@@ -1,24 +1,25 @@
 # The Bloom House — TODO
 
 ## What Ismar Needs To Do (can't be automated)
-- [ ] Create fresh Supabase project → put URL + keys in `.env.local`
-- [ ] Get ANTHROPIC_API_KEY from Phil or use existing → put in `.env.local`
-- [ ] Get GOOGLE_CLIENT_ID + SECRET (Gmail OAuth) from Phil → put in `.env.local`
-- [ ] Create GitHub repo (github.com/isadora-bloom/bloom-house or similar) and push
+- [x] Create fresh Supabase project → put URL + keys in `.env.local`
+- [x] Get ANTHROPIC_API_KEY → in `.env.local`
+- [x] Get GOOGLE_CLIENT_ID + SECRET → in `.env.local`
+- [x] Create GitHub repo → github.com/isadora-bloom/thebloomhouse
+- [ ] Run migrations 001-007 in Supabase SQL Editor (paste each file in order)
 
 ## What Claude Code Is Building (hands off)
 
 ### LAYER 0: Foundation
-- [ ] Scaffold Next.js 14 + TypeScript + Tailwind v4 + shadcn/ui
-- [ ] `.env.local.example` with all required keys
-- [ ] Supabase client setup (browser + server + service role)
-- [ ] AI client (`callAI`, `callAIJson`, `callAIVision` + cost tracking)
+- [x] Scaffold Next.js + TypeScript + Tailwind v4
+- [x] `.env.local.example` with all required keys
+- [x] Supabase client setup (browser + server + service role)
+- [x] AI client (`callAI`, `callAIJson`, `callAIVision` + cost tracking)
 - [ ] Auth (Supabase Auth + middleware + role-based routing)
-- [ ] Shell layout (sidebar, venue selector, role-based nav, top bar)
-- [ ] ALL database migrations (shared + agent + intel + portal + AI tables)
-- [ ] RLS policies (venue isolation + role-based access)
+- [x] Shell layout (sidebar, venue selector, role-based nav, top bar)
+- [x] ALL database migrations (7 files, ~60 tables)
+- [x] RLS policies (venue isolation + role-based access)
 - [ ] Crestwood demo seed (4 venues, 4 consultants, 24 months of data)
-- [ ] CLAUDE.md for the project
+- [x] CLAUDE.md for the project
 
 ### LAYER 1: The USP (parallel after Layer 0)
 **Voice Engine:**
