@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@theme {
+  /* Sage Green — Primary */
+  --color-sage-50: #F2F3F1;
+  --color-sage-100: #E0E3DD;
+  --color-sage-200: #C1C7BB;
+  --color-sage-300: #A2AB99;
+  --color-sage-400: #8F9A85;
+  --color-sage-500: #7D8471;
+  --color-sage-600: #6A7060;
+  --color-sage-700: #575C4F;
+  --color-sage-800: #44483E;
+  --color-sage-900: #31342D;
+
+  /* Dusty Teal — Secondary */
+  --color-teal-50: #F0F4F4;
+  --color-teal-100: #D6E0E0;
+  --color-teal-200: #ADCECE;
+  --color-teal-300: #84BABA;
+  --color-teal-400: #6B9A9A;
+  --color-teal-500: #5D7A7A;
+  --color-teal-600: #4D6666;
+  --color-teal-700: #3D5252;
+  --color-teal-800: #2E3E3E;
+  --color-teal-900: #1E2A2A;
+
+  /* Warm Gold — Accent */
+  --color-gold-50: #FAF6EE;
+  --color-gold-100: #F0E6CC;
+  --color-gold-200: #E1CD99;
+  --color-gold-300: #D2B466;
+  --color-gold-400: #C49E55;
+  --color-gold-500: #A6894A;
+  --color-gold-600: #8A723E;
+  --color-gold-700: #6E5B32;
+  --color-gold-800: #524426;
+  --color-gold-900: #362D1A;
+
+  /* Neutrals */
+  --color-warm-white: #FDFAF6;
+  --color-surface: #FFFFFF;
+  --color-border: #E8E4DF;
+  --color-muted: #9CA3AF;
+
+  /* Heat Map */
+  --color-heat-hot: #EF4444;
+  --color-heat-warm: #F59E0B;
+  --color-heat-cool: #3B82F6;
+  --color-heat-cold: #1E40AF;
+  --color-heat-frozen: #6B7280;
+
+  /* Typography */
+  --font-heading: 'Playfair Display', serif;
+  --font-body: 'Inter', sans-serif;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--color-warm-white);
+  color: var(--color-sage-900);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+}
