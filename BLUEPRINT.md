@@ -1126,7 +1126,24 @@ LAYER 0: Foundation (blocks everything)
 ├── Fresh Supabase project + ALL migrations (run once, all tables)
 ├── Auth (Supabase Auth + role-based middleware + RLS policies)
 ├── Shell layout (sidebar, venue selector, role-based nav, top bar)
-└── AI client (callAI/callAIJson/callAIVision + cost tracking)
+├── AI client (callAI/callAIJson/callAIVision + cost tracking)
+└── CRESTWOOD DEMO SEED (runs with migrations — validates schema immediately)
+    ├── 1 org: Crestwood Hospitality Group
+    ├── 4 venues with venue_config + venue_ai_config (each with distinct personality)
+    ├── 4 consultants as users (one per venue)
+    ├── 24 months of weddings with full lifecycle (inquiry → booked → completed → lost)
+    ├── Interactions, drafts, engagement_events, lead_score_history
+    ├── Marketing spend per source per venue
+    ├── Knowledge base entries per venue
+    ├── Search trends + trend_recommendations
+    ├── AI briefings + anomaly_alerts
+    ├── Review language with approved/pending phrases
+    ├── Guest lists, timelines, budgets, sage_conversations
+    └── Voice preferences (simulated training game results)
+
+    The seed is not decoration. It is the integration test. If the seed
+    breaks, the schema is wrong. Every table, every FK, every RLS policy
+    gets exercised by real-shaped data from day one.
 
     ↓ everything below can start simultaneously once Layer 0 exists ↓
 
@@ -1208,41 +1225,50 @@ LAYER 2: The three products (no dependencies on each other — all parallel)
         ├── Inspo gallery
         └── Contract upload + vision analysis
 
-LAYER 3: Polish (once products are functional)
-├── Seed data for demo
-├── Onboarding wizard
-├── Mobile responsive pass
-├── Error monitoring (Sentry)
-└── Performance optimization
-
-DEFERRED (not in initial build)
+DEFERRED (not in initial build — hold the line)
 ├── Wedding website builder
 ├── Stripe billing
 ├── Organisation model
 ├── Benchmarks (needs 20+ venues)
 ├── Calendly integration
 ├── SMS notifications
-└── Mobile app (React Native)
+├── Mobile app (React Native)
+├── Voice transcription (Whisper)
+└── Vendor brain
 ```
 
-**How this actually runs:** Layer 0 is one session. Then Layer 1's four
-branches (Voice, Intel, KB, Gmail) are built concurrently using parallel
-agents or sequential focused sessions — they share no code dependencies.
-Layer 2's three products are also independent of each other. The only
-real blocker chain is: Foundation → Voice Engine → Brains → Email Pipeline.
-Everything else fans out.
+**How this actually runs:** Layer 0 is one session — scaffold, migrations,
+seed, auth, shell. The Crestwood seed validates every table and relationship
+before any feature code exists. Then Layer 1's four branches fan out
+concurrently. Layer 2's three products fan out after their dependencies.
+The only sequential chain: Foundation → Voice Engine → Brains → Pipeline.
 
 ---
 
-## 13. WHAT NOT TO BUILD
+## 13. WHAT NOT TO BUILD (HOLD THE LINE)
 
-- **Benchmarks table** — useless until 20+ venues. Show empty state with "Coming soon" messaging.
-- **Organisation model** — don't need until a venue group signs up. Venues can be independent.
-- **Wedding website builder** — nice but not revenue-critical. Phase 2.
-- **Economic indicators display** — feed into briefings quietly, don't build a dashboard for it.
-- **Voice transcription (Whisper)** — edge case. Park it.
-- **Vendor brain** — Agent's vendor communication brain. Stub it, build later.
-- **Mobile app** — the web app should be mobile-responsive. Native app is Phase 3.
+This section is a contract. Claude Code will happily build any of these
+if asked. Do not ask. Not yet. Each item has a trigger condition — build
+it when the trigger fires, not before.
+
+| Feature | Why Not Now | Build When |
+|---------|------------|------------|
+| **Benchmarks** | Useless until 20+ venues. Meaningless averages from 3 venues mislead. | 20 active venues |
+| **Organisation model** | Venues can be independent. Don't build group hierarchy for one group. | A venue group actually signs up |
+| **Wedding website builder** | Cool but not revenue-critical. Couples have Zola/Knot/Minted for this. | Venues ask for it (>3 requests) |
+| **Stripe billing** | No one is paying yet. Don't build billing for a product that isn't sold. | First paying venue is ready to swipe |
+| **Calendly integration** | Tours can be booked by link. OAuth integration is nice-to-have. | Email pipeline is stable + venues ask |
+| **SMS notifications** | Email + dashboard covers it. SMS adds Twilio dependency + cost. | Coordinators say they miss things |
+| **Voice transcription (Whisper)** | Edge case. Very few coordinators send voice memos. | A venue actually needs it |
+| **Vendor brain** | Agent's vendor communication. Inquiry + client brains come first. | Inquiry + client brains have 75%+ approval |
+| **Mobile app (React Native)** | Web app is mobile-responsive. Native app is a maintenance burden. | Web app is stable + user demand proven |
+| **Economic indicators dashboard** | Data feeds into briefings quietly. No one needs a FRED chart. | Never (it stays behind the scenes) |
+| **Custom email templates** | HTML email templates are a rabbit hole. Plain text + signature works. | Venues specifically ask for branded emails |
+| **Onboarding quiz** | Agent has elaborate quiz for personality. Sliders + games are simpler. | Voice training adoption is low |
+
+**The rule:** If it's in this table, the answer is "not yet" until its
+trigger condition is met. No exceptions. No "while we're at it." No
+"it would only take an hour." Scope creep is how products die.
 
 ---
 
