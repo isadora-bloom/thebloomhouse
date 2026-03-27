@@ -1272,14 +1272,26 @@ trigger condition is met. No exceptions. No "while we're at it." No
 
 ---
 
-## 14. MIGRATION STRATEGY
+## 14. ISOLATION RULE
 
-No big-bang migration. Rixey Manor continues running on existing portals while we build.
+**This is an entirely new project. The source codebases are READ-ONLY reference.**
 
-1. **Build the unified platform alongside existing apps** — they keep running
-2. **When Agent core is ready** — Phil switches Rixey's email processing to the new system
-3. **When Portal is ready** — couples get invited to the new portal
-4. **When stable** — sunset the old apps one by one
-5. **Old Supabase projects become read-only archives**, then deleted
+```
+C:\Users\Ismar\bloom-house\              ← NEW. This project. Own repo, own Supabase, own deploy.
 
-No data migration scripts needed — the unified system starts fresh. Historical data from old systems can be imported later if needed, but the AI personality config, knowledge base, and learned preferences are what matter most.
+C:\Users\Ismar\Downloads\bloom-agent-main ← READ ONLY. Phil's Agent. Do not modify.
+C:\Users\Ismar\bloom\                     ← READ ONLY. Intelligence. Do not modify.
+C:\Users\Ismar\bloom-house-portal\        ← READ ONLY. Portal. Do not modify.
+C:\Users\Ismar\rixey-portal\              ← READ ONLY. Original Rixey. Do not modify.
+```
+
+**Rules:**
+- Copy logic, prompts, configs, and patterns FROM source codebases INTO bloom-house
+- Never write to, edit, or commit in any source codebase
+- Never share a Supabase project — bloom-house gets a fresh one
+- The old apps keep running in production untouched
+- If bloom-house breaks, Ismar rolls back to the individual apps with zero impact
+- When bloom-house is proven stable, the old apps are sunset one by one — not before
+
+**No imports, no symlinks, no shared packages.** Clean copies, ported to TypeScript,
+adapted to the unified schema. The source repos are reference material, not dependencies.
