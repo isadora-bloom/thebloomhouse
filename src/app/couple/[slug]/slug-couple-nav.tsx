@@ -20,6 +20,7 @@ import {
   Store,
   FileText,
   Globe,
+  Printer,
 } from 'lucide-react'
 
 interface SlugCoupleNavProps {
@@ -106,8 +107,17 @@ export function SlugCoupleNav({ venueName, logoUrl, venueSlug }: SlugCoupleNavPr
             })}
           </nav>
 
-          {/* Right: avatar + mobile hamburger */}
+          {/* Right: print + avatar + mobile hamburger */}
           <div className="flex items-center gap-3">
+            {/* Print button */}
+            <button
+              onClick={() => window.print()}
+              className="hidden sm:flex items-center justify-center w-8 h-8 rounded-full text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors no-print"
+              title="Print this page"
+            >
+              <Printer className="w-4 h-4" />
+            </button>
+
             {/* User avatar placeholder */}
             <div className="hidden sm:flex items-center gap-2">
               <div

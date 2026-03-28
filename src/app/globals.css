@@ -64,3 +64,116 @@ body {
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-heading);
 }
+
+/* ==========================================================================
+   Print Styles
+   ========================================================================== */
+
+@media print {
+  /* Hide non-printable elements */
+  .no-print,
+  nav,
+  aside,
+  header,
+  button,
+  [data-sidebar],
+  .lg\:pl-64 {
+    display: none !important;
+  }
+
+  /* Override sidebar offset */
+  main {
+    padding-left: 0 !important;
+    padding-top: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Full width content */
+  body {
+    background: white !important;
+    color: black !important;
+    font-size: 11pt !important;
+    line-height: 1.4 !important;
+  }
+
+  .print-container {
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Clean typography */
+  h1 {
+    font-size: 18pt !important;
+    margin-bottom: 4pt !important;
+  }
+
+  h2 {
+    font-size: 14pt !important;
+    margin-bottom: 4pt !important;
+  }
+
+  h3 {
+    font-size: 12pt !important;
+  }
+
+  /* Section breaks */
+  .print-section {
+    page-break-inside: avoid;
+    break-inside: avoid;
+    margin-bottom: 12pt !important;
+  }
+
+  /* Force open all accordions for printing */
+  .print-section [data-state="closed"] {
+    display: block !important;
+  }
+
+  /* Remove shadows and decorative borders */
+  .bg-surface,
+  .bg-warm-white {
+    background: white !important;
+    box-shadow: none !important;
+  }
+
+  /* Keep borders subtle */
+  .border,
+  .border-border {
+    border-color: #ddd !important;
+  }
+
+  /* Table styling for print */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  th, td {
+    border-bottom: 0.5pt solid #ddd;
+    padding: 3pt 4pt;
+  }
+
+  /* Progress bars visible in print */
+  .bg-teal-500,
+  .bg-emerald-500 {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Badges */
+  .rounded-full {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Page margins */
+  @page {
+    margin: 0.75in;
+    size: letter;
+  }
+
+  /* Show print-only elements */
+  .print\:block {
+    display: block !important;
+  }
+}

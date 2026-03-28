@@ -15,7 +15,10 @@ import {
   XCircle,
   Search,
   ListChecks,
+  Eye,
+  ExternalLink,
 } from 'lucide-react'
+import Link from 'next/link'
 import { cn } from '@/lib/utils'
 
 // TODO: Replace with venue context from auth/session
@@ -188,7 +191,7 @@ function WeddingCardSkeleton() {
 // Wedding Card
 // ---------------------------------------------------------------------------
 
-function WeddingCard({ wedding }: { wedding: Wedding }) {
+function WeddingCard({ wedding, venueSlug }: { wedding: Wedding; venueSlug: string | null }) {
   const [expanded, setExpanded] = useState(false)
 
   const coupleNames = getCoupleNames(wedding.people)
@@ -349,6 +352,27 @@ function WeddingCard({ wedding }: { wedding: Wedding }) {
               </div>
             </div>
           )}
+
+          {/* Portal action buttons */}
+          <div className="flex items-center gap-2 pt-2 border-t border-sage-100">
+            <Link
+              href={`/portal/weddings/${wedding.id}/portal`}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-sage-600 text-white hover:bg-sage-700 transition-colors"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              View Portal
+            </Link>
+            {venueSlug && (
+              <Link
+                href={`/couple/${venueSlug}?wedding=${wedding.id}`}
+                target="_blank"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100 transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                Open as Couple
+              </Link>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -361,6 +385,7 @@ function WeddingCard({ wedding }: { wedding: Wedding }) {
 
 export default function WeddingsPage() {
   const [weddings, setWeddings] = useState<Wedding[]>([])
+  const [venueSlug, setVenueSlug] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
@@ -372,6 +397,14 @@ export default function WeddingsPage() {
     const supabase = getSupabase()
 
     try {
+      // Fetch venue slug for "Open as Couple" links
+      const { data: venueData } = await supabase
+        .from('venues')
+        .select('slug')
+        .eq('id', VENUE_ID)
+        .single()
+      if (venueData) setVenueSlug(venueData.slug)
+
       let query = supabase
         .from('weddings')
         .select(`
@@ -570,7 +603,7 @@ export default function WeddingsPage() {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {sortedWeddings.map((wedding) => (
-            <WeddingCard key={wedding.id} wedding={wedding} />
+            <WeddingCard key={wedding.id} wedding={wedding} venueSlug={venueSlug} />
           ))}
         </div>
       )}

@@ -22,7 +22,7 @@ import {
   // System
   Building, ShieldCheck, Menu, X,
   // Misc
-  ListOrdered, HelpCircle, Users,
+  ListOrdered, HelpCircle, Users, SlidersHorizontal,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -70,6 +70,7 @@ const navSections: NavSection[] = [
       { label: 'Sage Queue', href: '/portal/sage-queue', icon: MessageCircleQuestion },
       { label: 'Knowledge Base', href: '/portal/kb', icon: BookOpen },
       { label: 'Vendors', href: '/portal/vendors', icon: Store },
+      { label: 'Section Settings', href: '/portal/section-settings', icon: SlidersHorizontal },
     ],
   },
 
