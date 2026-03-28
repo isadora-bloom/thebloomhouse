@@ -4,33 +4,14 @@ import {
   detectTrendDeviations,
   fetchTrendsForVenue,
 } from '@/lib/services/trends'
-
-// ---------------------------------------------------------------------------
-// Auth helper
-// ---------------------------------------------------------------------------
-
-async function getAuthVenue() {
-  const supabase = await createServerSupabaseClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data: profile } = await supabase
-    .from('user_profiles')
-    .select('venue_id')
-    .eq('id', user.id)
-    .single()
-
-  return profile?.venue_id
-    ? { userId: user.id, venueId: profile.venue_id as string }
-    : null
-}
+import { getPlatformAuth } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // GET — Recent trends + deviations for the authenticated user's venue
 // ---------------------------------------------------------------------------
 
 export async function GET() {
-  const auth = await getAuthVenue()
+  const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -68,7 +49,7 @@ export async function GET() {
 // ---------------------------------------------------------------------------
 
 export async function POST() {
-  const auth = await getAuthVenue()
+  const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }

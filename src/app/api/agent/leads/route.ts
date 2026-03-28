@@ -63,7 +63,6 @@ export async function GET(request: NextRequest) {
       .from('weddings')
       .select(`
         id,
-        couple_names,
         status,
         heat_score,
         wedding_date,
@@ -79,8 +78,6 @@ export async function GET(request: NextRequest) {
     // Sort
     if (sortBy === 'date') {
       query = query.order('inquiry_date', { ascending: false })
-    } else if (sortBy === 'name') {
-      query = query.order('couple_names', { ascending: true })
     } else {
       query = query.order('heat_score', { ascending: false })
     }

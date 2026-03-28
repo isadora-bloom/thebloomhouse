@@ -1,37 +1,17 @@
-import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   getActiveAlerts,
   runAnomalyDetection,
   acknowledgeAlert,
 } from '@/lib/services/anomaly-detection'
-
-// ---------------------------------------------------------------------------
-// Auth helper
-// ---------------------------------------------------------------------------
-
-async function getAuthVenue() {
-  const supabase = await createServerSupabaseClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data: profile } = await supabase
-    .from('user_profiles')
-    .select('venue_id')
-    .eq('id', user.id)
-    .single()
-
-  return profile?.venue_id
-    ? { userId: user.id, venueId: profile.venue_id as string }
-    : null
-}
+import { getPlatformAuth } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // GET — Active (unacknowledged) anomaly alerts
 // ---------------------------------------------------------------------------
 
 export async function GET() {
-  const auth = await getAuthVenue()
+  const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -50,7 +30,7 @@ export async function GET() {
 // ---------------------------------------------------------------------------
 
 export async function POST() {
-  const auth = await getAuthVenue()
+  const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -70,7 +50,7 @@ export async function POST() {
 // ---------------------------------------------------------------------------
 
 export async function PATCH(request: NextRequest) {
-  const auth = await getAuthVenue()
+  const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }

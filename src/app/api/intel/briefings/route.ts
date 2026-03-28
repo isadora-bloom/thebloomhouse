@@ -1,4 +1,3 @@
-import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   getLatestBriefing,
@@ -6,26 +5,7 @@ import {
   generateWeeklyBriefing,
   generateMonthlyBriefing,
 } from '@/lib/services/briefings'
-
-// ---------------------------------------------------------------------------
-// Auth helper
-// ---------------------------------------------------------------------------
-
-async function getAuthVenue() {
-  const supabase = await createServerSupabaseClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data: profile } = await supabase
-    .from('user_profiles')
-    .select('venue_id')
-    .eq('id', user.id)
-    .single()
-
-  return profile?.venue_id
-    ? { userId: user.id, venueId: profile.venue_id as string }
-    : null
-}
+import { getPlatformAuth } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // GET — Latest briefing(s)
@@ -34,7 +14,7 @@ async function getAuthVenue() {
 // ---------------------------------------------------------------------------
 
 export async function GET(request: NextRequest) {
-  const auth = await getAuthVenue()
+  const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -63,7 +43,7 @@ export async function GET(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
-  const auth = await getAuthVenue()
+  const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
