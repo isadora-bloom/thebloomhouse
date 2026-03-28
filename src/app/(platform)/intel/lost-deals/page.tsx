@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   X,
 } from 'lucide-react'
+import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import {
   PieChart,
   Pie,
@@ -172,6 +173,55 @@ export default function LostDealsPage() {
       .slice(0, 5)
   }, [deals])
 
+  // ---- Compute insights from lost deal data ----
+  const lostDealInsights: InsightItem[] = useMemo(() => {
+    if (deals.length === 0) return []
+    const items: InsightItem[] = []
+
+    // Top reason
+    const reasonCounts: Record<string, number> = {}
+    for (const d of deals) {
+      reasonCounts[d.reason] = (reasonCounts[d.reason] || 0) + 1
+    }
+    const topReasonEntry = Object.entries(reasonCounts).sort((a, b) => b[1] - a[1])[0]
+    if (topReasonEntry) {
+      const [reason, count] = topReasonEntry
+      const pct = Math.round((count / deals.length) * 100)
+      const label = reason.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
+      items.push({
+        icon: 'warning',
+        text: `${label} is your #1 reason for lost deals (${pct}%) — review your value proposition and messaging around this`,
+        priority: 'high',
+      })
+    }
+
+    // Top competitor
+    if (topCompetitors.length > 0) {
+      items.push({
+        icon: 'trend_down',
+        text: `${topCompetitors[0][0]} is winning the most deals against you (${topCompetitors[0][1]} lost) — study their positioning`,
+        priority: 'medium',
+      })
+    }
+
+    // Recovery rate insight
+    if (recoveryAttempted > 0) {
+      const ratePct = (recoveryRate * 100).toFixed(0)
+      items.push({
+        icon: recovered > 0 ? 'tip' : 'action',
+        text: `${ratePct}% of recovery attempts succeeded (${recovered} of ${recoveryAttempted}) — ${recovered > 0 ? 'worth continuing to pursue lost leads' : 'refine your recovery approach'}`,
+      })
+    } else if (deals.length > 3) {
+      items.push({
+        icon: 'action',
+        text: `No recovery attempts logged yet — even a 10% win-back rate adds meaningful revenue`,
+        priority: 'medium',
+      })
+    }
+
+    return items
+  }, [deals, topCompetitors, recoveryAttempted, recovered, recoveryRate])
+
   // Filtered list
   const filtered = useMemo(() => {
     return deals.filter((d) => {
@@ -270,6 +320,11 @@ export default function LostDealsPage() {
           </>
         )}
       </div>
+
+      {/* AI Insights */}
+      {!loading && lostDealInsights.length > 0 && (
+        <InsightPanel insights={lostDealInsights} />
+      )}
 
       {/* Charts */}
       {!loading && deals.length > 0 && (

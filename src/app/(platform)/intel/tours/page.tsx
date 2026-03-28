@@ -14,6 +14,7 @@ import {
   Users,
   Filter,
 } from 'lucide-react'
+import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -159,6 +160,67 @@ export default function ToursPage() {
         )
       : 0
 
+  // No-show count (cancelled tours)
+  const noShows = yearTours.filter((t) => t.outcome === 'cancelled').length
+
+  // Best converting day of week
+  const dayConversions = useMemo(() => {
+    const dayMap: Record<string, { total: number; booked: number }> = {}
+    for (const t of yearTours) {
+      if (!['completed', 'booked'].includes(t.outcome)) continue
+      const day = new Date(t.tour_date).toLocaleDateString('en-US', { weekday: 'long' })
+      if (!dayMap[day]) dayMap[day] = { total: 0, booked: 0 }
+      dayMap[day].total++
+      if (t.outcome === 'booked') dayMap[day].booked++
+    }
+    return dayMap
+  }, [yearTours])
+
+  // ---- Compute insights from tour data ----
+  const tourInsights: InsightItem[] = (() => {
+    if (yearTours.length === 0) return []
+    const items: InsightItem[] = []
+
+    // Conversion rate vs industry average
+    const convPct = conversionRate * 100
+    if (completed > 0) {
+      const comparison = convPct >= 40 ? 'above' : 'below'
+      items.push({
+        icon: convPct >= 40 ? 'trend_up' : 'trend_down',
+        text: `Your tour-to-booking rate is ${convPct.toFixed(1)}% — ${comparison} the industry average of 40%`,
+        priority: convPct < 30 ? 'high' : convPct < 40 ? 'medium' : undefined,
+      })
+    }
+
+    // No-shows
+    if (noShows > 0) {
+      items.push({
+        icon: 'warning',
+        text: `${noShows} no-show${noShows !== 1 ? 's' : ''} this year — consider sending confirmation texts 24hrs before each tour`,
+        priority: noShows >= 5 ? 'high' : 'medium',
+      })
+    }
+
+    // Best converting day
+    const dayEntries = Object.entries(dayConversions).filter(([, v]) => v.total >= 2)
+    if (dayEntries.length >= 2) {
+      const sorted = dayEntries
+        .map(([day, v]) => ({ day, rate: v.total > 0 ? v.booked / v.total : 0 }))
+        .sort((a, b) => b.rate - a.rate)
+      const best = sorted[0]
+      const avg = dayEntries.reduce((s, [, v]) => s + (v.total > 0 ? v.booked / v.total : 0), 0) / dayEntries.length
+      if (best.rate > avg && best.rate > 0) {
+        const pctBetter = Math.round(((best.rate - avg) / avg) * 100)
+        items.push({
+          icon: 'tip',
+          text: `Tours on ${best.day}s convert ${pctBetter}% better than average — prioritize this day for showings`,
+        })
+      }
+    }
+
+    return items
+  })()
+
   // Filtered
   const now = new Date().toISOString().slice(0, 10)
   const filtered = useMemo(() => {
@@ -281,6 +343,11 @@ export default function ToursPage() {
           </>
         )}
       </div>
+
+      {/* AI Insights */}
+      {!loading && tourInsights.length > 0 && (
+        <InsightPanel insights={tourInsights} />
+      )}
 
       {/* Filter tabs */}
       <div className="flex items-center gap-1 bg-sage-50 rounded-lg p-1 w-fit">

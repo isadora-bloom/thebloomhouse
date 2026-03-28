@@ -16,6 +16,7 @@ import {
   Building2, MapPin, UsersRound,
   XCircle, CalendarRange, LineChart, Megaphone, Share2,
   MapPinIcon, UserCheck, Activity, StickyNote, GitMerge, Workflow,
+  GraduationCap, ScrollText,
 } from 'lucide-react'
 
 const navSections = [
@@ -23,14 +24,21 @@ const navSections = [
     title: 'Agent',
     items: [
       { label: 'Inbox', href: '/agent/inbox', icon: Mail },
-      { label: 'Drafts', href: '/agent/drafts', icon: FileCheck },
+      { label: 'Approval Queue', href: '/agent/drafts', icon: FileCheck },
       { label: 'Pipeline', href: '/agent/pipeline', icon: Kanban },
       { label: 'Leads', href: '/agent/leads', icon: Flame },
-      { label: 'Knowledge Gaps', href: '/agent/knowledge-gaps', icon: HelpCircle },
+      { label: 'Teach Voice', href: '/agent/learning', icon: GraduationCap },
+      { label: 'Rules', href: '/agent/rules', icon: ScrollText },
       { label: 'Sequences', href: '/agent/sequences', icon: ListOrdered },
+      { label: 'Knowledge Gaps', href: '/agent/knowledge-gaps', icon: HelpCircle },
+      { label: 'Analytics', href: '/agent/analytics', icon: BarChart3 },
+    ],
+  },
+  {
+    title: 'Agent More',
+    items: [
       { label: 'Relationships', href: '/agent/relationships', icon: Network },
       { label: 'Client Codes', href: '/agent/codes', icon: Hash },
-      { label: 'Analytics', href: '/agent/analytics', icon: BarChart3 },
       { label: 'Error Log', href: '/agent/errors', icon: AlertCircle },
       { label: 'Settings', href: '/agent/settings', icon: Settings2 },
     ],

@@ -10,6 +10,7 @@ import {
   TrendingUp,
   Lightbulb,
 } from 'lucide-react'
+import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import {
   LineChart,
   Line,
@@ -236,6 +237,60 @@ export default function HealthDashboardPage() {
       }))
   }, [healthRecords])
 
+  // ---- Compute insights from health data ----
+  const healthInsights: InsightItem[] = useMemo(() => {
+    if (!latest) return []
+    const items: InsightItem[] = []
+
+    const dimensions: { label: string; score: number }[] = [
+      { label: 'Data Quality', score: dataQuality },
+      { label: 'Pipeline Health', score: pipelineHealth },
+      { label: 'Response Time', score: responseTime },
+      { label: 'Booking Rate', score: bookingRate },
+    ]
+
+    // Strongest area
+    const strongest = [...dimensions].sort((a, b) => b.score - a.score)[0]
+    if (strongest.score > 60) {
+      items.push({
+        icon: 'trend_up',
+        text: `Great job on ${strongest.label} — scoring ${strongest.score}/100, in the top tier`,
+      })
+    }
+
+    // Weakest area
+    const weakest = [...dimensions].sort((a, b) => a.score - b.score)[0]
+    if (weakest.score < 70) {
+      items.push({
+        icon: 'trend_down',
+        text: `Your weakest area is ${weakest.label} at ${weakest.score}/100 — focus improvement efforts here for the biggest impact`,
+        priority: weakest.score < 40 ? 'high' : 'medium',
+      })
+    }
+
+    // Overall health context
+    if (overallScore >= 70) {
+      items.push({
+        icon: 'tip',
+        text: `Overall health score of ${overallScore} is strong — maintain consistency and watch for early warning dips`,
+      })
+    } else if (overallScore >= 40) {
+      items.push({
+        icon: 'warning',
+        text: `Overall health score of ${overallScore} shows room for improvement — address the weakest dimension first`,
+        priority: 'medium',
+      })
+    } else {
+      items.push({
+        icon: 'warning',
+        text: `Overall health score of ${overallScore} needs urgent attention — multiple dimensions are underperforming`,
+        priority: 'high',
+      })
+    }
+
+    return items
+  }, [latest, dataQuality, pipelineHealth, responseTime, bookingRate, overallScore])
+
   // Recommendations
   const recommendations: Recommendation[] = useMemo(() => {
     const recs: Recommendation[] = []
@@ -325,6 +380,11 @@ export default function HealthDashboardPage() {
             <DimensionCard icon={Clock} label="Response Time" score={responseTime} />
             <DimensionCard icon={Target} label="Booking Rate" score={bookingRate} />
           </div>
+
+          {/* AI Insights */}
+          {healthInsights.length > 0 && (
+            <InsightPanel insights={healthInsights} />
+          )}
 
           {/* Historical chart */}
           {historyData.length > 1 && (

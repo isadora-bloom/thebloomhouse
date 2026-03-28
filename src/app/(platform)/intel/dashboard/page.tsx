@@ -14,6 +14,7 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react'
+import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -355,6 +356,38 @@ export default function IntelligenceDashboardPage() {
     return order[a.severity] - order[b.severity]
   })
 
+  // ---- Compute insights from alert data ----
+  const dashboardInsights: InsightItem[] = (() => {
+    const items: InsightItem[] = []
+    if (criticalCount > 0) {
+      items.push({
+        icon: 'warning',
+        text: `${criticalCount} critical alert${criticalCount !== 1 ? 's' : ''} need${criticalCount === 1 ? 's' : ''} immediate attention`,
+        priority: 'high',
+      })
+    }
+    if (warningCount > 0) {
+      items.push({
+        icon: 'warning',
+        text: `${warningCount} warning-level anomal${warningCount !== 1 ? 'ies' : 'y'} detected — review before they escalate`,
+        priority: 'medium',
+      })
+    }
+    if (alerts.length > 0) {
+      items.push({
+        icon: 'action',
+        text: `${alerts.length} active alert${alerts.length !== 1 ? 's' : ''} across your venue — acknowledge resolved items to keep this view clean`,
+      })
+    }
+    if (alerts.length === 0 && !loading) {
+      items.push({
+        icon: 'trend_up',
+        text: 'All metrics are within normal ranges — your venue is performing steadily',
+      })
+    }
+    return items
+  })()
+
   return (
     <div className="space-y-8">
       {/* ---- Header ---- */}
@@ -461,6 +494,11 @@ export default function IntelligenceDashboardPage() {
           </>
         )}
       </div>
+
+      {/* ---- AI Insights ---- */}
+      {!loading && dashboardInsights.length > 0 && (
+        <InsightPanel insights={dashboardInsights} />
+      )}
 
       {/* ---- Active Anomaly Alerts ---- */}
       <section>

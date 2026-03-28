@@ -14,6 +14,7 @@ import {
   ArrowDownRight,
   ChevronRight,
 } from 'lucide-react'
+import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import {
   AreaChart,
   Area,
@@ -508,6 +509,52 @@ export default function TrendsPage() {
   const pendingRecs = recommendations.filter((r) => r.status === 'pending')
   const resolvedRecs = recommendations.filter((r) => r.status !== 'pending')
 
+  // ---- Compute insights from trend data ----
+  const trendInsights: InsightItem[] = (() => {
+    if (!data || deviations.length === 0) return []
+    const items: InsightItem[] = []
+
+    // Rising terms — biggest positive change
+    const rising = deviations.filter((d) => d.direction === 'up').sort((a, b) => b.changePercent - a.changePercent)
+    if (rising.length > 0) {
+      const top = rising[0]
+      items.push({
+        icon: 'trend_up',
+        text: `"${top.term}" searches are up ${top.changePercent}% — feature this in your content and social media`,
+        priority: 'high',
+      })
+    }
+
+    // Falling terms — biggest negative change
+    const falling = deviations.filter((d) => d.direction === 'down').sort((a, b) => a.changePercent - b.changePercent)
+    if (falling.length > 0) {
+      const top = falling[0]
+      items.push({
+        icon: 'trend_down',
+        text: `"${top.term}" interest is declining (${top.changePercent}%) — diversify your positioning away from this term`,
+        priority: 'medium',
+      })
+    }
+
+    // Seasonal insight from core vs dampener signals
+    const coreUp = deviations.filter((d) => d.category === 'core' && d.direction === 'up').length
+    const coreDown = deviations.filter((d) => d.category === 'core' && d.direction === 'down').length
+    if (coreUp > coreDown) {
+      items.push({
+        icon: 'tip',
+        text: 'Based on search patterns, demand signals are strengthening in your region — a good time to promote availability',
+      })
+    } else if (coreDown > coreUp) {
+      items.push({
+        icon: 'warning',
+        text: 'Based on search patterns, demand signals are softening in your region — focus on lead nurturing and retention',
+        priority: 'medium',
+      })
+    }
+
+    return items
+  })()
+
   return (
     <div className="space-y-8">
       {/* ------------------------------------------------------------------ */}
@@ -548,6 +595,13 @@ export default function TrendsPage() {
           <AlertTriangle className="w-5 h-5 text-heat-hot flex-shrink-0" />
           <p className="text-sm text-sage-900">{error}</p>
         </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* AI Insights                                                          */}
+      {/* ------------------------------------------------------------------ */}
+      {!loading && trendInsights.length > 0 && (
+        <InsightPanel insights={trendInsights} />
       )}
 
       {/* ------------------------------------------------------------------ */}

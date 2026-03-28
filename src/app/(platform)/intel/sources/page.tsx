@@ -9,6 +9,7 @@ import {
   ArrowUpDown,
   Megaphone,
 } from 'lucide-react'
+import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import {
   BarChart,
   Bar,
@@ -284,6 +285,51 @@ export default function SourceAttributionPage() {
   const totalBookings = sourceRows.reduce((sum, r) => sum + r.bookings, 0)
   const overallCPB = totalBookings > 0 ? totalSpend / totalBookings : 0
 
+  // ---- Compute insights from source data ----
+  const sourceInsights: InsightItem[] = (() => {
+    if (sourceRows.length === 0) return []
+    const items: InsightItem[] = []
+
+    // Best performing source (by revenue per inquiry)
+    const withInquiries = sourceRows.filter((r) => r.inquiries > 0)
+    if (withInquiries.length > 0) {
+      const best = [...withInquiries].sort((a, b) => {
+        const aRev = a.inquiries > 0 ? a.revenue / a.inquiries : 0
+        const bRev = b.inquiries > 0 ? b.revenue / b.inquiries : 0
+        return bRev - aRev
+      })[0]
+      const revPerLead = best.inquiries > 0 ? Math.round(best.revenue / best.inquiries) : 0
+      items.push({
+        icon: 'trend_up',
+        text: `${best.source_name} is your best channel at $${revPerLead.toLocaleString()}/lead in revenue`,
+        priority: 'high',
+      })
+    }
+
+    // Worst ROI source (among those with spend)
+    const withSpend = sourceRows.filter((r) => r.spend > 0)
+    if (withSpend.length > 1) {
+      const worst = [...withSpend].sort((a, b) => a.roi - b.roi)[0]
+      items.push({
+        icon: 'trend_down',
+        text: `${worst.source_name} has the lowest ROI at ${worst.roi >= 0 ? '+' : ''}${(worst.roi * 100).toFixed(0)}% — consider reallocating spend`,
+        priority: 'medium',
+      })
+    }
+
+    // Sources with inquiries but zero bookings
+    const zeroBookings = sourceRows.filter((r) => r.inquiries > 0 && r.bookings === 0)
+    for (const src of zeroBookings) {
+      items.push({
+        icon: 'warning',
+        text: `${src.source_name} generated ${src.inquiries} inquiries but no bookings — investigate conversion blockers`,
+        priority: 'medium',
+      })
+    }
+
+    return items
+  })()
+
   return (
     <div className="space-y-8">
       {/* ---- Header ---- */}
@@ -364,6 +410,11 @@ export default function SourceAttributionPage() {
             <p className="text-3xl font-bold text-sage-900">{fmt$(overallCPB)}</p>
           </div>
         </div>
+      )}
+
+      {/* ---- AI Insights ---- */}
+      {!loading && sourceInsights.length > 0 && (
+        <InsightPanel insights={sourceInsights} />
       )}
 
       {/* ---- Cost per Booking Chart ---- */}
