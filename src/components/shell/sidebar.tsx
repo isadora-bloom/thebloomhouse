@@ -123,7 +123,6 @@ const navSections: NavSection[] = [
       { label: 'Overview', href: '/intel/portfolio', icon: Layers },
       { label: 'Venue Comparison', href: '/intel/cross', icon: BarChart3 },
       { label: 'Team Performance', href: '/intel/team', icon: Users },
-      { label: 'Team Compare', href: '/intel/team-compare', icon: UsersRound },
       { label: 'Regions', href: '/intel/regions', icon: MapPin },
       { label: 'Deduplication', href: '/intel/matching', icon: GitMerge },
     ],
