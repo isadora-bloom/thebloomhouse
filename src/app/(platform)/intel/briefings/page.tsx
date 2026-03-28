@@ -1,8 +1,670 @@
-export default function BriefingsPage() {
+'use client'
+
+import { useEffect, useState, useCallback } from 'react'
+import {
+  FileText,
+  RefreshCw,
+  Calendar,
+  TrendingUp,
+  Cloud,
+  AlertTriangle,
+  Lightbulb,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  BarChart3,
+} from 'lucide-react'
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface BriefingMetrics {
+  new_inquiries: number
+  tours_scheduled: number
+  bookings: number
+  lost_deals: number
+  revenue_booked: number
+}
+
+interface BriefingContent {
+  summary: string
+  metrics: BriefingMetrics
+  demand_outlook: {
+    score: number
+    outlook: 'positive' | 'neutral' | 'caution'
+  }
+  trend_highlights: string[]
+  weather_outlook: string
+  anomaly_summary: string[]
+  recommendations: string[]
+  generated_at: string
+}
+
+interface Briefing {
+  id: string
+  venue_id: string
+  type: 'weekly' | 'monthly'
+  content: BriefingContent
+  created_at: string
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatDate(dateStr: string): string {
+  const d = new Date(dateStr)
+  return d.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+function formatDateTime(dateStr: string): string {
+  const d = new Date(dateStr)
+  return d.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+function formatCurrency(amount: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(amount)
+}
+
+function outlookStyles(outlook: 'positive' | 'neutral' | 'caution') {
+  switch (outlook) {
+    case 'positive':
+      return 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+    case 'neutral':
+      return 'bg-amber-50 text-amber-700 border border-amber-200'
+    case 'caution':
+      return 'bg-red-50 text-red-700 border border-red-200'
+  }
+}
+
+function outlookLabel(outlook: 'positive' | 'neutral' | 'caution') {
+  switch (outlook) {
+    case 'positive':
+      return 'Positive'
+    case 'neutral':
+      return 'Neutral'
+    case 'caution':
+      return 'Caution'
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton Loaders
+// ---------------------------------------------------------------------------
+
+function SkeletonHero() {
   return (
-    <div>
-      <h1 className="font-heading text-3xl font-bold text-sage-900 mb-2">Briefings</h1>
-      <p className="text-sage-600">Weekly AI-generated venue intelligence.</p>
+    <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+      <div className="animate-pulse space-y-4">
+        <div className="h-3 bg-sage-100 rounded w-32" />
+        <div className="h-5 bg-sage-100 rounded w-full" />
+        <div className="h-5 bg-sage-100 rounded w-4/5" />
+        <div className="h-5 bg-sage-100 rounded w-2/3" />
+        <div className="flex gap-3 mt-2">
+          <div className="h-6 bg-sage-100 rounded-full w-24" />
+          <div className="h-6 bg-sage-100 rounded-full w-20" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SkeletonMetrics() {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+          <div className="animate-pulse space-y-3">
+            <div className="w-10 h-10 bg-sage-100 rounded-lg" />
+            <div className="h-6 bg-sage-100 rounded w-16" />
+            <div className="h-3 bg-sage-100 rounded w-24" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SkeletonSection() {
+  return (
+    <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+      <div className="animate-pulse space-y-3">
+        <div className="h-4 bg-sage-100 rounded w-40" />
+        <div className="h-3 bg-sage-100 rounded w-full" />
+        <div className="h-3 bg-sage-100 rounded w-5/6" />
+        <div className="h-3 bg-sage-100 rounded w-3/4" />
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Stat Card
+// ---------------------------------------------------------------------------
+
+function StatCard({
+  icon: Icon,
+  iconBg,
+  iconColor,
+  value,
+  label,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  iconBg: string
+  iconColor: string
+  value: string | number
+  label: string
+}) {
+  return (
+    <div className="bg-surface border border-border rounded-xl p-5 shadow-sm">
+      <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-3 ${iconBg}`}>
+        <Icon className={`w-5 h-5 ${iconColor}`} />
+      </div>
+      <p className="text-2xl font-bold text-sage-900">{value}</p>
+      <p className="text-sm text-sage-500 mt-0.5">{label}</p>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Briefing History Item
+// ---------------------------------------------------------------------------
+
+function BriefingHistoryItem({ briefing }: { briefing: Briefing }) {
+  const [expanded, setExpanded] = useState(false)
+  const content = briefing.content
+
+  return (
+    <div className="bg-surface border border-border rounded-xl shadow-sm overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-between p-4 text-left hover:bg-sage-50/50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <FileText className="w-4 h-4 text-sage-400 flex-shrink-0" />
+          <span className="text-sm font-medium text-sage-900">
+            {formatDate(briefing.created_at)}
+          </span>
+          <span
+            className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+              briefing.type === 'weekly'
+                ? 'bg-teal-100 text-teal-700'
+                : 'bg-gold-100 text-gold-700'
+            }`}
+          >
+            {briefing.type === 'weekly' ? 'Weekly' : 'Monthly'}
+          </span>
+          <span
+            className={`text-xs font-medium px-2 py-0.5 rounded-full ${outlookStyles(
+              content.demand_outlook.outlook
+            )}`}
+          >
+            {outlookLabel(content.demand_outlook.outlook)} ({content.demand_outlook.score})
+          </span>
+        </div>
+        {expanded ? (
+          <ChevronUp className="w-4 h-4 text-sage-400 flex-shrink-0" />
+        ) : (
+          <ChevronDown className="w-4 h-4 text-sage-400 flex-shrink-0" />
+        )}
+      </button>
+
+      {expanded && (
+        <div className="border-t border-border px-4 pb-4 pt-3 space-y-4">
+          <p className="text-sm text-sage-700 leading-relaxed">{content.summary}</p>
+
+          {/* Compact metrics */}
+          <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+            <span className="text-sage-600">
+              <span className="font-semibold text-sage-900">{content.metrics.new_inquiries}</span>{' '}
+              inquiries
+            </span>
+            <span className="text-sage-600">
+              <span className="font-semibold text-sage-900">{content.metrics.tours_scheduled}</span>{' '}
+              tours
+            </span>
+            <span className="text-sage-600">
+              <span className="font-semibold text-sage-900">{content.metrics.bookings}</span>{' '}
+              bookings
+            </span>
+            <span className="text-sage-600">
+              <span className="font-semibold text-sage-900">{content.metrics.lost_deals}</span>{' '}
+              lost
+            </span>
+            <span className="text-sage-600">
+              <span className="font-semibold text-sage-900">
+                {formatCurrency(content.metrics.revenue_booked)}
+              </span>{' '}
+              revenue
+            </span>
+          </div>
+
+          {/* Highlights */}
+          {content.trend_highlights.length > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1.5">
+                Highlights
+              </h4>
+              <ul className="space-y-1">
+                {content.trend_highlights.map((h, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-sage-700">
+                    <TrendingUp className="w-3.5 h-3.5 text-teal-500 mt-0.5 flex-shrink-0" />
+                    {h}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Recommendations */}
+          {content.recommendations.length > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1.5">
+                Recommendations
+              </h4>
+              <ol className="space-y-1 list-decimal list-inside">
+                {content.recommendations.map((r, i) => (
+                  <li key={i} className="text-sm text-sage-700">
+                    {r}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main Page
+// ---------------------------------------------------------------------------
+
+export default function BriefingsPage() {
+  const [activeTab, setActiveTab] = useState<'weekly' | 'monthly'>('weekly')
+  const [briefing, setBriefing] = useState<Briefing | null>(null)
+  const [history, setHistory] = useState<Briefing[]>([])
+  const [loading, setLoading] = useState(true)
+  const [generating, setGenerating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [historyExpanded, setHistoryExpanded] = useState(false)
+
+  // Fetch latest briefing for the selected type
+  const fetchLatest = useCallback(async (type: 'weekly' | 'monthly') => {
+    try {
+      const res = await fetch(`/api/intel/briefings?type=${type}`)
+      if (!res.ok) throw new Error(`Failed to fetch briefing (${res.status})`)
+      const json = await res.json()
+      setBriefing(json.briefing ?? null)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load briefing')
+      setBriefing(null)
+    }
+  }, [])
+
+  // Fetch all briefings for history
+  const fetchHistory = useCallback(async () => {
+    try {
+      const res = await fetch('/api/intel/briefings?all=true')
+      if (!res.ok) return
+      const json = await res.json()
+      if (Array.isArray(json.briefings)) {
+        setHistory(json.briefings)
+      }
+    } catch {
+      // Silently ignore — history is not critical
+    }
+  }, [])
+
+  // Initial load
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      await Promise.all([fetchLatest(activeTab), fetchHistory()])
+      setLoading(false)
+    }
+    load()
+  }, [activeTab, fetchLatest, fetchHistory])
+
+  // Generate new briefing
+  const handleGenerate = async () => {
+    setGenerating(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/intel/briefings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: activeTab }),
+      })
+      if (!res.ok) throw new Error(`Generation failed (${res.status})`)
+      const json = await res.json()
+      if (json.briefing) {
+        setBriefing(json.briefing)
+      }
+      // Refresh history
+      await fetchHistory()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to generate briefing')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const content = briefing?.content ?? null
+
+  // Filter history to exclude the currently displayed briefing
+  const pastBriefings = history.filter((b) => b.id !== briefing?.id)
+
+  return (
+    <div className="space-y-8">
+      {/* ------------------------------------------------------------------ */}
+      {/* Header                                                              */}
+      {/* ------------------------------------------------------------------ */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-3xl font-bold text-sage-900 mb-1">
+            Intelligence Briefings
+          </h1>
+          <p className="text-sage-600 text-sm">
+            AI-generated venue intelligence, delivered weekly and monthly.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {/* Tab Toggle */}
+          <div className="inline-flex rounded-lg border border-border bg-surface p-0.5">
+            <button
+              onClick={() => setActiveTab('weekly')}
+              className={`px-3.5 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                activeTab === 'weekly'
+                  ? 'bg-sage-500 text-white shadow-sm'
+                  : 'text-sage-600 hover:text-sage-900'
+              }`}
+            >
+              Weekly
+            </button>
+            <button
+              onClick={() => setActiveTab('monthly')}
+              className={`px-3.5 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                activeTab === 'monthly'
+                  ? 'bg-sage-500 text-white shadow-sm'
+                  : 'text-sage-600 hover:text-sage-900'
+              }`}
+            >
+              Monthly
+            </button>
+          </div>
+
+          {/* Generate Button */}
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            className="inline-flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors"
+          >
+            <RefreshCw className={`w-4 h-4 ${generating ? 'animate-spin' : ''}`} />
+            {generating ? 'Generating...' : 'Generate New'}
+          </button>
+        </div>
+      </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Error State                                                         */}
+      {/* ------------------------------------------------------------------ */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0" />
+          <p className="text-sm text-sage-900">{error}</p>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Loading State                                                       */}
+      {/* ------------------------------------------------------------------ */}
+      {loading && (
+        <>
+          <SkeletonHero />
+          <SkeletonMetrics />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <SkeletonSection />
+            <SkeletonSection />
+            <SkeletonSection />
+            <SkeletonSection />
+          </div>
+        </>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* No Briefing State                                                   */}
+      {/* ------------------------------------------------------------------ */}
+      {!loading && !content && (
+        <div className="bg-surface border border-border rounded-xl p-12 shadow-sm text-center">
+          <FileText className="w-10 h-10 text-sage-300 mx-auto mb-3" />
+          <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">
+            No {activeTab} briefing yet
+          </h3>
+          <p className="text-sm text-sage-500 max-w-md mx-auto">
+            Click &ldquo;Generate New&rdquo; to create your first {activeTab} intelligence briefing.
+            The AI will analyze your venue data, market trends, and upcoming weather to produce
+            actionable insights.
+          </p>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Latest Briefing — Hero Card                                         */}
+      {/* ------------------------------------------------------------------ */}
+      {!loading && content && (
+        <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
+            <div className="flex items-center gap-2 text-xs text-sage-500">
+              <Clock className="w-3.5 h-3.5" />
+              <span>Generated {formatDateTime(content.generated_at)}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span
+                className={`text-xs font-medium px-2.5 py-1 rounded-full ${
+                  briefing?.type === 'weekly'
+                    ? 'bg-teal-100 text-teal-700'
+                    : 'bg-gold-100 text-gold-700'
+                }`}
+              >
+                {briefing?.type === 'weekly' ? 'Weekly' : 'Monthly'}
+              </span>
+              <span
+                className={`text-xs font-medium px-2.5 py-1 rounded-full ${outlookStyles(
+                  content.demand_outlook.outlook
+                )}`}
+              >
+                {outlookLabel(content.demand_outlook.outlook)} Outlook &middot;{' '}
+                {content.demand_outlook.score}/100
+              </span>
+            </div>
+          </div>
+
+          <p className="text-lg text-sage-800 leading-relaxed">{content.summary}</p>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Metrics Row                                                         */}
+      {/* ------------------------------------------------------------------ */}
+      {!loading && content && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <StatCard
+            icon={FileText}
+            iconBg="bg-teal-100"
+            iconColor="text-teal-500"
+            value={content.metrics.new_inquiries}
+            label="New Inquiries"
+          />
+          <StatCard
+            icon={Calendar}
+            iconBg="bg-sage-100"
+            iconColor="text-sage-600"
+            value={content.metrics.tours_scheduled}
+            label="Tours Scheduled"
+          />
+          <StatCard
+            icon={TrendingUp}
+            iconBg="bg-emerald-100"
+            iconColor="text-emerald-600"
+            value={content.metrics.bookings}
+            label="Bookings"
+          />
+          <StatCard
+            icon={AlertTriangle}
+            iconBg="bg-red-50"
+            iconColor="text-red-500"
+            value={content.metrics.lost_deals}
+            label="Lost Deals"
+          />
+          <StatCard
+            icon={BarChart3}
+            iconBg="bg-gold-100"
+            iconColor="text-gold-500"
+            value={formatCurrency(content.metrics.revenue_booked)}
+            label="Revenue Booked"
+          />
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Content Sections                                                    */}
+      {/* ------------------------------------------------------------------ */}
+      {!loading && content && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Trend Highlights */}
+          <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+            <h3 className="font-heading text-base font-semibold text-sage-900 mb-4 flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-teal-500" />
+              Trend Highlights
+            </h3>
+            {content.trend_highlights.length > 0 ? (
+              <ul className="space-y-3">
+                {content.trend_highlights.map((highlight, i) => (
+                  <li key={i} className="flex items-start gap-2.5">
+                    <TrendingUp className="w-4 h-4 text-teal-400 mt-0.5 flex-shrink-0" />
+                    <span className="text-sm text-sage-700 leading-relaxed">{highlight}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-sage-400">No trend highlights for this period.</p>
+            )}
+          </div>
+
+          {/* Weather Outlook */}
+          <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+            <h3 className="font-heading text-base font-semibold text-sage-900 mb-4 flex items-center gap-2">
+              <Cloud className="w-5 h-5 text-sage-500" />
+              Weather Outlook
+            </h3>
+            {content.weather_outlook ? (
+              <div className="flex items-start gap-2.5">
+                <Cloud className="w-4 h-4 text-sage-400 mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-sage-700 leading-relaxed">{content.weather_outlook}</p>
+              </div>
+            ) : (
+              <p className="text-sm text-sage-400">No weather data available.</p>
+            )}
+          </div>
+
+          {/* Anomaly Summary */}
+          <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+            <h3 className="font-heading text-base font-semibold text-sage-900 mb-4 flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-gold-500" />
+              Anomaly Summary
+            </h3>
+            {content.anomaly_summary.length > 0 ? (
+              <ul className="space-y-3">
+                {content.anomaly_summary.map((anomaly, i) => (
+                  <li key={i} className="flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-gold-400 mt-0.5 flex-shrink-0" />
+                    <span className="text-sm text-sage-700 leading-relaxed">{anomaly}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-sage-400">No anomalies detected. Everything looks normal.</p>
+            )}
+          </div>
+
+          {/* Recommendations */}
+          <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+            <h3 className="font-heading text-base font-semibold text-sage-900 mb-4 flex items-center gap-2">
+              <Lightbulb className="w-5 h-5 text-gold-500" />
+              Recommendations
+            </h3>
+            {content.recommendations.length > 0 ? (
+              <ol className="space-y-3">
+                {content.recommendations.map((rec, i) => (
+                  <li key={i} className="flex items-start gap-2.5">
+                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-gold-100 text-gold-700 text-xs font-semibold flex items-center justify-center mt-0.5">
+                      {i + 1}
+                    </span>
+                    <span className="text-sm text-sage-700 leading-relaxed">{rec}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="text-sm text-sage-400">No recommendations for this period.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Briefing History                                                    */}
+      {/* ------------------------------------------------------------------ */}
+      {!loading && pastBriefings.length > 0 && (
+        <section>
+          <button
+            onClick={() => setHistoryExpanded(!historyExpanded)}
+            className="flex items-center gap-2 mb-4 group"
+          >
+            <h2 className="font-heading text-xl font-bold text-sage-900 flex items-center gap-2">
+              <FileText className="w-5 h-5 text-sage-400" />
+              Briefing History
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-sage-100 text-sage-600">
+                {pastBriefings.length}
+              </span>
+            </h2>
+            {historyExpanded ? (
+              <ChevronUp className="w-4 h-4 text-sage-400 group-hover:text-sage-600 transition-colors" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-sage-400 group-hover:text-sage-600 transition-colors" />
+            )}
+          </button>
+
+          {historyExpanded && (
+            <div className="space-y-2">
+              {pastBriefings.map((b) => (
+                <BriefingHistoryItem key={b.id} briefing={b} />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   )
 }

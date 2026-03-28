@@ -1,0 +1,91 @@
+import { createServerSupabaseClient } from '@/lib/supabase/server'
+import { NextRequest, NextResponse } from 'next/server'
+import {
+  getLatestBriefing,
+  getAllBriefings,
+  generateWeeklyBriefing,
+  generateMonthlyBriefing,
+} from '@/lib/services/briefings'
+
+// ---------------------------------------------------------------------------
+// Auth helper
+// ---------------------------------------------------------------------------
+
+async function getAuthVenue() {
+  const supabase = await createServerSupabaseClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+
+  const { data: profile } = await supabase
+    .from('user_profiles')
+    .select('venue_id')
+    .eq('id', user.id)
+    .single()
+
+  return profile?.venue_id
+    ? { userId: user.id, venueId: profile.venue_id as string }
+    : null
+}
+
+// ---------------------------------------------------------------------------
+// GET — Latest briefing(s)
+//   ?type=weekly|monthly  (default: weekly)
+//   ?all=true             for a list of recent briefings (limit 10)
+// ---------------------------------------------------------------------------
+
+export async function GET(request: NextRequest) {
+  const auth = await getAuthVenue()
+  if (!auth) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  try {
+    const { searchParams } = new URL(request.url)
+    const type = searchParams.get('type') ?? 'weekly'
+    const all = searchParams.get('all') === 'true'
+
+    if (all) {
+      const briefings = await getAllBriefings(auth.venueId, 10)
+      return NextResponse.json({ briefings })
+    }
+
+    const briefing = await getLatestBriefing(auth.venueId, type)
+    return NextResponse.json({ briefing })
+  } catch (err) {
+    console.error('[api/intel/briefings] GET error:', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST — Generate a new briefing
+//   Body: { type: 'weekly' | 'monthly' }
+// ---------------------------------------------------------------------------
+
+export async function POST(request: NextRequest) {
+  const auth = await getAuthVenue()
+  if (!auth) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  try {
+    const body = await request.json()
+    const type = body.type ?? 'weekly'
+
+    if (type !== 'weekly' && type !== 'monthly') {
+      return NextResponse.json(
+        { error: 'Invalid briefing type. Must be "weekly" or "monthly".' },
+        { status: 400 }
+      )
+    }
+
+    const briefing = type === 'weekly'
+      ? await generateWeeklyBriefing(auth.venueId)
+      : await generateMonthlyBriefing(auth.venueId)
+
+    return NextResponse.json({ briefing })
+  } catch (err) {
+    console.error('[api/intel/briefings] POST error:', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}

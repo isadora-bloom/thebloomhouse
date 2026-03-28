@@ -1,8 +1,571 @@
-export default function IntelligenceDashboardPage() {
+'use client'
+
+import { useState, useEffect, useCallback } from 'react'
+import {
+  AlertTriangle,
+  Shield,
+  CheckCircle,
+  RefreshCw,
+  BarChart3,
+  TrendingUp,
+  DollarSign,
+  Lightbulb,
+  Clock,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react'
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface AICause {
+  cause: string
+  likelihood: 'high' | 'medium' | 'low'
+  action: string
+}
+
+interface AnomalyAlert {
+  id: string
+  venue_id: string
+  alert_type: string
+  metric_name: string
+  current_value: number
+  baseline_value: number
+  change_percent: number
+  severity: 'info' | 'warning' | 'critical'
+  ai_explanation: string | null
+  causes: AICause[] | null
+  acknowledged: boolean
+  created_at: string
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatMetricName(name: string): string {
+  const map: Record<string, string> = {
+    inquiry_volume: 'Inquiry Volume',
+    response_time: 'Response Time',
+    tour_conversion: 'Tour Conversion',
+    booking_rate: 'Booking Rate',
+    avg_booking_value: 'Avg Booking Value',
+    lost_deal_rate: 'Lost Deal Rate',
+  }
+  return map[name] ?? name
+}
+
+function formatMetricValue(name: string, value: number): string {
+  switch (name) {
+    case 'inquiry_volume':
+      return `${Math.round(value)}`
+    case 'response_time':
+      return `${Math.round(value)}m`
+    case 'tour_conversion':
+    case 'booking_rate':
+    case 'lost_deal_rate':
+      return `${(value * 100).toFixed(1)}%`
+    case 'avg_booking_value':
+      return `$${Math.round(value).toLocaleString()}`
+    default:
+      return String(value)
+  }
+}
+
+function formatChangePercent(value: number): string {
+  const pct = (value * 100).toFixed(1)
+  return value > 0 ? `+${pct}%` : `${pct}%`
+}
+
+function severityConfig(severity: 'info' | 'warning' | 'critical') {
+  switch (severity) {
+    case 'critical':
+      return {
+        badge: 'bg-red-50 text-red-700 border border-red-200',
+        icon: AlertTriangle,
+        accent: 'border-l-red-500',
+        label: 'Critical',
+      }
+    case 'warning':
+      return {
+        badge: 'bg-amber-50 text-amber-700 border border-amber-200',
+        icon: AlertTriangle,
+        accent: 'border-l-amber-500',
+        label: 'Warning',
+      }
+    case 'info':
+      return {
+        badge: 'bg-blue-50 text-blue-700 border border-blue-200',
+        icon: Shield,
+        accent: 'border-l-blue-500',
+        label: 'Info',
+      }
+  }
+}
+
+function likelihoodBadge(likelihood: 'high' | 'medium' | 'low') {
+  switch (likelihood) {
+    case 'high':
+      return 'bg-red-50 text-red-600'
+    case 'medium':
+      return 'bg-amber-50 text-amber-600'
+    case 'low':
+      return 'bg-sage-50 text-sage-600'
+  }
+}
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const minutes = Math.floor(diff / 60000)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton components
+// ---------------------------------------------------------------------------
+
+function StatCardSkeleton() {
   return (
-    <div>
-      <h1 className="font-heading text-3xl font-bold text-sage-900 mb-2">Intelligence Dashboard</h1>
-      <p className="text-sage-600">Venue performance overview.</p>
+    <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+      <div className="animate-pulse space-y-3">
+        <div className="h-4 w-24 bg-sage-100 rounded" />
+        <div className="h-8 w-16 bg-sage-100 rounded" />
+        <div className="h-3 w-32 bg-sage-50 rounded" />
+      </div>
+    </div>
+  )
+}
+
+function AlertCardSkeleton() {
+  return (
+    <div className="bg-surface border border-border rounded-xl p-6 shadow-sm border-l-4 border-l-sage-200">
+      <div className="animate-pulse space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="h-6 w-20 bg-sage-100 rounded-full" />
+          <div className="h-5 w-40 bg-sage-100 rounded" />
+        </div>
+        <div className="h-4 w-full bg-sage-50 rounded" />
+        <div className="h-4 w-3/4 bg-sage-50 rounded" />
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Alert Card Component
+// ---------------------------------------------------------------------------
+
+function AlertCard({
+  alert,
+  onAcknowledge,
+  isAcknowledging,
+}: {
+  alert: AnomalyAlert
+  onAcknowledge: (id: string) => void
+  isAcknowledging: boolean
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const config = severityConfig(alert.severity)
+  const SeverityIcon = config.icon
+  const isNegative = alert.change_percent < 0
+
+  // For metrics where "down" is bad (inquiry_volume, tour_conversion, booking_rate, avg_booking_value)
+  // and where "up" is bad (response_time, lost_deal_rate)
+  const badDirection =
+    ['response_time', 'lost_deal_rate'].includes(alert.metric_name)
+      ? alert.change_percent > 0
+      : alert.change_percent < 0
+
+  return (
+    <div
+      className={`bg-surface border border-border rounded-xl shadow-sm border-l-4 ${config.accent} transition-all`}
+    >
+      <div className="p-6">
+        {/* Header row */}
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3 min-w-0">
+            <SeverityIcon className={`w-5 h-5 mt-0.5 shrink-0 ${
+              alert.severity === 'critical' ? 'text-red-500' :
+              alert.severity === 'warning' ? 'text-amber-500' : 'text-blue-500'
+            }`} />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${config.badge}`}>
+                  {config.label}
+                </span>
+                <h3 className="font-medium text-sage-900">
+                  {formatMetricName(alert.metric_name)}
+                </h3>
+                <span className="text-xs text-sage-500">{timeAgo(alert.created_at)}</span>
+              </div>
+
+              {/* Values row */}
+              <div className="mt-2 flex items-center gap-4 text-sm">
+                <span className="text-sage-600">
+                  Current: <span className="font-medium text-sage-900">{formatMetricValue(alert.metric_name, alert.current_value)}</span>
+                </span>
+                <span className="text-sage-400">vs</span>
+                <span className="text-sage-600">
+                  Baseline: <span className="font-medium text-sage-900">{formatMetricValue(alert.metric_name, alert.baseline_value)}</span>
+                </span>
+                <span className={`font-semibold ${badDirection ? 'text-red-600' : 'text-emerald-600'}`}>
+                  {formatChangePercent(alert.change_percent)}
+                </span>
+              </div>
+
+              {/* AI Explanation */}
+              {alert.ai_explanation && (
+                <p className="mt-3 text-sm text-sage-700 leading-relaxed">
+                  {alert.ai_explanation}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center gap-2 shrink-0">
+            {alert.causes && alert.causes.length > 0 && (
+              <button
+                onClick={() => setExpanded(!expanded)}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-sage-600 border border-sage-200 rounded-lg hover:bg-sage-50 transition-colors"
+              >
+                Causes
+                {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              </button>
+            )}
+            <button
+              onClick={() => onAcknowledge(alert.id)}
+              disabled={isAcknowledging}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-sage-500 hover:bg-sage-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <CheckCircle className="w-3.5 h-3.5" />
+              Acknowledge
+            </button>
+          </div>
+        </div>
+
+        {/* Expandable causes */}
+        {expanded && alert.causes && alert.causes.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-border">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-sage-500 mb-3">
+              Possible Causes
+            </h4>
+            <div className="space-y-3">
+              {alert.causes.map((cause, i) => (
+                <div key={i} className="flex items-start gap-3 text-sm">
+                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider mt-0.5 ${likelihoodBadge(cause.likelihood)}`}>
+                    {cause.likelihood}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-sage-800">{cause.cause}</p>
+                    <p className="text-sage-500 mt-0.5 flex items-center gap-1">
+                      <Lightbulb className="w-3 h-3 shrink-0" />
+                      {cause.action}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main Page Component
+// ---------------------------------------------------------------------------
+
+export default function IntelligenceDashboardPage() {
+  const [alerts, setAlerts] = useState<AnomalyAlert[]>([])
+  const [loading, setLoading] = useState(true)
+  const [running, setRunning] = useState(false)
+  const [acknowledgingId, setAcknowledgingId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // ---- Fetch alerts ----
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const res = await fetch('/api/intel/anomalies')
+      if (!res.ok) throw new Error('Failed to fetch alerts')
+      const data = await res.json()
+      setAlerts(data.alerts ?? [])
+      setError(null)
+    } catch (err) {
+      console.error('Failed to fetch anomaly alerts:', err)
+      setError('Failed to load anomaly alerts')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchAlerts()
+  }, [fetchAlerts])
+
+  // ---- Run detection ----
+  const handleRunDetection = async () => {
+    setRunning(true)
+    try {
+      const res = await fetch('/api/intel/anomalies', { method: 'POST' })
+      if (!res.ok) throw new Error('Failed to run detection')
+      // Refresh after detection
+      await fetchAlerts()
+    } catch (err) {
+      console.error('Failed to run anomaly detection:', err)
+      setError('Failed to run anomaly detection')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  // ---- Acknowledge ----
+  const handleAcknowledge = async (alertId: string) => {
+    setAcknowledgingId(alertId)
+    try {
+      const res = await fetch('/api/intel/anomalies', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alertId }),
+      })
+      if (!res.ok) throw new Error('Failed to acknowledge alert')
+      // Remove from local state
+      setAlerts((prev) => prev.filter((a) => a.id !== alertId))
+    } catch (err) {
+      console.error('Failed to acknowledge alert:', err)
+    } finally {
+      setAcknowledgingId(null)
+    }
+  }
+
+  // ---- Derived stats ----
+  const criticalCount = alerts.filter((a) => a.severity === 'critical').length
+  const warningCount = alerts.filter((a) => a.severity === 'warning').length
+  const infoCount = alerts.filter((a) => a.severity === 'info').length
+
+  // Sort: critical first, then warning, then info
+  const sortedAlerts = [...alerts].sort((a, b) => {
+    const order = { critical: 0, warning: 1, info: 2 }
+    return order[a.severity] - order[b.severity]
+  })
+
+  return (
+    <div className="space-y-8">
+      {/* ---- Header ---- */}
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-3xl font-bold text-sage-900 mb-1">
+            Intelligence Dashboard
+          </h1>
+          <p className="text-sage-600">
+            Anomaly alerts, performance metrics, and venue intelligence at a glance.
+          </p>
+        </div>
+        <button
+          onClick={handleRunDetection}
+          disabled={running}
+          className="flex items-center gap-2 px-4 py-2.5 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+        >
+          <RefreshCw className={`w-4 h-4 ${running ? 'animate-spin' : ''}`} />
+          {running ? 'Running...' : 'Run Anomaly Detection'}
+        </button>
+      </div>
+
+      {/* ---- Error state ---- */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
+          <p className="text-sm text-red-700">{error}</p>
+          <button
+            onClick={() => { setError(null); setLoading(true); fetchAlerts() }}
+            className="ml-auto text-sm font-medium text-red-600 hover:text-red-800 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* ---- Quick Stats Row ---- */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {loading ? (
+          <>
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+          </>
+        ) : (
+          <>
+            <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="p-2 bg-red-50 rounded-lg">
+                  <AlertTriangle className="w-4 h-4 text-red-500" />
+                </div>
+                <span className="text-sm font-medium text-sage-600">Active Alerts</span>
+              </div>
+              <p className="text-3xl font-bold text-sage-900">{alerts.length}</p>
+              <div className="mt-2 flex items-center gap-3 text-xs text-sage-500">
+                {criticalCount > 0 && (
+                  <span className="text-red-600">{criticalCount} critical</span>
+                )}
+                {warningCount > 0 && (
+                  <span className="text-amber-600">{warningCount} warning</span>
+                )}
+                {infoCount > 0 && (
+                  <span className="text-blue-600">{infoCount} info</span>
+                )}
+                {alerts.length === 0 && (
+                  <span className="text-emerald-600">All clear</span>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="p-2 bg-teal-50 rounded-lg">
+                  <TrendingUp className="w-4 h-4 text-teal-600" />
+                </div>
+                <span className="text-sm font-medium text-sage-600">Latest Demand Score</span>
+              </div>
+              <p className="text-3xl font-bold text-sage-900">&mdash;</p>
+              <p className="mt-2 text-xs text-sage-500">Computed from trends data</p>
+            </div>
+
+            <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="p-2 bg-amber-50 rounded-lg">
+                  <Lightbulb className="w-4 h-4 text-amber-600" />
+                </div>
+                <span className="text-sm font-medium text-sage-600">Pending Recommendations</span>
+              </div>
+              <p className="text-3xl font-bold text-sage-900">&mdash;</p>
+              <p className="mt-2 text-xs text-sage-500">AI-generated action items</p>
+            </div>
+
+            <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="p-2 bg-sage-50 rounded-lg">
+                  <DollarSign className="w-4 h-4 text-sage-600" />
+                </div>
+                <span className="text-sm font-medium text-sage-600">AI Cost This Month</span>
+              </div>
+              <p className="text-3xl font-bold text-sage-900">&mdash;</p>
+              <p className="mt-2 text-xs text-sage-500">Tracked via api_costs table</p>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ---- Active Anomaly Alerts ---- */}
+      <section>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2">
+            <Shield className="w-5 h-5 text-sage-600" />
+            Active Anomaly Alerts
+          </h2>
+          {!loading && alerts.length > 0 && (
+            <span className="text-sm text-sage-500">
+              {alerts.length} unacknowledged
+            </span>
+          )}
+        </div>
+
+        {loading ? (
+          <div className="space-y-4">
+            <AlertCardSkeleton />
+            <AlertCardSkeleton />
+            <AlertCardSkeleton />
+          </div>
+        ) : sortedAlerts.length === 0 ? (
+          <div className="bg-surface border border-border rounded-xl p-12 shadow-sm text-center">
+            <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto mb-4" />
+            <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">
+              No active alerts
+            </h3>
+            <p className="text-sm text-sage-600 max-w-md mx-auto">
+              All venue metrics are within normal ranges. Run anomaly detection to check
+              for new deviations against baseline performance.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {sortedAlerts.map((alert) => (
+              <AlertCard
+                key={alert.id}
+                alert={alert}
+                onAcknowledge={handleAcknowledge}
+                isAcknowledging={acknowledgingId === alert.id}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ---- Recent Activity ---- */}
+      <section>
+        <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2 mb-4">
+          <Clock className="w-5 h-5 text-sage-600" />
+          Recent Activity
+        </h2>
+
+        <div className="bg-surface border border-border rounded-xl shadow-sm divide-y divide-border">
+          {loading ? (
+            <div className="p-6 space-y-4">
+              {[...Array(4)].map((_, i) => (
+                <div key={i} className="animate-pulse flex items-center gap-3">
+                  <div className="w-8 h-8 bg-sage-100 rounded-full shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 w-3/4 bg-sage-100 rounded" />
+                    <div className="h-3 w-1/3 bg-sage-50 rounded" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : alerts.length > 0 ? (
+            // Show recent alert events as activity
+            sortedAlerts.slice(0, 8).map((alert) => {
+              const config = severityConfig(alert.severity)
+              const SeverityIcon = config.icon
+              return (
+                <div key={`activity-${alert.id}`} className="px-6 py-4 flex items-center gap-4">
+                  <div className={`p-2 rounded-full shrink-0 ${
+                    alert.severity === 'critical' ? 'bg-red-50' :
+                    alert.severity === 'warning' ? 'bg-amber-50' : 'bg-blue-50'
+                  }`}>
+                    <SeverityIcon className={`w-4 h-4 ${
+                      alert.severity === 'critical' ? 'text-red-500' :
+                      alert.severity === 'warning' ? 'text-amber-500' : 'text-blue-500'
+                    }`} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-sage-800">
+                      <span className="font-medium">{config.label}</span> anomaly detected in{' '}
+                      <span className="font-medium">{formatMetricName(alert.metric_name)}</span>
+                      {' '}&mdash;{' '}
+                      {formatChangePercent(alert.change_percent)} change from baseline
+                    </p>
+                    <p className="text-xs text-sage-500 mt-0.5">{timeAgo(alert.created_at)}</p>
+                  </div>
+                  <BarChart3 className="w-4 h-4 text-sage-300 shrink-0" />
+                </div>
+              )
+            })
+          ) : (
+            <div className="px-6 py-12 text-center">
+              <BarChart3 className="w-8 h-8 text-sage-300 mx-auto mb-3" />
+              <p className="text-sm text-sage-500">
+                No recent activity. Anomaly alerts, briefings, and recommendations will appear here.
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   )
 }

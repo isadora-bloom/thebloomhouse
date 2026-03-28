@@ -4,11 +4,18 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
+import { VenueSelector } from './venue-selector'
+import { UserMenu } from './user-menu'
 import {
   Mail, FileCheck, Kanban, Flame,
   LayoutDashboard, TrendingUp, Users, Newspaper, Star,
   Heart, MessageCircleQuestion, MessagesSquare, BookOpen,
   Settings, Sparkles, Mic, Menu, X,
+  Settings2, Building, ShieldCheck, MessageSquareText, Store,
+  HelpCircle, ListOrdered, Network, Hash, BarChart3, AlertCircle,
+  Building2, MapPin, UsersRound,
+  XCircle, CalendarRange, LineChart, Megaphone, Share2,
+  MapPinIcon, UserCheck, Activity, StickyNote, GitMerge, Workflow,
 } from 'lucide-react'
 
 const navSections = [
@@ -19,6 +26,13 @@ const navSections = [
       { label: 'Drafts', href: '/agent/drafts', icon: FileCheck },
       { label: 'Pipeline', href: '/agent/pipeline', icon: Kanban },
       { label: 'Leads', href: '/agent/leads', icon: Flame },
+      { label: 'Knowledge Gaps', href: '/agent/knowledge-gaps', icon: HelpCircle },
+      { label: 'Sequences', href: '/agent/sequences', icon: ListOrdered },
+      { label: 'Relationships', href: '/agent/relationships', icon: Network },
+      { label: 'Client Codes', href: '/agent/codes', icon: Hash },
+      { label: 'Analytics', href: '/agent/analytics', icon: BarChart3 },
+      { label: 'Error Log', href: '/agent/errors', icon: AlertCircle },
+      { label: 'Settings', href: '/agent/settings', icon: Settings2 },
     ],
   },
   {
@@ -29,6 +43,28 @@ const navSections = [
       { label: 'Trends', href: '/intel/trends', icon: Sparkles },
       { label: 'Briefings', href: '/intel/briefings', icon: Newspaper },
       { label: 'Reviews', href: '/intel/reviews', icon: Star },
+      { label: 'Team', href: '/intel/team', icon: Users },
+      { label: 'Ask Anything', href: '/intel/nlq', icon: MessageSquareText },
+      { label: 'Lost Deals', href: '/intel/lost-deals', icon: XCircle },
+      { label: 'Capacity', href: '/intel/capacity', icon: CalendarRange },
+      { label: 'Forecasts', href: '/intel/forecasts', icon: LineChart },
+      { label: 'Campaigns', href: '/intel/campaigns', icon: Megaphone },
+      { label: 'Social', href: '/intel/social', icon: Share2 },
+      { label: 'Tours', href: '/intel/tours', icon: MapPinIcon },
+      { label: 'Clients', href: '/intel/clients', icon: UserCheck },
+      { label: 'Health Score', href: '/intel/health', icon: Activity },
+      { label: 'Annotations', href: '/intel/annotations', icon: StickyNote },
+      { label: 'Deduplication', href: '/intel/matching', icon: GitMerge },
+      { label: 'Correlations', href: '/intel/cross', icon: Workflow },
+    ],
+  },
+  {
+    title: 'Enterprise',
+    items: [
+      { label: 'Company', href: '/intel/company', icon: Building2 },
+      { label: 'Portfolio', href: '/intel/portfolio', icon: LayoutDashboard },
+      { label: 'Regions', href: '/intel/regions', icon: MapPin },
+      { label: 'Team Compare', href: '/intel/team-compare', icon: UsersRound },
     ],
   },
   {
@@ -38,6 +74,7 @@ const navSections = [
       { label: 'Sage Queue', href: '/portal/sage-queue', icon: MessageCircleQuestion },
       { label: 'Messages', href: '/portal/messages', icon: MessagesSquare },
       { label: 'Knowledge Base', href: '/portal/kb', icon: BookOpen },
+      { label: 'Vendors', href: '/portal/vendors', icon: Store },
     ],
   },
   {
@@ -46,6 +83,13 @@ const navSections = [
       { label: 'General', href: '/settings', icon: Settings },
       { label: 'Voice Training', href: '/settings/voice', icon: Mic },
       { label: 'AI Personality', href: '/settings/personality', icon: Sparkles },
+    ],
+  },
+  {
+    title: 'Admin',
+    items: [
+      { label: 'Onboarding', href: '/onboarding', icon: Building },
+      { label: 'Super Admin', href: '/super-admin', icon: ShieldCheck },
     ],
   },
 ]
@@ -58,6 +102,7 @@ export function Sidebar() {
     <nav className="flex flex-col h-full">
       <div className="p-6 border-b border-border">
         <h1 className="font-heading text-xl font-bold text-sage-800">The Bloom House</h1>
+        <VenueSelector />
       </div>
       <div className="flex-1 overflow-y-auto py-4 px-3 space-y-6">
         {navSections.map((section) => (
@@ -89,6 +134,9 @@ export function Sidebar() {
             </ul>
           </div>
         ))}
+      </div>
+      <div className="p-4 border-t border-border flex items-center justify-between">
+        <UserMenu />
       </div>
     </nav>
   )
