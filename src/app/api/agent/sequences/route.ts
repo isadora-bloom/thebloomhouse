@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
           current_step,
           enrolled_at,
           paused_at,
-          weddings:wedding_id(id, couple_names, wedding_date),
+          weddings:wedding_id(id, wedding_date, people!people_wedding_id_fkey(role, first_name, last_name)),
           template:template_id(id, name)
         `)
         .eq('venue_id', auth.venueId)
@@ -34,7 +34,23 @@ export async function GET(request: NextRequest) {
         .order('enrolled_at', { ascending: false })
 
       if (error) throw error
-      return NextResponse.json({ sequences: sequences ?? [] })
+
+      // Build couple_names from people join
+      const mapped = (sequences ?? []).map((s: any) => {
+        const people = s.weddings?.people ?? []
+        const partners = people.filter((p: any) => p.role === 'partner1' || p.role === 'partner2')
+        const names = partners.map((p: any) => [p.first_name, p.last_name].filter(Boolean).join(' ')).filter(Boolean)
+        return {
+          ...s,
+          weddings: {
+            ...s.weddings,
+            couple_names: names.length > 0 ? names.join(' & ') : null,
+            people: undefined,
+          },
+        }
+      })
+
+      return NextResponse.json({ sequences: mapped })
     }
 
     // ── Template list mode ─────────────────────────────────────────────

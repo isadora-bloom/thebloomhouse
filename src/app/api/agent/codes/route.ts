@@ -21,13 +21,29 @@ export async function GET() {
         code,
         format_template,
         created_at,
-        wedding:wedding_id(id, couple_names, wedding_date, status)
+        wedding:wedding_id(id, wedding_date, status, people!people_wedding_id_fkey(role, first_name, last_name))
       `)
       .eq('venue_id', auth.venueId)
       .order('created_at', { ascending: false })
 
     if (error) throw error
-    return NextResponse.json({ codes: data ?? [] })
+
+    // Build couple_names from people join
+    const codes = (data ?? []).map((row: any) => {
+      const people = row.wedding?.people ?? []
+      const partners = people.filter((p: any) => p.role === 'partner1' || p.role === 'partner2')
+      const names = partners.map((p: any) => [p.first_name, p.last_name].filter(Boolean).join(' ')).filter(Boolean)
+      return {
+        ...row,
+        wedding: {
+          ...row.wedding,
+          couple_names: names.length > 0 ? names.join(' & ') : null,
+          people: undefined,
+        },
+      }
+    })
+
+    return NextResponse.json({ codes })
   } catch (err) {
     return serverError(err)
   }
@@ -104,12 +120,27 @@ export async function POST(request: NextRequest) {
         code,
         format_template,
         created_at,
-        wedding:wedding_id(id, couple_names, wedding_date, status)
+        wedding:wedding_id(id, wedding_date, status, people!people_wedding_id_fkey(role, first_name, last_name))
       `)
       .single()
 
     if (error) throw error
-    return NextResponse.json({ client_code: data }, { status: 201 })
+
+    // Build couple_names from people join
+    const row = data as any
+    const people = row?.wedding?.people ?? []
+    const partners = people.filter((p: any) => p.role === 'partner1' || p.role === 'partner2')
+    const names = partners.map((p: any) => [p.first_name, p.last_name].filter(Boolean).join(' ')).filter(Boolean)
+    const client_code = {
+      ...row,
+      wedding: {
+        ...row?.wedding,
+        couple_names: names.length > 0 ? names.join(' & ') : null,
+        people: undefined,
+      },
+    }
+
+    return NextResponse.json({ client_code }, { status: 201 })
   } catch (err) {
     return serverError(err)
   }

@@ -33,7 +33,7 @@ const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 interface ConsultantMetric {
   id: string
   venue_id: string
-  user_id: string
+  consultant_id: string
   period_start: string
   period_end: string
   inquiries_handled: number
@@ -42,14 +42,19 @@ interface ConsultantMetric {
   conversion_rate: number
   avg_response_time_minutes: number
   avg_booking_value: number
-  created_at: string
+  calculated_at: string
 }
 
 interface UserProfile {
   id: string
-  full_name: string
+  first_name: string | null
+  last_name: string | null
   role: string
   avatar_url: string | null
+}
+
+function getFullName(profile: UserProfile): string {
+  return [profile.first_name, profile.last_name].filter(Boolean).join(' ') || 'Unknown'
 }
 
 interface ConsultantData {
@@ -192,17 +197,17 @@ function ConsultantCard({
         {profile.avatar_url ? (
           <img
             src={profile.avatar_url}
-            alt={profile.full_name}
+            alt={getFullName(profile)}
             className="w-12 h-12 rounded-full object-cover border-2 border-sage-100"
           />
         ) : (
           <div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold ${avatarColor}`}>
-            {getInitials(profile.full_name)}
+            {getInitials(getFullName(profile))}
           </div>
         )}
         <div>
           <h3 className="font-heading text-base font-semibold text-sage-900">
-            {profile.full_name}
+            {getFullName(profile)}
           </h3>
           <span className="text-xs font-medium text-sage-500 capitalize">
             {profile.role.replace(/_/g, ' ')}
@@ -322,11 +327,11 @@ export default function TeamPerformancePage() {
       }
 
       // Get unique user IDs and fetch profiles
-      const userIds = Array.from(new Set(metrics.map((m) => m.user_id)))
+      const userIds = Array.from(new Set(metrics.map((m) => m.consultant_id)))
 
       const { data: profilesData, error: profilesErr } = await supabase
         .from('user_profiles')
-        .select('id, full_name, role, avatar_url')
+        .select('id, first_name, last_name, role, avatar_url')
         .in('id', userIds)
 
       if (profilesErr) throw profilesErr
@@ -340,9 +345,9 @@ export default function TeamPerformancePage() {
       const consultantMap = new Map<string, ConsultantMetric>()
 
       for (const m of metrics) {
-        const existing = consultantMap.get(m.user_id)
+        const existing = consultantMap.get(m.consultant_id)
         if (!existing) {
-          consultantMap.set(m.user_id, { ...m })
+          consultantMap.set(m.consultant_id, { ...m })
         } else {
           existing.inquiries_handled += m.inquiries_handled
           existing.tours_booked += m.tours_booked
@@ -387,7 +392,7 @@ export default function TeamPerformancePage() {
 
   // ---- Chart data ----
   const chartData = consultants.map((c) => ({
-    name: c.profile.full_name.split(' ')[0],
+    name: c.profile.first_name || getFullName(c.profile).split(' ')[0],
     inquiries: c.metrics.inquiries_handled,
     tours: c.metrics.tours_booked,
     bookings: c.metrics.bookings_closed,

@@ -34,11 +34,10 @@ interface SequenceTemplate {
   id: string
   venue_id: string
   name: string
-  trigger_type: 'new_inquiry' | 'no_response' | 'post_tour' | 'post_hold'
+  trigger: 'new_inquiry' | 'no_response' | 'post_tour' | 'post_hold'
   steps: SequenceStep[]
-  active: boolean
+  is_active: boolean
   created_at: string
-  updated_at: string
 }
 
 interface Enrollment {
@@ -48,8 +47,8 @@ interface Enrollment {
   template_id: string
   current_step: number
   status: 'active' | 'paused' | 'completed' | 'cancelled'
-  started_at: string
-  updated_at: string
+  enrolled_at: string
+  created_at: string
   // Joined
   template_name?: string
   couple_name?: string
@@ -156,7 +155,7 @@ function TemplateModal({
   onSave: (data: Partial<SequenceTemplate>) => Promise<void>
 }) {
   const [name, setName] = useState(template?.name ?? '')
-  const [triggerType, setTriggerType] = useState(template?.trigger_type ?? 'new_inquiry')
+  const [triggerType, setTriggerType] = useState(template?.trigger ?? 'new_inquiry')
   const [steps, setSteps] = useState<SequenceStep[]>(
     template?.steps ?? [{ day_offset: 1, template_type: 'follow_up', subject_line: '' }]
   )
@@ -184,9 +183,9 @@ function TemplateModal({
     await onSave({
       id: template?.id,
       name,
-      trigger_type: triggerType as SequenceTemplate['trigger_type'],
+      trigger: triggerType as SequenceTemplate['trigger'],
       steps,
-      active: template?.active ?? true,
+      is_active: template?.is_active ?? true,
     })
     setSaving(false)
   }
@@ -225,7 +224,7 @@ function TemplateModal({
             <label className="block text-sm font-medium text-sage-700 mb-1">Trigger</label>
             <select
               value={triggerType}
-              onChange={(e) => setTriggerType(e.target.value as SequenceTemplate['trigger_type'])}
+              onChange={(e) => setTriggerType(e.target.value as SequenceTemplate['trigger'])}
               className={inputClasses}
             >
               {TRIGGER_TYPES.map((t) => (
@@ -379,15 +378,15 @@ export default function SequencesPage() {
           template_id,
           current_step,
           status,
-          started_at,
-          updated_at,
+          enrolled_at,
+          created_at,
           follow_up_sequence_templates ( name ),
           weddings!wedding_sequences_wedding_id_fkey (
             people!people_wedding_id_fkey ( role, first_name, last_name )
           )
         `)
         .eq('venue_id', VENUE_ID)
-        .order('updated_at', { ascending: false })
+        .order('created_at', { ascending: false })
 
       if (fetchError) throw fetchError
 
@@ -406,8 +405,8 @@ export default function SequencesPage() {
           template_id: row.template_id,
           current_step: row.current_step,
           status: row.status,
-          started_at: row.started_at,
-          updated_at: row.updated_at,
+          enrolled_at: row.enrolled_at,
+          created_at: row.created_at,
           template_name: tmpl?.name ?? 'Unknown',
           couple_name: name1 && name2 ? `${name1} & ${name2}` : name1 || name2 || 'Unknown',
         }
@@ -433,10 +432,9 @@ export default function SequencesPage() {
           .from('follow_up_sequence_templates')
           .update({
             name: data.name,
-            trigger_type: data.trigger_type,
+            trigger: data.trigger,
             steps: data.steps,
-            active: data.active,
-            updated_at: new Date().toISOString(),
+            is_active: data.is_active,
           })
           .eq('id', data.id)
 
@@ -448,9 +446,9 @@ export default function SequencesPage() {
           .insert({
             venue_id: VENUE_ID,
             name: data.name,
-            trigger_type: data.trigger_type,
+            trigger: data.trigger,
             steps: data.steps,
-            active: data.active ?? true,
+            is_active: data.is_active ?? true,
           })
 
         if (insertError) throw insertError
@@ -464,11 +462,11 @@ export default function SequencesPage() {
   }
 
   // ---- Toggle active ----
-  const handleToggleActive = async (id: string, active: boolean) => {
+  const handleToggleActive = async (id: string, is_active: boolean) => {
     try {
       await supabase
         .from('follow_up_sequence_templates')
-        .update({ active: !active, updated_at: new Date().toISOString() })
+        .update({ is_active: !is_active })
         .eq('id', id)
       await fetchTemplates()
     } catch (err) {
@@ -483,9 +481,13 @@ export default function SequencesPage() {
   ) => {
     try {
       const newStatus = action === 'pause' ? 'paused' : action === 'resume' ? 'active' : 'cancelled'
+      const updates: Record<string, unknown> = { status: newStatus }
+      if (action === 'pause') updates.paused_at = new Date().toISOString()
+      if (action === 'cancel') updates.completed_at = new Date().toISOString()
+      if (action === 'resume') updates.paused_at = null
       await supabase
         .from('wedding_sequences')
-        .update({ status: newStatus, updated_at: new Date().toISOString() })
+        .update(updates)
         .eq('id', enrollmentId)
       await fetchEnrollments()
     } catch (err) {
@@ -494,11 +496,11 @@ export default function SequencesPage() {
   }
 
   // ---- Stats ----
-  const activeTemplateCount = templates.filter((t) => t.active).length
+  const activeTemplateCount = templates.filter((t) => t.is_active).length
   const activeEnrollments = enrollments.filter((e) => e.status === 'active').length
   const completedThisMonth = enrollments.filter((e) => {
     if (e.status !== 'completed') return false
-    const d = new Date(e.updated_at)
+    const d = new Date(e.created_at)
     const now = new Date()
     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
   }).length
@@ -624,7 +626,7 @@ export default function SequencesPage() {
           ) : (
             <div className="space-y-3">
               {templates.map((template) => {
-                const trigger = triggerBadge(template.trigger_type)
+                const trigger = triggerBadge(template.trigger)
                 const isExpanded = expandedTemplateId === template.id
                 const steps = template.steps as SequenceStep[] | null
 
@@ -645,7 +647,7 @@ export default function SequencesPage() {
                             >
                               {trigger.label}
                             </span>
-                            {template.active ? (
+                            {template.is_active ? (
                               <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700">
                                 Active
                               </span>
@@ -670,14 +672,14 @@ export default function SequencesPage() {
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           <button
-                            onClick={() => handleToggleActive(template.id, template.active)}
+                            onClick={() => handleToggleActive(template.id, template.is_active)}
                             className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                              template.active
+                              template.is_active
                                 ? 'text-amber-700 bg-amber-50 hover:bg-amber-100'
                                 : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
                             }`}
                           >
-                            {template.active ? 'Deactivate' : 'Activate'}
+                            {template.is_active ? 'Deactivate' : 'Activate'}
                           </button>
                           <button
                             onClick={() => setEditingTemplate(template)}
@@ -809,7 +811,7 @@ export default function SequencesPage() {
                           </td>
                           <td className="px-4 py-3">
                             <span className="text-sm text-sage-600">
-                              {formatDate(enrollment.started_at)}
+                              {formatDate(enrollment.enrolled_at)}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-right">

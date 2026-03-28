@@ -122,7 +122,7 @@ export async function generateDigest(venueId: string): Promise<Digest> {
     // New inquiries in last 24 hours
     supabase
       .from('weddings')
-      .select('id, couple_names')
+      .select('id, people!people_wedding_id_fkey(role, first_name, last_name)')
       .eq('venue_id', venueId)
       .gte('created_at', since),
 
@@ -152,7 +152,7 @@ export async function generateDigest(venueId: string): Promise<Digest> {
     // Upcoming tours (next 7 days)
     supabase
       .from('weddings')
-      .select('couple_names, tour_date')
+      .select('tour_date, people!people_wedding_id_fkey(role, first_name, last_name)')
       .eq('venue_id', venueId)
       .not('tour_date', 'is', null)
       .gte('tour_date', todayStr)
@@ -162,7 +162,7 @@ export async function generateDigest(venueId: string): Promise<Digest> {
     // Upcoming weddings (next 30 days)
     supabase
       .from('weddings')
-      .select('couple_names, wedding_date')
+      .select('wedding_date, people!people_wedding_id_fkey(role, first_name, last_name)')
       .eq('venue_id', venueId)
       .eq('status', 'booked')
       .not('wedding_date', 'is', null)
@@ -216,19 +216,27 @@ export async function generateDigest(venueId: string): Promise<Digest> {
       .lt('created_at', hoursAgo(2)),
   ])
 
+  // ---- Helper: extract couple names from people join ----
+  function getCoupleNames(row: any): string {
+    const people = row.people ?? []
+    const partners = people.filter((p: any) => p.role === 'partner1' || p.role === 'partner2')
+    const names = partners.map((p: any) => [p.first_name, p.last_name].filter(Boolean).join(' ')).filter(Boolean)
+    return names.length > 0 ? names.join(' & ') : 'Unknown'
+  }
+
   // ---- Compute sections ----
 
   const newInquiries = newInquiriesResult.data ?? []
 
   // Tours — map to { couple, date }
-  const tours = (upcomingToursResult.data ?? []).map((t) => ({
-    couple: (t.couple_names as string) ?? 'Unknown',
+  const tours = (upcomingToursResult.data ?? []).map((t: any) => ({
+    couple: getCoupleNames(t),
     date: t.tour_date as string,
   }))
 
   // Weddings — map to { couple, date, days_away }
-  const weddings = (upcomingWeddingsResult.data ?? []).map((w) => ({
-    couple: (w.couple_names as string) ?? 'Unknown',
+  const weddings = (upcomingWeddingsResult.data ?? []).map((w: any) => ({
+    couple: getCoupleNames(w),
     date: w.wedding_date as string,
     days_away: daysBetween(w.wedding_date as string),
   }))

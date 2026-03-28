@@ -34,7 +34,7 @@ function getSupabase() {
 interface ConsultantMetric {
   id: string
   venue_id: string
-  user_id: string
+  consultant_id: string
   period_start: string
   period_end: string
   inquiries_handled: number
@@ -47,7 +47,8 @@ interface ConsultantMetric {
 
 interface UserProfile {
   id: string
-  full_name: string
+  first_name: string | null
+  last_name: string | null
   role: string
 }
 
@@ -156,7 +157,7 @@ export default function TeamComparePage() {
           .select('*')
           .gte('period_start', start)
           .lte('period_end', end),
-        supabase.from('user_profiles').select('id, full_name, role'),
+        supabase.from('user_profiles').select('id, first_name, last_name, role'),
         supabase.from('venues').select('id, name'),
       ])
       if (metricRes.error) throw metricRes.error
@@ -173,11 +174,11 @@ export default function TeamComparePage() {
       // Aggregate by user + venue
       const agg = new Map<string, TeamRow>()
       for (const m of metrics) {
-        const key = `${m.user_id}-${m.venue_id}`
+        const key = `${m.consultant_id}-${m.venue_id}`
         const existing = agg.get(key)
         if (!existing) {
           agg.set(key, {
-            name: profileMap.get(m.user_id)?.full_name ?? 'Unknown',
+            name: (() => { const p = profileMap.get(m.consultant_id); return p ? [p.first_name, p.last_name].filter(Boolean).join(' ') || 'Unknown' : 'Unknown' })(),
             venue: venueMap.get(m.venue_id) ?? 'Unknown',
             inquiries: m.inquiries_handled,
             tours: m.tours_booked,
