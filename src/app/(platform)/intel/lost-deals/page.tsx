@@ -273,7 +273,7 @@ export default function LostDealsPage() {
             Lost Deals
           </h1>
           <p className="text-sage-600">
-            Track lost opportunities, reasons, competitors, and recovery attempts.
+            Analyze every couple who didn't book — what stage they dropped off, why, and what you could do differently. Patterns here reveal your biggest conversion opportunities.
           </p>
         </div>
         <button

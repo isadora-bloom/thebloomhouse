@@ -444,7 +444,7 @@ export default function KnowledgeBasePage() {
             Knowledge Base
           </h1>
           <p className="text-sage-600">
-            Manage venue information and FAQs for Sage.
+            Your venue&apos;s knowledge base — the answers Sage uses when couples ask questions. Add FAQs, upload a CSV, or let resolved Sage Queue items automatically build your knowledge over time.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">

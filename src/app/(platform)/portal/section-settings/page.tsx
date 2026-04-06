@@ -401,7 +401,7 @@ export default function SectionSettingsPage() {
             Portal Sections
           </h1>
           <p className="text-sage-600">
-            Control which sections couples can see in their planning portal.
+            Control which sections are visible on the couple&apos;s planning portal — show, hide, or restrict access. Use this to customize the portal experience for different venues or wedding packages.
           </p>
         </div>
         <div className="flex items-center gap-3">

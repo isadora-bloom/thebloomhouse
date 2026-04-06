@@ -403,7 +403,7 @@ export default function ClientCodesPage() {
             Client Codes
           </h1>
           <p className="text-sage-600">
-            Quick-reference codes for every wedding — useful for phone calls and lookups.
+            Every wedding gets a short reference code for quick lookups during calls or in-person conversations. Click any code to copy it, or use the search to find a specific couple.
           </p>
         </div>
         <button

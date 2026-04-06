@@ -373,7 +373,7 @@ export default function SageQueuePage() {
           )}
         </h1>
         <p className="text-sage-600">
-          Uncertain questions awaiting coordinator review. Your answers train Sage.
+          Questions Sage wasn&apos;t confident enough to answer on her own. Review each one, provide the correct answer, and optionally add it to the Knowledge Base so she learns for next time.
         </p>
       </div>
 

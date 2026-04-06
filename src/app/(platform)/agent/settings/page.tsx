@@ -363,7 +363,7 @@ export default function AgentSettingsPage() {
           Agent Settings
         </h1>
         <p className="text-sage-600">
-          Configure auto-send rules, email sync, and follow-up sequences.
+          Configure your AI agent&apos;s email connection, auto-send thresholds, and operational preferences. Changes here affect how the agent handles all incoming and outgoing communications.
         </p>
       </div>
 

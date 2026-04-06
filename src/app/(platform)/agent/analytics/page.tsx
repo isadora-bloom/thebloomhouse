@@ -369,7 +369,7 @@ export default function AgentAnalyticsPage() {
             Agent Analytics
           </h1>
           <p className="text-sage-600">
-            Performance metrics for email handling and lead conversion.
+            Track how your AI email agent is performing — response times, draft accuracy, and lead conversion rates. Use this to spot trends and measure the impact of your communication strategy.
           </p>
         </div>
         <select

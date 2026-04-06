@@ -264,7 +264,7 @@ export default function TeamComparePage() {
             Team Comparison
           </h1>
           <p className="text-sage-600">
-            Coordinator performance across all venues.
+            Side-by-side team member comparison across key metrics. Identify top performers, spot coaching opportunities, and balance workloads across your team.
           </p>
         </div>
         <div className="flex items-center gap-1 bg-sage-50 rounded-lg p-1">

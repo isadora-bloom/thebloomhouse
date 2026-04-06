@@ -454,7 +454,7 @@ export default function RelationshipsPage() {
             Relationships
           </h1>
           <p className="text-sage-600">
-            Track connections between people across weddings — referrals, family, vendors.
+            Map the connections between your couples, their families, vendors, and referral sources. Spot referral patterns and understand how your clients are connected to each other.
           </p>
         </div>
         <button

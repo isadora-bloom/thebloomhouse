@@ -169,7 +169,7 @@ export default function AnnotationsPage() {
             Event Annotations
           </h1>
           <p className="text-sage-600">
-            Mark known events that explain metric movements (holidays, closures, campaigns).
+            Mark events, promotions, or disruptions on your data timeline — like an open house, a viral post, or a weather cancellation. Annotations help explain spikes and dips so your trends tell the real story.
           </p>
         </div>
         <button

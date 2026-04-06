@@ -463,7 +463,7 @@ export default function VoiceTrainingPage() {
             Voice Training
           </h1>
           <p className="text-sage-600">
-            Train your AI&apos;s voice through interactive games. The more you play, the better it learns.
+            Train your AI&apos;s voice through interactive games — pick the phrasing that sounds like you, flag what doesn&apos;t, and refine until every email feels like it came from your team.
           </p>
         </div>
 

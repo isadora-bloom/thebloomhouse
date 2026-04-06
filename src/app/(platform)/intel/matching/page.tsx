@@ -227,7 +227,7 @@ function MatchingPageInner() {
           Client Deduplication
         </h1>
         <p className="text-sage-600">
-          Review potential duplicate contacts and merge or dismiss matches.
+          Find and resolve duplicate records — couples who inquired from multiple sources or with slightly different names. Merge duplicates to keep your pipeline clean and your data accurate.
         </p>
       </div>
 

@@ -234,7 +234,7 @@ export default function CampaignsPage() {
             Campaign ROI
           </h1>
           <p className="text-sage-600">
-            Track marketing spend, measure returns, and identify top channels.
+            Track marketing spend against results across every channel — The Knot, Instagram ads, Google, and more. See which campaigns actually drive bookings, not just clicks.
           </p>
         </div>
         <button

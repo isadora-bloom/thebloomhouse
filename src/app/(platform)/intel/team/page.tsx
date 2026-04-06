@@ -413,7 +413,7 @@ function TeamPerformancePageInner() {
             Team Performance
           </h1>
           <p className="text-sage-600">
-            Consultant metrics, comparisons, and conversion tracking.
+            Individual performance metrics for every team member — inquiries handled, response times, tours booked, and conversion rates. Use this for coaching conversations and workload balancing.
           </p>
         </div>
 

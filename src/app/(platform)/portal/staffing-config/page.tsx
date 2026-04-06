@@ -329,7 +329,7 @@ export default function StaffingConfigPage() {
             Staffing Configuration
           </h1>
           <p className="text-sage-600">
-            Configure staffing rates, roles, and calculation rules for the couple calculator.
+            Define staffing roles, responsibilities, and day-of assignments. This feeds into the couple&apos;s timeline and helps coordinate your team for each wedding.
           </p>
         </div>
         <div className="flex items-center gap-3">

@@ -192,7 +192,7 @@ export default function CapacityPage() {
             Capacity & Yield
           </h1>
           <p className="text-sage-600">
-            Monthly occupancy, availability, and pricing recommendations.
+            Understand how full your calendar is and where you have availability gaps. Use this to optimize pricing for off-peak dates and maximize revenue per available date.
           </p>
         </div>
         <div className="flex items-center gap-1 bg-sage-50 rounded-lg p-1">

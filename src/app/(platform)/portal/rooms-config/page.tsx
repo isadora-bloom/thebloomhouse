@@ -570,7 +570,7 @@ export default function RoomsConfigPage() {
             Rooms &amp; Accommodations
           </h1>
           <p className="text-sage-600">
-            Configure on-site rooms and partner hotel information for your couples.
+            Manage on-site rooms, suites, and nearby accommodation recommendations. Couples can browse options and reserve rooms for their wedding party and out-of-town guests.
           </p>
         </div>
         <div className="flex items-center gap-3">

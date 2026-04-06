@@ -566,7 +566,7 @@ export default function TrendsPage() {
             Trends & Recommendations
           </h1>
           <p className="text-sage-600 text-sm">
-            Google Trends intelligence and proactive recommendations for your market.
+            AI-analyzed trends from Google search data, seasonal patterns, and your own booking history. Each trend comes with a specific recommendation you can act on.
           </p>
         </div>
 

@@ -337,7 +337,7 @@ export default function SourceAttributionPage() {
           Source Attribution
         </h1>
         <p className="text-sage-600">
-          Marketing spend vs. bookings by channel. Track ROI and optimize your budget.
+          Compare lead sources head-to-head — which channels bring the most inquiries, the highest quality leads, and the best conversion rates. Allocate your marketing budget based on real data.
         </p>
       </div>
 

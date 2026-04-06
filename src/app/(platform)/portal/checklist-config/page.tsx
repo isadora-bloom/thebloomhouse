@@ -695,7 +695,7 @@ export default function ChecklistConfigPage() {
             Checklist Templates
           </h1>
           <p className="text-sage-600">
-            Configure the default checklist for new couples.{' '}
+            Create and manage the default wedding planning checklist that couples see on their portal. Add, reorder, or customize items — each couple gets their own copy they can check off.{' '}
             <span className="text-sage-500">
               {includedCount}/{totalCount} tasks included
             </span>

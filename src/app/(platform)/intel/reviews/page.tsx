@@ -452,7 +452,7 @@ export default function ReviewAnalysisPage() {
             Review Language
           </h1>
           <p className="text-sage-600">
-            Extracted phrases from guest reviews — approve for Sage AI or marketing use.
+            Extracted themes and sentiment from your reviews across The Knot, WeddingWire, and Google. See what guests love most — these phrases get fed back into your AI's voice training.
           </p>
         </div>
         <button

@@ -312,7 +312,7 @@ export default function ShuttleConfigPage() {
             Shuttle Configuration
           </h1>
           <p className="text-sage-600">
-            Configure shuttle and transportation defaults for your couples.
+            Set up shuttle routes, pickup times, and transportation logistics. Couples see these options on their portal to coordinate guest transportation on the wedding day.
           </p>
         </div>
         <div className="flex items-center gap-3">

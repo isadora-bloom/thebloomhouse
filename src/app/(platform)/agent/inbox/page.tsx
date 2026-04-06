@@ -802,13 +802,7 @@ export default function InboxPage() {
             )}
           </h1>
           <p className="text-sage-600">
-            {totalCount} email{totalCount !== 1 ? 's' : ''}
-            {unreadCount > 0 && (
-              <span className="text-sage-500">
-                {' '}
-                &middot; {unreadCount} unread
-              </span>
-            )}
+            Your unified email inbox — every inquiry, client reply, and vendor message in one place. Click any email to view the full thread, and approve or reject AI-drafted replies directly from here.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">

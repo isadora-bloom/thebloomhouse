@@ -290,7 +290,7 @@ export default function DecorConfigPage() {
             Decor Configuration
           </h1>
           <p className="text-sage-600">
-            Configure decor spaces, provided items, and restrictions for your couples.
+            Define your venue&apos;s decor options, add-on packages, and styling choices. These appear on the couple&apos;s portal so they can browse and select their preferences.
           </p>
         </div>
         <div className="flex items-center gap-3">

@@ -505,7 +505,7 @@ export default function BarConfigPage() {
             Bar Configuration
           </h1>
           <p className="text-sage-600">
-            Configure how the bar section works for your couples.
+            Set up your bar service options, signature cocktails, and pricing tiers. Couples will see these choices on their planning portal when customizing their bar package.
           </p>
         </div>
         <div className="flex items-center gap-3">

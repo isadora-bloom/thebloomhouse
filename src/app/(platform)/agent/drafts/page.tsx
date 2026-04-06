@@ -706,7 +706,7 @@ export default function ApprovalQueuePage() {
             Approval Queue
           </h1>
           <p className="text-sage-600">
-            {drafts.length} {activeTab} draft{drafts.length !== 1 ? 's' : ''}
+            Review AI-drafted emails before they go out. Approve to send immediately, edit to refine the message, or reject with feedback so the AI learns your preferences.
           </p>
         </div>
       </div>

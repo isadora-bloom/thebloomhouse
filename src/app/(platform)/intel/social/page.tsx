@@ -216,7 +216,7 @@ export default function SocialPage() {
             Social Media Correlation
           </h1>
           <p className="text-sage-600">
-            Track post performance and correlate with inquiry spikes.
+            Connect your social media performance to real business outcomes. See which posts drove inquiries, which platforms convert best, and when your audience is most engaged.
           </p>
         </div>
         <button

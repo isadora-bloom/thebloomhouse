@@ -380,11 +380,7 @@ ${name}`
             AI Personality
           </h1>
           <p className="text-sage-600">
-            Configure how{' '}
-            <span className="font-semibold text-sage-800">
-              {config.ai_name || 'your AI'} {config.ai_emoji || ''}
-            </span>{' '}
-            communicates with couples.
+            Shape your AI&apos;s personality — warmth, formality, playfulness, and how she signs off. Preview changes in real-time to make sure the voice feels authentically yours.
           </p>
         </div>
         <button

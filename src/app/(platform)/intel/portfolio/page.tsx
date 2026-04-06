@@ -467,8 +467,7 @@ export default function PortfolioOverviewPage() {
           Portfolio Overview
         </h1>
         <p className="text-sage-600">
-          All venues at a glance. Click any card to view that venue&apos;s
-          dashboard, or click a health score to see its breakdown.
+          All venues at a glance — health scores, inquiry volume, bookings, and response times side by side. Click any venue card to drill into that venue's dashboard, or click a health score for the breakdown.
         </p>
       </div>
 

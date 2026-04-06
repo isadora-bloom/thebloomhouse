@@ -425,7 +425,7 @@ export default function SeatingConfigPage() {
             Seating &amp; Floor Plan Configuration
           </h1>
           <p className="text-sage-600">
-            Upload your floor plan and configure default seating layout for couples.
+            Design your default floor plan layouts and table configurations. Couples use this as their starting point when building their seating chart on the portal.
           </p>
         </div>
         <div className="flex items-center gap-3">

@@ -173,7 +173,7 @@ export default function SettingsPage() {
             <Settings className="w-8 h-8 text-sage-500" />
             Venue Settings
           </h1>
-          <p className="text-sage-600">Configure your venue details, branding, and portal appearance.</p>
+          <p className="text-sage-600">Configure your venue&apos;s core details — business info, contact details, pricing, branding colors, fonts, and logo. Changes here affect your couple portal, AI emails, and all client-facing materials.</p>
         </div>
         <button
           onClick={handleSave}

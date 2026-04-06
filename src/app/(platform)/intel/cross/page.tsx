@@ -224,7 +224,7 @@ function CrossIntelligencePageInner() {
           Cross-Intelligence Correlations
         </h1>
         <p className="text-sage-600">
-          Discover relationships between social media, inquiries, bookings, and revenue.
+          Discover how social media activity, inquiry volume, bookings, and revenue move together. The correlation matrix reveals which efforts actually drive results — and which don't.
         </p>
       </div>
 

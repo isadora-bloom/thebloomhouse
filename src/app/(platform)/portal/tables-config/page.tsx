@@ -358,7 +358,7 @@ export default function TablesConfigPage() {
             Tables &amp; Linen Configuration
           </h1>
           <p className="text-sage-600">
-            Configure table types, linen colors, and options for your couples.
+            Configure your table inventory — sizes, shapes, linen options, and default layouts. This is what couples work with when they build their seating arrangements.
           </p>
         </div>
         <div className="flex items-center gap-3">

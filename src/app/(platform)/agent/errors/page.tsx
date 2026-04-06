@@ -338,7 +338,7 @@ export default function ErrorsPage() {
           Error Monitoring
         </h1>
         <p className="text-sage-600">
-          Track and resolve system errors across the Agent pipeline.
+          Monitor failed email syncs, AI errors, and pipeline issues in one place. Resolve errors to keep your agent running smoothly — most issues fix themselves, but flagged ones need your attention.
         </p>
       </div>
 

@@ -437,14 +437,7 @@ export default function LeadsPage() {
             Lead Scoring
           </h1>
           <p className="text-sage-600">
-            {leads.length} scored lead{leads.length !== 1 ? 's' : ''}
-            {leads.length > 0 && (
-              <span className="text-sage-500">
-                {' '}
-                &middot; {tierCounts.hot ?? 0} hot, {tierCounts.warm ?? 0}{' '}
-                warm, {tierCounts.cool ?? 0} cool
-              </span>
-            )}
+            See every lead ranked by engagement heat score — from hot prospects ready to book down to cold leads that need a nudge. Click any lead to view their full profile and history.
           </p>
         </div>
       </div>

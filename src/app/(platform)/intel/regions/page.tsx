@@ -187,7 +187,7 @@ function RegionalAnalyticsPageInner() {
           Regional Analytics
         </h1>
         <p className="text-sage-600">
-          Performance grouped by state/region across all venues.
+          See where your inquiries and bookings come from geographically. Identify strong markets to double down on and underperforming regions that need attention.
         </p>
       </div>
 

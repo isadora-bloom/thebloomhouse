@@ -284,7 +284,7 @@ function CompanyDashboardInner() {
           Company Overview
         </h1>
         <p className="text-sage-600">
-          Cross-venue KPIs, revenue trends, and portfolio performance.
+          High-level business metrics across all your venues — total revenue, booking velocity, and conversion benchmarks. Use this as your executive snapshot.
         </p>
       </div>
 

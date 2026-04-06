@@ -513,8 +513,7 @@ export default function PipelinePage() {
             Pipeline
           </h1>
           <p className="text-sage-600">
-            {totalLeads} active lead{totalLeads !== 1 ? 's' : ''} across all
-            stages
+            Your sales pipeline as a kanban board — drag cards between stages as leads progress from inquiry to booked. Click any couple&apos;s name to open their full profile.
           </p>
         </div>
         <button

@@ -401,7 +401,7 @@ export default function WeddingDetailsConfigPage() {
             Wedding Details Config
           </h1>
           <p className="text-sage-600">
-            Control which wedding detail options appear for your couples.
+            Define the wedding detail fields couples fill out — colors, themes, ceremony style, dietary needs, and more. Customize what information you collect from each couple.
           </p>
         </div>
         <div className="flex items-center gap-3">

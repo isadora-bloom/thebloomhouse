@@ -334,7 +334,7 @@ export default function KnowledgeGapsPage() {
           Knowledge Gaps
         </h1>
         <p className="text-sage-600">
-          Questions Sage couldn&apos;t answer — resolve to improve knowledge coverage.
+          Questions that Sage couldn&apos;t confidently answer. Resolve each gap by adding the correct answer — it gets saved to your Knowledge Base so Sage never misses it again.
         </p>
       </div>
 

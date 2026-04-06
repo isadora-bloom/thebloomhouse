@@ -363,7 +363,7 @@ export default function GuestCareConfigPage() {
             Guest Care Configuration
           </h1>
           <p className="text-sage-600">
-            Configure accessibility, pet policy, dietary options, and guest care details.
+            Configure welcome amenities, guest comfort features, and special accommodation options. Couples use this section to communicate guest needs like mobility access or dietary restrictions.
           </p>
         </div>
         <div className="flex items-center gap-3">

@@ -286,7 +286,7 @@ export default function ToursPage() {
             Tour Tracking
           </h1>
           <p className="text-sage-600">
-            Log tours, track conversions, and manage upcoming visits.
+            Track every tour — scheduled, completed, cancelled, and no-shows. See conversion rates from tour to booking and identify which tour types and times work best.
           </p>
         </div>
         <button

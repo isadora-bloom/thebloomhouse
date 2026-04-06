@@ -219,7 +219,7 @@ export default function ForecastsPage() {
           Revenue Forecasts
         </h1>
         <p className="text-sage-600">
-          Projected revenue by quarter with pipeline weighting.
+          Revenue projections based on your current pipeline, historical booking patterns, and seasonal trends. Use this to plan staffing, inventory, and marketing spend.
         </p>
       </div>
 

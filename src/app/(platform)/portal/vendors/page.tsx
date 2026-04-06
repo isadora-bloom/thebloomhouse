@@ -540,7 +540,7 @@ export default function VendorsPage() {
             Vendor Recommendations
           </h1>
           <p className="text-sage-600">
-            Manage preferred vendors and recommendations for couples.
+            Your curated list of preferred vendors that couples can browse and contact directly. Add vendor details, mark favorites, and track which vendors get the most interest.
           </p>
         </div>
         <button

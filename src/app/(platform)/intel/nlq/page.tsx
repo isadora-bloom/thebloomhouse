@@ -345,7 +345,7 @@ export default function NaturalLanguageQueryPage() {
             Ask Your Data
           </h1>
           <p className="text-sm text-sage-600">
-            Ask questions about your venue performance in plain English.
+            Ask questions about your data in plain English — like &quot;How many inquiries came from Instagram last month?&quot; The AI searches your analytics and gives you a direct answer.
           </p>
         </div>
       </div>

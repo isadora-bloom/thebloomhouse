@@ -214,7 +214,7 @@ function ClientsPageInner() {
           Client Lifecycle
         </h1>
         <p className="text-sage-600">
-          Manage clients from inquiry through completion.
+          Every couple who has ever inquired, toured, or booked — searchable and filterable by status. Click any name to open their full profile with communication history and lifecycle timeline.
         </p>
       </div>
 

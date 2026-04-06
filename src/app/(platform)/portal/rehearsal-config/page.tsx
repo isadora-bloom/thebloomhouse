@@ -244,7 +244,7 @@ export default function RehearsalConfigPage() {
             Rehearsal Configuration
           </h1>
           <p className="text-sage-600">
-            Configure rehearsal dinner options for your couples.
+            Set up rehearsal dinner options, scheduling, and venue details. Couples see this on their portal to coordinate rehearsal logistics with their wedding party.
           </p>
         </div>
         <div className="flex items-center gap-3">

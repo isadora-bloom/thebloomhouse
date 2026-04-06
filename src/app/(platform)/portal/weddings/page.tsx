@@ -498,7 +498,7 @@ export default function WeddingsPage() {
             )}
           </h1>
           <p className="text-sage-600">
-            Active weddings and status management.
+            All weddings managed through your portal — booked, in-planning, and completed. Click any couple to view their portal, or open it as the couple would see it.
           </p>
         </div>
       </div>

@@ -507,7 +507,7 @@ export default function IntelligenceDashboardPage() {
             Intelligence Dashboard
           </h1>
           <p className="text-sage-600">
-            Anomaly alerts, performance metrics, and venue intelligence at a glance.
+            Your daily command center — anomaly alerts, key metrics, and AI-generated insights at a glance. Start here each morning to see what needs attention and what's trending.
           </p>
         </div>
         <button

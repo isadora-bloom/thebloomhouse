@@ -1705,8 +1705,7 @@ export default function MarketPulsePage() {
             Market Pulse
           </h1>
           <p className="text-sage-600 text-sm">
-            Economic signals, weather data, search trends, and AI-powered
-            recommendations for your market.
+            Real-time market intelligence — Google search trends, competitor activity, economic indicators, and seasonal demand signals. Know what's happening in your market before it hits your inbox.
           </p>
         </div>
         <button

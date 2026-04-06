@@ -893,7 +893,7 @@ export default function SequencesPage() {
             Sequences
           </h1>
           <p className="text-sage-600">
-            Automated follow-up sequences that trigger at key moments in the lead and client journey.
+            Automated follow-up workflows that trigger based on lead activity — post-tour nurture, ghosted re-engagement, booking welcome, and pre-event check-ins. Activate a template or build your own.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">

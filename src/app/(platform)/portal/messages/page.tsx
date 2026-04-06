@@ -368,7 +368,7 @@ export default function MessagesPage() {
           Messages
         </h1>
         <p className="text-sage-600">
-          Coordinator-couple messaging threads.
+          Direct messages between your team and couples through the portal. Send updates, answer questions, and keep all wedding communications in one organized thread.
         </p>
       </div>
 

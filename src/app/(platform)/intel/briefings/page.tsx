@@ -386,7 +386,7 @@ export default function BriefingsPage() {
             Intelligence Briefings
           </h1>
           <p className="text-sage-600 text-sm">
-            AI-generated venue intelligence, delivered weekly and monthly.
+            AI-generated weekly and monthly summaries of your venue's performance, market conditions, and recommended actions. Read the latest briefing to stay informed without digging through dashboards.
           </p>
         </div>
 

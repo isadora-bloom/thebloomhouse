@@ -311,7 +311,7 @@ export default function NotificationsPage() {
             Notifications
           </h1>
           <p className="text-sage-600">
-            Configure how and when you receive alerts.
+            Configure how and when you get alerted about new inquiries, AI draft approvals, pipeline changes, and Sage questions. Set thresholds so you only see what matters.
           </p>
         </div>
         <button

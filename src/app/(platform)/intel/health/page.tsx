@@ -345,7 +345,7 @@ export default function HealthDashboardPage() {
           Venue Health Score
         </h1>
         <p className="text-sage-600">
-          Multi-dimensional venue health assessment and improvement recommendations.
+          A composite score measuring your venue's operational health — data quality, pipeline activity, response speed, and booking rate. Click any factor to see what's pulling your score up or down.
         </p>
       </div>
 
