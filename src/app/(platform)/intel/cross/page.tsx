@@ -266,7 +266,7 @@ function CrossIntelligencePageInner() {
               Correlation Matrix
             </h2>
             <div className="overflow-x-auto">
-              <table className="min-w-[600px] w-full">
+              <table className="w-full">
                 <thead>
                   <tr>
                     <th className="p-2 text-xs font-medium text-sage-500" />

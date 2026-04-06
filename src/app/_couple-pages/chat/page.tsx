@@ -302,7 +302,7 @@ export default function SageChatPage() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8rem)]">
+    <div className="flex flex-col h-[calc(100dvh-8rem)]">
       {/* Header */}
       <div className="flex items-center gap-3 pb-4 border-b border-gray-100">
         <div

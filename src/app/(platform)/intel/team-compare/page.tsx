@@ -335,7 +335,7 @@ export default function TeamComparePage() {
               <thead>
                 <tr className="border-b border-border bg-warm-white">
                   <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Name</th>
-                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Venue</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600 hidden md:table-cell">Venue</th>
                   {([
                     ['inquiries', 'Inquiries', Mail],
                     ['tours', 'Tours', CalendarCheck],
@@ -361,13 +361,13 @@ export default function TeamComparePage() {
                 {sorted.map((r, i) => (
                   <tr key={`${r.name}-${r.venue}-${i}`} className="hover:bg-sage-50/50 transition-colors">
                     <td className="px-6 py-4 font-medium text-sage-900">{r.name}</td>
-                    <td className="px-6 py-4 text-sage-600">{r.venue}</td>
+                    <td className="px-6 py-4 text-sage-600 hidden md:table-cell">{r.venue}</td>
                     <td className="px-6 py-4 text-sage-700 tabular-nums">{r.inquiries}</td>
                     <td className="px-6 py-4 text-sage-700 tabular-nums">{r.tours}</td>
                     <td className="px-6 py-4 text-sage-700 tabular-nums">{r.bookings}</td>
                     <td className="px-6 py-4 text-sage-700 tabular-nums">{fmtPct(r.conversionRate)}</td>
-                    <td className="px-6 py-4 text-sage-700 tabular-nums">{fmtMin(r.avgResponseTime)}</td>
-                    <td className="px-6 py-4 text-sage-700 tabular-nums">{fmt$(r.avgBookingValue)}</td>
+                    <td className="px-6 py-4 text-sage-700 tabular-nums hidden lg:table-cell">{fmtMin(r.avgResponseTime)}</td>
+                    <td className="px-6 py-4 text-sage-700 tabular-nums hidden lg:table-cell">{fmt$(r.avgBookingValue)}</td>
                   </tr>
                 ))}
               </tbody>

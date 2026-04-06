@@ -165,7 +165,7 @@ function ConsultantCardSkeleton() {
             <div className="h-3 w-20 bg-sage-50 rounded" />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-14 bg-sage-50 rounded-lg" />
           ))}
@@ -215,7 +215,7 @@ function ConsultantCard({
       </div>
 
       {/* Metrics grid */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <MetricTile
           icon={Mail}
           label="Inquiries"

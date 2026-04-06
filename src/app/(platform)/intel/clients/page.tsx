@@ -287,9 +287,9 @@ function ClientsPageInner() {
                 <tr className="border-b border-border bg-warm-white">
                   <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Client</th>
                   <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Status</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Source</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Event Date</th>
-                  <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-sage-600">Revenue</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600 hidden sm:table-cell">Source</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600 hidden md:table-cell">Event Date</th>
+                  <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-sage-600 hidden sm:table-cell">Revenue</th>
                   <th className="px-5 py-3 w-8" />
                 </tr>
               </thead>

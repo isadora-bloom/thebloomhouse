@@ -132,7 +132,7 @@ function VenueCardSkeleton() {
           <div className="w-14 h-14 bg-sage-100 rounded-full" />
         </div>
         <div className="h-4 w-20 bg-sage-50 rounded" />
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="h-14 bg-sage-50 rounded-lg" />
           ))}
@@ -588,7 +588,7 @@ export default function PortfolioOverviewPage() {
                 </div>
 
                 {/* Metrics row */}
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <div className="bg-warm-white rounded-lg p-2.5 border border-sage-100">
                     <div className="flex items-center gap-1 mb-0.5">
                       <TrendingUp className="w-3 h-3 text-teal-500" />
