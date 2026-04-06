@@ -13,11 +13,13 @@ import {
   Tag,
   ChevronLeft,
   ChevronRight,
+  Crown,
+  Users,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
@@ -30,6 +32,8 @@ interface Photo {
   caption: string | null
   tags: string[]
   is_website: boolean
+  is_hero: boolean
+  people_tags: string[]
   created_at: string
 }
 
@@ -38,6 +42,14 @@ interface PhotoFormData {
   caption: string
   tags: string[]
   is_website: boolean
+  is_hero: boolean
+  people_tags: string[]
+}
+
+interface GuestName {
+  id: string
+  first_name: string
+  last_name: string
 }
 
 const PHOTO_TAGS = [
@@ -56,9 +68,11 @@ const EMPTY_FORM: PhotoFormData = {
   caption: '',
   tags: [],
   is_website: false,
+  is_hero: false,
+  people_tags: [],
 }
 
-type TagFilter = 'all' | string
+type TagFilter = 'all' | '_website' | '_hero' | string
 
 // ---------------------------------------------------------------------------
 // Photo Library Page
@@ -72,6 +86,8 @@ export default function PhotoLibraryPage() {
   const [form, setForm] = useState<PhotoFormData>(EMPTY_FORM)
   const [tagFilter, setTagFilter] = useState<TagFilter>('all')
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null)
+  const [guestNames, setGuestNames] = useState<GuestName[]>([])
+  const [peopleSearch, setPeopleSearch] = useState('')
 
   const supabase = createClient()
 
@@ -84,27 +100,60 @@ export default function PhotoLibraryPage() {
       .order('created_at', { ascending: false })
 
     if (!error && data) {
-      setPhotos(data as Photo[])
+      setPhotos(
+        (data as Record<string, unknown>[]).map((d) => ({
+          ...d,
+          is_hero: (d.is_hero as boolean) ?? false,
+          people_tags: (d.people_tags as string[]) ?? [],
+        })) as Photo[]
+      )
     }
     setLoading(false)
   }, [supabase])
 
+  const fetchGuests = useCallback(async () => {
+    const { data } = await supabase
+      .from('guest_list')
+      .select('id, first_name, last_name')
+      .eq('wedding_id', WEDDING_ID)
+      .order('first_name', { ascending: true })
+
+    if (data) {
+      setGuestNames(data as GuestName[])
+    }
+  }, [supabase])
+
   useEffect(() => {
     fetchPhotos()
-  }, [fetchPhotos])
+    fetchGuests()
+  }, [fetchPhotos, fetchGuests])
 
   // ---- Derived ----
   const filtered = photos.filter((p) => {
     if (tagFilter === 'all') return true
+    if (tagFilter === '_website') return p.is_website
+    if (tagFilter === '_hero') return p.is_hero
     return p.tags?.includes(tagFilter)
   })
 
   const websiteCount = photos.filter((p) => p.is_website).length
+  const heroPhoto = photos.find((p) => p.is_hero)
+
+  // ---- Filter counts ----
+  const filterCounts: Record<string, number> = {
+    all: photos.length,
+    _website: websiteCount,
+    _hero: heroPhoto ? 1 : 0,
+  }
+  PHOTO_TAGS.forEach((tag) => {
+    filterCounts[tag] = photos.filter((p) => p.tags?.includes(tag)).length
+  })
 
   // ---- Modal ----
   function openAdd() {
     setForm(EMPTY_FORM)
     setEditingId(null)
+    setPeopleSearch('')
     setShowModal(true)
   }
 
@@ -114,8 +163,11 @@ export default function PhotoLibraryPage() {
       caption: photo.caption || '',
       tags: photo.tags || [],
       is_website: photo.is_website,
+      is_hero: photo.is_hero ?? false,
+      people_tags: photo.people_tags ?? [],
     })
     setEditingId(photo.id)
+    setPeopleSearch('')
     setShowModal(true)
   }
 
@@ -125,6 +177,15 @@ export default function PhotoLibraryPage() {
       tags: prev.tags.includes(tag)
         ? prev.tags.filter((t) => t !== tag)
         : [...prev.tags, tag],
+    }))
+  }
+
+  function togglePersonTag(name: string) {
+    setForm((prev) => ({
+      ...prev,
+      people_tags: prev.people_tags.includes(name)
+        ? prev.people_tags.filter((n) => n !== name)
+        : [...prev.people_tags, name],
     }))
   }
 
@@ -138,6 +199,17 @@ export default function PhotoLibraryPage() {
       caption: form.caption.trim() || null,
       tags: form.tags,
       is_website: form.is_website,
+      is_hero: form.is_hero,
+      people_tags: form.people_tags,
+    }
+
+    // If marking as hero, un-hero all others first
+    if (form.is_hero) {
+      await supabase
+        .from('photo_library')
+        .update({ is_hero: false })
+        .eq('wedding_id', WEDDING_ID)
+        .neq('id', editingId || '')
     }
 
     if (editingId) {
@@ -165,6 +237,22 @@ export default function PhotoLibraryPage() {
     fetchPhotos()
   }
 
+  async function toggleHero(photo: Photo) {
+    const newHeroState = !photo.is_hero
+    // If setting as hero, un-hero all others first
+    if (newHeroState) {
+      await supabase
+        .from('photo_library')
+        .update({ is_hero: false })
+        .eq('wedding_id', WEDDING_ID)
+    }
+    await supabase
+      .from('photo_library')
+      .update({ is_hero: newHeroState })
+      .eq('id', photo.id)
+    fetchPhotos()
+  }
+
   // ---- Lightbox ----
   function openLightbox(idx: number) {
     setLightboxIdx(idx)
@@ -184,6 +272,12 @@ export default function PhotoLibraryPage() {
     }
   }
 
+  // ---- People search filter ----
+  const filteredGuests = guestNames.filter((g) => {
+    const fullName = `${g.first_name} ${g.last_name}`.toLowerCase()
+    return fullName.includes(peopleSearch.toLowerCase())
+  })
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -197,7 +291,9 @@ export default function PhotoLibraryPage() {
             <span className="ml-2 text-lg font-normal text-gray-400">({photos.length})</span>
           </h1>
           <p className="text-gray-500 text-sm">
-            Manage your wedding photos. {websiteCount > 0 && `${websiteCount} shown on your website.`}
+            Manage your wedding photos.{' '}
+            {websiteCount > 0 && `${websiteCount} shown on your website.`}
+            {heroPhoto && ' Hero banner set.'}
           </p>
         </div>
         <button
@@ -210,8 +306,9 @@ export default function PhotoLibraryPage() {
         </button>
       </div>
 
-      {/* Tag Filter */}
+      {/* Filter Tabs */}
       <div className="flex flex-wrap gap-2">
+        {/* All */}
         <button
           onClick={() => setTagFilter('all')}
           className={cn(
@@ -223,33 +320,93 @@ export default function PhotoLibraryPage() {
           style={tagFilter === 'all' ? { backgroundColor: 'var(--couple-primary)' } : undefined}
         >
           All
+          <span
+            className={cn(
+              'ml-1.5 px-1.5 py-0.5 rounded-full text-[10px]',
+              tagFilter === 'all' ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-500'
+            )}
+          >
+            {filterCounts.all}
+          </span>
         </button>
-        {PHOTO_TAGS.map((tag) => {
-          const count = photos.filter((p) => p.tags?.includes(tag)).length
-          return (
-            <button
-              key={tag}
-              onClick={() => setTagFilter(tag)}
-              className={cn(
-                'px-3 py-1.5 rounded-full text-xs font-medium capitalize transition-colors',
-                tagFilter === tag
-                  ? 'text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              )}
-              style={tagFilter === tag ? { backgroundColor: 'var(--couple-primary)' } : undefined}
-            >
-              {tag}
-              {count > 0 && (
-                <span className={cn(
+
+        {/* Website filter */}
+        <button
+          onClick={() => setTagFilter('_website')}
+          className={cn(
+            'px-3 py-1.5 rounded-full text-xs font-medium transition-colors inline-flex items-center gap-1',
+            tagFilter === '_website'
+              ? 'text-white bg-emerald-600'
+              : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+          )}
+        >
+          <Globe className="w-3 h-3" />
+          Website
+          <span
+            className={cn(
+              'ml-1 px-1.5 py-0.5 rounded-full text-[10px]',
+              tagFilter === '_website'
+                ? 'bg-white/20 text-white'
+                : 'bg-emerald-100 text-emerald-600'
+            )}
+          >
+            {filterCounts._website}
+          </span>
+        </button>
+
+        {/* Hero filter */}
+        <button
+          onClick={() => setTagFilter('_hero')}
+          className={cn(
+            'px-3 py-1.5 rounded-full text-xs font-medium transition-colors inline-flex items-center gap-1',
+            tagFilter === '_hero'
+              ? 'text-white bg-amber-500'
+              : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+          )}
+        >
+          <Crown className="w-3 h-3" />
+          Hero
+          <span
+            className={cn(
+              'ml-1 px-1.5 py-0.5 rounded-full text-[10px]',
+              tagFilter === '_hero'
+                ? 'bg-white/20 text-white'
+                : 'bg-amber-100 text-amber-600'
+            )}
+          >
+            {filterCounts._hero}
+          </span>
+        </button>
+
+        {/* Divider */}
+        <div className="w-px h-7 bg-gray-200 self-center" />
+
+        {/* Tag filters */}
+        {PHOTO_TAGS.map((tag) => (
+          <button
+            key={tag}
+            onClick={() => setTagFilter(tag)}
+            className={cn(
+              'px-3 py-1.5 rounded-full text-xs font-medium capitalize transition-colors',
+              tagFilter === tag
+                ? 'text-white'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            )}
+            style={tagFilter === tag ? { backgroundColor: 'var(--couple-primary)' } : undefined}
+          >
+            {tag}
+            {filterCounts[tag] > 0 && (
+              <span
+                className={cn(
                   'ml-1.5 px-1.5 py-0.5 rounded-full text-[10px]',
                   tagFilter === tag ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-500'
-                )}>
-                  {count}
-                </span>
-              )}
-            </button>
-          )
-        })}
+                )}
+              >
+                {filterCounts[tag]}
+              </span>
+            )}
+          </button>
+        ))}
       </div>
 
       {/* Photo Grid */}
@@ -261,17 +418,33 @@ export default function PhotoLibraryPage() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16 bg-white rounded-xl border border-gray-100 shadow-sm">
-          <ImageIcon className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--couple-primary)', opacity: 0.3 }} />
+          <ImageIcon
+            className="w-12 h-12 mx-auto mb-4"
+            style={{ color: 'var(--couple-primary)', opacity: 0.3 }}
+          />
           <h3
             className="text-lg font-semibold mb-2"
-            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+            style={{
+              fontFamily: 'var(--couple-font-heading)',
+              color: 'var(--couple-primary)',
+            }}
           >
-            {tagFilter !== 'all' ? 'No photos with this tag' : 'No photos yet'}
+            {tagFilter === '_website'
+              ? 'No website photos yet'
+              : tagFilter === '_hero'
+                ? 'No hero photo set'
+                : tagFilter !== 'all'
+                  ? 'No photos with this tag'
+                  : 'No photos yet'}
           </h3>
           <p className="text-gray-500 text-sm mb-4">
-            {tagFilter !== 'all'
-              ? 'Try a different tag filter.'
-              : 'Add photos to build your wedding library.'}
+            {tagFilter === '_website'
+              ? 'Toggle the globe icon on photos to show them on your website.'
+              : tagFilter === '_hero'
+                ? 'Set a hero photo using the crown icon to feature it as your website banner.'
+                : tagFilter !== 'all'
+                  ? 'Try a different tag filter.'
+                  : 'Add photos to build your wedding library.'}
           </p>
           {tagFilter === 'all' && (
             <button
@@ -289,7 +462,10 @@ export default function PhotoLibraryPage() {
           {filtered.map((photo, idx) => (
             <div
               key={photo.id}
-              className="group relative aspect-square rounded-xl overflow-hidden border border-gray-100 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
+              className={cn(
+                'group relative aspect-square rounded-xl overflow-hidden border shadow-sm cursor-pointer hover:shadow-md transition-shadow',
+                photo.is_hero ? 'border-amber-400 ring-2 ring-amber-200' : 'border-gray-100'
+              )}
               onClick={() => openLightbox(idx)}
             >
               <img
@@ -304,7 +480,7 @@ export default function PhotoLibraryPage() {
                   {photo.caption && (
                     <p className="text-white text-xs line-clamp-2 mb-1">{photo.caption}</p>
                   )}
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 flex-wrap">
                     {photo.tags?.slice(0, 2).map((tag) => (
                       <span
                         key={tag}
@@ -313,6 +489,12 @@ export default function PhotoLibraryPage() {
                         {tag}
                       </span>
                     ))}
+                    {(photo.people_tags?.length ?? 0) > 0 && (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] bg-blue-500/30 text-white inline-flex items-center gap-0.5">
+                        <Users className="w-2.5 h-2.5" />
+                        {photo.people_tags.length}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -321,6 +503,20 @@ export default function PhotoLibraryPage() {
                   className="absolute top-2 right-2 flex items-center gap-1"
                   onClick={(e) => e.stopPropagation()}
                 >
+                  {/* Hero toggle */}
+                  <button
+                    onClick={() => toggleHero(photo)}
+                    className={cn(
+                      'p-1.5 rounded-md backdrop-blur-sm transition-colors',
+                      photo.is_hero
+                        ? 'bg-amber-500/90 text-white'
+                        : 'bg-black/30 text-white/70 hover:text-amber-300'
+                    )}
+                    title={photo.is_hero ? 'Hero banner photo' : 'Set as hero banner'}
+                  >
+                    <Crown className="w-3.5 h-3.5" />
+                  </button>
+                  {/* Website toggle */}
                   <button
                     onClick={() => toggleWebsite(photo)}
                     className={cn(
@@ -331,7 +527,11 @@ export default function PhotoLibraryPage() {
                     )}
                     title={photo.is_website ? 'Shown on website' : 'Not on website'}
                   >
-                    {photo.is_website ? <Globe className="w-3.5 h-3.5" /> : <GlobeOff className="w-3.5 h-3.5" />}
+                    {photo.is_website ? (
+                      <Globe className="w-3.5 h-3.5" />
+                    ) : (
+                      <GlobeOff className="w-3.5 h-3.5" />
+                    )}
                   </button>
                   <button
                     onClick={() => openEdit(photo)}
@@ -348,15 +548,21 @@ export default function PhotoLibraryPage() {
                 </div>
               </div>
 
-              {/* Website badge (always visible) */}
-              {photo.is_website && (
-                <div className="absolute top-2 left-2">
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-500 text-white">
+              {/* Badges (always visible) */}
+              <div className="absolute top-2 left-2 flex flex-col gap-1">
+                {photo.is_hero && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-500 text-white shadow-sm">
+                    <Crown className="w-2.5 h-2.5" />
+                    Hero
+                  </span>
+                )}
+                {photo.is_website && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-500 text-white shadow-sm">
                     <Globe className="w-2.5 h-2.5" />
                     Website
                   </span>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -364,15 +570,24 @@ export default function PhotoLibraryPage() {
 
       {/* Lightbox */}
       {lightboxIdx !== null && filtered[lightboxIdx] && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90" onClick={closeLightbox}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90"
+          onClick={closeLightbox}
+        >
           <button
-            onClick={(e) => { e.stopPropagation(); lightboxNav('prev') }}
+            onClick={(e) => {
+              e.stopPropagation()
+              lightboxNav('prev')
+            }}
             className="absolute left-4 top-1/2 -translate-y-1/2 p-2 rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
           >
             <ChevronLeft className="w-6 h-6" />
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); lightboxNav('next') }}
+            onClick={(e) => {
+              e.stopPropagation()
+              lightboxNav('next')
+            }}
             className="absolute right-4 top-1/2 -translate-y-1/2 p-2 rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
           >
             <ChevronRight className="w-6 h-6" />
@@ -391,8 +606,30 @@ export default function PhotoLibraryPage() {
               className="max-w-full max-h-[85vh] object-contain rounded-lg"
             />
             {filtered[lightboxIdx].caption && (
-              <p className="text-white text-center mt-3 text-sm">{filtered[lightboxIdx].caption}</p>
+              <p className="text-white text-center mt-3 text-sm">
+                {filtered[lightboxIdx].caption}
+              </p>
             )}
+            <div className="flex items-center justify-center gap-3 mt-2">
+              {filtered[lightboxIdx].is_hero && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-500 text-white">
+                  <Crown className="w-3 h-3" />
+                  Hero Banner
+                </span>
+              )}
+              {filtered[lightboxIdx].is_website && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-emerald-500 text-white">
+                  <Globe className="w-3 h-3" />
+                  On Website
+                </span>
+              )}
+              {(filtered[lightboxIdx].people_tags?.length ?? 0) > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-500 text-white">
+                  <Users className="w-3 h-3" />
+                  {filtered[lightboxIdx].people_tags.join(', ')}
+                </span>
+              )}
+            </div>
             <p className="text-white/50 text-center mt-1 text-xs">
               {lightboxIdx + 1} of {filtered.length}
             </p>
@@ -408,11 +645,17 @@ export default function PhotoLibraryPage() {
             <div className="flex items-center justify-between">
               <h2
                 className="text-lg font-semibold"
-                style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+                style={{
+                  fontFamily: 'var(--couple-font-heading)',
+                  color: 'var(--couple-primary)',
+                }}
               >
                 {editingId ? 'Edit Photo' : 'Add Photo'}
               </h2>
-              <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600">
+              <button
+                onClick={() => setShowModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -455,6 +698,7 @@ export default function PhotoLibraryPage() {
                 />
               </div>
 
+              {/* Context Tags */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   <Tag className="w-3.5 h-3.5 inline mr-1" />
@@ -474,7 +718,9 @@ export default function PhotoLibraryPage() {
                             ? 'text-white border-transparent'
                             : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
                         )}
-                        style={selected ? { backgroundColor: 'var(--couple-primary)' } : undefined}
+                        style={
+                          selected ? { backgroundColor: 'var(--couple-primary)' } : undefined
+                        }
                       >
                         {tag}
                       </button>
@@ -483,16 +729,144 @@ export default function PhotoLibraryPage() {
                 </div>
               </div>
 
-              <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={form.is_website}
-                  onChange={(e) => setForm({ ...form, is_website: e.target.checked })}
-                  className="w-4 h-4 rounded border-gray-300"
-                  style={{ accentColor: 'var(--couple-primary)' }}
-                />
-                Show on wedding website
-              </label>
+              {/* People Tags */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <Users className="w-3.5 h-3.5 inline mr-1" />
+                  People
+                </label>
+
+                {/* Selected people */}
+                {form.people_tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {form.people_tags.map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() => togglePersonTag(name)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors"
+                      >
+                        {name}
+                        <X className="w-3 h-3" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Search guests */}
+                {guestNames.length > 0 ? (
+                  <>
+                    <input
+                      type="text"
+                      value={peopleSearch}
+                      onChange={(e) => setPeopleSearch(e.target.value)}
+                      className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:border-transparent mb-2"
+                      style={
+                        { '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties
+                      }
+                      placeholder="Search guests to tag..."
+                    />
+                    <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                      {filteredGuests
+                        .filter(
+                          (g) =>
+                            !form.people_tags.includes(`${g.first_name} ${g.last_name}`)
+                        )
+                        .slice(0, 20)
+                        .map((g) => {
+                          const fullName = `${g.first_name} ${g.last_name}`
+                          return (
+                            <button
+                              key={g.id}
+                              type="button"
+                              onClick={() => togglePersonTag(fullName)}
+                              className="px-2.5 py-1 rounded-full text-xs font-medium bg-gray-50 text-gray-600 border border-gray-200 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200 transition-colors"
+                            >
+                              {fullName}
+                            </button>
+                          )
+                        })}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs text-gray-400">
+                    No guests in your guest list yet. Add guests first to tag them in photos.
+                  </p>
+                )}
+              </div>
+
+              {/* Show on Website toggle */}
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, is_website: !form.is_website })}
+                  className={cn(
+                    'w-full flex items-center justify-between px-4 py-2.5 rounded-lg border text-sm font-medium transition-all',
+                    form.is_website
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                      : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'
+                  )}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    {form.is_website ? (
+                      <Globe className="w-4 h-4" />
+                    ) : (
+                      <GlobeOff className="w-4 h-4" />
+                    )}
+                    Show on wedding website
+                  </span>
+                  <span
+                    className={cn(
+                      'w-9 h-5 rounded-full relative transition-colors',
+                      form.is_website ? 'bg-emerald-500' : 'bg-gray-300'
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform',
+                        form.is_website ? 'translate-x-4' : 'translate-x-0.5'
+                      )}
+                    />
+                  </span>
+                </button>
+              </div>
+
+              {/* Hero banner toggle */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, is_hero: !form.is_hero })}
+                  className={cn(
+                    'w-full flex items-center justify-between px-4 py-2.5 rounded-lg border text-sm font-medium transition-all',
+                    form.is_hero
+                      ? 'bg-amber-50 border-amber-300 text-amber-700'
+                      : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'
+                  )}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <Crown className="w-4 h-4" />
+                    Set as hero banner
+                  </span>
+                  <span
+                    className={cn(
+                      'w-9 h-5 rounded-full relative transition-colors',
+                      form.is_hero ? 'bg-amber-500' : 'bg-gray-300'
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform',
+                        form.is_hero ? 'translate-x-4' : 'translate-x-0.5'
+                      )}
+                    />
+                  </span>
+                </button>
+                {form.is_hero && (
+                  <p className="text-xs text-amber-600 mt-1 px-1">
+                    Only one photo can be the hero banner. This will replace any existing hero.
+                  </p>
+                )}
+              </div>
             </div>
 
             <div className="flex justify-end gap-3 pt-2">

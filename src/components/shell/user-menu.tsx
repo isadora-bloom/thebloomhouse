@@ -41,7 +41,7 @@ export function UserMenu({ compact = false }: UserMenuProps) {
 
       // Try to get profile data
       const { data: profile } = await supabase
-        .from('profiles')
+        .from('user_profiles')
         .select('full_name, avatar_url, role')
         .eq('id', authUser.id)
         .single()

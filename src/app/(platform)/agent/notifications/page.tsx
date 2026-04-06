@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
   Bell,
@@ -42,9 +43,6 @@ interface RecentNotification {
   read: boolean
   created_at: string
 }
-
-// TODO: Replace with venue from auth context
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSetting[] = [
   {
@@ -166,6 +164,7 @@ function SettingsSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function NotificationsPage() {
+  const VENUE_ID = useVenueId()
   const [settings, setSettings] = useState<NotificationSetting[]>(DEFAULT_NOTIFICATION_SETTINGS)
   const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([])
   const [loading, setLoading] = useState(true)

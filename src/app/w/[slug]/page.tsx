@@ -112,6 +112,32 @@ interface GuestSearchResult {
   plus_one: boolean
 }
 
+interface RsvpCustomQuestion {
+  id: string
+  label: string
+  type: 'text' | 'select' | 'boolean'
+  options?: string[]
+}
+
+interface RsvpConfigData {
+  ask_meal_choice: boolean
+  ask_dietary: boolean
+  ask_allergies: boolean
+  ask_phone: boolean
+  ask_email: boolean
+  ask_address: boolean
+  ask_hotel: boolean
+  ask_shuttle: boolean
+  ask_accessibility: boolean
+  ask_song_request: boolean
+  ask_message: boolean
+  allow_maybe: boolean
+  custom_questions: RsvpCustomQuestion[]
+  rsvp_deadline: string | null
+  attending_message: string | null
+  declined_message: string | null
+}
+
 // ---------------------------------------------------------------------------
 // Theme configs
 // ---------------------------------------------------------------------------
@@ -229,6 +255,7 @@ export default function WeddingWebsitePage() {
   const [timeline, setTimeline] = useState<TimelineItem[]>([])
   const [accommodations, setAccommodations] = useState<Accommodation[]>([])
   const [eventDate, setEventDate] = useState<string | null>(null)
+  const [rsvpConfig, setRsvpConfig] = useState<RsvpConfigData | null>(null)
 
   const fetchData = useCallback(async () => {
     try {
@@ -244,6 +271,7 @@ export default function WeddingWebsitePage() {
       setTimeline(data.timeline ?? [])
       setAccommodations(data.accommodations ?? [])
       setEventDate(data.event_date ?? null)
+      setRsvpConfig(data.rsvp_config ?? null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
@@ -366,6 +394,7 @@ export default function WeddingWebsitePage() {
           timeline={timeline}
           accommodations={accommodations}
           slug={slug}
+          rsvpConfig={rsvpConfig}
         />
       ))}
     </div>
@@ -418,6 +447,7 @@ function SectionRenderer({
   timeline,
   accommodations,
   slug,
+  rsvpConfig,
 }: {
   section: WebsiteSection
   website: WebsiteData
@@ -428,6 +458,7 @@ function SectionRenderer({
   timeline: TimelineItem[]
   accommodations: Accommodation[]
   slug: string
+  rsvpConfig: RsvpConfigData | null
 }) {
   const content = (() => {
     switch (section.type) {
@@ -440,7 +471,7 @@ function SectionRenderer({
       case 'the_day':
         return <ScheduleSection data={section.data} timeline={timeline} theme={theme} accent={accent} />
       case 'rsvp':
-        return <RSVPSection data={section.data} slug={slug} mealOptions={mealOptions} theme={theme} accent={accent} accentRgb={accentRgb} />
+        return <RSVPSection data={section.data} slug={slug} mealOptions={mealOptions} theme={theme} accent={accent} accentRgb={accentRgb} rsvpConfig={rsvpConfig} />
       case 'registry':
         return <RegistrySection data={section.data} website={website} theme={theme} accent={accent} accentRgb={accentRgb} />
       case 'faq':
@@ -685,13 +716,14 @@ function ScheduleSection({ data, timeline, theme, accent }: {
 
 type RSVPStep = 'search' | 'confirm' | 'form' | 'success'
 
-function RSVPSection({ data, slug, mealOptions, theme, accent, accentRgb }: {
+function RSVPSection({ data, slug, mealOptions, theme, accent, rsvpConfig }: {
   data: Record<string, unknown>
   slug: string
   mealOptions: MealOption[]
   theme: typeof THEME_CONFIG.classic
   accent: string
   accentRgb: string
+  rsvpConfig: RsvpConfigData | null
 }) {
   const [step, setStep] = useState<RSVPStep>('search')
   const [searchQuery, setSearchQuery] = useState('')
@@ -700,7 +732,7 @@ function RSVPSection({ data, slug, mealOptions, theme, accent, accentRgb }: {
   const [searchError, setSearchError] = useState<string | null>(null)
   const [selectedGuest, setSelectedGuest] = useState<GuestSearchResult | null>(null)
 
-  const [rsvpStatus, setRsvpStatus] = useState<'attending' | 'declined'>('attending')
+  const [rsvpStatus, setRsvpStatus] = useState<'attending' | 'declined' | 'maybe'>('attending')
   const [mealChoice, setMealChoice] = useState('')
   const [dietary, setDietary] = useState('')
   const [plusOneRsvp, setPlusOneRsvp] = useState<'attending' | 'declined'>('attending')
@@ -709,15 +741,60 @@ function RSVPSection({ data, slug, mealOptions, theme, accent, accentRgb }: {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
-  const deadlineEnabled = data.deadline_enabled as boolean
-  const deadline = data.deadline as string
+  // Extended RSVP fields
+  const [phone, setPhone] = useState('')
+  const [email, setEmail] = useState('')
+  const [address, setAddress] = useState('')
+  const [hotelName, setHotelName] = useState('')
+  const [shuttleNeeded, setShuttleNeeded] = useState<boolean | null>(null)
+  const [accessibilityNeeds, setAccessibilityNeeds] = useState('')
+  const [songRequest, setSongRequest] = useState('')
+  const [messageToCpl, setMessageToCpl] = useState('')
+  const [allergies, setAllergies] = useState('')
+  const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({})
+
+  // Determine deadline: prefer rsvp_config deadline, fall back to section data
+  const configDeadline = rsvpConfig?.rsvp_deadline
+  const sectionDeadlineEnabled = data.deadline_enabled as boolean
+  const sectionDeadline = data.deadline as string
+  const deadline = configDeadline || (sectionDeadlineEnabled ? sectionDeadline : null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // Defaults: if no rsvp_config, show meal + dietary (original behavior)
+  const cfg = rsvpConfig || {
+    ask_meal_choice: true,
+    ask_dietary: true,
+    ask_allergies: false,
+    ask_phone: false,
+    ask_email: false,
+    ask_address: false,
+    ask_hotel: false,
+    ask_shuttle: false,
+    ask_accessibility: false,
+    ask_song_request: false,
+    ask_message: false,
+    allow_maybe: false,
+    custom_questions: [] as RsvpCustomQuestion[],
+    rsvp_deadline: null as string | null,
+    attending_message: null as string | null,
+    declined_message: null as string | null,
+  }
 
   // Check if past deadline
   const isPastDeadline = (() => {
-    if (!deadlineEnabled || !deadline) return false
+    if (!deadline) return false
     return new Date(deadline + 'T23:59:59') < new Date()
   })()
+
+  const rsvpOptions: ('attending' | 'declined' | 'maybe')[] = cfg.allow_maybe
+    ? ['attending', 'maybe', 'declined']
+    : ['attending', 'declined']
+
+  function rsvpLabel(status: string) {
+    if (status === 'attending') return 'Joyfully Accept'
+    if (status === 'maybe') return 'Maybe'
+    return 'Respectfully Decline'
+  }
 
   async function handleSearch() {
     if (searchQuery.trim().length < 2) return
@@ -753,6 +830,29 @@ function RSVPSection({ data, slug, mealOptions, theme, accent, accentRgb }: {
     setStep('form')
   }
 
+  function resetAll() {
+    setStep('search')
+    setSelectedGuest(null)
+    setSearchQuery('')
+    setSearchResults([])
+    setRsvpStatus('attending')
+    setMealChoice('')
+    setDietary('')
+    setPlusOneRsvp('attending')
+    setPlusOneName('')
+    setPlusOneMeal('')
+    setPhone('')
+    setEmail('')
+    setAddress('')
+    setHotelName('')
+    setShuttleNeeded(null)
+    setAccessibilityNeeds('')
+    setSongRequest('')
+    setMessageToCpl('')
+    setAllergies('')
+    setCustomAnswers({})
+  }
+
   async function submitRSVP() {
     if (!selectedGuest) return
     setSubmitting(true)
@@ -761,18 +861,33 @@ function RSVPSection({ data, slug, mealOptions, theme, accent, accentRgb }: {
     try {
       const body: Record<string, unknown> = {
         guest_id: selectedGuest.guest_id,
+        guest_name: selectedGuest.name,
         rsvp_status: rsvpStatus,
       }
 
-      if (rsvpStatus === 'attending') {
-        if (mealChoice) body.meal_preference = mealChoice
-        if (dietary) body.dietary_restrictions = dietary
+      if (rsvpStatus === 'attending' || rsvpStatus === 'maybe') {
+        if (cfg.ask_meal_choice && mealChoice) body.meal_choice = mealChoice
+        if (cfg.ask_dietary && dietary) body.dietary_restrictions = dietary
       }
 
       if (selectedGuest.plus_one) {
         body.plus_one_rsvp = plusOneRsvp
         if (plusOneName) body.plus_one_name = plusOneName
         if (plusOneRsvp === 'attending' && plusOneMeal) body.plus_one_meal = plusOneMeal
+      }
+
+      // Extended fields
+      if (cfg.ask_phone && phone) body.phone = phone
+      if (cfg.ask_email && email) body.email = email
+      if (cfg.ask_address && address) body.address = address
+      if (cfg.ask_hotel && hotelName) body.hotel_name = hotelName
+      if (cfg.ask_shuttle && shuttleNeeded !== null) body.shuttle_needed = shuttleNeeded
+      if (cfg.ask_accessibility && accessibilityNeeds) body.accessibility_needs = accessibilityNeeds
+      if (cfg.ask_song_request && songRequest) body.song_request = songRequest
+      if (cfg.ask_message && messageToCpl) body.message_to_couple = messageToCpl
+      if (cfg.ask_allergies && allergies) body.allergies = allergies
+      if (cfg.custom_questions.length > 0 && Object.keys(customAnswers).length > 0) {
+        body.custom_answers = customAnswers
       }
 
       const res = await fetch(
@@ -803,11 +918,15 @@ function RSVPSection({ data, slug, mealOptions, theme, accent, accentRgb }: {
 
   const inputClass = 'w-full px-4 py-3 border rounded-lg text-sm focus:outline-none focus:ring-2 transition-colors bg-white'
 
+  // Confirmation messages
+  const attendingMsg = cfg.attending_message || "Your RSVP has been received. We cannot wait to celebrate with you!"
+  const declinedMsg = cfg.declined_message || "We will miss you! Your response has been recorded."
+
   return (
     <>
       <SectionHeading title="RSVP" icon={CheckCircle2} accent={accent} headingFont={theme.headingFont} />
 
-      {deadlineEnabled && deadline && (
+      {deadline && (
         <p className="text-center text-xs mb-6" style={{ color: theme.mutedColor }}>
           {isPastDeadline
             ? 'The RSVP deadline has passed.'
@@ -930,8 +1049,8 @@ function RSVPSection({ data, slug, mealOptions, theme, accent, accentRgb }: {
                 <label className="block text-xs font-medium" style={{ color: theme.textColor }}>
                   Will you be attending?
                 </label>
-                <div className="grid grid-cols-2 gap-3">
-                  {(['attending', 'declined'] as const).map((status) => (
+                <div className={`grid gap-3 ${cfg.allow_maybe ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                  {rsvpOptions.map((status) => (
                     <button
                       key={status}
                       onClick={() => setRsvpStatus(status)}
@@ -942,16 +1061,16 @@ function RSVPSection({ data, slug, mealOptions, theme, accent, accentRgb }: {
                         color: rsvpStatus === status ? accent : theme.mutedColor,
                       }}
                     >
-                      {status === 'attending' ? 'Joyfully Accept' : 'Respectfully Decline'}
+                      {rsvpLabel(status)}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {rsvpStatus === 'attending' && (
+              {(rsvpStatus === 'attending' || rsvpStatus === 'maybe') && (
                 <>
                   {/* Meal preference */}
-                  {mealOptions.length > 0 && (
+                  {cfg.ask_meal_choice && mealOptions.length > 0 && (
                     <div className="space-y-2">
                       <label className="block text-xs font-medium" style={{ color: theme.textColor }}>
                         <Utensils className="w-3 h-3 inline mr-1" />
@@ -981,20 +1100,229 @@ function RSVPSection({ data, slug, mealOptions, theme, accent, accentRgb }: {
                   )}
 
                   {/* Dietary restrictions */}
-                  <div className="space-y-2">
-                    <label className="block text-xs font-medium" style={{ color: theme.textColor }}>
-                      Dietary Restrictions or Allergies
-                    </label>
-                    <textarea
-                      value={dietary}
-                      onChange={(e) => setDietary(e.target.value)}
-                      placeholder="Any dietary needs we should know about?"
-                      rows={2}
-                      className={`${inputClass} resize-none`}
-                      style={{ ...inputStyle, '--tw-ring-color': accent } as React.CSSProperties}
-                    />
-                  </div>
+                  {cfg.ask_dietary && (
+                    <div className="space-y-2">
+                      <label className="block text-xs font-medium" style={{ color: theme.textColor }}>
+                        Dietary Restrictions or Allergies
+                      </label>
+                      <textarea
+                        value={dietary}
+                        onChange={(e) => setDietary(e.target.value)}
+                        placeholder="Any dietary needs we should know about?"
+                        rows={2}
+                        className={`${inputClass} resize-none`}
+                        style={{ ...inputStyle, '--tw-ring-color': accent } as React.CSSProperties}
+                      />
+                    </div>
+                  )}
+
+                  {/* Detailed allergies */}
+                  {cfg.ask_allergies && (
+                    <div className="space-y-2">
+                      <label className="block text-xs font-medium" style={{ color: theme.textColor }}>
+                        Allergy Details
+                      </label>
+                      <textarea
+                        value={allergies}
+                        onChange={(e) => setAllergies(e.target.value)}
+                        placeholder="Please list allergies, severity, and if you carry an EpiPen"
+                        rows={3}
+                        className={`${inputClass} resize-none`}
+                        style={{ ...inputStyle, '--tw-ring-color': accent } as React.CSSProperties}
+                      />
+                    </div>
+                  )}
                 </>
+              )}
+
+              {/* Phone */}
+              {cfg.ask_phone && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium" style={{ color: theme.textColor }}>Phone Number</label>
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="(555) 123-4567"
+                    className={inputClass}
+                    style={{ ...inputStyle, '--tw-ring-color': accent } as React.CSSProperties}
+                  />
+                </div>
+              )}
+
+              {/* Email */}
+              {cfg.ask_email && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium" style={{ color: theme.textColor }}>Email Address</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className={inputClass}
+                    style={{ ...inputStyle, '--tw-ring-color': accent } as React.CSSProperties}
+                  />
+                </div>
+              )}
+
+              {/* Mailing Address */}
+              {cfg.ask_address && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium" style={{ color: theme.textColor }}>Mailing Address</label>
+                  <textarea
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    placeholder="Your mailing address"
+                    rows={2}
+                    className={`${inputClass} resize-none`}
+                    style={{ ...inputStyle, '--tw-ring-color': accent } as React.CSSProperties}
+                  />
+                </div>
+              )}
+
+              {/* Hotel / Accommodation */}
+              {cfg.ask_hotel && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium" style={{ color: theme.textColor }}>Where are you staying?</label>
+                  <input
+                    type="text"
+                    value={hotelName}
+                    onChange={(e) => setHotelName(e.target.value)}
+                    placeholder="Hotel or accommodation name"
+                    className={inputClass}
+                    style={{ ...inputStyle, '--tw-ring-color': accent } as React.CSSProperties}
+                  />
+                </div>
+              )}
+
+              {/* Shuttle */}
+              {cfg.ask_shuttle && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium" style={{ color: theme.textColor }}>
+                    Do you need shuttle transportation?
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[true, false].map((val) => (
+                      <button
+                        key={String(val)}
+                        onClick={() => setShuttleNeeded(val)}
+                        className="px-4 py-2.5 rounded-lg border-2 text-sm transition-all"
+                        style={{
+                          borderColor: shuttleNeeded === val ? accent : theme.borderColor,
+                          backgroundColor: shuttleNeeded === val ? accent + '10' : 'transparent',
+                          color: shuttleNeeded === val ? accent : theme.mutedColor,
+                        }}
+                      >
+                        {val ? 'Yes' : 'No'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Accessibility */}
+              {cfg.ask_accessibility && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium" style={{ color: theme.textColor }}>
+                    Accessibility or Mobility Needs
+                  </label>
+                  <textarea
+                    value={accessibilityNeeds}
+                    onChange={(e) => setAccessibilityNeeds(e.target.value)}
+                    placeholder="Let us know about any accessibility requirements"
+                    rows={2}
+                    className={`${inputClass} resize-none`}
+                    style={{ ...inputStyle, '--tw-ring-color': accent } as React.CSSProperties}
+                  />
+                </div>
+              )}
+
+              {/* Song request */}
+              {cfg.ask_song_request && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium" style={{ color: theme.textColor }}>Song Request</label>
+                  <input
+                    type="text"
+                    value={songRequest}
+                    onChange={(e) => setSongRequest(e.target.value)}
+                    placeholder="What song will get you on the dance floor?"
+                    className={inputClass}
+                    style={{ ...inputStyle, '--tw-ring-color': accent } as React.CSSProperties}
+                  />
+                </div>
+              )}
+
+              {/* Message to couple */}
+              {cfg.ask_message && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium" style={{ color: theme.textColor }}>Message to the Couple</label>
+                  <textarea
+                    value={messageToCpl}
+                    onChange={(e) => setMessageToCpl(e.target.value)}
+                    placeholder="Leave a personal note..."
+                    rows={3}
+                    className={`${inputClass} resize-none`}
+                    style={{ ...inputStyle, '--tw-ring-color': accent } as React.CSSProperties}
+                  />
+                </div>
+              )}
+
+              {/* Custom Questions */}
+              {cfg.custom_questions.length > 0 && (
+                <div className="space-y-4 pt-2">
+                  {cfg.custom_questions.map((q) => (
+                    <div key={q.id} className="space-y-2">
+                      <label className="block text-xs font-medium" style={{ color: theme.textColor }}>
+                        {q.label}
+                      </label>
+                      {q.type === 'text' && (
+                        <input
+                          type="text"
+                          value={customAnswers[q.label] || ''}
+                          onChange={(e) => setCustomAnswers((prev) => ({ ...prev, [q.label]: e.target.value }))}
+                          className={inputClass}
+                          style={{ ...inputStyle, '--tw-ring-color': accent } as React.CSSProperties}
+                        />
+                      )}
+                      {q.type === 'boolean' && (
+                        <div className="grid grid-cols-2 gap-3">
+                          {['Yes', 'No'].map((val) => (
+                            <button
+                              key={val}
+                              onClick={() => setCustomAnswers((prev) => ({ ...prev, [q.label]: val }))}
+                              className="px-4 py-2.5 rounded-lg border-2 text-sm transition-all"
+                              style={{
+                                borderColor: customAnswers[q.label] === val ? accent : theme.borderColor,
+                                backgroundColor: customAnswers[q.label] === val ? accent + '10' : 'transparent',
+                                color: customAnswers[q.label] === val ? accent : theme.mutedColor,
+                              }}
+                            >
+                              {val}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {q.type === 'select' && q.options && (
+                        <div className="space-y-2">
+                          {q.options.map((opt) => (
+                            <button
+                              key={opt}
+                              onClick={() => setCustomAnswers((prev) => ({ ...prev, [q.label]: opt }))}
+                              className="w-full text-left px-4 py-2.5 rounded-lg border-2 transition-all"
+                              style={{
+                                borderColor: customAnswers[q.label] === opt ? accent : theme.borderColor,
+                                backgroundColor: customAnswers[q.label] === opt ? accent + '10' : 'transparent',
+                                color: customAnswers[q.label] === opt ? accent : theme.textColor,
+                              }}
+                            >
+                              <p className="text-sm">{opt}</p>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
 
               {/* Plus one */}
@@ -1040,7 +1368,7 @@ function RSVPSection({ data, slug, mealOptions, theme, accent, accentRgb }: {
                     </div>
                   </div>
 
-                  {plusOneRsvp === 'attending' && mealOptions.length > 0 && (
+                  {plusOneRsvp === 'attending' && cfg.ask_meal_choice && mealOptions.length > 0 && (
                     <div className="space-y-2">
                       <label className="block text-xs font-medium" style={{ color: theme.textColor }}>
                         Their Meal Preference
@@ -1103,26 +1431,15 @@ function RSVPSection({ data, slug, mealOptions, theme, accent, accentRgb }: {
                 <CheckCircle2 className="w-8 h-8" style={{ color: accent }} />
               </div>
               <h3 className="text-xl font-light" style={{ fontFamily: theme.headingFont, color: accent }}>
-                {rsvpStatus === 'attending' ? 'See you there!' : 'Thank you for letting us know'}
+                {rsvpStatus === 'attending' ? 'See you there!' : rsvpStatus === 'maybe' ? 'Thank you!' : 'Thank you for letting us know'}
               </h3>
               <p className="text-sm" style={{ color: theme.mutedColor }}>
-                {rsvpStatus === 'attending'
-                  ? 'Your RSVP has been received. We cannot wait to celebrate with you!'
-                  : 'We will miss you! Your response has been recorded.'}
+                {rsvpStatus === 'attending' || rsvpStatus === 'maybe'
+                  ? attendingMsg
+                  : declinedMsg}
               </p>
               <button
-                onClick={() => {
-                  setStep('search')
-                  setSelectedGuest(null)
-                  setSearchQuery('')
-                  setSearchResults([])
-                  setRsvpStatus('attending')
-                  setMealChoice('')
-                  setDietary('')
-                  setPlusOneRsvp('attending')
-                  setPlusOneName('')
-                  setPlusOneMeal('')
-                }}
+                onClick={resetAll}
                 className="text-xs underline underline-offset-2 transition-colors hover:opacity-70"
                 style={{ color: accent }}
               >

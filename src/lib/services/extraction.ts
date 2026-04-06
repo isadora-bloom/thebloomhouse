@@ -13,6 +13,7 @@ import { callAIJson } from '@/lib/ai/client'
 // ---------------------------------------------------------------------------
 
 export interface ExtractedSignals {
+  // Core contact info
   clientName: string | null
   partnerName: string | null
   eventDate: string | null
@@ -26,6 +27,25 @@ export interface ExtractedSignals {
   excitementSignals: string[]
   mentionedVendors: string[]
   specialRequests: string[]
+
+  // Phil's agent fields
+  painPoints: string[]
+  objectionSignals: string[]
+  communicationStyle: 'formal' | 'casual' | 'detailed' | 'brief' | null
+  keyPriorities: string[]
+  followUpNeeded: boolean
+  guestCountMin: number | null
+  guestCountMax: number | null
+  budgetMin: number | null
+  budgetMax: number | null
+  budgetVerbatim: string | null
+  leadSource: string | null
+  leadSourceDetail: string | null
+  searchStage: 'just_started' | 'actively_touring' | 'final_decision' | null
+  venuesTouring: string[]
+  decisionTimeline: 'immediate' | 'this_month' | 'this_quarter' | 'flexible' | null
+  contactRelationship: 'engaged' | 'parent' | 'planner' | 'friend' | null
+  phoneNumbers: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +74,106 @@ const MEDIUM_URGENCY_INDICATORS = [
   /\b(20\d{2})\b/,
   /\bnext\s+(spring|summer|fall|winter|year)\b/i,
 ]
+
+// ---------------------------------------------------------------------------
+// Phone / budget / lead source patterns (regex extraction)
+// ---------------------------------------------------------------------------
+
+const PHONE_PATTERNS = [
+  /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/g,
+  /\(\d{3}\)\s*\d{3}[-.\s]?\d{4}/g,
+]
+
+const BUDGET_PATTERNS = [
+  /\$[\d,]+(?:\s*[-–to]+\s*\$?[\d,]+)?/gi,
+  /budget\s*(?:is|of|around|about)?\s*\$?[\d,]+/gi,
+]
+
+const LEAD_SOURCES: Record<string, string[]> = {
+  the_knot: ['the knot', 'theknot'],
+  zola: ['zola'],
+  weddingwire: ['weddingwire', 'wedding wire'],
+  google: ['google', 'google search'],
+  instagram: ['instagram', 'insta'],
+  facebook: ['facebook'],
+  referral: ['friend', 'referred', 'recommendation'],
+}
+
+// ---------------------------------------------------------------------------
+// Regex-based extraction helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract phone numbers from text using regex patterns.
+ */
+function extractPhoneNumbers(text: string): string[] {
+  const phones = new Set<string>()
+  for (const pattern of PHONE_PATTERNS) {
+    // Reset lastIndex for global regex
+    pattern.lastIndex = 0
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(text)) !== null) {
+      phones.add(match[0].trim())
+    }
+  }
+  return Array.from(phones)
+}
+
+/**
+ * Extract budget information from text using regex patterns.
+ * Returns the raw verbatim string and parsed min/max if possible.
+ */
+function extractBudget(text: string): {
+  verbatim: string | null
+  min: number | null
+  max: number | null
+} {
+  for (const pattern of BUDGET_PATTERNS) {
+    pattern.lastIndex = 0
+    const match = pattern.exec(text)
+    if (match) {
+      const verbatim = match[0].trim()
+      // Try to parse dollar amounts
+      const amounts = verbatim.match(/\$?([\d,]+)/g)
+      if (amounts && amounts.length >= 2) {
+        const values = amounts.map((a) => parseInt(a.replace(/[$,]/g, ''), 10)).filter((n) => !isNaN(n))
+        if (values.length >= 2) {
+          return { verbatim, min: Math.min(...values), max: Math.max(...values) }
+        }
+      }
+      if (amounts && amounts.length === 1) {
+        const value = parseInt(amounts[0].replace(/[$,]/g, ''), 10)
+        if (!isNaN(value)) {
+          return { verbatim, min: value, max: null }
+        }
+      }
+      return { verbatim, min: null, max: null }
+    }
+  }
+  return { verbatim: null, min: null, max: null }
+}
+
+/**
+ * Detect lead source from text by matching against known platform keywords.
+ */
+function detectLeadSource(text: string): { source: string | null; detail: string | null } {
+  const lower = text.toLowerCase()
+  for (const [key, keywords] of Object.entries(LEAD_SOURCES)) {
+    for (const keyword of keywords) {
+      if (lower.includes(keyword)) {
+        // For referral, try to extract the referrer name
+        if (key === 'referral') {
+          const referrerMatch = lower.match(
+            /(?:referred by|recommended by|friend)\s+([a-z]+(?:\s+[a-z]+)?)/i
+          )
+          return { source: key, detail: referrerMatch ? referrerMatch[1] : null }
+        }
+        return { source: key, detail: null }
+      }
+    }
+  }
+  return { source: null, detail: null }
+}
 
 // ---------------------------------------------------------------------------
 // Date normalization
@@ -183,14 +303,46 @@ export async function extractSignals(
 ): Promise<ExtractedSignals> {
   const urgency = detectUrgency(emailBody)
 
-  const signals = await callAIJson<Omit<ExtractedSignals, 'urgency'>>({
+  // Run regex-based extractions in parallel with AI
+  const phoneNumbers = extractPhoneNumbers(emailBody)
+  const budgetInfo = extractBudget(emailBody)
+  const leadSourceInfo = detectLeadSource(emailBody)
+
+  // AI extraction type — fields that AI fills (excludes urgency and regex-extracted fields)
+  interface AIExtractedSignals {
+    clientName: string | null
+    partnerName: string | null
+    eventDate: string | null
+    guestCount: number | null
+    eventType: string | null
+    budgetRange: { min: number; max: number } | null
+    questions: string[]
+    sentiment: 'positive' | 'neutral' | 'cautious' | 'negative'
+    stressSignals: string[]
+    excitementSignals: string[]
+    mentionedVendors: string[]
+    specialRequests: string[]
+    painPoints: string[]
+    objectionSignals: string[]
+    communicationStyle: 'formal' | 'casual' | 'detailed' | 'brief' | null
+    keyPriorities: string[]
+    followUpNeeded: boolean
+    guestCountMin: number | null
+    guestCountMax: number | null
+    searchStage: 'just_started' | 'actively_touring' | 'final_decision' | null
+    venuesTouring: string[]
+    decisionTimeline: 'immediate' | 'this_month' | 'this_quarter' | 'flexible' | null
+    contactRelationship: 'engaged' | 'parent' | 'planner' | 'friend' | null
+  }
+
+  const signals = await callAIJson<AIExtractedSignals>({
     systemPrompt: `You are a wedding venue inquiry analyzer. Extract structured data from the email text.
 
 Return a JSON object with these fields:
 - clientName: string | null — the person writing the email
 - partnerName: string | null — their partner if mentioned
 - eventDate: string | null — in YYYY-MM-DD format if possible, or the raw date string
-- guestCount: number | null — estimated guest count
+- guestCount: number | null — estimated guest count (single best estimate)
 - eventType: string | null — "wedding", "reception", "rehearsal dinner", "elopement", "corporate", etc.
 - budgetRange: { min: number, max: number } | null — dollar amounts if mentioned
 - questions: string[] — specific questions they asked
@@ -199,10 +351,21 @@ Return a JSON object with these fields:
 - excitementSignals: string[] — phrases indicating excitement ("can't wait", "dream venue", etc.)
 - mentionedVendors: string[] — any vendor names or types mentioned (photographer, caterer, etc.)
 - specialRequests: string[] — accessibility needs, dietary restrictions, cultural traditions, etc.
+- painPoints: string[] — what is frustrating them (e.g. "venues not responding", "sticker shock", "overwhelming process")
+- objectionSignals: string[] — signs of hesitation (e.g. "not sure about the drive", "might be out of our budget")
+- communicationStyle: "formal" | "casual" | "detailed" | "brief" | null — how they write
+- keyPriorities: string[] — what matters most to them (e.g. "outdoor ceremony", "great food", "affordable")
+- followUpNeeded: boolean — should the coordinator proactively reach out?
+- guestCountMin: number | null — low end of guest count range if given as a range
+- guestCountMax: number | null — high end of guest count range if given as a range
+- searchStage: "just_started" | "actively_touring" | "final_decision" | null — where they are in their venue search
+- venuesTouring: string[] — competing venues they mention touring or considering
+- decisionTimeline: "immediate" | "this_month" | "this_quarter" | "flexible" | null — how soon they plan to decide
+- contactRelationship: "engaged" | "parent" | "planner" | "friend" | null — who is writing the email
 
 Be precise. Only extract what is explicitly stated or clearly implied. Do not guess.`,
     userPrompt: emailBody,
-    maxTokens: 1500,
+    maxTokens: 2000,
     temperature: 0.1,
     venueId,
     taskType: 'signal_extraction',
@@ -216,8 +379,21 @@ Be precise. Only extract what is explicitly stated or clearly implied. Do not gu
     }
   }
 
+  // Merge AI-extracted budget with regex-extracted budget (regex wins for verbatim)
+  const budgetMin = budgetInfo.min ?? signals.budgetRange?.min ?? null
+  const budgetMax = budgetInfo.max ?? signals.budgetRange?.max ?? null
+
   return {
     ...signals,
     urgency,
+    // Merge regex-extracted phone numbers (dedup with any the AI might return)
+    phoneNumbers,
+    // Budget fields
+    budgetMin,
+    budgetMax,
+    budgetVerbatim: budgetInfo.verbatim,
+    // Lead source from regex detection
+    leadSource: leadSourceInfo.source,
+    leadSourceDetail: leadSourceInfo.detail,
   }
 }

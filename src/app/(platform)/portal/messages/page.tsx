@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createBrowserClient } from '@supabase/ssr'
 import {
   MessageSquare,
@@ -12,9 +13,6 @@ import {
   Shield,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-
-// TODO: Replace with venue context from auth/session
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -195,6 +193,7 @@ function MessagesSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function MessagesPage() {
+  const VENUE_ID = useVenueId()
   const [threads, setThreads] = useState<WeddingThread[]>([])
   const [messages, setMessages] = useState<Message[]>([])
   const [selectedWeddingId, setSelectedWeddingId] = useState<string | null>(null)

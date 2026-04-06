@@ -12,10 +12,11 @@ import {
   ShieldAlert, HeartHandshake, Camera, Package, Hotel,
   ClipboardCheck, MessagesSquare, ImagePlus, Download,
   CalendarPlus, Rocket, BookOpen, UsersRound, ChevronDown,
+  ShoppingBag, Star, Table2,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
-// All couple portal sections — matches portal_section_config
+// All couple portal sections — matches Rixey portal structure
 // ---------------------------------------------------------------------------
 
 interface NavSection {
@@ -26,71 +27,79 @@ interface NavSection {
 function buildNavSections(base: string): NavSection[] {
   return [
     {
+      group: '',
+      items: [
+        { key: 'chat',             label: 'Chat with Sage',     href: `${base}/chat`,               icon: MessageCircle },
+      ],
+    },
+    {
       group: 'Main',
       items: [
-        { key: 'dashboard',       label: 'Dashboard',         href: base,                      icon: LayoutDashboard },
-        { key: 'getting-started',  label: 'Getting Started',   href: `${base}/getting-started`, icon: Rocket },
-        { key: 'chat',            label: 'Chat with Sage',    href: `${base}/chat`,            icon: MessageCircle },
-        { key: 'messages',        label: 'Messages',          href: `${base}/messages`,        icon: MessagesSquare },
+        { key: 'dashboard',        label: 'Dashboard',          href: base,                         icon: LayoutDashboard },
+        { key: 'getting-started',   label: 'Get Started',        href: `${base}/getting-started`,    icon: Rocket },
+        { key: 'worksheets',       label: 'Worksheets',         href: `${base}/worksheets`,         icon: FileText },
       ],
     },
     {
-      group: 'Planning',
+      group: 'Plan',
       items: [
-        { key: 'wedding-details', label: 'Wedding Details',   href: `${base}/wedding-details`, icon: Heart },
-        { key: 'timeline',        label: 'Timeline',          href: `${base}/timeline`,        icon: Clock },
-        { key: 'budget',          label: 'Budget',            href: `${base}/budget`,          icon: DollarSign },
-        { key: 'guests',          label: 'Guest List',        href: `${base}/guests`,          icon: Users },
-        { key: 'seating',         label: 'Seating Chart',     href: `${base}/seating`,         icon: Armchair },
-        { key: 'checklist',       label: 'Checklist',         href: `${base}/checklist`,       icon: CheckSquare },
-        { key: 'vendors',         label: 'Vendors',           href: `${base}/vendors`,         icon: Store },
-        { key: 'contracts',       label: 'Contracts',         href: `${base}/contracts`,       icon: FileText },
+        { key: 'wedding-details',  label: 'Wedding Details',    href: `${base}/wedding-details`,    icon: Heart },
+        { key: 'checklist',        label: 'Checklist',          href: `${base}/checklist`,          icon: CheckSquare },
+        { key: 'budget',           label: 'Budget',             href: `${base}/budget`,             icon: DollarSign },
+        { key: 'guests',           label: 'Guest List',         href: `${base}/guests`,             icon: Users },
+        { key: 'vendors',          label: 'Vendors',            href: `${base}/vendors`,            icon: Store },
+        { key: 'preferred-vendors',label: 'Preferred Vendors',  href: `${base}/preferred-vendors`,  icon: Star },
+        { key: 'timeline',         label: 'Timeline',           href: `${base}/timeline`,           icon: Clock },
+        { key: 'contracts',        label: 'Contracts',          href: `${base}/contracts`,          icon: FileText },
       ],
     },
     {
-      group: 'Wedding Party',
+      group: 'Day Of',
       items: [
-        { key: 'party',           label: 'Wedding Party',     href: `${base}/party`,           icon: UsersRound },
-        { key: 'ceremony',        label: 'Ceremony Order',    href: `${base}/ceremony`,        icon: BookOpen },
-        { key: 'beauty',          label: 'Hair & Makeup',     href: `${base}/beauty`,          icon: Sparkles },
+        { key: 'tables',           label: 'Tables',             href: `${base}/tables`,             icon: Table2 },
+        { key: 'ceremony',         label: 'Ceremony Order',     href: `${base}/ceremony`,           icon: BookOpen },
+        { key: 'seating',          label: 'Seating Chart',      href: `${base}/seating`,            icon: Armchair },
+        { key: 'staffing',         label: 'Staffing Guide',     href: `${base}/staffing`,           icon: HardHat },
+        { key: 'bar',              label: 'Bar Planner',        href: `${base}/bar`,                icon: Wine },
+        { key: 'beauty',           label: 'Hair & Makeup',      href: `${base}/beauty`,             icon: Sparkles },
+        { key: 'transportation',   label: 'Shuttle Schedule',   href: `${base}/transportation`,     icon: Car },
+        { key: 'rehearsal',        label: 'Rehearsal Dinner',   href: `${base}/rehearsal`,           icon: UtensilsCrossed },
+        { key: 'rooms',            label: 'Bedroom Assignments',href: `${base}/rooms`,              icon: BedDouble },
+        { key: 'decor',            label: 'Decor Inventory',    href: `${base}/decor`,              icon: Flower2 },
       ],
     },
     {
-      group: 'Day-of Details',
+      group: 'Your Guests',
       items: [
-        { key: 'bar',             label: 'Bar Planning',      href: `${base}/bar`,             icon: Wine },
-        { key: 'decor',           label: 'Decor',             href: `${base}/decor`,           icon: Flower2 },
-        { key: 'transportation',  label: 'Transportation',    href: `${base}/transportation`,  icon: Car },
-        { key: 'rooms',           label: 'Rooms',             href: `${base}/rooms`,           icon: BedDouble },
-        { key: 'rehearsal',       label: 'Rehearsal Dinner',  href: `${base}/rehearsal`,       icon: UtensilsCrossed },
-        { key: 'staffing',        label: 'Staffing',          href: `${base}/staffing`,        icon: HardHat },
-        { key: 'allergies',       label: 'Allergies',         href: `${base}/allergies`,       icon: ShieldAlert },
-        { key: 'guest-care',      label: 'Guest Care',        href: `${base}/guest-care`,      icon: HeartHandshake },
+        { key: 'allergies',        label: 'Allergy Registry',   href: `${base}/allergies`,          icon: ShieldAlert },
+        { key: 'guest-care',       label: 'Guest Care Notes',   href: `${base}/guest-care`,         icon: HeartHandshake },
       ],
     },
     {
-      group: 'Gallery & Inspo',
+      group: 'Your Website',
       items: [
-        { key: 'inspo',           label: 'Inspiration',       href: `${base}/inspo`,           icon: Lightbulb },
-        { key: 'photos',          label: 'Photos',            href: `${base}/photos`,          icon: Camera },
-        { key: 'worksheets',      label: 'Worksheets',        href: `${base}/worksheets`,      icon: FileText },
+        { key: 'website',          label: 'Build Your Website', href: `${base}/website`,            icon: Globe },
+        { key: 'rsvp-settings',    label: 'RSVP Settings',      href: `${base}/rsvp-settings`,      icon: ClipboardCheck },
+        { key: 'photos',           label: 'Photo Library',      href: `${base}/photos`,             icon: Camera },
+        { key: 'party',            label: 'Wedding Party',      href: `${base}/party`,              icon: UsersRound },
+        { key: 'couple-photo',     label: 'Couple Photo',       href: `${base}/couple-photo`,       icon: ImagePlus },
       ],
     },
     {
       group: 'Venue',
       items: [
-        { key: 'venue-inventory', label: 'Venue Inventory',   href: `${base}/venue-inventory`, icon: Package },
-        { key: 'stays',           label: 'Accommodations',    href: `${base}/stays`,           icon: Hotel },
-        { key: 'booking',         label: 'Book a Meeting',    href: `${base}/booking`,         icon: CalendarPlus },
-        { key: 'resources',       label: 'Resources',         href: `${base}/resources`,       icon: Download },
+        { key: 'inspo',            label: 'Inspiration',        href: `${base}/inspo`,              icon: Lightbulb },
+        { key: 'venue-inventory',  label: 'Borrow Brochure',    href: `${base}/venue-inventory`,    icon: Package },
+        { key: 'picks',            label: 'Venue Picks',        href: `${base}/picks`,              icon: ShoppingBag },
+        { key: 'downloads',        label: 'Downloads',          href: `${base}/downloads`,          icon: Download },
       ],
     },
     {
-      group: 'Website & Wrap-up',
+      group: 'Connect',
       items: [
-        { key: 'website',         label: 'Wedding Website',   href: `${base}/website`,         icon: Globe },
-        { key: 'final-review',    label: 'Final Review',      href: `${base}/final-review`,    icon: ClipboardCheck },
-        { key: 'couple-photo',    label: 'Couple Photo',      href: `${base}/couple-photo`,    icon: ImagePlus },
+        { key: 'messages',         label: 'Inbox',              href: `${base}/messages`,           icon: MessagesSquare },
+        { key: 'booking',          label: 'Book a Meeting',     href: `${base}/booking`,            icon: CalendarPlus },
+        { key: 'resources',        label: 'Resources',          href: `${base}/resources`,          icon: BookOpen },
       ],
     },
   ]
@@ -113,10 +122,12 @@ export function SlugCoupleNav({ venueName, logoUrl, venueSlug }: SlugCoupleNavPr
   const base = `/couple/${venueSlug}`
   const sections = buildNavSections(base)
 
-  // Flat list for the top bar (most important items)
+  // Sage is always first and visually distinct
+  const sageItem = { label: 'Ask Sage', href: `${base}/chat`, icon: MessageCircle }
+
+  // Flat list for the top bar (most important items after Sage)
   const topBarItems = [
     { label: 'Dashboard', href: base, icon: LayoutDashboard },
-    { label: 'Chat', href: `${base}/chat`, icon: MessageCircle },
     { label: 'Timeline', href: `${base}/timeline`, icon: Clock },
     { label: 'Budget', href: `${base}/budget`, icon: DollarSign },
     { label: 'Guests', href: `${base}/guests`, icon: Users },
@@ -164,24 +175,41 @@ export function SlugCoupleNav({ venueName, logoUrl, venueSlug }: SlugCoupleNavPr
           </Link>
 
           {/* Center: quick nav (desktop) */}
-          <nav className="hidden lg:flex items-center gap-1 overflow-x-auto">
-            {topBarItems.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  'flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap',
-                  isActive(item.href)
-                    ? 'text-white'
-                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                )}
-                style={isActive(item.href) ? { backgroundColor: 'var(--couple-primary)' } : undefined}
-              >
-                <item.icon className="w-3.5 h-3.5" />
-                {item.label}
-              </Link>
-            ))}
-            {/* "More" dropdown for all sections */}
+          <div className="hidden lg:flex items-center gap-1.5">
+            {/* Sage button — always prominent */}
+            <Link
+              href={sageItem.href}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap',
+                isActive(sageItem.href)
+                  ? 'text-white shadow-sm'
+                  : 'text-white hover:opacity-90 shadow-sm'
+              )}
+              style={{ backgroundColor: 'var(--couple-accent, #A6894A)' }}
+            >
+              <sageItem.icon className="w-3.5 h-3.5" />
+              {sageItem.label}
+            </Link>
+            <div className="w-px h-5 bg-gray-200 mx-0.5" />
+            <nav className="flex items-center gap-1">
+              {topBarItems.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    'flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap',
+                    isActive(item.href)
+                      ? 'text-white'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                  )}
+                  style={isActive(item.href) ? { backgroundColor: 'var(--couple-primary)' } : undefined}
+                >
+                  <item.icon className="w-3.5 h-3.5" />
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+            {/* "All Sections" dropdown — outside nav to avoid overflow clipping */}
             <div className="relative">
               <button
                 onClick={() => setExpandedGroup(expandedGroup === 'more' ? null : 'more')}
@@ -222,7 +250,7 @@ export function SlugCoupleNav({ venueName, logoUrl, venueSlug }: SlugCoupleNavPr
                 </>
               )}
             </div>
-          </nav>
+          </div>
 
           {/* Right: print + avatar + mobile hamburger */}
           <div className="flex items-center gap-3">

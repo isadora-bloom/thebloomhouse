@@ -450,17 +450,49 @@ export default function SettingsPage() {
           <p className="text-xs text-sage-500 mt-1">Shown on the couple portal login page.</p>
         </div>
 
-        {/* Logo URL */}
+        {/* Logo Upload */}
         <div>
-          <label className="block text-sm font-medium text-sage-700 mb-1">Logo URL</label>
-          <input
-            type="text"
-            value={config.logo_url ?? ''}
-            onChange={(e) => update('logo_url', e.target.value)}
-            placeholder="https://your-bucket.supabase.co/storage/v1/object/public/logos/logo.png"
-            className={inputClasses + ' max-w-lg'}
-          />
-          <p className="text-xs text-sage-500 mt-1">Direct URL to your logo image. File upload coming soon.</p>
+          <label className="block text-sm font-medium text-sage-700 mb-1">Business Logo</label>
+          <div className="flex items-start gap-4">
+            {config.logo_url && (
+              <div className="shrink-0">
+                <img
+                  src={config.logo_url}
+                  alt="Business logo"
+                  className="w-20 h-20 object-contain rounded-lg border border-sage-200 bg-white p-1"
+                />
+              </div>
+            )}
+            <div className="flex-1 space-y-2">
+              <input
+                type="text"
+                value={config.logo_url ?? ''}
+                onChange={(e) => update('logo_url', e.target.value || null)}
+                placeholder="Paste a logo URL or upload to Supabase Storage"
+                className={inputClasses + ' max-w-lg'}
+              />
+              <p className="text-xs text-sage-500">
+                Appears in the portal, client-facing emails, and branded materials.
+                Upload your logo to Supabase Storage and paste the public URL here.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Brand Assets */}
+        <div>
+          <label className="block text-sm font-medium text-sage-700 mb-1">Brand Assets</label>
+          <p className="text-xs text-sage-500 mb-3">
+            Upload venue photography, watercolor images, and textures.
+            These can be used across the platform — emails, proposals, and the client portal.
+            Add assets via the <code className="text-sage-600">brand_assets</code> table in Supabase
+            (type: hero_image, watercolor, photography, texture).
+          </p>
+          <div className="p-4 border border-dashed border-sage-300 rounded-xl text-center bg-warm-white">
+            <Palette className="w-6 h-6 text-sage-300 mx-auto mb-2" />
+            <p className="text-sm text-sage-500">Brand asset management coming with Supabase Storage integration.</p>
+            <p className="text-xs text-sage-400 mt-1">For now, add image URLs directly to the brand_assets table.</p>
+          </div>
         </div>
 
         {/* ---------------------------------------------------------------- */}

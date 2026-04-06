@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
   Settings,
@@ -17,9 +18,6 @@ import {
   AlertTriangle,
   CalendarClock,
 } from 'lucide-react'
-
-// TODO: Replace with venue from auth context
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -205,6 +203,7 @@ function AutoSendRuleCard({
 // ---------------------------------------------------------------------------
 
 export default function AgentSettingsPage() {
+  const VENUE_ID = useVenueId()
   const [activeTab, setActiveTab] = useState<TabKey>('auto-send')
   const [rules, setRules] = useState<AutoSendRule[]>([])
   const [syncState, setSyncState] = useState<EmailSyncState | null>(null)

@@ -13,18 +13,24 @@ import {
   DollarSign,
   Brain,
   ListOrdered,
+  Heart,
+  MessageSquare,
+  XCircle,
+  Send,
+  AlertTriangle,
+  ThumbsUp,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types & Constants
 // ---------------------------------------------------------------------------
 
-type SectionKey = 'priorities' | 'story' | 'feelings' | 'splurge' | 'skip' | 'memories'
+type SectionKey = 'priorities' | 'story' | 'feelings' | 'splurge' | 'skip' | 'memories' | 'values' | 'alignment' | 'happily_skipping'
 
 interface WorksheetRecord {
   id: string
@@ -42,9 +48,12 @@ interface SectionConfig {
 
 const SECTIONS: SectionConfig[] = [
   { key: 'priorities', title: 'Priorities', description: 'Rank what matters most to you', icon: ListOrdered },
+  { key: 'values', title: 'Values Statement', description: 'Define what your wedding is really about', icon: Heart },
   { key: 'story', title: 'Our Story', description: 'How you met, your proposal, your journey', icon: BookOpen },
   { key: 'feelings', title: 'Our Vibe', description: 'What feelings do you want on your day?', icon: Sparkles },
   { key: 'splurge', title: 'Splurge vs Skip', description: 'Where to invest and where to save', icon: DollarSign },
+  { key: 'happily_skipping', title: "Happily Skipping", description: 'Traditions you are choosing to skip', icon: XCircle },
+  { key: 'alignment', title: 'Alignment Check', description: 'See where you and your partner agree', icon: MessageSquare },
   { key: 'memories', title: 'Memories & Notes', description: 'Personal reminders and reflections', icon: Brain },
 ]
 
@@ -73,6 +82,43 @@ const VIBE_OPTIONS = [
   'Cultural',
   'Minimal',
 ]
+
+const HAPPILY_SKIPPING_OPTIONS = [
+  'Favors',
+  'Programs',
+  'Formal Exit',
+  'Guest Book',
+  'Bouquet Toss',
+  'Garter Toss',
+  'Cake Cutting',
+  'Flower Girl',
+  'Ring Bearer',
+  'Receiving Line',
+  'Unity Ceremony',
+  'Dollar Dance',
+]
+
+interface ValuesData {
+  about_1: string
+  about_2: string
+  guests_feel: string
+  splurge_on: string
+  splurge_because: string
+  skip_what: string
+  skip_because: string
+  remember: string
+}
+
+const EMPTY_VALUES: ValuesData = {
+  about_1: '',
+  about_2: '',
+  guests_feel: '',
+  splurge_on: '',
+  splurge_because: '',
+  skip_what: '',
+  skip_because: '',
+  remember: '',
+}
 
 const SPLURGE_SKIP_ITEMS = [
   'Photography',
@@ -103,11 +149,16 @@ export default function WorksheetsPage() {
     splurge: null,
     skip: null,
     memories: null,
+    values: null,
+    alignment: null,
+    happily_skipping: null,
   })
   const [loading, setLoading] = useState(true)
   const [expandedSection, setExpandedSection] = useState<SectionKey | null>('priorities')
   const [savingSection, setSavingSection] = useState<SectionKey | null>(null)
   const [savedSection, setSavedSection] = useState<SectionKey | null>(null)
+  const [sendingToTeam, setSendingToTeam] = useState(false)
+  const [sentToTeam, setSentToTeam] = useState(false)
 
   // Local form state per section
   const [priorities, setPriorities] = useState<string[]>([...PRIORITY_CATEGORIES])
@@ -116,6 +167,11 @@ export default function WorksheetsPage() {
   const [splurgeItems, setSplurgeItems] = useState<string[]>([])
   const [skipItems, setSkipItems] = useState<string[]>([])
   const [memories, setMemories] = useState('')
+  const [valuesData, setValuesData] = useState<ValuesData>({ ...EMPTY_VALUES })
+  const [happilySkipping, setHappilySkipping] = useState<string[]>([])
+
+  // Partner priority data for alignment check (partner2 priorities stored under a different key)
+  const [partner2Priorities, setPartner2Priorities] = useState<string[] | null>(null)
 
   const supabase = createClient()
 
@@ -163,6 +219,14 @@ export default function WorksheetsPage() {
         const c = bySection.memories.content as { text?: string }
         if (c.text) setMemories(c.text)
       }
+      if (bySection.values?.content) {
+        const c = bySection.values.content as Partial<ValuesData>
+        setValuesData({ ...EMPTY_VALUES, ...c })
+      }
+      if (bySection.happily_skipping?.content) {
+        const c = bySection.happily_skipping.content as { items?: string[] }
+        if (c.items) setHappilySkipping(c.items)
+      }
     }
     setLoading(false)
   }, [supabase])
@@ -192,6 +256,15 @@ export default function WorksheetsPage() {
       case 'memories':
         content = { text: memories }
         break
+      case 'values':
+        content = { ...valuesData }
+        break
+      case 'happily_skipping':
+        content = { items: happilySkipping }
+        break
+      case 'alignment':
+        // Alignment is read-only / computed, no save needed
+        return
     }
 
     const existing = records[section]
@@ -246,6 +319,67 @@ export default function WorksheetsPage() {
     )
     // Remove from splurge if adding to skip
     setSplurgeItems((prev) => prev.filter((i) => i !== item))
+  }
+
+  // ---- Toggle happily skipping ----
+  function toggleHappilySkipping(item: string) {
+    setHappilySkipping((prev) =>
+      prev.includes(item) ? prev.filter((i) => i !== item) : [...prev, item]
+    )
+  }
+
+  // ---- Save & Send to Team ----
+  async function saveAndSendToTeam() {
+    setSendingToTeam(true)
+    try {
+      // Save all sections first
+      for (const section of SECTIONS) {
+        if (section.key === 'alignment') continue
+        await saveSection(section.key)
+      }
+
+      // Create admin notification
+      await supabase.from('admin_notifications').insert({
+        venue_id: VENUE_ID,
+        wedding_id: WEDDING_ID,
+        type: 'worksheet_submitted',
+        title: 'Worksheets submitted',
+        body: 'The couple has submitted their wedding worksheets for review.',
+      })
+
+      setSentToTeam(true)
+      setTimeout(() => setSentToTeam(false), 4000)
+    } catch (err) {
+      console.error('Failed to send to team:', err)
+    } finally {
+      setSendingToTeam(false)
+    }
+  }
+
+  // ---- Alignment computation ----
+  // For the alignment check, we compare partner1 and partner2 priority rankings
+  // In a real implementation, each partner would have their own priorities saved under a user key.
+  // For now, we use the current priorities as partner1 and check if partner2 data exists.
+  const alignmentAgree: string[] = []
+  const alignmentConversation: string[] = []
+
+  if (partner2Priorities && partner2Priorities.length > 0) {
+    const p1Top3 = priorities.slice(0, 3)
+    const p2Top3 = partner2Priorities.slice(0, 3)
+
+    // Items where both ranked in top 3
+    for (const item of p1Top3) {
+      if (p2Top3.includes(item)) alignmentAgree.push(item)
+    }
+
+    // Items where rankings differ by 5+ positions
+    for (const item of PRIORITY_CATEGORIES) {
+      const p1Idx = priorities.indexOf(item)
+      const p2Idx = partner2Priorities.indexOf(item)
+      if (p1Idx >= 0 && p2Idx >= 0 && Math.abs(p1Idx - p2Idx) >= 5) {
+        alignmentConversation.push(item)
+      }
+    }
   }
 
   // ---- Progress ----
@@ -303,6 +437,34 @@ export default function WorksheetsPage() {
             style={{ width: `${progressPct}%`, backgroundColor: 'var(--couple-primary)' }}
           />
         </div>
+      </div>
+
+      {/* Save & Send to Team */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-gray-700">Ready to share with your coordinator?</p>
+          <p className="text-xs text-gray-400">This saves all sections and notifies your venue team.</p>
+        </div>
+        <button
+          onClick={saveAndSendToTeam}
+          disabled={sendingToTeam}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50 shrink-0"
+          style={{ backgroundColor: 'var(--couple-primary)' }}
+        >
+          {sentToTeam ? (
+            <>
+              <Check className="w-4 h-4" />
+              Sent to Team
+            </>
+          ) : sendingToTeam ? (
+            'Sending...'
+          ) : (
+            <>
+              <Send className="w-4 h-4" />
+              Save &amp; Send to Team
+            </>
+          )}
+        </button>
       </div>
 
       {/* Sections */}
@@ -522,29 +684,265 @@ export default function WorksheetsPage() {
                       </>
                     )}
 
-                    {/* Save Button */}
-                    <div className="flex justify-end pt-2">
-                      <button
-                        onClick={() => saveSection(section.key)}
-                        disabled={savingSection === section.key}
-                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                        style={{ backgroundColor: 'var(--couple-primary)' }}
-                      >
-                        {savedSection === section.key ? (
-                          <>
-                            <Check className="w-4 h-4" />
-                            Saved
-                          </>
-                        ) : savingSection === section.key ? (
-                          'Saving...'
-                        ) : (
-                          <>
-                            <Save className="w-4 h-4" />
-                            Save {section.title}
-                          </>
+                    {/* VALUES STATEMENT BUILDER */}
+                    {section.key === 'values' && (
+                      <>
+                        <p className="text-sm text-gray-600 mb-4">
+                          Fill in the blanks to create your wedding values statement. This helps your team understand what matters most to you.
+                        </p>
+                        <div className="space-y-5">
+                          <div className="text-sm text-gray-800 leading-relaxed">
+                            <span>{'"'}Our wedding is about </span>
+                            <input
+                              type="text"
+                              value={valuesData.about_1}
+                              onChange={(e) => setValuesData({ ...valuesData, about_1: e.target.value })}
+                              className="inline-block w-40 sm:w-48 border-b-2 border-gray-300 bg-transparent text-sm px-1 py-0.5 focus:outline-none focus:border-current mx-1"
+                              style={{ borderColor: valuesData.about_1 ? 'var(--couple-primary)' : undefined, color: 'var(--couple-primary)' }}
+                              placeholder="______"
+                            />
+                            <span> and </span>
+                            <input
+                              type="text"
+                              value={valuesData.about_2}
+                              onChange={(e) => setValuesData({ ...valuesData, about_2: e.target.value })}
+                              className="inline-block w-40 sm:w-48 border-b-2 border-gray-300 bg-transparent text-sm px-1 py-0.5 focus:outline-none focus:border-current mx-1"
+                              style={{ borderColor: valuesData.about_2 ? 'var(--couple-primary)' : undefined, color: 'var(--couple-primary)' }}
+                              placeholder="______"
+                            />
+                            <span>{'"'}</span>
+                          </div>
+
+                          <div className="text-sm text-gray-800 leading-relaxed">
+                            <span>{'"'}We want our guests to feel </span>
+                            <input
+                              type="text"
+                              value={valuesData.guests_feel}
+                              onChange={(e) => setValuesData({ ...valuesData, guests_feel: e.target.value })}
+                              className="inline-block w-40 sm:w-56 border-b-2 border-gray-300 bg-transparent text-sm px-1 py-0.5 focus:outline-none focus:border-current mx-1"
+                              style={{ borderColor: valuesData.guests_feel ? 'var(--couple-primary)' : undefined, color: 'var(--couple-primary)' }}
+                              placeholder="______"
+                            />
+                            <span>{'"'}</span>
+                          </div>
+
+                          <div className="text-sm text-gray-800 leading-relaxed">
+                            <span>{'"'}We{"\'"}re willing to splurge on </span>
+                            <input
+                              type="text"
+                              value={valuesData.splurge_on}
+                              onChange={(e) => setValuesData({ ...valuesData, splurge_on: e.target.value })}
+                              className="inline-block w-36 sm:w-44 border-b-2 border-gray-300 bg-transparent text-sm px-1 py-0.5 focus:outline-none focus:border-current mx-1"
+                              style={{ borderColor: valuesData.splurge_on ? 'var(--couple-primary)' : undefined, color: 'var(--couple-primary)' }}
+                              placeholder="______"
+                            />
+                            <span> because </span>
+                            <input
+                              type="text"
+                              value={valuesData.splurge_because}
+                              onChange={(e) => setValuesData({ ...valuesData, splurge_because: e.target.value })}
+                              className="inline-block w-36 sm:w-44 border-b-2 border-gray-300 bg-transparent text-sm px-1 py-0.5 focus:outline-none focus:border-current mx-1"
+                              style={{ borderColor: valuesData.splurge_because ? 'var(--couple-primary)' : undefined, color: 'var(--couple-primary)' }}
+                              placeholder="______"
+                            />
+                            <span>{'"'}</span>
+                          </div>
+
+                          <div className="text-sm text-gray-800 leading-relaxed">
+                            <span>{'"'}We{"\'"}re okay skipping </span>
+                            <input
+                              type="text"
+                              value={valuesData.skip_what}
+                              onChange={(e) => setValuesData({ ...valuesData, skip_what: e.target.value })}
+                              className="inline-block w-36 sm:w-44 border-b-2 border-gray-300 bg-transparent text-sm px-1 py-0.5 focus:outline-none focus:border-current mx-1"
+                              style={{ borderColor: valuesData.skip_what ? 'var(--couple-primary)' : undefined, color: 'var(--couple-primary)' }}
+                              placeholder="______"
+                            />
+                            <span> because </span>
+                            <input
+                              type="text"
+                              value={valuesData.skip_because}
+                              onChange={(e) => setValuesData({ ...valuesData, skip_because: e.target.value })}
+                              className="inline-block w-36 sm:w-44 border-b-2 border-gray-300 bg-transparent text-sm px-1 py-0.5 focus:outline-none focus:border-current mx-1"
+                              style={{ borderColor: valuesData.skip_because ? 'var(--couple-primary)' : undefined, color: 'var(--couple-primary)' }}
+                              placeholder="______"
+                            />
+                            <span>{'"'}</span>
+                          </div>
+
+                          <div className="text-sm text-gray-800 leading-relaxed">
+                            <span>{'"'}In 20 years, we want to remember </span>
+                            <input
+                              type="text"
+                              value={valuesData.remember}
+                              onChange={(e) => setValuesData({ ...valuesData, remember: e.target.value })}
+                              className="inline-block w-48 sm:w-64 border-b-2 border-gray-300 bg-transparent text-sm px-1 py-0.5 focus:outline-none focus:border-current mx-1"
+                              style={{ borderColor: valuesData.remember ? 'var(--couple-primary)' : undefined, color: 'var(--couple-primary)' }}
+                              placeholder="______"
+                            />
+                            <span>{'"'}</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* HAPPILY SKIPPING */}
+                    {section.key === 'happily_skipping' && (
+                      <>
+                        <p className="text-sm text-gray-600">
+                          Check off traditions you are choosing to skip. No judgment here -- your day, your way.
+                        </p>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {HAPPILY_SKIPPING_OPTIONS.map((item) => {
+                            const isChecked = happilySkipping.includes(item)
+                            return (
+                              <button
+                                key={item}
+                                onClick={() => toggleHappilySkipping(item)}
+                                className={cn(
+                                  'flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium border transition-all text-left',
+                                  isChecked
+                                    ? 'text-white border-transparent'
+                                    : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+                                )}
+                                style={isChecked ? { backgroundColor: 'var(--couple-primary)' } : undefined}
+                              >
+                                {isChecked ? (
+                                  <Check className="w-4 h-4 shrink-0" />
+                                ) : (
+                                  <div className="w-4 h-4 rounded border border-gray-300 shrink-0" />
+                                )}
+                                {item}
+                              </button>
+                            )
+                          })}
+                        </div>
+                        {happilySkipping.length > 0 && (
+                          <p className="text-xs text-gray-400 mt-2">
+                            {happilySkipping.length} tradition{happilySkipping.length !== 1 ? 's' : ''} happily skipped
+                          </p>
                         )}
-                      </button>
-                    </div>
+                      </>
+                    )}
+
+                    {/* ALIGNMENT CHECK */}
+                    {section.key === 'alignment' && (
+                      <>
+                        <p className="text-sm text-gray-600 mb-4">
+                          This compares your priority rankings to see where you align and where you might want to talk things through.
+                        </p>
+                        {!partner2Priorities || partner2Priorities.length === 0 ? (
+                          <div className="text-center py-8 bg-gray-50 rounded-lg">
+                            <MessageSquare className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                            <p className="text-sm text-gray-500 mb-1">Both partners need to rank priorities first</p>
+                            <p className="text-xs text-gray-400">
+                              Once both of you have completed the Priorities section, your alignment will appear here.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="space-y-6">
+                            {/* Agreement */}
+                            {alignmentAgree.length > 0 && (
+                              <div>
+                                <h3 className="flex items-center gap-2 text-sm font-semibold text-emerald-700 mb-2">
+                                  <ThumbsUp className="w-4 h-4" />
+                                  You agree on:
+                                </h3>
+                                <div className="space-y-1">
+                                  {alignmentAgree.map((item) => (
+                                    <div key={item} className="flex items-center gap-2 bg-emerald-50 rounded-lg px-4 py-2">
+                                      <Check className="w-4 h-4 text-emerald-600" />
+                                      <span className="text-sm text-emerald-800">{item}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Conversation needed */}
+                            {alignmentConversation.length > 0 && (
+                              <div>
+                                <h3 className="flex items-center gap-2 text-sm font-semibold text-amber-700 mb-2">
+                                  <AlertTriangle className="w-4 h-4" />
+                                  Worth a conversation:
+                                </h3>
+                                <div className="space-y-1">
+                                  {alignmentConversation.map((item) => {
+                                    const p1Rank = priorities.indexOf(item) + 1
+                                    const p2Rank = (partner2Priorities?.indexOf(item) ?? -1) + 1
+                                    return (
+                                      <div key={item} className="flex items-center justify-between bg-amber-50 rounded-lg px-4 py-2">
+                                        <span className="text-sm text-amber-800">{item}</span>
+                                        <span className="text-xs text-amber-600">
+                                          Partner 1: #{p1Rank} vs Partner 2: #{p2Rank}
+                                        </span>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {alignmentAgree.length === 0 && alignmentConversation.length === 0 && (
+                              <div className="text-center py-6 bg-gray-50 rounded-lg">
+                                <p className="text-sm text-gray-500">Your priorities are fairly aligned. No major differences found.</p>
+                              </div>
+                            )}
+
+                            {/* Visual comparison */}
+                            <div>
+                              <h3 className="text-sm font-semibold text-gray-700 mb-3">Side-by-Side Rankings</h3>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <p className="text-xs font-medium text-gray-500 mb-2">Partner 1</p>
+                                  {priorities.map((item, idx) => (
+                                    <div key={item} className="flex items-center gap-2 py-1">
+                                      <span className="text-xs font-bold text-gray-400 w-5 text-right">{idx + 1}</span>
+                                      <span className="text-xs text-gray-700">{item}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                                <div>
+                                  <p className="text-xs font-medium text-gray-500 mb-2">Partner 2</p>
+                                  {(partner2Priorities || []).map((item, idx) => (
+                                    <div key={item} className="flex items-center gap-2 py-1">
+                                      <span className="text-xs font-bold text-gray-400 w-5 text-right">{idx + 1}</span>
+                                      <span className="text-xs text-gray-700">{item}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {/* Save Button (hidden for alignment which is read-only) */}
+                    {section.key !== 'alignment' && (
+                      <div className="flex justify-end pt-2">
+                        <button
+                          onClick={() => saveSection(section.key)}
+                          disabled={savingSection === section.key}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                          style={{ backgroundColor: 'var(--couple-primary)' }}
+                        >
+                          {savedSection === section.key ? (
+                            <>
+                              <Check className="w-4 h-4" />
+                              Saved
+                            </>
+                          ) : savingSection === section.key ? (
+                            'Saving...'
+                          ) : (
+                            <>
+                              <Save className="w-4 h-4" />
+                              Save {section.title}
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

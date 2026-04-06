@@ -1,249 +1,904 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   Clock,
   Plus,
   X,
-  MapPin,
-  Edit2,
-  Trash2,
   ChevronDown,
   ChevronUp,
   Lightbulb,
-  GripVertical,
+  Save,
+  Sun,
+  Sunset,
+  ToggleLeft,
+  ToggleRight,
+  Trash2,
+  Edit2,
   AlertCircle,
-  Copy,
-  Users,
-  Sparkles,
+  Check,
+  RotateCcw,
+  Eye,
+  EyeOff,
+  StickyNote,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-interface TimelineItem {
+interface TimelineEvent {
   id: string
-  time: string | null
-  end_time: string | null
-  duration_minutes: number | null
-  title: string
-  description: string | null
-  location: string | null
-  category: string | null
-  section: string | null
-  sort_order: number | null
-  is_concurrent: boolean
-  tip: string | null
-  is_custom: boolean
-}
-
-interface TimelineFormData {
-  time: string
-  duration_minutes: string
-  title: string
-  description: string
-  location: string
-  category: string
-  section: string
-  is_concurrent: boolean
-}
-
-// ---------------------------------------------------------------------------
-// Timeline Section Definitions
-// ---------------------------------------------------------------------------
-
-interface EventTemplate {
-  title: string
-  category: string
-  defaultDuration: number
-  tip: string
-  concurrent?: boolean
-  durationByGuestCount?: (count: number) => number
-}
-
-interface TimelineSection {
-  id: string
-  label: string
+  name: string
   icon: string
-  color: string
-  events: EventTemplate[]
+  defaultDuration: number
+  duration: number
+  description: string
+  tips?: string
+  included: boolean
+  time: string
+  manualTime: boolean
+  isTimeMarker?: boolean
+  isAnchor?: boolean
+  alwaysIncluded?: boolean
+  canBeConcurrent?: boolean
+  canChooseTiming?: boolean
+  chain?: string
+  notes: string
+  phase: string
+  // For formalities: 'before' | 'after' dinner
+  formalityTiming?: 'before' | 'after'
+  // For first-look conditional events
+  requiresFirstLook?: boolean
+  // Conditional on off-site ceremony
+  requiresOffsite?: boolean
+  // Duration in cocktail-hour mode (no first look)
+  cocktailDuration?: number
 }
 
-const TIMELINE_SECTIONS: TimelineSection[] = [
-  {
-    id: 'preparation',
-    label: 'Preparation',
-    icon: '💄',
-    color: '#EC4899',
-    events: [
-      { title: 'Hair & Makeup Begin', category: 'Getting Ready', defaultDuration: 180, tip: 'Start 3-4 hours before the ceremony. Hair and makeup artists typically need 45-60 min per person.' },
-      { title: 'Hair & Makeup Done', category: 'Getting Ready', defaultDuration: 0, tip: 'Build in a 30-minute buffer after the last person finishes — things always run long.' },
-      { title: 'Buffer Time', category: 'Getting Ready', defaultDuration: 30, tip: 'Use this time to eat something, hydrate, and take a breath. You will thank yourself later.' },
-      { title: 'Getting Dressed', category: 'Getting Ready', defaultDuration: 30, tip: 'This is a great photo moment. Keep the room tidy and well-lit for the photographer.' },
-      { title: 'Detail Photos', category: 'Photos', defaultDuration: 20, tip: 'Rings, shoes, invitations, flowers, perfume — have them laid out and ready for the photographer.', concurrent: true },
-    ],
-  },
-  {
-    id: 'first_look',
-    label: 'First Look',
-    icon: '👀',
-    color: '#F97316',
-    events: [
-      { title: 'First Look with Parent/Family', category: 'First Look', defaultDuration: 15, tip: 'An emotional private moment. Keep it intimate — just the photographer and the people involved.' },
-      { title: 'First Look with Partner', category: 'First Look', defaultDuration: 15, tip: 'Choose a private, photogenic spot. The photographer will position you for the best reveal.' },
-      { title: 'Private Vow Reading', category: 'First Look', defaultDuration: 10, tip: 'Optional but beautiful. Read personal vows privately before the ceremony for a more intimate moment.' },
-    ],
-  },
-  {
-    id: 'photo_sessions',
-    label: 'Photo Sessions',
-    icon: '📸',
-    color: '#3B82F6',
-    events: [
-      { title: 'Couple Portraits', category: 'Photos', defaultDuration: 30, tip: 'Best lighting is 1-2 hours before sunset. Trust your photographer to find the best spots.' },
-      { title: 'Wedding Party Photos', category: 'Photos', defaultDuration: 20, tip: 'Have your party gathered and ready. The more organized, the faster this goes.' },
-      { title: 'Family Formals', category: 'Photos', defaultDuration: 30, tip: 'Create a shot list in advance. Designate someone to wrangle family members — it saves enormous time.' },
-    ],
-  },
-  {
-    id: 'pre_ceremony',
-    label: 'Pre-Ceremony',
-    icon: '🚐',
-    color: '#8B5CF6',
-    events: [
-      { title: 'Travel to Ceremony', category: 'Logistics', defaultDuration: 15, tip: 'Account for traffic and allow extra time. Better to arrive early than rush.' },
-      { title: 'Last Shuttle / Guest Arrival', category: 'Logistics', defaultDuration: 30, tip: 'Ensure all guests have arrived before starting. Have ushers ready to seat people.' },
-    ],
-  },
-  {
-    id: 'ceremony',
-    label: 'Ceremony',
-    icon: '💒',
-    color: '#8B5CF6',
-    events: [
-      { title: 'Guests Arrive & Are Seated', category: 'Ceremony', defaultDuration: 30, tip: 'Play background music as guests are seated. Ushers should guide people to their seats.' },
-      { title: 'Prelude Music Begins', category: 'Ceremony', defaultDuration: 15, tip: 'Sets the mood. Choose 3-4 songs that reflect your style as a couple.' },
-      { title: 'Ceremony Begins', category: 'Ceremony', defaultDuration: 25, tip: 'Most ceremonies last 20-30 minutes. Discuss timing with your officiant beforehand.' },
-      { title: 'Group Photo', category: 'Photos', defaultDuration: 10, tip: 'Right after the ceremony while everyone is still gathered. Quick and efficient — one or two shots.' },
-    ],
-  },
-  {
-    id: 'cocktail_hour',
-    label: 'Cocktail Hour',
-    icon: '🥂',
-    color: '#F59E0B',
-    events: [
-      { title: 'Cocktail Hour Begins', category: 'Cocktail Hour', defaultDuration: 60, tip: 'This is the transition. Guests mingle, enjoy drinks and appetizers while the space turns over.' },
-      { title: 'Remaining Couple/Party Photos', category: 'Photos', defaultDuration: 30, tip: 'Use this time for any remaining photos. Try to keep it under 30 minutes so you can enjoy cocktail hour too.', concurrent: true },
-      { title: 'Couple Break', category: 'Cocktail Hour', defaultDuration: 15, tip: 'Steal 10-15 minutes to eat, drink, and enjoy the moment together. You deserve it.', concurrent: true },
-    ],
-  },
-  {
-    id: 'reception_intro',
-    label: 'Reception Intro',
-    icon: '🎉',
-    color: '#10B981',
-    events: [
-      { title: 'Doors Open', category: 'Reception', defaultDuration: 10, tip: 'Guests find their seats. Have a seating chart displayed prominently at the entrance.' },
-      { title: 'Wedding Party Introductions', category: 'Reception', defaultDuration: 10, tip: 'Keep it fun and high-energy. Coordinate with your DJ or MC on pronunciation of names.' },
-      { title: 'Couple Entrance', category: 'Reception', defaultDuration: 5, tip: 'Your grand entrance! Pick a song that gets you hyped.' },
-      { title: 'Welcome Toast', category: 'Speeches', defaultDuration: 5, tip: 'Brief and warm. Thank everyone for being there. Can be from the couple or a host.' },
-    ],
-  },
-  {
-    id: 'formalities',
-    label: 'Formalities',
-    icon: '🎵',
-    color: '#6366F1',
-    events: [
-      { title: 'First Dance', category: 'Dancing', defaultDuration: 5, tip: 'Practice at least a few times! Even if you are not choreographing, knowing the song length helps.' },
-      { title: 'Parent Dances', category: 'Dancing', defaultDuration: 8, tip: 'One or two songs. Can be combined (both parents dance simultaneously) to save time.' },
-      { title: 'Toasts & Speeches', category: 'Speeches', defaultDuration: 20, tip: 'Limit to 2-3 speakers, 3-5 minutes each. Brief speakers early so they do not go long.' },
-      { title: 'Cake Cutting', category: 'Reception', defaultDuration: 10, tip: 'Quick and sweet. The photographer needs just a few minutes. Dessert can be served later.' },
-    ],
-  },
-  {
-    id: 'dinner',
-    label: 'Dinner',
-    icon: '🍽️',
-    color: '#14B8A6',
-    events: [
-      {
-        title: 'Dinner Service',
-        category: 'Dinner',
-        defaultDuration: 60,
-        tip: 'Buffet: 45-60 min. Plated: 60-75 min. Multi-course: 90-120 min. Duration depends on guest count and service style.',
-        durationByGuestCount: (count: number) => {
-          if (count <= 50) return 45
-          if (count <= 100) return 60
-          if (count <= 150) return 75
-          return 90
-        },
-      },
-    ],
-  },
-  {
-    id: 'end_events',
-    label: 'End Events',
-    icon: '🌟',
-    color: '#EF4444',
-    events: [
-      { title: 'Open Dancing', category: 'Dancing', defaultDuration: 120, tip: 'The party! Let your DJ or band read the room. Keep the energy up.' },
-      { title: 'Last Dance', category: 'Dancing', defaultDuration: 5, tip: 'A special slow song to close the night. Some couples invite everyone to the floor.' },
-      { title: 'Send-Off', category: 'Reception', defaultDuration: 15, tip: 'Sparklers, bubbles, confetti, or a simple walk-out. Have everything prepped and distributed.' },
-    ],
-  },
-]
+type DinnerType = 'buffet' | 'plated' | 'multi_course'
+type FormalitiesTiming = 'before' | 'after'
 
-const ALL_CATEGORIES = [
-  'Getting Ready', 'First Look', 'Photos', 'Logistics', 'Ceremony',
-  'Cocktail Hour', 'Reception', 'Speeches', 'Dancing', 'Dinner', 'Other',
-]
-
-const CATEGORY_COLORS: Record<string, string> = {
-  'Getting Ready': '#EC4899',
-  'First Look': '#F97316',
-  Photos: '#3B82F6',
-  Logistics: '#8B5CF6',
-  Ceremony: '#8B5CF6',
-  'Cocktail Hour': '#F59E0B',
-  Reception: '#10B981',
-  Speeches: '#6366F1',
-  Dancing: '#EF4444',
-  Dinner: '#14B8A6',
-  Other: '#6B7280',
+interface TimelineConfig {
+  ceremonyTime: string
+  receptionEndTime: string
+  dinnerType: DinnerType
+  doingFirstLook: boolean
+  offSiteCeremony: boolean
+  autoCalculate: boolean
+  formalitiesTiming: FormalitiesTiming
+  weddingDate: string | null
+  latitude: number
 }
 
-const DINNER_STYLES = [
-  { value: 'buffet', label: 'Buffet', baseDuration: 45 },
-  { value: 'plated', label: 'Plated', baseDuration: 60 },
-  { value: 'multi_course', label: 'Multi-Course', baseDuration: 90 },
-  { value: 'stations', label: 'Food Stations', baseDuration: 50 },
-  { value: 'family_style', label: 'Family Style', baseDuration: 60 },
-]
-
-const EMPTY_FORM: TimelineFormData = {
-  time: '',
-  duration_minutes: '',
-  title: '',
-  description: '',
-  location: '',
-  category: '',
-  section: '',
-  is_concurrent: false,
+interface CustomEvent {
+  id: string
+  name: string
+  time: string
+  duration: number
+  notes: string
+  phase: string
+  icon: string
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Constants
 // ---------------------------------------------------------------------------
 
-function formatTime(timeStr: string | null): string {
+const DINNER_DURATIONS: Record<DinnerType, number> = {
+  buffet: 60,
+  plated: 90,
+  multi_course: 120,
+}
+
+const DINNER_LABELS: Record<DinnerType, string> = {
+  buffet: 'Buffet (60 min)',
+  plated: 'Plated (90 min)',
+  multi_course: 'Multi-Course (120 min)',
+}
+
+const PHASE_ORDER = [
+  'preparation',
+  'first_look',
+  'photos',
+  'pre_ceremony',
+  'ceremony',
+  'cocktail_hour',
+  'reception_intro',
+  'formalities_before',
+  'dinner',
+  'formalities_after',
+  'end',
+]
+
+const PHASE_LABELS: Record<string, string> = {
+  preparation: 'Preparation',
+  first_look: 'First Look',
+  photos: 'Photos',
+  pre_ceremony: 'Pre-Ceremony',
+  ceremony: 'Ceremony',
+  cocktail_hour: 'Cocktail Hour',
+  reception_intro: 'Reception Intro',
+  formalities_before: 'Formalities (Before Dinner)',
+  dinner: 'Dinner',
+  formalities_after: 'Formalities (After Dinner)',
+  end: 'End of Night',
+}
+
+const PHASE_ICONS: Record<string, string> = {
+  preparation: '💄',
+  first_look: '👀',
+  photos: '📸',
+  pre_ceremony: '🚐',
+  ceremony: '💒',
+  cocktail_hour: '🥂',
+  reception_intro: '🎉',
+  formalities_before: '🎵',
+  dinner: '🍽️',
+  formalities_after: '🎵',
+  end: '🌟',
+}
+
+const PHASE_COLORS: Record<string, string> = {
+  preparation: '#EC4899',
+  first_look: '#F97316',
+  photos: '#3B82F6',
+  pre_ceremony: '#8B5CF6',
+  ceremony: '#7C3AED',
+  cocktail_hour: '#F59E0B',
+  reception_intro: '#10B981',
+  formalities_before: '#6366F1',
+  dinner: '#14B8A6',
+  formalities_after: '#6366F1',
+  end: '#EF4444',
+}
+
+// ---------------------------------------------------------------------------
+// Default Event Definitions
+// ---------------------------------------------------------------------------
+
+function buildDefaultEvents(config: TimelineConfig): TimelineEvent[] {
+  const dinnerDuration = DINNER_DURATIONS[config.dinnerType]
+
+  return [
+    // ===== PREPARATION =====
+    {
+      id: 'prep_hmu_complete',
+      name: 'Hair & Makeup Complete',
+      icon: '💄',
+      defaultDuration: 0,
+      duration: 0,
+      description: 'Everyone is camera-ready',
+      tips: 'Build in 30 min buffer — things always run long. Hydrate and eat before photos start.',
+      included: true,
+      time: '',
+      manualTime: false,
+      isTimeMarker: true,
+      isAnchor: true,
+      alwaysIncluded: true,
+      phase: 'preparation',
+      notes: '',
+    },
+    {
+      id: 'prep_buffer',
+      name: 'Buffer / Lunch Break',
+      icon: '🥪',
+      defaultDuration: 30,
+      duration: 30,
+      description: 'Eat something, hydrate, take a breath',
+      tips: 'You will thank yourself later. Have sandwiches or wraps — nothing messy.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'preparation',
+      notes: '',
+    },
+    {
+      id: 'prep_party_dressed',
+      name: 'Bridesmaids & Groomsmen Get Dressed',
+      icon: '👗',
+      defaultDuration: 30,
+      duration: 30,
+      description: 'Wedding party gets into their outfits',
+      tips: 'Have a designated room for each side. Keep it tidy for photos.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'preparation',
+      notes: '',
+    },
+    {
+      id: 'prep_bride_dressed',
+      name: 'Bride Gets Dressed',
+      icon: '👰',
+      defaultDuration: 30,
+      duration: 30,
+      description: 'The dress moment — one of the best photo opportunities',
+      tips: 'Keep the room bright, clean, and uncluttered. Only a few people in the room.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'preparation',
+      notes: '',
+    },
+    {
+      id: 'prep_groom_photos',
+      name: 'Groom Getting Ready Photos',
+      icon: '🤵',
+      defaultDuration: 30,
+      duration: 30,
+      description: 'Groom and groomsmen candid + posed shots',
+      tips: 'Ties, cufflinks, flask moments — let the photographer capture the mood.',
+      included: true,
+      time: '',
+      manualTime: false,
+      canBeConcurrent: true,
+      phase: 'preparation',
+      notes: '',
+    },
+    {
+      id: 'prep_bride_photos',
+      name: 'Bride Getting Ready Photos',
+      icon: '📸',
+      defaultDuration: 30,
+      duration: 30,
+      description: 'Bride getting dressed, earrings, veil, shoes',
+      tips: 'The "reveal" to bridesmaids is a great candid moment. Have them face away.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'preparation',
+      notes: '',
+    },
+    {
+      id: 'prep_details',
+      name: 'Details Photos',
+      icon: '💍',
+      defaultDuration: 20,
+      duration: 20,
+      description: 'Rings, shoes, invitations, flowers, perfume, jewelry',
+      tips: 'Have all details laid out on a flat surface with good light. Photographer needs 15-20 min.',
+      included: true,
+      time: '',
+      manualTime: false,
+      canBeConcurrent: true,
+      phase: 'preparation',
+      notes: '',
+    },
+
+    // ===== FIRST LOOK (conditional) =====
+    {
+      id: 'fl_dad',
+      name: 'First Look with Dad',
+      icon: '🥲',
+      defaultDuration: 10,
+      duration: 10,
+      description: 'An emotional private moment — just dad and the bride',
+      tips: 'Keep it intimate. Only the photographer. Have tissues ready.',
+      included: config.doingFirstLook,
+      time: '',
+      manualTime: false,
+      requiresFirstLook: true,
+      phase: 'first_look',
+      notes: '',
+    },
+    {
+      id: 'fl_partner',
+      name: 'First Look with Partner',
+      icon: '💕',
+      defaultDuration: 15,
+      duration: 15,
+      description: 'See each other for the first time before the ceremony',
+      tips: 'Choose a private, photogenic spot. Let the photographer position you for the reveal.',
+      included: config.doingFirstLook,
+      time: '',
+      manualTime: false,
+      requiresFirstLook: true,
+      phase: 'first_look',
+      notes: '',
+    },
+    {
+      id: 'fl_vows',
+      name: 'Private Vows',
+      icon: '📝',
+      defaultDuration: 15,
+      duration: 15,
+      description: 'Read personal vows privately before the ceremony',
+      tips: 'Incredibly intimate. Many couples say this was their favorite moment of the day.',
+      included: false,
+      time: '',
+      manualTime: false,
+      requiresFirstLook: true,
+      phase: 'first_look',
+      notes: '',
+    },
+
+    // ===== PHOTOS =====
+    {
+      id: 'photo_couple',
+      name: 'Couple Portraits',
+      icon: '📷',
+      defaultDuration: 30,
+      duration: config.doingFirstLook ? 30 : 15,
+      cocktailDuration: 15,
+      description: 'Just the two of you — the hero shots of the day',
+      tips: 'Best light is 1-2 hours before sunset. Trust your photographer on locations.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'photos',
+      notes: '',
+    },
+    {
+      id: 'photo_party',
+      name: 'Wedding Party Photos',
+      icon: '👯',
+      defaultDuration: 30,
+      duration: config.doingFirstLook ? 30 : 20,
+      cocktailDuration: 20,
+      description: 'Group shots with your bridesmaids, groomsmen, or mixed crew',
+      tips: 'Have your party gathered and ready. The more organized, the faster this goes.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'photos',
+      notes: '',
+    },
+    {
+      id: 'photo_family_immediate',
+      name: 'Immediate Family Photos',
+      icon: '👨‍👩‍👧‍👦',
+      defaultDuration: 30,
+      duration: config.doingFirstLook ? 30 : 15,
+      cocktailDuration: 15,
+      description: 'Parents, siblings, grandparents — the must-have shots',
+      tips: 'Create a shot list in advance. Designate a family wrangler — it saves huge time.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'photos',
+      notes: '',
+    },
+    {
+      id: 'photo_family_extended',
+      name: 'Extended Family Photos',
+      icon: '👥',
+      defaultDuration: 20,
+      duration: config.doingFirstLook ? 20 : 10,
+      cocktailDuration: 10,
+      description: 'Aunts, uncles, cousins — the big group shots',
+      tips: 'Keep it moving. These go fastest with a clear list and someone calling names.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'photos',
+      notes: '',
+    },
+
+    // ===== PRE-CEREMONY =====
+    {
+      id: 'precer_put_away',
+      name: 'Put Bride Away',
+      icon: '🚪',
+      defaultDuration: 30,
+      duration: 30,
+      description: 'Bride hidden from guests before the ceremony',
+      tips: 'Final touch-ups, veil adjusted, bouquet ready. A moment to breathe.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'pre_ceremony',
+      notes: '',
+    },
+    {
+      id: 'precer_shuttle',
+      name: 'Last Shuttle Arrives',
+      icon: '🚌',
+      defaultDuration: 0,
+      duration: 0,
+      description: 'All guests have arrived on-site',
+      tips: 'Coordinate with your shuttle company for exact arrival time.',
+      included: true,
+      time: '',
+      manualTime: false,
+      isTimeMarker: true,
+      phase: 'pre_ceremony',
+      notes: '',
+    },
+    {
+      id: 'precer_travel',
+      name: 'Travel to Ceremony',
+      icon: '🚗',
+      defaultDuration: 30,
+      duration: 30,
+      description: 'Transit time if ceremony is at a different location',
+      tips: 'Account for traffic and allow extra time. Better early than stressed.',
+      included: config.offSiteCeremony,
+      time: '',
+      manualTime: false,
+      requiresOffsite: true,
+      phase: 'pre_ceremony',
+      notes: '',
+    },
+
+    // ===== CEREMONY =====
+    {
+      id: 'cer_arrival',
+      name: 'Guest Arrival',
+      icon: '🚶',
+      defaultDuration: 30,
+      duration: 30,
+      description: 'Guests arrive and find their seats',
+      tips: 'Play background music. Have ushers ready to seat people and hand out programs.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'ceremony',
+      notes: '',
+    },
+    {
+      id: 'cer_music',
+      name: 'Ceremony Music Begins',
+      icon: '🎶',
+      defaultDuration: 15,
+      duration: 15,
+      description: 'Prelude music sets the mood before the processional',
+      tips: 'Choose 3-4 songs that reflect your style. Sets the emotional tone.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'ceremony',
+      notes: '',
+    },
+    {
+      id: 'cer_ceremony',
+      name: 'Ceremony',
+      icon: '💒',
+      defaultDuration: 25,
+      duration: 25,
+      description: 'The main event — processional, vows, rings, kiss',
+      tips: 'Most ceremonies last 20-30 minutes. Discuss timing with your officiant.',
+      included: true,
+      time: '',
+      manualTime: false,
+      isAnchor: true,
+      alwaysIncluded: true,
+      phase: 'ceremony',
+      notes: '',
+    },
+    {
+      id: 'cer_group_photo',
+      name: 'Big Group Photo',
+      icon: '📸',
+      defaultDuration: 5,
+      duration: 5,
+      description: 'One big photo with everyone right after the ceremony',
+      tips: 'Quick and efficient — one or two shots while everyone is still gathered.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'ceremony',
+      notes: '',
+    },
+    {
+      id: 'cer_travel_back',
+      name: 'Travel Back',
+      icon: '🚗',
+      defaultDuration: 30,
+      duration: 30,
+      description: 'Transit back to reception venue',
+      tips: 'Use this time to decompress. Grab a snack in the car.',
+      included: config.offSiteCeremony,
+      time: '',
+      manualTime: false,
+      requiresOffsite: true,
+      phase: 'ceremony',
+      notes: '',
+    },
+
+    // ===== COCKTAIL HOUR =====
+    {
+      id: 'cock_cocktail',
+      name: 'Cocktail Hour',
+      icon: '🥂',
+      defaultDuration: 50,
+      duration: 50,
+      description: 'Guests mingle, enjoy drinks and appetizers',
+      tips: 'This is the transition. Space turns over, guests relax. Great for lawn games.',
+      included: true,
+      time: '',
+      manualTime: false,
+      alwaysIncluded: true,
+      phase: 'cocktail_hour',
+      notes: '',
+    },
+    {
+      id: 'cock_remaining_photos',
+      name: 'Remaining Photos',
+      icon: '📷',
+      defaultDuration: 15,
+      duration: 15,
+      description: 'Any remaining formal photos during cocktail hour',
+      tips: 'If you did a first look, this is lighter. If not, this is your main photo block.',
+      included: true,
+      time: '',
+      manualTime: false,
+      canBeConcurrent: true,
+      phase: 'cocktail_hour',
+      notes: '',
+    },
+    {
+      id: 'cock_break',
+      name: 'Couple Break',
+      icon: '💑',
+      defaultDuration: 15,
+      duration: 15,
+      description: 'Steal 15 minutes to eat, drink, and breathe together',
+      tips: 'You deserve this. Have your coordinator bring you a plate and a drink.',
+      included: true,
+      time: '',
+      manualTime: false,
+      canBeConcurrent: true,
+      phase: 'cocktail_hour',
+      notes: '',
+    },
+    {
+      id: 'cock_sunset',
+      name: 'Sunset / Golden Hour Photos',
+      icon: '🌅',
+      defaultDuration: 20,
+      duration: 20,
+      description: 'The most magical light of the day — auto-timed to sunset',
+      tips: 'Golden hour is 30 min before sunset. Your photographer will know exactly when to grab you.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'cocktail_hour',
+      notes: '',
+    },
+
+    // ===== RECEPTION INTRO =====
+    {
+      id: 'rec_doors',
+      name: 'Doors Open',
+      icon: '🚪',
+      defaultDuration: 10,
+      duration: 10,
+      description: 'Guests find their seats, check the seating chart',
+      tips: 'Have a clear seating chart at the entrance. Escort cards speed things up.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'reception_intro',
+      notes: '',
+    },
+    {
+      id: 'rec_entrance',
+      name: 'Grand Entrance / Introductions',
+      icon: '🎉',
+      defaultDuration: 5,
+      duration: 5,
+      description: 'Wedding party and couple are introduced',
+      tips: 'Pick a hype song! Coordinate pronunciation with your DJ/MC beforehand.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'reception_intro',
+      notes: '',
+    },
+    {
+      id: 'rec_welcome',
+      name: 'Welcome & Blessing',
+      icon: '🙏',
+      defaultDuration: 5,
+      duration: 5,
+      description: 'Brief welcome, blessing, or toast to kick off the reception',
+      tips: 'Keep it under 3 minutes. Thank everyone for being there.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'reception_intro',
+      notes: '',
+    },
+
+    // ===== FORMALITIES =====
+    {
+      id: 'form_first_dance',
+      name: 'First Dance',
+      icon: '💃',
+      defaultDuration: 5,
+      duration: 5,
+      description: 'Your first dance as a married couple',
+      tips: 'Practice at least a few times! Even if not choreographed, know the song length.',
+      included: true,
+      time: '',
+      manualTime: false,
+      canChooseTiming: true,
+      formalityTiming: config.formalitiesTiming,
+      phase: config.formalitiesTiming === 'before' ? 'formalities_before' : 'formalities_after',
+      notes: '',
+    },
+    {
+      id: 'form_parent_dances',
+      name: 'Parent Dances',
+      icon: '👨‍👧',
+      defaultDuration: 5,
+      duration: 5,
+      description: 'Mother-son and father-daughter dances',
+      tips: 'Can be combined (both dances at the same time) to save time and energy.',
+      included: true,
+      time: '',
+      manualTime: false,
+      canChooseTiming: true,
+      formalityTiming: config.formalitiesTiming,
+      phase: config.formalitiesTiming === 'before' ? 'formalities_before' : 'formalities_after',
+      notes: '',
+    },
+    {
+      id: 'form_toasts',
+      name: 'Toasts & Speeches',
+      icon: '🥂',
+      defaultDuration: 15,
+      duration: 15,
+      description: 'Best man, maid of honor, and family speeches',
+      tips: 'Limit to 2-3 speakers, 3-5 minutes each. Brief them early so they do not go long.',
+      included: true,
+      time: '',
+      manualTime: false,
+      canChooseTiming: true,
+      formalityTiming: config.formalitiesTiming,
+      phase: config.formalitiesTiming === 'before' ? 'formalities_before' : 'formalities_after',
+      notes: '',
+    },
+    {
+      id: 'form_cake',
+      name: 'Cake Cutting',
+      icon: '🎂',
+      defaultDuration: 10,
+      duration: 10,
+      description: 'The classic cake cutting moment',
+      tips: 'Quick and sweet. Photographer needs just a few minutes. Dessert can be served later.',
+      included: true,
+      time: '',
+      manualTime: false,
+      canChooseTiming: true,
+      formalityTiming: config.formalitiesTiming,
+      phase: config.formalitiesTiming === 'before' ? 'formalities_before' : 'formalities_after',
+      notes: '',
+    },
+    {
+      id: 'form_anniversary',
+      name: 'Anniversary Dance',
+      icon: '💞',
+      defaultDuration: 5,
+      duration: 5,
+      description: 'All married couples dance — last couple standing wins',
+      tips: 'Fun crowd participation moment. DJ calls out years and couples sit down.',
+      included: false,
+      time: '',
+      manualTime: false,
+      canChooseTiming: true,
+      formalityTiming: config.formalitiesTiming,
+      phase: config.formalitiesTiming === 'before' ? 'formalities_before' : 'formalities_after',
+      notes: '',
+    },
+    {
+      id: 'form_newlywed_game',
+      name: 'Newlywed Game',
+      icon: '🎮',
+      defaultDuration: 5,
+      duration: 5,
+      description: 'Fun Q&A game for the couple — guests love it',
+      tips: 'Prepare 5-7 questions in advance. Keep it light and funny.',
+      included: false,
+      time: '',
+      manualTime: false,
+      canChooseTiming: true,
+      formalityTiming: config.formalitiesTiming,
+      phase: config.formalitiesTiming === 'before' ? 'formalities_before' : 'formalities_after',
+      notes: '',
+    },
+    {
+      id: 'form_bouquet',
+      name: 'Bouquet Toss',
+      icon: '💐',
+      defaultDuration: 5,
+      duration: 5,
+      description: 'The classic bouquet toss to unmarried guests',
+      tips: 'Have DJ announce it so people gather. Some couples skip this — totally fine.',
+      included: false,
+      time: '',
+      manualTime: false,
+      canChooseTiming: true,
+      formalityTiming: config.formalitiesTiming,
+      phase: config.formalitiesTiming === 'before' ? 'formalities_before' : 'formalities_after',
+      notes: '',
+    },
+    {
+      id: 'form_garter',
+      name: 'Garter Toss',
+      icon: '🎯',
+      defaultDuration: 5,
+      duration: 5,
+      description: 'Traditional garter toss',
+      tips: 'Increasingly optional — skip if it does not feel like you. No pressure.',
+      included: false,
+      time: '',
+      manualTime: false,
+      canChooseTiming: true,
+      formalityTiming: config.formalitiesTiming,
+      phase: config.formalitiesTiming === 'before' ? 'formalities_before' : 'formalities_after',
+      notes: '',
+    },
+
+    // ===== DINNER =====
+    {
+      id: 'dinner_service',
+      name: 'Dinner Service',
+      icon: '🍽️',
+      defaultDuration: dinnerDuration,
+      duration: dinnerDuration,
+      description: `${DINNER_LABELS[config.dinnerType]}`,
+      tips: 'Duration depends on service style and guest count. Buffet is fastest, multi-course is longest.',
+      included: true,
+      time: '',
+      manualTime: false,
+      alwaysIncluded: true,
+      phase: 'dinner',
+      notes: '',
+    },
+
+    // ===== END =====
+    {
+      id: 'end_dancing',
+      name: 'Open Dancing Begins',
+      icon: '🕺',
+      defaultDuration: 0,
+      duration: 0,
+      description: 'The dance floor opens — let the party begin',
+      tips: 'Let your DJ read the room. Request a few must-play songs in advance.',
+      included: true,
+      time: '',
+      manualTime: false,
+      isTimeMarker: true,
+      phase: 'end',
+      notes: '',
+    },
+    {
+      id: 'end_last_dance',
+      name: 'Last Dance',
+      icon: '🎵',
+      defaultDuration: 5,
+      duration: 5,
+      description: 'A special slow song to close the night',
+      tips: 'Some couples invite everyone to the floor. Others keep it private first.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'end',
+      notes: '',
+    },
+    {
+      id: 'end_private_last',
+      name: 'Private Last Dance',
+      icon: '💕',
+      defaultDuration: 5,
+      duration: 5,
+      description: 'Just the two of you on an empty dance floor',
+      tips: 'After guests line up for the exit, steal one more song alone. Magical.',
+      included: false,
+      time: '',
+      manualTime: false,
+      phase: 'end',
+      notes: '',
+    },
+    {
+      id: 'end_exit',
+      name: 'Grand Exit / Send-Off',
+      icon: '✨',
+      defaultDuration: 10,
+      duration: 10,
+      description: 'Sparklers, bubbles, confetti, or a simple walk-out',
+      tips: 'Have everything prepped and distributed before the last dance. Coordinate with your team.',
+      included: true,
+      time: '',
+      manualTime: false,
+      phase: 'end',
+      notes: '',
+    },
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// Sunset Calculation
+// ---------------------------------------------------------------------------
+
+function calculateSunset(dateStr: string | null, latitude: number): string | null {
+  if (!dateStr) return null
+
+  const date = new Date(dateStr)
+  const year = date.getFullYear()
+  const month = date.getMonth()
+  const day = date.getDate()
+
+  // Day of year
+  const start = new Date(year, 0, 0)
+  const diff = date.getTime() - start.getTime()
+  const dayOfYear = Math.floor(diff / (1000 * 60 * 60 * 24))
+
+  // Solar declination (degrees)
+  const declination = 23.45 * Math.sin((2 * Math.PI / 365) * (dayOfYear - 81))
+  const decRad = declination * (Math.PI / 180)
+  const latRad = latitude * (Math.PI / 180)
+
+  // Hour angle at sunset
+  const cosHourAngle = -(Math.sin(latRad) * Math.sin(decRad)) / (Math.cos(latRad) * Math.cos(decRad))
+
+  // Check for polar day/night
+  if (cosHourAngle > 1 || cosHourAngle < -1) return null
+
+  const hourAngle = Math.acos(cosHourAngle) * (180 / Math.PI)
+
+  // Solar noon in hours (approximate — 12:00 local standard)
+  // Equation of time correction (simplified)
+  const B = (2 * Math.PI / 365) * (dayOfYear - 81)
+  const eqOfTime = 9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B) // in minutes
+
+  // Sunset time in hours (local standard time, no timezone offset for simplicity)
+  const solarNoon = 12 - eqOfTime / 60
+  const sunsetHours = solarNoon + hourAngle / 15
+
+  // DST handling (US rules: 2nd Sunday March - 1st Sunday November)
+  let isDST = false
+  if (month > 2 && month < 10) {
+    isDST = true
+  } else if (month === 2) {
+    // March: DST starts 2nd Sunday
+    const firstDay = new Date(year, 2, 1).getDay()
+    const secondSunday = firstDay === 0 ? 8 : (14 - firstDay + 1)
+    if (day >= secondSunday) isDST = true
+  } else if (month === 10) {
+    // November: DST ends 1st Sunday
+    const firstDay = new Date(year, 10, 1).getDay()
+    const firstSunday = firstDay === 0 ? 1 : (7 - firstDay + 1)
+    if (day < firstSunday) isDST = true
+  }
+
+  let adjustedHours = sunsetHours + (isDST ? 1 : 0)
+
+  // Clamp to 24h
+  if (adjustedHours >= 24) adjustedHours -= 24
+  if (adjustedHours < 0) adjustedHours += 24
+
+  const h = Math.floor(adjustedHours)
+  const m = Math.round((adjustedHours - h) * 60)
+
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+// ---------------------------------------------------------------------------
+// Time Helpers
+// ---------------------------------------------------------------------------
+
+function addMinutes(time: string, minutes: number): string {
+  const [h, m] = time.split(':').map(Number)
+  let totalMins = h * 60 + m + minutes
+  if (totalMins < 0) totalMins += 24 * 60
+  const newH = Math.floor(totalMins / 60) % 24
+  const newM = totalMins % 60
+  return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`
+}
+
+function subtractMinutes(time: string, minutes: number): string {
+  return addMinutes(time, -minutes)
+}
+
+function formatTime12(timeStr: string): string {
   if (!timeStr) return 'TBD'
   const [hours, minutes] = timeStr.split(':').map(Number)
   const ampm = hours >= 12 ? 'PM' : 'AM'
@@ -251,956 +906,1285 @@ function formatTime(timeStr: string | null): string {
   return `${displayHours}:${String(minutes).padStart(2, '0')} ${ampm}`
 }
 
-function formatDuration(mins: number | null): string {
-  if (!mins) return ''
+function formatDuration(mins: number): string {
+  if (mins === 0) return 'marker'
   if (mins < 60) return `${mins} min`
   const h = Math.floor(mins / 60)
   const m = mins % 60
   return m > 0 ? `${h}h ${m}m` : `${h}h`
 }
 
-function addMinutes(time: string, minutes: number): string {
+function timeToMinutes(time: string): number {
   const [h, m] = time.split(':').map(Number)
-  const totalMins = h * 60 + m + minutes
-  const newH = Math.floor(totalMins / 60) % 24
-  const newM = totalMins % 60
-  return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`
+  return h * 60 + m
 }
 
-function timeDiffMinutes(start: string, end: string): number {
-  const [sh, sm] = start.split(':').map(Number)
-  const [eh, em] = end.split(':').map(Number)
-  return (eh * 60 + em) - (sh * 60 + sm)
+function minutesToTime(mins: number): string {
+  let m = mins
+  if (m < 0) m += 24 * 60
+  const h = Math.floor(m / 60) % 24
+  const min = m % 60
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`
 }
 
 // ---------------------------------------------------------------------------
-// Timeline Page
+// Auto-Calculation Engine
+// ---------------------------------------------------------------------------
+
+function autoCalculateTimes(
+  events: TimelineEvent[],
+  config: TimelineConfig,
+  sunsetTime: string | null,
+): TimelineEvent[] {
+  const updated = events.map(e => ({ ...e }))
+
+  // Find ceremony event
+  const ceremonyIdx = updated.findIndex(e => e.id === 'cer_ceremony')
+  if (ceremonyIdx === -1) return updated
+
+  // Set ceremony time
+  if (!updated[ceremonyIdx].manualTime) {
+    updated[ceremonyIdx].time = config.ceremonyTime
+  }
+
+  // ================================================================
+  // WORK BACKWARDS from ceremony for prep phases
+  // ================================================================
+
+  // Gather all events BEFORE ceremony (included, sequential) in reverse
+  const preCeremonyPhases = ['preparation', 'first_look', 'photos', 'pre_ceremony', 'ceremony']
+  const preCeremonyEvents = updated.filter(
+    e => preCeremonyPhases.includes(e.phase) && e.included && e.id !== 'cer_ceremony'
+  )
+
+  // Ceremony-phase events before the ceremony itself
+  const ceremonyPhaseEvents = ['cer_arrival', 'cer_music']
+  const postCeremonyPhaseEvents = ['cer_group_photo', 'cer_travel_back']
+
+  // Calculate backward from ceremony time
+  let backwardTime = timeToMinutes(config.ceremonyTime)
+
+  // Guest arrival and music are before ceremony
+  const musicEvent = updated.find(e => e.id === 'cer_music')
+  const arrivalEvent = updated.find(e => e.id === 'cer_arrival')
+
+  if (musicEvent && musicEvent.included && !musicEvent.manualTime) {
+    backwardTime -= musicEvent.duration
+    musicEvent.time = minutesToTime(backwardTime)
+  }
+  if (arrivalEvent && arrivalEvent.included && !arrivalEvent.manualTime) {
+    backwardTime -= arrivalEvent.duration
+    arrivalEvent.time = minutesToTime(backwardTime)
+  }
+
+  // Pre-ceremony events (travel, shuttle, put away)
+  const preCerOrder = ['precer_travel', 'precer_shuttle', 'precer_put_away']
+  for (const eid of preCerOrder) {
+    const ev = updated.find(e => e.id === eid)
+    if (ev && ev.included && !ev.manualTime) {
+      backwardTime -= ev.duration
+      ev.time = minutesToTime(backwardTime)
+    }
+  }
+
+  // Photos (before ceremony if first-look, or they happen during cocktail if no first-look)
+  if (config.doingFirstLook) {
+    const photoOrder = ['photo_family_extended', 'photo_family_immediate', 'photo_party', 'photo_couple']
+    for (const eid of photoOrder) {
+      const ev = updated.find(e => e.id === eid)
+      if (ev && ev.included && !ev.manualTime) {
+        backwardTime -= ev.duration
+        ev.time = minutesToTime(backwardTime)
+      }
+    }
+  }
+
+  // First look events
+  if (config.doingFirstLook) {
+    const flOrder = ['fl_vows', 'fl_partner', 'fl_dad']
+    for (const eid of flOrder) {
+      const ev = updated.find(e => e.id === eid)
+      if (ev && ev.included && !ev.manualTime) {
+        backwardTime -= ev.duration
+        ev.time = minutesToTime(backwardTime)
+      }
+    }
+  }
+
+  // Preparation events (work backwards)
+  const prepOrder = [
+    'prep_details', 'prep_bride_photos', 'prep_groom_photos',
+    'prep_bride_dressed', 'prep_party_dressed', 'prep_buffer', 'prep_hmu_complete',
+  ]
+  for (const eid of prepOrder) {
+    const ev = updated.find(e => e.id === eid)
+    if (ev && ev.included && !ev.manualTime) {
+      if (ev.canBeConcurrent) {
+        // Concurrent events share the time slot of the previous sequential event
+        // Just set time to current backward time without subtracting
+        ev.time = minutesToTime(backwardTime)
+      } else {
+        backwardTime -= ev.duration
+        ev.time = minutesToTime(backwardTime)
+      }
+    }
+  }
+
+  // ================================================================
+  // WORK FORWARDS from ceremony for post-ceremony events
+  // ================================================================
+
+  let forwardTime = timeToMinutes(config.ceremonyTime)
+  // Add ceremony duration
+  const ceremony = updated.find(e => e.id === 'cer_ceremony')
+  if (ceremony) forwardTime += ceremony.duration
+
+  // Post-ceremony events in ceremony phase
+  for (const eid of postCeremonyPhaseEvents) {
+    const ev = updated.find(e => e.id === eid)
+    if (ev && ev.included && !ev.manualTime) {
+      ev.time = minutesToTime(forwardTime)
+      forwardTime += ev.duration
+    }
+  }
+
+  // Cocktail hour
+  const cocktailOrder = ['cock_cocktail', 'cock_remaining_photos', 'cock_break', 'cock_sunset']
+  for (const eid of cocktailOrder) {
+    const ev = updated.find(e => e.id === eid)
+    if (ev && ev.included && !ev.manualTime) {
+      if (eid === 'cock_sunset' && sunsetTime) {
+        // Schedule sunset photos 20 min before sunset
+        const sunsetMins = timeToMinutes(sunsetTime)
+        ev.time = minutesToTime(sunsetMins - 20)
+      } else if (ev.canBeConcurrent) {
+        // Concurrent with cocktail hour — same start time as cocktail
+        const cocktail = updated.find(e => e.id === 'cock_cocktail')
+        if (cocktail && cocktail.time) {
+          ev.time = cocktail.time
+        }
+      } else {
+        ev.time = minutesToTime(forwardTime)
+        forwardTime += ev.duration
+      }
+    }
+  }
+
+  // If no first look, photos happen during cocktail hour
+  if (!config.doingFirstLook) {
+    const cocktailStart = updated.find(e => e.id === 'cock_cocktail')
+    if (cocktailStart && cocktailStart.time) {
+      let photoTime = timeToMinutes(cocktailStart.time)
+      const photoOrder = ['photo_couple', 'photo_party', 'photo_family_immediate', 'photo_family_extended']
+      for (const eid of photoOrder) {
+        const ev = updated.find(e => e.id === eid)
+        if (ev && ev.included && !ev.manualTime) {
+          ev.time = minutesToTime(photoTime)
+          ev.phase = 'cocktail_hour'
+          photoTime += (ev.cocktailDuration || ev.duration)
+        }
+      }
+    }
+  }
+
+  // Reception intro
+  const introOrder = ['rec_doors', 'rec_entrance', 'rec_welcome']
+  for (const eid of introOrder) {
+    const ev = updated.find(e => e.id === eid)
+    if (ev && ev.included && !ev.manualTime) {
+      ev.time = minutesToTime(forwardTime)
+      forwardTime += ev.duration
+    }
+  }
+
+  // Formalities BEFORE dinner
+  const formalitiesOrder = [
+    'form_first_dance', 'form_parent_dances', 'form_toasts', 'form_cake',
+    'form_anniversary', 'form_newlywed_game', 'form_bouquet', 'form_garter',
+  ]
+  const beforeDinnerFormalities = formalitiesOrder.filter(eid => {
+    const ev = updated.find(e => e.id === eid)
+    return ev && ev.included && ev.formalityTiming === 'before'
+  })
+  for (const eid of beforeDinnerFormalities) {
+    const ev = updated.find(e => e.id === eid)
+    if (ev && !ev.manualTime) {
+      ev.time = minutesToTime(forwardTime)
+      ev.phase = 'formalities_before'
+      forwardTime += ev.duration
+    }
+  }
+
+  // Dinner
+  const dinner = updated.find(e => e.id === 'dinner_service')
+  if (dinner && dinner.included && !dinner.manualTime) {
+    dinner.time = minutesToTime(forwardTime)
+    forwardTime += dinner.duration
+  }
+
+  // Formalities AFTER dinner
+  const afterDinnerFormalities = formalitiesOrder.filter(eid => {
+    const ev = updated.find(e => e.id === eid)
+    return ev && ev.included && ev.formalityTiming === 'after'
+  })
+  for (const eid of afterDinnerFormalities) {
+    const ev = updated.find(e => e.id === eid)
+    if (ev && !ev.manualTime) {
+      ev.time = minutesToTime(forwardTime)
+      ev.phase = 'formalities_after'
+      forwardTime += ev.duration
+    }
+  }
+
+  // End events
+  // Calculate open dancing duration to fill until reception end
+  const receptionEndMins = timeToMinutes(config.receptionEndTime)
+  const endEventsOrder = ['end_dancing', 'end_last_dance', 'end_private_last', 'end_exit']
+  const endEventsDuration = endEventsOrder.reduce((sum, eid) => {
+    const ev = updated.find(e => e.id === eid && e.included && eid !== 'end_dancing')
+    return sum + (ev ? ev.duration : 0)
+  }, 0)
+
+  for (const eid of endEventsOrder) {
+    const ev = updated.find(e => e.id === eid)
+    if (ev && ev.included && !ev.manualTime) {
+      if (eid === 'end_dancing') {
+        ev.time = minutesToTime(forwardTime)
+        // Open dancing goes until last dance
+        forwardTime = receptionEndMins - endEventsDuration
+      } else {
+        ev.time = minutesToTime(forwardTime)
+        forwardTime += ev.duration
+      }
+    }
+  }
+
+  return updated
+}
+
+// ---------------------------------------------------------------------------
+// Timeline Page Component
 // ---------------------------------------------------------------------------
 
 export default function TimelinePage() {
-  const [items, setItems] = useState<TimelineItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [form, setForm] = useState<TimelineFormData>(EMPTY_FORM)
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(TIMELINE_SECTIONS.map(s => s.id)))
-  const [showTemplatePanel, setShowTemplatePanel] = useState(false)
-  const [guestCount, setGuestCount] = useState(100)
-  const [ceremonyTime, setCeremonyTime] = useState('16:00')
-  const [dinnerStyle, setDinnerStyle] = useState('plated')
-  const [showTips, setShowTips] = useState(true)
-  const [insertAfterIndex, setInsertAfterIndex] = useState<number | null>(null)
+  // ---- Config state ----
+  const [config, setConfig] = useState<TimelineConfig>({
+    ceremonyTime: '16:00',
+    receptionEndTime: '22:00',
+    dinnerType: 'plated',
+    doingFirstLook: true,
+    offSiteCeremony: false,
+    autoCalculate: true,
+    formalitiesTiming: 'before',
+    weddingDate: null,
+    latitude: 38.4,
+  })
 
+  // ---- Event state ----
+  const [events, setEvents] = useState<TimelineEvent[]>([])
+  const [customEvents, setCustomEvents] = useState<CustomEvent[]>([])
+  const [expandedPhases, setExpandedPhases] = useState<Set<string>>(new Set(PHASE_ORDER))
+  const [showTips, setShowTips] = useState(true)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [dirty, setDirty] = useState(false)
+  const [showSummary, setShowSummary] = useState(false)
+  const [showCustomModal, setShowCustomModal] = useState(false)
+  const [customForm, setCustomForm] = useState<CustomEvent>({
+    id: '',
+    name: '',
+    time: '',
+    duration: 15,
+    notes: '',
+    phase: 'reception_intro',
+    icon: '🎯',
+  })
+  const [notesOpen, setNotesOpen] = useState<Set<string>>(new Set())
+
+  const saveBarRef = useRef<HTMLDivElement>(null)
   const supabase = createClient()
 
-  // ---- Fetch ----
-  const fetchItems = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('timeline')
-      .select('*')
-      .eq('wedding_id', WEDDING_ID)
-      .order('sort_order', { ascending: true })
-      .order('time', { ascending: true, nullsFirst: false })
+  // ---- Sunset calculation ----
+  const sunsetTime = useMemo(() => {
+    return calculateSunset(config.weddingDate, config.latitude)
+  }, [config.weddingDate, config.latitude])
 
-    if (!error && data) {
-      setItems(data as TimelineItem[])
+  // ---- Fetch saved data ----
+  const fetchData = useCallback(async () => {
+    const [timelineRes, weddingRes] = await Promise.all([
+      supabase
+        .from('timeline')
+        .select('*')
+        .eq('wedding_id', WEDDING_ID)
+        .single(),
+      supabase
+        .from('weddings')
+        .select('wedding_date')
+        .eq('id', WEDDING_ID)
+        .single(),
+    ])
+
+    let weddingDate: string | null = null
+    if (!weddingRes.error && weddingRes.data) {
+      weddingDate = weddingRes.data.wedding_date
     }
+
+    if (!timelineRes.error && timelineRes.data && timelineRes.data.config_json) {
+      // Restore saved state
+      const saved = timelineRes.data.config_json as {
+        config?: TimelineConfig
+        events?: TimelineEvent[]
+        customEvents?: CustomEvent[]
+      }
+      if (saved.config) {
+        setConfig({ ...saved.config, weddingDate })
+      }
+      if (saved.events) {
+        setEvents(saved.events)
+      }
+      if (saved.customEvents) {
+        setCustomEvents(saved.customEvents)
+      }
+    } else {
+      // Initialize with defaults
+      const initConfig = { ...config, weddingDate }
+      setConfig(initConfig)
+      const defaults = buildDefaultEvents(initConfig)
+      if (initConfig.autoCalculate) {
+        const sunset = calculateSunset(weddingDate, initConfig.latitude)
+        setEvents(autoCalculateTimes(defaults, initConfig, sunset))
+      } else {
+        setEvents(defaults)
+      }
+    }
+
     setLoading(false)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase])
 
   useEffect(() => {
-    fetchItems()
-  }, [fetchItems])
+    fetchData()
+  }, [fetchData])
 
-  // ---- Computed timeline stats ----
-  const timelineStats = useMemo(() => {
-    if (items.length === 0) return null
-    const withTime = items.filter(i => i.time)
+  // ---- Recalculate when config changes ----
+  useEffect(() => {
+    if (loading) return
+    if (!config.autoCalculate) return
+
+    setEvents(prev => {
+      // Update events based on config changes
+      const refreshed = prev.map(e => {
+        const copy = { ...e }
+
+        // Update first-look conditional events
+        if (copy.requiresFirstLook) {
+          copy.included = config.doingFirstLook && copy.included
+        }
+
+        // Update off-site conditional events
+        if (copy.requiresOffsite) {
+          copy.included = config.offSiteCeremony
+        }
+
+        // Update dinner duration
+        if (copy.id === 'dinner_service') {
+          copy.duration = DINNER_DURATIONS[config.dinnerType]
+          copy.description = DINNER_LABELS[config.dinnerType]
+        }
+
+        // Update photo durations based on first-look mode
+        if (copy.cocktailDuration !== undefined) {
+          copy.duration = config.doingFirstLook ? copy.defaultDuration : copy.cocktailDuration
+        }
+
+        // Update formality phases
+        if (copy.canChooseTiming) {
+          const timing = copy.formalityTiming || config.formalitiesTiming
+          copy.phase = timing === 'before' ? 'formalities_before' : 'formalities_after'
+        }
+
+        return copy
+      })
+
+      return autoCalculateTimes(refreshed, config, sunsetTime)
+    })
+    setDirty(true)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.ceremonyTime, config.receptionEndTime, config.dinnerType, config.doingFirstLook, config.offSiteCeremony, config.formalitiesTiming, config.autoCalculate, sunsetTime])
+
+  // ---- Event handlers ----
+  function updateConfig<K extends keyof TimelineConfig>(key: K, value: TimelineConfig[K]) {
+    setConfig(prev => ({ ...prev, [key]: value }))
+    setDirty(true)
+  }
+
+  function toggleEvent(eventId: string) {
+    setEvents(prev => {
+      const updated = prev.map(e => {
+        if (e.id !== eventId) return e
+        if (e.alwaysIncluded) return e
+        return { ...e, included: !e.included }
+      })
+      if (config.autoCalculate) {
+        return autoCalculateTimes(updated, config, sunsetTime)
+      }
+      return updated
+    })
+    setDirty(true)
+  }
+
+  function updateEventDuration(eventId: string, duration: number) {
+    setEvents(prev => {
+      const updated = prev.map(e =>
+        e.id === eventId ? { ...e, duration: Math.max(0, duration) } : e
+      )
+      if (config.autoCalculate) {
+        return autoCalculateTimes(updated, config, sunsetTime)
+      }
+      return updated
+    })
+    setDirty(true)
+  }
+
+  function updateEventTime(eventId: string, time: string) {
+    setEvents(prev =>
+      prev.map(e =>
+        e.id === eventId ? { ...e, time, manualTime: true } : e
+      )
+    )
+    setDirty(true)
+  }
+
+  function clearManualTime(eventId: string) {
+    setEvents(prev => {
+      const updated = prev.map(e =>
+        e.id === eventId ? { ...e, manualTime: false } : e
+      )
+      if (config.autoCalculate) {
+        return autoCalculateTimes(updated, config, sunsetTime)
+      }
+      return updated
+    })
+    setDirty(true)
+  }
+
+  function updateEventNotes(eventId: string, notes: string) {
+    setEvents(prev =>
+      prev.map(e => e.id === eventId ? { ...e, notes } : e)
+    )
+    setDirty(true)
+  }
+
+  function toggleFormalityTiming(eventId: string) {
+    setEvents(prev => {
+      const updated: TimelineEvent[] = prev.map(e => {
+        if (e.id !== eventId) return e
+        const newTiming: 'before' | 'after' = e.formalityTiming === 'before' ? 'after' : 'before'
+        return {
+          ...e,
+          formalityTiming: newTiming,
+          phase: newTiming === 'before' ? 'formalities_before' : 'formalities_after',
+        }
+      })
+      if (config.autoCalculate) {
+        return autoCalculateTimes(updated, config, sunsetTime)
+      }
+      return updated
+    })
+    setDirty(true)
+  }
+
+  function togglePhase(phase: string) {
+    setExpandedPhases(prev => {
+      const next = new Set(prev)
+      if (next.has(phase)) next.delete(phase)
+      else next.add(phase)
+      return next
+    })
+  }
+
+  function toggleNotes(eventId: string) {
+    setNotesOpen(prev => {
+      const next = new Set(prev)
+      if (next.has(eventId)) next.delete(eventId)
+      else next.add(eventId)
+      return next
+    })
+  }
+
+  // ---- Custom events ----
+  function addCustomEvent() {
+    if (!customForm.name.trim()) return
+    const newEvent: CustomEvent = {
+      ...customForm,
+      id: `custom_${Date.now()}`,
+    }
+    setCustomEvents(prev => [...prev, newEvent])
+    setShowCustomModal(false)
+    setCustomForm({
+      id: '',
+      name: '',
+      time: '',
+      duration: 15,
+      notes: '',
+      phase: 'reception_intro',
+      icon: '🎯',
+    })
+    setDirty(true)
+  }
+
+  function removeCustomEvent(id: string) {
+    setCustomEvents(prev => prev.filter(e => e.id !== id))
+    setDirty(true)
+  }
+
+  // ---- Save ----
+  async function handleSave() {
+    setSaving(true)
+    const payload = {
+      venue_id: VENUE_ID,
+      wedding_id: WEDDING_ID,
+      config_json: {
+        config,
+        events,
+        customEvents,
+      },
+    }
+
+    const { error } = await supabase
+      .from('timeline')
+      .upsert(payload, { onConflict: 'wedding_id' })
+
+    if (!error) {
+      setDirty(false)
+    }
+    setSaving(false)
+  }
+
+  // ---- Reset to defaults ----
+  function resetToDefaults() {
+    if (!confirm('Reset all timeline events to defaults? Your customizations will be lost.')) return
+    const defaults = buildDefaultEvents(config)
+    if (config.autoCalculate) {
+      setEvents(autoCalculateTimes(defaults, config, sunsetTime))
+    } else {
+      setEvents(defaults)
+    }
+    setCustomEvents([])
+    setDirty(true)
+  }
+
+  // ---- Computed: group events by phase ----
+  const eventsByPhase = useMemo(() => {
+    const grouped: Record<string, TimelineEvent[]> = {}
+    for (const phase of PHASE_ORDER) {
+      grouped[phase] = events.filter(e => e.phase === phase)
+    }
+    return grouped
+  }, [events])
+
+  // ---- Computed: summary stats ----
+  const stats = useMemo(() => {
+    const included = events.filter(e => e.included)
+    const withTime = included.filter(e => e.time)
     if (withTime.length === 0) return null
 
-    const times = withTime.map(i => i.time!).sort()
-    const startTime = times[0]
-    const lastItem = withTime.sort((a, b) => (a.time! > b.time! ? 1 : -1))[withTime.length - 1]
-    const endTime = lastItem.duration_minutes
-      ? addMinutes(lastItem.time!, lastItem.duration_minutes)
-      : lastItem.time!
+    const times = withTime.map(e => timeToMinutes(e.time)).sort((a, b) => a - b)
+    const startTime = minutesToTime(times[0])
 
-    const totalMinutes = timeDiffMinutes(startTime, endTime)
+    // Find the actual end — last event time + its duration
+    let latestEnd = 0
+    for (const e of withTime) {
+      const end = timeToMinutes(e.time) + e.duration
+      if (end > latestEnd) latestEnd = end
+    }
+    const endTime = minutesToTime(latestEnd)
+    const totalMinutes = latestEnd - times[0]
 
     return {
       startTime,
       endTime,
       totalMinutes,
-      eventCount: items.length,
-      concurrentCount: items.filter(i => i.is_concurrent).length,
+      eventCount: included.length,
+      concurrentCount: included.filter(e => e.canBeConcurrent).length,
     }
-  }, [items])
+  }, [events])
 
-  // ---- Section grouping ----
-  const itemsBySection = useMemo(() => {
-    const grouped: Record<string, TimelineItem[]> = {}
-    const uncategorized: TimelineItem[] = []
-
-    items.forEach(item => {
-      const section = item.section || item.category || ''
-      const matchedSection = TIMELINE_SECTIONS.find(s =>
-        s.events.some(e => e.category === item.category) ||
-        s.id === item.section
-      )
-      if (matchedSection) {
-        if (!grouped[matchedSection.id]) grouped[matchedSection.id] = []
-        grouped[matchedSection.id].push(item)
-      } else {
-        uncategorized.push(item)
-      }
+  // ---- Computed: phases that have events ----
+  const activePhases = useMemo(() => {
+    return PHASE_ORDER.filter(phase => {
+      const phaseEvents = eventsByPhase[phase] || []
+      // Show phase if it has included events, or if it has events that could be included
+      return phaseEvents.length > 0
     })
+  }, [eventsByPhase])
 
-    return { grouped, uncategorized }
-  }, [items])
-
-  // ---- Toggle section ----
-  function toggleSection(sectionId: string) {
-    setExpandedSections(prev => {
-      const next = new Set(prev)
-      if (next.has(sectionId)) next.delete(sectionId)
-      else next.add(sectionId)
-      return next
-    })
-  }
-
-  // ---- Modal helpers ----
-  function openAdd(section?: string) {
-    setForm({ ...EMPTY_FORM, section: section || '' })
-    setEditingId(null)
-    setShowModal(true)
-  }
-
-  function openEdit(item: TimelineItem) {
-    setForm({
-      time: item.time || '',
-      duration_minutes: item.duration_minutes?.toString() || '',
-      title: item.title,
-      description: item.description || '',
-      location: item.location || '',
-      category: item.category || '',
-      section: item.section || '',
-      is_concurrent: item.is_concurrent || false,
-    })
-    setEditingId(item.id)
-    setShowModal(true)
-  }
-
-  function openInsertAfter(index: number) {
-    setInsertAfterIndex(index)
-    setForm(EMPTY_FORM)
-    setEditingId(null)
-    setShowModal(true)
-  }
-
-  async function handleSave() {
-    if (!form.title.trim()) return
-
-    const sortOrder = insertAfterIndex !== null
-      ? (items[insertAfterIndex]?.sort_order || 0) + 1
-      : items.length
-
-    const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
-      time: form.time || null,
-      duration_minutes: form.duration_minutes ? parseInt(form.duration_minutes) : null,
-      title: form.title.trim(),
-      description: form.description.trim() || null,
-      location: form.location.trim() || null,
-      category: form.category || null,
-      section: form.section || null,
-      sort_order: sortOrder,
-      is_concurrent: form.is_concurrent,
-      is_custom: true,
-    }
-
-    if (editingId) {
-      await supabase.from('timeline').update(payload).eq('id', editingId)
-    } else {
-      await supabase.from('timeline').insert(payload)
-    }
-
-    setShowModal(false)
-    setEditingId(null)
-    setInsertAfterIndex(null)
-    fetchItems()
-  }
-
-  async function handleDelete(id: string) {
-    if (!confirm('Remove this timeline item?')) return
-    await supabase.from('timeline').delete().eq('id', id)
-    fetchItems()
-  }
-
-  async function handleDuplicate(item: TimelineItem) {
-    const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
-      time: item.time,
-      duration_minutes: item.duration_minutes,
-      title: `${item.title} (Copy)`,
-      description: item.description,
-      location: item.location,
-      category: item.category,
-      section: item.section,
-      sort_order: (item.sort_order || 0) + 1,
-      is_concurrent: item.is_concurrent,
-      is_custom: true,
-    }
-    await supabase.from('timeline').insert(payload)
-    fetchItems()
-  }
-
-  // ---- Generate from template ----
-  async function generateFromTemplate() {
-    if (items.length > 0 && !confirm('This will add template events to your existing timeline. Continue?')) return
-
-    let currentTime = ceremonyTime
-    let sortOrder = items.length
-
-    // Work backwards from ceremony for prep, first look, photos
-    const preCeremonyOffset = 240 // 4 hours before ceremony for prep start
-    const [ch, cm] = ceremonyTime.split(':').map(Number)
-    let prepStart = (ch * 60 + cm) - preCeremonyOffset
-    if (prepStart < 0) prepStart = 0
-    let runningTime = `${String(Math.floor(prepStart / 60)).padStart(2, '0')}:${String(prepStart % 60).padStart(2, '0')}`
-
-    const eventsToInsert: Array<{
-      venue_id: string
-      wedding_id: string
-      time: string
-      duration_minutes: number
-      title: string
-      description: string | null
-      location: string | null
-      category: string
-      section: string
-      sort_order: number
-      is_concurrent: boolean
-      tip: string | null
-      is_custom: boolean
-    }> = []
-
-    for (const section of TIMELINE_SECTIONS) {
-      for (const event of section.events) {
-        let duration = event.defaultDuration
-        if (event.durationByGuestCount) {
-          duration = event.durationByGuestCount(guestCount)
-        }
-        if (section.id === 'dinner') {
-          const style = DINNER_STYLES.find(s => s.value === dinnerStyle)
-          if (style) {
-            duration = style.baseDuration
-            if (guestCount > 100) duration += 15
-            if (guestCount > 150) duration += 15
-          }
-        }
-
-        // Use ceremony time for ceremony section
-        if (section.id === 'ceremony' && event.title === 'Ceremony Begins') {
-          runningTime = ceremonyTime
-        }
-
-        eventsToInsert.push({
-          venue_id: VENUE_ID,
-          wedding_id: WEDDING_ID,
-          time: event.concurrent ? runningTime : runningTime,
-          duration_minutes: duration,
-          title: event.title,
-          description: null,
-          location: null,
-          category: event.category,
-          section: section.id,
-          sort_order: sortOrder++,
-          is_concurrent: event.concurrent || false,
-          tip: event.tip,
-          is_custom: false,
-        })
-
-        if (!event.concurrent && duration > 0) {
-          runningTime = addMinutes(runningTime, duration)
-        }
-      }
-    }
-
-    await supabase.from('timeline').insert(eventsToInsert)
-    setShowTemplatePanel(false)
-    fetchItems()
-  }
-
-  // ---- Running time display ----
-  function getRunningTime(index: number): string | null {
-    const item = items[index]
-    if (!item?.time || !item?.duration_minutes) return null
-    return addMinutes(item.time, item.duration_minutes)
+  // ---- Loading ----
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="h-10 bg-gray-100 rounded-lg w-64 animate-pulse" />
+        <div className="h-32 bg-gray-100 rounded-xl animate-pulse" />
+        <div className="space-y-3">
+          {[1, 2, 3, 4, 5].map(i => (
+            <div key={i} className="h-20 bg-gray-100 rounded-xl animate-pulse" />
+          ))}
+        </div>
+      </div>
+    )
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1
-            className="text-3xl font-bold mb-1"
-            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-          >
-            Your Timeline
-          </h1>
-          <p className="text-gray-500 text-sm">Plan your day, moment by moment.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowTips(!showTips)}
-            className={cn(
-              'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-colors',
-              showTips ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'
-            )}
-          >
-            <Lightbulb className="w-3.5 h-3.5" />
-            Tips
-          </button>
-          <button
-            onClick={() => setShowTemplatePanel(!showTemplatePanel)}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
-          >
-            <Sparkles className="w-4 h-4" />
-            Generate
-          </button>
-          <button
-            onClick={() => openAdd()}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
-            style={{ backgroundColor: 'var(--couple-primary)' }}
-          >
-            <Plus className="w-4 h-4" />
-            Add Event
-          </button>
-        </div>
+    <div className="space-y-6 pb-24">
+      {/* ================================================================ */}
+      {/* HEADER */}
+      {/* ================================================================ */}
+      <div>
+        <h1
+          className="text-3xl font-bold mb-1"
+          style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary, #7D8471)' }}
+        >
+          Your Wedding Timeline
+        </h1>
+        <p className="text-gray-500 text-sm">
+          Map out the flow of your day, from getting ready to the grand exit.
+          {sunsetTime && (
+            <span className="ml-2 inline-flex items-center gap-1 text-amber-600">
+              <Sunset className="w-3.5 h-3.5" />
+              Sunset at {formatTime12(sunsetTime)}
+            </span>
+          )}
+        </p>
       </div>
 
-      {/* Timeline Stats Bar */}
-      {timelineStats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center">
-            <p className="text-lg font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
-              {formatTime(timelineStats.startTime)}
-            </p>
-            <p className="text-xs text-gray-500 font-medium">Start</p>
-          </div>
-          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center">
-            <p className="text-lg font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
-              {formatTime(timelineStats.endTime)}
-            </p>
-            <p className="text-xs text-gray-500 font-medium">End</p>
-          </div>
-          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center">
-            <p className="text-lg font-bold tabular-nums" style={{ color: 'var(--couple-secondary, var(--couple-primary))' }}>
-              {formatDuration(timelineStats.totalMinutes)}
-            </p>
-            <p className="text-xs text-gray-500 font-medium">Total Duration</p>
-          </div>
-          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center">
-            <p className="text-lg font-bold tabular-nums" style={{ color: 'var(--couple-accent, var(--couple-primary))' }}>
-              {timelineStats.eventCount}
-            </p>
-            <p className="text-xs text-gray-500 font-medium">Events</p>
-          </div>
+      {/* ================================================================ */}
+      {/* CONFIGURATION PANEL */}
+      {/* ================================================================ */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        <div
+          className="px-5 py-3 border-b"
+          style={{
+            borderColor: 'color-mix(in srgb, var(--couple-primary, #7D8471) 15%, transparent)',
+            backgroundColor: 'color-mix(in srgb, var(--couple-primary, #7D8471) 4%, transparent)',
+          }}
+        >
+          <h2
+            className="font-semibold text-sm flex items-center gap-2"
+            style={{ color: 'var(--couple-primary, #7D8471)' }}
+          >
+            <Clock className="w-4 h-4" />
+            Timeline Settings
+          </h2>
         </div>
-      )}
 
-      {/* Generate from Template Panel */}
-      {showTemplatePanel && (
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-5">
-          <div className="flex items-center justify-between">
+        <div className="p-5 space-y-4">
+          {/* Row 1: Times */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div>
-              <h2
-                className="text-lg font-semibold"
-                style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-              >
-                Generate Timeline
-              </h2>
-              <p className="text-sm text-gray-500 mt-1">
-                We will create a complete timeline based on your details. You can customize everything after.
-              </p>
-            </div>
-            <button onClick={() => setShowTemplatePanel(false)} className="text-gray-400 hover:text-gray-600">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                <Clock className="w-3.5 h-3.5 inline mr-1" />
-                Ceremony Time
-              </label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Ceremony Time</label>
               <input
                 type="time"
-                value={ceremonyTime}
-                onChange={(e) => setCeremonyTime(e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                value={config.ceremonyTime}
+                onChange={e => updateConfig('ceremonyTime', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-opacity-50"
+                style={{ '--tw-ring-color': 'var(--couple-primary, #7D8471)' } as React.CSSProperties}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                <Users className="w-3.5 h-3.5 inline mr-1" />
-                Guest Count
-              </label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Reception Ends</label>
               <input
-                type="number"
-                value={guestCount}
-                onChange={(e) => setGuestCount(parseInt(e.target.value) || 100)}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                min={1}
-                placeholder="100"
+                type="time"
+                value={config.receptionEndTime}
+                onChange={e => updateConfig('receptionEndTime', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-opacity-50"
+                style={{ '--tw-ring-color': 'var(--couple-primary, #7D8471)' } as React.CSSProperties}
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Dinner Style</label>
+            <div className="col-span-2 sm:col-span-2">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Dinner Style</label>
               <select
-                value={dinnerStyle}
-                onChange={(e) => setDinnerStyle(e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
-                style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                value={config.dinnerType}
+                onChange={e => updateConfig('dinnerType', e.target.value as DinnerType)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-opacity-50 bg-white"
+                style={{ '--tw-ring-color': 'var(--couple-primary, #7D8471)' } as React.CSSProperties}
               >
-                {DINNER_STYLES.map(s => (
-                  <option key={s.value} value={s.value}>{s.label} (~{s.baseDuration} min)</option>
+                {(Object.keys(DINNER_LABELS) as DinnerType[]).map(key => (
+                  <option key={key} value={key}>{DINNER_LABELS[key]}</option>
                 ))}
               </select>
             </div>
           </div>
 
-          {/* Section toggles */}
-          <div>
-            <p className="text-sm font-medium text-gray-700 mb-2">Include these sections:</p>
-            <div className="flex flex-wrap gap-2">
-              {TIMELINE_SECTIONS.map(section => (
-                <label
-                  key={section.id}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border cursor-pointer transition-colors hover:bg-gray-50"
-                  style={{ borderColor: section.color + '40', color: section.color }}
-                >
-                  <input
-                    type="checkbox"
-                    defaultChecked
-                    className="w-3 h-3 rounded"
-                    style={{ accentColor: section.color }}
-                  />
-                  <span>{section.icon}</span>
-                  {section.label}
-                </label>
-              ))}
-            </div>
+          {/* Row 2: Toggles */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {/* First Look */}
+            <button
+              onClick={() => updateConfig('doingFirstLook', !config.doingFirstLook)}
+              className={cn(
+                'flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-colors',
+                config.doingFirstLook
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-gray-200 bg-white text-gray-500'
+              )}
+            >
+              {config.doingFirstLook ? (
+                <ToggleRight className="w-4 h-4 text-emerald-600" />
+              ) : (
+                <ToggleLeft className="w-4 h-4" />
+              )}
+              <span className="truncate">First Look</span>
+            </button>
+
+            {/* Off-site Ceremony */}
+            <button
+              onClick={() => updateConfig('offSiteCeremony', !config.offSiteCeremony)}
+              className={cn(
+                'flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-colors',
+                config.offSiteCeremony
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-gray-200 bg-white text-gray-500'
+              )}
+            >
+              {config.offSiteCeremony ? (
+                <ToggleRight className="w-4 h-4 text-emerald-600" />
+              ) : (
+                <ToggleLeft className="w-4 h-4" />
+              )}
+              <span className="truncate">Off-site Ceremony</span>
+            </button>
+
+            {/* Auto-Calculate */}
+            <button
+              onClick={() => updateConfig('autoCalculate', !config.autoCalculate)}
+              className={cn(
+                'flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-colors',
+                config.autoCalculate
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-gray-200 bg-white text-gray-500'
+              )}
+            >
+              {config.autoCalculate ? (
+                <ToggleRight className="w-4 h-4 text-emerald-600" />
+              ) : (
+                <ToggleLeft className="w-4 h-4" />
+              )}
+              <span className="truncate">Auto-Calculate</span>
+            </button>
+
+            {/* Formalities Timing */}
+            <button
+              onClick={() => updateConfig('formalitiesTiming', config.formalitiesTiming === 'before' ? 'after' : 'before')}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-white text-gray-600 text-sm transition-colors hover:bg-gray-50"
+            >
+              <span className="truncate">
+                Formalities: {config.formalitiesTiming === 'before' ? 'Before Dinner' : 'After Dinner'}
+              </span>
+            </button>
           </div>
 
-          <div className="flex justify-end">
-            <button
-              onClick={generateFromTemplate}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
-              style={{ backgroundColor: 'var(--couple-primary)' }}
-            >
-              <Sparkles className="w-4 h-4" />
-              Generate Timeline
-            </button>
+          {/* Info bar */}
+          {config.autoCalculate && (
+            <div className="flex items-start gap-2 px-3 py-2 bg-blue-50 rounded-lg text-xs text-blue-700">
+              <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>
+                Auto-calculate is on. Times cascade from your ceremony time. Override any event by setting its time manually.
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ================================================================ */}
+      {/* STATS BAR */}
+      {/* ================================================================ */}
+      {stats && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3 text-center">
+            <div className="text-lg font-bold text-gray-800">{formatTime12(stats.startTime)}</div>
+            <div className="text-[11px] text-gray-400 uppercase tracking-wide">Day Starts</div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3 text-center">
+            <div className="text-lg font-bold text-gray-800">{formatTime12(stats.endTime)}</div>
+            <div className="text-[11px] text-gray-400 uppercase tracking-wide">Day Ends</div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3 text-center">
+            <div className="text-lg font-bold text-gray-800">{formatDuration(stats.totalMinutes)}</div>
+            <div className="text-[11px] text-gray-400 uppercase tracking-wide">Total Duration</div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3 text-center">
+            <div className="text-lg font-bold text-gray-800">{stats.eventCount}</div>
+            <div className="text-[11px] text-gray-400 uppercase tracking-wide">Events</div>
           </div>
         </div>
       )}
 
-      {/* Timeline Content */}
-      {loading ? (
-        <div className="space-y-4">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <div key={i} className="animate-pulse flex gap-4">
-              <div className="w-20 h-5 bg-gray-200 rounded" />
-              <div className="flex-1 h-20 bg-gray-100 rounded-xl" />
-            </div>
-          ))}
-        </div>
-      ) : items.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-xl border border-gray-100 shadow-sm">
-          <Clock className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--couple-primary)', opacity: 0.3 }} />
-          <h3
-            className="text-lg font-semibold mb-2"
-            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+      {/* ================================================================ */}
+      {/* TOOLBAR */}
+      {/* ================================================================ */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowTips(!showTips)}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+              showTips ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-gray-50 text-gray-500 border border-gray-200'
+            )}
           >
-            No timeline items yet
-          </h3>
-          <p className="text-gray-500 text-sm mb-6 max-w-md mx-auto">
-            Start with our smart template generator or add events manually. The template builds a full day
-            based on your ceremony time, guest count, and dinner style.
-          </p>
-          <div className="flex items-center justify-center gap-3">
-            <button
-              onClick={() => setShowTemplatePanel(true)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium text-white"
-              style={{ backgroundColor: 'var(--couple-primary)' }}
-            >
-              <Sparkles className="w-4 h-4" />
-              Generate from Template
-            </button>
-            <button
-              onClick={() => openAdd()}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50"
-            >
-              <Plus className="w-4 h-4" />
-              Add Manually
-            </button>
+            <Lightbulb className="w-3.5 h-3.5" />
+            {showTips ? 'Hide Tips' : 'Show Tips'}
+          </button>
+          <button
+            onClick={() => setShowSummary(!showSummary)}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+              showSummary ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-gray-50 text-gray-500 border border-gray-200'
+            )}
+          >
+            {showSummary ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            {showSummary ? 'Hide Summary' : 'Full Summary'}
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowCustomModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100 transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Custom Event
+          </button>
+          <button
+            onClick={resetToDefaults}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-50 text-gray-500 border border-gray-200 hover:bg-gray-100 transition-colors"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Reset
+          </button>
+        </div>
+      </div>
+
+      {/* ================================================================ */}
+      {/* FULL SUMMARY VIEW */}
+      {/* ================================================================ */}
+      {showSummary && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-100">
+            <h2 className="font-semibold text-sm text-gray-800">Full Timeline Summary</h2>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {events
+              .filter(e => e.included && e.time)
+              .sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time))
+              .map(event => (
+                <div key={event.id} className="px-5 py-2.5 flex items-center gap-3">
+                  <span className="text-xs font-mono text-gray-400 w-16 shrink-0">
+                    {formatTime12(event.time)}
+                  </span>
+                  <span className="text-sm">{event.icon}</span>
+                  <span className="text-sm text-gray-700 flex-1">{event.name}</span>
+                  {event.duration > 0 && (
+                    <span className="text-xs text-gray-400">{formatDuration(event.duration)}</span>
+                  )}
+                  {event.canBeConcurrent && (
+                    <span className="text-[10px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded">concurrent</span>
+                  )}
+                </div>
+              ))}
+            {/* Custom events in summary */}
+            {customEvents.map(ce => (
+              <div key={ce.id} className="px-5 py-2.5 flex items-center gap-3">
+                <span className="text-xs font-mono text-gray-400 w-16 shrink-0">
+                  {ce.time ? formatTime12(ce.time) : 'TBD'}
+                </span>
+                <span className="text-sm">{ce.icon}</span>
+                <span className="text-sm text-gray-700 flex-1">{ce.name}</span>
+                {ce.duration > 0 && (
+                  <span className="text-xs text-gray-400">{formatDuration(ce.duration)}</span>
+                )}
+                <span className="text-[10px] bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded">custom</span>
+              </div>
+            ))}
           </div>
         </div>
-      ) : (
-        <div className="space-y-4">
-          {/* Section-based view */}
-          {TIMELINE_SECTIONS.map(section => {
-            const sectionItems = itemsBySection.grouped[section.id]
-            if (!sectionItems || sectionItems.length === 0) return null
+      )}
 
-            const isExpanded = expandedSections.has(section.id)
-            const sectionDuration = sectionItems.reduce((sum, item) =>
-              sum + (item.is_concurrent ? 0 : (item.duration_minutes || 0)), 0
-            )
+      {/* ================================================================ */}
+      {/* EVENT PHASES */}
+      {/* ================================================================ */}
+      <div className="space-y-4">
+        {activePhases.map(phase => {
+          const phaseEvents = eventsByPhase[phase] || []
+          const phaseCustom = customEvents.filter(ce => ce.phase === phase)
+          const isExpanded = expandedPhases.has(phase)
+          const includedCount = phaseEvents.filter(e => e.included).length
+          const totalCount = phaseEvents.length
+          const phaseColor = PHASE_COLORS[phase] || '#6B7280'
 
-            return (
-              <div key={section.id} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-                {/* Section header */}
-                <button
-                  onClick={() => toggleSection(section.id)}
-                  className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50/50 transition-colors"
+          // Skip first_look phase entirely if not doing first look
+          if (phase === 'first_look' && !config.doingFirstLook) return null
+          // Skip empty formalities phases
+          if (phase === 'formalities_before' && phaseEvents.filter(e => e.included).length === 0 && phaseCustom.length === 0) return null
+          if (phase === 'formalities_after' && phaseEvents.filter(e => e.included).length === 0 && phaseCustom.length === 0) return null
+
+          return (
+            <div
+              key={phase}
+              className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden"
+            >
+              {/* Phase Header */}
+              <button
+                onClick={() => togglePhase(phase)}
+                className="w-full px-5 py-3.5 flex items-center gap-3 hover:bg-gray-50/50 transition-colors"
+              >
+                <span
+                  className="w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0"
+                  style={{ backgroundColor: `${phaseColor}15` }}
                 >
-                  <div className="flex items-center gap-3">
-                    <span className="text-lg">{section.icon}</span>
-                    <div className="text-left">
-                      <h3 className="font-semibold text-gray-800 text-sm">{section.label}</h3>
-                      <p className="text-xs text-gray-400">
-                        {sectionItems.length} event{sectionItems.length !== 1 ? 's' : ''}
-                        {sectionDuration > 0 && ` · ${formatDuration(sectionDuration)}`}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="w-3 h-3 rounded-full"
-                      style={{ backgroundColor: section.color }}
-                    />
-                    {isExpanded ? (
-                      <ChevronUp className="w-4 h-4 text-gray-400" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 text-gray-400" />
-                    )}
-                  </div>
-                </button>
+                  {PHASE_ICONS[phase]}
+                </span>
+                <div className="flex-1 text-left min-w-0">
+                  <span className="font-semibold text-sm text-gray-800">
+                    {PHASE_LABELS[phase]}
+                  </span>
+                  <span className="ml-2 text-xs text-gray-400">
+                    {includedCount}/{totalCount} events
+                  </span>
+                </div>
+                {/* Phase time range */}
+                {(() => {
+                  const includedWithTime = phaseEvents.filter(e => e.included && e.time)
+                  if (includedWithTime.length === 0) return null
+                  const times = includedWithTime.map(e => timeToMinutes(e.time)).sort((a, b) => a - b)
+                  const lastEvent = includedWithTime.sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time))[includedWithTime.length - 1]
+                  const endMins = timeToMinutes(lastEvent.time) + lastEvent.duration
+                  return (
+                    <span className="text-xs text-gray-400 tabular-nums shrink-0">
+                      {formatTime12(minutesToTime(times[0]))} - {formatTime12(minutesToTime(endMins))}
+                    </span>
+                  )
+                })()}
+                {isExpanded ? (
+                  <ChevronUp className="w-4 h-4 text-gray-400 shrink-0" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />
+                )}
+              </button>
 
-                {/* Section events */}
-                {isExpanded && (
-                  <div className="border-t border-gray-50">
-                    {sectionItems.map((item, idx) => {
-                      const globalIdx = items.indexOf(item)
+              {/* Phase Events */}
+              {isExpanded && (
+                <div className="border-t border-gray-50">
+                  {phaseEvents.map(event => {
+                    const isNotesOpen = notesOpen.has(event.id)
 
-                      return (
-                        <div key={item.id}>
-                          <div
-                            className={cn(
-                              'flex gap-4 px-5 py-3 group hover:bg-gray-50/50 transition-colors',
-                              item.is_concurrent && 'bg-blue-50/30'
-                            )}
+                    return (
+                      <div
+                        key={event.id}
+                        className={cn(
+                          'border-b border-gray-50 last:border-b-0 transition-colors',
+                          !event.included && 'opacity-50'
+                        )}
+                      >
+                        <div className="px-5 py-3 flex items-start gap-3">
+                          {/* Include/Exclude Checkbox */}
+                          <button
+                            onClick={() => toggleEvent(event.id)}
+                            className="mt-0.5 shrink-0"
+                            disabled={event.alwaysIncluded}
                           >
-                            {/* Time column */}
-                            <div className="w-20 shrink-0 text-right pt-0.5">
-                              <span
-                                className="text-sm font-semibold tabular-nums"
-                                style={{ color: section.color }}
-                              >
-                                {formatTime(item.time)}
-                              </span>
-                              {item.duration_minutes && item.duration_minutes > 0 && (
-                                <p className="text-[10px] text-gray-400 mt-0.5">
-                                  {formatDuration(item.duration_minutes)}
-                                </p>
-                              )}
-                            </div>
-
-                            {/* Dot + line */}
-                            <div className="relative flex flex-col items-center shrink-0 pt-1.5">
+                            {event.included ? (
                               <div
-                                className={cn(
-                                  'w-2.5 h-2.5 rounded-full border-2 bg-white z-10',
-                                  item.is_concurrent && 'border-dashed'
-                                )}
-                                style={{ borderColor: section.color }}
-                              />
-                              {idx < sectionItems.length - 1 && (
-                                <div
-                                  className="w-0.5 flex-1 mt-1"
-                                  style={{ backgroundColor: section.color + '25' }}
-                                />
+                                className="w-5 h-5 rounded flex items-center justify-center"
+                                style={{ backgroundColor: phaseColor }}
+                              >
+                                <Check className="w-3 h-3 text-white" />
+                              </div>
+                            ) : (
+                              <div className="w-5 h-5 rounded border-2 border-gray-300" />
+                            )}
+                          </button>
+
+                          {/* Icon */}
+                          <span className="text-base mt-0.5 shrink-0">{event.icon}</span>
+
+                          {/* Content */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={cn(
+                                'text-sm font-medium',
+                                event.included ? 'text-gray-800' : 'text-gray-400'
+                              )}>
+                                {event.name}
+                              </span>
+                              {event.canBeConcurrent && (
+                                <span className="text-[10px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-medium">
+                                  concurrent
+                                </span>
+                              )}
+                              {event.isAnchor && (
+                                <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-medium">
+                                  anchor
+                                </span>
+                              )}
+                              {event.manualTime && (
+                                <button
+                                  onClick={() => clearManualTime(event.id)}
+                                  className="text-[10px] bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded font-medium hover:bg-amber-100"
+                                  title="Click to reset to auto-calculated time"
+                                >
+                                  manual
+                                </button>
                               )}
                             </div>
+                            <p className="text-xs text-gray-400 mt-0.5">{event.description}</p>
 
-                            {/* Content */}
-                            <div className="flex-1 min-w-0 pb-2">
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 mb-0.5">
-                                    <h4 className="font-medium text-gray-800 text-sm">{item.title}</h4>
-                                    {item.is_concurrent && (
-                                      <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-blue-100 text-blue-600">
-                                        CONCURRENT
-                                      </span>
-                                    )}
-                                    {item.is_custom && (
-                                      <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 text-gray-500">
-                                        CUSTOM
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {item.description && (
-                                    <p className="text-xs text-gray-500 mb-1">{item.description}</p>
-                                  )}
-
-                                  <div className="flex items-center gap-3 text-[11px] text-gray-400">
-                                    {item.location && (
-                                      <span className="flex items-center gap-1">
-                                        <MapPin className="w-3 h-3" />
-                                        {item.location}
-                                      </span>
-                                    )}
-                                    {item.time && item.duration_minutes && (
-                                      <span className="flex items-center gap-1">
-                                        <Clock className="w-3 h-3" />
-                                        {formatTime(item.time)} - {formatTime(addMinutes(item.time, item.duration_minutes))}
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {/* Tip */}
-                                  {showTips && item.tip && (
-                                    <div className="mt-2 flex items-start gap-1.5 px-2.5 py-2 rounded-lg bg-amber-50 border border-amber-100">
-                                      <Lightbulb className="w-3 h-3 text-amber-500 mt-0.5 shrink-0" />
-                                      <p className="text-[11px] text-amber-700 leading-relaxed">{item.tip}</p>
-                                    </div>
-                                  )}
-                                </div>
-
-                                {/* Actions */}
-                                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                                  <button
-                                    onClick={() => openEdit(item)}
-                                    className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                                    title="Edit"
-                                  >
-                                    <Edit2 className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    onClick={() => handleDuplicate(item)}
-                                    className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                                    title="Duplicate"
-                                  >
-                                    <Copy className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    onClick={() => handleDelete(item.id)}
-                                    className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
-                                    title="Remove"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
+                            {/* Tip */}
+                            {showTips && event.tips && event.included && (
+                              <div className="mt-2 flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 rounded-md px-2.5 py-1.5">
+                                <Lightbulb className="w-3 h-3 mt-0.5 shrink-0" />
+                                <span>{event.tips}</span>
                               </div>
-                            </div>
+                            )}
+
+                            {/* Formality timing toggle */}
+                            {event.canChooseTiming && event.included && (
+                              <button
+                                onClick={() => toggleFormalityTiming(event.id)}
+                                className="mt-2 text-[11px] px-2 py-1 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors"
+                              >
+                                {event.formalityTiming === 'before' ? 'Move after dinner' : 'Move before dinner'}
+                              </button>
+                            )}
+
+                            {/* Notes */}
+                            {isNotesOpen && (
+                              <textarea
+                                value={event.notes}
+                                onChange={e => updateEventNotes(event.id, e.target.value)}
+                                placeholder="Add notes for this event..."
+                                className="mt-2 w-full px-3 py-2 border border-gray-200 rounded-lg text-xs resize-none focus:outline-none focus:ring-1"
+                                style={{ '--tw-ring-color': 'var(--couple-primary, #7D8471)' } as React.CSSProperties}
+                                rows={2}
+                              />
+                            )}
                           </div>
 
-                          {/* Insert between */}
-                          <div className="relative px-5 -my-1 z-10 opacity-0 hover:opacity-100 transition-opacity">
+                          {/* Right side: time + duration */}
+                          <div className="flex items-center gap-2 shrink-0">
+                            {/* Time input */}
+                            {event.included && (
+                              <input
+                                type="time"
+                                value={event.time}
+                                onChange={e => updateEventTime(event.id, e.target.value)}
+                                className="px-2 py-1 border border-gray-200 rounded text-xs w-[90px] focus:outline-none focus:ring-1"
+                                style={{ '--tw-ring-color': 'var(--couple-primary, #7D8471)' } as React.CSSProperties}
+                              />
+                            )}
+
+                            {/* Duration */}
+                            {event.included && !event.isTimeMarker && (
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  value={event.duration}
+                                  onChange={e => updateEventDuration(event.id, parseInt(e.target.value) || 0)}
+                                  className="px-2 py-1 border border-gray-200 rounded text-xs w-14 text-center focus:outline-none focus:ring-1"
+                                  style={{ '--tw-ring-color': 'var(--couple-primary, #7D8471)' } as React.CSSProperties}
+                                  min={0}
+                                  step={5}
+                                />
+                                <span className="text-[10px] text-gray-400">min</span>
+                              </div>
+                            )}
+
+                            {/* Notes toggle */}
                             <button
-                              onClick={() => openInsertAfter(globalIdx)}
-                              className="w-full flex items-center justify-center gap-1 py-0.5 text-[10px] text-gray-400 hover:text-gray-600"
+                              onClick={() => toggleNotes(event.id)}
+                              className={cn(
+                                'p-1 rounded hover:bg-gray-100 transition-colors',
+                                isNotesOpen ? 'text-gray-700' : 'text-gray-300'
+                              )}
                             >
-                              <Plus className="w-3 h-3" />
-                              Insert event here
+                              <StickyNote className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </div>
-                      )
-                    })}
+                      </div>
+                    )
+                  })}
 
-                    {/* Add to section */}
-                    <div className="px-5 py-3 border-t border-gray-50">
+                  {/* Custom events in this phase */}
+                  {phaseCustom.map(ce => (
+                    <div
+                      key={ce.id}
+                      className="px-5 py-3 flex items-center gap-3 border-b border-gray-50 last:border-b-0 bg-amber-50/30"
+                    >
+                      <div className="w-5 h-5 rounded bg-amber-100 flex items-center justify-center shrink-0">
+                        <span className="text-[10px]">C</span>
+                      </div>
+                      <span className="text-base shrink-0">{ce.icon}</span>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium text-gray-800">{ce.name}</span>
+                        {ce.notes && <p className="text-xs text-gray-400 mt-0.5">{ce.notes}</p>}
+                      </div>
+                      <span className="text-xs text-gray-400 tabular-nums">
+                        {ce.time ? formatTime12(ce.time) : 'TBD'}
+                      </span>
+                      {ce.duration > 0 && (
+                        <span className="text-xs text-gray-400">{formatDuration(ce.duration)}</span>
+                      )}
                       <button
-                        onClick={() => openAdd(section.id)}
-                        className="inline-flex items-center gap-1.5 text-xs font-medium transition-colors hover:opacity-80"
-                        style={{ color: section.color }}
+                        onClick={() => removeCustomEvent(ce.id)}
+                        className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
                       >
-                        <Plus className="w-3.5 h-3.5" />
-                        Add to {section.label}
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-
-          {/* Uncategorized items */}
-          {itemsBySection.uncategorized.length > 0 && (
-            <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-              <div className="px-5 py-4">
-                <h3 className="font-semibold text-gray-800 text-sm">Other Events</h3>
-              </div>
-              <div className="border-t border-gray-50">
-                {itemsBySection.uncategorized.map((item, idx) => (
-                  <div
-                    key={item.id}
-                    className="flex gap-4 px-5 py-3 group hover:bg-gray-50/50 transition-colors"
-                  >
-                    <div className="w-20 shrink-0 text-right pt-0.5">
-                      <span className="text-sm font-semibold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
-                        {formatTime(item.time)}
-                      </span>
-                      {item.duration_minutes && (
-                        <p className="text-[10px] text-gray-400 mt-0.5">{formatDuration(item.duration_minutes)}</p>
-                      )}
-                    </div>
-                    <div className="relative flex flex-col items-center shrink-0 pt-1.5">
-                      <div
-                        className="w-2.5 h-2.5 rounded-full border-2 bg-white z-10"
-                        style={{ borderColor: CATEGORY_COLORS[item.category || ''] || 'var(--couple-primary)' }}
-                      />
-                      {idx < itemsBySection.uncategorized.length - 1 && (
-                        <div className="w-0.5 flex-1 mt-1 bg-gray-100" />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0 pb-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <h4 className="font-medium text-gray-800 text-sm">{item.title}</h4>
-                          {item.description && <p className="text-xs text-gray-500 mt-0.5">{item.description}</p>}
-                          {item.location && (
-                            <span className="text-[11px] text-gray-400 flex items-center gap-1 mt-1">
-                              <MapPin className="w-3 h-3" />{item.location}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={() => openEdit(item)} className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100">
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button onClick={() => handleDelete(item.id)} className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50">
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* End of day summary */}
-          {timelineStats && (
-            <div
-              className="rounded-xl p-5 text-center"
-              style={{ backgroundColor: 'color-mix(in srgb, var(--couple-primary) 8%, white)' }}
-            >
-              <p className="text-sm font-medium" style={{ color: 'var(--couple-primary)' }}>
-                Your day runs from{' '}
-                <span className="font-bold">{formatTime(timelineStats.startTime)}</span>
-                {' '}to{' '}
-                <span className="font-bold">{formatTime(timelineStats.endTime)}</span>
-                {' '}({formatDuration(timelineStats.totalMinutes)})
-              </p>
-              {timelineStats.concurrentCount > 0 && (
-                <p className="text-xs text-gray-500 mt-1">
-                  {timelineStats.concurrentCount} concurrent event{timelineStats.concurrentCount !== 1 ? 's' : ''} running in parallel
-                </p>
+                  ))}
+                </div>
               )}
             </div>
-          )}
-        </div>
-      )}
+          )
+        })}
+      </div>
 
-      {/* Add/Edit Modal */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/30" onClick={() => { setShowModal(false); setInsertAfterIndex(null) }} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <h2
-                className="text-lg font-semibold"
-                style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+      {/* ================================================================ */}
+      {/* CUSTOM EVENT MODAL */}
+      {/* ================================================================ */}
+      {showCustomModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-lg w-full max-w-md overflow-hidden">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-800">Add Custom Event</h2>
+              <button
+                onClick={() => setShowCustomModal(false)}
+                className="p-1 rounded-lg hover:bg-gray-100"
               >
-                {editingId ? 'Edit Event' : insertAfterIndex !== null ? 'Insert Event' : 'Add Event'}
-              </h2>
-              <button onClick={() => { setShowModal(false); setInsertAfterIndex(null) }} className="text-gray-400 hover:text-gray-600">
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4 text-gray-400" />
               </button>
             </div>
-
-            <div className="space-y-3">
-              {/* Title */}
+            <div className="p-5 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Event Name</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Event Name</label>
                 <input
                   type="text"
-                  value={form.title}
-                  onChange={(e) => setForm({ ...form, title: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  placeholder="e.g., Couple Portraits"
+                  value={customForm.name}
+                  onChange={e => setCustomForm(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="e.g., Sparkler Send-Off"
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2"
+                  style={{ '--tw-ring-color': 'var(--couple-primary, #7D8471)' } as React.CSSProperties}
+                  autoFocus
                 />
               </div>
-
-              {/* Time + Duration */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Time</label>
                   <input
                     type="time"
-                    value={form.time}
-                    onChange={(e) => setForm({ ...form, time: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                    value={customForm.time}
+                    onChange={e => setCustomForm(prev => ({ ...prev, time: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2"
+                    style={{ '--tw-ring-color': 'var(--couple-primary, #7D8471)' } as React.CSSProperties}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Duration (minutes)</label>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Duration (min)</label>
                   <input
                     type="number"
-                    value={form.duration_minutes}
-                    onChange={(e) => setForm({ ...form, duration_minutes: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                    placeholder="30"
+                    value={customForm.duration}
+                    onChange={e => setCustomForm(prev => ({ ...prev, duration: parseInt(e.target.value) || 0 }))}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2"
+                    style={{ '--tw-ring-color': 'var(--couple-primary, #7D8471)' } as React.CSSProperties}
                     min={0}
-                  />
-                  {form.time && form.duration_minutes && parseInt(form.duration_minutes) > 0 && (
-                    <p className="text-[10px] text-gray-400 mt-1">
-                      Ends at {formatTime(addMinutes(form.time, parseInt(form.duration_minutes)))}
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* Description */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Details (optional)</label>
-                <textarea
-                  value={form.description}
-                  onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent resize-none"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  rows={2}
-                  placeholder="Any notes about this event..."
-                />
-              </div>
-
-              {/* Location + Category row */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    <MapPin className="w-3.5 h-3.5 inline mr-1" />
-                    Location
-                  </label>
-                  <input
-                    type="text"
-                    value={form.location}
-                    onChange={(e) => setForm({ ...form, location: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                    placeholder="e.g., Garden"
+                    step={5}
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                  <select
-                    value={form.category}
-                    onChange={(e) => setForm({ ...form, category: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  >
-                    <option value="">Select category...</option>
-                    {ALL_CATEGORIES.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
               </div>
-
-              {/* Section assignment */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Timeline Section</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Section</label>
                 <select
-                  value={form.section}
-                  onChange={(e) => setForm({ ...form, section: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  value={customForm.phase}
+                  onChange={e => setCustomForm(prev => ({ ...prev, phase: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 bg-white"
+                  style={{ '--tw-ring-color': 'var(--couple-primary, #7D8471)' } as React.CSSProperties}
                 >
-                  <option value="">Auto-assign by category</option>
-                  {TIMELINE_SECTIONS.map(s => (
-                    <option key={s.id} value={s.id}>{s.icon} {s.label}</option>
+                  {PHASE_ORDER.map(p => (
+                    <option key={p} value={p}>{PHASE_LABELS[p]}</option>
                   ))}
                 </select>
               </div>
-
-              {/* Concurrent toggle */}
-              <label className="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={form.is_concurrent}
-                  onChange={(e) => setForm({ ...form, is_concurrent: e.target.checked })}
-                  className="w-4 h-4 rounded border-gray-300"
-                  style={{ accentColor: 'var(--couple-primary)' }}
-                />
-                <span>Concurrent event</span>
-                <span className="text-[10px] text-gray-400 font-normal">(happens at the same time as previous event)</span>
-              </label>
-            </div>
-
-            {/* Quick-add templates */}
-            {!editingId && (
               <div>
-                <p className="text-xs font-medium text-gray-500 mb-2">Quick add from templates:</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {TIMELINE_SECTIONS.flatMap(s => s.events).slice(0, 8).map((evt, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setForm({
-                        ...form,
-                        title: evt.title,
-                        category: evt.category,
-                        duration_minutes: evt.defaultDuration.toString(),
-                        is_concurrent: evt.concurrent || false,
-                      })}
-                      className="px-2 py-1 rounded text-[10px] font-medium bg-gray-50 text-gray-600 hover:bg-gray-100 transition-colors"
-                    >
-                      {evt.title}
-                    </button>
-                  ))}
-                </div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Icon (emoji)</label>
+                <input
+                  type="text"
+                  value={customForm.icon}
+                  onChange={e => setCustomForm(prev => ({ ...prev, icon: e.target.value }))}
+                  className="w-20 px-3 py-2 border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2"
+                  style={{ '--tw-ring-color': 'var(--couple-primary, #7D8471)' } as React.CSSProperties}
+                  maxLength={4}
+                />
               </div>
-            )}
-
-            {/* Actions */}
-            <div className="flex justify-end gap-3 pt-2">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+                <textarea
+                  value={customForm.notes}
+                  onChange={e => setCustomForm(prev => ({ ...prev, notes: e.target.value }))}
+                  placeholder="Any details about this event..."
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2"
+                  style={{ '--tw-ring-color': 'var(--couple-primary, #7D8471)' } as React.CSSProperties}
+                  rows={2}
+                />
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-gray-100 flex justify-end gap-3">
               <button
-                onClick={() => { setShowModal(false); setInsertAfterIndex(null) }}
-                className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
+                onClick={() => setShowCustomModal(false)}
+                className="px-4 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100 transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={handleSave}
-                disabled={!form.title.trim()}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                style={{ backgroundColor: 'var(--couple-primary)' }}
+                onClick={addCustomEvent}
+                disabled={!customForm.name.trim()}
+                className="px-4 py-2 rounded-lg text-sm text-white font-medium disabled:opacity-40 transition-opacity"
+                style={{ backgroundColor: 'var(--couple-primary, #7D8471)' }}
               >
-                {editingId ? 'Save Changes' : 'Add Event'}
+                Add Event
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================================================================ */}
+      {/* STICKY SAVE BAR */}
+      {/* ================================================================ */}
+      {dirty && (
+        <div
+          ref={saveBarRef}
+          className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-gray-200 shadow-lg px-4 py-3"
+        >
+          <div className="max-w-3xl mx-auto flex items-center justify-between">
+            <span className="text-sm text-gray-500">
+              You have unsaved changes
+            </span>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  setDirty(false)
+                  fetchData()
+                }}
+                className="px-4 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100 transition-colors"
+              >
+                Discard
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm text-white font-medium disabled:opacity-60 transition-opacity"
+                style={{ backgroundColor: 'var(--couple-primary, #7D8471)' }}
+              >
+                <Save className="w-4 h-4" />
+                {saving ? 'Saving...' : 'Save Timeline'}
               </button>
             </div>
           </div>

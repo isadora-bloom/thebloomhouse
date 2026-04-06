@@ -4,6 +4,7 @@ import { callAI } from '@/lib/ai/client'
 import { buildPersonalityPrompt, type PersonalityData } from '@/lib/ai/personality-builder'
 import { buildSageIntelligenceContext } from '@/lib/services/sage-intelligence'
 import { extractPlanningDecisions, savePlanningNotes } from '@/lib/services/planning-extraction'
+import { createNotification } from '@/lib/services/admin-notifications'
 
 // ---------------------------------------------------------------------------
 // POST — Sage portal chat
@@ -224,13 +225,19 @@ ${historyContext}
     // 6. Assess confidence
     // -----------------------------------------------------------------------
 
-    // Confidence is higher when KB has relevant entries
+    // Confidence tiers:
+    //   ≥80: Sage responds normally
+    //   50-79: Sage responds with caveat ("I believe... but let me confirm")
+    //          + triggers alert for venue staff to review
+    //   <50: Sage gives warm non-answer ("Great question! Let me check with
+    //        your coordinator") + triggers alert
+
     let confidence = 85 // default: Sage is generally confident
 
     if (relevantKB.length > 0) {
-      confidence = 95 // KB has a direct answer
+      confidence = 95 // KB has a verified answer
     } else {
-      // Check if the response contains hedging language
+      // Detect hedging language as a confidence signal
       const hedges = [
         "i'm not sure",
         "i'll need to check",
@@ -244,9 +251,27 @@ ${historyContext}
       const responseLower = aiResult.text.toLowerCase()
       const hedgeCount = hedges.filter((h) => responseLower.includes(h)).length
       if (hedgeCount >= 2) {
-        confidence = 50
+        confidence = 45
       } else if (hedgeCount === 1) {
         confidence = 65
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 6b. Apply confidence-based response modifications
+    // -----------------------------------------------------------------------
+
+    let finalResponse = aiResult.text
+
+    if (confidence < 50) {
+      // Very uncertain — don't guess, give a warm non-answer
+      const coupleFirstName = wedding?.people?.[0]?.first_name
+      const greeting = coupleFirstName ? `Hi ${coupleFirstName}!` : 'Hi there!'
+      finalResponse = `${greeting} That's a great question. I want to make sure I give you the right answer, so let me check with your coordinator and get back to you on this. I'll make sure they see your question right away!`
+    } else if (confidence < 80) {
+      // Somewhat uncertain — respond but add a caveat
+      if (!finalResponse.toLowerCase().includes('confirm') && !finalResponse.toLowerCase().includes('check with')) {
+        finalResponse += '\n\nI want to make sure this is exactly right, so I\'ve flagged this for your coordinator to confirm. They\'ll follow up if anything needs updating!'
       }
     }
 
@@ -283,29 +308,44 @@ ${historyContext}
         venue_id: venueId,
         wedding_id: weddingId || null,
         role: 'assistant',
-        content: aiResult.text,
+        content: finalResponse,
         model_used: 'claude-sonnet-4-20250514',
         tokens_used: aiResult.inputTokens + aiResult.outputTokens,
         cost: aiResult.cost,
         confidence_score: confidence,
-        flagged_uncertain: confidence < 70,
+        flagged_uncertain: confidence < 80,
       })
       .select('id')
       .single()
 
     // -----------------------------------------------------------------------
-    // 8. If low confidence, add to uncertain queue
+    // 8. If uncertain, add to queue + alert venue staff
     // -----------------------------------------------------------------------
 
-    if (confidence < 70 && sageMsg) {
+    if (confidence < 80 && sageMsg) {
+      // Add to uncertain queue for coordinator review
       await supabase.from('sage_uncertain_queue').insert({
         venue_id: venueId,
         wedding_id: weddingId || null,
         conversation_id: sageMsg.id,
         question: message,
-        sage_answer: aiResult.text,
+        sage_answer: finalResponse,
         confidence_score: confidence,
       })
+
+      // Create admin notification so venue staff knows to check
+      const tierLabel = confidence < 50 ? 'low confidence' : 'needs confirmation'
+      try {
+        await createNotification({
+          venueId,
+          weddingId: weddingId || undefined,
+          type: 'sage_uncertain',
+          title: `${aiName} flagged a question (${tierLabel})`,
+          body: `"${message.slice(0, 120)}${message.length > 120 ? '...' : ''}" — Confidence: ${confidence}%. Check the Sage Queue to review and respond.`,
+        })
+      } catch (err) {
+        console.warn('[api/portal/sage] Failed to create notification (non-blocking):', err)
+      }
     }
 
     // -----------------------------------------------------------------------
@@ -313,7 +353,7 @@ ${historyContext}
     // -----------------------------------------------------------------------
 
     return NextResponse.json({
-      response: aiResult.text,
+      response: finalResponse,
       confidence,
       conversationId: sageMsg?.id || null,
     })

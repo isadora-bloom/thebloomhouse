@@ -17,6 +17,15 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: 'The Bloom House',
   description: 'Intelligence-powered wedding venue platform',
+  icons: {
+    icon: '/favicon.png',
+    apple: '/brand/icon-black.png',
+  },
+  openGraph: {
+    title: 'The Bloom House',
+    description: 'Intelligence-powered wedding venue platform',
+    images: ['/brand/wordmark-black.png'],
+  },
 }
 
 export default function RootLayout({

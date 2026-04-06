@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
   AlertCircle,
@@ -45,9 +46,6 @@ interface DailyErrorCount {
 }
 
 type StatusFilter = 'all' | 'unresolved' | 'resolved'
-
-// TODO: Replace with venue from auth context
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -204,6 +202,7 @@ function ResolveModal({
 // ---------------------------------------------------------------------------
 
 export default function ErrorsPage() {
+  const VENUE_ID = useVenueId()
   const [errors, setErrors] = useState<ErrorLog[]>([])
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createBrowserClient } from '@supabase/ssr'
 import {
   BarChart3,
@@ -22,9 +23,6 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-
-// TODO: Replace with venue context from auth/session
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -137,6 +135,7 @@ function TableSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function SourceAttributionPage() {
+  const VENUE_ID = useVenueId()
   const [attributions, setAttributions] = useState<SourceAttribution[]>([])
   const [spendData, setSpendData] = useState<MarketingSpend[]>([])
   const [loading, setLoading] = useState(true)

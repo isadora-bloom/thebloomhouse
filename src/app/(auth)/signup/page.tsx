@@ -94,9 +94,11 @@ export default function SignupPage() {
     <div className="w-full max-w-sm">
       <div className="bg-surface rounded-xl shadow-sm border border-border p-8">
         <div className="text-center mb-8">
-          <h1 className="font-heading text-2xl text-sage-900 mb-1">
-            The Bloom House
-          </h1>
+          <img
+            src="/brand/wordmark-black.png"
+            alt="The Bloom House"
+            className="h-12 w-auto mx-auto mb-4"
+          />
           <p className="text-sm text-muted">
             Create your account
           </p>

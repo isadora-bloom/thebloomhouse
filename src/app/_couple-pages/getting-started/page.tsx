@@ -1,140 +1,245 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
-  Sparkles,
   Check,
-  Circle,
   ChevronRight,
-  Heart,
-  Calendar,
-  Lock,
-  Paintbrush,
+  Camera,
+  MessageCircle,
+  Users,
+  Sparkles,
+  CheckSquare,
+  ArrowRight,
   PartyPopper,
-  Rocket,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
-// Types & Constants
+// Types
 // ---------------------------------------------------------------------------
 
-interface OnboardingRecord {
+interface OnboardingProgress {
   id: string
-  step: string
-  completed: boolean
-  completed_at: string | null
+  wedding_id: string
+  couple_photo_uploaded: boolean
+  first_message_sent: boolean
+  vendor_added: boolean
+  inspo_uploaded: boolean
+  checklist_item_completed: boolean
+  updated_at: string | null
 }
 
 interface WeddingInfo {
   wedding_date: string | null
+  partner1_name: string | null
+  partner2_name: string | null
 }
 
-interface StepDef {
-  id: string
-  label: string
-  description: string
-  link?: string
-}
-
-interface PhaseDef {
-  id: string
+interface ActionCard {
+  id: keyof Pick<OnboardingProgress, 'couple_photo_uploaded' | 'first_message_sent' | 'vendor_added' | 'inspo_uploaded' | 'checklist_item_completed'>
+  emoji: string
   title: string
-  subtitle: string
-  icon: typeof Sparkles
+  description: string
+  actionLabel: string
+  path: string
+  icon: typeof Camera
+}
+
+// ---------------------------------------------------------------------------
+// Action Card Definitions
+// ---------------------------------------------------------------------------
+
+const ACTION_CARDS: ActionCard[] = [
+  {
+    id: 'couple_photo_uploaded',
+    emoji: '📸',
+    title: 'Upload a photo of you two',
+    description: 'Add a photo so your vendors and venue team can put faces to names. It makes everything feel more personal.',
+    actionLabel: 'Add your photo',
+    path: 'couple-photo',
+    icon: Camera,
+  },
+  {
+    id: 'first_message_sent',
+    emoji: '💬',
+    title: 'Say hi to Sage',
+    description: 'Your AI planning assistant is ready and waiting. Ask anything about your venue, your timeline, or just say hello.',
+    actionLabel: 'Start chatting',
+    path: 'chat',
+    icon: MessageCircle,
+  },
+  {
+    id: 'vendor_added',
+    emoji: '👥',
+    title: 'Add your first vendor',
+    description: 'Start tracking your photographer, florist, DJ, or anyone else helping make your day happen.',
+    actionLabel: 'Add a vendor',
+    path: 'vendors',
+    icon: Users,
+  },
+  {
+    id: 'inspo_uploaded',
+    emoji: '✨',
+    title: 'Share some inspiration',
+    description: 'Upload photos of your vision — colors, flowers, tablescapes, vibes. Help your team see what you are dreaming of.',
+    actionLabel: 'Upload inspo',
+    path: 'inspo',
+    icon: Sparkles,
+  },
+  {
+    id: 'checklist_item_completed',
+    emoji: '✅',
+    title: 'Check off a task',
+    description: 'Your checklist is pre-loaded with everything you need. Start knocking things out, one at a time.',
+    actionLabel: 'View checklist',
+    path: 'checklist',
+    icon: CheckSquare,
+  },
+]
+
+// ---------------------------------------------------------------------------
+// Time-Bucket Nudge Content
+// ---------------------------------------------------------------------------
+
+interface NudgeBucket {
   minWeeks: number
   maxWeeks: number | null
-  steps: StepDef[]
+  title: string
+  emoji: string
+  description: string
+  tips: string[]
 }
 
-const PHASES: PhaseDef[] = [
+const NUDGE_BUCKETS: NudgeBucket[] = [
   {
-    id: 'dream',
-    title: 'Dream & Discover',
-    subtitle: '12+ months out',
-    icon: Heart,
     minWeeks: 52,
     maxWeeks: null,
-    steps: [
-      { id: 'dream_priorities', label: 'Set your priorities', description: 'Work through the wedding worksheets together', link: '/worksheets' },
-      { id: 'dream_inventory', label: 'Explore venue inventory', description: 'See what your venue offers for your day', link: '/venue-inventory' },
-      { id: 'dream_guests', label: 'Start your guest list', description: 'Begin adding the people you want there', link: '/guests' },
-      { id: 'dream_party', label: 'Think about your wedding party', description: 'Who stands beside you?', link: '/party' },
-      { id: 'dream_inspo', label: 'Gather inspiration', description: 'Save photos and ideas you love', link: '/inspo' },
+    title: 'Dream & Book Essentials',
+    emoji: '🌙',
+    description: 'You have wonderful time ahead of you. Focus on the big pieces first.',
+    tips: [
+      'Book your photographer early — the best ones fill up 12-18 months out',
+      'Lock in your caterer and start thinking about the menu direction',
+      'Start a guest list draft, even if it changes ten times',
+      'Chat with Sage about your venue — she knows every corner of this place',
     ],
   },
   {
-    id: 'lock',
-    title: 'Lock It In',
-    subtitle: '6-12 months out',
-    icon: Lock,
     minWeeks: 26,
-    maxWeeks: 52,
-    steps: [
-      { id: 'lock_vendors', label: 'Book your vendors', description: 'Photographer, florist, DJ, caterer, officiant', link: '/vendors' },
-      { id: 'lock_guestlist', label: 'Finalize guest list', description: 'Confirm your headcount and collect addresses', link: '/guests' },
-      { id: 'lock_timeline', label: 'Draft your timeline', description: 'Map out the flow of your day', link: '/timeline' },
-      { id: 'lock_website', label: 'Set up your wedding website', description: 'Share details with your guests', link: '/website' },
-      { id: 'lock_budget', label: 'Lock in your budget', description: 'Know where the money goes', link: '/budget' },
+    maxWeeks: 51,
+    title: 'Lock In Your Vendors',
+    emoji: '🔒',
+    description: 'This is the sweet spot for getting everything booked and confirmed.',
+    tips: [
+      'Upload your vendor contracts so everything is in one place',
+      'Book your DJ or band, florist, and officiant if you have not yet',
+      'Start thinking about your ceremony flow and timeline',
+      'Send save-the-dates if you have not already',
     ],
   },
   {
-    id: 'details',
-    title: 'Details',
-    subtitle: '3-6 months out',
-    icon: Paintbrush,
-    minWeeks: 12,
-    maxWeeks: 26,
-    steps: [
-      { id: 'details_seating', label: 'Plan seating', description: 'Arrange tables and assign seats', link: '/seating' },
-      { id: 'details_decor', label: 'Finalize decor', description: 'Table settings, flowers, lighting', link: '/venue-inventory' },
-      { id: 'details_beauty', label: 'Schedule hair and makeup', description: 'Book trials and day-of appointments' },
-      { id: 'details_menu', label: 'Finalize the menu', description: 'Catering selections, dietary notes, bar planning' },
-      { id: 'details_allergies', label: 'Log allergies', description: 'Track guest allergies for your caterer', link: '/allergies' },
-      { id: 'details_stays', label: 'Share lodging info', description: 'Review nearby stays for your guests', link: '/stays' },
+    minWeeks: 13,
+    maxWeeks: 25,
+    title: 'Get Into the Details',
+    emoji: '🎨',
+    description: 'The fun part — making all the little decisions that bring your vision to life.',
+    tips: [
+      'Build your day-of timeline so everyone knows the flow',
+      'Start your table layout and think about seating groups',
+      'Finalize your menu, bar selections, and any dietary notes',
+      'Schedule hair and makeup trials',
     ],
   },
   {
-    id: 'prep',
-    title: 'Final Prep',
-    subtitle: '4-8 weeks out',
-    icon: Rocket,
     minWeeks: 4,
     maxWeeks: 12,
-    steps: [
-      { id: 'prep_confirm', label: 'Confirm all vendors', description: 'Double-check contracts and timelines', link: '/vendors' },
-      { id: 'prep_walkthrough', label: 'Schedule final walkthrough', description: 'Walk through the day with your coordinator' },
-      { id: 'prep_invites', label: 'Send invitations', description: 'Mail or send invites, track RSVPs', link: '/guests' },
-      { id: 'prep_care', label: 'Add guest care notes', description: 'Mobility needs, VIPs, family situations', link: '/guest-care' },
-      { id: 'prep_review', label: 'Start final review', description: 'Begin signing off on each section', link: '/final-review' },
+    title: 'Final Prep',
+    emoji: '🚀',
+    description: 'Everything is coming together. Time to confirm, finalize, and breathe.',
+    tips: [
+      'Confirm all vendor arrival times and day-of contacts',
+      'Schedule your final walkthrough with your coordinator',
+      'Finalize your guest count and submit to your caterer',
+      'Create a packing list for the wedding day',
     ],
   },
   {
-    id: 'week',
-    title: 'Almost There!',
-    subtitle: 'Wedding week',
-    icon: PartyPopper,
     minWeeks: 0,
-    maxWeeks: 4,
-    steps: [
-      { id: 'week_rehearsal', label: 'Rehearsal', description: 'Run through the ceremony and dinner' },
-      { id: 'week_checklist', label: 'Last-minute checks', description: 'Rings, license, outfit, emergency kit', link: '/checklist' },
-      { id: 'week_relax', label: 'Take a breath', description: 'You did the work. Now enjoy it.' },
+    maxWeeks: 3,
+    title: 'Home Stretch',
+    emoji: '🎉',
+    description: 'You have done the work. Trust your plan, lean on your people, and enjoy every moment.',
+    tips: [
+      'Send final confirmations to all vendors',
+      'Pack your bags for the day — do not forget the rings and the license',
+      'Delegate day-of questions to your coordinator or point person',
+      'Take a deep breath. You are so ready for this.',
     ],
   },
 ]
+
+// ---------------------------------------------------------------------------
+// Progress Ring Component
+// ---------------------------------------------------------------------------
+
+function ProgressRing({ completed, total }: { completed: number; total: number }) {
+  const size = 120
+  const strokeWidth = 8
+  const radius = (size - strokeWidth) / 2
+  const circumference = 2 * Math.PI * radius
+  const progress = total > 0 ? completed / total : 0
+  const offset = circumference - progress * circumference
+
+  return (
+    <div className="relative inline-flex items-center justify-center">
+      <svg width={size} height={size} className="-rotate-90">
+        {/* Background circle */}
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke="#E5E7EB"
+          strokeWidth={strokeWidth}
+          fill="none"
+        />
+        {/* Progress circle */}
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke="var(--couple-primary, #7D8471)"
+          strokeWidth={strokeWidth}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          className="transition-all duration-700 ease-out"
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span
+          className="text-3xl font-bold"
+          style={{ color: 'var(--couple-primary, #7D8471)' }}
+        >
+          {completed}
+        </span>
+        <span className="text-xs text-gray-400">of {total}</span>
+      </div>
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Getting Started Page
 // ---------------------------------------------------------------------------
 
 export default function GettingStartedPage() {
-  const [progress, setProgress] = useState<OnboardingRecord[]>([])
+  const [progress, setProgress] = useState<OnboardingProgress | null>(null)
   const [wedding, setWedding] = useState<WeddingInfo | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -146,16 +251,17 @@ export default function GettingStartedPage() {
       supabase
         .from('onboarding_progress')
         .select('*')
-        .eq('wedding_id', WEDDING_ID),
+        .eq('wedding_id', WEDDING_ID)
+        .single(),
       supabase
         .from('weddings')
-        .select('wedding_date')
+        .select('wedding_date, partner1_name, partner2_name')
         .eq('id', WEDDING_ID)
         .single(),
     ])
 
     if (!progressRes.error && progressRes.data) {
-      setProgress(progressRes.data as OnboardingRecord[])
+      setProgress(progressRes.data as OnboardingProgress)
     }
     if (!weddingRes.error && weddingRes.data) {
       setWedding(weddingRes.data as WeddingInfo)
@@ -167,67 +273,66 @@ export default function GettingStartedPage() {
     fetchData()
   }, [fetchData])
 
-  // ---- Computed ----
-  const weeksUntilWedding = wedding?.wedding_date
-    ? Math.max(0, Math.ceil(
+  // ---- Completion tracking ----
+  const completedSteps = useMemo(() => {
+    if (!progress) return new Set<string>()
+    const done = new Set<string>()
+    if (progress.couple_photo_uploaded) done.add('couple_photo_uploaded')
+    if (progress.first_message_sent) done.add('first_message_sent')
+    if (progress.vendor_added) done.add('vendor_added')
+    if (progress.inspo_uploaded) done.add('inspo_uploaded')
+    if (progress.checklist_item_completed) done.add('checklist_item_completed')
+    return done
+  }, [progress])
+
+  const completedCount = completedSteps.size
+  const totalSteps = ACTION_CARDS.length
+  const allComplete = completedCount === totalSteps
+
+  // ---- Weeks until wedding ----
+  const weeksUntilWedding = useMemo(() => {
+    if (!wedding?.wedding_date) return null
+    return Math.max(
+      0,
+      Math.ceil(
         (new Date(wedding.wedding_date).getTime() - Date.now()) / (7 * 24 * 60 * 60 * 1000)
-      ))
-    : null
+      )
+    )
+  }, [wedding])
 
-  // Determine which phase the couple is in
-  function getCurrentPhaseId(): string {
-    if (weeksUntilWedding === null) return 'dream' // default if no date
-    for (let i = PHASES.length - 1; i >= 0; i--) {
-      const phase = PHASES[i]
-      if (weeksUntilWedding >= phase.minWeeks) return phase.id
+  // ---- Get the right nudge bucket ----
+  const currentNudge = useMemo(() => {
+    if (weeksUntilWedding === null) return NUDGE_BUCKETS[0] // default to "Dream"
+    for (let i = NUDGE_BUCKETS.length - 1; i >= 0; i--) {
+      if (weeksUntilWedding >= NUDGE_BUCKETS[i].minWeeks) {
+        return NUDGE_BUCKETS[i]
+      }
     }
-    return PHASES[PHASES.length - 1].id
-  }
+    return NUDGE_BUCKETS[NUDGE_BUCKETS.length - 1]
+  }, [weeksUntilWedding])
 
-  const currentPhaseId = getCurrentPhaseId()
-
-  function isStepComplete(stepId: string): boolean {
-    return progress.some((p) => p.step === stepId && p.completed)
-  }
-
-  async function toggleStep(stepId: string) {
-    const existing = progress.find((p) => p.step === stepId)
-
-    if (existing) {
-      const newCompleted = !existing.completed
-      await supabase
-        .from('onboarding_progress')
-        .update({
-          completed: newCompleted,
-          completed_at: newCompleted ? new Date().toISOString() : null,
-        })
-        .eq('id', existing.id)
-    } else {
-      await supabase.from('onboarding_progress').insert({
-        venue_id: VENUE_ID,
-        wedding_id: WEDDING_ID,
-        step: stepId,
-        completed: true,
-        completed_at: new Date().toISOString(),
-      })
+  // ---- Greeting ----
+  const greeting = useMemo(() => {
+    if (wedding?.partner1_name && wedding?.partner2_name) {
+      return `Welcome, ${wedding.partner1_name} & ${wedding.partner2_name}`
     }
+    return 'Welcome to your wedding portal'
+  }, [wedding])
 
-    fetchData()
-  }
+  // ---- Build couple slug for links (simplified) ----
+  const coupleSlug = 'demo' // TODO: get from router params
 
-  // All steps across all phases
-  const allSteps = PHASES.flatMap((p) => p.steps)
-  const completedCount = allSteps.filter((s) => isStepComplete(s.id)).length
-  const totalSteps = allSteps.length
-  const overallPct = totalSteps > 0 ? Math.round((completedCount / totalSteps) * 100) : 0
-
+  // ---- Loading ----
   if (loading) {
     return (
       <div className="space-y-6">
         <div className="h-10 bg-gray-100 rounded-lg w-64 animate-pulse" />
-        <div className="animate-pulse space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-24 bg-gray-100 rounded-xl" />
+        <div className="flex justify-center py-8">
+          <div className="w-[120px] h-[120px] bg-gray-100 rounded-full animate-pulse" />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="h-40 bg-gray-100 rounded-xl animate-pulse" />
           ))}
         </div>
       </div>
@@ -235,148 +340,229 @@ export default function GettingStartedPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
+      {/* ------------------------------------------------------------------ */}
       {/* Header */}
-      <div>
+      {/* ------------------------------------------------------------------ */}
+      <div className="text-center">
         <h1
-          className="text-3xl font-bold mb-1"
-          style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+          className="text-3xl font-bold mb-2"
+          style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary, #7D8471)' }}
         >
-          Getting Started
+          {greeting}
         </h1>
-        <p className="text-gray-500 text-sm">
+        <p className="text-gray-500 text-sm max-w-md mx-auto">
           {weeksUntilWedding !== null
-            ? `${weeksUntilWedding} weeks until your wedding day.`
-            : 'Your personalized planning roadmap.'}
-          {' '}Take it one step at a time.
+            ? `${weeksUntilWedding} weeks until your big day. Let\u2019s make them count.`
+            : 'Your planning journey starts right here. Take it one step at a time.'}
         </p>
       </div>
 
-      {/* Overall Progress */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-gray-700">
-            {completedCount} of {totalSteps} steps completed
-          </span>
-          <span className="text-sm font-medium" style={{ color: 'var(--couple-primary)' }}>
-            {overallPct}%
-          </span>
-        </div>
-        <div className="w-full bg-gray-100 rounded-full h-2">
-          <div
-            className="h-2 rounded-full transition-all duration-500"
-            style={{ width: `${overallPct}%`, backgroundColor: 'var(--couple-primary)' }}
-          />
-        </div>
+      {/* ------------------------------------------------------------------ */}
+      {/* Progress Ring */}
+      {/* ------------------------------------------------------------------ */}
+      <div className="flex flex-col items-center gap-2">
+        <ProgressRing completed={completedCount} total={totalSteps} />
+        <p className="text-sm text-gray-500">
+          {completedCount === 0
+            ? 'Let\u2019s get you started'
+            : completedCount < totalSteps
+              ? `${completedCount} of ${totalSteps} steps complete \u2014 nice work!`
+              : 'All steps complete \u2014 you\u2019re on your way!'}
+        </p>
       </div>
 
-      {/* Phases */}
-      <div className="space-y-4">
-        {PHASES.map((phase) => {
-          const PhaseIcon = phase.icon
-          const isCurrent = phase.id === currentPhaseId
-          const phaseStepsDone = phase.steps.filter((s) => isStepComplete(s.id)).length
-          const phaseComplete = phaseStepsDone === phase.steps.length
+      {/* ------------------------------------------------------------------ */}
+      {/* All Complete Celebration */}
+      {/* ------------------------------------------------------------------ */}
+      {allComplete && (
+        <div
+          className="bg-white rounded-xl border-2 shadow-md p-6 text-center"
+          style={{ borderColor: 'var(--couple-primary, #7D8471)' }}
+        >
+          <div className="flex justify-center mb-3">
+            <div
+              className="w-14 h-14 rounded-full flex items-center justify-center"
+              style={{ backgroundColor: 'color-mix(in srgb, var(--couple-primary, #7D8471) 12%, transparent)' }}
+            >
+              <PartyPopper className="w-7 h-7" style={{ color: 'var(--couple-primary, #7D8471)' }} />
+            </div>
+          </div>
+          <h2
+            className="text-xl font-bold mb-2"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary, #7D8471)' }}
+          >
+            You are off to an amazing start!
+          </h2>
+          <p className="text-gray-500 text-sm mb-4 max-w-sm mx-auto">
+            You have completed all five getting-started steps. Your portal is ready for the real planning to begin.
+          </p>
+          <a
+            href={`/couple/${coupleSlug}/checklist`}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-white text-sm font-medium transition-opacity hover:opacity-90"
+            style={{ backgroundColor: 'var(--couple-primary, #7D8471)' }}
+          >
+            Explore your full portal
+            <ArrowRight className="w-4 h-4" />
+          </a>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Action Cards */}
+      {/* ------------------------------------------------------------------ */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        {ACTION_CARDS.map((card) => {
+          const done = completedSteps.has(card.id)
+          const CardIcon = card.icon
 
           return (
             <div
-              key={phase.id}
+              key={card.id}
               className={cn(
-                'bg-white rounded-xl border shadow-sm overflow-hidden transition-shadow',
-                isCurrent ? 'border-2 shadow-md' : 'border-gray-100',
+                'relative bg-white rounded-xl border shadow-sm overflow-hidden transition-all duration-200 hover:shadow-md group',
+                done ? 'border-emerald-200' : 'border-gray-100'
               )}
-              style={isCurrent ? { borderColor: 'var(--couple-primary)' } : undefined}
             >
-              {/* Phase Header */}
-              <div className="px-5 py-4 flex items-center gap-3">
-                <div
-                  className={cn(
-                    'w-10 h-10 rounded-xl flex items-center justify-center shrink-0',
-                    phaseComplete ? 'bg-emerald-100' : ''
-                  )}
-                  style={!phaseComplete ? {
-                    backgroundColor: 'color-mix(in srgb, var(--couple-primary) 10%, transparent)',
-                  } : undefined}
-                >
-                  {phaseComplete ? (
-                    <Check className="w-5 h-5 text-emerald-600" />
-                  ) : (
-                    <PhaseIcon
-                      className="w-5 h-5"
-                      style={{ color: 'var(--couple-primary)' }}
-                    />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h2 className="font-semibold text-gray-800">{phase.title}</h2>
-                    {isCurrent && (
-                      <span
-                        className="px-2 py-0.5 rounded-full text-[10px] font-bold text-white uppercase tracking-wide"
-                        style={{ backgroundColor: 'var(--couple-primary)' }}
-                      >
-                        You are here
-                      </span>
-                    )}
+              {/* Completed indicator */}
+              {done && (
+                <div className="absolute top-3 right-3 z-10">
+                  <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center shadow-sm">
+                    <Check className="w-3.5 h-3.5 text-white" />
                   </div>
-                  <p className="text-xs text-gray-500">{phase.subtitle}</p>
                 </div>
-                <span className="text-xs text-gray-400 tabular-nums shrink-0">
-                  {phaseStepsDone}/{phase.steps.length}
-                </span>
-              </div>
+              )}
 
-              {/* Steps */}
-              <div className="border-t border-gray-50">
-                {phase.steps.map((step) => {
-                  const done = isStepComplete(step.id)
+              <div className="p-5">
+                {/* Emoji + Title */}
+                <div className="flex items-start gap-3 mb-3">
+                  <div
+                    className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 text-xl"
+                    style={{
+                      backgroundColor: done
+                        ? '#ECFDF5'
+                        : 'color-mix(in srgb, var(--couple-primary, #7D8471) 10%, transparent)',
+                    }}
+                  >
+                    {card.emoji}
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className={cn(
+                      'font-semibold text-[15px] leading-tight',
+                      done ? 'text-emerald-700' : 'text-gray-800'
+                    )}>
+                      {card.title}
+                    </h3>
+                  </div>
+                </div>
 
-                  return (
-                    <div
-                      key={step.id}
-                      className="flex items-center gap-3 px-5 py-3 border-b border-gray-50 last:border-b-0 hover:bg-gray-50/50 transition-colors"
-                    >
-                      <button
-                        onClick={() => toggleStep(step.id)}
-                        className="shrink-0"
-                      >
-                        {done ? (
-                          <div
-                            className="w-5 h-5 rounded-full flex items-center justify-center"
-                            style={{ backgroundColor: 'var(--couple-primary)' }}
-                          >
-                            <Check className="w-3 h-3 text-white" />
-                          </div>
-                        ) : (
-                          <Circle className="w-5 h-5 text-gray-300" />
-                        )}
-                      </button>
+                {/* Description */}
+                <p className="text-sm text-gray-500 leading-relaxed mb-4">
+                  {card.description}
+                </p>
 
-                      <div className="flex-1 min-w-0">
-                        <span className={cn(
-                          'text-sm',
-                          done ? 'text-gray-400 line-through' : 'text-gray-800 font-medium'
-                        )}>
-                          {step.label}
-                        </span>
-                        <p className="text-xs text-gray-400">{step.description}</p>
-                      </div>
-
-                      {step.link && (
-                        <a
-                          href={step.link}
-                          className="p-1.5 rounded-md text-gray-300 hover:text-gray-500 shrink-0"
-                        >
-                          <ChevronRight className="w-4 h-4" />
-                        </a>
-                      )}
-                    </div>
-                  )
-                })}
+                {/* Action Button */}
+                <a
+                  href={`/couple/${coupleSlug}/${card.path}`}
+                  className={cn(
+                    'inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all',
+                    done
+                      ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                      : 'text-white hover:opacity-90'
+                  )}
+                  style={!done ? { backgroundColor: 'var(--couple-primary, #7D8471)' } : undefined}
+                >
+                  <CardIcon className="w-4 h-4" />
+                  {done ? 'Done! View again' : card.actionLabel}
+                  <ChevronRight className="w-3.5 h-3.5 opacity-60" />
+                </a>
               </div>
             </div>
           )
         })}
+      </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Time-Bucket Nudge Section */}
+      {/* ------------------------------------------------------------------ */}
+      {currentNudge && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+          {/* Nudge Header */}
+          <div
+            className="px-5 py-4 border-b"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--couple-primary, #7D8471) 15%, transparent)',
+              backgroundColor: 'color-mix(in srgb, var(--couple-primary, #7D8471) 4%, transparent)',
+            }}
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">{currentNudge.emoji}</span>
+              <div>
+                <h2
+                  className="font-semibold text-base"
+                  style={{ color: 'var(--couple-primary, #7D8471)' }}
+                >
+                  {currentNudge.title}
+                </h2>
+                <p className="text-sm text-gray-500">{currentNudge.description}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Tips */}
+          <div className="p-5">
+            <ul className="space-y-3">
+              {currentNudge.tips.map((tip, i) => (
+                <li key={i} className="flex items-start gap-3">
+                  <div
+                    className="w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5"
+                    style={{ backgroundColor: 'color-mix(in srgb, var(--couple-primary, #7D8471) 12%, transparent)' }}
+                  >
+                    <span
+                      className="text-[10px] font-bold"
+                      style={{ color: 'var(--couple-primary, #7D8471)' }}
+                    >
+                      {i + 1}
+                    </span>
+                  </div>
+                  <span className="text-sm text-gray-600 leading-relaxed">{tip}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Weeks indicator */}
+          {weeksUntilWedding !== null && (
+            <div
+              className="px-5 py-3 border-t text-center"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--couple-primary, #7D8471) 10%, transparent)',
+                backgroundColor: 'color-mix(in srgb, var(--couple-primary, #7D8471) 2%, transparent)',
+              }}
+            >
+              <span className="text-xs text-gray-400">
+                Based on your wedding date &mdash; {weeksUntilWedding} {weeksUntilWedding === 1 ? 'week' : 'weeks'} to go
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Bottom CTA */}
+      {/* ------------------------------------------------------------------ */}
+      <div className="text-center pb-4">
+        <p className="text-sm text-gray-400 mb-3">
+          Questions? Your venue coordinator and Sage are always here to help.
+        </p>
+        <a
+          href={`/couple/${coupleSlug}/chat`}
+          className="inline-flex items-center gap-2 text-sm font-medium hover:underline"
+          style={{ color: 'var(--couple-primary, #7D8471)' }}
+        >
+          <MessageCircle className="w-4 h-4" />
+          Chat with Sage
+        </a>
       </div>
     </div>
   )

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createBrowserClient } from '@supabase/ssr'
 import {
   Users,
@@ -22,9 +23,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-
-// TODO: Replace with venue context from auth/session
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
+import { UpgradeGate } from '@/components/ui/upgrade-gate'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -294,7 +293,8 @@ function MetricTile({
 // Main Page
 // ---------------------------------------------------------------------------
 
-export default function TeamPerformancePage() {
+function TeamPerformancePageInner() {
+  const VENUE_ID = useVenueId()
   const [consultants, setConsultants] = useState<ConsultantData[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -529,5 +529,13 @@ export default function TeamPerformancePage() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function TeamPerformancePageWrapper() {
+  return (
+    <UpgradeGate requiredTier="enterprise" featureName="Team Performance">
+      <TeamPerformancePageInner />
+    </UpgradeGate>
   )
 }

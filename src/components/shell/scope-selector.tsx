@@ -36,11 +36,12 @@ export interface Scope {
   companyName?: string
 }
 
-// Demo data (matches seed)
+// Fallback org name (will be overridden from DB)
 const DEMO_ORG_ID = '11111111-1111-1111-1111-111111111111'
-const DEMO_ORG_NAME = 'The Crestwood Collection'
+const DEFAULT_ORG_NAME = 'The Crestwood Collection'
 
-const DEMO_GROUPS: VenueGroup[] = [
+// Static fallback groups — used only if venue_groups table doesn't exist yet
+const FALLBACK_GROUPS: VenueGroup[] = [
   {
     id: 'group-virginia-estate',
     name: 'Virginia Estates',
@@ -107,11 +108,13 @@ const SCOPE_BG = {
 
 export function ScopeSelector() {
   const [venues, setVenues] = useState<Venue[]>([])
+  const [groups, setGroups] = useState<VenueGroup[]>([])
+  const [orgName, setOrgName] = useState(DEFAULT_ORG_NAME)
   const [scope, setScope] = useState<Scope>({
     level: 'venue',
     venueId: '22222222-2222-2222-2222-222222222201',
     venueName: 'Rixey Manor',
-    companyName: DEMO_ORG_NAME,
+    companyName: DEFAULT_ORG_NAME,
   })
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -121,6 +124,7 @@ export function ScopeSelector() {
     async function load() {
       const supabase = createClient()
 
+      // Load venues
       const { data: venueData } = await supabase
         .from('venues')
         .select('id, name, slug, status')
@@ -128,17 +132,43 @@ export function ScopeSelector() {
 
       setVenues((venueData ?? []) as Venue[])
 
+      // Load org name
+      const { data: orgData } = await supabase
+        .from('organisations')
+        .select('name')
+        .limit(1)
+        .maybeSingle()
+      if (orgData?.name) setOrgName(orgData.name)
+
+      // Load groups from DB (with fallback to static)
+      const { data: groupData, error: groupErr } = await supabase
+        .from('venue_groups')
+        .select('id, name, venue_group_members(venue_id)')
+        .order('name')
+
+      if (!groupErr && groupData && groupData.length > 0) {
+        const dbGroups: VenueGroup[] = groupData.map((g: any) => ({
+          id: g.id,
+          name: g.name,
+          venue_ids: (g.venue_group_members ?? []).map((m: any) => m.venue_id),
+        }))
+        setGroups(dbGroups)
+      } else {
+        // Fallback to hardcoded groups if table doesn't exist yet
+        setGroups(FALLBACK_GROUPS)
+      }
+
       // Restore from cookie or default to first venue
       const saved = getScopeCookie()
       if (saved) {
-        setScope({ ...saved, companyName: DEMO_ORG_NAME })
+        setScope({ ...saved, companyName: orgData?.name ?? DEFAULT_ORG_NAME })
       } else if (venueData && venueData.length > 0) {
         const first = venueData[0]
         setScope({
           level: 'venue',
           venueId: first.id,
           venueName: first.name,
-          companyName: DEMO_ORG_NAME,
+          companyName: orgData?.name ?? DEFAULT_ORG_NAME,
         })
       }
 
@@ -160,7 +190,7 @@ export function ScopeSelector() {
       level: 'venue',
       venueId: v.id,
       venueName: v.name,
-      companyName: DEMO_ORG_NAME,
+      companyName: orgName,
     }
     setScope(newScope)
     setScopeCookie(newScope)
@@ -173,7 +203,7 @@ export function ScopeSelector() {
       level: 'group',
       groupId: g.id,
       groupName: g.name,
-      companyName: DEMO_ORG_NAME,
+      companyName: orgName,
     }
     setScope(newScope)
     setScopeCookie(newScope)
@@ -184,7 +214,7 @@ export function ScopeSelector() {
   function selectCompany() {
     const newScope: Scope = {
       level: 'company',
-      companyName: DEMO_ORG_NAME,
+      companyName: orgName,
     }
     setScope(newScope)
     setScopeCookie(newScope)
@@ -249,17 +279,17 @@ export function ScopeSelector() {
               )}
             >
               <Globe className="w-4 h-4 shrink-0" />
-              <span className="flex-1 text-left font-medium">{DEMO_ORG_NAME}</span>
+              <span className="flex-1 text-left font-medium">{orgName}</span>
               <span className="text-xs text-sage-400">{venues.length} venues</span>
               {scope.level === 'company' && <Check className="w-3.5 h-3.5" />}
             </button>
           </div>
 
           {/* Groups */}
-          {DEMO_GROUPS.length > 0 && (
+          {groups.length > 0 && (
             <div className="p-2 border-b border-border">
               <p className="px-3 py-1 text-xs font-semibold uppercase text-sage-400">Groups</p>
-              {DEMO_GROUPS.map((g) => (
+              {groups.map((g) => (
                 <button
                   key={g.id}
                   onClick={() => selectGroup(g)}

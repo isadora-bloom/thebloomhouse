@@ -255,6 +255,8 @@ You work alongside **${ownerName}** (${ownerTitle}) to ensure every couple gets 
   if (config.signature_greeting) {
     prompt += `**Your go-to greeting:** "${config.signature_greeting}"\n`
   }
+  // Greeting flexibility: vary openers based on context
+  prompt += `**Greeting flexibility:** When you know the client's first name, open with it naturally (e.g., "Hi Sarah!", "Hey Michael!"). When you don't know their name, rotate between warm openers like "${config.signature_greeting || 'Hi there'}," "Hey!", or "Hello!" — don't always use the exact same greeting. Be warm and natural, not robotic.\n`
   if (config.signature_closer) {
     prompt += `**Your typical closer:** "${config.signature_closer}"\n`
   }

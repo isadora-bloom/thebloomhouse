@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   Sparkles,
@@ -12,11 +12,14 @@ import {
   ZoomIn,
   Tag,
   Loader2,
+  Upload,
 } from 'lucide-react'
 
 // TODO: Get from auth session
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
+
+const MAX_IMAGES = 50
 
 // ---------------------------------------------------------------------------
 // Types
@@ -70,6 +73,14 @@ export default function InspoGalleryPage() {
   const [lightboxImage, setLightboxImage] = useState<InspoImage | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
+  // File upload state
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [filePreview, setFilePreview] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
   const supabase = createClient()
 
   // ---- Fetch ----
@@ -109,25 +120,106 @@ export default function InspoGalleryPage() {
     new Set(images.flatMap((img) => img.tags || []))
   ).sort()
 
+  // ---- File handling ----
+  function handleFileSelect(file: File) {
+    setUploadError(null)
+    if (!file.type.match(/^image\/(jpeg|png|webp)$/)) {
+      setUploadError('Please select a JPEG, PNG, or WebP image.')
+      return
+    }
+    setSelectedFile(file)
+    // Create preview URL
+    const url = URL.createObjectURL(file)
+    setFilePreview(url)
+    // Clear URL input when file is selected
+    setForm((prev) => ({ ...prev, image_url: '' }))
+  }
+
+  function clearFile() {
+    setSelectedFile(null)
+    if (filePreview) {
+      URL.revokeObjectURL(filePreview)
+      setFilePreview(null)
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(false)
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(false)
+    const file = e.dataTransfer.files[0]
+    if (file) handleFileSelect(file)
+  }
+
   // ---- Upload ----
   async function handleUpload() {
-    if (!form.image_url.trim()) return
+    // Check 50 image limit
+    if (images.length >= MAX_IMAGES) {
+      setUploadError(`You've reached the maximum of ${MAX_IMAGES} inspiration images. Remove some to add more.`)
+      return
+    }
 
-    const tags = form.tags
-      .split(',')
-      .map((t) => t.trim().toLowerCase())
-      .filter(Boolean)
+    const hasFile = !!selectedFile
+    const hasUrl = !!form.image_url.trim()
 
-    await supabase.from('inspo_gallery').insert({
-      venue_id: VENUE_ID,
-      image_url: form.image_url.trim(),
-      caption: form.caption.trim() || null,
-      tags: tags.length > 0 ? tags : null,
-    })
+    if (!hasFile && !hasUrl) return
 
-    setForm(EMPTY_FORM)
-    setShowUpload(false)
-    fetchImages()
+    setUploading(true)
+    setUploadError(null)
+
+    try {
+      let publicUrl = form.image_url.trim()
+
+      // If file is selected, upload to Supabase Storage
+      if (hasFile && selectedFile) {
+        const path = `${WEDDING_ID}/${Date.now()}_${selectedFile.name}`
+        const { error: uploadErr } = await supabase.storage
+          .from('inspo-gallery')
+          .upload(path, selectedFile, { contentType: selectedFile.type })
+
+        if (uploadErr) throw uploadErr
+
+        const { data: urlData } = supabase.storage
+          .from('inspo-gallery')
+          .getPublicUrl(path)
+
+        publicUrl = urlData.publicUrl
+      }
+
+      const tags = form.tags
+        .split(',')
+        .map((t) => t.trim().toLowerCase())
+        .filter(Boolean)
+
+      await supabase.from('inspo_gallery').insert({
+        venue_id: VENUE_ID,
+        wedding_id: WEDDING_ID,
+        image_url: publicUrl,
+        caption: form.caption.trim() || null,
+        tags: tags.length > 0 ? tags : null,
+      })
+
+      setForm(EMPTY_FORM)
+      clearFile()
+      setShowUpload(false)
+      fetchImages()
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed. Please try again.')
+    } finally {
+      setUploading(false)
+    }
   }
 
   // ---- Delete ----
@@ -137,6 +229,17 @@ export default function InspoGalleryPage() {
     if (lightboxImage?.id === id) setLightboxImage(null)
     fetchImages()
   }
+
+  // ---- Reset modal state on close ----
+  function closeUploadModal() {
+    setShowUpload(false)
+    setUploadError(null)
+    clearFile()
+    setForm(EMPTY_FORM)
+  }
+
+  const canUpload = !!(selectedFile || form.image_url.trim())
+  const isAtLimit = images.length >= MAX_IMAGES
 
   return (
     <div className="space-y-6">
@@ -151,10 +254,19 @@ export default function InspoGalleryPage() {
           </h1>
           <p className="text-gray-500 text-sm">
             Collect and organize images for your dream wedding.
+            <span className="ml-2 font-medium" style={{ color: 'var(--couple-primary)' }}>
+              {images.length} / {MAX_IMAGES} images
+            </span>
           </p>
         </div>
         <button
-          onClick={() => setShowUpload(true)}
+          onClick={() => {
+            if (isAtLimit) {
+              alert(`You've reached the maximum of ${MAX_IMAGES} inspiration images. Remove some to add more.`)
+              return
+            }
+            setShowUpload(true)
+          }}
           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
           style={{ backgroundColor: 'var(--couple-primary)' }}
         >
@@ -311,7 +423,7 @@ export default function InspoGalleryPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-black/30"
-            onClick={() => setShowUpload(false)}
+            onClick={closeUploadModal}
           />
           <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
             <div className="flex items-center justify-between">
@@ -322,35 +434,99 @@ export default function InspoGalleryPage() {
                 Add Inspiration
               </h2>
               <button
-                onClick={() => setShowUpload(false)}
+                onClick={closeUploadModal}
                 className="text-gray-400 hover:text-gray-600"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
+            {/* Error message */}
+            {uploadError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                {uploadError}
+              </div>
+            )}
+
             <div className="space-y-3">
-              {/* Image URL */}
+              {/* File Upload Zone */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  <ImageIcon className="w-3.5 h-3.5 inline mr-1" />
-                  Image URL
+                  <Upload className="w-3.5 h-3.5 inline mr-1" />
+                  Upload Image
                 </label>
+
+                {selectedFile && filePreview ? (
+                  <div className="relative rounded-lg overflow-hidden border border-gray-200">
+                    <img
+                      src={filePreview}
+                      alt="Selected file preview"
+                      className="w-full h-48 object-cover"
+                    />
+                    <button
+                      onClick={clearFile}
+                      className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/50 flex items-center justify-center text-white hover:bg-black/70 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                    <div className="absolute bottom-0 left-0 right-0 bg-black/40 px-3 py-1.5">
+                      <p className="text-white text-xs truncate">{selectedFile.name}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`flex flex-col items-center justify-center py-8 px-4 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${
+                      isDragging
+                        ? 'border-blue-400 bg-blue-50'
+                        : 'border-gray-200 bg-gray-50 hover:border-gray-300 hover:bg-gray-100'
+                    }`}
+                  >
+                    <Upload className="w-8 h-8 mb-2 text-gray-400" />
+                    <p className="text-sm text-gray-600 font-medium">
+                      Drag and drop an image, or click to select
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      JPEG, PNG, or WebP
+                    </p>
+                  </div>
+                )}
+
                 <input
-                  type="url"
-                  value={form.image_url}
-                  onChange={(e) => setForm({ ...form, image_url: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  placeholder="https://..."
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) handleFileSelect(file)
+                  }}
+                  className="hidden"
                 />
-                <p className="text-xs text-gray-400 mt-1">
-                  Paste a link to an image. File upload coming soon.
-                </p>
               </div>
 
-              {/* Preview */}
-              {form.image_url.trim() && (
+              {/* URL Input (secondary option) */}
+              {!selectedFile && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <ImageIcon className="w-3.5 h-3.5 inline mr-1" />
+                    Or paste an image URL
+                  </label>
+                  <input
+                    type="url"
+                    value={form.image_url}
+                    onChange={(e) => setForm({ ...form, image_url: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                    placeholder="https://..."
+                  />
+                </div>
+              )}
+
+              {/* URL Preview */}
+              {!selectedFile && form.image_url.trim() && (
                 <div className="rounded-lg overflow-hidden border border-gray-200 max-h-48">
                   <img
                     src={form.image_url}
@@ -437,18 +613,19 @@ export default function InspoGalleryPage() {
 
             <div className="flex justify-end gap-3 pt-2">
               <button
-                onClick={() => setShowUpload(false)}
+                onClick={closeUploadModal}
                 className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleUpload}
-                disabled={!form.image_url.trim()}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                disabled={!canUpload || uploading}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                 style={{ backgroundColor: 'var(--couple-primary)' }}
               >
-                Add to Gallery
+                {uploading && <Loader2 className="w-4 h-4 animate-spin" />}
+                {uploading ? 'Uploading...' : 'Add to Gallery'}
               </button>
             </div>
           </div>

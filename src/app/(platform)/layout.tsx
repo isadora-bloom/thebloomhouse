@@ -1,4 +1,4 @@
-import { Sidebar } from '@/components/shell/sidebar'
+import { PlatformShell } from '@/components/shell/platform-shell'
 
 export default function PlatformLayout({
   children,
@@ -7,12 +7,7 @@ export default function PlatformLayout({
 }) {
   return (
     <div className="min-h-screen bg-warm-white">
-      <Sidebar />
-      <main className="lg:pl-64 pt-14 lg:pt-0">
-        <div className="p-6 lg:p-8 max-w-7xl mx-auto">
-          {children}
-        </div>
-      </main>
+      <PlatformShell>{children}</PlatformShell>
     </div>
   )
 }

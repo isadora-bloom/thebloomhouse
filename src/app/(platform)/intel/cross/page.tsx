@@ -19,6 +19,7 @@ import {
   ResponsiveContainer,
   ZAxis,
 } from 'recharts'
+import { UpgradeGate } from '@/components/ui/upgrade-gate'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -58,7 +59,7 @@ interface SocialPostRow {
   reach: number
   likes: number
   comments: number
-  post_date: string
+  posted_at: string
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +121,7 @@ function DirectionIcon({ direction, strength }: { direction: string; strength: s
 // Main
 // ---------------------------------------------------------------------------
 
-export default function CrossIntelligencePage() {
+function CrossIntelligencePageInner() {
   const [weddings, setWeddings] = useState<WeddingRow[]>([])
   const [socialPosts, setSocialPosts] = useState<SocialPostRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -132,7 +133,7 @@ export default function CrossIntelligencePage() {
     try {
       const [weddingRes, socialRes] = await Promise.all([
         supabase.from('weddings').select('id, status, booking_value, source, created_at').order('created_at'),
-        supabase.from('social_posts').select('id, reach, likes, comments, post_date').order('post_date'),
+        supabase.from('social_posts').select('id, reach, likes, comments, posted_at').order('posted_at'),
       ])
       if (weddingRes.error) throw weddingRes.error
       if (socialRes.error) throw socialRes.error
@@ -173,7 +174,7 @@ export default function CrossIntelligencePage() {
     }
 
     for (const sp of socialPosts) {
-      const key = sp.post_date.slice(0, 7)
+      const key = sp.posted_at.slice(0, 7)
       const m = months.get(key) ?? { inquiries: 0, bookings: 0, revenue: 0, socialReach: 0, socialEngagement: 0 }
       m.socialReach += sp.reach
       m.socialEngagement += sp.likes + sp.comments
@@ -383,5 +384,13 @@ export default function CrossIntelligencePage() {
         </>
       )}
     </div>
+  )
+}
+
+export default function CrossIntelligencePageWrapper() {
+  return (
+    <UpgradeGate requiredTier="enterprise" featureName="Venue Comparison">
+      <CrossIntelligencePageInner />
+    </UpgradeGate>
   )
 }

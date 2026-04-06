@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@supabase/ssr'
 import {
   Users,
@@ -13,6 +14,7 @@ import {
   Phone,
   ArrowRight,
 } from 'lucide-react'
+import { UpgradeGate } from '@/components/ui/upgrade-gate'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -115,7 +117,8 @@ function ClientRowSkeleton() {
 // Main
 // ---------------------------------------------------------------------------
 
-export default function ClientsPage() {
+function ClientsPageInner() {
+  const router = useRouter()
   const [weddings, setWeddings] = useState<WeddingRow[]>([])
   const [people, setPeople] = useState<PersonRow[]>([])
   const [contacts, setContacts] = useState<ContactRow[]>([])
@@ -302,7 +305,12 @@ export default function ClientsPage() {
                         >
                           <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center px-5 py-4 gap-4">
                             <div>
-                              <p className="font-medium text-sage-900">{c.name}</p>
+                              <p
+                                className="font-medium text-sage-900 hover:text-teal-600 hover:underline cursor-pointer transition-colors"
+                                onClick={(e) => { e.stopPropagation(); router.push(`/intel/clients/${c.weddingId}`) }}
+                              >
+                                {c.name}
+                              </p>
                               {c.email && <p className="text-xs text-sage-500">{c.email}</p>}
                             </div>
                             <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${statusBadge(c.status)}`}>
@@ -373,5 +381,13 @@ export default function ClientsPage() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function ClientsPageWrapper() {
+  return (
+    <UpgradeGate requiredTier="enterprise" featureName="All Clients">
+      <ClientsPageInner />
+    </UpgradeGate>
   )
 }

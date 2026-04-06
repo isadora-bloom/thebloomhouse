@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createBrowserClient } from '@supabase/ssr'
 import {
   Store,
@@ -16,9 +17,6 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// TODO: Replace with venue context from auth/session
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -26,16 +24,15 @@ const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 interface Vendor {
   id: string
   venue_id: string
-  name: string
-  type: string
-  email: string | null
-  phone: string | null
-  website: string | null
+  vendor_name: string
+  vendor_type: string
+  contact_email: string | null
+  contact_phone: string | null
+  website_url: string | null
   description: string | null
-  preferred: boolean
+  is_preferred: boolean
   click_count: number
   created_at: string
-  updated_at: string
 }
 
 interface VendorForm {
@@ -145,7 +142,7 @@ function VendorCard({
   vendor: Vendor
   onEdit: (vendor: Vendor) => void
 }) {
-  const config = typeConfig(vendor.type)
+  const config = typeConfig(vendor.vendor_type)
 
   return (
     <div className="bg-surface border border-border rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow">
@@ -153,9 +150,9 @@ function VendorCard({
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="flex items-center gap-2 min-w-0">
           <h3 className="font-heading text-base font-semibold text-sage-900 truncate">
-            {vendor.name}
+            {vendor.vendor_name}
           </h3>
-          {vendor.preferred && (
+          {vendor.is_preferred && (
             <Star className="w-4 h-4 text-gold-500 fill-gold-500 shrink-0" />
           )}
         </div>
@@ -171,9 +168,9 @@ function VendorCard({
       {/* Type badge */}
       <div className="flex items-center gap-2 flex-wrap mb-3">
         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.bg} ${config.text}`}>
-          {vendor.type}
+          {vendor.vendor_type}
         </span>
-        {vendor.preferred && (
+        {vendor.is_preferred && (
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gold-100 text-gold-700">
             Preferred
           </span>
@@ -195,27 +192,27 @@ function VendorCard({
 
       {/* Contact info */}
       <div className="flex flex-wrap items-center gap-3 text-xs text-sage-500">
-        {vendor.email && (
+        {vendor.contact_email && (
           <a
-            href={`mailto:${vendor.email}`}
+            href={`mailto:${vendor.contact_email}`}
             className="flex items-center gap-1 hover:text-sage-700 transition-colors"
           >
             <Mail className="w-3 h-3" />
-            {vendor.email}
+            {vendor.contact_email}
           </a>
         )}
-        {vendor.phone && (
+        {vendor.contact_phone && (
           <a
-            href={`tel:${vendor.phone}`}
+            href={`tel:${vendor.contact_phone}`}
             className="flex items-center gap-1 hover:text-sage-700 transition-colors"
           >
             <Phone className="w-3 h-3" />
-            {vendor.phone}
+            {vendor.contact_phone}
           </a>
         )}
-        {vendor.website && (
+        {vendor.website_url && (
           <a
-            href={vendor.website.startsWith('http') ? vendor.website : `https://${vendor.website}`}
+            href={vendor.website_url.startsWith('http') ? vendor.website_url : `https://${vendor.website_url}`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1 hover:text-sage-700 transition-colors"
@@ -411,6 +408,7 @@ function VendorModal({
 // ---------------------------------------------------------------------------
 
 export default function VendorsPage() {
+  const VENUE_ID = useVenueId()
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -432,9 +430,9 @@ export default function VendorsPage() {
         .from('vendor_recommendations')
         .select('*')
         .eq('venue_id', VENUE_ID)
-        .order('preferred', { ascending: false })
-        .order('type', { ascending: true })
-        .order('name', { ascending: true })
+        .order('is_preferred', { ascending: false })
+        .order('vendor_type', { ascending: true })
+        .order('vendor_name', { ascending: true })
 
       if (fetchErr) throw fetchErr
 
@@ -462,13 +460,13 @@ export default function VendorsPage() {
   function openEditModal(vendor: Vendor) {
     setEditingVendor(vendor)
     setForm({
-      name: vendor.name,
-      type: vendor.type,
-      email: vendor.email ?? '',
-      phone: vendor.phone ?? '',
-      website: vendor.website ?? '',
+      name: vendor.vendor_name,
+      type: vendor.vendor_type,
+      email: vendor.contact_email ?? '',
+      phone: vendor.contact_phone ?? '',
+      website: vendor.website_url ?? '',
       description: vendor.description ?? '',
-      preferred: vendor.preferred,
+      preferred: vendor.is_preferred,
     })
     setModalOpen(true)
   }
@@ -485,20 +483,20 @@ export default function VendorsPage() {
 
     const payload = {
       venue_id: VENUE_ID,
-      name: form.name.trim(),
-      type: form.type,
-      email: form.email.trim() || null,
-      phone: form.phone.trim() || null,
-      website: form.website.trim() || null,
+      vendor_name: form.name.trim(),
+      vendor_type: form.type,
+      contact_email: form.email.trim() || null,
+      contact_phone: form.phone.trim() || null,
+      website_url: form.website.trim() || null,
       description: form.description.trim() || null,
-      preferred: form.preferred,
+      is_preferred: form.preferred,
     }
 
     try {
       if (editingVendor) {
         const { error: updateErr } = await supabase
           .from('vendor_recommendations')
-          .update({ ...payload, updated_at: new Date().toISOString() })
+          .update(payload)
           .eq('id', editingVendor.id)
 
         if (updateErr) throw updateErr
@@ -520,15 +518,15 @@ export default function VendorsPage() {
   }
 
   // ---- Filter + sort ----
-  const vendorTypes = Array.from(new Set(vendors.map((v) => v.type))).sort()
+  const vendorTypes = Array.from(new Set(vendors.map((v) => v.vendor_type))).sort()
 
   const filteredVendors = vendors.filter((v) => {
-    if (typeFilter !== 'all' && v.type !== typeFilter) return false
+    if (typeFilter !== 'all' && v.vendor_type !== typeFilter) return false
     if (!searchQuery.trim()) return true
     const q = searchQuery.toLowerCase()
     return (
-      v.name.toLowerCase().includes(q) ||
-      v.type.toLowerCase().includes(q) ||
+      v.vendor_name.toLowerCase().includes(q) ||
+      v.vendor_type.toLowerCase().includes(q) ||
       (v.description ?? '').toLowerCase().includes(q)
     )
   })

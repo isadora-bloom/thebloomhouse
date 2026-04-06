@@ -631,7 +631,7 @@ ${name}`
               placeholder="Hi there"
               className={inputClasses}
             />
-            <p className="text-xs text-sage-500 mt-1">How the AI opens every email.</p>
+            <p className="text-xs text-sage-500 mt-1">Default greeting. Sage will also use the client&apos;s first name when available and naturally rotate between warm openers.</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-sage-700 mb-1">Closer</label>

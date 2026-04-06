@@ -1,7 +1,26 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
+import {
+  DndContext,
+  DragOverlay,
+  closestCorners,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragStartEvent,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { useDroppable } from '@dnd-kit/core'
 import {
   Kanban,
   Users,
@@ -10,6 +29,7 @@ import {
   Clock,
   AlertTriangle,
   RefreshCw,
+  GripVertical,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -37,9 +57,6 @@ interface PipelineColumn {
   label: string
   weddings: PipelineWedding[]
 }
-
-// TODO: Replace with venue from auth context
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -149,20 +166,26 @@ function ColumnSkeleton() {
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline Card
+// Pipeline Card (static — used for both sortable wrapper and overlay)
 // ---------------------------------------------------------------------------
 
-function PipelineCard({ wedding }: { wedding: PipelineWedding }) {
+function PipelineCardContent({ wedding, onNameClick }: { wedding: PipelineWedding; onNameClick?: () => void }) {
   const source = sourceBadge(wedding.source)
   const days = daysInStage(wedding.updated_at)
 
   return (
-    <div className="bg-surface border border-border rounded-lg p-3 shadow-sm hover:shadow-md transition-shadow cursor-default">
+    <>
       {/* Couple name + heat dot */}
       <div className="flex items-center justify-between gap-2 mb-2">
-        <h4 className="text-sm font-medium text-sage-900 truncate">
-          {coupleName(wedding.partner1_name, wedding.partner2_name)}
-        </h4>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <GripVertical className="w-3.5 h-3.5 text-sage-300 shrink-0" />
+          <h4
+            className="text-sm font-medium text-sage-900 truncate hover:text-teal-600 hover:underline cursor-pointer transition-colors"
+            onClick={(e) => { e.stopPropagation(); onNameClick?.() }}
+          >
+            {coupleName(wedding.partner1_name, wedding.partner2_name)}
+          </h4>
+        </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <span
             className={`w-2.5 h-2.5 rounded-full ${heatDotColor(wedding.temperature_tier)}`}
@@ -197,22 +220,62 @@ function PipelineCard({ wedding }: { wedding: PipelineWedding }) {
           {days}d in stage
         </span>
       </div>
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Sortable Card (draggable)
+// ---------------------------------------------------------------------------
+
+function SortableCard({ wedding }: { wedding: PipelineWedding }) {
+  const cardRouter = useRouter()
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: wedding.id, data: { type: 'card', wedding } })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className="bg-surface border border-border rounded-lg p-3 shadow-sm hover:shadow-md transition-shadow cursor-grab active:cursor-grabbing"
+    >
+      <PipelineCardContent wedding={wedding} onNameClick={() => cardRouter.push(`/intel/clients/${wedding.id}`)} />
     </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline Column
+// Droppable Column
 // ---------------------------------------------------------------------------
 
-function PipelineColumnView({ column }: { column: PipelineColumn }) {
+function DroppableColumn({ column }: { column: PipelineColumn }) {
   const isLost = column.key === 'lost'
+  const { setNodeRef, isOver } = useDroppable({ id: column.key })
 
   return (
     <div className="min-w-[280px] flex-shrink-0">
       <div
-        className={`rounded-xl p-3 h-full ${
-          isLost ? 'bg-red-50/50' : 'bg-sage-50'
+        ref={setNodeRef}
+        className={`rounded-xl p-3 h-full transition-colors ${
+          isOver
+            ? 'bg-sage-100 ring-2 ring-sage-300'
+            : isLost
+              ? 'bg-red-50/50'
+              : 'bg-sage-50'
         }`}
       >
         {/* Column header */}
@@ -236,18 +299,24 @@ function PipelineColumnView({ column }: { column: PipelineColumn }) {
         </div>
 
         {/* Cards */}
-        {/* TODO: Add drag-and-drop (DnD) for card reordering between columns */}
-        <div className="space-y-2">
-          {column.weddings.length === 0 ? (
-            <div className="text-center py-6">
-              <p className="text-xs text-sage-400">No leads</p>
-            </div>
-          ) : (
-            column.weddings.map((wedding) => (
-              <PipelineCard key={wedding.id} wedding={wedding} />
-            ))
-          )}
-        </div>
+        <SortableContext
+          items={column.weddings.map((w) => w.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          <div className="space-y-2 min-h-[60px]">
+            {column.weddings.length === 0 ? (
+              <div className="text-center py-6">
+                <p className="text-xs text-sage-400">
+                  {isOver ? 'Drop here' : 'No leads'}
+                </p>
+              </div>
+            ) : (
+              column.weddings.map((wedding) => (
+                <SortableCard key={wedding.id} wedding={wedding} />
+              ))
+            )}
+          </div>
+        </SortableContext>
       </div>
     </div>
   )
@@ -258,12 +327,22 @@ function PipelineColumnView({ column }: { column: PipelineColumn }) {
 // ---------------------------------------------------------------------------
 
 export default function PipelinePage() {
+  const router = useRouter()
+  const VENUE_ID = useVenueId()
   const [columns, setColumns] = useState<PipelineColumn[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [totalLeads, setTotalLeads] = useState(0)
+  const [activeWedding, setActiveWedding] = useState<PipelineWedding | null>(null)
 
   const supabase = createClient()
+  const navigateToClient = (id: string) => router.push(`/intel/clients/${id}`)
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 5 },
+    })
+  )
 
   // ---- Fetch pipeline data ----
   const fetchPipeline = useCallback(async () => {
@@ -351,6 +430,80 @@ export default function PipelinePage() {
     fetchPipeline()
   }, [fetchPipeline])
 
+  // ---- DnD handlers ----
+
+  function handleDragStart(event: DragStartEvent) {
+    const { active } = event
+    const wedding = active.data?.current?.wedding as PipelineWedding | undefined
+    if (wedding) setActiveWedding(wedding)
+  }
+
+  async function handleDragEnd(event: DragEndEvent) {
+    setActiveWedding(null)
+    const { active, over } = event
+    if (!over) return
+
+    const weddingId = active.id as string
+
+    // Determine which column was dropped onto
+    // over.id could be a column key or another card's id
+    let targetColumnKey: string | null = null
+
+    // Check if dropped directly on a column
+    if (PIPELINE_STAGES.some((s) => s.key === over.id)) {
+      targetColumnKey = over.id as string
+    } else {
+      // Dropped on a card — find which column that card belongs to
+      for (const col of columns) {
+        if (col.weddings.some((w) => w.id === over.id)) {
+          targetColumnKey = col.key
+          break
+        }
+      }
+    }
+
+    if (!targetColumnKey) return
+
+    // Find the source column
+    const sourceColumn = columns.find((col) =>
+      col.weddings.some((w) => w.id === weddingId)
+    )
+    if (!sourceColumn || sourceColumn.key === targetColumnKey) return
+
+    // Optimistic update: move card between columns
+    setColumns((prev) =>
+      prev.map((col) => {
+        if (col.key === sourceColumn.key) {
+          return { ...col, weddings: col.weddings.filter((w) => w.id !== weddingId) }
+        }
+        if (col.key === targetColumnKey) {
+          const movedWedding = sourceColumn.weddings.find((w) => w.id === weddingId)
+          if (!movedWedding) return col
+          return {
+            ...col,
+            weddings: [...col.weddings, { ...movedWedding, status: targetColumnKey }],
+          }
+        }
+        return col
+      })
+    )
+
+    // Persist to database
+    try {
+      const { error: updateError } = await supabase
+        .from('weddings')
+        .update({ status: targetColumnKey, updated_at: new Date().toISOString() })
+        .eq('id', weddingId)
+        .eq('venue_id', VENUE_ID)
+
+      if (updateError) throw updateError
+    } catch (err) {
+      console.error('Failed to update wedding status:', err)
+      // Revert on failure
+      fetchPipeline()
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* ---- Header ---- */}
@@ -402,11 +555,27 @@ export default function PipelinePage() {
           ))}
         </div>
       ) : (
-        <div className="flex gap-4 overflow-x-auto pb-4 -mx-6 lg:-mx-8 px-6 lg:px-8">
-          {columns.map((column) => (
-            <PipelineColumnView key={column.key} column={column} />
-          ))}
-        </div>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+        >
+          <div className="flex gap-4 overflow-x-auto pb-4 -mx-6 lg:-mx-8 px-6 lg:px-8">
+            {columns.map((column) => (
+              <DroppableColumn key={column.key} column={column} />
+            ))}
+          </div>
+
+          {/* Drag overlay — renders a floating copy of the card */}
+          <DragOverlay>
+            {activeWedding ? (
+              <div className="bg-surface border-2 border-sage-400 rounded-lg p-3 shadow-lg w-[280px] rotate-2">
+                <PipelineCardContent wedding={activeWedding} />
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
       )}
 
       {/* ---- Summary row ---- */}

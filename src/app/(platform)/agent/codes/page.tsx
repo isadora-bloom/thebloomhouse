@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
   Hash,
@@ -44,9 +45,6 @@ interface WeddingLookup {
   guest_count_estimate: number | null
   source: string | null
 }
-
-// TODO: Replace with venue from auth context
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -184,6 +182,7 @@ function LookupResult({ wedding, onClear }: { wedding: WeddingLookup; onClear: (
 // ---------------------------------------------------------------------------
 
 export default function ClientCodesPage() {
+  const VENUE_ID = useVenueId()
   const [codes, setCodes] = useState<ClientCode[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

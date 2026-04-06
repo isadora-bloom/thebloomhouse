@@ -11,6 +11,7 @@ import {
   User,
   AlertCircle,
 } from 'lucide-react'
+import { UpgradeGate } from '@/components/ui/upgrade-gate'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -120,7 +121,7 @@ function MatchCardSkeleton() {
 // Main
 // ---------------------------------------------------------------------------
 
-export default function MatchingPage() {
+function MatchingPageInner() {
   const [queue, setQueue] = useState<MatchQueueItem[]>([])
   const [people, setPeople] = useState<PersonRow[]>([])
   const [contacts, setContacts] = useState<ContactRow[]>([])
@@ -337,5 +338,13 @@ export default function MatchingPage() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function MatchingPageWrapper() {
+  return (
+    <UpgradeGate requiredTier="enterprise" featureName="Client Deduplication">
+      <MatchingPageInner />
+    </UpgradeGate>
   )
 }

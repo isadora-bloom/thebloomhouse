@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { cn } from '@/lib/utils'
 import {
   Settings,
@@ -287,6 +288,7 @@ function CouplePreview({ sections }: { sections: SectionConfig[] }) {
 // ---------------------------------------------------------------------------
 
 export default function SectionSettingsPage() {
+  const VENUE_ID = useVenueId()
   const [sections, setSections] = useState<SectionConfig[]>([])
   const [originalSections, setOriginalSections] = useState<SectionConfig[]>([])
   const [loading, setLoading] = useState(true)
@@ -300,6 +302,7 @@ export default function SectionSettingsPage() {
       const { data, error: fetchErr } = await supabase
         .from('portal_section_config')
         .select('*')
+        .eq('venue_id', VENUE_ID)
         .order('sort_order', { ascending: true })
 
       if (fetchErr) throw fetchErr

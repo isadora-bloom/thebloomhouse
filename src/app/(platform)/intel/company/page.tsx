@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
+import { useScope } from '@/lib/hooks/use-scope'
+import { UpgradeGate } from '@/components/ui/upgrade-gate'
 import {
   Building2,
   TrendingUp,
@@ -111,7 +113,15 @@ function StatCardSkeleton() {
 // Main
 // ---------------------------------------------------------------------------
 
-export default function CompanyDashboardPage() {
+export default function CompanyDashboardPageWrapper() {
+  return (
+    <UpgradeGate requiredTier="enterprise" featureName="Company Dashboard">
+      <CompanyDashboardInner />
+    </UpgradeGate>
+  )
+}
+
+function CompanyDashboardInner() {
   const [venues, setVenues] = useState<VenueRow[]>([])
   const [weddings, setWeddings] = useState<WeddingRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -153,10 +163,10 @@ export default function CompanyDashboardPage() {
   // ---- Aggregate stats ----
   const totalInquiries = ytdWeddings.length
   const totalBookings = ytdWeddings.filter((w) =>
-    ['contracted', 'completed'].includes(w.status)
+    ['booked', 'contracted', 'completed'].includes(w.status)
   ).length
   const totalRevenue = ytdWeddings
-    .filter((w) => ['contracted', 'completed'].includes(w.status))
+    .filter((w) => ['booked', 'contracted', 'completed'].includes(w.status))
     .reduce((sum, w) => sum + (w.booking_value ?? 0), 0)
   const avgBookingRate =
     totalInquiries > 0 ? totalBookings / totalInquiries : 0
@@ -175,7 +185,7 @@ export default function CompanyDashboardPage() {
           return (
             wd.getFullYear() === d.getFullYear() &&
             wd.getMonth() === d.getMonth() &&
-            ['contracted', 'completed'].includes(w.status)
+            ['booked', 'contracted', 'completed'].includes(w.status)
           )
         })
         .reduce((s, w) => s + (w.booking_value ?? 0), 0)
@@ -205,14 +215,14 @@ export default function CompanyDashboardPage() {
         ['toured', 'held', 'contracted', 'completed'].includes(w.status)
       ).length
       const bookings = vw.filter((w) =>
-        ['contracted', 'completed'].includes(w.status)
+        ['booked', 'contracted', 'completed'].includes(w.status)
       ).length
       const tourRate = inquiries > 0 ? tours / inquiries : 0
       const bookingRate = inquiries > 0 ? bookings / inquiries : 0
       const avgRevenue =
         bookings > 0
           ? vw
-              .filter((w) => ['contracted', 'completed'].includes(w.status))
+              .filter((w) => ['booked', 'contracted', 'completed'].includes(w.status))
               .reduce((s, w) => s + (w.booking_value ?? 0), 0) / bookings
           : 0
       // Simple health score: weighted sum of key rates

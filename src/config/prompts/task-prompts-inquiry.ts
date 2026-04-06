@@ -181,7 +181,7 @@ Before drafting, verify:
 
 Only proceed if they genuinely haven't engaged.
 
-### FOLLOW-UP PRINCIPLES (Alan Berg):
+### FOLLOW-UP PRINCIPLES:
 
 1. **Keep it SHORT** (3-4 sentences max)
 2. **Reference the previous email briefly** - don't repeat it

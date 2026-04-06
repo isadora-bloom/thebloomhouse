@@ -20,6 +20,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
+import { UpgradeGate } from '@/components/ui/upgrade-gate'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -91,7 +92,7 @@ function RegionCardSkeleton() {
 // Main
 // ---------------------------------------------------------------------------
 
-export default function RegionalAnalyticsPage() {
+function RegionalAnalyticsPageInner() {
   const [venues, setVenues] = useState<VenueRow[]>([])
   const [weddings, setWeddings] = useState<WeddingRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -327,5 +328,13 @@ export default function RegionalAnalyticsPage() {
         </>
       )}
     </div>
+  )
+}
+
+export default function RegionalAnalyticsPageWrapper() {
+  return (
+    <UpgradeGate requiredTier="enterprise" featureName="Regional Analysis">
+      <RegionalAnalyticsPageInner />
+    </UpgradeGate>
   )
 }

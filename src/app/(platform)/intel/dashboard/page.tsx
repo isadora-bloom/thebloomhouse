@@ -1,6 +1,8 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import {
   AlertTriangle,
   Shield,
@@ -283,12 +285,67 @@ function AlertCard({
 // Main Page Component
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Demand score calculation (mirrors economics.ts)
+// ---------------------------------------------------------------------------
+
+const AVERAGES: Record<string, number> = {
+  consumer_sentiment: 70,
+  personal_savings_rate: 7.5,
+  consumer_confidence: 100,
+  housing_starts: 1400,
+  disposable_income_real: 15000,
+}
+
+function clampVal(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function calcDemandScore(indicators: Record<string, number>): {
+  score: number
+  outlook: 'positive' | 'neutral' | 'caution'
+} {
+  let score = 50
+  if (indicators.consumer_sentiment != null) {
+    const d = (indicators.consumer_sentiment - AVERAGES.consumer_sentiment) / AVERAGES.consumer_sentiment
+    score += clampVal(d * 20, -10, 10)
+  }
+  if (indicators.personal_savings_rate != null) {
+    const d = (indicators.personal_savings_rate - AVERAGES.personal_savings_rate) / AVERAGES.personal_savings_rate
+    score += clampVal(-d * 10, -5, 5)
+  }
+  if (indicators.consumer_confidence != null) {
+    const d = (indicators.consumer_confidence - AVERAGES.consumer_confidence) / AVERAGES.consumer_confidence
+    score += clampVal(d * 16, -8, 8)
+  }
+  if (indicators.housing_starts != null) {
+    const d = (indicators.housing_starts - AVERAGES.housing_starts) / AVERAGES.housing_starts
+    score += clampVal(d * 10, -5, 5)
+  }
+  score = Math.round(clampVal(score, 0, 100))
+  const outlook: 'positive' | 'neutral' | 'caution' =
+    score >= 58 ? 'positive' : score >= 42 ? 'neutral' : 'caution'
+  return { score, outlook }
+}
+
+// ---------------------------------------------------------------------------
+// Main Page Component
+// ---------------------------------------------------------------------------
+
 export default function IntelligenceDashboardPage() {
+  const venueId = useVenueId()
+  const supabase = useMemo(() => createClient(), [])
+
   const [alerts, setAlerts] = useState<AnomalyAlert[]>([])
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState(false)
   const [acknowledgingId, setAcknowledgingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // Real stat card state
+  const [demandScore, setDemandScore] = useState<{ score: number; outlook: 'positive' | 'neutral' | 'caution' } | null>(null)
+  const [pendingRecsCount, setPendingRecsCount] = useState<number | null>(null)
+  const [aiCostThisMonth, setAiCostThisMonth] = useState<number | null>(null)
 
   // ---- Fetch alerts ----
   const fetchAlerts = useCallback(async () => {
@@ -306,9 +363,62 @@ export default function IntelligenceDashboardPage() {
     }
   }, [])
 
+  // ---- Fetch real stat card data ----
+  const fetchStatCards = useCallback(async () => {
+    try {
+      // 1. Demand score from economic_indicators
+      const { data: indicatorRows } = await supabase
+        .from('economic_indicators')
+        .select('indicator_name, value')
+        .order('date', { ascending: false })
+        .limit(50)
+
+      if (indicatorRows && indicatorRows.length > 0) {
+        const latest: Record<string, number> = {}
+        for (const row of indicatorRows) {
+          const name = row.indicator_name as string
+          if (!(name in latest)) {
+            latest[name] = Number(row.value)
+          }
+        }
+        setDemandScore(calcDemandScore(latest))
+      }
+
+      // 2. Pending recommendations count
+      const { count } = await supabase
+        .from('trend_recommendations')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .eq('status', 'pending')
+
+      setPendingRecsCount(count ?? 0)
+
+      // 3. AI cost this month
+      const startOfMonth = new Date()
+      startOfMonth.setDate(1)
+      startOfMonth.setHours(0, 0, 0, 0)
+
+      const { data: costRows } = await supabase
+        .from('api_costs')
+        .select('cost')
+        .eq('venue_id', venueId)
+        .gte('created_at', startOfMonth.toISOString())
+
+      if (costRows && costRows.length > 0) {
+        const total = costRows.reduce((sum, row) => sum + (Number(row.cost) || 0), 0)
+        setAiCostThisMonth(total)
+      } else {
+        setAiCostThisMonth(0)
+      }
+    } catch (err) {
+      console.error('[dashboard] Failed to fetch stat cards:', err)
+    }
+  }, [supabase, venueId])
+
   useEffect(() => {
     fetchAlerts()
-  }, [fetchAlerts])
+    fetchStatCards()
+  }, [fetchAlerts, fetchStatCards])
 
   // ---- Run detection ----
   const handleRunDetection = async () => {
@@ -466,8 +576,22 @@ export default function IntelligenceDashboardPage() {
                 </div>
                 <span className="text-sm font-medium text-sage-600">Latest Demand Score</span>
               </div>
-              <p className="text-3xl font-bold text-sage-900">&mdash;</p>
-              <p className="mt-2 text-xs text-sage-500">Computed from trends data</p>
+              <p className="text-3xl font-bold text-sage-900">
+                {demandScore != null ? demandScore.score : <span className="text-sage-300">--</span>}
+              </p>
+              <div className="mt-2 flex items-center gap-2">
+                {demandScore != null ? (
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border capitalize ${
+                    demandScore.outlook === 'positive' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                    demandScore.outlook === 'neutral' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                    'bg-red-50 text-red-700 border-red-200'
+                  }`}>
+                    {demandScore.outlook}
+                  </span>
+                ) : (
+                  <span className="text-xs text-sage-500">Computed from economic data</span>
+                )}
+              </div>
             </div>
 
             <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
@@ -477,8 +601,14 @@ export default function IntelligenceDashboardPage() {
                 </div>
                 <span className="text-sm font-medium text-sage-600">Pending Recommendations</span>
               </div>
-              <p className="text-3xl font-bold text-sage-900">&mdash;</p>
-              <p className="mt-2 text-xs text-sage-500">AI-generated action items</p>
+              <p className="text-3xl font-bold text-sage-900">
+                {pendingRecsCount != null ? pendingRecsCount : <span className="text-sage-300">--</span>}
+              </p>
+              <p className="mt-2 text-xs text-sage-500">
+                {pendingRecsCount != null && pendingRecsCount > 0
+                  ? 'AI-generated action items awaiting review'
+                  : 'AI-generated action items'}
+              </p>
             </div>
 
             <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
@@ -488,8 +618,14 @@ export default function IntelligenceDashboardPage() {
                 </div>
                 <span className="text-sm font-medium text-sage-600">AI Cost This Month</span>
               </div>
-              <p className="text-3xl font-bold text-sage-900">&mdash;</p>
-              <p className="mt-2 text-xs text-sage-500">Tracked via api_costs table</p>
+              <p className="text-3xl font-bold text-sage-900">
+                {aiCostThisMonth != null
+                  ? `$${aiCostThisMonth.toFixed(2)}`
+                  : <span className="text-sage-300">--</span>}
+              </p>
+              <p className="mt-2 text-xs text-sage-500">
+                {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} spend
+              </p>
             </div>
           </>
         )}

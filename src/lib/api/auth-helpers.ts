@@ -9,7 +9,7 @@ import { NextResponse } from 'next/server'
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true'
 const DEMO_VENUE_ID = '22222222-2222-2222-2222-222222222201' // Rixey Manor
 const DEMO_USER_ID = '33333333-3333-3333-3333-333333333301' // Sarah Chen
-const DEMO_WEDDING_ID = '44444444-4444-4444-4444-444444000109' // Chloe & Ryan
+const DEMO_WEDDING_ID = 'ab000000-0000-0000-0000-000000000001' // Chloe & Ryan
 
 // ---------------------------------------------------------------------------
 // Platform auth — coordinator, manager, admin

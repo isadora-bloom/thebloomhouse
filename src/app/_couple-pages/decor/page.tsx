@@ -3,146 +3,131 @@
 // Feature: configurable via venue_config.feature_flags
 // Table: decor_inventory
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { cn } from '@/lib/utils'
 import {
   Palette,
   Plus,
-  X,
-  Edit2,
   Trash2,
-  Package,
   ChevronDown,
   ChevronUp,
-  Store,
-  Home,
-  Building2,
-  Wrench,
-  ArrowRightLeft,
+  Check,
+  X,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
+
+// ---------------------------------------------------------------------------
+// Preset spaces
+// ---------------------------------------------------------------------------
+
+const PRESET_SPACES = [
+  'Round Guest Tables',
+  'Long/Rectangular Guest Tables',
+  'Head Table',
+  'Sweetheart Table',
+  'Cocktail Tables',
+  'Ceremony Space',
+  'Card & Gift Table',
+  'Cake Table',
+  'Dessert Table',
+  'Bar Area',
+  'Favor Table',
+  'Memorial Table',
+  'Photo Booth',
+]
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type DecorSpace = 'ceremony' | 'reception' | 'tables' | 'entrance' | 'outdoor' | 'restrooms' | 'other'
-type DecorSource = 'venue_provided' | 'personal' | 'vendor' | 'diy'
-type LeavingAction = 'stays_at_venue' | 'goes_home' | 'vendor_picks_up' | 'donate' | 'trash'
-
 interface DecorItem {
   id: string
+  space_name: string
   item_name: string
-  space: DecorSpace
-  quantity: number
-  source: DecorSource
-  vendor_name: string | null
-  leaving_action: LeavingAction | null
+  source: string
+  goes_home_with: string
+  leaving_it: boolean
   notes: string | null
   sort_order: number
 }
 
-interface DecorFormData {
+interface ItemFormData {
   item_name: string
-  space: DecorSpace
-  quantity: string
-  source: DecorSource
-  vendor_name: string
-  leaving_action: string
+  source: string
+  goes_home_with: string
+  leaving_it: boolean
   notes: string
 }
 
-const SPACES: { key: DecorSpace; label: string }[] = [
-  { key: 'ceremony', label: 'Ceremony' },
-  { key: 'reception', label: 'Reception' },
-  { key: 'tables', label: 'Tables' },
-  { key: 'entrance', label: 'Entrance' },
-  { key: 'outdoor', label: 'Outdoor' },
-  { key: 'restrooms', label: 'Restrooms' },
-  { key: 'other', label: 'Other' },
-]
-
-const SOURCES: { key: DecorSource; label: string; icon: typeof Store }[] = [
-  { key: 'venue_provided', label: 'Venue Provided', icon: Building2 },
-  { key: 'personal', label: 'Personal', icon: Home },
-  { key: 'vendor', label: 'Vendor', icon: Store },
-  { key: 'diy', label: 'DIY', icon: Wrench },
-]
-
-const LEAVING_ACTIONS: { key: LeavingAction; label: string }[] = [
-  { key: 'stays_at_venue', label: 'Stays at Venue' },
-  { key: 'goes_home', label: 'Goes Home' },
-  { key: 'vendor_picks_up', label: 'Vendor Picks Up' },
-  { key: 'donate', label: 'Donate' },
-  { key: 'trash', label: 'Dispose' },
-]
-
-const EMPTY_FORM: DecorFormData = {
+const EMPTY_ITEM: ItemFormData = {
   item_name: '',
-  space: 'ceremony',
-  quantity: '1',
-  source: 'personal',
-  vendor_name: '',
-  leaving_action: '',
+  source: '',
+  goes_home_with: '',
+  leaving_it: false,
   notes: '',
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function sourceLabel(source: DecorSource): string {
-  return SOURCES.find((s) => s.key === source)?.label || source
-}
-
-function sourceBadge(source: DecorSource): { bg: string; text: string } {
-  const styles: Record<DecorSource, { bg: string; text: string }> = {
-    venue_provided: { bg: 'bg-emerald-50 border-emerald-200', text: 'text-emerald-700' },
-    personal: { bg: 'bg-blue-50 border-blue-200', text: 'text-blue-700' },
-    vendor: { bg: 'bg-purple-50 border-purple-200', text: 'text-purple-700' },
-    diy: { bg: 'bg-amber-50 border-amber-200', text: 'text-amber-700' },
-  }
-  return styles[source] || { bg: 'bg-gray-50 border-gray-200', text: 'text-gray-700' }
-}
-
-function spaceLabel(space: DecorSpace): string {
-  return SPACES.find((s) => s.key === space)?.label || space
-}
-
-function leavingLabel(action: LeavingAction | null): string {
-  if (!action) return '--'
-  return LEAVING_ACTIONS.find((a) => a.key === action)?.label || action
-}
-
-// ---------------------------------------------------------------------------
-// Decor Inventory Page
+// Component
 // ---------------------------------------------------------------------------
 
 export default function DecorInventoryPage() {
   const [items, setItems] = useState<DecorItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [form, setForm] = useState<DecorFormData>(EMPTY_FORM)
-  const [expandedSpaces, setExpandedSpaces] = useState<Set<string>>(new Set(SPACES.map((s) => s.key)))
+  const [expandedSpaces, setExpandedSpaces] = useState<Set<string>>(new Set())
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [deleteSpaceConfirm, setDeleteSpaceConfirm] = useState<string | null>(null)
+
+  // Venue-configured spaces (loaded from venue_config.feature_flags.decor_config)
+  const [venueSpaces, setVenueSpaces] = useState<string[]>(PRESET_SPACES)
+
+  // Add space state
+  const [showSpacePicker, setShowSpacePicker] = useState(false)
+  const [customSpaceName, setCustomSpaceName] = useState('')
+
+  // Inline add-item form: which space is being added to
+  const [addingToSpace, setAddingToSpace] = useState<string | null>(null)
+  const [itemForm, setItemForm] = useState<ItemFormData>(EMPTY_ITEM)
+
+  // Debounced auto-save
+  const debounceRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
   const supabase = createClient()
 
   // ---- Fetch ----
   const fetchItems = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('decor_inventory')
-      .select('*')
-      .eq('wedding_id', WEDDING_ID)
-      .order('space')
-      .order('sort_order', { ascending: true })
+    const [itemsRes, configRes] = await Promise.all([
+      supabase
+        .from('decor_inventory')
+        .select('*')
+        .eq('wedding_id', WEDDING_ID)
+        .order('space_name')
+        .order('sort_order', { ascending: true }),
+      supabase
+        .from('venue_config')
+        .select('feature_flags')
+        .eq('venue_id', VENUE_ID)
+        .maybeSingle(),
+    ])
 
-    if (!error && data) {
-      setItems(data as DecorItem[])
+    // Load venue-configured spaces if available
+    if (configRes.data) {
+      const flags = (configRes.data.feature_flags ?? {}) as Record<string, unknown>
+      const decorConfig = flags.decor_config as Record<string, unknown> | undefined
+      if (decorConfig?.venue_spaces && Array.isArray(decorConfig.venue_spaces) && (decorConfig.venue_spaces as string[]).length > 0) {
+        setVenueSpaces(decorConfig.venue_spaces as string[])
+      }
+    }
+
+    if (!itemsRes.error && itemsRes.data) {
+      setItems(itemsRes.data as DecorItem[])
+      // Auto-expand all spaces that have items
+      const spaces = new Set((itemsRes.data as DecorItem[]).map((i) => i.space_name))
+      setExpandedSpaces(spaces)
     }
     setLoading(false)
   }, [supabase])
@@ -152,93 +137,107 @@ export default function DecorInventoryPage() {
   }, [fetchItems])
 
   // ---- Group by space ----
-  const itemsBySpace = useMemo(() => {
+  const spaces = useMemo(() => {
     const grouped: Record<string, DecorItem[]> = {}
     for (const item of items) {
-      if (!grouped[item.space]) grouped[item.space] = []
-      grouped[item.space].push(item)
+      if (!grouped[item.space_name]) grouped[item.space_name] = []
+      grouped[item.space_name].push(item)
     }
     return grouped
   }, [items])
 
-  // ---- Source summary ----
-  const sourceSummary = useMemo(() => {
-    const summary: Record<DecorSource, number> = {
-      venue_provided: 0,
-      personal: 0,
-      vendor: 0,
-      diy: 0,
-    }
-    for (const item of items) {
-      summary[item.source] += item.quantity
-    }
-    return summary
-  }, [items])
+  const spaceNames = useMemo(() => Object.keys(spaces).sort(), [spaces])
+  const usedSpaces = new Set(spaceNames)
 
   // ---- Toggle space ----
-  function toggleSpace(space: string) {
+  function toggleSpace(name: string) {
     const next = new Set(expandedSpaces)
-    if (next.has(space)) next.delete(space)
-    else next.add(space)
+    if (next.has(name)) next.delete(name)
+    else next.add(name)
     setExpandedSpaces(next)
   }
 
-  // ---- Modal helpers ----
-  function openAdd(space?: DecorSpace) {
-    setForm({ ...EMPTY_FORM, space: space || 'ceremony' })
-    setEditingId(null)
-    setShowModal(true)
+  // ---- Add space ----
+  function addPresetSpace(name: string) {
+    // Just expand it and start adding an item
+    const next = new Set(expandedSpaces)
+    next.add(name)
+    setExpandedSpaces(next)
+
+    // If space doesn't exist yet, we need at least one item to create it
+    // Open the add-item form for this space
+    setAddingToSpace(name)
+    setItemForm(EMPTY_ITEM)
+    setShowSpacePicker(false)
   }
 
-  function openEdit(item: DecorItem) {
-    setForm({
-      item_name: item.item_name,
-      space: item.space,
-      quantity: item.quantity.toString(),
-      source: item.source,
-      vendor_name: item.vendor_name || '',
-      leaving_action: item.leaving_action || '',
-      notes: item.notes || '',
-    })
-    setEditingId(item.id)
-    setShowModal(true)
+  function addCustomSpace() {
+    const name = customSpaceName.trim()
+    if (!name) return
+    addPresetSpace(name)
+    setCustomSpaceName('')
   }
 
-  async function handleSave() {
-    if (!form.item_name.trim()) return
+  // ---- Delete space ----
+  async function handleDeleteSpace(spaceName: string) {
+    const spaceItems = spaces[spaceName] || []
+    for (const item of spaceItems) {
+      await supabase.from('decor_inventory').delete().eq('id', item.id)
+    }
+    setDeleteSpaceConfirm(null)
+    fetchItems()
+  }
+
+  // ---- Add item ----
+  async function handleAddItem(spaceName: string) {
+    if (!itemForm.item_name.trim()) return
 
     const payload = {
       venue_id: VENUE_ID,
       wedding_id: WEDDING_ID,
-      item_name: form.item_name.trim(),
-      space: form.space,
-      quantity: parseInt(form.quantity) || 1,
-      source: form.source,
-      vendor_name: form.source === 'vendor' ? form.vendor_name.trim() || null : null,
-      leaving_action: form.leaving_action || null,
-      notes: form.notes.trim() || null,
+      space_name: spaceName,
+      item_name: itemForm.item_name.trim(),
+      source: itemForm.source.trim() || null,
+      goes_home_with: itemForm.leaving_it ? null : (itemForm.goes_home_with.trim() || null),
+      leaving_it: itemForm.leaving_it,
+      notes: itemForm.notes.trim() || null,
+      sort_order: (spaces[spaceName]?.length || 0),
     }
 
-    if (editingId) {
-      await supabase.from('decor_inventory').update(payload).eq('id', editingId)
-    } else {
-      await supabase.from('decor_inventory').insert({
-        ...payload,
-        sort_order: items.length,
-      })
-    }
-
-    setShowModal(false)
-    setEditingId(null)
+    await supabase.from('decor_inventory').insert(payload)
+    setAddingToSpace(null)
+    setItemForm(EMPTY_ITEM)
     fetchItems()
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('Remove this item from your decor inventory?')) return
+  // ---- Debounced field save ----
+  function debouncedSave(itemId: string, field: string, value: string | boolean | null) {
+    if (debounceRef.current[itemId]) clearTimeout(debounceRef.current[itemId])
+
+    debounceRef.current[itemId] = setTimeout(async () => {
+      await supabase
+        .from('decor_inventory')
+        .update({ [field]: value })
+        .eq('id', itemId)
+      delete debounceRef.current[itemId]
+    }, 400)
+  }
+
+  function updateItemLocal(itemId: string, field: string, value: string | boolean | null) {
+    setItems((prev) =>
+      prev.map((item) => (item.id === itemId ? { ...item, [field]: value } : item)),
+    )
+    debouncedSave(itemId, field, value)
+  }
+
+  // ---- Delete item ----
+  async function handleDeleteItem(id: string) {
     await supabase.from('decor_inventory').delete().eq('id', id)
+    setDeleteConfirm(null)
     fetchItems()
   }
 
+  // ---- Loading ----
   if (loading) {
     return (
       <div className="animate-pulse space-y-6">
@@ -260,149 +259,457 @@ export default function DecorInventoryPage() {
           >
             Decor Inventory
           </h1>
-          <p className="text-gray-500 text-sm">Track all decor items by space, source, and leaving instructions.</p>
+          <p className="text-gray-500 text-sm">
+            Track all decor items by space. Know what goes where, who brings it, and who takes it home.
+          </p>
         </div>
         <button
-          onClick={() => openAdd()}
+          onClick={() => setShowSpacePicker(!showSpacePicker)}
           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
           style={{ backgroundColor: 'var(--couple-primary)' }}
         >
           <Plus className="w-4 h-4" />
-          Add Item
+          Add Space
         </button>
       </div>
 
-      {/* Source summary */}
-      {items.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {SOURCES.map((src) => {
-            const SourceIcon = src.icon
-            const badge = sourceBadge(src.key)
-            return (
-              <div key={src.key} className={`rounded-xl p-4 border text-center ${badge.bg}`}>
-                <SourceIcon className={`w-5 h-5 mx-auto mb-2 ${badge.text}`} />
-                <p className={`text-2xl font-bold tabular-nums ${badge.text}`}>{sourceSummary[src.key]}</p>
-                <p className={`text-xs font-medium ${badge.text} opacity-80`}>{src.label}</p>
-              </div>
-            )
-          })}
+      {/* Space picker */}
+      {showSpacePicker && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 space-y-4">
+          <h3
+            className="text-sm font-semibold"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+          >
+            Choose a Space
+          </h3>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+            {venueSpaces.map((name) => {
+              const used = usedSpaces.has(name)
+              return (
+                <button
+                  key={name}
+                  onClick={() => !used && addPresetSpace(name)}
+                  disabled={used}
+                  className={cn(
+                    'px-3 py-2.5 rounded-lg text-xs font-medium border transition-colors text-left',
+                    used
+                      ? 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'
+                      : 'text-gray-700 border-gray-200 hover:border-gray-400 bg-white hover:bg-gray-50',
+                  )}
+                >
+                  {name}
+                  {used && ' (added)'}
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Custom space */}
+          <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
+            <input
+              type="text"
+              value={customSpaceName}
+              onChange={(e) => setCustomSpaceName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addCustomSpace()}
+              placeholder="Other space name..."
+              className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+              style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+            />
+            <button
+              onClick={addCustomSpace}
+              disabled={!customSpaceName.trim()}
+              className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+              style={{ backgroundColor: 'var(--couple-primary)' }}
+            >
+              Add
+            </button>
+          </div>
+
+          <button
+            onClick={() => setShowSpacePicker(false)}
+            className="text-xs text-gray-400 hover:text-gray-600"
+          >
+            Close
+          </button>
         </div>
       )}
 
-      {/* Items by space */}
-      {items.length === 0 ? (
+      {/* Stats */}
+      {items.length > 0 && (
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center">
+            <p className="text-2xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
+              {spaceNames.length}
+            </p>
+            <p className="text-xs text-gray-500 font-medium">Spaces</p>
+          </div>
+          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center">
+            <p className="text-2xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
+              {items.length}
+            </p>
+            <p className="text-xs text-gray-500 font-medium">Items</p>
+          </div>
+          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center">
+            <p className="text-2xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
+              {items.filter((i) => i.leaving_it).length}
+            </p>
+            <p className="text-xs text-gray-500 font-medium">Leaving Behind</p>
+          </div>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {spaceNames.length === 0 && !showSpacePicker && (
         <div className="text-center py-16 bg-white rounded-xl border border-gray-100 shadow-sm">
-          <Palette className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--couple-primary)', opacity: 0.3 }} />
+          <Palette
+            className="w-12 h-12 mx-auto mb-4"
+            style={{ color: 'var(--couple-primary)', opacity: 0.3 }}
+          />
           <h3
             className="text-lg font-semibold mb-2"
             style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
           >
-            No decor items yet
+            No decor spaces yet
           </h3>
-          <p className="text-gray-500 text-sm mb-4">Start tracking your decor by adding items to each space.</p>
+          <p className="text-gray-500 text-sm mb-4">
+            Add spaces like "Head Table" or "Ceremony Space", then list decor items inside each.
+          </p>
           <button
-            onClick={() => openAdd()}
+            onClick={() => setShowSpacePicker(true)}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
             style={{ backgroundColor: 'var(--couple-primary)' }}
           >
             <Plus className="w-4 h-4" />
-            Add First Item
+            Add First Space
           </button>
         </div>
-      ) : (
+      )}
+
+      {/* Space sections */}
+      {spaceNames.length > 0 && (
         <div className="space-y-3">
-          {SPACES.map((space) => {
-            const spaceItems = itemsBySpace[space.key] || []
-            if (spaceItems.length === 0 && !expandedSpaces.has(space.key)) return null
+          {spaceNames.map((spaceName) => {
+            const spaceItems = spaces[spaceName] || []
+            const isExpanded = expandedSpaces.has(spaceName)
+            const isDeletingSpace = deleteSpaceConfirm === spaceName
 
             return (
-              <div key={space.key} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-                <button
-                  onClick={() => toggleSpace(space.key)}
-                  className="w-full flex items-center justify-between p-4 hover:bg-gray-50/50 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-gray-800 text-sm">{space.label}</h3>
+              <div
+                key={spaceName}
+                className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden"
+              >
+                {/* Space header */}
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => toggleSpace(spaceName)}
+                    className="flex-1 flex items-center gap-2 p-4 hover:bg-gray-50/50 transition-colors text-left"
+                  >
+                    <h3 className="font-semibold text-gray-800 text-sm">{spaceName}</h3>
                     <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
                       {spaceItems.length} item{spaceItems.length !== 1 ? 's' : ''}
                     </span>
-                  </div>
-                  {expandedSpaces.has(space.key) ? (
-                    <ChevronUp className="w-4 h-4 text-gray-400" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 text-gray-400" />
-                  )}
-                </button>
+                    {isExpanded ? (
+                      <ChevronUp className="w-4 h-4 text-gray-400 ml-auto" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-gray-400 ml-auto" />
+                    )}
+                  </button>
 
-                {expandedSpaces.has(space.key) && (
-                  <div className="border-t border-gray-100">
-                    {spaceItems.length === 0 ? (
-                      <div className="p-4 text-center">
-                        <p className="text-xs text-gray-400">No items in this space.</p>
+                  {/* Delete space */}
+                  <div className="pr-3">
+                    {isDeletingSpace ? (
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] text-red-500 mr-1">Delete all?</span>
+                        <button
+                          onClick={() => handleDeleteSpace(spaceName)}
+                          className="p-1 rounded text-red-500 hover:bg-red-50"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteSpaceConfirm(null)}
+                          className="p-1 rounded text-gray-400 hover:bg-gray-100"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     ) : (
-                      <div className="divide-y divide-gray-50">
-                        {spaceItems.map((item) => {
-                          const badge = sourceBadge(item.source)
-                          return (
-                            <div key={item.id} className="px-4 py-3 group hover:bg-gray-50/50 transition-colors">
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="font-medium text-sm text-gray-800">{item.item_name}</span>
-                                    <span className="text-xs text-gray-400">x{item.quantity}</span>
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${badge.bg} ${badge.text}`}>
-                                      {sourceLabel(item.source)}
-                                    </span>
-                                    {item.vendor_name && (
-                                      <span className="text-xs text-gray-400">{item.vendor_name}</span>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-3 mt-1">
-                                    {item.leaving_action && (
-                                      <span className="text-xs text-gray-400 flex items-center gap-1">
-                                        <ArrowRightLeft className="w-3 h-3" />
-                                        {leavingLabel(item.leaving_action)}
-                                      </span>
-                                    )}
-                                    {item.notes && (
-                                      <span className="text-xs text-gray-400 italic truncate max-w-[300px]">
-                                        {item.notes}
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                                  <button
-                                    onClick={() => openEdit(item)}
-                                    className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                                  >
-                                    <Edit2 className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    onClick={() => handleDelete(item.id)}
-                                    className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          )
-                        })}
+                      <button
+                        onClick={() => setDeleteSpaceConfirm(spaceName)}
+                        className="p-1.5 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                        title="Delete space and all items"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Expanded content */}
+                {isExpanded && (
+                  <div className="border-t border-gray-100">
+                    {/* Column headers */}
+                    {spaceItems.length > 0 && (
+                      <div className="grid grid-cols-12 gap-2 px-4 py-2 bg-gray-50 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+                        <div className="col-span-3">Item</div>
+                        <div className="col-span-2">Source</div>
+                        <div className="col-span-2">Goes Home With</div>
+                        <div className="col-span-1 text-center">Leave</div>
+                        <div className="col-span-3">Notes</div>
+                        <div className="col-span-1" />
                       </div>
                     )}
 
-                    <div className="p-3 bg-gray-50/50 border-t border-gray-100">
-                      <button
-                        onClick={() => openAdd(space.key)}
-                        className="text-xs font-medium flex items-center gap-1 hover:opacity-80 transition-opacity"
-                        style={{ color: 'var(--couple-primary)' }}
-                      >
-                        <Plus className="w-3 h-3" />
-                        Add to {space.label}
-                      </button>
+                    {/* Item rows */}
+                    <div className="divide-y divide-gray-50">
+                      {spaceItems.map((item) => {
+                        const isItemDeleting = deleteConfirm === item.id
+
+                        return (
+                          <div
+                            key={item.id}
+                            className="grid grid-cols-12 gap-2 px-4 py-2.5 items-center group hover:bg-gray-50/50 transition-colors"
+                          >
+                            {/* Item name */}
+                            <div className="col-span-3">
+                              <input
+                                type="text"
+                                defaultValue={item.item_name}
+                                onBlur={(e) => {
+                                  const v = e.target.value.trim()
+                                  if (v && v !== item.item_name) updateItemLocal(item.id, 'item_name', v)
+                                }}
+                                className="w-full text-sm text-gray-800 font-medium bg-transparent border-0 border-b border-transparent hover:border-gray-200 focus:border-gray-300 focus:outline-none px-0 py-0.5 transition-colors"
+                              />
+                            </div>
+
+                            {/* Source */}
+                            <div className="col-span-2">
+                              <input
+                                type="text"
+                                defaultValue={item.source || ''}
+                                onBlur={(e) => {
+                                  const v = e.target.value.trim() || null
+                                  if (v !== (item.source || null)) updateItemLocal(item.id, 'source', v)
+                                }}
+                                placeholder="Source"
+                                className="w-full text-xs text-gray-600 bg-transparent border-0 border-b border-transparent hover:border-gray-200 focus:border-gray-300 focus:outline-none px-0 py-0.5 placeholder:text-gray-300 transition-colors"
+                              />
+                            </div>
+
+                            {/* Goes home with */}
+                            <div className="col-span-2">
+                              {item.leaving_it ? (
+                                <span className="text-xs text-gray-300">&mdash;</span>
+                              ) : (
+                                <input
+                                  type="text"
+                                  defaultValue={item.goes_home_with || ''}
+                                  onBlur={(e) => {
+                                    const v = e.target.value.trim() || null
+                                    if (v !== (item.goes_home_with || null))
+                                      updateItemLocal(item.id, 'goes_home_with', v)
+                                  }}
+                                  placeholder="Who takes it?"
+                                  className="w-full text-xs text-gray-600 bg-transparent border-0 border-b border-transparent hover:border-gray-200 focus:border-gray-300 focus:outline-none px-0 py-0.5 placeholder:text-gray-300 transition-colors"
+                                />
+                              )}
+                            </div>
+
+                            {/* Leaving it checkbox */}
+                            <div className="col-span-1 flex justify-center">
+                              <input
+                                type="checkbox"
+                                checked={item.leaving_it}
+                                onChange={(e) => {
+                                  const checked = e.target.checked
+                                  updateItemLocal(item.id, 'leaving_it', checked)
+                                  if (checked) {
+                                    updateItemLocal(item.id, 'goes_home_with', null)
+                                  }
+                                }}
+                                className="w-4 h-4 rounded border-gray-300 cursor-pointer"
+                                style={{ accentColor: 'var(--couple-primary)' }}
+                                title="Leaving it behind"
+                              />
+                            </div>
+
+                            {/* Notes */}
+                            <div className="col-span-3">
+                              <input
+                                type="text"
+                                defaultValue={item.notes || ''}
+                                onBlur={(e) => {
+                                  const v = e.target.value.trim() || null
+                                  if (v !== (item.notes || null)) updateItemLocal(item.id, 'notes', v)
+                                }}
+                                placeholder="Notes"
+                                className="w-full text-xs text-gray-500 italic bg-transparent border-0 border-b border-transparent hover:border-gray-200 focus:border-gray-300 focus:outline-none px-0 py-0.5 placeholder:text-gray-300 placeholder:not-italic transition-colors"
+                              />
+                            </div>
+
+                            {/* Delete */}
+                            <div className="col-span-1 flex justify-end">
+                              {isItemDeleting ? (
+                                <div className="flex items-center gap-0.5">
+                                  <button
+                                    onClick={() => handleDeleteItem(item.id)}
+                                    className="p-1 rounded text-red-500 hover:bg-red-50"
+                                  >
+                                    <Check className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    onClick={() => setDeleteConfirm(null)}
+                                    className="p-1 rounded text-gray-400 hover:bg-gray-100"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => setDeleteConfirm(item.id)}
+                                  className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
+                                  title="Delete item"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
+
+                    {/* Inline add item form */}
+                    {addingToSpace === spaceName ? (
+                      <div className="p-4 bg-gray-50/80 border-t border-gray-100 space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">
+                              Item Description *
+                            </label>
+                            <input
+                              type="text"
+                              value={itemForm.item_name}
+                              onChange={(e) => setItemForm({ ...itemForm, item_name: e.target.value })}
+                              placeholder="e.g. 10 pillar candles"
+                              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                              style={
+                                { '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties
+                              }
+                              autoFocus
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">
+                              Source
+                            </label>
+                            <input
+                              type="text"
+                              value={itemForm.source}
+                              onChange={(e) => setItemForm({ ...itemForm, source: e.target.value })}
+                              placeholder="Where is it coming from?"
+                              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                              style={
+                                { '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties
+                              }
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">
+                              Goes Home With
+                            </label>
+                            <input
+                              type="text"
+                              value={itemForm.goes_home_with}
+                              onChange={(e) =>
+                                setItemForm({ ...itemForm, goes_home_with: e.target.value })
+                              }
+                              disabled={itemForm.leaving_it}
+                              placeholder={
+                                itemForm.leaving_it ? 'Leaving behind' : 'Who takes it home?'
+                              }
+                              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent disabled:bg-gray-100 disabled:text-gray-400"
+                              style={
+                                { '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties
+                              }
+                            />
+                          </div>
+                          <div className="flex items-end pb-1">
+                            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={itemForm.leaving_it}
+                                onChange={(e) =>
+                                  setItemForm({
+                                    ...itemForm,
+                                    leaving_it: e.target.checked,
+                                    goes_home_with: e.target.checked ? '' : itemForm.goes_home_with,
+                                  })
+                                }
+                                className="w-4 h-4 rounded border-gray-300"
+                                style={{ accentColor: 'var(--couple-primary)' }}
+                              />
+                              Leaving it behind
+                            </label>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-gray-500 mb-1">
+                            Notes
+                          </label>
+                          <input
+                            type="text"
+                            value={itemForm.notes}
+                            onChange={(e) => setItemForm({ ...itemForm, notes: e.target.value })}
+                            placeholder="Setup notes, fragile, etc."
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                            style={
+                              { '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties
+                            }
+                          />
+                        </div>
+
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => {
+                              setAddingToSpace(null)
+                              setItemForm(EMPTY_ITEM)
+                            }}
+                            className="px-3 py-1.5 text-sm font-medium text-gray-500 hover:text-gray-700"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => handleAddItem(spaceName)}
+                            disabled={!itemForm.item_name.trim()}
+                            className="px-4 py-1.5 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                            style={{ backgroundColor: 'var(--couple-primary)' }}
+                          >
+                            Add Item
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-gray-50/50 border-t border-gray-100">
+                        <button
+                          onClick={() => {
+                            setAddingToSpace(spaceName)
+                            setItemForm(EMPTY_ITEM)
+                          }}
+                          className="text-xs font-medium flex items-center gap-1 hover:opacity-80 transition-opacity"
+                          style={{ color: 'var(--couple-primary)' }}
+                        >
+                          <Plus className="w-3 h-3" />
+                          Add item to {spaceName}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -411,178 +718,111 @@ export default function DecorInventoryPage() {
         </div>
       )}
 
-      {/* Leaving Instructions Summary */}
-      {items.filter((i) => i.leaving_action).length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-          <h2
-            className="text-sm font-semibold mb-3 flex items-center gap-2"
-            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-          >
-            <ArrowRightLeft className="w-4 h-4" />
-            End-of-Night Summary
-          </h2>
-          <div className="space-y-2">
-            {LEAVING_ACTIONS.map((action) => {
-              const actionItems = items.filter((i) => i.leaving_action === action.key)
-              if (actionItems.length === 0) return null
-              return (
-                <div key={action.key} className="flex items-start gap-2">
-                  <span className="text-xs font-medium text-gray-500 w-32 shrink-0">{action.label}:</span>
-                  <div className="flex flex-wrap gap-1">
-                    {actionItems.map((item) => (
-                      <span key={item.id} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
-                        {item.item_name} {item.quantity > 1 ? `(x${item.quantity})` : ''}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )
-            })}
+      {/* Also show add-item form for spaces that don't exist yet but are being created */}
+      {addingToSpace && !usedSpaces.has(addingToSpace) && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="p-4 flex items-center gap-2">
+            <h3 className="font-semibold text-gray-800 text-sm">{addingToSpace}</h3>
+            <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+              new space
+            </span>
           </div>
-        </div>
-      )}
-
-      {/* Add/Edit Modal */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setShowModal(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <h2
-                className="text-lg font-semibold"
-                style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-              >
-                {editingId ? 'Edit Item' : 'Add Decor Item'}
-              </h2>
-              <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
+          <div className="p-4 bg-gray-50/80 border-t border-gray-100 space-y-3">
+            <p className="text-xs text-gray-500">
+              Add your first item to create this space.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Item Name</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">
+                  Item Description *
+                </label>
                 <input
                   type="text"
-                  value={form.item_name}
-                  onChange={(e) => setForm({ ...form, item_name: e.target.value })}
+                  value={itemForm.item_name}
+                  onChange={(e) => setItemForm({ ...itemForm, item_name: e.target.value })}
+                  placeholder="e.g. 10 pillar candles"
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
                   style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  placeholder="e.g., Pillar Candles"
+                  autoFocus
                 />
               </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Space</label>
-                  <select
-                    value={form.space}
-                    onChange={(e) => setForm({ ...form, space: e.target.value as DecorSpace })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  >
-                    {SPACES.map((s) => (
-                      <option key={s.key} value={s.key}>{s.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
-                  <input
-                    type="number"
-                    value={form.quantity}
-                    onChange={(e) => setForm({ ...form, quantity: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                    min={1}
-                  />
-                </div>
-              </div>
-
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Source</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {SOURCES.map((src) => {
-                    const SrcIcon = src.icon
-                    return (
-                      <button
-                        key={src.key}
-                        onClick={() => setForm({ ...form, source: src.key })}
-                        className={cn(
-                          'flex items-center gap-2 p-2.5 rounded-lg border text-xs font-medium transition-colors',
-                          form.source === src.key
-                            ? 'text-white border-transparent'
-                            : 'text-gray-600 border-gray-200 hover:border-gray-300 bg-white'
-                        )}
-                        style={form.source === src.key ? { backgroundColor: 'var(--couple-primary)' } : undefined}
-                      >
-                        <SrcIcon className="w-4 h-4" />
-                        {src.label}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {form.source === 'vendor' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Vendor Name</label>
-                  <input
-                    type="text"
-                    value={form.vendor_name}
-                    onChange={(e) => setForm({ ...form, vendor_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                    placeholder="e.g., Blooms by Sarah"
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  <ArrowRightLeft className="w-3.5 h-3.5 inline mr-1" />
-                  End-of-Night Plan
-                </label>
-                <select
-                  value={form.leaving_action}
-                  onChange={(e) => setForm({ ...form, leaving_action: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+                <label className="block text-xs font-medium text-gray-500 mb-1">Source</label>
+                <input
+                  type="text"
+                  value={itemForm.source}
+                  onChange={(e) => setItemForm({ ...itemForm, source: e.target.value })}
+                  placeholder="Where is it coming from?"
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
                   style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                >
-                  <option value="">Not decided</option>
-                  {LEAVING_ACTIONS.map((a) => (
-                    <option key={a.key} value={a.key}>{a.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                <textarea
-                  value={form.notes}
-                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent resize-none"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  rows={2}
-                  placeholder="Setup instructions, fragile handling, etc."
                 />
               </div>
             </div>
 
-            <div className="flex justify-end gap-3 pt-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">
+                  Goes Home With
+                </label>
+                <input
+                  type="text"
+                  value={itemForm.goes_home_with}
+                  onChange={(e) => setItemForm({ ...itemForm, goes_home_with: e.target.value })}
+                  disabled={itemForm.leaving_it}
+                  placeholder={itemForm.leaving_it ? 'Leaving behind' : 'Who takes it home?'}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent disabled:bg-gray-100 disabled:text-gray-400"
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                />
+              </div>
+              <div className="flex items-end pb-1">
+                <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={itemForm.leaving_it}
+                    onChange={(e) =>
+                      setItemForm({
+                        ...itemForm,
+                        leaving_it: e.target.checked,
+                        goes_home_with: e.target.checked ? '' : itemForm.goes_home_with,
+                      })
+                    }
+                    className="w-4 h-4 rounded border-gray-300"
+                    style={{ accentColor: 'var(--couple-primary)' }}
+                  />
+                  Leaving it behind
+                </label>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+              <input
+                type="text"
+                value={itemForm.notes}
+                onChange={(e) => setItemForm({ ...itemForm, notes: e.target.value })}
+                placeholder="Setup notes, fragile, etc."
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2">
               <button
-                onClick={() => setShowModal(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
+                onClick={() => {
+                  setAddingToSpace(null)
+                  setItemForm(EMPTY_ITEM)
+                }}
+                className="px-3 py-1.5 text-sm font-medium text-gray-500 hover:text-gray-700"
               >
                 Cancel
               </button>
               <button
-                onClick={handleSave}
-                disabled={!form.item_name.trim()}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                onClick={() => handleAddItem(addingToSpace)}
+                disabled={!itemForm.item_name.trim()}
+                className="px-4 py-1.5 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
                 style={{ backgroundColor: 'var(--couple-primary)' }}
               >
-                {editingId ? 'Save Changes' : 'Add Item'}
+                Add Item
               </button>
             </div>
           </div>

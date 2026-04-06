@@ -1,178 +1,421 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+// Feature: configurable via venue_config.feature_flags
+// Table: guest_care_notes (single JSONB row per wedding)
+
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   Heart,
-  Plus,
-  X,
-  Edit2,
-  Trash2,
-  Search,
-  Accessibility,
-  UtensilsCrossed,
-  Users,
-  Star,
-  Stethoscope,
-  MoreHorizontal,
+  Save,
+  Check,
+  Info,
+  ShieldCheck,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
+
+// ---------------------------------------------------------------------------
+// Section definitions
+// ---------------------------------------------------------------------------
+
+interface SectionDef {
+  key: string
+  icon: string
+  question: string
+  placeholder: string
+  alwaysOpen?: boolean
+  category: 'accessibility' | 'health' | 'logistics' | 'interpersonal'
+}
+
+const SECTIONS: SectionDef[] = [
+  {
+    key: 'children',
+    icon: '\u{1F476}',
+    question: 'Will children be attending your wedding?',
+    placeholder: 'How many, roughly what ages? Are they your own children, guests\' kids, or both? Any high chairs or a dedicated kids\' table needed?',
+    category: 'logistics',
+  },
+  {
+    key: 'mobility',
+    icon: '\u267F',
+    question: 'Do any guests use a wheelchair, walker, or cane \u2014 or have difficulty with stairs or uneven ground?',
+    placeholder: 'Tell us who and anything we should prepare: reserved accessible parking, seating near paths, avoiding steps, etc.',
+    category: 'accessibility',
+  },
+  {
+    key: 'vision_hearing',
+    icon: '\u{1F441}',
+    question: 'Do any guests have vision or hearing impairments?',
+    placeholder: 'Anything we should know to help them feel comfortable and fully included in the day?',
+    category: 'accessibility',
+  },
+  {
+    key: 'sensory',
+    icon: '\u{1F33F}',
+    question: 'Do any guests have sensory sensitivities \u2014 things like loud music, bright lights, or busy environments that can feel overwhelming?',
+    placeholder: 'We can arrange a quiet space to step away to, give you a heads-up before loud moments like the send-off, or adjust how we manage certain areas. Just tell us what would help.',
+    category: 'accessibility',
+  },
+  {
+    key: 'dietary',
+    icon: '\u{1F37D}',
+    question: 'Any dietary restrictions or food allergies among your guests?',
+    placeholder: 'Even if your caterer already knows, we like to have this too \u2014 especially severe allergies (nuts, shellfish, etc.) and whether anyone carries an EpiPen.',
+    category: 'health',
+  },
+  {
+    key: 'sobriety',
+    icon: '\u{1F964}',
+    question: 'Do you have guests who are sober or would prefer not to be offered alcohol?',
+    placeholder: 'We can handle bar service discreetly, arrange a non-alcoholic area, or simply make sure staff know not to offer certain guests drinks. No explanation needed \u2014 just let us know.',
+    category: 'health',
+  },
+  {
+    key: 'elderly',
+    icon: '\u{1F90D}',
+    question: 'Any elderly or frail guests who might appreciate a little extra looking after?',
+    placeholder: 'Grandparents, anyone who might tire easily and need a comfortable place to rest, or someone you\'d like us to quietly check in on throughout the day?',
+    category: 'health',
+  },
+  {
+    key: 'medical',
+    icon: '\u{1F3E5}',
+    question: 'Does anyone have a medical condition our staff should know about in case of an emergency?',
+    placeholder: 'Severe allergies with an EpiPen, epilepsy, heart conditions, diabetes \u2014 anything that helps us be prepared. This stays with us.',
+    category: 'health',
+  },
+  {
+    key: 'service_animals',
+    icon: '\u{1F415}',
+    question: 'Will any guests be accompanied by a service animal?',
+    placeholder: 'Just let us know so we can make sure the space is set up and ready.',
+    category: 'logistics',
+  },
+  {
+    key: 'pet_allergies',
+    icon: '\u{1F43E}',
+    question: 'Do any overnight guests have pet allergies?',
+    placeholder: 'We\'re a pet-friendly venue and dogs are often present. If any guests staying on-site have pet allergies, let us know so we can do our best to prepare the rooms and flag it for the couple bringing their dog.',
+    category: 'logistics',
+  },
+  {
+    key: 'family_dynamics',
+    icon: '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}',
+    question: 'Any family dynamics we should quietly be aware of?',
+    placeholder: 'Divorced parents who need to be on opposite sides of the room, estranged relatives, anyone who might need a little extra care or a gentle eye kept on the situation?',
+    category: 'interpersonal',
+  },
+  {
+    key: 'other',
+    icon: '\u{1F4AC}',
+    question: 'Anything else we should know about your guests?',
+    placeholder: 'Anything at all that would help us take the very best care of the people you love most.',
+    alwaysOpen: true,
+    category: 'interpersonal',
+  },
+]
+
+// Category metadata for summary cards
+const CATEGORY_META: Record<string, { label: string; color: string; bgColor: string; borderColor: string }> = {
+  accessibility: { label: 'Accessibility', color: '#3B82F6', bgColor: '#EFF6FF', borderColor: '#BFDBFE' },
+  health: { label: 'Health & Safety', color: '#EF4444', bgColor: '#FEF2F2', borderColor: '#FECACA' },
+  logistics: { label: 'Logistics', color: '#F59E0B', bgColor: '#FFFBEB', borderColor: '#FDE68A' },
+  interpersonal: { label: 'Interpersonal', color: '#8B5CF6', bgColor: '#F5F3FF', borderColor: '#DDD6FE' },
+}
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-interface CareNote {
-  id: string
-  guest_name: string
-  care_type: 'mobility' | 'dietary' | 'family' | 'vip' | 'medical' | 'other'
-  note: string | null
-  created_at: string
+interface SectionValue {
+  has: boolean | null
+  notes: string
 }
 
-interface CareFormData {
-  guest_name: string
-  care_type: string
-  note: string
+type GuestCareFormData = Record<string, SectionValue>
+
+function buildDefault(): GuestCareFormData {
+  const d: GuestCareFormData = {}
+  SECTIONS.forEach((s) => {
+    d[s.key] = { has: null, notes: '' }
+  })
+  return d
 }
 
-const EMPTY_FORM: CareFormData = {
-  guest_name: '',
-  care_type: 'other',
-  note: '',
+function mergeWithDefaults(saved: Record<string, Partial<SectionValue>> | null): GuestCareFormData {
+  const base = buildDefault()
+  if (!saved) return base
+  SECTIONS.forEach((s) => {
+    if (saved[s.key]) {
+      base[s.key] = {
+        has: saved[s.key].has ?? null,
+        notes: saved[s.key].notes ?? '',
+      }
+    }
+  })
+  return base
 }
 
-type CareTypeFilter = 'all' | 'mobility' | 'dietary' | 'family' | 'vip' | 'medical' | 'other'
-
 // ---------------------------------------------------------------------------
-// Helpers
+// Yes/No Button component
 // ---------------------------------------------------------------------------
 
-function careTypeConfig(type: string) {
-  switch (type) {
-    case 'mobility':
-      return { label: 'Mobility', icon: Accessibility, className: 'bg-blue-50 text-blue-700 border-blue-200' }
-    case 'dietary':
-      return { label: 'Dietary', icon: UtensilsCrossed, className: 'bg-green-50 text-green-700 border-green-200' }
-    case 'family':
-      return { label: 'Family', icon: Users, className: 'bg-purple-50 text-purple-700 border-purple-200' }
-    case 'vip':
-      return { label: 'VIP', icon: Star, className: 'bg-amber-50 text-amber-700 border-amber-200' }
-    case 'medical':
-      return { label: 'Medical', icon: Stethoscope, className: 'bg-red-50 text-red-700 border-red-200' }
-    default:
-      return { label: 'Other', icon: MoreHorizontal, className: 'bg-gray-50 text-gray-600 border-gray-200' }
-  }
+function YesNoButtons({
+  value,
+  onChange,
+}: {
+  value: boolean | null
+  onChange: (val: boolean | null) => void
+}) {
+  const isYes = value === true
+  const isNo = value === false
+
+  return (
+    <div className="flex gap-2 mb-3">
+      {/* Yes button */}
+      <button
+        onClick={() => onChange(isYes ? null : true)}
+        className={cn(
+          'px-5 py-1.5 rounded-full text-sm font-medium border transition-all',
+          isYes
+            ? 'text-white border-transparent shadow-sm'
+            : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300 hover:text-gray-500'
+        )}
+        style={isYes ? { backgroundColor: 'var(--couple-primary)' } : undefined}
+      >
+        Yes
+      </button>
+
+      {/* No button */}
+      <button
+        onClick={() => onChange(isNo ? null : false)}
+        className={cn(
+          'px-5 py-1.5 rounded-full text-sm font-medium border transition-all',
+          isNo
+            ? 'bg-gray-200 text-gray-600 border-gray-300 shadow-sm'
+            : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300 hover:text-gray-500'
+        )}
+      >
+        No
+      </button>
+    </div>
+  )
 }
 
-const CARE_TYPES: { key: CareTypeFilter; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'mobility', label: 'Mobility' },
-  { key: 'dietary', label: 'Dietary' },
-  { key: 'family', label: 'Family' },
-  { key: 'vip', label: 'VIP' },
-  { key: 'medical', label: 'Medical' },
-  { key: 'other', label: 'Other' },
-]
-
 // ---------------------------------------------------------------------------
-// Guest Care Page
+// Section Row component
 // ---------------------------------------------------------------------------
 
-export default function GuestCarePage() {
-  const [notes, setNotes] = useState<CareNote[]>([])
+function SectionRow({
+  section,
+  value,
+  onSetHas,
+  onSetNotes,
+}: {
+  section: SectionDef
+  value: SectionValue
+  onSetHas: (val: boolean | null) => void
+  onSetNotes: (val: string) => void
+}) {
+  const isYes = value?.has === true
+  const showTextarea = section.alwaysOpen || isYes
+  const catMeta = CATEGORY_META[section.category]
+
+  return (
+    <div className="px-5 py-4">
+      <div className="flex items-start gap-3">
+        {/* Icon */}
+        <span className="text-lg mt-0.5 shrink-0 select-none">{section.icon}</span>
+
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          {/* Category tag */}
+          <div className="flex items-center gap-2 mb-1.5">
+            <span
+              className="px-2 py-0.5 rounded text-[10px] font-medium"
+              style={{
+                backgroundColor: catMeta.bgColor,
+                color: catMeta.color,
+              }}
+            >
+              {catMeta.label}
+            </span>
+          </div>
+
+          {/* Question */}
+          <p className="text-sm font-medium text-gray-700 leading-snug mb-2.5">
+            {section.question}
+          </p>
+
+          {/* Yes / No toggle buttons */}
+          {!section.alwaysOpen && (
+            <YesNoButtons value={value?.has ?? null} onChange={onSetHas} />
+          )}
+
+          {/* Conditional textarea */}
+          {showTextarea && (
+            <textarea
+              value={value?.notes || ''}
+              onChange={(e) => onSetNotes(e.target.value)}
+              placeholder={section.placeholder}
+              rows={3}
+              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-700 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:border-transparent resize-none"
+              style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+            />
+          )}
+
+          {/* "No" confirmation */}
+          {value?.has === false && (
+            <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+              <Check className="w-3 h-3" /> Noted — no concerns here
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
+export default function GuestCareNotesPage() {
+  const [formData, setFormData] = useState<GuestCareFormData>(buildDefault())
   const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [form, setForm] = useState<CareFormData>(EMPTY_FORM)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [typeFilter, setTypeFilter] = useState<CareTypeFilter>('all')
+  const [saving, setSaving] = useState(false)
+  const [savedAt, setSavedAt] = useState<string | null>(null)
+  const [dirty, setDirty] = useState(false)
+  const [saved, setSaved] = useState(false)
 
   const supabase = createClient()
 
-  // ---- Fetch ----
-  const fetchNotes = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('guest_care_notes')
-      .select('*')
-      .eq('wedding_id', WEDDING_ID)
-      .order('created_at', { ascending: true })
+  // Load existing data
+  const loadData = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from('guest_care_notes')
+        .select('data, updated_at')
+        .eq('wedding_id', WEDDING_ID)
+        .maybeSingle()
 
-    if (!error && data) {
-      setNotes(data as CareNote[])
+      if (data) {
+        setFormData(mergeWithDefaults(data.data))
+        setSavedAt(data.updated_at)
+      }
+    } catch (err) {
+      console.error('Failed to load guest care notes:', err)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }, [supabase])
 
   useEffect(() => {
-    fetchNotes()
-  }, [fetchNotes])
+    loadData()
+  }, [loadData])
 
-  // ---- Derived data ----
-  const typeCounts = notes.reduce<Record<string, number>>((acc, n) => {
-    acc[n.care_type] = (acc[n.care_type] || 0) + 1
-    return acc
-  }, {})
-
-  const filtered = notes.filter((n) => {
-    if (typeFilter !== 'all' && n.care_type !== typeFilter) return false
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase()
-      return (
-        n.guest_name.toLowerCase().includes(q) ||
-        (n.note || '').toLowerCase().includes(q)
-      )
-    }
-    return true
-  })
-
-  // ---- Modal ----
-  function openAdd() {
-    setForm(EMPTY_FORM)
-    setEditingId(null)
-    setShowModal(true)
+  // Section value setters
+  const setHas = (key: string, val: boolean | null) => {
+    setFormData((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], has: val },
+    }))
+    setDirty(true)
+    setSaved(false)
   }
 
-  function openEdit(note: CareNote) {
-    setForm({
-      guest_name: note.guest_name,
-      care_type: note.care_type,
-      note: note.note || '',
+  const setNotes = (key: string, val: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], notes: val },
+    }))
+    setDirty(true)
+    setSaved(false)
+  }
+
+  // Save
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const payload = {
+        venue_id: VENUE_ID,
+        wedding_id: WEDDING_ID,
+        data: formData,
+        updated_at: new Date().toISOString(),
+      }
+
+      await supabase
+        .from('guest_care_notes')
+        .upsert(payload, { onConflict: 'wedding_id' })
+
+      setSavedAt(new Date().toISOString())
+      setDirty(false)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
+    } catch (err) {
+      console.error('Failed to save guest care notes:', err)
+    }
+    setSaving(false)
+  }
+
+  // Count filled sections
+  const filledCount = useMemo(() => {
+    return SECTIONS.filter((s) => {
+      const val = formData[s.key]
+      return val?.has === true || (s.alwaysOpen && val?.notes?.trim())
+    }).length
+  }, [formData])
+
+  // Count answered (yes or no)
+  const answeredCount = useMemo(() => {
+    return SECTIONS.filter((s) => {
+      const val = formData[s.key]
+      return val?.has !== null && val?.has !== undefined
+    }).length
+  }, [formData])
+
+  // Unanswered count (excludes alwaysOpen)
+  const unansweredCount = useMemo(() => {
+    return SECTIONS.filter((s) => {
+      if (s.alwaysOpen) return false
+      const val = formData[s.key]
+      return val?.has === null || val?.has === undefined
+    }).length
+  }, [formData])
+
+  // Category summaries
+  const categorySummary = useMemo(() => {
+    const cats: Record<string, { total: number; flagged: number }> = {}
+    SECTIONS.forEach((s) => {
+      if (!cats[s.category]) cats[s.category] = { total: 0, flagged: 0 }
+      cats[s.category].total++
+      if (formData[s.key]?.has === true) cats[s.category].flagged++
     })
-    setEditingId(note.id)
-    setShowModal(true)
-  }
+    return cats
+  }, [formData])
 
-  async function handleSave() {
-    if (!form.guest_name.trim()) return
-
-    const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
-      guest_name: form.guest_name.trim(),
-      care_type: form.care_type,
-      note: form.note.trim() || null,
-    }
-
-    if (editingId) {
-      await supabase.from('guest_care_notes').update(payload).eq('id', editingId)
-    } else {
-      await supabase.from('guest_care_notes').insert(payload)
-    }
-
-    setShowModal(false)
-    setEditingId(null)
-    fetchNotes()
-  }
-
-  async function handleDelete(note: CareNote) {
-    if (!confirm(`Remove care note for ${note.guest_name}?`)) return
-    await supabase.from('guest_care_notes').delete().eq('id', note.id)
-    fetchNotes()
+  if (loading) {
+    return (
+      <div className="animate-pulse space-y-6">
+        <div className="h-8 w-48 bg-gray-200 rounded" />
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-16 bg-gray-100 rounded-xl" />
+          ))}
+        </div>
+        <div className="space-y-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-20 bg-gray-100 rounded-xl" />
+          ))}
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -184,248 +427,128 @@ export default function GuestCarePage() {
             className="text-3xl font-bold mb-1"
             style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
           >
-            Guest Care
+            Guest Care Notes
           </h1>
           <p className="text-gray-500 text-sm">
-            Special notes your venue coordinator should know about your guests.
+            Help us take care of your people. The more you share, the better we can prepare for your day.
           </p>
         </div>
-        <button
-          onClick={openAdd}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
-          style={{ backgroundColor: 'var(--couple-primary)' }}
-        >
-          <Plus className="w-4 h-4" />
-          Add Note
-        </button>
+        <div className="flex items-center gap-3 self-start">
+          {filledCount > 0 && (
+            <span
+              className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium border"
+              style={{
+                backgroundColor: 'color-mix(in srgb, var(--couple-primary) 8%, white)',
+                borderColor: 'color-mix(in srgb, var(--couple-primary) 20%, white)',
+                color: 'var(--couple-primary)',
+              }}
+            >
+              {filledCount} {filledCount === 1 ? 'section' : 'sections'} flagged
+            </span>
+          )}
+          {unansweredCount > 0 && (
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">
+              {unansweredCount} unanswered
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* Summary */}
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-        {(['mobility', 'dietary', 'family', 'vip', 'medical', 'other'] as const).map((type) => {
-          const config = careTypeConfig(type)
-          const Icon = config.icon
+      {/* Category summary cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {Object.entries(CATEGORY_META).map(([catKey, meta]) => {
+          const summary = categorySummary[catKey] || { total: 0, flagged: 0 }
           return (
-            <button
-              key={type}
-              onClick={() => setTypeFilter(typeFilter === type ? 'all' : type)}
-              className={cn(
-                'rounded-xl p-3 border text-center transition-all',
-                typeFilter === type
-                  ? 'ring-2 ring-offset-1'
-                  : 'hover:shadow-sm',
-                config.className
-              )}
-              style={typeFilter === type ? { '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties : undefined}
+            <div
+              key={catKey}
+              className="rounded-xl p-3 border text-center"
+              style={{ backgroundColor: meta.bgColor, borderColor: meta.borderColor }}
             >
-              <Icon className="w-4 h-4 mx-auto mb-1" />
-              <p className="text-lg font-bold tabular-nums">{typeCounts[type] || 0}</p>
-              <p className="text-[10px] font-medium">{config.label}</p>
-            </button>
+              <p
+                className="text-lg font-bold tabular-nums"
+                style={{ color: meta.color }}
+              >
+                {summary.flagged}
+                <span className="text-xs font-normal text-gray-400">/{summary.total}</span>
+              </p>
+              <p className="text-[10px] font-medium" style={{ color: meta.color }}>
+                {meta.label}
+              </p>
+            </div>
           )
         })}
       </div>
 
-      {/* Search + Filter pills */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="flex flex-wrap gap-2">
-          {CARE_TYPES.map((ct) => (
-            <button
-              key={ct.key}
-              onClick={() => setTypeFilter(ct.key)}
-              className={cn(
-                'px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
-                typeFilter === ct.key
-                  ? 'text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              )}
-              style={typeFilter === ct.key ? { backgroundColor: 'var(--couple-primary)' } : undefined}
-            >
-              {ct.label}
-              {ct.key !== 'all' && (
-                <span className={cn(
-                  'ml-1.5 px-1.5 py-0.5 rounded-full text-[10px]',
-                  typeFilter === ct.key ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-500'
-                )}>
-                  {typeCounts[ct.key] || 0}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-
-        <div className="relative sm:ml-auto">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Search guests or notes..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:border-transparent w-full sm:w-56"
-            style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-          />
+      {/* Privacy notice */}
+      <div className="flex items-start gap-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+        <ShieldCheck className="w-5 h-5 text-gray-400 mt-0.5 shrink-0" />
+        <div>
+          <p className="text-xs text-gray-500">
+            <strong className="text-gray-600">Private and confidential.</strong> This information is only shared with your
+            venue coordinator and day-of staff. It helps us prepare quietly and care for your guests without drawing attention
+            to anyone's needs.
+          </p>
         </div>
       </div>
 
-      {/* Notes List */}
-      {loading ? (
-        <div className="animate-pulse space-y-3">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-16 bg-gray-100 rounded-lg" />
-          ))}
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-xl border border-gray-100 shadow-sm">
-          <Heart className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--couple-primary)', opacity: 0.3 }} />
-          <h3
-            className="text-lg font-semibold mb-2"
-            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-          >
-            {searchQuery || typeFilter !== 'all' ? 'No matching notes' : 'No guest care notes yet'}
-          </h3>
-          <p className="text-gray-500 text-sm mb-4">
-            {searchQuery || typeFilter !== 'all'
-              ? 'Try adjusting your filters.'
-              : 'Add notes about guests who need special attention on your wedding day.'}
+      {/* Sections */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden divide-y divide-gray-50">
+        {SECTIONS.map((section) => {
+          const val = formData[section.key]
+          return (
+            <SectionRow
+              key={section.key}
+              section={section}
+              value={val}
+              onSetHas={(v) => setHas(section.key, v)}
+              onSetNotes={(v) => setNotes(section.key, v)}
+            />
+          )
+        })}
+      </div>
+
+      {/* Save footer */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-5 py-4 flex items-center justify-between gap-4">
+        <div className="flex flex-col gap-0.5">
+          <p className="text-xs text-gray-400">
+            {savedAt
+              ? `Last saved ${new Date(savedAt).toLocaleDateString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                })}`
+              : 'Not saved yet'}
           </p>
-          {!searchQuery && typeFilter === 'all' && (
-            <button
-              onClick={openAdd}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
-              style={{ backgroundColor: 'var(--couple-primary)' }}
-            >
-              <Plus className="w-4 h-4" />
-              Add First Note
-            </button>
+          {dirty && (
+            <p className="text-xs text-amber-500 font-medium">Unsaved changes</p>
           )}
         </div>
-      ) : (
-        <div className="space-y-2">
-          {filtered.map((note) => {
-            const config = careTypeConfig(note.care_type)
-            const TypeIcon = config.icon
-
-            return (
-              <div
-                key={note.id}
-                className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 group hover:shadow-md transition-shadow"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                      <span className="font-medium text-gray-800">{note.guest_name}</span>
-                      <span className={cn(
-                        'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border',
-                        config.className
-                      )}>
-                        <TypeIcon className="w-3 h-3" />
-                        {config.label}
-                      </span>
-                    </div>
-                    {note.note && (
-                      <p className="text-sm text-gray-600">{note.note}</p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                    <button
-                      onClick={() => openEdit(note)}
-                      className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(note)}
-                      className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      {/* Add/Edit Modal */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setShowModal(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <h2
-                className="text-lg font-semibold"
-                style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-              >
-                {editingId ? 'Edit Care Note' : 'Add Care Note'}
-              </h2>
-              <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Guest Name</label>
-                <input
-                  type="text"
-                  value={form.guest_name}
-                  onChange={(e) => setForm({ ...form, guest_name: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  placeholder="Guest's full name"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Care Type</label>
-                <select
-                  value={form.care_type}
-                  onChange={(e) => setForm({ ...form, care_type: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                >
-                  <option value="mobility">Mobility</option>
-                  <option value="dietary">Dietary</option>
-                  <option value="family">Family</option>
-                  <option value="vip">VIP</option>
-                  <option value="medical">Medical</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Note</label>
-                <textarea
-                  value={form.note}
-                  onChange={(e) => setForm({ ...form, note: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent resize-none"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  rows={4}
-                  placeholder="What should the venue team know about this guest?"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3 pt-2">
-              <button
-                onClick={() => setShowModal(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={!form.guest_name.trim()}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                style={{ backgroundColor: 'var(--couple-primary)' }}
-              >
-                {editingId ? 'Save Changes' : 'Add Note'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+        <button
+          onClick={handleSave}
+          disabled={saving || !dirty}
+          className={cn(
+            'inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium text-white transition-all',
+            saved ? 'bg-emerald-500' : 'hover:opacity-90 disabled:opacity-40'
+          )}
+          style={!saved ? { backgroundColor: 'var(--couple-primary)' } : undefined}
+        >
+          {saved ? (
+            <>
+              <Check className="w-4 h-4" />
+              Saved!
+            </>
+          ) : saving ? (
+            'Saving...'
+          ) : (
+            <>
+              <Save className="w-4 h-4" />
+              Save Notes
+            </>
+          )}
+        </button>
+      </div>
     </div>
   )
 }

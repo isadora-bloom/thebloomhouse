@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
   Network,
@@ -42,9 +43,6 @@ interface Person {
 }
 
 type TypeFilter = 'all' | 'partner' | 'parent' | 'sibling' | 'friend' | 'vendor' | 'planner'
-
-// TODO: Replace with venue from auth context
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 const RELATIONSHIP_TYPES: { value: TypeFilter; label: string; icon: string }[] = [
   { value: 'all', label: 'All', icon: '' },
@@ -309,6 +307,7 @@ function AddRelationshipModal({
 // ---------------------------------------------------------------------------
 
 export default function RelationshipsPage() {
+  const VENUE_ID = useVenueId()
   const [relationships, setRelationships] = useState<Relationship[]>([])
   const [people, setPeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)

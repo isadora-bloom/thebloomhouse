@@ -11,6 +11,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI } from '@/lib/ai/client'
+import { sendEmail } from '@/lib/services/gmail'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -297,7 +298,7 @@ export async function generateDigest(venueId: string): Promise<Digest> {
   try {
     const sevenDaysAgo = hoursAgo(7 * 24)
     const { data: briefing } = await supabase
-      .from('briefings')
+      .from('ai_briefings')
       .select('content')
       .eq('venue_id', venueId)
       .eq('briefing_type', 'weekly')
@@ -612,13 +613,21 @@ export async function sendDigestEmail(
   try {
     const digest = await generateDigest(venueId)
     const html = formatDigestHtml(digest)
+    const subject = `${digest.venue_name} — Daily Digest for ${digest.date}`
 
-    // TODO: Replace with Resend or SES in production
-    console.log(`[daily-digest] Digest ready for ${briefingEmail}`)
-    console.log(`[daily-digest] Subject: ${digest.venue_name} — Daily Digest for ${digest.date}`)
-    console.log(`[daily-digest] HTML length: ${html.length} chars`)
+    // Send via the venue's authenticated Gmail
+    const messageId = await sendEmail(venueId, briefingEmail, subject, html)
 
-    return { sent: true, to: briefingEmail }
+    if (messageId) {
+      console.log(`[daily-digest] Sent to ${briefingEmail} (messageId: ${messageId})`)
+      return { sent: true, to: briefingEmail }
+    } else {
+      // Gmail not connected — fall back to logging
+      console.warn(`[daily-digest] Gmail not connected for venue ${venueId}, logging digest instead`)
+      console.log(`[daily-digest] Subject: ${subject}`)
+      console.log(`[daily-digest] HTML length: ${html.length} chars`)
+      return { sent: false, to: briefingEmail }
+    }
   } catch (err) {
     console.error(`[daily-digest] Failed for venue ${venueId}:`, err)
     return { sent: false, to: briefingEmail }

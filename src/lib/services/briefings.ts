@@ -17,6 +17,7 @@ import { detectTrendDeviations } from './trends'
 import { getWeatherForDateRange } from './weather'
 import { getLatestIndicators, calculateDemandScore } from './economics'
 import { getActiveAlerts } from './anomaly-detection'
+import { sendEmail } from './gmail'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -287,6 +288,9 @@ Generate the weekly briefing.`,
     console.error('[briefings] Failed to insert weekly briefing:', error.message)
   }
 
+  // Email the briefing to the venue's briefing address
+  await deliverBriefingEmail(venueId, 'Weekly Intelligence Briefing', content.summary)
+
   return content
 }
 
@@ -423,8 +427,8 @@ Generate the monthly briefing with strategic recommendations.`,
   }
 
   // Persist to ai_briefings
-  const supabase = createServiceClient()
-  const { error } = await supabase.from('ai_briefings').insert({
+  const supabase2 = createServiceClient()
+  const { error } = await supabase2.from('ai_briefings').insert({
     venue_id: venueId,
     briefing_type: 'monthly',
     content,
@@ -433,6 +437,9 @@ Generate the monthly briefing with strategic recommendations.`,
   if (error) {
     console.error('[briefings] Failed to insert monthly briefing:', error.message)
   }
+
+  // Email the briefing to the venue's briefing address
+  await deliverBriefingEmail(venueId, 'Monthly Intelligence Briefing', content.summary)
 
   return content
 }
@@ -492,4 +499,41 @@ export async function getAllBriefings(
   }
 
   return (data ?? []) as BriefingRow[]
+}
+
+// ---------------------------------------------------------------------------
+// 5. deliverBriefingEmail (shared helper)
+// ---------------------------------------------------------------------------
+
+/**
+ * Sends a briefing summary email to the venue's briefing_email address
+ * using the venue's authenticated Gmail. Fails silently if Gmail is not
+ * connected or no briefing_email is configured.
+ */
+async function deliverBriefingEmail(
+  venueId: string,
+  subjectPrefix: string,
+  summary: string
+): Promise<void> {
+  try {
+    const supabase = createServiceClient()
+    const { data: venue } = await supabase
+      .from('venues')
+      .select('briefing_email, name')
+      .eq('id', venueId)
+      .single()
+
+    const briefingEmail = venue?.briefing_email as string | null
+    if (!briefingEmail) return
+
+    const subject = `${venue?.name ?? 'Bloom House'} — ${subjectPrefix}`
+    const body = `${subjectPrefix}\n\n${summary}\n\nView the full briefing in your Bloom House dashboard.`
+
+    const messageId = await sendEmail(venueId, briefingEmail, subject, body)
+    if (messageId) {
+      console.log(`[briefings] Sent ${subjectPrefix} to ${briefingEmail}`)
+    }
+  } catch (err) {
+    console.error(`[briefings] Email delivery failed for ${venueId}:`, err)
+  }
 }

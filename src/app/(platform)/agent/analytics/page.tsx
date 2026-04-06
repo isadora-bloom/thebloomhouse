@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
   BarChart3,
@@ -61,9 +62,6 @@ interface CostData {
   cost: number
   count: number
 }
-
-// TODO: Replace with venue from auth context
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
   { value: 'today', label: 'Today' },
@@ -180,6 +178,7 @@ function StatCard({
 // ---------------------------------------------------------------------------
 
 export default function AgentAnalyticsPage() {
+  const VENUE_ID = useVenueId()
   const [period, setPeriod] = useState<Period>('this_month')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

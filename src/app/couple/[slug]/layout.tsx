@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { getFontUrl, getFontVars } from '@/config/fonts'
 import { SlugCoupleNav } from './slug-couple-nav'
+import { FloatingSage } from '@/components/couple/floating-sage'
 
 /**
  * Layout for path-based couple portal: /couple/[slug]/...
@@ -107,6 +108,9 @@ export default async function CoupleSlugLayout({
             {children}
           </div>
         </main>
+
+        {/* Floating Sage button on every page */}
+        <FloatingSage venueSlug={slug} />
       </div>
     </>
   )

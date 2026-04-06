@@ -37,7 +37,7 @@ export function VenueSelector() {
 
       // Get user's org membership
       const { data: membership } = await supabase
-        .from('org_members')
+        .from('user_profiles')
         .select('org_id')
         .eq('user_id', user.id)
         .single()

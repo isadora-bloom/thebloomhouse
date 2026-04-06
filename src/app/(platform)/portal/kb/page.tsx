@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createBrowserClient } from '@supabase/ssr'
 import {
   BookOpen,
@@ -14,11 +15,9 @@ import {
   ChevronDown,
   ChevronUp,
   X,
+  Upload,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-
-// TODO: Replace with venue context from auth/session
-const VENUE_ID = '22222222-2222-2222-2222-222222222201' // Rixey Manor
 
 // ---------------------------------------------------------------------------
 // Types
@@ -73,6 +72,7 @@ function getSupabase() {
 // ---------------------------------------------------------------------------
 
 export default function KnowledgeBasePage() {
+  const VENUE_ID = useVenueId()
   const [entries, setEntries] = useState<KBEntry[]>([])
   const [categories, setCategories] = useState<string[]>([])
   const [activeCategory, setActiveCategory] = useState<string>('All')
@@ -88,6 +88,9 @@ export default function KnowledgeBasePage() {
 
   // Delete confirmation
   const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  // Error state
+  const [error, setError] = useState<string | null>(null)
 
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -242,6 +245,82 @@ export default function KnowledgeBasePage() {
     setForm(EMPTY_FORM)
   }
 
+  const csvInputRef = useRef<HTMLInputElement>(null)
+  const [csvUploading, setCsvUploading] = useState(false)
+
+  async function handleCSVUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setCsvUploading(true)
+    try {
+      const text = await file.text()
+      const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
+      if (lines.length < 2) {
+        setError('CSV must have a header row and at least one data row')
+        return
+      }
+
+      // Parse header
+      const header = lines[0].toLowerCase().split(',').map((h) => h.trim().replace(/"/g, ''))
+      const qIdx = header.findIndex((h) => h === 'question' || h === 'q')
+      const aIdx = header.findIndex((h) => h === 'answer' || h === 'a')
+      const catIdx = header.findIndex((h) => h === 'category' || h === 'cat')
+      const kwIdx = header.findIndex((h) => h === 'keywords' || h === 'tags')
+
+      if (qIdx === -1 || aIdx === -1) {
+        setError('CSV must have "question" and "answer" columns')
+        return
+      }
+
+      // Parse rows
+      const supabase = getSupabase()
+      const rows = []
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(',').map((c) => c.trim().replace(/^"|"$/g, ''))
+        const question = cols[qIdx]?.trim()
+        const answer = cols[aIdx]?.trim()
+        if (!question || !answer) continue
+
+        const category = catIdx >= 0 ? (cols[catIdx]?.trim() || 'general') : 'general'
+        const keywords = kwIdx >= 0
+          ? (cols[kwIdx] || '').split(';').map((k) => k.trim().toLowerCase()).filter(Boolean)
+          : []
+
+        rows.push({
+          venue_id: VENUE_ID,
+          category,
+          question,
+          answer,
+          keywords,
+          priority: 0,
+          is_active: true,
+        })
+      }
+
+      if (rows.length === 0) {
+        setError('No valid entries found in CSV')
+        return
+      }
+
+      const { error: insertErr } = await supabase
+        .from('knowledge_base')
+        .insert(rows)
+
+      if (insertErr) throw insertErr
+
+      // Refresh
+      fetchEntries()
+      setError(null)
+    } catch (err) {
+      console.error('CSV upload failed:', err)
+      setError('Failed to upload CSV')
+    } finally {
+      setCsvUploading(false)
+      if (csvInputRef.current) csvInputRef.current.value = ''
+    }
+  }
+
   async function handleSave() {
     const supabase = getSupabase()
     setSaving(true)
@@ -349,6 +428,15 @@ export default function KnowledgeBasePage() {
 
   return (
     <div className="space-y-6">
+      {/* Error */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
+          <BookOpen className="w-5 h-5 text-red-500 shrink-0" />
+          <p className="text-sm text-red-700">{error}</p>
+          <button onClick={() => setError(null)} className="ml-auto text-sm font-medium text-red-600 hover:text-red-800">Dismiss</button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -359,13 +447,30 @@ export default function KnowledgeBasePage() {
             Manage venue information and FAQs for Sage.
           </p>
         </div>
-        <button
-          onClick={openCreateModal}
-          className="inline-flex items-center gap-2 px-4 py-2.5 bg-sage-600 text-white rounded-lg text-sm font-medium hover:bg-sage-700 transition-colors shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          Add Entry
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => csvInputRef.current?.click()}
+            disabled={csvUploading}
+            className="inline-flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 rounded-lg text-sm font-medium hover:bg-sage-50 transition-colors disabled:opacity-50"
+          >
+            <Upload className="w-4 h-4" />
+            {csvUploading ? 'Uploading...' : 'Upload CSV'}
+          </button>
+          <input
+            ref={csvInputRef}
+            type="file"
+            accept=".csv"
+            onChange={handleCSVUpload}
+            className="hidden"
+          />
+          <button
+            onClick={openCreateModal}
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-sage-600 text-white rounded-lg text-sm font-medium hover:bg-sage-700 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Add Entry
+          </button>
+        </div>
       </div>
 
       {/* Search */}

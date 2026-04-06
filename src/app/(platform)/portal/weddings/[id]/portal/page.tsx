@@ -687,7 +687,7 @@ export default function AdminPortalViewerPage() {
         supabase.from('timeline').select('*').eq('wedding_id', weddingId).order('due_date', { ascending: true }),
         supabase.from('budget').select('*').eq('wedding_id', weddingId).order('category'),
         supabase.from('checklist_items').select('*').eq('wedding_id', weddingId),
-        supabase.from('guests').select('*').eq('wedding_id', weddingId).order('last_name'),
+        supabase.from('guest_list').select('*').eq('wedding_id', weddingId).order('last_name'),
         supabase.from('portal_section_config').select('*').eq('venue_id', venueId).neq('visibility', 'off').order('sort_order'),
       ])
 

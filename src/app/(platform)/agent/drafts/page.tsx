@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
   FileCheck,
@@ -41,9 +42,6 @@ interface Draft {
 }
 
 type FilterTab = 'pending' | 'approved' | 'rejected' | 'sent'
-
-// TODO: Replace with venue from auth context
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -453,6 +451,7 @@ function DraftCard({
 // ---------------------------------------------------------------------------
 
 export default function ApprovalQueuePage() {
+  const VENUE_ID = useVenueId()
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -523,10 +522,11 @@ export default function ApprovalQueuePage() {
     fetchDrafts(activeTab)
   }, [fetchDrafts, activeTab])
 
-  // ---- Approve draft ----
+  // ---- Approve & Send draft ----
   const handleApprove = async (id: string) => {
     setProcessingId(id)
     try {
+      // Step 1: Mark as approved
       const { error: updateError } = await supabase
         .from('drafts')
         .update({
@@ -537,12 +537,24 @@ export default function ApprovalQueuePage() {
 
       if (updateError) throw updateError
 
-      // Log feedback
+      // Step 2: Log feedback
       await supabase.from('draft_feedback').insert({
         venue_id: VENUE_ID,
         draft_id: id,
         action: 'approved',
       })
+
+      // Step 3: Send the email via the API (triggers gmail.sendEmail)
+      try {
+        await fetch('/api/agent/drafts', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ draftId: id }),
+        })
+      } catch (sendErr) {
+        // Email send failure shouldn't block UI — draft is approved regardless
+        console.warn('Email send attempted but may have failed:', sendErr)
+      }
 
       // Remove from local state
       setDrafts((prev) => prev.filter((d) => d.id !== id))
@@ -579,6 +591,17 @@ export default function ApprovalQueuePage() {
         original_body: original?.draft_body,
         edited_body: editedBody,
       })
+
+      // Send the email via the API (triggers gmail.sendEmail)
+      try {
+        await fetch('/api/agent/drafts', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ draftId: id }),
+        })
+      } catch (sendErr) {
+        console.warn('Email send attempted but may have failed:', sendErr)
+      }
 
       setDrafts((prev) => prev.filter((d) => d.id !== id))
     } catch (err) {

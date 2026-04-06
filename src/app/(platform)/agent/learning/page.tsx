@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
   GraduationCap,
@@ -19,6 +20,7 @@ import {
   Plus,
   ArrowRight,
   X,
+  TrendingUp,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -61,9 +63,6 @@ interface LearnedPattern {
   confidence: number | null
   created_at: string
 }
-
-// TODO: Replace with venue from auth context
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Voice training A/B pairs — static content for "Which sounds more like you?"
@@ -266,6 +265,7 @@ function PreviewModal({
 // ---------------------------------------------------------------------------
 
 export default function EmailLearningPage() {
+  const VENUE_ID = useVenueId()
   const supabase = createClient()
 
   // State
@@ -290,6 +290,9 @@ export default function EmailLearningPage() {
 
   // Learned patterns
   const [learnedPatterns, setLearnedPatterns] = useState<LearnedPattern[]>([])
+
+  // Learning curve data (weekly aggregation)
+  const [weeklyData, setWeeklyData] = useState<{ week: string; approved: number; edited: number; rejected: number; approvalRate: number }[]>([])
 
   // A/B training
   const [currentABIndex, setCurrentABIndex] = useState(0)
@@ -354,6 +357,43 @@ export default function EmailLearningPage() {
         const stats = Object.entries(counts).map(([action, count]) => ({ action, count }))
         setFeedbackStats(stats)
         setTotalFeedback(feedbackRes.data.length)
+
+        // Build weekly learning curve from feedback timestamps
+        const { data: feedbackWithDates } = await supabase
+          .from('draft_feedback')
+          .select('action, created_at')
+          .eq('venue_id', VENUE_ID)
+          .order('created_at', { ascending: true })
+
+        if (feedbackWithDates && feedbackWithDates.length > 0) {
+          const weekMap = new Map<string, { approved: number; edited: number; rejected: number }>()
+          for (const row of feedbackWithDates) {
+            const d = new Date(row.created_at as string)
+            // Week key = Monday of that week
+            const day = d.getDay()
+            const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+            const monday = new Date(d)
+            monday.setDate(diff)
+            const weekKey = monday.toISOString().split('T')[0]
+            if (!weekMap.has(weekKey)) weekMap.set(weekKey, { approved: 0, edited: 0, rejected: 0 })
+            const w = weekMap.get(weekKey)!
+            const action = row.action as string
+            if (action === 'approved') w.approved++
+            else if (action === 'edited') w.edited++
+            else if (action === 'rejected') w.rejected++
+          }
+          const weekly = Array.from(weekMap.entries())
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([week, counts]) => {
+              const total = counts.approved + counts.edited + counts.rejected
+              return {
+                week,
+                ...counts,
+                approvalRate: total > 0 ? Math.round((counts.approved / total) * 100) : 0,
+              }
+            })
+          setWeeklyData(weekly)
+        }
       }
 
       setError(null)
@@ -608,6 +648,92 @@ export default function EmailLearningPage() {
           </>
         )}
       </div>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Learning Curve                                                   */}
+      {/* ---------------------------------------------------------------- */}
+      {!loading && weeklyData.length > 0 && (
+        <div className="bg-surface border border-border rounded-xl shadow-sm p-6">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-10 h-10 bg-emerald-50 rounded-lg flex items-center justify-center">
+              <TrendingUp className="w-5 h-5 text-emerald-600" />
+            </div>
+            <div>
+              <h2 className="font-heading text-lg font-semibold text-sage-900">
+                Voice Match Trajectory
+              </h2>
+              <p className="text-xs text-sage-500">
+                Approval rate over time — higher means {aiName} sounds more like you
+              </p>
+            </div>
+            {weeklyData.length > 0 && (
+              <div className="ml-auto text-right">
+                <p className={`text-2xl font-bold ${
+                  weeklyData[weeklyData.length - 1].approvalRate >= 90 ? 'text-emerald-600' :
+                  weeklyData[weeklyData.length - 1].approvalRate >= 70 ? 'text-sage-700' : 'text-amber-600'
+                }`}>
+                  {weeklyData[weeklyData.length - 1].approvalRate}%
+                </p>
+                <p className="text-[10px] text-sage-400">current match</p>
+              </div>
+            )}
+          </div>
+
+          {/* Chart */}
+          <div className="flex items-end gap-1 h-32 mb-2">
+            {weeklyData.map((w, i) => {
+              const barHeight = Math.max(8, (w.approvalRate / 100) * 120)
+              const color = w.approvalRate >= 90
+                ? 'bg-emerald-500'
+                : w.approvalRate >= 70
+                  ? 'bg-sage-400'
+                  : w.approvalRate >= 50
+                    ? 'bg-amber-400'
+                    : 'bg-red-400'
+              return (
+                <div key={w.week} className="flex-1 flex flex-col items-center justify-end gap-1 group relative">
+                  <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-sage-800 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                    {w.approvalRate}% — {w.approved}✓ {w.edited}✎ {w.rejected}✗
+                  </div>
+                  <div
+                    className={`w-full rounded-t-sm ${color} transition-all`}
+                    style={{ height: `${barHeight}px` }}
+                  />
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Week labels */}
+          <div className="flex gap-1">
+            {weeklyData.map((w, i) => (
+              <div key={w.week} className="flex-1 text-center">
+                {(i === 0 || i === weeklyData.length - 1 || i === Math.floor(weeklyData.length / 2)) ? (
+                  <span className="text-[10px] text-sage-400">
+                    {new Date(w.week + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  </span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+
+          {/* Milestone markers */}
+          <div className="flex items-center gap-4 mt-4 pt-4 border-t border-sage-100">
+            {[
+              { label: 'Week 1', target: '~60%', desc: 'Getting to know you' },
+              { label: 'Week 2', target: '~78%', desc: 'Finding your rhythm' },
+              { label: 'Month 1', target: '~93%', desc: 'Sounding like you' },
+              { label: 'Month 2+', target: '97%+', desc: 'Your voice, perfected' },
+            ].map((m) => (
+              <div key={m.label} className="flex-1 text-center">
+                <p className="text-xs font-semibold text-sage-700">{m.target}</p>
+                <p className="text-[10px] text-sage-500">{m.label}</p>
+                <p className="text-[10px] text-sage-400">{m.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* ============================================================ */}

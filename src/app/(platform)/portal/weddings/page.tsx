@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createBrowserClient } from '@supabase/ssr'
 import {
   Heart,
@@ -20,9 +21,6 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
-
-// TODO: Replace with venue context from auth/session
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -384,6 +382,7 @@ function WeddingCard({ wedding, venueSlug }: { wedding: Wedding; venueSlug: stri
 // ---------------------------------------------------------------------------
 
 export default function WeddingsPage() {
+  const VENUE_ID = useVenueId()
   const [weddings, setWeddings] = useState<Wedding[]>([])
   const [venueSlug, setVenueSlug] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)

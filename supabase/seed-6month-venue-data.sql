@@ -773,9 +773,9 @@ INSERT INTO interactions (id, venue_id, wedding_id, person_id, type, direction, 
   -- Crestwood Farm — recent threads
   ('eeee0901-0002-0001-0001-000000000001', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000209', '55555555-5555-5555-5555-555555000401', 'email', 'inbound', 'Vendor recommendation needed', 'Hey Jake! Do you have a bartending service you would recommend for our June wedding? We need someone who can handle craft cocktails for about 115 guests.', '2026-03-16 13:00:00+00'),
   ('eeee0901-0002-0001-0001-000000000002', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000209', '55555555-5555-5555-5555-555555000401', 'email', 'outbound', 'Re: Vendor recommendation needed', 'Hey Taylor! Absolutely — our top recommendation is Blue Ridge Bar Co. They do amazing craft cocktails and they know our space really well. I will send you their contact info...', '2026-03-16 14:30:00+00'),
-  ('eeee0901-0002-0001-0001-000000000003', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000211', NULL, 'email', 'inbound', 'Following up on our tour', 'Hi Daisy! We just wanted to say how much we loved visiting Crestwood Farm last weekend. The barn was even more beautiful than the photos. We are seriously considering it for our October wedding.', '2026-03-19 09:00:00+00'),
+  ('eeee0901-0002-0001-0001-000000000003', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000211', NULL, 'email', 'inbound', 'Following up on our tour', 'Hi Sage! We just wanted to say how much we loved visiting Crestwood Farm last weekend. The barn was even more beautiful than the photos. We are seriously considering it for our October wedding.', '2026-03-19 09:00:00+00'),
   ('eeee0901-0002-0001-0001-000000000004', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000211', NULL, 'email', 'outbound', 'Re: Following up on our tour', 'Hey! Oh that makes me so happy to hear! Y''all were such a fun couple to show around. October is absolutely gorgeous here — the leaves start turning and the meadow gets this golden glow. Want me to put together a proposal for October dates?', '2026-03-19 10:30:00+00'),
-  ('eeee0901-0002-0001-0001-000000000005', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000212', NULL, 'email', 'inbound', 'Re: Barn venue for intimate wedding?', 'Thanks for the quick reply Daisy! We would love to come see the space. Does Saturday March 29th work? Around 2pm?', '2026-03-24 08:00:00+00'),
+  ('eeee0901-0002-0001-0001-000000000005', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000212', NULL, 'email', 'inbound', 'Re: Barn venue for intimate wedding?', 'Thanks for the quick reply Sage! We would love to come see the space. Does Saturday March 29th work? Around 2pm?', '2026-03-24 08:00:00+00'),
   ('eeee0901-0002-0001-0001-000000000006', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000212', NULL, 'email', 'outbound', 'Re: Barn venue for intimate wedding?', 'Saturday the 29th at 2pm is perfect! I will have the barn open and the string lights on. Fair warning — it looks even better in person. See y''all then!', '2026-03-24 09:15:00+00'),
 
   -- The Glass House — recent threads
@@ -820,7 +820,7 @@ INSERT INTO drafts (id, venue_id, wedding_id, interaction_id, to_email, subject,
 
   -- PENDING: Crestwood — tour confirmation
   ('eeee1001-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000212', 'eeee0901-0002-0001-0001-000000000005', NULL, 'Re: Barn venue for intimate wedding?',
-   'Saturday the 29th at 2pm is perfect! I will have the barn doors open and the string lights on so y''all can see it in all its glory. Fair warning — it looks even better in person than the photos. Just head down the gravel drive and park by the big red barn. Can''t wait to meet y''all! Daisy',
+   'Saturday the 29th at 2pm is perfect! I will have the barn doors open and the string lights on so y''all can see it in all its glory. Fair warning — it looks even better in person than the photos. Just head down the gravel drive and park by the big red barn. Can''t wait to meet y''all! Sage',
    'pending', 'inquiry', 'inquiry_reply', 'claude-sonnet-4-20250514', 980, 0.0034, 94, false, NULL, NULL, '2026-03-24 08:10:00+00'),
 
   -- APPROVED+SENT: Rixey — catering question reply
@@ -840,7 +840,7 @@ INSERT INTO drafts (id, venue_id, wedding_id, interaction_id, to_email, subject,
 
   -- REJECTED: Crestwood — tone was too formal, Jake wanted it warmer
   ('eeee1001-0001-0001-0001-000000000008', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000211', 'eeee0901-0002-0001-0001-000000000003', NULL, 'Re: Following up on our tour',
-   'Dear couple, Thank you for your kind words about your visit to Crestwood Farm. We are pleased you enjoyed the tour. Should you wish to proceed, we would be happy to prepare a formal proposal for your October wedding. Please let us know your preferred date. Regards, Daisy',
+   'Dear couple, Thank you for your kind words about your visit to Crestwood Farm. We are pleased you enjoyed the tour. Should you wish to proceed, we would be happy to prepare a formal proposal for your October wedding. Please let us know your preferred date. Regards, Sage',
    'rejected', 'inquiry', 'inquiry_reply', 'claude-sonnet-4-20250514', 950, 0.0032, 72, false, NULL, NULL, '2026-03-19 09:05:00+00'),
 
   -- REJECTED: Rose Hill — too pushy on the close
@@ -850,7 +850,7 @@ INSERT INTO drafts (id, venue_id, wedding_id, interaction_id, to_email, subject,
 
   -- AUTO-SENT: Crestwood — high-confidence acknowledgment
   ('eeee1001-0001-0001-0001-000000000010', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000209', 'eeee0901-0002-0001-0001-000000000001', 'taylor.kim@gmail.com', 'Re: Vendor recommendation needed',
-   'Hey Taylor! Absolutely — our top recommendation is Blue Ridge Bar Co. They do amazing craft cocktails and they know our space really well. Tell them Crestwood Farm sent you and they will take great care of y''all. I will email you their contact info separately. Can''t wait to meet y''all! Daisy',
+   'Hey Taylor! Absolutely — our top recommendation is Blue Ridge Bar Co. They do amazing craft cocktails and they know our space really well. Tell them Crestwood Farm sent you and they will take great care of y''all. I will email you their contact info separately. Can''t wait to meet y''all! Sage',
    'sent', 'client', 'inquiry_reply', 'claude-sonnet-4-20250514', 920, 0.0032, 96, true, NULL, NULL, '2026-03-16 13:02:00+00'),
 
   -- AUTO-SENT: Rixey — 3-day follow-up on an older lead
@@ -1068,7 +1068,7 @@ ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO draft_feedback (id, venue_id, draft_id, action, original_body, edited_body, rejection_reason, coordinator_edits, created_at) VALUES
   -- Jake rejected the too-formal Crestwood draft
-  ('eeee1501-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222202', 'eeee1001-0001-0001-0001-000000000008', 'rejected', NULL, NULL, 'Way too formal — Daisy would never say "Dear couple" or "Regards". Rewrite with the actual Crestwood voice.', NULL, '2026-03-19 09:10:00+00'),
+  ('eeee1501-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222202', 'eeee1001-0001-0001-0001-000000000008', 'rejected', NULL, NULL, 'Way too formal — Sage would never say "Dear couple" or "Regards". Rewrite with the actual Crestwood voice.', NULL, '2026-03-19 09:10:00+00'),
 
   -- Olivia rejected the pushy Rose Hill draft
   ('eeee1501-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222204', 'eeee1001-0001-0001-0001-000000000009', 'rejected', NULL, NULL, 'Too pushy — we never say "dates are filling fast" or push for a deposit in the first email. That is not our vibe at all.', NULL, '2026-03-20 16:20:00+00'),

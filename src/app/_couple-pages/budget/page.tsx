@@ -9,6 +9,7 @@ import {
   Edit2,
   Trash2,
   TrendingUp,
+  TrendingDown,
   CreditCard,
   Receipt,
   Wallet,
@@ -17,140 +18,157 @@ import {
   AlertTriangle,
   CheckCircle2,
   PiggyBank,
-  FileText,
   Calendar,
   Search,
+  Share2,
+  Banknote,
+  Building,
+  Gift,
+  Users,
+  MoreHorizontal,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+interface PaymentRecord {
+  id: string
+  budget_item_id: string
+  amount: number
+  date: string
+  method: string
+  notes: string | null
+}
+
 interface BudgetItem {
   id: string
-  category: string | null
+  category: string
   item_name: string
-  estimated_cost: number | null
-  actual_cost: number | null
-  paid_amount: number | null
+  budgeted: number
+  committed: number
+  paid: number
+  payment_source: string | null
+  payment_due_date: string | null
   notes: string | null
-  vendor_name: string | null
-  due_date: string | null
-  is_paid: boolean
-  contract_signed: boolean
+  is_custom_category: boolean
+  display_order: number
+  payments?: PaymentRecord[]
 }
 
 interface BudgetFormData {
   category: string
   item_name: string
-  estimated_cost: string
-  actual_cost: string
-  paid_amount: string
+  budgeted: string
+  committed: string
+  payment_source: string
+  payment_due_date: string
   notes: string
-  vendor_name: string
-  due_date: string
-  is_paid: boolean
-  contract_signed: boolean
-}
-
-interface PaymentRecord {
-  id: string
-  budget_item_id: string
-  amount: number
-  payment_date: string
-  method: string | null
-  notes: string | null
 }
 
 interface PaymentFormData {
   amount: string
-  payment_date: string
+  date: string
   method: string
   notes: string
 }
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
 const DEFAULT_CATEGORIES = [
-  'Venue',
-  'Catering / Food',
-  'Bar / Beverages',
+  'Catering/Food',
   'Photography',
   'Videography',
-  'Flowers',
-  'Music / Entertainment',
+  'Flowers & Florals',
+  'Music (DJ/Band)',
   'Cake & Desserts',
   'Officiant',
   'Hair & Makeup',
-  'Attire',
-  'Decor / Rentals',
-  'Stationery',
-  'Transportation',
-  'Tips',
+  'Attire & Accessories',
   'Other',
 ]
 
-const CATEGORY_ICONS: Record<string, string> = {
-  'Venue': '🏛️',
-  'Catering / Food': '🍽️',
-  'Bar / Beverages': '🥂',
-  'Photography': '📸',
-  'Videography': '🎥',
-  'Flowers': '💐',
-  'Music / Entertainment': '🎵',
-  'Cake & Desserts': '🎂',
-  'Officiant': '💒',
-  'Hair & Makeup': '💄',
-  'Attire': '👔',
-  'Decor / Rentals': '✨',
-  'Stationery': '✉️',
-  'Transportation': '🚗',
-  'Tips': '💰',
-  'Other': '📋',
+const PAYMENT_SOURCES = [
+  'Couple',
+  'Parents of Bride',
+  'Parents of Groom',
+  'Wedding Party',
+  'Credit Card',
+  'Savings',
+  'Gift',
+  'Other',
+]
+
+const PAYMENT_METHODS = [
+  'Credit Card',
+  'Check',
+  'Bank Transfer',
+  'Cash',
+  'Venmo/Zelle',
+]
+
+const SOURCE_ICONS: Record<string, React.ReactNode> = {
+  Couple: <Users className="w-3 h-3" />,
+  'Parents of Bride': <Building className="w-3 h-3" />,
+  'Parents of Groom': <Building className="w-3 h-3" />,
+  'Wedding Party': <Users className="w-3 h-3" />,
+  'Credit Card': <CreditCard className="w-3 h-3" />,
+  Savings: <PiggyBank className="w-3 h-3" />,
+  Gift: <Gift className="w-3 h-3" />,
+  Other: <MoreHorizontal className="w-3 h-3" />,
 }
 
 const EMPTY_FORM: BudgetFormData = {
   category: '',
   item_name: '',
-  estimated_cost: '',
-  actual_cost: '',
-  paid_amount: '',
+  budgeted: '',
+  committed: '',
+  payment_source: '',
+  payment_due_date: '',
   notes: '',
-  vendor_name: '',
-  due_date: '',
-  is_paid: false,
-  contract_signed: false,
 }
 
 const EMPTY_PAYMENT: PaymentFormData = {
   amount: '',
-  payment_date: new Date().toISOString().split('T')[0],
-  method: '',
+  date: new Date().toISOString().split('T')[0],
+  method: 'Credit Card',
   notes: '',
 }
-
-const PAYMENT_METHODS = ['Credit Card', 'Check', 'Bank Transfer', 'Cash', 'Venmo/Zelle', 'Other']
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function fmt$(value: number | null): string {
-  if (value == null) return '$0'
-  return `$${Math.round(value).toLocaleString()}`
+function formatCurrency(amount: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(amount)
 }
 
-function toNum(val: string): number | null {
-  const n = parseFloat(val)
-  return isNaN(n) ? null : n
-}
+function formatDueDate(dateStr: string | null): { text: string; color: string } {
+  if (!dateStr) return { text: '', color: '' }
+  const due = new Date(dateStr + 'T00:00:00')
+  const now = new Date()
+  now.setHours(0, 0, 0, 0)
+  const diffMs = due.getTime() - now.getTime()
+  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24))
 
-function progressColor(percent: number): string {
-  if (percent > 100) return '#EF4444'
-  if (percent > 90) return '#F59E0B'
-  return 'var(--couple-primary)'
+  if (diffDays < 0) return { text: `${Math.abs(diffDays)}d overdue`, color: 'text-red-600 bg-red-50' }
+  if (diffDays === 0) return { text: 'Due today', color: 'text-amber-700 bg-amber-50' }
+  if (diffDays === 1) return { text: 'Tomorrow', color: 'text-amber-600 bg-amber-50' }
+  if (diffDays <= 7) return { text: `in ${diffDays} days`, color: 'text-blue-600 bg-blue-50' }
+  if (diffDays <= 14) return { text: 'in 2 weeks', color: 'text-gray-500 bg-gray-50' }
+  const formatted = due.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return { text: formatted, color: 'text-gray-500 bg-gray-50' }
 }
 
 // ---------------------------------------------------------------------------
@@ -160,118 +178,116 @@ function progressColor(percent: number): string {
 export default function BudgetPage() {
   const [items, setItems] = useState<BudgetItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
+  const [totalBudget, setTotalBudget] = useState(0)
+  const [editingBudget, setEditingBudget] = useState(false)
+  const [budgetInput, setBudgetInput] = useState('')
+  const [showItemModal, setShowItemModal] = useState(false)
   const [showPaymentModal, setShowPaymentModal] = useState(false)
-  const [showBudgetSetter, setShowBudgetSetter] = useState(false)
-  const [showAddCategory, setShowAddCategory] = useState(false)
+  const [showCategoryModal, setShowCategoryModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [paymentItemId, setPaymentItemId] = useState<string | null>(null)
   const [form, setForm] = useState<BudgetFormData>(EMPTY_FORM)
   const [paymentForm, setPaymentForm] = useState<PaymentFormData>(EMPTY_PAYMENT)
-  const [paymentItemId, setPaymentItemId] = useState<string | null>(null)
-  const [totalBudget, setTotalBudget] = useState(0)
-  const [totalBudgetInput, setTotalBudgetInput] = useState('')
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set())
+  const [expandedPayments, setExpandedPayments] = useState<Set<string>>(new Set())
   const [customCategories, setCustomCategories] = useState<string[]>([])
   const [newCategoryName, setNewCategoryName] = useState('')
+  const [shareWithVenue, setShareWithVenue] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [filterCategory, setFilterCategory] = useState<string | null>(null)
 
-  const allCategories = [...DEFAULT_CATEGORIES, ...customCategories]
   const supabase = createClient()
+  const allCategories = useMemo(() => [...DEFAULT_CATEGORIES, ...customCategories], [customCategories])
 
   // ---- Fetch ----
   const fetchItems = useCallback(async () => {
     const { data, error } = await supabase
-      .from('budget')
-      .select('*')
+      .from('budget_items')
+      .select('*, budget_payments(*)')
       .eq('wedding_id', WEDDING_ID)
-      .order('category', { ascending: true })
-      .order('item_name', { ascending: true })
+      .order('display_order', { ascending: true })
 
     if (!error && data) {
-      setItems(data as BudgetItem[])
+      const mapped = data.map((d: Record<string, unknown>) => ({
+        id: d.id as string,
+        category: (d.category as string) || 'Other',
+        item_name: (d.item_name as string) || '',
+        budgeted: (d.budgeted as number) || 0,
+        committed: (d.committed as number) || 0,
+        paid: 0,
+        payment_source: d.payment_source as string | null,
+        payment_due_date: d.payment_due_date as string | null,
+        notes: d.notes as string | null,
+        is_custom_category: (d.is_custom_category as boolean) || false,
+        display_order: (d.display_order as number) || 0,
+        payments: ((d.budget_payments || []) as PaymentRecord[]),
+      }))
+      // Calculate paid from payments
+      mapped.forEach((item) => {
+        item.paid = (item.payments || []).reduce((sum: number, p: PaymentRecord) => sum + p.amount, 0)
+      })
+      setItems(mapped)
+      // Collect custom categories
+      const customs = [...new Set(mapped.filter((i) => i.is_custom_category).map((i) => i.category))]
+      setCustomCategories(customs)
     }
     setLoading(false)
   }, [supabase])
 
-  const fetchBudgetSettings = useCallback(async () => {
+  const fetchBudgetConfig = useCallback(async () => {
     const { data } = await supabase
-      .from('wedding_settings')
-      .select('total_budget, custom_budget_categories')
+      .from('wedding_config')
+      .select('total_budget, share_budget_with_venue')
       .eq('wedding_id', WEDDING_ID)
       .single()
 
     if (data) {
-      setTotalBudget(data.total_budget || 0)
-      setCustomCategories(data.custom_budget_categories || [])
+      setTotalBudget((data as Record<string, unknown>).total_budget as number || 0)
+      setShareWithVenue((data as Record<string, unknown>).share_budget_with_venue as boolean || false)
     }
   }, [supabase])
 
   useEffect(() => {
     fetchItems()
-    fetchBudgetSettings()
-  }, [fetchItems, fetchBudgetSettings])
+    fetchBudgetConfig()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ---- Computed totals ----
+  // ---- Computed ----
   const totals = useMemo(() => {
-    const budgeted = items.reduce((s, i) => s + (Number(i.estimated_cost) || 0), 0)
-    const committed = items.reduce((s, i) => s + (Number(i.actual_cost) || 0), 0)
-    const paid = items.reduce((s, i) => s + (Number(i.paid_amount) || 0), 0)
-    const outstanding = committed - paid
-    const remaining = totalBudget > 0 ? totalBudget - committed : budgeted - committed
-
-    return { budgeted, committed, paid, outstanding, remaining }
+    const budgeted = items.reduce((s, i) => s + i.budgeted, 0)
+    const committed = items.reduce((s, i) => s + i.committed, 0)
+    const paid = items.reduce((s, i) => s + i.paid, 0)
+    const remaining = committed - paid
+    const overBudget = committed > totalBudget && totalBudget > 0
+    const underBudget = totalBudget > 0 && committed <= totalBudget
+    return { budgeted, committed, paid, remaining, overBudget, underBudget }
   }, [items, totalBudget])
 
-  // ---- Category breakdown ----
-  const categoryData = useMemo(() => {
-    const cats: Record<string, {
-      items: BudgetItem[]
-      budgeted: number
-      committed: number
-      paid: number
-    }> = {}
-
-    items.forEach(item => {
-      const cat = item.category || 'Uncategorized'
-      if (!cats[cat]) cats[cat] = { items: [], budgeted: 0, committed: 0, paid: 0 }
-      cats[cat].items.push(item)
-      cats[cat].budgeted += Number(item.estimated_cost) || 0
-      cats[cat].committed += Number(item.actual_cost) || 0
-      cats[cat].paid += Number(item.paid_amount) || 0
-    })
-
-    return cats
-  }, [items])
-
-  // ---- Filter items ----
-  const filteredCategoryEntries = useMemo(() => {
-    let entries = Object.entries(categoryData)
-
-    if (filterCategory) {
-      entries = entries.filter(([cat]) => cat === filterCategory)
+  // ---- Group by category ----
+  const groupedItems = useMemo(() => {
+    const groups: Record<string, BudgetItem[]> = {}
+    for (const item of items) {
+      const cat = item.category || 'Other'
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase()
+        if (
+          !item.item_name.toLowerCase().includes(q) &&
+          !cat.toLowerCase().includes(q)
+        ) {
+          continue
+        }
+      }
+      if (!groups[cat]) groups[cat] = []
+      groups[cat].push(item)
     }
+    // Sort by allCategories order
+    return allCategories
+      .filter((c) => groups[c] && groups[c].length > 0)
+      .map((c) => ({ category: c, items: groups[c] }))
+  }, [items, allCategories, searchQuery])
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase()
-      entries = entries
-        .map(([cat, data]) => [cat, {
-          ...data,
-          items: data.items.filter(i =>
-            i.item_name.toLowerCase().includes(q) ||
-            (i.vendor_name || '').toLowerCase().includes(q) ||
-            (i.notes || '').toLowerCase().includes(q)
-          ),
-        }] as [string, typeof data])
-        .filter(([, data]) => data.items.length > 0)
-    }
-
-    return entries.sort((a, b) => b[1].committed - a[1].committed)
-  }, [categoryData, filterCategory, searchQuery])
-
-  // ---- Toggle category ----
+  // ---- Toggle category expand ----
   function toggleCategory(cat: string) {
-    setExpandedCategories(prev => {
+    setExpandedCategories((prev) => {
       const next = new Set(prev)
       if (next.has(cat)) next.delete(cat)
       else next.add(cat)
@@ -279,136 +295,132 @@ export default function BudgetPage() {
     })
   }
 
-  // ---- Modal helpers ----
-  function openAdd(category?: string) {
+  function togglePayments(itemId: string) {
+    setExpandedPayments((prev) => {
+      const next = new Set(prev)
+      if (next.has(itemId)) next.delete(itemId)
+      else next.add(itemId)
+      return next
+    })
+  }
+
+  // ---- Save total budget ----
+  async function saveTotalBudget() {
+    const amount = parseFloat(budgetInput.replace(/[^0-9.]/g, '')) || 0
+    setTotalBudget(amount)
+    setEditingBudget(false)
+    await supabase
+      .from('wedding_config')
+      .upsert({ wedding_id: WEDDING_ID, total_budget: amount }, { onConflict: 'wedding_id' })
+  }
+
+  // ---- Share toggle ----
+  async function toggleShare() {
+    const val = !shareWithVenue
+    setShareWithVenue(val)
+    await supabase
+      .from('wedding_config')
+      .upsert({ wedding_id: WEDDING_ID, share_budget_with_venue: val }, { onConflict: 'wedding_id' })
+  }
+
+  // ---- Item modal ----
+  function openAddItem(category?: string) {
     setForm({ ...EMPTY_FORM, category: category || '' })
     setEditingId(null)
-    setShowModal(true)
+    setShowItemModal(true)
   }
 
-  function openEdit(item: BudgetItem) {
+  function openEditItem(item: BudgetItem) {
     setForm({
-      category: item.category || '',
+      category: item.category,
       item_name: item.item_name,
-      estimated_cost: item.estimated_cost?.toString() || '',
-      actual_cost: item.actual_cost?.toString() || '',
-      paid_amount: item.paid_amount?.toString() || '',
+      budgeted: item.budgeted.toString(),
+      committed: item.committed.toString(),
+      payment_source: item.payment_source || '',
+      payment_due_date: item.payment_due_date || '',
       notes: item.notes || '',
-      vendor_name: item.vendor_name || '',
-      due_date: item.due_date || '',
-      is_paid: item.is_paid || false,
-      contract_signed: item.contract_signed || false,
     })
     setEditingId(item.id)
-    setShowModal(true)
+    setShowItemModal(true)
   }
 
-  async function handleSave() {
-    if (!form.item_name.trim()) return
-
+  async function handleSaveItem() {
+    if (!form.item_name.trim() || !form.category) return
+    const isCustom = !DEFAULT_CATEGORIES.includes(form.category)
     const payload = {
       venue_id: VENUE_ID,
       wedding_id: WEDDING_ID,
-      category: form.category || null,
+      category: form.category,
       item_name: form.item_name.trim(),
-      estimated_cost: toNum(form.estimated_cost),
-      actual_cost: toNum(form.actual_cost),
-      paid_amount: toNum(form.paid_amount),
+      budgeted: parseFloat(form.budgeted) || 0,
+      committed: parseFloat(form.committed) || 0,
+      payment_source: form.payment_source || null,
+      payment_due_date: form.payment_due_date || null,
       notes: form.notes.trim() || null,
-      vendor_name: form.vendor_name.trim() || null,
-      due_date: form.due_date || null,
-      is_paid: form.is_paid,
-      contract_signed: form.contract_signed,
+      is_custom_category: isCustom,
+      display_order: editingId
+        ? items.find((i) => i.id === editingId)?.display_order || items.length + 1
+        : items.length + 1,
     }
 
     if (editingId) {
-      await supabase.from('budget').update(payload).eq('id', editingId)
+      await supabase.from('budget_items').update(payload).eq('id', editingId)
     } else {
-      await supabase.from('budget').insert(payload)
+      await supabase.from('budget_items').insert(payload)
     }
 
-    setShowModal(false)
+    setShowItemModal(false)
     setEditingId(null)
     fetchItems()
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('Remove this budget item?')) return
-    await supabase.from('budget').delete().eq('id', id)
-    fetchItems()
+  async function handleDeleteItem(id: string) {
+    if (!confirm('Delete this budget item and all its payments?')) return
+    await supabase.from('budget_payments').delete().eq('budget_item_id', id)
+    await supabase.from('budget_items').delete().eq('id', id)
+    setItems((prev) => prev.filter((i) => i.id !== id))
   }
 
-  // ---- Payment tracking ----
-  function openPayment(itemId: string) {
+  // ---- Payment modal ----
+  function openRecordPayment(itemId: string) {
     setPaymentItemId(itemId)
     setPaymentForm(EMPTY_PAYMENT)
     setShowPaymentModal(true)
   }
 
-  async function handleRecordPayment() {
+  async function handleSavePayment() {
     if (!paymentItemId || !paymentForm.amount) return
-
-    const amount = parseFloat(paymentForm.amount)
-    if (isNaN(amount)) return
-
-    // Update the paid_amount on the budget item
-    const item = items.find(i => i.id === paymentItemId)
-    if (!item) return
-
-    const newPaid = (Number(item.paid_amount) || 0) + amount
-    const isFullyPaid = item.actual_cost ? newPaid >= Number(item.actual_cost) : false
-
-    await supabase.from('budget').update({
-      paid_amount: newPaid,
-      is_paid: isFullyPaid,
-    }).eq('id', paymentItemId)
-
+    await supabase.from('budget_payments').insert({
+      budget_item_id: paymentItemId,
+      amount: parseFloat(paymentForm.amount) || 0,
+      date: paymentForm.date || new Date().toISOString().split('T')[0],
+      method: paymentForm.method,
+      notes: paymentForm.notes.trim() || null,
+    })
     setShowPaymentModal(false)
     setPaymentItemId(null)
     fetchItems()
   }
 
-  // ---- Budget setting ----
-  async function saveTotalBudget() {
-    const val = parseFloat(totalBudgetInput)
-    if (isNaN(val)) return
-
-    await supabase.from('wedding_settings').upsert({
-      wedding_id: WEDDING_ID,
-      total_budget: val,
-    }, { onConflict: 'wedding_id' })
-
-    setTotalBudget(val)
-    setShowBudgetSetter(false)
+  async function handleDeletePayment(paymentId: string) {
+    if (!confirm('Delete this payment record?')) return
+    await supabase.from('budget_payments').delete().eq('id', paymentId)
+    fetchItems()
   }
 
   // ---- Custom category ----
-  async function addCustomCategory() {
-    if (!newCategoryName.trim()) return
-    const updated = [...customCategories, newCategoryName.trim()]
-    await supabase.from('wedding_settings').upsert({
-      wedding_id: WEDDING_ID,
-      custom_budget_categories: updated,
-    }, { onConflict: 'wedding_id' })
-    setCustomCategories(updated)
+  function addCustomCategory() {
+    const name = newCategoryName.trim()
+    if (!name || allCategories.includes(name)) return
+    setCustomCategories((prev) => [...prev, name])
     setNewCategoryName('')
-    setShowAddCategory(false)
   }
 
-  // ---- Progress calculations ----
-  const overallBudgetBase = totalBudget > 0 ? totalBudget : totals.budgeted
-  const overallCommittedPercent = overallBudgetBase > 0
-    ? Math.round((totals.committed / overallBudgetBase) * 100)
-    : 0
-  const overallPaidPercent = overallBudgetBase > 0
-    ? Math.round((totals.paid / overallBudgetBase) * 100)
-    : 0
-  const isOverBudget = totals.committed > overallBudgetBase && overallBudgetBase > 0
-
+  // ---- Render ----
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1
             className="text-3xl font-bold mb-1"
@@ -416,18 +428,18 @@ export default function BudgetPage() {
           >
             Budget
           </h1>
-          <p className="text-gray-500 text-sm">Track every dollar — budgeted, committed, and paid.</p>
+          <p className="text-gray-500 text-sm">Track every dollar of your wedding budget.</p>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => { setTotalBudgetInput(totalBudget.toString()); setShowBudgetSetter(true) }}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+            onClick={() => setShowCategoryModal(true)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50"
           >
-            <PiggyBank className="w-3.5 h-3.5" />
-            {totalBudget > 0 ? `Budget: ${fmt$(totalBudget)}` : 'Set Budget'}
+            <Plus className="w-4 h-4" />
+            Category
           </button>
           <button
-            onClick={() => openAdd()}
+            onClick={() => openAddItem()}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
             style={{ backgroundColor: 'var(--couple-primary)' }}
           >
@@ -437,313 +449,396 @@ export default function BudgetPage() {
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        {totalBudget > 0 && (
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-            <div className="flex items-center gap-2 mb-1">
-              <PiggyBank className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
-              <span className="text-xs text-gray-500 font-medium">Total Budget</span>
+      {/* Overall Dashboard */}
+      <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+        {/* Total Budget */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div
+              className="w-10 h-10 rounded-xl flex items-center justify-center text-white"
+              style={{ backgroundColor: 'var(--couple-primary)' }}
+            >
+              <Wallet className="w-5 h-5" />
             </div>
-            <p className="text-xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
-              {fmt$(totalBudget)}
-            </p>
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wide font-medium">Total Wedding Budget</p>
+              {editingBudget ? (
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-gray-400">$</span>
+                  <input
+                    type="text"
+                    value={budgetInput}
+                    onChange={(e) => setBudgetInput(e.target.value)}
+                    className="text-xl font-bold w-32 border-b-2 bg-transparent focus:outline-none"
+                    style={{ borderColor: 'var(--couple-primary)' }}
+                    autoFocus
+                    onKeyDown={(e) => e.key === 'Enter' && saveTotalBudget()}
+                  />
+                  <button
+                    onClick={saveTotalBudget}
+                    className="text-xs font-medium px-2 py-1 rounded text-white"
+                    style={{ backgroundColor: 'var(--couple-primary)' }}
+                  >
+                    Save
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
+                    setBudgetInput(totalBudget.toString())
+                    setEditingBudget(true)
+                  }}
+                  className="text-xl font-bold text-gray-900 hover:underline decoration-dotted"
+                >
+                  {totalBudget > 0 ? formatCurrency(totalBudget) : 'Set Budget'}
+                </button>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={toggleShare}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+              shareWithVenue
+                ? 'bg-green-50 border-green-200 text-green-700'
+                : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+            )}
+          >
+            <Share2 className="w-3 h-3" />
+            {shareWithVenue ? 'Shared with venue' : 'Share with venue'}
+          </button>
+        </div>
+
+        {/* Committed vs Budget Progress */}
+        {totalBudget > 0 && (
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-1 text-xs">
+              <span className="text-gray-500">
+                Committed: {formatCurrency(totals.committed)} of {formatCurrency(totalBudget)}
+              </span>
+              <span
+                className={cn(
+                  'font-medium',
+                  totals.overBudget ? 'text-red-600' : 'text-green-600'
+                )}
+              >
+                {totals.overBudget
+                  ? `${formatCurrency(totals.committed - totalBudget)} over`
+                  : `${formatCurrency(totalBudget - totals.committed)} under`}
+              </span>
+            </div>
+            <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className={cn(
+                  'h-full rounded-full transition-all duration-500',
+                  totals.overBudget ? 'bg-red-500' : ''
+                )}
+                style={{
+                  width: `${Math.min((totals.committed / totalBudget) * 100, 100)}%`,
+                  backgroundColor: totals.overBudget ? undefined : 'var(--couple-primary)',
+                }}
+              />
+            </div>
           </div>
         )}
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-2 mb-1">
-            <TrendingUp className="w-4 h-4 text-blue-500" />
-            <span className="text-xs text-gray-500 font-medium">Budgeted</span>
+
+        {/* Stats Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="p-3 bg-gray-50 rounded-lg">
+            <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+              <Receipt className="w-3.5 h-3.5" />
+              Budgeted
+            </div>
+            <p className="text-lg font-bold text-gray-900">{formatCurrency(totals.budgeted)}</p>
           </div>
-          <p className="text-xl font-bold tabular-nums text-blue-600">{fmt$(totals.budgeted)}</p>
-        </div>
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-2 mb-1">
-            <FileText className="w-4 h-4 text-purple-500" />
-            <span className="text-xs text-gray-500 font-medium">Committed</span>
+          <div className="p-3 bg-gray-50 rounded-lg">
+            <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+              <CreditCard className="w-3.5 h-3.5" />
+              Committed
+            </div>
+            <p className="text-lg font-bold text-gray-900">{formatCurrency(totals.committed)}</p>
           </div>
-          <p className="text-xl font-bold tabular-nums text-purple-600">{fmt$(totals.committed)}</p>
-        </div>
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-2 mb-1">
-            <CreditCard className="w-4 h-4 text-emerald-500" />
-            <span className="text-xs text-gray-500 font-medium">Paid</span>
+          <div className="p-3 bg-gray-50 rounded-lg">
+            <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+              <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+              Paid
+            </div>
+            <p className="text-lg font-bold text-green-700">{formatCurrency(totals.paid)}</p>
           </div>
-          <p className="text-xl font-bold tabular-nums text-emerald-600">{fmt$(totals.paid)}</p>
-        </div>
-        <div className={cn('rounded-xl p-4 shadow-sm border', isOverBudget ? 'bg-red-50 border-red-200' : 'bg-white border-gray-100')}>
-          <div className="flex items-center gap-2 mb-1">
-            {isOverBudget ? <AlertTriangle className="w-4 h-4 text-red-500" /> : <Wallet className="w-4 h-4 text-amber-500" />}
-            <span className="text-xs text-gray-500 font-medium">{isOverBudget ? 'Over Budget' : 'Remaining'}</span>
+          <div className="p-3 bg-gray-50 rounded-lg">
+            <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+              <Banknote className="w-3.5 h-3.5 text-amber-500" />
+              Remaining
+            </div>
+            <p className="text-lg font-bold text-amber-700">{formatCurrency(totals.remaining)}</p>
           </div>
-          <p className={cn('text-xl font-bold tabular-nums', isOverBudget ? 'text-red-600' : totals.remaining < 0 ? 'text-red-600' : 'text-amber-600')}>
-            {isOverBudget ? fmt$(totals.committed - overallBudgetBase) : fmt$(Math.max(0, totals.remaining))}
-          </p>
         </div>
+
+        {/* Over budget warning */}
+        {totals.overBudget && (
+          <div className="flex items-center gap-2 mt-4 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            You are {formatCurrency(totals.committed - totalBudget)} over your total budget.
+          </div>
+        )}
       </div>
 
-      {/* Overall Progress */}
-      <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-gray-700">Overall Progress</span>
-          {isOverBudget && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-600">
-              <AlertTriangle className="w-3 h-3" />
-              Over budget by {fmt$(totals.committed - overallBudgetBase)}
-            </span>
-          )}
-        </div>
-
-        {/* Committed bar */}
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs text-gray-500">Committed</span>
-            <span className="text-xs font-medium tabular-nums" style={{ color: progressColor(overallCommittedPercent) }}>
-              {fmt$(totals.committed)} / {fmt$(overallBudgetBase)} ({overallCommittedPercent}%)
-            </span>
-          </div>
-          <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all"
-              style={{
-                width: `${Math.min(100, overallCommittedPercent)}%`,
-                backgroundColor: progressColor(overallCommittedPercent),
-              }}
-            />
-          </div>
-        </div>
-
-        {/* Paid bar */}
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs text-gray-500">Paid</span>
-            <span className="text-xs font-medium tabular-nums text-emerald-600">
-              {fmt$(totals.paid)} / {fmt$(totals.committed)} ({totals.committed > 0 ? Math.round((totals.paid / totals.committed) * 100) : 0}%)
-            </span>
-          </div>
-          <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all bg-emerald-500"
-              style={{
-                width: `${totals.committed > 0 ? Math.min(100, Math.round((totals.paid / totals.committed) * 100)) : 0}%`,
-              }}
-            />
-          </div>
-        </div>
+      {/* Search */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search items..."
+          className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+          style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+        />
       </div>
 
-      {/* Search + Filter */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Search items, vendors..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
-            style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-          />
-        </div>
-        <select
-          value={filterCategory || ''}
-          onChange={e => setFilterCategory(e.target.value || null)}
-          className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-600"
-        >
-          <option value="">All categories</option>
-          {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <button
-          onClick={() => setShowAddCategory(true)}
-          className="inline-flex items-center gap-1 px-3 py-2 text-xs font-medium border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50"
-        >
-          <Plus className="w-3 h-3" />
-          Category
-        </button>
-      </div>
-
-      {/* Category Breakdown */}
+      {/* Category Groups */}
       {loading ? (
-        <div className="animate-pulse space-y-3">
-          {[1, 2, 3, 4, 5].map(i => (
-            <div key={i} className="h-16 bg-gray-100 rounded-lg" />
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="animate-pulse h-20 bg-gray-100 rounded-xl" />
           ))}
         </div>
-      ) : items.length === 0 ? (
+      ) : groupedItems.length === 0 ? (
         <div className="text-center py-16 bg-white rounded-xl border border-gray-100 shadow-sm">
           <DollarSign className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--couple-primary)', opacity: 0.3 }} />
-          <h3 className="text-lg font-semibold mb-2" style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}>
-            No budget items yet
+          <h3
+            className="text-lg font-semibold mb-2"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+          >
+            {searchQuery ? 'No matching items' : 'No budget items yet'}
           </h3>
-          <p className="text-gray-500 text-sm mb-4">Start tracking your wedding budget by adding items.</p>
-          <div className="flex items-center justify-center gap-3">
+          <p className="text-gray-500 text-sm mb-4">
+            {searchQuery ? 'Try a different search.' : 'Add your first budget item to start tracking.'}
+          </p>
+          {!searchQuery && (
             <button
-              onClick={() => { setTotalBudgetInput(''); setShowBudgetSetter(true) }}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50"
-            >
-              <PiggyBank className="w-4 h-4" />
-              Set Total Budget
-            </button>
-            <button
-              onClick={() => openAdd()}
+              onClick={() => openAddItem()}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
               style={{ backgroundColor: 'var(--couple-primary)' }}
             >
               <Plus className="w-4 h-4" />
               Add First Item
             </button>
-          </div>
+          )}
         </div>
       ) : (
-        <div className="space-y-3">
-          {filteredCategoryEntries.map(([cat, data]) => {
-            const isExpanded = expandedCategories.has(cat)
-            const catPercent = data.budgeted > 0 ? Math.round((data.committed / data.budgeted) * 100) : 0
-            const paidPercent = data.committed > 0 ? Math.round((data.paid / data.committed) * 100) : 0
-            const icon = CATEGORY_ICONS[cat] || '📋'
+        <div className="space-y-4">
+          {groupedItems.map(({ category, items: catItems }) => {
+            const isExpanded = expandedCategories.has(category)
+            const catBudgeted = catItems.reduce((s, i) => s + i.budgeted, 0)
+            const catCommitted = catItems.reduce((s, i) => s + i.committed, 0)
+            const catPaid = catItems.reduce((s, i) => s + i.paid, 0)
+            const overCat = catBudgeted > 0 && catCommitted > catBudgeted
+            const commitPct = catBudgeted > 0 ? Math.min((catCommitted / catBudgeted) * 100, 100) : 0
 
             return (
-              <div key={cat} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-                {/* Category header */}
+              <div key={category} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+                {/* Category Header */}
                 <button
-                  onClick={() => toggleCategory(cat)}
-                  className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50/50 transition-colors"
+                  onClick={() => toggleCategory(category)}
+                  className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
                 >
                   <div className="flex items-center gap-3">
-                    <span className="text-lg">{icon}</span>
+                    <span
+                      className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold"
+                      style={{ backgroundColor: 'var(--couple-accent)' }}
+                    >
+                      {catItems.length}
+                    </span>
                     <div className="text-left">
-                      <h3 className="font-semibold text-gray-800 text-sm">{cat}</h3>
-                      <p className="text-xs text-gray-400">
-                        {data.items.length} item{data.items.length !== 1 ? 's' : ''}
-                      </p>
+                      <h3 className="text-sm font-semibold text-gray-800">{category}</h3>
+                      <div className="flex items-center gap-3 text-xs text-gray-500 mt-0.5">
+                        <span>Budget: {formatCurrency(catBudgeted)}</span>
+                        <span>Committed: {formatCurrency(catCommitted)}</span>
+                        <span>Paid: {formatCurrency(catPaid)}</span>
+                      </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-4">
-                    <div className="text-right hidden sm:block">
-                      <p className="text-sm font-semibold tabular-nums text-gray-800">{fmt$(data.committed)}</p>
-                      <p className="text-[10px] text-gray-400">of {fmt$(data.budgeted)} budgeted</p>
-                    </div>
-                    <div className="w-20 hidden sm:block">
-                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="flex items-center gap-3">
+                    {/* Progress mini bar */}
+                    <div className="hidden sm:block w-24">
+                      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                         <div
-                          className="h-full rounded-full"
-                          style={{ width: `${Math.min(100, catPercent)}%`, backgroundColor: progressColor(catPercent) }}
+                          className={cn('h-full rounded-full', overCat ? 'bg-red-500' : '')}
+                          style={{
+                            width: `${commitPct}%`,
+                            backgroundColor: overCat ? undefined : 'var(--couple-primary)',
+                          }}
                         />
                       </div>
-                      <div className="h-1.5 bg-gray-50 rounded-full overflow-hidden mt-1">
-                        <div className="h-full rounded-full bg-emerald-400" style={{ width: `${Math.min(100, paidPercent)}%` }} />
-                      </div>
                     </div>
-                    {isExpanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                    {overCat && (
+                      <span className="text-xs text-red-600 font-medium flex items-center gap-0.5">
+                        <TrendingUp className="w-3 h-3" />
+                        Over
+                      </span>
+                    )}
+                    {isExpanded ? (
+                      <ChevronUp className="w-4 h-4 text-gray-400" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-gray-400" />
+                    )}
                   </div>
                 </button>
 
-                {/* Items */}
+                {/* Expanded Items */}
                 {isExpanded && (
-                  <div className="border-t border-gray-50">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-gray-50 text-left">
-                            <th className="px-5 py-2.5 font-medium text-gray-400 text-xs">Item</th>
-                            <th className="px-3 py-2.5 font-medium text-gray-400 text-xs hidden md:table-cell">Vendor</th>
-                            <th className="px-3 py-2.5 font-medium text-gray-400 text-xs text-right">Budgeted</th>
-                            <th className="px-3 py-2.5 font-medium text-gray-400 text-xs text-right">Committed</th>
-                            <th className="px-3 py-2.5 font-medium text-gray-400 text-xs text-right">Paid</th>
-                            <th className="px-3 py-2.5 font-medium text-gray-400 text-xs text-right">Remaining</th>
-                            <th className="px-3 py-2.5 font-medium text-gray-400 text-xs text-center hidden sm:table-cell">Status</th>
-                            <th className="px-3 py-2.5 w-28" />
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {data.items.map(item => {
-                            const actual = Number(item.actual_cost) || 0
-                            const paid = Number(item.paid_amount) || 0
-                            const remaining = actual - paid
-                            const overEstimate = item.estimated_cost && actual > Number(item.estimated_cost)
+                  <div className="border-t border-gray-100">
+                    {catItems.map((item) => {
+                      const remaining = item.committed - item.paid
+                      const dueInfo = formatDueDate(item.payment_due_date)
+                      const paymentsOpen = expandedPayments.has(item.id)
 
-                            return (
-                              <tr key={item.id} className="border-b border-gray-50 group hover:bg-gray-50/50">
-                                <td className="px-5 py-3">
-                                  <div>
-                                    <p className="font-medium text-gray-800">{item.item_name}</p>
-                                    {item.notes && <p className="text-[10px] text-gray-400 mt-0.5 truncate max-w-[200px]">{item.notes}</p>}
-                                    {item.due_date && (
-                                      <span className="text-[10px] text-gray-400 flex items-center gap-0.5 mt-0.5">
-                                        <Calendar className="w-2.5 h-2.5" />
-                                        Due {new Date(item.due_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="px-3 py-3 text-gray-500 text-xs hidden md:table-cell">
-                                  {item.vendor_name || <span className="text-gray-300">--</span>}
-                                </td>
-                                <td className="px-3 py-3 text-right tabular-nums text-gray-500">{fmt$(item.estimated_cost)}</td>
-                                <td className={cn('px-3 py-3 text-right tabular-nums font-medium', overEstimate ? 'text-red-600' : 'text-gray-800')}>
-                                  {fmt$(item.actual_cost)}
-                                </td>
-                                <td className="px-3 py-3 text-right tabular-nums text-emerald-600">{fmt$(item.paid_amount)}</td>
-                                <td className="px-3 py-3 text-right tabular-nums">
-                                  <span className={remaining > 0 ? 'text-amber-600' : 'text-gray-400'}>
-                                    {remaining > 0 ? fmt$(remaining) : '$0'}
+                      return (
+                        <div key={item.id} className="border-b border-gray-50 last:border-0">
+                          <div className="px-5 py-3 flex items-center justify-between gap-3 group hover:bg-gray-50/50 transition-colors">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="text-sm font-medium text-gray-800">{item.item_name}</p>
+                                {item.payment_source && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-gray-100 rounded text-[10px] text-gray-600 font-medium">
+                                    {SOURCE_ICONS[item.payment_source] || <MoreHorizontal className="w-3 h-3" />}
+                                    {item.payment_source}
                                   </span>
-                                </td>
-                                <td className="px-3 py-3 text-center hidden sm:table-cell">
-                                  <div className="flex items-center justify-center gap-1">
-                                    {item.contract_signed && (
-                                      <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-purple-50 text-purple-600" title="Contract signed">
-                                        CONTRACT
-                                      </span>
+                                )}
+                                {dueInfo.text && (
+                                  <span
+                                    className={cn(
+                                      'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium',
+                                      dueInfo.color
                                     )}
-                                    {item.is_paid ? (
-                                      <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-50 text-emerald-600">
-                                        PAID
-                                      </span>
-                                    ) : actual > 0 && paid > 0 ? (
-                                      <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-50 text-amber-600">
-                                        PARTIAL
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                </td>
-                                <td className="px-3 py-3">
-                                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    {!item.is_paid && actual > 0 && (
-                                      <button
-                                        onClick={() => openPayment(item.id)}
-                                        className="p-1.5 rounded-md text-gray-400 hover:text-emerald-600 hover:bg-emerald-50"
-                                        title="Record payment"
-                                      >
-                                        <CreditCard className="w-3.5 h-3.5" />
-                                      </button>
-                                    )}
-                                    <button onClick={() => openEdit(item)} className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100">
-                                      <Edit2 className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button onClick={() => handleDelete(item.id)} className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50">
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                                  >
+                                    <Calendar className="w-2.5 h-2.5" />
+                                    {dueInfo.text}
+                                  </span>
+                                )}
+                              </div>
+                              {item.notes && (
+                                <p className="text-xs text-gray-400 mt-0.5 truncate">{item.notes}</p>
+                              )}
+                            </div>
 
-                    {/* Add to category */}
-                    <div className="px-5 py-3 border-t border-gray-50">
-                      <button
-                        onClick={() => openAdd(cat)}
-                        className="inline-flex items-center gap-1 text-xs font-medium transition-colors"
-                        style={{ color: 'var(--couple-primary)' }}
-                      >
-                        <Plus className="w-3 h-3" />
-                        Add to {cat}
-                      </button>
-                    </div>
+                            {/* Dollar amounts */}
+                            <div className="hidden sm:flex items-center gap-4 text-xs tabular-nums shrink-0">
+                              <div className="text-center">
+                                <p className="text-gray-400">Budgeted</p>
+                                <p className="font-medium text-gray-700">{formatCurrency(item.budgeted)}</p>
+                              </div>
+                              <div className="text-center">
+                                <p className="text-gray-400">Committed</p>
+                                <p className={cn('font-medium', item.committed > item.budgeted && item.budgeted > 0 ? 'text-red-600' : 'text-gray-700')}>
+                                  {formatCurrency(item.committed)}
+                                </p>
+                              </div>
+                              <div className="text-center">
+                                <p className="text-gray-400">Paid</p>
+                                <p className="font-medium text-green-700">{formatCurrency(item.paid)}</p>
+                              </div>
+                              <div className="text-center">
+                                <p className="text-gray-400">Remaining</p>
+                                <p className="font-medium text-amber-700">{formatCurrency(remaining > 0 ? remaining : 0)}</p>
+                              </div>
+                            </div>
+
+                            {/* Mobile amounts */}
+                            <div className="sm:hidden text-right text-xs tabular-nums shrink-0">
+                              <p className="font-medium text-gray-800">{formatCurrency(item.committed)}</p>
+                              <p className="text-green-700">{formatCurrency(item.paid)} paid</p>
+                            </div>
+
+                            {/* Actions */}
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                              <button
+                                onClick={() => openRecordPayment(item.id)}
+                                className="p-1.5 rounded-md text-gray-400 hover:text-green-600 hover:bg-green-50"
+                                title="Record payment"
+                              >
+                                <DollarSign className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => togglePayments(item.id)}
+                                className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                                title="View payments"
+                              >
+                                <Receipt className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => openEditItem(item)}
+                                className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteItem(item.id)}
+                                className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Payment Records */}
+                          {paymentsOpen && (
+                            <div className="px-5 pb-3 ml-5">
+                              <div className="bg-gray-50 rounded-lg p-3">
+                                <p className="text-xs font-medium text-gray-500 mb-2">Payment History</p>
+                                {item.payments && item.payments.length > 0 ? (
+                                  <div className="space-y-1.5">
+                                    {item.payments.map((p) => (
+                                      <div key={p.id} className="flex items-center justify-between text-xs group/pay">
+                                        <div className="flex items-center gap-3">
+                                          <span className="text-gray-400">
+                                            {new Date(p.date + 'T00:00:00').toLocaleDateString('en-US', {
+                                              month: 'short',
+                                              day: 'numeric',
+                                              year: 'numeric',
+                                            })}
+                                          </span>
+                                          <span className="font-medium text-gray-700">{formatCurrency(p.amount)}</span>
+                                          <span className="px-1.5 py-0.5 bg-white rounded text-[10px] text-gray-500">
+                                            {p.method}
+                                          </span>
+                                          {p.notes && <span className="text-gray-400 truncate max-w-[120px]">{p.notes}</span>}
+                                        </div>
+                                        <button
+                                          onClick={() => handleDeletePayment(p.id)}
+                                          className="opacity-0 group-hover/pay:opacity-100 p-1 text-gray-400 hover:text-red-500"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-xs text-gray-400">No payments recorded yet.</p>
+                                )}
+                                <button
+                                  onClick={() => openRecordPayment(item.id)}
+                                  className="mt-2 text-xs font-medium hover:underline"
+                                  style={{ color: 'var(--couple-primary)' }}
+                                >
+                                  + Record Payment
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+
+                    {/* Add item to this category */}
+                    <button
+                      onClick={() => openAddItem(category)}
+                      className="w-full px-5 py-2.5 text-sm text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors flex items-center gap-2 border-t border-gray-100"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Add item to {category}
+                    </button>
                   </div>
                 )}
               </div>
@@ -752,116 +847,139 @@ export default function BudgetPage() {
         </div>
       )}
 
-      {/* Add/Edit Modal */}
-      {showModal && (
+      {/* Add/Edit Item Modal */}
+      {showItemModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setShowModal(false)} />
+          <div className="absolute inset-0 bg-black/30" onClick={() => setShowItemModal(false)} />
           <div className="relative bg-white rounded-xl shadow-xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold" style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}>
+              <h2
+                className="text-lg font-semibold"
+                style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+              >
                 {editingId ? 'Edit Budget Item' : 'Add Budget Item'}
               </h2>
-              <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+              <button onClick={() => setShowItemModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
             </div>
 
             <div className="space-y-3">
+              {/* Item Name */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Item Name</label>
+                <input
+                  type="text"
+                  value={form.item_name}
+                  onChange={(e) => setForm({ ...form, item_name: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  placeholder="e.g., Jane Smith Photography"
+                  autoFocus
+                />
+              </div>
+
               {/* Category */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}
+                <select
+                  value={form.category}
+                  onChange={(e) => setForm({ ...form, category: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}>
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                >
                   <option value="">Select category...</option>
-                  {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                  {allCategories.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
                 </select>
               </div>
 
-              {/* Item + Vendor */}
+              {/* Budgeted + Committed */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Item Name</label>
-                  <input type="text" value={form.item_name} onChange={e => setForm({ ...form, item_name: e.target.value })}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Budgeted ($)</label>
+                  <input
+                    type="number"
+                    value={form.budgeted}
+                    onChange={(e) => setForm({ ...form, budgeted: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties} placeholder="e.g., Photographer" />
+                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                    placeholder="0"
+                  />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Vendor</label>
-                  <input type="text" value={form.vendor_name} onChange={e => setForm({ ...form, vendor_name: e.target.value })}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Committed ($)</label>
+                  <input
+                    type="number"
+                    value={form.committed}
+                    onChange={(e) => setForm({ ...form, committed: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties} placeholder="Vendor name" />
+                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                    placeholder="0"
+                  />
                 </div>
               </div>
 
-              {/* Amounts */}
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Budgeted</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
-                    <input type="number" value={form.estimated_cost} onChange={e => setForm({ ...form, estimated_cost: e.target.value })}
-                      className="w-full pl-7 pr-2 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                      style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties} placeholder="0" min={0} />
-                  </div>
-                  <p className="text-[10px] text-gray-400 mt-0.5">What you planned to spend</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Committed</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
-                    <input type="number" value={form.actual_cost} onChange={e => setForm({ ...form, actual_cost: e.target.value })}
-                      className="w-full pl-7 pr-2 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                      style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties} placeholder="0" min={0} />
-                  </div>
-                  <p className="text-[10px] text-gray-400 mt-0.5">Contract / quoted amount</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Paid</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
-                    <input type="number" value={form.paid_amount} onChange={e => setForm({ ...form, paid_amount: e.target.value })}
-                      className="w-full pl-7 pr-2 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                      style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties} placeholder="0" min={0} />
-                  </div>
-                  <p className="text-[10px] text-gray-400 mt-0.5">Actually paid so far</p>
-                </div>
-              </div>
-
-              {/* Due date */}
+              {/* Payment Source + Due Date */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1"><Calendar className="w-3.5 h-3.5 inline mr-1" />Due Date</label>
-                  <input type="date" value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties} />
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Payment Source</label>
+                  <select
+                    value={form.payment_source}
+                    onChange={(e) => setForm({ ...form, payment_source: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  >
+                    <option value="">Select...</option>
+                    {PAYMENT_SOURCES.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <div className="flex flex-col justify-end gap-2 pb-0.5">
-                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer">
-                    <input type="checkbox" checked={form.contract_signed} onChange={e => setForm({ ...form, contract_signed: e.target.checked })}
-                      className="w-4 h-4 rounded border-gray-300" style={{ accentColor: 'var(--couple-primary)' }} />
-                    Contract signed
-                  </label>
-                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer">
-                    <input type="checkbox" checked={form.is_paid} onChange={e => setForm({ ...form, is_paid: e.target.checked })}
-                      className="w-4 h-4 rounded border-gray-300" style={{ accentColor: 'var(--couple-primary)' }} />
-                    Fully paid
-                  </label>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Payment Due Date</label>
+                  <input
+                    type="date"
+                    value={form.payment_due_date}
+                    onChange={(e) => setForm({ ...form, payment_due_date: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  />
                 </div>
               </div>
 
               {/* Notes */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })}
+                <textarea
+                  value={form.notes}
+                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:border-transparent"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties} rows={2} placeholder="Contract details, payment schedule..." />
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  rows={2}
+                  placeholder="Contract details, vendor notes..."
+                />
               </div>
             </div>
 
             <div className="flex justify-end gap-3 pt-2">
-              <button onClick={() => setShowModal(false)} className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800">Cancel</button>
-              <button onClick={handleSave} disabled={!form.item_name.trim()}
+              <button
+                onClick={() => setShowItemModal(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveItem}
+                disabled={!form.item_name.trim() || !form.category}
                 className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                style={{ backgroundColor: 'var(--couple-primary)' }}>
+                style={{ backgroundColor: 'var(--couple-primary)' }}
+              >
                 {editingId ? 'Save Changes' : 'Add Item'}
               </button>
             </div>
@@ -873,96 +991,94 @@ export default function BudgetPage() {
       {showPaymentModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/30" onClick={() => setShowPaymentModal(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold" style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}>
+              <h2
+                className="text-lg font-semibold"
+                style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+              >
                 Record Payment
               </h2>
-              <button onClick={() => setShowPaymentModal(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+              <button onClick={() => setShowPaymentModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
             </div>
 
-            {paymentItemId && (() => {
-              const item = items.find(i => i.id === paymentItemId)
-              if (!item) return null
-              const remaining = (Number(item.actual_cost) || 0) - (Number(item.paid_amount) || 0)
-              return (
-                <div className="bg-gray-50 rounded-lg p-3 text-sm">
-                  <p className="font-medium text-gray-800">{item.item_name}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    {fmt$(item.paid_amount)} paid of {fmt$(item.actual_cost)} · {fmt$(remaining)} remaining
-                  </p>
-                </div>
-              )
-            })()}
+            {paymentItemId && (
+              <p className="text-sm text-gray-500">
+                For: <span className="font-medium text-gray-700">{items.find((i) => i.id === paymentItemId)?.item_name}</span>
+              </p>
+            )}
 
             <div className="space-y-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
-                  <input type="number" value={paymentForm.amount} onChange={e => setPaymentForm({ ...paymentForm, amount: e.target.value })}
-                    className="w-full pl-7 pr-2 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties} placeholder="0" min={0} />
-                </div>
-              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
-                  <input type="date" value={paymentForm.payment_date} onChange={e => setPaymentForm({ ...paymentForm, payment_date: e.target.value })}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Amount ($)</label>
+                  <input
+                    type="number"
+                    value={paymentForm.amount}
+                    onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties} />
+                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                    placeholder="0"
+                    autoFocus
+                  />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Method</label>
-                  <select value={paymentForm.method} onChange={e => setPaymentForm({ ...paymentForm, method: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}>
-                    <option value="">Select...</option>
-                    {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
-                  </select>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={paymentForm.date}
+                    onChange={(e) => setPaymentForm({ ...paymentForm, date: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  />
                 </div>
               </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Method</label>
+                <select
+                  value={paymentForm.method}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, method: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                >
+                  {PAYMENT_METHODS.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                <input type="text" value={paymentForm.notes} onChange={e => setPaymentForm({ ...paymentForm, notes: e.target.value })}
+                <input
+                  type="text"
+                  value={paymentForm.notes}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, notes: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties} placeholder="Deposit, final payment..." />
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  placeholder="e.g., deposit, final payment..."
+                />
               </div>
             </div>
 
             <div className="flex justify-end gap-3 pt-2">
-              <button onClick={() => setShowPaymentModal(false)} className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800">Cancel</button>
-              <button onClick={handleRecordPayment} disabled={!paymentForm.amount}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                style={{ backgroundColor: 'var(--couple-primary)' }}>
-                Record Payment
+              <button
+                onClick={() => setShowPaymentModal(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800"
+              >
+                Cancel
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Set Budget Modal */}
-      {showBudgetSetter && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setShowBudgetSetter(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
-            <h2 className="text-lg font-semibold" style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}>
-              Set Total Budget
-            </h2>
-            <p className="text-sm text-gray-500">Your overall wedding budget. Progress bars and remaining calculations will use this.</p>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
-              <input type="number" value={totalBudgetInput} onChange={e => setTotalBudgetInput(e.target.value)}
-                className="w-full pl-7 pr-2 py-3 border border-gray-200 rounded-lg text-lg font-semibold focus:outline-none focus:ring-2 focus:border-transparent"
-                style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties} placeholder="25000" min={0} autoFocus />
-            </div>
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setShowBudgetSetter(false)} className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800">Cancel</button>
-              <button onClick={saveTotalBudget}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
-                style={{ backgroundColor: 'var(--couple-primary)' }}>
-                Save
+              <button
+                onClick={handleSavePayment}
+                disabled={!paymentForm.amount}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                style={{ backgroundColor: 'var(--couple-primary)' }}
+              >
+                Record Payment
               </button>
             </div>
           </div>
@@ -970,23 +1086,70 @@ export default function BudgetPage() {
       )}
 
       {/* Add Category Modal */}
-      {showAddCategory && (
+      {showCategoryModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setShowAddCategory(false)} />
+          <div className="absolute inset-0 bg-black/30" onClick={() => setShowCategoryModal(false)} />
           <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
-            <h2 className="text-lg font-semibold" style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}>
-              Add Custom Category
-            </h2>
-            <input type="text" value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-              style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-              placeholder="Category name" autoFocus onKeyDown={e => e.key === 'Enter' && addCustomCategory()} />
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setShowAddCategory(false)} className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800">Cancel</button>
-              <button onClick={addCustomCategory} disabled={!newCategoryName.trim()}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                style={{ backgroundColor: 'var(--couple-primary)' }}>
-                Add
+            <div className="flex items-center justify-between">
+              <h2
+                className="text-lg font-semibold"
+                style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+              >
+                Custom Categories
+              </h2>
+              <button onClick={() => setShowCategoryModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500">Default categories are always available. Add custom ones below.</p>
+
+              {/* Existing custom categories */}
+              {customCategories.length > 0 && (
+                <div className="space-y-1.5">
+                  {customCategories.map((cat) => (
+                    <div key={cat} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg">
+                      <span className="text-sm text-gray-700">{cat}</span>
+                      <button
+                        onClick={() => setCustomCategories((prev) => prev.filter((c) => c !== cat))}
+                        className="text-gray-400 hover:text-red-500"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add new */}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  placeholder="Category name..."
+                  onKeyDown={(e) => e.key === 'Enter' && addCustomCategory()}
+                />
+                <button
+                  onClick={addCustomCategory}
+                  disabled={!newCategoryName.trim()}
+                  className="px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+                  style={{ backgroundColor: 'var(--couple-primary)' }}
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setShowCategoryModal(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800"
+              >
+                Done
               </button>
             </div>
           </div>

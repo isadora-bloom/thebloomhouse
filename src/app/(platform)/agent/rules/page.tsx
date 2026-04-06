@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
   ScrollText,
@@ -38,6 +39,9 @@ interface Rule {
   content: string
   score: number // 1 = active, 0 = inactive
   sample_count: number
+  source_type: string | null
+  source_reference: string | null
+  source_url: string | null
   created_at: string
 }
 
@@ -64,9 +68,6 @@ type RuleCategory =
   | 'follow_up'
   | 'escalation'
   | 'general'
-
-// TODO: Replace with venue from auth context
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Preset rules for quick-add
@@ -192,6 +193,7 @@ function RuleCardSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function RulesEditorPage() {
+  const VENUE_ID = useVenueId()
   const supabase = createClient()
 
   // State
@@ -202,6 +204,7 @@ export default function RulesEditorPage() {
   // Rules
   const [rules, setRules] = useState<Rule[]>([])
   const [showAddRule, setShowAddRule] = useState(false)
+  const [newRuleSource, setNewRuleSource] = useState('')
   const [newRuleKind, setNewRuleKind] = useState<RuleKind>('always')
   const [newRuleCategory, setNewRuleCategory] = useState<RuleCategory>('general')
   const [newRuleText, setNewRuleText] = useState('')
@@ -284,15 +287,27 @@ export default function RulesEditorPage() {
       // Encode the category in the content using a prefix pattern: [category] text
       const contentWithCategory = `[${newRuleCategory}] ${ruleText}`
 
+      const insertPayload: Record<string, unknown> = {
+        venue_id: VENUE_ID,
+        preference_type: 'rule',
+        content: contentWithCategory,
+        score: 1, // active
+        sample_count: 1,
+        source_type: 'manual',
+      }
+      if (newRuleSource.trim()) {
+        const src = newRuleSource.trim()
+        if (src.startsWith('http')) {
+          insertPayload.source_url = src
+          insertPayload.source_reference = src
+        } else {
+          insertPayload.source_reference = src
+        }
+      }
+
       const { data, error: insertError } = await supabase
         .from('voice_preferences')
-        .insert({
-          venue_id: VENUE_ID,
-          preference_type: 'rule',
-          content: contentWithCategory,
-          score: 1, // active
-          sample_count: 1,
-        })
+        .insert(insertPayload)
         .select()
         .single()
 
@@ -303,6 +318,7 @@ export default function RulesEditorPage() {
       }
 
       setNewRuleText('')
+      setNewRuleSource('')
       setShowAddRule(false)
     } catch (err) {
       console.error('Failed to add rule:', err)
@@ -719,6 +735,20 @@ export default function RulesEditorPage() {
                   />
                 </div>
 
+                {/* Source reference (optional) */}
+                <div>
+                  <label className="text-sm font-medium text-sage-700 mb-2 block">
+                    Source <span className="text-sage-400 font-normal">(optional — link to review, testimonial, or conversation)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newRuleSource}
+                    onChange={(e) => setNewRuleSource(e.target.value)}
+                    placeholder="e.g., 'The Knot review, March 2026' or a URL"
+                    className="w-full px-3 py-2.5 border border-sage-200 rounded-lg text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 bg-warm-white"
+                  />
+                </div>
+
                 <div className="flex items-center gap-3">
                   <button
                     onClick={handleAddRule}
@@ -861,6 +891,18 @@ export default function RulesEditorPage() {
 
                           {/* Rule text */}
                           <p className="text-sm text-sage-800 leading-relaxed">{text}</p>
+                          {rule.source_reference && (
+                            <p className="text-[11px] text-sage-400 mt-1 flex items-center gap-1">
+                              <Tag className="w-3 h-3" />
+                              {rule.source_url ? (
+                                <a href={rule.source_url} target="_blank" rel="noopener noreferrer" className="hover:text-teal-600 hover:underline transition-colors">
+                                  {rule.source_reference}
+                                </a>
+                              ) : (
+                                <span>{rule.source_reference}</span>
+                              )}
+                            </p>
+                          )}
                         </div>
 
                         {/* Actions */}
@@ -1162,7 +1204,7 @@ export default function RulesEditorPage() {
                 'Anti-hallucination — never fabricates facts',
                 'Safety escalation — flags emergencies and upset couples',
                 'Positive framing — reframes negatives positively',
-                'Alan Berg methodology — short, mobile-friendly, CTA-focused',
+                'Communication style — short, mobile-friendly, CTA-focused',
                 'Banned phrases — industry cliches automatically avoided',
               ].map((rule, i) => (
                 <li key={i} className="flex items-start gap-2">

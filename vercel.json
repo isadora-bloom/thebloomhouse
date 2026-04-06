@@ -1,0 +1,48 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron?job=email_poll",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron?job=heat_decay",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron?job=daily_digest",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron?job=follow_up_sequences",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron?job=weather_forecast",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron?job=anomaly_detection",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron?job=trends_refresh",
+      "schedule": "0 3 * * 1"
+    },
+    {
+      "path": "/api/cron?job=attribution_refresh",
+      "schedule": "0 2 * * 1"
+    },
+    {
+      "path": "/api/cron?job=weekly_briefing",
+      "schedule": "0 8 * * 1"
+    },
+    {
+      "path": "/api/cron?job=monthly_briefing",
+      "schedule": "0 8 1 * *"
+    },
+    {
+      "path": "/api/cron?job=economic_indicators",
+      "schedule": "0 3 * * 3"
+    }
+  ]
+}

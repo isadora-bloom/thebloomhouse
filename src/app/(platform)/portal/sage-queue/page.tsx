@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createBrowserClient } from '@supabase/ssr'
 import {
   MessageSquareWarning,
@@ -15,9 +16,6 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// TODO: Replace with venue context from auth/session
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -27,11 +25,11 @@ interface SageQueueItem {
   venue_id: string
   wedding_id: string | null
   conversation_id: string | null
-  couple_question: string
+  question: string
   sage_answer: string | null
   confidence_score: number
-  coordinator_answer: string | null
-  resolved: boolean
+  coordinator_response: string | null
+  resolved_by: string | null
   resolved_at: string | null
   added_to_kb: boolean
   created_at: string
@@ -70,20 +68,15 @@ function confidenceConfig(score: number): {
   label: string
   className: string
 } {
-  if (score >= 0.7) {
+  // Scores are stored as integers 0-100
+  if (score >= 50) {
     return {
-      label: `${Math.round(score * 100)}% confident`,
+      label: `${score}% — needs confirmation`,
       className: 'bg-amber-50 text-amber-700 border border-amber-200',
     }
   }
-  if (score >= 0.4) {
-    return {
-      label: `${Math.round(score * 100)}% confident`,
-      className: 'bg-orange-50 text-orange-700 border border-orange-200',
-    }
-  }
   return {
-    label: `${Math.round(score * 100)}% confident`,
+    label: `${score}% — low confidence`,
     className: 'bg-red-50 text-red-700 border border-red-200',
   }
 }
@@ -171,7 +164,7 @@ function QueueCard({
           Couple&apos;s Question
         </h4>
         <p className="text-sage-900 text-sm leading-relaxed bg-warm-white border border-sage-100 rounded-lg p-3">
-          {item.couple_question}
+          {item.question}
         </p>
       </div>
 
@@ -239,7 +232,7 @@ function ResolvedItem({ item }: { item: SageQueueItem }) {
       <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
       <div className="flex-1 min-w-0">
         <p className="text-sm text-sage-700 line-clamp-1">
-          {item.couple_question}
+          {item.question}
         </p>
         <div className="flex items-center gap-3 mt-1 text-xs text-sage-400">
           <span>{getCoupleLabel(item.wedding)}</span>
@@ -261,6 +254,7 @@ function ResolvedItem({ item }: { item: SageQueueItem }) {
 // ---------------------------------------------------------------------------
 
 export default function SageQueuePage() {
+  const VENUE_ID = useVenueId()
   const [pendingItems, setPendingItems] = useState<SageQueueItem[]>([])
   const [resolvedItems, setResolvedItems] = useState<SageQueueItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -283,7 +277,7 @@ export default function SageQueuePage() {
             )
           `)
           .eq('venue_id', VENUE_ID)
-          .eq('resolved', false)
+          .is('resolved_at', null)
           .order('created_at', { ascending: false }),
         supabase
           .from('sage_uncertain_queue')
@@ -295,7 +289,7 @@ export default function SageQueuePage() {
             )
           `)
           .eq('venue_id', VENUE_ID)
-          .eq('resolved', true)
+          .not('resolved_at', 'is', null)
           .order('resolved_at', { ascending: false })
           .limit(20),
       ])
@@ -325,8 +319,7 @@ export default function SageQueuePage() {
     const { error: updateErr } = await supabase
       .from('sage_uncertain_queue')
       .update({
-        coordinator_answer: answer,
-        resolved: true,
+        coordinator_response: answer,
         resolved_at: new Date().toISOString(),
         added_to_kb: addToKB,
       })
@@ -344,7 +337,7 @@ export default function SageQueuePage() {
         await supabase.from('knowledge_base').insert({
           venue_id: VENUE_ID,
           category: 'sage_learned',
-          question: item.couple_question,
+          question: item.question,
           answer: answer,
           keywords: [],
           priority: 1,
@@ -358,8 +351,7 @@ export default function SageQueuePage() {
     if (movedItem) {
       const resolved = {
         ...movedItem,
-        coordinator_answer: answer,
-        resolved: true,
+        coordinator_response: answer,
         resolved_at: new Date().toISOString(),
         added_to_kb: addToKB,
       }

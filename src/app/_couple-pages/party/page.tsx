@@ -12,11 +12,16 @@ import {
   ChevronUp,
   ChevronDown,
   User,
+  RefreshCw,
+  Search,
+  AlertCircle,
+  Check,
+  ImageOff,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
@@ -35,6 +40,12 @@ interface PartyMember {
   created_at: string
 }
 
+interface GuestOption {
+  id: string
+  first_name: string
+  last_name: string
+}
+
 interface PartyFormData {
   name: string
   role: string
@@ -42,7 +53,9 @@ interface PartyFormData {
   side: string
   relationship: string
   bio: string
+  blurb: string
   photo_url: string
+  guest_id: string
 }
 
 const ROLES = [
@@ -68,7 +81,48 @@ const EMPTY_FORM: PartyFormData = {
   side: 'partner_1',
   relationship: '',
   bio: '',
+  blurb: '',
   photo_url: '',
+  guest_id: '',
+}
+
+// Maps wedding party roles to ceremony sections
+function roleToCeremonySection(role: string): 'processional' | 'family_escort' | null {
+  const processionalRoles = [
+    'honor_attendant', 'best_person', 'attendant',
+    'maid_of_honor', 'best_man', 'bridesmaid', 'groomsman',
+    'flower_child', 'ring_bearer',
+  ]
+  const familyEscortRoles = ['parent', 'grandparent']
+
+  if (processionalRoles.includes(role)) return 'processional'
+  if (familyEscortRoles.includes(role)) return 'family_escort'
+  return null // officiant, reader, musician, pet, other — not added
+}
+
+// Maps wedding party roles to ceremony_order role values
+function partyRoleToCeremonyRole(role: string): string {
+  const mapping: Record<string, string> = {
+    honor_attendant: 'other',
+    best_person: 'other',
+    attendant: 'other',
+    maid_of_honor: 'maid_of_honor',
+    best_man: 'best_man',
+    bridesmaid: 'bridesmaid',
+    groomsman: 'groomsman',
+    flower_child: 'flower_girl',
+    ring_bearer: 'ring_bearer',
+    parent: 'other',
+    grandparent: 'other',
+  }
+  return mapping[role] || 'other'
+}
+
+// Maps wedding party side to ceremony side
+function partySideToCeremonySide(side: string): string {
+  if (side === 'partner_1' || side === 'bride') return 'bride'
+  if (side === 'partner_2' || side === 'groom') return 'groom'
+  return 'both'
 }
 
 function roleLabel(role: string): string {
@@ -85,6 +139,11 @@ export default function WeddingPartyPage() {
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<PartyFormData>(EMPTY_FORM)
+  const [guestOptions, setGuestOptions] = useState<GuestOption[]>([])
+  const [guestSearch, setGuestSearch] = useState('')
+  const [showGuestPicker, setShowGuestPicker] = useState(false)
+  const [syncingToCeremony, setSyncingToCeremony] = useState(false)
+  const [syncMessage, setSyncMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
   const supabase = createClient()
 
@@ -103,9 +162,23 @@ export default function WeddingPartyPage() {
     setLoading(false)
   }, [supabase])
 
+  // ---- Fetch guest list for picker ----
+  const fetchGuests = useCallback(async () => {
+    const { data } = await supabase
+      .from('guest_list')
+      .select('id, first_name, last_name')
+      .eq('wedding_id', WEDDING_ID)
+      .order('last_name', { ascending: true })
+
+    if (data) {
+      setGuestOptions(data as GuestOption[])
+    }
+  }, [supabase])
+
   useEffect(() => {
     fetchMembers()
-  }, [fetchMembers])
+    fetchGuests()
+  }, [fetchMembers, fetchGuests])
 
   // ---- Derived ----
   const partner1Members = members.filter((m) => m.side === 'partner_1' || m.side === 'bride')
@@ -117,6 +190,8 @@ export default function WeddingPartyPage() {
     setForm({ ...EMPTY_FORM, side: side || 'partner_1' })
     setEditingId(null)
     setShowModal(true)
+    setShowGuestPicker(false)
+    setGuestSearch('')
   }
 
   function openEdit(member: PartyMember) {
@@ -128,10 +203,14 @@ export default function WeddingPartyPage() {
       side: member.side || 'partner_1',
       relationship: member.relationship || '',
       bio: member.bio || '',
+      blurb: (member as PartyMember & { blurb?: string }).blurb || '',
       photo_url: member.photo_url || '',
+      guest_id: '',
     })
     setEditingId(member.id)
     setShowModal(true)
+    setShowGuestPicker(false)
+    setGuestSearch('')
   }
 
   async function handleSave() {
@@ -144,7 +223,7 @@ export default function WeddingPartyPage() {
     const sideMembers = members.filter((m) => m.side === form.side)
     const maxOrder = sideMembers.reduce((max, m) => Math.max(max, m.sort_order || 0), 0)
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       venue_id: VENUE_ID,
       wedding_id: WEDDING_ID,
       name: form.name.trim(),
@@ -152,6 +231,7 @@ export default function WeddingPartyPage() {
       side: form.side,
       relationship: form.relationship.trim() || null,
       bio: form.bio.trim() || null,
+      blurb: form.blurb.trim() || null,
       photo_url: form.photo_url.trim() || null,
     }
 
@@ -195,6 +275,100 @@ export default function WeddingPartyPage() {
     ])
 
     fetchMembers()
+  }
+
+  // ---- Sync to Ceremony ----
+  async function syncToCeremony() {
+    if (!confirm('This will add your wedding party members to the ceremony order. Continue?')) return
+    setSyncingToCeremony(true)
+    setSyncMessage(null)
+
+    try {
+      // Get existing ceremony order to find max sort_order
+      const { data: existing } = await supabase
+        .from('ceremony_order')
+        .select('sort_order')
+        .eq('wedding_id', WEDDING_ID)
+        .order('sort_order', { ascending: false })
+        .limit(1)
+
+      let nextOrder = (existing?.[0]?.sort_order || 0) + 1
+      let addedCount = 0
+
+      // Build inserts grouped by ceremony section
+      const processional: typeof members = []
+      const familyEscort: typeof members = []
+
+      for (const member of members) {
+        const section = roleToCeremonySection(member.role)
+        if (section === 'processional') processional.push(member)
+        else if (section === 'family_escort') familyEscort.push(member)
+        // null = skip (officiant, reader, musician, pet, other)
+      }
+
+      const inserts = []
+
+      // Family escort first, then processional
+      for (const member of familyEscort) {
+        inserts.push({
+          venue_id: VENUE_ID,
+          wedding_id: WEDDING_ID,
+          participant_name: member.name,
+          role: partyRoleToCeremonyRole(member.role),
+          side: partySideToCeremonySide(member.side),
+          sort_order: nextOrder++,
+          notes: `family_escort | Synced from wedding party`,
+        })
+        addedCount++
+      }
+
+      for (const member of processional) {
+        inserts.push({
+          venue_id: VENUE_ID,
+          wedding_id: WEDDING_ID,
+          participant_name: member.name,
+          role: partyRoleToCeremonyRole(member.role),
+          side: partySideToCeremonySide(member.side),
+          sort_order: nextOrder++,
+          notes: `processional | Synced from wedding party`,
+        })
+        addedCount++
+      }
+
+      if (inserts.length > 0) {
+        const { error } = await supabase.from('ceremony_order').insert(inserts)
+        if (error) throw error
+      }
+
+      setSyncMessage({
+        text: addedCount > 0
+          ? `Added ${addedCount} member${addedCount !== 1 ? 's' : ''} to ceremony order.`
+          : 'No applicable members to sync (roles like officiant, reader, musician are not auto-added).',
+        type: 'success',
+      })
+    } catch (err) {
+      console.error('Sync to ceremony failed:', err)
+      setSyncMessage({ text: 'Failed to sync. Please try again.', type: 'error' })
+    } finally {
+      setSyncingToCeremony(false)
+      setTimeout(() => setSyncMessage(null), 5000)
+    }
+  }
+
+  // ---- Guest picker helpers ----
+  const filteredGuests = guestOptions.filter((g) => {
+    const fullName = `${g.first_name} ${g.last_name}`.toLowerCase()
+    return fullName.includes(guestSearch.toLowerCase())
+  })
+
+  function selectGuest(guest: GuestOption) {
+    setForm({
+      ...form,
+      name: `${guest.first_name} ${guest.last_name}`.trim(),
+      guest_id: guest.id,
+    })
+    setShowGuestPicker(false)
+    setGuestSearch('')
   }
 
   // ---- Render side column ----
@@ -256,6 +430,12 @@ export default function WeddingPartyPage() {
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600 border border-gray-200">
                         {roleLabel(member.role)}
                       </span>
+                      {!member.photo_url && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-600 border border-amber-200 inline-flex items-center gap-0.5">
+                          <ImageOff className="w-2.5 h-2.5" />
+                          No photo
+                        </span>
+                      )}
                     </div>
                     {member.relationship && (
                       <p className="text-xs text-gray-500 mt-0.5">{member.relationship}</p>
@@ -319,15 +499,43 @@ export default function WeddingPartyPage() {
             Your people, your way. Add everyone who stands with you.
           </p>
         </div>
-        <button
-          onClick={() => openAdd()}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
-          style={{ backgroundColor: 'var(--couple-primary)' }}
-        >
-          <Plus className="w-4 h-4" />
-          Add Member
-        </button>
+        <div className="flex items-center gap-2">
+          {members.length > 0 && (
+            <button
+              onClick={syncToCeremony}
+              disabled={syncingToCeremony}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors hover:bg-gray-50 disabled:opacity-50"
+              style={{ borderColor: 'var(--couple-primary)', color: 'var(--couple-primary)' }}
+            >
+              <RefreshCw className={cn('w-4 h-4', syncingToCeremony && 'animate-spin')} />
+              Sync to Ceremony
+            </button>
+          )}
+          <button
+            onClick={() => openAdd()}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
+            style={{ backgroundColor: 'var(--couple-primary)' }}
+          >
+            <Plus className="w-4 h-4" />
+            Add Member
+          </button>
+        </div>
       </div>
+
+      {/* Sync Message */}
+      {syncMessage && (
+        <div
+          className={cn(
+            'flex items-center gap-2 px-4 py-3 rounded-lg text-sm',
+            syncMessage.type === 'success'
+              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+              : 'bg-red-50 text-red-700 border border-red-200'
+          )}
+        >
+          {syncMessage.type === 'success' ? <Check className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+          {syncMessage.text}
+        </div>
+      )}
 
       {/* Loading */}
       {loading ? (
@@ -392,6 +600,49 @@ export default function WeddingPartyPage() {
             </div>
 
             <div className="space-y-3">
+              {/* Guest list picker */}
+              {!editingId && (
+                <div className="relative">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Link to existing guest
+                    <span className="text-gray-400 font-normal ml-1">(optional)</span>
+                  </label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                    <input
+                      type="text"
+                      value={guestSearch}
+                      onChange={(e) => {
+                        setGuestSearch(e.target.value)
+                        setShowGuestPicker(e.target.value.length > 0)
+                      }}
+                      onFocus={() => { if (guestSearch.length > 0) setShowGuestPicker(true) }}
+                      className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                      style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                      placeholder="Search guest list..."
+                    />
+                  </div>
+                  {showGuestPicker && filteredGuests.length > 0 && (
+                    <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                      {filteredGuests.map((g) => (
+                        <button
+                          key={g.id}
+                          onClick={() => selectGuest(g)}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition-colors"
+                        >
+                          {g.first_name} {g.last_name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {showGuestPicker && guestSearch.length > 0 && filteredGuests.length === 0 && (
+                    <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-sm text-gray-400">
+                      No matching guests
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
                 <input
@@ -460,7 +711,7 @@ export default function WeddingPartyPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Bio</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Bio <span className="text-gray-400 font-normal">(internal notes)</span></label>
                 <textarea
                   value={form.bio}
                   onChange={(e) => setForm({ ...form, bio: e.target.value })}
@@ -468,6 +719,18 @@ export default function WeddingPartyPage() {
                   style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
                   rows={3}
                   placeholder="A few words about this person (optional)"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Website blurb <span className="text-gray-400 font-normal">(shown on your wedding website)</span></label>
+                <textarea
+                  value={form.blurb}
+                  onChange={(e) => setForm({ ...form, blurb: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent resize-none"
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  rows={3}
+                  placeholder="e.g., &quot;Sarah and I have been best friends since the 3rd grade...&quot;"
                 />
               </div>
 

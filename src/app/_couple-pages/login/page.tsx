@@ -270,11 +270,10 @@ export default function CoupleLoginPage() {
         </div>
 
         {/* Powered by footer */}
-        <p className="mt-6 text-center text-xs text-gray-400 flex items-center justify-center gap-1">
-          Powered by
-          <Heart className="w-3 h-3 inline" style={{ color: 'var(--couple-accent, #A6894A)' }} />
-          <span className="font-medium text-gray-500">The Bloom House</span>
-        </p>
+        <div className="mt-6 text-center">
+          <p className="text-xs text-gray-400 mb-1">Powered by</p>
+          <img src="/brand/wordmark-sage-sm.png" alt="The Bloom House" className="h-5 w-auto mx-auto opacity-60" />
+        </div>
       </div>
     </div>
   )

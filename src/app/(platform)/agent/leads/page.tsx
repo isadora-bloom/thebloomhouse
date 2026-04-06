@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
   Flame,
@@ -37,9 +38,6 @@ interface Lead {
 type TierFilter = 'all' | 'hot' | 'warm' | 'cool' | 'cold' | 'frozen'
 type SortField = 'heat_score' | 'inquiry_date' | 'updated_at'
 type SortDir = 'asc' | 'desc'
-
-// TODO: Replace with venue from auth context
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -289,6 +287,7 @@ function SortHeader({
 // ---------------------------------------------------------------------------
 
 export default function LeadsPage() {
+  const VENUE_ID = useVenueId()
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

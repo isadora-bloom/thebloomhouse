@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
   Mail,
@@ -12,6 +13,13 @@ import {
   Tag,
   MailOpen,
   Send,
+  Plus,
+  X,
+  Reply,
+  Loader2,
+  Sparkles,
+  CheckCircle,
+  XCircle,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -39,9 +47,6 @@ interface Interaction {
 }
 
 type FilterTab = 'all' | 'inquiries' | 'client' | 'unread'
-
-// TODO: Replace with venue from auth context
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -203,16 +208,280 @@ function EmailListItem({
 // Thread View
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Compose Modal
+// ---------------------------------------------------------------------------
+
+function ComposeModal({
+  venueId,
+  onClose,
+  onSent,
+}: {
+  venueId: string
+  onClose: () => void
+  onSent: () => void
+}) {
+  const [to, setTo] = useState('')
+  const [subject, setSubject] = useState('')
+  const [body, setBody] = useState('')
+  const [sending, setSending] = useState(false)
+
+  const handleSend = async () => {
+    if (!to.trim() || !body.trim()) return
+    setSending(true)
+    try {
+      const res = await fetch('/api/agent/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: to.trim(), subject: subject.trim(), body: body.trim() }),
+      })
+      if (!res.ok) throw new Error('Send failed')
+      onSent()
+      onClose()
+    } catch (err) {
+      console.error('Failed to send email:', err)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-surface border border-border rounded-xl shadow-xl w-full max-w-xl mx-4">
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <h3 className="font-heading text-lg font-semibold text-sage-900">New Email</h3>
+          <button onClick={onClose} className="text-sage-400 hover:text-sage-600 transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-4 space-y-3">
+          <input
+            type="email"
+            placeholder="To"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            className="w-full px-3 py-2 text-sm border border-sage-200 rounded-lg text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 bg-warm-white"
+          />
+          <input
+            type="text"
+            placeholder="Subject"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            className="w-full px-3 py-2 text-sm border border-sage-200 rounded-lg text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 bg-warm-white"
+          />
+          <textarea
+            placeholder="Write your message..."
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={8}
+            className="w-full px-3 py-2 text-sm border border-sage-200 rounded-lg text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 bg-warm-white resize-y"
+          />
+        </div>
+        <div className="flex items-center justify-end gap-2 p-4 border-t border-border">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-sage-600 hover:text-sage-800 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSend}
+            disabled={sending || !to.trim() || !body.trim()}
+            className="flex items-center gap-2 px-4 py-2 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            {sending ? 'Sending...' : 'Send'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Reply Form
+// ---------------------------------------------------------------------------
+
+function ReplyForm({
+  interactionId,
+  personEmail,
+  onSent,
+}: {
+  interactionId: string
+  personEmail: string | undefined
+  onSent: () => void
+}) {
+  const [body, setBody] = useState('')
+  const [sending, setSending] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+
+  const handleSend = async () => {
+    if (!body.trim()) return
+    setSending(true)
+    try {
+      const res = await fetch('/api/agent/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interactionId, body: body.trim() }),
+      })
+      if (!res.ok) throw new Error('Reply failed')
+      setBody('')
+      setExpanded(false)
+      onSent()
+    } catch (err) {
+      console.error('Failed to send reply:', err)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  if (!expanded) {
+    return (
+      <div className="p-4 border-t border-border">
+        <button
+          onClick={() => setExpanded(true)}
+          className="flex items-center gap-2 text-sm text-sage-500 hover:text-sage-700 transition-colors"
+        >
+          <Reply className="w-4 h-4" />
+          Reply{personEmail ? ` to ${personEmail}` : ''}
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-4 border-t border-border space-y-3">
+      <div className="flex items-center gap-2 text-sm text-sage-600">
+        <Reply className="w-4 h-4" />
+        <span>Replying{personEmail ? ` to ${personEmail}` : ''}</span>
+      </div>
+      <textarea
+        autoFocus
+        placeholder="Write your reply..."
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        rows={4}
+        className="w-full px-3 py-2 text-sm border border-sage-200 rounded-lg text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 bg-warm-white resize-y"
+      />
+      <div className="flex items-center justify-end gap-2">
+        <button
+          onClick={() => { setExpanded(false); setBody('') }}
+          className="px-3 py-1.5 text-sm text-sage-500 hover:text-sage-700 transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleSend}
+          disabled={sending || !body.trim()}
+          className="flex items-center gap-2 px-4 py-1.5 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          {sending ? 'Sending...' : 'Send Reply'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Draft Approval Card (inline in thread)
+// ---------------------------------------------------------------------------
+
+function DraftApprovalCard({
+  draft,
+  onApprove,
+  onReject,
+}: {
+  draft: { id: string; draft_body: string; subject: string }
+  onApprove: (draftId: string) => Promise<void>
+  onReject: (draftId: string) => Promise<void>
+}) {
+  const [processing, setProcessing] = useState(false)
+  const [action, setAction] = useState<'approve' | 'reject' | null>(null)
+
+  const handleApprove = async () => {
+    setProcessing(true)
+    setAction('approve')
+    try {
+      await onApprove(draft.id)
+    } finally {
+      setProcessing(false)
+      setAction(null)
+    }
+  }
+
+  const handleReject = async () => {
+    setProcessing(true)
+    setAction('reject')
+    try {
+      await onReject(draft.id)
+    } finally {
+      setProcessing(false)
+      setAction(null)
+    }
+  }
+
+  return (
+    <div className="rounded-xl p-4 bg-amber-50 border-2 border-amber-300 ml-8">
+      <div className="flex items-center gap-2 mb-3">
+        <Sparkles className="w-4 h-4 text-amber-600" />
+        <span className="text-sm font-semibold text-amber-800">
+          AI Draft — Pending Your Approval
+        </span>
+      </div>
+      <div className="text-sm text-amber-800 whitespace-pre-wrap leading-relaxed mb-4 bg-white/60 rounded-lg p-3 border border-amber-200">
+        {draft.draft_body}
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleApprove}
+          disabled={processing}
+          className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {action === 'approve' ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <CheckCircle className="w-4 h-4" />
+          )}
+          Approve & Send
+        </button>
+        <button
+          onClick={handleReject}
+          disabled={processing}
+          className="flex items-center gap-2 px-4 py-2 bg-red-50 hover:bg-red-100 text-red-700 text-sm font-medium rounded-lg border border-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {action === 'reject' ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <XCircle className="w-4 h-4" />
+          )}
+          Reject
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Thread View
+// ---------------------------------------------------------------------------
+
 function ThreadView({
   interaction,
   threadMessages,
   draft,
   onBack,
+  onReply,
+  onApproveDraft,
+  onRejectDraft,
 }: {
   interaction: Interaction
   threadMessages: Interaction[]
   draft: { id: string; draft_body: string; subject: string } | null
   onBack: () => void
+  onReply: () => void
+  onApproveDraft: (draftId: string) => Promise<void>
+  onRejectDraft: (draftId: string) => Promise<void>
 }) {
   return (
     <div className="flex flex-col h-full">
@@ -267,21 +536,22 @@ function ThreadView({
           </div>
         ))}
 
-        {/* Draft reply if exists */}
+        {/* Draft reply if exists — with approve/reject controls */}
         {draft && (
-          <div className="rounded-xl p-4 bg-amber-50 border border-amber-200 ml-8">
-            <div className="flex items-center gap-2 mb-2">
-              <Send className="w-3.5 h-3.5 text-amber-600" />
-              <span className="text-sm font-medium text-amber-800">
-                Draft Reply (pending approval)
-              </span>
-            </div>
-            <div className="text-sm text-amber-700 whitespace-pre-wrap leading-relaxed">
-              {draft.draft_body}
-            </div>
-          </div>
+          <DraftApprovalCard
+            draft={draft}
+            onApprove={onApproveDraft}
+            onReject={onRejectDraft}
+          />
         )}
       </div>
+
+      {/* Reply form */}
+      <ReplyForm
+        interactionId={interaction.id}
+        personEmail={interaction.person_email}
+        onSent={onReply}
+      />
     </div>
   )
 }
@@ -291,6 +561,7 @@ function ThreadView({
 // ---------------------------------------------------------------------------
 
 export default function InboxPage() {
+  const VENUE_ID = useVenueId()
   const [interactions, setInteractions] = useState<Interaction[]>([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
@@ -305,8 +576,20 @@ export default function InboxPage() {
     subject: string
   } | null>(null)
   const [threadLoading, setThreadLoading] = useState(false)
+  const [showCompose, setShowCompose] = useState(false)
+  const [pendingDraftCount, setPendingDraftCount] = useState(0)
 
   const supabase = createClient()
+
+  // ---- Fetch pending draft count ----
+  useEffect(() => {
+    supabase
+      .from('drafts')
+      .select('id', { count: 'exact', head: true })
+      .eq('venue_id', VENUE_ID)
+      .eq('status', 'pending')
+      .then(({ count }) => setPendingDraftCount(count ?? 0))
+  }, [threadDraft])
 
   // ---- Fetch interactions ----
   const fetchInteractions = useCallback(async () => {
@@ -512,6 +795,11 @@ export default function InboxPage() {
         <div>
           <h1 className="font-heading text-3xl font-bold text-sage-900 mb-1">
             Inbox
+            {pendingDraftCount > 0 && (
+              <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-amber-100 text-amber-700">
+                {pendingDraftCount} pending approval
+              </span>
+            )}
           </h1>
           <p className="text-sage-600">
             {totalCount} email{totalCount !== 1 ? 's' : ''}
@@ -523,14 +811,23 @@ export default function InboxPage() {
             )}
           </p>
         </div>
-        <button
-          onClick={handleSync}
-          disabled={syncing}
-          className="flex items-center gap-2 px-4 py-2.5 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-        >
-          <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-          {syncing ? 'Syncing...' : 'Sync Emails'}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => setShowCompose(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Compose
+          </button>
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Syncing...' : 'Sync'}
+          </button>
+        </div>
       </div>
 
       {/* ---- Error ---- */}
@@ -652,6 +949,40 @@ export default function InboxPage() {
                     threadMessages={threadMessages}
                     draft={threadDraft}
                     onBack={() => setSelectedId(null)}
+                    onReply={() => {
+                      if (selectedInteraction) loadThread(selectedInteraction)
+                    }}
+                    onApproveDraft={async (draftId: string) => {
+                      await supabase
+                        .from('drafts')
+                        .update({ status: 'approved', approved_at: new Date().toISOString() })
+                        .eq('id', draftId)
+                      await supabase.from('draft_feedback').insert({
+                        venue_id: VENUE_ID,
+                        draft_id: draftId,
+                        action: 'approved',
+                      })
+                      try {
+                        await fetch('/api/agent/drafts', {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ draftId }),
+                        })
+                      } catch { /* email send is best-effort */ }
+                      setThreadDraft(null)
+                    }}
+                    onRejectDraft={async (draftId: string) => {
+                      await supabase
+                        .from('drafts')
+                        .update({ status: 'rejected' })
+                        .eq('id', draftId)
+                      await supabase.from('draft_feedback').insert({
+                        venue_id: VENUE_ID,
+                        draft_id: draftId,
+                        action: 'rejected',
+                      })
+                      setThreadDraft(null)
+                    }}
                   />
                 )
               ) : (
@@ -666,6 +997,15 @@ export default function InboxPage() {
           </div>
         )}
       </div>
+
+      {/* Compose modal */}
+      {showCompose && (
+        <ComposeModal
+          venueId={VENUE_ID}
+          onClose={() => setShowCompose(false)}
+          onSent={fetchInteractions}
+        />
+      )}
     </div>
   )
 }

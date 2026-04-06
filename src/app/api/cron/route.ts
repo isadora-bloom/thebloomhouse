@@ -10,12 +10,16 @@ import {
 } from '@/lib/services/briefings'
 import { sendAllDigests } from '@/lib/services/daily-digest'
 import { processAllVenueFollowUps } from '@/lib/services/follow-up-sequences'
+import { applyDailyDecay } from '@/lib/services/heat-mapping'
+import { processAllNewEmails } from '@/lib/services/email-pipeline'
 
 // ---------------------------------------------------------------------------
 // Valid job names
 // ---------------------------------------------------------------------------
 
 const VALID_JOBS = [
+  'email_poll',
+  'heat_decay',
   'trends_refresh',
   'weather_forecast',
   'economic_indicators',
@@ -24,6 +28,7 @@ const VALID_JOBS = [
   'monthly_briefing',
   'daily_digest',
   'follow_up_sequences',
+  'attribution_refresh',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -34,6 +39,12 @@ type JobName = (typeof VALID_JOBS)[number]
 
 async function runJob(job: JobName): Promise<unknown> {
   switch (job) {
+    case 'email_poll':
+      return pollEmailsAllVenues()
+
+    case 'heat_decay':
+      return applyDecayAllVenues()
+
     case 'trends_refresh':
       return fetchAllVenueTrends()
 
@@ -57,7 +68,151 @@ async function runJob(job: JobName): Promise<unknown> {
 
     case 'follow_up_sequences':
       return processAllVenueFollowUps()
+
+    case 'attribution_refresh':
+      return refreshAttributionAllVenues()
   }
+}
+
+/**
+ * Poll emails for all venues with Gmail connected.
+ */
+async function pollEmailsAllVenues(): Promise<Record<string, number>> {
+  const supabase = createServiceClient()
+
+  const { data: venues } = await supabase
+    .from('venue_config')
+    .select('venue_id')
+    .not('gmail_tokens', 'is', null)
+
+  if (!venues || venues.length === 0) return {}
+
+  const results: Record<string, number> = {}
+  for (const v of venues) {
+    const id = v.venue_id as string
+    try {
+      const result = await processAllNewEmails(id)
+      results[id] = result.processed
+    } catch (err) {
+      console.error(`[cron] Email poll failed for venue ${id}:`, err)
+      results[id] = 0
+    }
+  }
+  return results
+}
+
+/**
+ * Apply heat score decay to all venues.
+ */
+async function applyDecayAllVenues(): Promise<Record<string, number>> {
+  const supabase = createServiceClient()
+
+  const { data: venues } = await supabase
+    .from('venues')
+    .select('id')
+    .eq('status', 'active')
+
+  if (!venues || venues.length === 0) return {}
+
+  const results: Record<string, number> = {}
+  for (const v of venues) {
+    const id = v.id as string
+    try {
+      const affected = await applyDailyDecay(id)
+      results[id] = affected
+    } catch (err) {
+      console.error(`[cron] Heat decay failed for venue ${id}:`, err)
+      results[id] = 0
+    }
+  }
+  return results
+}
+
+/**
+ * Refresh source attribution calculations for all venues.
+ */
+async function refreshAttributionAllVenues(): Promise<Record<string, boolean>> {
+  const supabase = createServiceClient()
+
+  const { data: venues } = await supabase
+    .from('venues')
+    .select('id')
+    .eq('status', 'active')
+
+  if (!venues || venues.length === 0) return {}
+
+  const results: Record<string, boolean> = {}
+  for (const v of venues) {
+    const id = v.id as string
+    try {
+      // Calculate source attribution from weddings + marketing_spend
+      const { data: weddings } = await supabase
+        .from('weddings')
+        .select('source, status, booking_value, created_at')
+        .eq('venue_id', id)
+
+      const { data: spend } = await supabase
+        .from('marketing_spend')
+        .select('source, amount')
+        .eq('venue_id', id)
+
+      if (!weddings) { results[id] = false; continue }
+
+      // Group by source
+      const sources = new Map<string, { inquiries: number; tours: number; bookings: number; revenue: number; spend: number }>()
+
+      for (const w of weddings) {
+        const src = w.source || 'unknown'
+        const existing = sources.get(src) || { inquiries: 0, tours: 0, bookings: 0, revenue: 0, spend: 0 }
+        existing.inquiries++
+        if (['tour_scheduled', 'tour_completed', 'proposal_sent', 'booked', 'completed'].includes(w.status)) existing.tours++
+        if (['booked', 'completed'].includes(w.status)) {
+          existing.bookings++
+          existing.revenue += Number(w.booking_value) || 0
+        }
+        sources.set(src, existing)
+      }
+
+      // Add spend data
+      for (const s of (spend || [])) {
+        const existing = sources.get(s.source) || { inquiries: 0, tours: 0, bookings: 0, revenue: 0, spend: 0 }
+        existing.spend += Number(s.amount) || 0
+        sources.set(s.source, existing)
+      }
+
+      // Upsert source_attribution records
+      const now = new Date().toISOString()
+      for (const [source, data] of sources) {
+        const costPerInquiry = data.inquiries > 0 ? data.spend / data.inquiries : 0
+        const costPerBooking = data.bookings > 0 ? data.spend / data.bookings : 0
+        const conversionRate = data.inquiries > 0 ? data.bookings / data.inquiries : 0
+        const roi = data.spend > 0 ? (data.revenue - data.spend) / data.spend : 0
+
+        await supabase.from('source_attribution').upsert({
+          venue_id: id,
+          source,
+          period_start: new Date(new Date().getFullYear(), 0, 1).toISOString(),
+          period_end: now,
+          spend: data.spend,
+          inquiries: data.inquiries,
+          tours: data.tours,
+          bookings: data.bookings,
+          revenue: data.revenue,
+          cost_per_inquiry: costPerInquiry,
+          cost_per_booking: costPerBooking,
+          conversion_rate: conversionRate,
+          roi,
+          calculated_at: now,
+        }, { onConflict: 'venue_id,source,period_start' })
+      }
+
+      results[id] = true
+    } catch (err) {
+      console.error(`[cron] Attribution refresh failed for venue ${id}:`, err)
+      results[id] = false
+    }
+  }
+  return results
 }
 
 /**

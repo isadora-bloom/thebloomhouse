@@ -1,10 +1,11 @@
 'use client'
 
 // Feature: configurable via venue_config.feature_flags
-// Table: bedroom_assignments
+// Tables: room_blocks, bedroom_assignments, guest_list
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { cn } from '@/lib/utils'
 import {
   BedDouble,
   Plus,
@@ -13,51 +14,87 @@ import {
   Trash2,
   UserPlus,
   UserMinus,
+  Hotel,
   Home,
   ExternalLink,
+  Calendar,
+  DollarSign,
+  Link2,
   Info,
-  Accessibility,
+  Save,
+  Check,
+  Loader2,
+  ChevronDown,
+  ChevronUp,
+  Users,
+  ClipboardList,
+  Search,
 } from 'lucide-react'
 
 // TODO: Get from auth session
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type RoomModel = 'on_site' | 'nearby_partner' | 'none'
+interface RoomBlock {
+  id: string
+  hotel_name: string
+  block_name: string
+  rate_per_night: number | null
+  rooms_reserved: number | null
+  booking_deadline: string | null
+  booking_link: string | null
+  booking_code: string | null
+  notes: string | null
+  sort_order: number
+}
 
-interface RoomAssignment {
+interface RoomBlockForm {
+  hotel_name: string
+  block_name: string
+  rate_per_night: string
+  rooms_reserved: string
+  booking_deadline: string
+  booking_link: string
+  booking_code: string
+  notes: string
+}
+
+interface OnSiteRoom {
   id: string
   room_name: string
   description: string | null
-  assigned_guests: string[]
+  friday_guest: string | null
+  saturday_guest: string | null
   accessibility_notes: string | null
   notes: string | null
   sort_order: number
 }
 
-interface RoomFormData {
-  room_name: string
-  description: string
-  accessibility_notes: string
-  notes: string
-}
-
 interface Guest {
   id: string
+  accommodation: string | null
   person: {
     first_name: string | null
     last_name: string | null
   } | null
 }
 
-const EMPTY_FORM: RoomFormData = {
-  room_name: '',
-  description: '',
-  accessibility_notes: '',
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const EMPTY_BLOCK_FORM: RoomBlockForm = {
+  hotel_name: '',
+  block_name: '',
+  rate_per_night: '',
+  rooms_reserved: '',
+  booking_deadline: '',
+  booking_link: '',
+  booking_code: '',
   notes: '',
 }
 
@@ -72,26 +109,66 @@ function guestName(guest: Guest): string {
   return 'Unnamed'
 }
 
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return ''
+  try {
+    const d = new Date(dateStr + 'T00:00:00')
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  } catch {
+    return dateStr
+  }
+}
+
+function isDeadlineSoon(dateStr: string | null): boolean {
+  if (!dateStr) return false
+  const deadline = new Date(dateStr + 'T00:00:00')
+  const now = new Date()
+  const diff = deadline.getTime() - now.getTime()
+  const daysDiff = diff / (1000 * 60 * 60 * 24)
+  return daysDiff >= 0 && daysDiff <= 14
+}
+
+function isDeadlinePassed(dateStr: string | null): boolean {
+  if (!dateStr) return false
+  const deadline = new Date(dateStr + 'T00:00:00')
+  return deadline < new Date()
+}
+
 // ---------------------------------------------------------------------------
 // Room Assignments Page
 // ---------------------------------------------------------------------------
 
 export default function RoomAssignmentsPage() {
-  const [rooms, setRooms] = useState<RoomAssignment[]>([])
+  // Room blocks
+  const [roomBlocks, setRoomBlocks] = useState<RoomBlock[]>([])
+  const [showBlockModal, setShowBlockModal] = useState(false)
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
+  const [blockForm, setBlockForm] = useState<RoomBlockForm>(EMPTY_BLOCK_FORM)
+
+  // On-site rooms
+  const [onSiteRooms, setOnSiteRooms] = useState<OnSiteRoom[]>([])
+  const [savingRoom, setSavingRoom] = useState<string | null>(null)
+
+  // Guest accommodation tracker
   const [guests, setGuests] = useState<Guest[]>([])
+  const [showTracker, setShowTracker] = useState(false)
+  const [trackerSearch, setTrackerSearch] = useState('')
+
+  // General
   const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [form, setForm] = useState<RoomFormData>(EMPTY_FORM)
-  const [showAssignModal, setShowAssignModal] = useState(false)
-  const [assigningRoomId, setAssigningRoomId] = useState<string | null>(null)
-  const [roomModel, setRoomModel] = useState<RoomModel>('on_site')
+  const [expandedBlocks, setExpandedBlocks] = useState(true)
+  const [expandedOnSite, setExpandedOnSite] = useState(true)
 
   const supabase = createClient()
 
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
-    const [roomsRes, guestsRes] = await Promise.all([
+    const [blocksRes, roomsRes, guestsRes] = await Promise.all([
+      supabase
+        .from('room_blocks')
+        .select('*')
+        .eq('wedding_id', WEDDING_ID)
+        .order('sort_order', { ascending: true }),
       supabase
         .from('bedroom_assignments')
         .select('*')
@@ -99,12 +176,13 @@ export default function RoomAssignmentsPage() {
         .order('sort_order', { ascending: true }),
       supabase
         .from('guest_list')
-        .select('id, person:people(first_name, last_name)')
+        .select('id, accommodation, person:people(first_name, last_name)')
         .eq('wedding_id', WEDDING_ID)
         .order('created_at', { ascending: true }),
     ])
 
-    if (roomsRes.data) setRooms(roomsRes.data as unknown as RoomAssignment[])
+    if (blocksRes.data) setRoomBlocks(blocksRes.data as unknown as RoomBlock[])
+    if (roomsRes.data) setOnSiteRooms(roomsRes.data as unknown as OnSiteRoom[])
     if (guestsRes.data) setGuests(guestsRes.data as unknown as Guest[])
     setLoading(false)
   }, [supabase])
@@ -114,101 +192,113 @@ export default function RoomAssignmentsPage() {
   }, [fetchData])
 
   // ---- Derived ----
-  const assignedGuestIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const room of rooms) {
-      for (const gId of room.assigned_guests || []) {
-        ids.add(gId)
-      }
+  const totalBlockRooms = roomBlocks.reduce((sum, b) => sum + (b.rooms_reserved || 0), 0)
+  const accommodationOptions = useMemo(() => {
+    const opts: string[] = []
+    for (const block of roomBlocks) {
+      opts.push(block.hotel_name + (block.block_name ? ` — ${block.block_name}` : ''))
     }
-    return ids
-  }, [rooms])
+    for (const room of onSiteRooms) {
+      opts.push(`On-site: ${room.room_name}`)
+    }
+    opts.push('Making own arrangements')
+    return opts
+  }, [roomBlocks, onSiteRooms])
 
-  const unassignedGuests = useMemo(() => {
-    return guests.filter((g) => !assignedGuestIds.has(g.id))
-  }, [guests, assignedGuestIds])
+  const guestsWithAccommodation = guests.filter((g) => g.accommodation)
+  const guestsWithoutAccommodation = guests.filter((g) => !g.accommodation)
 
-  const totalGuestsHoused = assignedGuestIds.size
+  const filteredGuests = useMemo(() => {
+    if (!trackerSearch.trim()) return guests
+    const q = trackerSearch.toLowerCase()
+    return guests.filter((g) => guestName(g).toLowerCase().includes(q))
+  }, [guests, trackerSearch])
 
-  // ---- Room CRUD ----
-  function openAdd() {
-    setForm(EMPTY_FORM)
-    setEditingId(null)
-    setShowModal(true)
+  // ---- Room Block CRUD ----
+  function openAddBlock() {
+    setBlockForm(EMPTY_BLOCK_FORM)
+    setEditingBlockId(null)
+    setShowBlockModal(true)
   }
 
-  function openEdit(room: RoomAssignment) {
-    setForm({
-      room_name: room.room_name,
-      description: room.description || '',
-      accessibility_notes: room.accessibility_notes || '',
-      notes: room.notes || '',
+  function openEditBlock(block: RoomBlock) {
+    setBlockForm({
+      hotel_name: block.hotel_name,
+      block_name: block.block_name || '',
+      rate_per_night: block.rate_per_night?.toString() || '',
+      rooms_reserved: block.rooms_reserved?.toString() || '',
+      booking_deadline: block.booking_deadline || '',
+      booking_link: block.booking_link || '',
+      booking_code: block.booking_code || '',
+      notes: block.notes || '',
     })
-    setEditingId(room.id)
-    setShowModal(true)
+    setEditingBlockId(block.id)
+    setShowBlockModal(true)
   }
 
-  async function handleSave() {
-    if (!form.room_name.trim()) return
+  async function handleSaveBlock() {
+    if (!blockForm.hotel_name.trim()) return
 
     const payload = {
       venue_id: VENUE_ID,
       wedding_id: WEDDING_ID,
-      room_name: form.room_name.trim(),
-      description: form.description.trim() || null,
-      accessibility_notes: form.accessibility_notes.trim() || null,
-      notes: form.notes.trim() || null,
+      hotel_name: blockForm.hotel_name.trim(),
+      block_name: blockForm.block_name.trim() || null,
+      rate_per_night: blockForm.rate_per_night ? parseFloat(blockForm.rate_per_night) : null,
+      rooms_reserved: blockForm.rooms_reserved ? parseInt(blockForm.rooms_reserved) : null,
+      booking_deadline: blockForm.booking_deadline || null,
+      booking_link: blockForm.booking_link.trim() || null,
+      booking_code: blockForm.booking_code.trim() || null,
+      notes: blockForm.notes.trim() || null,
     }
 
-    if (editingId) {
-      await supabase.from('bedroom_assignments').update(payload).eq('id', editingId)
+    if (editingBlockId) {
+      await supabase.from('room_blocks').update(payload).eq('id', editingBlockId)
     } else {
-      await supabase.from('bedroom_assignments').insert({
+      await supabase.from('room_blocks').insert({
         ...payload,
-        assigned_guests: [],
-        sort_order: rooms.length,
+        sort_order: roomBlocks.length,
       })
     }
 
-    setShowModal(false)
-    setEditingId(null)
+    setShowBlockModal(false)
+    setEditingBlockId(null)
     fetchData()
   }
 
-  async function handleDeleteRoom(id: string) {
-    if (!confirm('Remove this room? Guest assignments will be cleared.')) return
-    await supabase.from('bedroom_assignments').delete().eq('id', id)
+  async function handleDeleteBlock(id: string) {
+    if (!confirm('Remove this room block?')) return
+    await supabase.from('room_blocks').delete().eq('id', id)
     fetchData()
   }
 
-  // ---- Guest assignment ----
-  function openAssignModal(roomId: string) {
-    setAssigningRoomId(roomId)
-    setShowAssignModal(true)
-  }
+  // ---- On-site room guest save ----
+  async function saveRoomGuest(roomId: string, field: 'friday_guest' | 'saturday_guest', value: string) {
+    setSavingRoom(roomId + field)
+    await supabase
+      .from('bedroom_assignments')
+      .update({ [field]: value.trim() || null })
+      .eq('id', roomId)
 
-  async function assignGuest(roomId: string, guestId: string) {
-    const room = rooms.find((r) => r.id === roomId)
-    if (!room) return
-
-    const updated = [...(room.assigned_guests || []), guestId]
-    await supabase.from('bedroom_assignments').update({ assigned_guests: updated }).eq('id', roomId)
+    setSavingRoom(null)
     fetchData()
   }
 
-  async function unassignGuest(roomId: string, guestId: string) {
-    const room = rooms.find((r) => r.id === roomId)
-    if (!room) return
-
-    const updated = (room.assigned_guests || []).filter((id) => id !== guestId)
-    await supabase.from('bedroom_assignments').update({ assigned_guests: updated }).eq('id', roomId)
+  // ---- Guest accommodation ----
+  async function updateGuestAccommodation(guestId: string, value: string) {
+    await supabase
+      .from('guest_list')
+      .update({ accommodation: value || null })
+      .eq('id', guestId)
     fetchData()
   }
 
+  // ---- Loading ----
   if (loading) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-48 bg-gray-200 rounded" />
+        <div className="h-32 bg-gray-100 rounded-xl" />
         <div className="h-32 bg-gray-100 rounded-xl" />
       </div>
     )
@@ -217,146 +307,242 @@ export default function RoomAssignmentsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1
-            className="text-3xl font-bold mb-1"
-            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-          >
-            Room Assignments
-          </h1>
-          <p className="text-gray-500 text-sm">Assign guests to on-site rooms or accommodations.</p>
-        </div>
-        <button
-          onClick={openAdd}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
-          style={{ backgroundColor: 'var(--couple-primary)' }}
+      <div>
+        <h1
+          className="text-3xl font-bold mb-1"
+          style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
         >
-          <Plus className="w-4 h-4" />
-          Add Room
-        </button>
+          Room Assignments
+        </h1>
+        <p className="text-gray-500 text-sm">
+          Manage hotel room blocks, on-site accommodations, and track where your guests are staying.
+        </p>
       </div>
-
-      {/* Accommodation model selector */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-        <label className="block text-sm font-medium text-gray-700 mb-2">Accommodation Type</label>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          <button
-            onClick={() => setRoomModel('on_site')}
-            className={`text-left p-3 rounded-lg border text-sm transition-colors ${
-              roomModel === 'on_site' ? 'text-white border-transparent' : 'text-gray-700 border-gray-200 hover:border-gray-300 bg-white'
-            }`}
-            style={roomModel === 'on_site' ? { backgroundColor: 'var(--couple-primary)' } : undefined}
-          >
-            <div className="flex items-center gap-2">
-              <Home className="w-4 h-4" />
-              <span className="font-medium">On-Site Rooms</span>
-            </div>
-            <p className={`text-xs mt-1 ${roomModel === 'on_site' ? 'text-white/80' : 'text-gray-400'}`}>
-              Your venue offers on-site accommodations
-            </p>
-          </button>
-          <button
-            onClick={() => setRoomModel('nearby_partner')}
-            className={`text-left p-3 rounded-lg border text-sm transition-colors ${
-              roomModel === 'nearby_partner' ? 'text-white border-transparent' : 'text-gray-700 border-gray-200 hover:border-gray-300 bg-white'
-            }`}
-            style={roomModel === 'nearby_partner' ? { backgroundColor: 'var(--couple-primary)' } : undefined}
-          >
-            <div className="flex items-center gap-2">
-              <ExternalLink className="w-4 h-4" />
-              <span className="font-medium">Nearby Stays</span>
-            </div>
-            <p className={`text-xs mt-1 ${roomModel === 'nearby_partner' ? 'text-white/80' : 'text-gray-400'}`}>
-              Your venue partners with nearby accommodations
-            </p>
-          </button>
-          <button
-            onClick={() => setRoomModel('none')}
-            className={`text-left p-3 rounded-lg border text-sm transition-colors ${
-              roomModel === 'none' ? 'text-white border-transparent' : 'text-gray-700 border-gray-200 hover:border-gray-300 bg-white'
-            }`}
-            style={roomModel === 'none' ? { backgroundColor: 'var(--couple-primary)' } : undefined}
-          >
-            <div className="flex items-center gap-2">
-              <Info className="w-4 h-4" />
-              <span className="font-medium">No Rooms</span>
-            </div>
-            <p className={`text-xs mt-1 ${roomModel === 'none' ? 'text-white/80' : 'text-gray-400'}`}>
-              Not applicable for your venue
-            </p>
-          </button>
-        </div>
-      </div>
-
-      {roomModel === 'none' && (
-        <div className="flex items-start gap-3 p-4 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-600">
-          <Info className="w-5 h-5 mt-0.5 shrink-0 text-gray-400" />
-          <p>Room assignments are not needed for your venue. You can still add rooms if you want to track hotel room blocks or external accommodations for your guests.</p>
-        </div>
-      )}
-
-      {roomModel === 'nearby_partner' && (
-        <div className="flex items-start gap-3 p-4 bg-blue-50 border border-blue-100 rounded-xl text-sm text-blue-800">
-          <ExternalLink className="w-5 h-5 mt-0.5 shrink-0 text-blue-500" />
-          <p>Your venue partners with nearby stays. Use the rooms below to track room block assignments, or share accommodation details on your wedding website.</p>
-        </div>
-      )}
 
       {/* Stats */}
-      {rooms.length > 0 && (
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center">
-            <p className="text-2xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
-              {rooms.length}
-            </p>
-            <p className="text-xs text-gray-500 font-medium">Rooms</p>
-          </div>
-          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center">
-            <p className="text-2xl font-bold tabular-nums text-emerald-600">
-              {totalGuestsHoused}
-            </p>
-            <p className="text-xs text-gray-500 font-medium">Guests Housed</p>
-          </div>
-          <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center">
-            <p className={`text-2xl font-bold tabular-nums ${unassignedGuests.length > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
-              {guests.length - totalGuestsHoused}
-            </p>
-            <p className="text-xs text-gray-500 font-medium">Without Room</p>
-          </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
+          <p className="text-xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
+            {roomBlocks.length}
+          </p>
+          <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">Room Blocks</p>
         </div>
-      )}
+        <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
+          <p className="text-xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
+            {totalBlockRooms}
+          </p>
+          <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">Rooms Reserved</p>
+        </div>
+        <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
+          <p className="text-xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
+            {onSiteRooms.length}
+          </p>
+          <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">On-Site Rooms</p>
+        </div>
+        <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
+          <p className={cn('text-xl font-bold tabular-nums', guestsWithoutAccommodation.length > 0 ? 'text-amber-600' : 'text-emerald-600')}>
+            {guestsWithAccommodation.length}/{guests.length}
+          </p>
+          <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">Guests Tracked</p>
+        </div>
+      </div>
 
-      {/* Room Cards */}
-      {rooms.length === 0 && roomModel !== 'none' ? (
-        <div className="text-center py-16 bg-white rounded-xl border border-gray-100 shadow-sm">
-          <BedDouble className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--couple-primary)', opacity: 0.3 }} />
-          <h3
-            className="text-lg font-semibold mb-2"
-            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-          >
-            No rooms added yet
-          </h3>
-          <p className="text-gray-500 text-sm mb-4">Add rooms to start assigning guests.</p>
+      {/* ================================================================ */}
+      {/* SECTION 1: Room Blocks */}
+      {/* ================================================================ */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        <button
+          onClick={() => setExpandedBlocks(!expandedBlocks)}
+          className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Hotel className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
+            <h2
+              className="text-sm font-semibold"
+              style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+            >
+              Hotel Room Blocks
+            </h2>
+            {roomBlocks.length > 0 && (
+              <span className="text-[10px] font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                {roomBlocks.length}
+              </span>
+            )}
+          </div>
+          {expandedBlocks ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+        </button>
+
+        {expandedBlocks && (
+          <div className="px-5 pb-5 space-y-4">
+            <div className="flex items-start gap-3 p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
+              <Info className="w-4 h-4 mt-0.5 shrink-0 text-blue-500" />
+              <p>
+                Where are your guests staying? Add room blocks you have reserved at hotels. Share the booking codes
+                and links on your wedding website or with your guests directly.
+              </p>
+            </div>
+
+            {/* Room block cards */}
+            {roomBlocks.length > 0 && (
+              <div className="space-y-3">
+                {roomBlocks.map((block) => {
+                  const deadlineSoon = isDeadlineSoon(block.booking_deadline)
+                  const deadlinePassed = isDeadlinePassed(block.booking_deadline)
+
+                  return (
+                    <div
+                      key={block.id}
+                      className="border border-gray-100 rounded-xl p-4 group hover:shadow-sm transition-shadow"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <h3
+                            className="font-semibold text-sm"
+                            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+                          >
+                            {block.hotel_name}
+                          </h3>
+                          {block.block_name && (
+                            <p className="text-xs text-gray-500 mt-0.5">Block: {block.block_name}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          <button
+                            onClick={() => openEditBlock(block)}
+                            className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteBlock(block.id)}
+                            className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+                        {block.rate_per_night != null && (
+                          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                            <DollarSign className="w-3 h-3 text-gray-400" />
+                            <span>${block.rate_per_night}/night</span>
+                          </div>
+                        )}
+                        {block.rooms_reserved != null && (
+                          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                            <BedDouble className="w-3 h-3 text-gray-400" />
+                            <span>{block.rooms_reserved} rooms</span>
+                          </div>
+                        )}
+                        {block.booking_deadline && (
+                          <div className={cn(
+                            'flex items-center gap-1.5 text-xs',
+                            deadlinePassed ? 'text-red-500' : deadlineSoon ? 'text-amber-600' : 'text-gray-500',
+                          )}>
+                            <Calendar className="w-3 h-3" />
+                            <span>
+                              {deadlinePassed ? 'Expired: ' : deadlineSoon ? 'Soon: ' : 'By '}
+                              {formatDate(block.booking_deadline)}
+                            </span>
+                          </div>
+                        )}
+                        {block.booking_code && (
+                          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                            <ClipboardList className="w-3 h-3 text-gray-400" />
+                            <span className="font-mono">{block.booking_code}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {block.booking_link && (
+                        <div className="mt-2">
+                          <a
+                            href={block.booking_link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-medium hover:underline"
+                            style={{ color: 'var(--couple-primary)' }}
+                          >
+                            <Link2 className="w-3 h-3" />
+                            Booking Link
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                      )}
+
+                      {block.notes && (
+                        <p className="text-xs text-gray-400 mt-2 italic">{block.notes}</p>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {roomBlocks.length === 0 && (
+              <div className="text-center py-8 bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                <Hotel className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                <p className="text-sm text-gray-500 mb-1">No room blocks added yet</p>
+                <p className="text-xs text-gray-400 mb-3">
+                  Add your hotel room blocks to share booking details with guests.
+                </p>
+              </div>
+            )}
+
+            <button
+              onClick={openAddBlock}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
+              style={{ backgroundColor: 'var(--couple-primary)' }}
+            >
+              <Plus className="w-4 h-4" />
+              Add Room Block
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ================================================================ */}
+      {/* SECTION 2: On-Site Rooms */}
+      {/* ================================================================ */}
+      {onSiteRooms.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
           <button
-            onClick={openAdd}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
-            style={{ backgroundColor: 'var(--couple-primary)' }}
+            onClick={() => setExpandedOnSite(!expandedOnSite)}
+            className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
           >
-            <Plus className="w-4 h-4" />
-            Add First Room
+            <div className="flex items-center gap-2">
+              <Home className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
+              <h2
+                className="text-sm font-semibold"
+                style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+              >
+                On-Site Rooms
+              </h2>
+              <span className="text-[10px] font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                {onSiteRooms.length}
+              </span>
+            </div>
+            {expandedOnSite ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
           </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {rooms.map((room) => {
-            const roomGuests = guests.filter((g) => (room.assigned_guests || []).includes(g.id))
-            return (
-              <div key={room.id} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden group">
-                {/* Room header */}
-                <div className="p-4 border-b border-gray-100" style={{ backgroundColor: 'color-mix(in srgb, var(--couple-primary) 5%, white)' }}>
-                  <div className="flex items-start justify-between">
-                    <div>
+
+          {expandedOnSite && (
+            <div className="px-5 pb-5 space-y-4">
+              <p className="text-xs text-gray-500">
+                These rooms are set up by your venue. Enter guest names for Friday and Saturday nights.
+                Changes save automatically when you tab or click away.
+              </p>
+
+              <div className="space-y-3">
+                {onSiteRooms.map((room) => (
+                  <div
+                    key={room.id}
+                    className="border border-gray-100 rounded-xl overflow-hidden"
+                  >
+                    <div
+                      className="px-4 py-3 border-b border-gray-100"
+                      style={{ backgroundColor: 'color-mix(in srgb, var(--couple-primary) 5%, white)' }}
+                    >
                       <h3
                         className="font-semibold text-sm"
                         style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
@@ -366,197 +552,307 @@ export default function RoomAssignmentsPage() {
                       {room.description && (
                         <p className="text-xs text-gray-500 mt-0.5">{room.description}</p>
                       )}
+                      {room.accessibility_notes && (
+                        <p className="text-[10px] text-gray-400 mt-1">Accessibility: {room.accessibility_notes}</p>
+                      )}
                     </div>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => openEdit(room)} className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-white/50">
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button onClick={() => handleDeleteRoom(room.id)} className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50/50">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
 
-                  {room.accessibility_notes && (
-                    <div className="flex items-center gap-1 mt-2 text-xs text-gray-500">
-                      <Accessibility className="w-3 h-3" />
-                      {room.accessibility_notes}
-                    </div>
-                  )}
-                </div>
-
-                {/* Assigned guests */}
-                <div className="p-4">
-                  {roomGuests.length === 0 ? (
-                    <p className="text-xs text-gray-400 text-center py-3">No guests assigned</p>
-                  ) : (
-                    <div className="space-y-1 mb-3">
-                      {roomGuests.map((guest) => (
-                        <div key={guest.id} className="flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-gray-50">
-                          <span className="text-sm text-gray-700">{guestName(guest)}</span>
-                          <button
-                            onClick={() => unassignGuest(room.id, guest.id)}
-                            className="text-gray-300 hover:text-red-500 transition-colors"
-                          >
-                            <UserMinus className="w-3.5 h-3.5" />
-                          </button>
+                    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Friday night */}
+                      <div>
+                        <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
+                          Friday Night
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            defaultValue={room.friday_guest || ''}
+                            onBlur={(e) => saveRoomGuest(room.id, 'friday_guest', e.target.value)}
+                            placeholder="Guest name(s)"
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                            style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                          />
+                          {savingRoom === room.id + 'friday_guest' && (
+                            <Loader2 className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-300" />
+                          )}
                         </div>
-                      ))}
+                      </div>
+
+                      {/* Saturday night */}
+                      <div>
+                        <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
+                          Saturday Night
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            defaultValue={room.saturday_guest || ''}
+                            onBlur={(e) => saveRoomGuest(room.id, 'saturday_guest', e.target.value)}
+                            placeholder="Guest name(s)"
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                            style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                          />
+                          {savingRoom === room.id + 'saturday_guest' && (
+                            <Loader2 className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-300" />
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  )}
 
-                  <button
-                    onClick={() => openAssignModal(room.id)}
-                    className="w-full inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
-                  >
-                    <UserPlus className="w-3 h-3" />
-                    Assign Guest
-                  </button>
-
-                  {room.notes && (
-                    <p className="text-xs text-gray-400 mt-3 italic">{room.notes}</p>
-                  )}
-                </div>
+                    {room.notes && (
+                      <div className="px-4 pb-3">
+                        <p className="text-xs text-gray-400 italic">{room.notes}</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
-            )
-          })}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Add/Edit Room Modal */}
-      {showModal && (
+      {/* ================================================================ */}
+      {/* SECTION 3: Guest Accommodation Tracker */}
+      {/* ================================================================ */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        <button
+          onClick={() => setShowTracker(!showTracker)}
+          className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <ClipboardList className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
+            <h2
+              className="text-sm font-semibold"
+              style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+            >
+              Guest Accommodation Tracker
+            </h2>
+            {guestsWithAccommodation.length > 0 && (
+              <span className="text-[10px] font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                {guestsWithAccommodation.length}/{guests.length}
+              </span>
+            )}
+          </div>
+          {showTracker ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+        </button>
+
+        {showTracker && (
+          <div className="px-5 pb-5 space-y-4">
+            <p className="text-xs text-gray-500">
+              Track where each guest is staying. This is optional but helps with transportation planning
+              and guest communication.
+            </p>
+
+            {guests.length === 0 ? (
+              <div className="text-center py-8 bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                <Users className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                <p className="text-sm text-gray-500">No guests in your guest list yet.</p>
+                <p className="text-xs text-gray-400 mt-1">Add guests first, then track their accommodations here.</p>
+              </div>
+            ) : (
+              <>
+                {/* Search */}
+                <div className="relative">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-300" />
+                  <input
+                    type="text"
+                    value={trackerSearch}
+                    onChange={(e) => setTrackerSearch(e.target.value)}
+                    placeholder="Search guests..."
+                    className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  />
+                </div>
+
+                {/* Guest list */}
+                <div className="space-y-2 max-h-[500px] overflow-y-auto">
+                  {filteredGuests.map((guest) => (
+                    <div
+                      key={guest.id}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-gray-100 hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-[10px] font-medium text-gray-500 shrink-0">
+                        {guestName(guest).charAt(0).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm text-gray-700 truncate block">{guestName(guest)}</span>
+                      </div>
+                      <select
+                        value={guest.accommodation || ''}
+                        onChange={(e) => updateGuestAccommodation(guest.id, e.target.value)}
+                        className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:border-transparent max-w-[200px]"
+                        style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                      >
+                        <option value="">Not set</option>
+                        {accommodationOptions.map((opt) => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Summary */}
+                {guestsWithoutAccommodation.length > 0 && (
+                  <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-100 rounded-lg text-xs text-amber-700">
+                    <Info className="w-4 h-4 shrink-0 text-amber-500" />
+                    <span>
+                      {guestsWithoutAccommodation.length} guest{guestsWithoutAccommodation.length !== 1 ? 's' : ''} still
+                      need accommodation tracking.
+                    </span>
+                  </div>
+                )}
+
+                {guestsWithoutAccommodation.length === 0 && guests.length > 0 && (
+                  <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-100 rounded-lg text-xs text-emerald-700">
+                    <Check className="w-4 h-4 shrink-0 text-emerald-500" />
+                    <span>All guests have accommodation info tracked.</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ================================================================ */}
+      {/* Add/Edit Room Block Modal */}
+      {/* ================================================================ */}
+      {showBlockModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setShowModal(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setShowBlockModal(false)} />
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h2
                 className="text-lg font-semibold"
                 style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
               >
-                {editingId ? 'Edit Room' : 'Add Room'}
+                {editingBlockId ? 'Edit Room Block' : 'Add Room Block'}
               </h2>
-              <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600">
+              <button onClick={() => setShowBlockModal(false)} className="text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Room Name</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Hotel Name *</label>
                 <input
                   type="text"
-                  value={form.room_name}
-                  onChange={(e) => setForm({ ...form, room_name: e.target.value })}
+                  value={blockForm.hotel_name}
+                  onChange={(e) => setBlockForm({ ...blockForm, hotel_name: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
                   style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  placeholder="e.g., Rose Suite, Room 204"
+                  placeholder="e.g., Hampton Inn — Culpeper"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-                <textarea
-                  value={form.description}
-                  onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent resize-none"
+                <label className="block text-sm font-medium text-gray-700 mb-1">Block Name</label>
+                <input
+                  type="text"
+                  value={blockForm.block_name}
+                  onChange={(e) => setBlockForm({ ...blockForm, block_name: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
                   style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  rows={2}
-                  placeholder="Room features, bed type, sleeps N..."
+                  placeholder="e.g., Smith-Jones Wedding Block"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Rate / Night</label>
+                  <div className="relative">
+                    <DollarSign className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={blockForm.rate_per_night}
+                      onChange={(e) => setBlockForm({ ...blockForm, rate_per_night: e.target.value })}
+                      className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                      style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                      placeholder="149"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Rooms Reserved</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={blockForm.rooms_reserved}
+                    onChange={(e) => setBlockForm({ ...blockForm, rooms_reserved: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                    placeholder="10"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Booking Deadline</label>
+                <input
+                  type="date"
+                  value={blockForm.booking_deadline}
+                  onChange={(e) => setBlockForm({ ...blockForm, booking_deadline: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  <Accessibility className="w-3.5 h-3.5 inline mr-1" />
-                  Accessibility Notes
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Booking Link</label>
                 <input
-                  type="text"
-                  value={form.accessibility_notes}
-                  onChange={(e) => setForm({ ...form, accessibility_notes: e.target.value })}
+                  type="url"
+                  value={blockForm.booking_link}
+                  onChange={(e) => setBlockForm({ ...blockForm, booking_link: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
                   style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  placeholder="e.g., First floor, wheelchair accessible, stairs required"
+                  placeholder="https://..."
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Booking Code</label>
+                <input
+                  type="text"
+                  value={blockForm.booking_code}
+                  onChange={(e) => setBlockForm({ ...blockForm, booking_code: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  placeholder="e.g., SMITHJONES2026"
                 />
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
                 <textarea
-                  value={form.notes}
-                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                  value={blockForm.notes}
+                  onChange={(e) => setBlockForm({ ...blockForm, notes: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent resize-none"
                   style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  rows={2}
-                  placeholder="Check-in time, amenities, etc."
+                  rows={3}
+                  placeholder="Breakfast included, pet-friendly, shuttle available..."
                 />
               </div>
             </div>
 
             <div className="flex justify-end gap-3 pt-2">
               <button
-                onClick={() => setShowModal(false)}
+                onClick={() => setShowBlockModal(false)}
                 className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={handleSave}
-                disabled={!form.room_name.trim()}
+                onClick={handleSaveBlock}
+                disabled={!blockForm.hotel_name.trim()}
                 className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                 style={{ backgroundColor: 'var(--couple-primary)' }}
               >
-                {editingId ? 'Save Changes' : 'Add Room'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Assign Guest Modal */}
-      {showAssignModal && assigningRoomId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setShowAssignModal(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4 max-h-[80vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <h2
-                className="text-lg font-semibold"
-                style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
-              >
-                Assign Guest to {rooms.find((r) => r.id === assigningRoomId)?.room_name}
-              </h2>
-              <button onClick={() => setShowAssignModal(false)} className="text-gray-400 hover:text-gray-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {unassignedGuests.length === 0 ? (
-              <p className="text-sm text-gray-400 py-4 text-center">
-                All guests have been assigned to rooms.
-              </p>
-            ) : (
-              <div className="space-y-1">
-                {unassignedGuests.map((guest) => (
-                  <button
-                    key={guest.id}
-                    onClick={() => {
-                      assignGuest(assigningRoomId, guest.id)
-                    }}
-                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-                  >
-                    <span>{guestName(guest)}</span>
-                    <Plus className="w-3.5 h-3.5 text-gray-300" />
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="flex justify-end pt-2">
-              <button
-                onClick={() => setShowAssignModal(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
-              >
-                Done
+                {editingBlockId ? 'Save Changes' : 'Add Room Block'}
               </button>
             </div>
           </div>

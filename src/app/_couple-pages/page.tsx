@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 
 // TODO: Get wedding ID from auth session / couple's user profile
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,11 +28,17 @@ interface DashboardData {
   guestCount: number | null
   guestsAttending: number
   guestsPending: number
+  guestsDeclined: number
   budgetEstimated: number
   budgetActual: number
   budgetPaid: number
   checklistTotal: number
   checklistDone: number
+  checklistOverdue: number
+  timelineCeremonyTime: string | null
+  timelineReceptionEnd: string | null
+  timelineDinnerType: string | null
+  timelineEventsCount: number
   upcomingTimeline: Array<{
     id: string
     title: string
@@ -73,6 +79,18 @@ function fmt$(value: number): string {
   return `$${Math.round(value).toLocaleString()}`
 }
 
+function getCountdownMessage(days: number | null): string | null {
+  if (days === null || days < 0) return null
+  if (days === 0) return 'Today is your day!'
+  if (days === 1) return "Tomorrow's the day!"
+  if (days <= 7) return 'This is really happening!'
+  if (days < 30) return 'Almost there! One week to go.'
+  if (days < 100) return "The home stretch! Let's make sure nothing's missed."
+  if (days < 200) return 'Things are coming together. Time for details!'
+  if (days < 400) return "Plenty of time to plan. Let's lock in the big stuff."
+  return 'You have all the time in the world. Start dreaming!'
+}
+
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime()
   const mins = Math.floor(diff / 60000)
@@ -110,16 +128,21 @@ export default function CoupleDashboard() {
         }
 
         // Fetch related data in parallel
-        const [guests, budget, checklist, timeline, messages] = await Promise.all([
+        const [guests, budget, checklist, timeline, allTimeline, messages] = await Promise.all([
           supabase.from('guest_list').select('id, rsvp_status').eq('wedding_id', WEDDING_ID),
           supabase.from('budget').select('estimated_cost, actual_cost, paid_amount').eq('wedding_id', WEDDING_ID),
-          supabase.from('checklist_items').select('id, is_completed').eq('wedding_id', WEDDING_ID),
+          supabase.from('checklist_items').select('id, is_completed, due_date').eq('wedding_id', WEDDING_ID),
           supabase
             .from('timeline')
             .select('id, title, time, category')
             .eq('wedding_id', WEDDING_ID)
             .order('time', { ascending: true })
             .limit(5),
+          supabase
+            .from('timeline')
+            .select('id, title, time, category')
+            .eq('wedding_id', WEDDING_ID)
+            .order('time', { ascending: true }),
           supabase
             .from('messages')
             .select('id, content, sender_role, created_at')
@@ -142,6 +165,20 @@ export default function CoupleDashboard() {
         const guestList = guests.data || []
         const budgetItems = budget.data || []
         const checklistItems = checklist.data || []
+        const allTimelineItems = (allTimeline.data || []) as Array<{ id: string; title: string; time: string | null; category: string | null }>
+
+        // Compute checklist overdue count
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+        const overdueCount = checklistItems.filter((c: { is_completed: boolean; due_date: string | null }) => {
+          if (c.is_completed || !c.due_date) return false
+          return new Date(c.due_date + 'T00:00:00') < today
+        }).length
+
+        // Derive timeline summary
+        const ceremonyItem = allTimelineItems.find((t) => t.category === 'ceremony' || t.title.toLowerCase().includes('ceremony'))
+        const receptionEndItem = [...allTimelineItems].reverse().find((t) => t.category === 'reception' || t.title.toLowerCase().includes('last dance') || t.title.toLowerCase().includes('reception end') || t.title.toLowerCase().includes('send off') || t.title.toLowerCase().includes('exit'))
+        const dinnerItem = allTimelineItems.find((t) => t.category === 'dinner' || t.title.toLowerCase().includes('dinner') || t.title.toLowerCase().includes('supper'))
 
         setData({
           coupleNames,
@@ -149,11 +186,17 @@ export default function CoupleDashboard() {
           guestCount: wedding.guest_count_estimate,
           guestsAttending: guestList.filter((g) => g.rsvp_status === 'attending').length,
           guestsPending: guestList.filter((g) => g.rsvp_status === 'pending').length,
+          guestsDeclined: guestList.filter((g) => g.rsvp_status === 'declined').length,
           budgetEstimated: budgetItems.reduce((s, b) => s + (Number(b.estimated_cost) || 0), 0),
           budgetActual: budgetItems.reduce((s, b) => s + (Number(b.actual_cost) || 0), 0),
           budgetPaid: budgetItems.reduce((s, b) => s + (Number(b.paid_amount) || 0), 0),
           checklistTotal: checklistItems.length,
-          checklistDone: checklistItems.filter((c) => c.is_completed).length,
+          checklistDone: checklistItems.filter((c: { is_completed: boolean }) => c.is_completed).length,
+          checklistOverdue: overdueCount,
+          timelineCeremonyTime: ceremonyItem?.time || null,
+          timelineReceptionEnd: receptionEndItem?.time || null,
+          timelineDinnerType: dinnerItem?.title || null,
+          timelineEventsCount: allTimelineItems.length,
           upcomingTimeline: (timeline.data || []) as DashboardData['upcomingTimeline'],
           recentMessages: (messages.data || []) as DashboardData['recentMessages'],
         })
@@ -206,9 +249,36 @@ export default function CoupleDashboard() {
     ? Math.round((data.checklistDone / data.checklistTotal) * 100)
     : 0
   const budgetRemaining = data.budgetEstimated - data.budgetPaid
+  const budgetCommittedPct = data.budgetEstimated > 0
+    ? Math.round((data.budgetActual / data.budgetEstimated) * 100)
+    : 0
+  const budgetPaidPct = data.budgetEstimated > 0
+    ? Math.round((data.budgetPaid / data.budgetEstimated) * 100)
+    : 0
+  const countdownMessage = getCountdownMessage(days)
+
+  // Detect admin preview mode (has bloom_scope cookie = admin user)
+  const isAdminPreview = typeof document !== 'undefined' && document.cookie.includes('bloom_scope=')
 
   return (
     <div className="space-y-8">
+      {/* Admin Preview Banner */}
+      {isAdminPreview && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-3">
+          <Sparkles className="w-5 h-5 text-amber-600 shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-amber-800">Admin Preview Mode</p>
+            <p className="text-xs text-amber-600">You&apos;re viewing this portal as your client would see it.</p>
+          </div>
+          <button
+            onClick={() => window.close()}
+            className="text-xs font-medium text-amber-700 hover:text-amber-900 transition-colors"
+          >
+            Close Preview
+          </button>
+        </div>
+      )}
+
       {/* Welcome Header */}
       <div>
         <h1
@@ -241,6 +311,14 @@ export default function CoupleDashboard() {
             'Your wedding date has not been set yet.'
           )}
         </p>
+        {countdownMessage && (
+          <p
+            className="text-sm mt-2 italic"
+            style={{ color: 'var(--couple-primary)', fontFamily: 'var(--couple-font-body)' }}
+          >
+            {countdownMessage}
+          </p>
+        )}
       </div>
 
       {/* Quick Stats */}
@@ -301,6 +379,194 @@ export default function CoupleDashboard() {
                 backgroundColor: 'var(--couple-primary)',
               }}
             />
+          </div>
+        </div>
+      </div>
+
+      {/* Detailed Summary Cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Budget Summary Card */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+          <h2
+            className="text-lg font-semibold mb-4"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+          >
+            <DollarSign className="w-4 h-4 inline mr-2" />
+            Budget Summary
+          </h2>
+          <div className="space-y-3">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Total Budgeted</span>
+              <span className="font-medium text-gray-800">{fmt$(data.budgetEstimated)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Committed</span>
+              <span className="font-medium text-gray-800">{fmt$(data.budgetActual)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Paid</span>
+              <span className="font-medium text-gray-800">{fmt$(data.budgetPaid)}</span>
+            </div>
+            <div className="mt-3">
+              <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                <span>Committed vs Budget</span>
+                <span>{budgetCommittedPct}%</span>
+              </div>
+              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div className="h-full rounded-full relative" style={{ width: '100%' }}>
+                  <div
+                    className="absolute inset-y-0 left-0 rounded-full transition-all"
+                    style={{ width: `${budgetCommittedPct}%`, backgroundColor: 'var(--couple-primary)', opacity: 0.4 }}
+                  />
+                  <div
+                    className="absolute inset-y-0 left-0 rounded-full transition-all"
+                    style={{ width: `${budgetPaidPct}%`, backgroundColor: 'var(--couple-primary)' }}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-4 mt-2 text-xs text-gray-400">
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: 'var(--couple-primary)' }} />
+                  Paid
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: 'var(--couple-primary)', opacity: 0.4 }} />
+                  Committed
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Guest RSVP Summary Card */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+          <h2
+            className="text-lg font-semibold mb-4"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+          >
+            <Users className="w-4 h-4 inline mr-2" />
+            Guest RSVPs
+          </h2>
+          <div className="space-y-3">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                Attending
+              </span>
+              <span className="font-medium text-gray-800">{data.guestsAttending}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+                Pending
+              </span>
+              <span className="font-medium text-gray-800">{data.guestsPending}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-red-400" />
+                Declined
+              </span>
+              <span className="font-medium text-gray-800">{data.guestsDeclined}</span>
+            </div>
+            {(data.guestsAttending + data.guestsPending + data.guestsDeclined) > 0 && (
+              <div className="mt-3 h-3 bg-gray-100 rounded-full overflow-hidden flex">
+                {data.guestsAttending > 0 && (
+                  <div
+                    className="h-full bg-emerald-500 transition-all"
+                    style={{ width: `${(data.guestsAttending / (data.guestsAttending + data.guestsPending + data.guestsDeclined)) * 100}%` }}
+                  />
+                )}
+                {data.guestsPending > 0 && (
+                  <div
+                    className="h-full bg-amber-400 transition-all"
+                    style={{ width: `${(data.guestsPending / (data.guestsAttending + data.guestsPending + data.guestsDeclined)) * 100}%` }}
+                  />
+                )}
+                {data.guestsDeclined > 0 && (
+                  <div
+                    className="h-full bg-red-400 transition-all"
+                    style={{ width: `${(data.guestsDeclined / (data.guestsAttending + data.guestsPending + data.guestsDeclined)) * 100}%` }}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Timeline Summary Card */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+          <h2
+            className="text-lg font-semibold mb-4"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+          >
+            <Clock className="w-4 h-4 inline mr-2" />
+            Day-Of Snapshot
+          </h2>
+          <div className="space-y-3">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Ceremony</span>
+              <span className="font-medium text-gray-800">
+                {data.timelineCeremonyTime || 'Not set'}
+              </span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Reception End</span>
+              <span className="font-medium text-gray-800">
+                {data.timelineReceptionEnd || 'Not set'}
+              </span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Dinner</span>
+              <span className="font-medium text-gray-800">
+                {data.timelineDinnerType || 'Not set'}
+              </span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Timeline Events</span>
+              <span className="font-medium text-gray-800">{data.timelineEventsCount}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Checklist Progress Card */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+          <h2
+            className="text-lg font-semibold mb-4"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+          >
+            <CheckSquare className="w-4 h-4 inline mr-2" />
+            Checklist Progress
+          </h2>
+          <div className="space-y-3">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Completed</span>
+              <span className="font-medium text-gray-800">{data.checklistDone} of {data.checklistTotal}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Completion</span>
+              <span className="font-medium text-gray-800">{checklistPercent}%</span>
+            </div>
+            {data.checklistOverdue > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-red-600 font-medium">Overdue</span>
+                <span className="font-medium text-red-600">{data.checklistOverdue}</span>
+              </div>
+            )}
+            <div className="mt-2 h-2.5 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: `${checklistPercent}%`,
+                  backgroundColor: data.checklistOverdue > 0 ? '#ef4444' : 'var(--couple-primary)',
+                }}
+              />
+            </div>
+            {data.checklistOverdue > 0 && (
+              <p className="text-xs text-red-500 mt-1">
+                {data.checklistOverdue} item{data.checklistOverdue !== 1 ? 's' : ''} past due date
+              </p>
+            )}
           </div>
         </div>
       </div>

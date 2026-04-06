@@ -13,10 +13,12 @@ import {
   Trash2,
   Clock,
   Scissors,
+  Users,
+  Info,
 } from 'lucide-react'
 
 // TODO: Get from auth session
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
@@ -29,6 +31,8 @@ interface BeautyAppointment {
   role: string
   hair_time: string | null
   makeup_time: string | null
+  hair_duration: number | null
+  makeup_duration: number | null
   notes: string | null
   sort_order: number
 }
@@ -38,6 +42,8 @@ interface AppointmentFormData {
   role: string
   hair_time: string
   makeup_time: string
+  hair_duration: number
+  makeup_duration: number
   notes: string
 }
 
@@ -58,6 +64,8 @@ const EMPTY_FORM: AppointmentFormData = {
   role: 'Attendant',
   hair_time: '',
   makeup_time: '',
+  hair_duration: 45,
+  makeup_duration: 45,
   notes: '',
 }
 
@@ -94,6 +102,8 @@ export default function BeautySchedulePage() {
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<AppointmentFormData>(EMPTY_FORM)
+  const [hairStylists, setHairStylists] = useState(1)
+  const [makeupArtists, setMakeupArtists] = useState(1)
 
   const supabase = createClient()
 
@@ -157,6 +167,43 @@ export default function BeautySchedulePage() {
     return { start: firstMin, end: lastMin, duration: lastMin - firstMin || 60 }
   }, [timelineSlots])
 
+  // ---- Scheduling calculations ----
+  const scheduleEstimate = useMemo(() => {
+    const hairCount = appointments.filter((a) => a.hair_time).length
+    const makeupCount = appointments.filter((a) => a.makeup_time).length
+    const avgHairDuration = hairCount > 0
+      ? Math.round(appointments.filter((a) => a.hair_time).reduce((sum, a) => sum + (a.hair_duration || 45), 0) / hairCount)
+      : 45
+    const avgMakeupDuration = makeupCount > 0
+      ? Math.round(appointments.filter((a) => a.makeup_time).reduce((sum, a) => sum + (a.makeup_duration || 45), 0) / makeupCount)
+      : 45
+
+    const hairSlots = Math.ceil(hairCount / hairStylists)
+    const makeupSlots = Math.ceil(makeupCount / makeupArtists)
+    const totalHairMinutes = hairSlots * avgHairDuration
+    const totalMakeupMinutes = makeupSlots * avgMakeupDuration
+    // Hair and makeup can run in parallel, so total time is the max
+    const totalMinutes = Math.max(totalHairMinutes, totalMakeupMinutes)
+    const totalHours = Math.floor(totalMinutes / 60)
+    const remainderMinutes = totalMinutes % 60
+    const parallelSlots = hairStylists + makeupArtists
+
+    return {
+      hairCount,
+      makeupCount,
+      avgHairDuration,
+      avgMakeupDuration,
+      totalHairMinutes,
+      totalMakeupMinutes,
+      totalMinutes,
+      totalHours,
+      remainderMinutes,
+      parallelSlots,
+      hairSlots,
+      makeupSlots,
+    }
+  }, [appointments, hairStylists, makeupArtists])
+
   // ---- Modal helpers ----
   function openAdd() {
     setForm(EMPTY_FORM)
@@ -170,6 +217,8 @@ export default function BeautySchedulePage() {
       role: appt.role,
       hair_time: appt.hair_time || '',
       makeup_time: appt.makeup_time || '',
+      hair_duration: appt.hair_duration || 45,
+      makeup_duration: appt.makeup_duration || 45,
       notes: appt.notes || '',
     })
     setEditingId(appt.id)
@@ -186,6 +235,8 @@ export default function BeautySchedulePage() {
       role: form.role,
       hair_time: form.hair_time || null,
       makeup_time: form.makeup_time || null,
+      hair_duration: form.hair_duration || 45,
+      makeup_duration: form.makeup_duration || 45,
       notes: form.notes.trim() || null,
     }
 
@@ -241,6 +292,96 @@ export default function BeautySchedulePage() {
           <Plus className="w-4 h-4" />
           Add Person
         </button>
+      </div>
+
+      {/* Stylist Configuration */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+        <h2
+          className="text-sm font-semibold mb-4 flex items-center gap-2"
+          style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+        >
+          <Users className="w-4 h-4" />
+          Your Beauty Team
+        </h2>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              <Scissors className="w-3.5 h-3.5 inline mr-1" />
+              How many hair stylists?
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={hairStylists}
+              onChange={(e) => setHairStylists(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+              style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              <Sparkles className="w-3.5 h-3.5 inline mr-1" />
+              How many makeup artists?
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={makeupArtists}
+              onChange={(e) => setMakeupArtists(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+              style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+            />
+          </div>
+        </div>
+
+        {/* Capacity info */}
+        <div
+          className="rounded-lg px-4 py-3 text-sm"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--couple-primary) 6%, white)',
+            borderLeft: '3px solid var(--couple-primary)',
+          }}
+        >
+          <p className="font-medium text-gray-700">
+            With {hairStylists} hair stylist{hairStylists > 1 ? 's' : ''} and {makeupArtists} makeup artist{makeupArtists > 1 ? 's' : ''},{' '}
+            you can have <strong style={{ color: 'var(--couple-primary)' }}>{scheduleEstimate.parallelSlots} people</strong> getting
+            ready simultaneously.
+          </p>
+        </div>
+
+        {/* Scheduling estimate — only show when there are appointments */}
+        {appointments.length > 0 && (
+          <div className="mt-3 rounded-lg bg-gray-50 px-4 py-3 text-xs text-gray-600 space-y-1.5">
+            <div className="flex items-start gap-2">
+              <Info className="w-3.5 h-3.5 mt-0.5 shrink-0 text-gray-400" />
+              <div className="space-y-1">
+                {scheduleEstimate.hairCount > 0 && (
+                  <p>
+                    With {hairStylists} hair stylist{hairStylists > 1 ? 's' : ''}, each{' '}
+                    {scheduleEstimate.avgHairDuration}-minute slot can handle {hairStylists} {hairStylists > 1 ? 'people' : 'person'}.
+                    For {scheduleEstimate.hairCount} {scheduleEstimate.hairCount === 1 ? 'person' : 'people'}, that&apos;s ~{Math.floor(scheduleEstimate.totalHairMinutes / 60)}h{scheduleEstimate.totalHairMinutes % 60 > 0 ? ` ${scheduleEstimate.totalHairMinutes % 60}m` : ''} of hair.
+                  </p>
+                )}
+                {scheduleEstimate.makeupCount > 0 && (
+                  <p>
+                    With {makeupArtists} makeup artist{makeupArtists > 1 ? 's' : ''}, each{' '}
+                    {scheduleEstimate.avgMakeupDuration}-minute slot can handle {makeupArtists} {makeupArtists > 1 ? 'people' : 'person'}.
+                    For {scheduleEstimate.makeupCount} {scheduleEstimate.makeupCount === 1 ? 'person' : 'people'}, that&apos;s ~{Math.floor(scheduleEstimate.totalMakeupMinutes / 60)}h{scheduleEstimate.totalMakeupMinutes % 60 > 0 ? ` ${scheduleEstimate.totalMakeupMinutes % 60}m` : ''} of makeup.
+                  </p>
+                )}
+                {(scheduleEstimate.hairCount > 0 || scheduleEstimate.makeupCount > 0) && (
+                  <p className="font-medium pt-1 border-t border-gray-200" style={{ color: 'var(--couple-primary)' }}>
+                    Total estimated prep time: ~{scheduleEstimate.totalHours > 0 ? `${scheduleEstimate.totalHours}h` : ''}{scheduleEstimate.remainderMinutes > 0 ? ` ${scheduleEstimate.remainderMinutes}m` : ''}{scheduleEstimate.totalMinutes === 0 ? '0m' : ''}
+                    {' '}(hair and makeup run in parallel)
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Timeline Visualization */}
@@ -346,6 +487,12 @@ export default function BeautySchedulePage() {
                       Makeup
                     </div>
                   </th>
+                  <th className="px-5 py-3 font-medium text-gray-500 hidden lg:table-cell">
+                    <div className="flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5" />
+                      Duration
+                    </div>
+                  </th>
                   <th className="px-5 py-3 font-medium text-gray-500 hidden md:table-cell">Notes</th>
                   <th className="px-5 py-3 w-20" />
                 </tr>
@@ -378,6 +525,19 @@ export default function BeautySchedulePage() {
                       ) : (
                         <span className="text-gray-300 text-xs">--</span>
                       )}
+                    </td>
+                    <td className="px-5 py-3 hidden lg:table-cell">
+                      <div className="flex flex-col gap-0.5 text-xs">
+                        {appt.hair_time && (
+                          <span className="text-amber-600">{appt.hair_duration || 45}m hair</span>
+                        )}
+                        {appt.makeup_time && (
+                          <span className="text-pink-600">{appt.makeup_duration || 45}m makeup</span>
+                        )}
+                        {!appt.hair_time && !appt.makeup_time && (
+                          <span className="text-gray-300">--</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-5 py-3 text-xs text-gray-400 hidden md:table-cell max-w-[200px] truncate">
                       {appt.notes || <span className="text-gray-300">--</span>}
@@ -473,6 +633,41 @@ export default function BeautySchedulePage() {
                     type="time"
                     value={form.makeup_time}
                     onChange={(e) => setForm({ ...form, makeup_time: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <Clock className="w-3.5 h-3.5 inline mr-1" />
+                    Hair Duration (min)
+                  </label>
+                  <input
+                    type="number"
+                    min={15}
+                    max={180}
+                    step={5}
+                    value={form.hair_duration}
+                    onChange={(e) => setForm({ ...form, hair_duration: parseInt(e.target.value) || 45 })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <Clock className="w-3.5 h-3.5 inline mr-1" />
+                    Makeup Duration (min)
+                  </label>
+                  <input
+                    type="number"
+                    min={15}
+                    max={180}
+                    step={5}
+                    value={form.makeup_duration}
+                    onChange={(e) => setForm({ ...form, makeup_duration: parseInt(e.target.value) || 45 })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
                     style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
                   />

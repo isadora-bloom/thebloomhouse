@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   CheckSquare,
@@ -13,11 +13,25 @@ import {
   Square,
   CheckCircle,
   AlertTriangle,
+  Search,
+  ChevronDown,
+  ChevronUp,
+  StickyNote,
+  Sparkles,
+  Filter,
+  Eye,
+  EyeOff,
+  Home,
+  Users,
+  Scissors,
+  Palette,
+  Clock,
+  UserCheck,
+  MoreHorizontal,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// TODO: Get from auth session
-const WEDDING_ID = '44444444-4444-4444-4444-444444000109'
+const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
@@ -26,44 +40,105 @@ const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 interface ChecklistItem {
   id: string
-  title: string
-  description: string | null
+  task_text: string
+  category: string
   due_date: string | null
-  category: string | null
   is_completed: boolean
   completed_at: string | null
-  sort_order: number | null
+  completed_via: 'manual' | 'sage' | null
+  is_custom: boolean
+  display_order: number
+  notes: string | null
 }
 
 interface ChecklistFormData {
-  title: string
-  description: string
-  due_date: string
+  task_text: string
   category: string
+  due_date: string
+  notes: string
 }
 
-type FilterMode = 'all' | 'todo' | 'completed' | 'overdue'
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 const CATEGORIES = [
   'Venue',
   'Vendors',
-  'Attire',
-  'Invitations',
+  'Attire & Beauty',
   'Decor',
-  'Florals',
-  'Music',
-  'Photography',
-  'Catering',
-  'Legal',
-  'Travel',
+  'Timeline',
+  'Guests',
   'Other',
+] as const
+
+type Category = (typeof CATEGORIES)[number]
+
+const CATEGORY_ICONS: Record<Category, React.ReactNode> = {
+  Venue: <Home className="w-4 h-4" />,
+  Vendors: <Users className="w-4 h-4" />,
+  'Attire & Beauty': <Scissors className="w-4 h-4" />,
+  Decor: <Palette className="w-4 h-4" />,
+  Timeline: <Clock className="w-4 h-4" />,
+  Guests: <UserCheck className="w-4 h-4" />,
+  Other: <MoreHorizontal className="w-4 h-4" />,
+}
+
+const DEFAULT_TASKS: { task_text: string; category: Category; display_order: number }[] = [
+  // Venue (1-2)
+  { task_text: 'Set your budget', category: 'Venue', display_order: 1 },
+  { task_text: 'Complete alignment worksheets', category: 'Venue', display_order: 2 },
+  // Vendors (3-13)
+  { task_text: 'Book photographer', category: 'Vendors', display_order: 3 },
+  { task_text: 'Book videographer', category: 'Vendors', display_order: 4 },
+  { task_text: 'Book DJ or band', category: 'Vendors', display_order: 5 },
+  { task_text: 'Book hair & makeup', category: 'Vendors', display_order: 6 },
+  { task_text: 'Book officiant', category: 'Vendors', display_order: 7 },
+  { task_text: 'Hire florist', category: 'Vendors', display_order: 8 },
+  { task_text: 'Choose caterer and menu', category: 'Vendors', display_order: 9 },
+  { task_text: 'Schedule engagement photos', category: 'Vendors', display_order: 10 },
+  { task_text: 'Confirm with all vendors (times/locations)', category: 'Vendors', display_order: 11 },
+  // Attire & Beauty (12-16)
+  { task_text: 'Find wedding dress/attire', category: 'Attire & Beauty', display_order: 12 },
+  { task_text: 'Schedule alterations', category: 'Attire & Beauty', display_order: 13 },
+  { task_text: 'Coordinate wedding party attire', category: 'Attire & Beauty', display_order: 14 },
+  { task_text: 'Buy wedding rings', category: 'Attire & Beauty', display_order: 15 },
+  { task_text: 'Final dress fitting', category: 'Attire & Beauty', display_order: 16 },
+  // Decor (17-19)
+  { task_text: 'Plan big rentals', category: 'Decor', display_order: 17 },
+  { task_text: 'Arrange smaller rentals and decor', category: 'Decor', display_order: 18 },
+  { task_text: 'Pack decor items (labeled by area)', category: 'Decor', display_order: 19 },
+  // Timeline (20-22)
+  { task_text: 'Draft guest list', category: 'Timeline', display_order: 20 },
+  { task_text: 'Build day-of timeline', category: 'Timeline', display_order: 21 },
+  { task_text: 'Finalize detailed timeline with team', category: 'Timeline', display_order: 22 },
+  // Guests (23-31)
+  { task_text: 'Send save-the-dates', category: 'Guests', display_order: 23 },
+  { task_text: 'Create wedding website', category: 'Guests', display_order: 24 },
+  { task_text: 'Design invitations', category: 'Guests', display_order: 25 },
+  { task_text: 'Send invitations (2 months before)', category: 'Guests', display_order: 26 },
+  { task_text: 'Track RSVPs', category: 'Guests', display_order: 27 },
+  { task_text: 'Chase non-responders', category: 'Guests', display_order: 28 },
+  { task_text: 'Finalize guest count for caterer', category: 'Guests', display_order: 29 },
+  { task_text: 'Create seating chart', category: 'Guests', display_order: 30 },
+  { task_text: 'Reserve hotel room block', category: 'Guests', display_order: 31 },
+  // Other (32-41)
+  { task_text: 'Arrange transportation', category: 'Other', display_order: 32 },
+  { task_text: 'Plan rehearsal dinner', category: 'Other', display_order: 33 },
+  { task_text: 'Obtain marriage license', category: 'Other', display_order: 34 },
+  { task_text: 'Prepare tips and final payment envelopes', category: 'Other', display_order: 35 },
+  { task_text: 'Final vendor confirmations', category: 'Other', display_order: 36 },
+  { task_text: 'Prepare emergency kit', category: 'Other', display_order: 37 },
+  { task_text: 'Gather ceremony items', category: 'Other', display_order: 38 },
+  { task_text: 'Plan day-of meals', category: 'Other', display_order: 39 },
+  { task_text: 'Write vows', category: 'Other', display_order: 40 },
 ]
 
 const EMPTY_FORM: ChecklistFormData = {
-  title: '',
-  description: '',
-  due_date: '',
+  task_text: '',
   category: '',
+  due_date: '',
+  notes: '',
 }
 
 // ---------------------------------------------------------------------------
@@ -76,25 +151,31 @@ function isOverdue(item: ChecklistItem): boolean {
   return due < new Date()
 }
 
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return ''
-  return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-  })
-}
-
-function daysUntilDue(dateStr: string | null): string {
-  if (!dateStr) return ''
+function formatDueDate(dateStr: string | null): { text: string; color: string } {
+  if (!dateStr) return { text: '', color: '' }
   const due = new Date(dateStr + 'T00:00:00')
   const now = new Date()
   now.setHours(0, 0, 0, 0)
-  const diff = Math.ceil((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-  if (diff < 0) return `${Math.abs(diff)}d overdue`
-  if (diff === 0) return 'Due today'
-  if (diff === 1) return 'Due tomorrow'
-  if (diff <= 7) return `${diff} days left`
-  return ''
+  const diffMs = due.getTime() - now.getTime()
+  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24))
+
+  if (diffDays < 0) {
+    return { text: `${Math.abs(diffDays)}d overdue`, color: 'text-red-600 bg-red-50' }
+  }
+  if (diffDays === 0) {
+    return { text: 'Due today', color: 'text-amber-700 bg-amber-50' }
+  }
+  if (diffDays === 1) {
+    return { text: 'Tomorrow', color: 'text-amber-600 bg-amber-50' }
+  }
+  if (diffDays <= 7) {
+    return { text: `in ${diffDays} days`, color: 'text-blue-600 bg-blue-50' }
+  }
+  if (diffDays <= 14) {
+    return { text: `in ${Math.floor(diffDays / 7)} week${diffDays >= 14 ? 's' : ''}`, color: 'text-gray-500 bg-gray-50' }
+  }
+  const formatted = due.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return { text: formatted, color: 'text-gray-500 bg-gray-50' }
 }
 
 // ---------------------------------------------------------------------------
@@ -107,9 +188,59 @@ export default function ChecklistPage() {
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<ChecklistFormData>(EMPTY_FORM)
-  const [filter, setFilter] = useState<FilterMode>('all')
+  const [categoryFilter, setCategoryFilter] = useState<string>('all')
+  const [hideCompleted, setHideCompleted] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set())
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({})
+  const [savingNote, setSavingNote] = useState<string | null>(null)
+  const [initialized, setInitialized] = useState(false)
 
   const supabase = createClient()
+
+  // ---- Seed default tasks if none exist ----
+  // First checks venue_config.feature_flags.checklist_template for venue-specific tasks,
+  // falls back to hardcoded DEFAULT_TASKS if no template configured.
+  const seedDefaults = useCallback(async () => {
+    // Try to load venue-specific checklist template
+    const { data: configData } = await supabase
+      .from('venue_config')
+      .select('feature_flags')
+      .eq('venue_id', VENUE_ID)
+      .maybeSingle()
+
+    const flags = (configData?.feature_flags ?? {}) as Record<string, unknown>
+    const template = flags.checklist_template as { tasks?: { task_text: string; category: string; included?: boolean }[] } | undefined
+
+    // Use venue template tasks (only included ones) if available, otherwise hardcoded defaults
+    const tasksToSeed = template?.tasks?.filter(t => t.included !== false)
+
+    const rows = tasksToSeed && tasksToSeed.length > 0
+      ? tasksToSeed.map((t, i) => ({
+          venue_id: VENUE_ID,
+          wedding_id: WEDDING_ID,
+          task_text: t.task_text,
+          category: t.category,
+          is_completed: false,
+          completed_via: null,
+          is_custom: false,
+          display_order: i + 1,
+          notes: null,
+        }))
+      : DEFAULT_TASKS.map((t) => ({
+          venue_id: VENUE_ID,
+          wedding_id: WEDDING_ID,
+          task_text: t.task_text,
+          category: t.category,
+          is_completed: false,
+          completed_via: null,
+          is_custom: false,
+          display_order: t.display_order,
+          notes: null,
+        }))
+
+    await supabase.from('checklist_items').insert(rows)
+  }, [supabase])
 
   // ---- Fetch ----
   const fetchItems = useCallback(async () => {
@@ -117,19 +248,28 @@ export default function ChecklistPage() {
       .from('checklist_items')
       .select('*')
       .eq('wedding_id', WEDDING_ID)
-      .order('is_completed', { ascending: true })
-      .order('due_date', { ascending: true, nullsFirst: false })
-      .order('sort_order', { ascending: true })
+      .order('display_order', { ascending: true })
 
     if (!error && data) {
-      setItems(data as ChecklistItem[])
+      if (data.length === 0 && !initialized) {
+        setInitialized(true)
+        await seedDefaults()
+        const { data: seeded } = await supabase
+          .from('checklist_items')
+          .select('*')
+          .eq('wedding_id', WEDDING_ID)
+          .order('display_order', { ascending: true })
+        if (seeded) setItems(seeded as ChecklistItem[])
+      } else {
+        setItems(data as ChecklistItem[])
+      }
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, initialized, seedDefaults])
 
   useEffect(() => {
     fetchItems()
-  }, [fetchItems])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Computed ----
   const totalItems = items.length
@@ -137,39 +277,79 @@ export default function ChecklistPage() {
   const overdueItems = items.filter((i) => isOverdue(i)).length
   const progressPercent = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0
 
-  // ---- Filter ----
-  const filteredItems = items.filter((item) => {
-    switch (filter) {
-      case 'todo':
-        return !item.is_completed
-      case 'completed':
-        return item.is_completed
-      case 'overdue':
-        return isOverdue(item)
-      default:
-        return true
+  // ---- Filtering ----
+  const filteredItems = useMemo(() => {
+    return items.filter((item) => {
+      if (hideCompleted && item.is_completed) return false
+      if (categoryFilter !== 'all' && item.category !== categoryFilter) return false
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase()
+        if (
+          !item.task_text.toLowerCase().includes(q) &&
+          !(item.notes || '').toLowerCase().includes(q) &&
+          !item.category.toLowerCase().includes(q)
+        ) {
+          return false
+        }
+      }
+      return true
+    })
+  }, [items, hideCompleted, categoryFilter, searchQuery])
+
+  // ---- Group by category ----
+  const groupedItems = useMemo(() => {
+    const groups: Record<string, ChecklistItem[]> = {}
+    for (const cat of CATEGORIES) {
+      groups[cat] = []
     }
-  })
+    for (const item of filteredItems) {
+      const cat = item.category || 'Other'
+      if (!groups[cat]) groups[cat] = []
+      groups[cat].push(item)
+    }
+    // Remove empty groups
+    return Object.entries(groups).filter(([, items]) => items.length > 0)
+  }, [filteredItems])
 
   // ---- Toggle completion ----
   async function toggleComplete(item: ChecklistItem) {
     const newCompleted = !item.is_completed
-    await supabase
-      .from('checklist_items')
-      .update({
-        is_completed: newCompleted,
-        completed_at: newCompleted ? new Date().toISOString() : null,
-      })
-      .eq('id', item.id)
+    const update = {
+      is_completed: newCompleted,
+      completed_at: newCompleted ? new Date().toISOString() : null,
+      completed_via: newCompleted ? ('manual' as const) : null,
+    }
 
-    // Optimistic update
     setItems((prev) =>
-      prev.map((i) =>
-        i.id === item.id
-          ? { ...i, is_completed: newCompleted, completed_at: newCompleted ? new Date().toISOString() : null }
-          : i
-      )
+      prev.map((i) => (i.id === item.id ? { ...i, ...update } : i))
     )
+
+    await supabase.from('checklist_items').update(update).eq('id', item.id)
+  }
+
+  // ---- Notes ----
+  function toggleNotes(id: string) {
+    setExpandedNotes((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+        const item = items.find((i) => i.id === id)
+        setNoteDrafts((d) => ({ ...d, [id]: item?.notes || '' }))
+      }
+      return next
+    })
+  }
+
+  async function saveNote(id: string) {
+    setSavingNote(id)
+    const note = noteDrafts[id]?.trim() || null
+    await supabase.from('checklist_items').update({ notes: note }).eq('id', id)
+    setItems((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, notes: note } : i))
+    )
+    setSavingNote(null)
   }
 
   // ---- Modal helpers ----
@@ -181,25 +361,29 @@ export default function ChecklistPage() {
 
   function openEdit(item: ChecklistItem) {
     setForm({
-      title: item.title,
-      description: item.description || '',
-      due_date: item.due_date || '',
+      task_text: item.task_text,
       category: item.category || '',
+      due_date: item.due_date || '',
+      notes: item.notes || '',
     })
     setEditingId(item.id)
     setShowModal(true)
   }
 
   async function handleSave() {
-    if (!form.title.trim()) return
+    if (!form.task_text.trim()) return
 
     const payload = {
       venue_id: VENUE_ID,
       wedding_id: WEDDING_ID,
-      title: form.title.trim(),
-      description: form.description.trim() || null,
+      task_text: form.task_text.trim(),
+      category: form.category || 'Other',
       due_date: form.due_date || null,
-      category: form.category || null,
+      notes: form.notes.trim() || null,
+      is_custom: true,
+      display_order: editingId
+        ? items.find((i) => i.id === editingId)?.display_order || 100
+        : items.length + 1,
     }
 
     if (editingId) {
@@ -214,33 +398,42 @@ export default function ChecklistPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Remove this checklist item?')) return
+    if (!confirm('Remove this task?')) return
     await supabase.from('checklist_items').delete().eq('id', id)
-    fetchItems()
+    setItems((prev) => prev.filter((i) => i.id !== id))
   }
 
-  const filters: { key: FilterMode; label: string; count: number }[] = [
-    { key: 'all', label: 'All', count: totalItems },
-    { key: 'todo', label: 'To Do', count: totalItems - completedItems },
-    { key: 'completed', label: 'Completed', count: completedItems },
-    { key: 'overdue', label: 'Overdue', count: overdueItems },
-  ]
+  async function handleSetDueDate(id: string, date: string) {
+    await supabase
+      .from('checklist_items')
+      .update({ due_date: date || null })
+      .eq('id', id)
+    setItems((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, due_date: date || null } : i))
+    )
+  }
 
+  // ---- Unique categories in data (for filter dropdown) ----
+  const activeCategories = useMemo(() => {
+    const cats = new Set(items.map((i) => i.category))
+    return [...CATEGORIES].filter((c) => cats.has(c))
+  }, [items])
+
+  // ---- Render ----
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1
             className="text-3xl font-bold mb-1"
             style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
           >
             Checklist
-            <span className="ml-2 text-lg font-normal text-gray-400">
-              ({completedItems} of {totalItems})
-            </span>
           </h1>
-          <p className="text-gray-500 text-sm">Stay on track with your wedding planning tasks.</p>
+          <p className="text-gray-500 text-sm">
+            {completedItems} of {totalItems} tasks complete
+          </p>
         </div>
         <button
           onClick={openAdd}
@@ -252,7 +445,7 @@ export default function ChecklistPage() {
         </button>
       </div>
 
-      {/* Progress Bar */}
+      {/* Progress Header */}
       <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
         <div className="flex items-center justify-between mb-2">
           <span className="text-sm font-medium text-gray-700">Overall Progress</span>
@@ -263,88 +456,104 @@ export default function ChecklistPage() {
         <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
           <div
             className="h-full rounded-full transition-all duration-500"
-            style={{
-              width: `${progressPercent}%`,
-              backgroundColor: 'var(--couple-primary)',
-            }}
+            style={{ width: `${progressPercent}%`, backgroundColor: 'var(--couple-primary)' }}
           />
         </div>
         <div className="flex items-center justify-between mt-2 text-xs text-gray-400">
           <span>{completedItems} completed</span>
-          <span>{totalItems - completedItems} remaining</span>
+          <div className="flex items-center gap-4">
+            <span>{totalItems - completedItems} remaining</span>
+            {overdueItems > 0 && (
+              <span className="text-red-500 font-medium">{overdueItems} overdue</span>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Overdue Alert */}
-      {overdueItems > 0 && filter !== 'overdue' && (
-        <button
-          onClick={() => setFilter('overdue')}
-          className="w-full flex items-center gap-3 px-4 py-3 bg-red-50 border border-red-100 rounded-xl text-sm text-red-700 hover:bg-red-100 transition-colors"
-        >
+      {overdueItems > 0 && (
+        <div className="flex items-center gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
           <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
           <span>
-            <span className="font-semibold">{overdueItems} task{overdueItems > 1 ? 's' : ''}</span> overdue. Tap to view.
+            <span className="font-semibold">{overdueItems}</span>{' '}
+            task{overdueItems > 1 ? 's' : ''} overdue — stay on top of your planning!
           </span>
-        </button>
+        </div>
       )}
 
-      {/* Filter Pills */}
-      <div className="flex flex-wrap gap-2">
-        {filters.map((f) => (
-          <button
-            key={f.key}
-            onClick={() => setFilter(f.key)}
-            className={cn(
-              'px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
-              filter === f.key
-                ? 'text-white'
-                : f.key === 'overdue' && f.count > 0
-                  ? 'bg-red-50 text-red-600 hover:bg-red-100'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            )}
-            style={filter === f.key ? { backgroundColor: f.key === 'overdue' ? '#EF4444' : 'var(--couple-primary)' } : undefined}
+      {/* Filter Bar */}
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Category Dropdown */}
+        <div className="relative">
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="appearance-none pl-8 pr-8 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+            style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
           >
-            {f.label}
-            <span className={cn(
-              'ml-1.5 px-1.5 py-0.5 rounded-full text-[10px]',
-              filter === f.key
-                ? 'bg-white/20 text-white'
-                : 'bg-gray-200 text-gray-500'
-            )}>
-              {f.count}
-            </span>
-          </button>
-        ))}
+            <option value="all">All Categories</option>
+            {activeCategories.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+          <Filter className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+        </div>
+
+        {/* Search */}
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search tasks..."
+            className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+            style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+          />
+        </div>
+
+        {/* Hide/Show Completed Toggle */}
+        <button
+          onClick={() => setHideCompleted(!hideCompleted)}
+          className={cn(
+            'inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-colors',
+            hideCompleted
+              ? 'border-gray-300 bg-gray-50 text-gray-700'
+              : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
+          )}
+        >
+          {hideCompleted ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+          {hideCompleted ? 'Show completed' : 'Hide completed'}
+        </button>
       </div>
 
-      {/* Checklist Items */}
+      {/* Task Groups */}
       {loading ? (
         <div className="space-y-3">
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <div key={i} className="animate-pulse h-16 bg-gray-100 rounded-xl" />
           ))}
         </div>
-      ) : filteredItems.length === 0 ? (
+      ) : groupedItems.length === 0 ? (
         <div className="text-center py-16 bg-white rounded-xl border border-gray-100 shadow-sm">
           <CheckSquare className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--couple-primary)', opacity: 0.3 }} />
           <h3
             className="text-lg font-semibold mb-2"
             style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
           >
-            {filter === 'completed'
-              ? 'No completed tasks yet'
-              : filter === 'overdue'
-                ? 'No overdue tasks'
-                : filter === 'todo'
-                  ? 'All caught up!'
-                  : 'No checklist items yet'}
+            {searchQuery ? 'No matching tasks' : hideCompleted ? 'All caught up!' : 'No tasks yet'}
           </h3>
           <p className="text-gray-500 text-sm mb-4">
-            {filter === 'all'
-              ? 'Add your first planning task to get started.'
-              : 'Try a different filter.'}
+            {searchQuery
+              ? 'Try a different search.'
+              : hideCompleted
+                ? 'All your remaining tasks are done. Toggle to see completed.'
+                : 'Add your first task to start planning.'}
           </p>
-          {filter === 'all' && (
+          {!searchQuery && !hideCompleted && (
             <button
               onClick={openAdd}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
@@ -356,98 +565,182 @@ export default function ChecklistPage() {
           )}
         </div>
       ) : (
-        <div className="space-y-2">
-          {filteredItems.map((item) => {
-            const overdue = isOverdue(item)
-            const dueText = daysUntilDue(item.due_date)
-
-            return (
-              <div
-                key={item.id}
-                className={cn(
-                  'bg-white rounded-xl border shadow-sm p-4 flex items-start gap-3 group transition-all',
-                  overdue ? 'border-red-200 bg-red-50/30' : 'border-gray-100',
-                  item.is_completed && 'opacity-60'
-                )}
-              >
-                {/* Checkbox */}
-                <button
-                  onClick={() => toggleComplete(item)}
-                  className="shrink-0 mt-0.5 transition-colors"
-                  style={{ color: item.is_completed ? 'var(--couple-primary)' : '#D1D5DB' }}
+        <div className="space-y-6">
+          {groupedItems.map(([category, categoryItems]) => (
+            <div key={category}>
+              {/* Category Header */}
+              <div className="flex items-center gap-2 mb-3">
+                <span
+                  className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-white"
+                  style={{ backgroundColor: 'var(--couple-primary)' }}
                 >
-                  {item.is_completed ? (
-                    <CheckCircle className="w-5 h-5" />
-                  ) : (
-                    <Square className="w-5 h-5 hover:text-gray-400" />
-                  )}
-                </button>
-
-                {/* Content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className={cn(
-                        'text-sm font-medium',
-                        item.is_completed ? 'line-through text-gray-400' : 'text-gray-800'
-                      )}>
-                        {item.title}
-                      </p>
-                      {item.description && (
-                        <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">
-                          {item.description}
-                        </p>
-                      )}
-                      <div className="flex items-center gap-3 mt-1.5">
-                        {item.due_date && (
-                          <span className={cn(
-                            'inline-flex items-center gap-1 text-xs',
-                            overdue ? 'text-red-600 font-medium' : 'text-gray-400'
-                          )}>
-                            <Calendar className="w-3 h-3" />
-                            {formatDate(item.due_date)}
-                            {dueText && (
-                              <span className={cn(
-                                'ml-1',
-                                overdue ? 'text-red-500' : 'text-gray-400'
-                              )}>
-                                ({dueText})
-                              </span>
-                            )}
-                          </span>
-                        )}
-                        {item.category && (
-                          <span
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium text-white"
-                            style={{ backgroundColor: 'var(--couple-accent)' }}
-                          >
-                            <Tag className="w-2.5 h-2.5" />
-                            {item.category}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Actions */}
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                      <button
-                        onClick={() => openEdit(item)}
-                        className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(item.id)}
-                        className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                  {CATEGORY_ICONS[category as Category] || <Tag className="w-4 h-4" />}
+                </span>
+                <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                  {category}
+                </h2>
+                <span className="text-xs text-gray-400">
+                  {categoryItems.filter((i) => i.is_completed).length}/{categoryItems.length}
+                </span>
               </div>
-            )
-          })}
+
+              {/* Tasks */}
+              <div className="space-y-2">
+                {categoryItems.map((item) => {
+                  const overdue = isOverdue(item)
+                  const dueInfo = formatDueDate(item.due_date)
+                  const notesExpanded = expandedNotes.has(item.id)
+                  const hasNotes = !!item.notes
+
+                  return (
+                    <div key={item.id}>
+                      <div
+                        className={cn(
+                          'bg-white rounded-xl border shadow-sm p-4 flex items-start gap-3 group transition-all',
+                          overdue ? 'border-red-200 bg-red-50/30' : 'border-gray-100',
+                          item.is_completed && 'opacity-60'
+                        )}
+                      >
+                        {/* Checkbox */}
+                        <button
+                          onClick={() => toggleComplete(item)}
+                          className="shrink-0 mt-0.5 transition-colors"
+                          style={{ color: item.is_completed ? 'var(--couple-primary)' : '#D1D5DB' }}
+                        >
+                          {item.is_completed ? (
+                            <CheckCircle className="w-5 h-5" />
+                          ) : (
+                            <Square className="w-5 h-5 hover:text-gray-400" />
+                          )}
+                        </button>
+
+                        {/* Content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <p
+                                className={cn(
+                                  'text-sm font-medium',
+                                  item.is_completed ? 'line-through text-gray-400' : 'text-gray-800'
+                                )}
+                              >
+                                {item.task_text}
+                              </p>
+
+                              {/* Badges row */}
+                              <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                                {/* Due date badge */}
+                                {dueInfo.text && (
+                                  <span
+                                    className={cn(
+                                      'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium',
+                                      dueInfo.color
+                                    )}
+                                  >
+                                    <Calendar className="w-3 h-3" />
+                                    {dueInfo.text}
+                                  </span>
+                                )}
+
+                                {/* Completed by Sage badge */}
+                                {item.completed_via === 'sage' && item.is_completed && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-purple-50 text-purple-600">
+                                    <Sparkles className="w-3 h-3" />
+                                    Completed by Sage
+                                  </span>
+                                )}
+
+                                {/* Notes indicator */}
+                                {hasNotes && !notesExpanded && (
+                                  <span className="inline-flex items-center gap-1 text-[11px] text-gray-400">
+                                    <StickyNote className="w-3 h-3" />
+                                    note
+                                  </span>
+                                )}
+
+                                {/* Inline due date picker for tasks without one */}
+                                {!item.due_date && !item.is_completed && (
+                                  <input
+                                    type="date"
+                                    className="text-[11px] text-gray-400 border-0 bg-transparent p-0 focus:outline-none focus:ring-0 cursor-pointer"
+                                    onChange={(e) => handleSetDueDate(item.id, e.target.value)}
+                                    title="Set due date"
+                                  />
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Actions */}
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                              <button
+                                onClick={() => toggleNotes(item.id)}
+                                className={cn(
+                                  'p-1.5 rounded-md transition-colors',
+                                  notesExpanded
+                                    ? 'text-amber-600 bg-amber-50'
+                                    : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                                )}
+                                title="Notes"
+                              >
+                                <StickyNote className="w-3.5 h-3.5" />
+                              </button>
+                              {item.is_custom && (
+                                <>
+                                  <button
+                                    onClick={() => openEdit(item)}
+                                    className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDelete(item.id)}
+                                    className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Expanded Notes */}
+                      {notesExpanded && (
+                        <div className="ml-8 mt-1 mb-2 p-3 bg-amber-50/50 border border-amber-100 rounded-lg">
+                          <textarea
+                            value={noteDrafts[item.id] ?? item.notes ?? ''}
+                            onChange={(e) =>
+                              setNoteDrafts((d) => ({ ...d, [item.id]: e.target.value }))
+                            }
+                            placeholder="Add a note..."
+                            rows={2}
+                            className="w-full text-sm bg-transparent border-0 resize-none focus:outline-none focus:ring-0 text-gray-700 placeholder:text-gray-400"
+                          />
+                          <div className="flex justify-end gap-2 mt-1">
+                            <button
+                              onClick={() => toggleNotes(item.id)}
+                              className="text-xs text-gray-400 hover:text-gray-600"
+                            >
+                              Close
+                            </button>
+                            <button
+                              onClick={() => saveNote(item.id)}
+                              disabled={savingNote === item.id}
+                              className="text-xs font-medium px-2 py-1 rounded text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                              style={{ backgroundColor: 'var(--couple-primary)' }}
+                            >
+                              {savingNote === item.id ? 'Saving...' : 'Save Note'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -461,7 +754,7 @@ export default function ChecklistPage() {
                 className="text-lg font-semibold"
                 style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
               >
-                {editingId ? 'Edit Task' : 'Add Task'}
+                {editingId ? 'Edit Task' : 'Add Custom Task'}
               </h2>
               <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
@@ -469,47 +762,22 @@ export default function ChecklistPage() {
             </div>
 
             <div className="space-y-3">
-              {/* Title */}
+              {/* Task Text */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Task</label>
                 <input
                   type="text"
-                  value={form.title}
-                  onChange={(e) => setForm({ ...form, title: e.target.value })}
+                  value={form.task_text}
+                  onChange={(e) => setForm({ ...form, task_text: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
                   style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  placeholder="e.g., Book photographer"
+                  placeholder="e.g., Book rehearsal dinner venue"
+                  autoFocus
                 />
               </div>
 
-              {/* Description */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-                <textarea
-                  value={form.description}
-                  onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:border-transparent"
-                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  rows={2}
-                  placeholder="Optional details..."
-                />
-              </div>
-
-              {/* Due Date + Category */}
+              {/* Category + Due Date */}
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    <Calendar className="w-3.5 h-3.5 inline mr-1" />
-                    Due Date
-                  </label>
-                  <input
-                    type="date"
-                    value={form.due_date}
-                    onChange={(e) => setForm({ ...form, due_date: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  />
-                </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     <Tag className="w-3.5 h-3.5 inline mr-1" />
@@ -523,10 +791,41 @@ export default function ChecklistPage() {
                   >
                     <option value="">Select...</option>
                     {CATEGORIES.map((c) => (
-                      <option key={c} value={c}>{c}</option>
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
                     ))}
                   </select>
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <Calendar className="w-3.5 h-3.5 inline mr-1" />
+                    Due Date
+                  </label>
+                  <input
+                    type="date"
+                    value={form.due_date}
+                    onChange={(e) => setForm({ ...form, due_date: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  />
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <StickyNote className="w-3.5 h-3.5 inline mr-1" />
+                  Notes
+                </label>
+                <textarea
+                  value={form.notes}
+                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:border-transparent"
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                  rows={2}
+                  placeholder="Optional notes..."
+                />
               </div>
             </div>
 
@@ -540,7 +839,7 @@ export default function ChecklistPage() {
               </button>
               <button
                 onClick={handleSave}
-                disabled={!form.title.trim()}
+                disabled={!form.task_text.trim()}
                 className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                 style={{ backgroundColor: 'var(--couple-primary)' }}
               >

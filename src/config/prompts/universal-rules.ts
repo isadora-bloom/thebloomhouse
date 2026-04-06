@@ -66,7 +66,7 @@ If ANY escalation trigger is detected -> STOP drafting and flag for human review
 
 ---
 
-## ALAN BERG SALES METHODOLOGY (ALWAYS FOLLOW)
+## EMAIL COMMUNICATION PRINCIPLES (ALWAYS FOLLOW)
 
 These principles guide EVERY email you write:
 
