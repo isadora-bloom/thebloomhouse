@@ -89,7 +89,7 @@ export const TIER_DISPLAY: Record<PlanTier, { name: string; price: string }> = {
  */
 export function usePlanTier() {
   const venueId = useVenueId()
-  const [tier, setTier] = useState<PlanTier>('enterprise') // default to enterprise for demo
+  const [tier, setTier] = useState<PlanTier>('enterprise') // default until DB responds
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {

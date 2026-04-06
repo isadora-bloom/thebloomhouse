@@ -37,7 +37,7 @@ async function run() {
 
   // Budget items
   await post("budget_items", [
-    {id:"e4000001-0000-0000-0000-000000000001",venue_id:V,wedding_id:W,category:"Venue",item_name:"Venue rental",budgeted:8500,committed:8500,paid:4250,vendor_name:"Rixey Manor",notes:"Balance due 2 weeks before",sort_order:1},
+    {id:"e4000001-0000-0000-0000-000000000001",venue_id:V,wedding_id:W,category:"Venue",item_name:"Venue rental",budgeted:8500,committed:8500,paid:4250,vendor_name:"Hawthorne Manor",notes:"Balance due 2 weeks before",sort_order:1},
     {id:"e4000001-0000-0000-0000-000000000002",venue_id:V,wedding_id:W,category:"Photography",item_name:"Photography package",budgeted:4200,committed:4200,paid:1000,vendor_name:"Hannah Kate Photography",notes:null,sort_order:2},
     {id:"e4000001-0000-0000-0000-000000000003",venue_id:V,wedding_id:W,category:"Videography",item_name:"Videography package",budgeted:3500,committed:3500,paid:800,vendor_name:"Ridge Run Films",notes:null,sort_order:3},
     {id:"e4000001-0000-0000-0000-000000000004",venue_id:V,wedding_id:W,category:"Music",item_name:"DJ services",budgeted:1800,committed:1800,paid:500,vendor_name:"Blue Ridge Beats",notes:null,sort_order:4},
@@ -94,7 +94,7 @@ async function run() {
       {id:"t4",task_text:"Book videographer",category:"Vendors",included:true},
       {id:"t5",task_text:"Book DJ or band",category:"Vendors",included:true},
       {id:"t6",task_text:"Book hair & makeup",category:"Vendors",included:true},
-      {id:"t7",task_text:"Choose caterer and finalize menu",category:"Vendors",included:true,description:"Rixey Manor is BYOB"},
+      {id:"t7",task_text:"Choose caterer and finalize menu",category:"Vendors",included:true,description:"Hawthorne Manor is BYOB"},
       {id:"t8",task_text:"Hire florist",category:"Vendors",included:true},
       {id:"t9",task_text:"Submit proof of insurance for caterer",category:"Venue",included:true,is_custom:true},
       {id:"t10",task_text:"Send save-the-dates",category:"Guests",included:true},
@@ -102,7 +102,7 @@ async function run() {
       {id:"t12",task_text:"Build day-of timeline",category:"Timeline",included:true},
       {id:"t13",task_text:"Finalize seating chart",category:"Guests",included:true},
       {id:"t14",task_text:"Write vows",category:"Other",included:true},
-      {id:"t15",task_text:"Schedule final walkthrough at Rixey Manor",category:"Venue",included:true,is_custom:true},
+      {id:"t15",task_text:"Schedule final walkthrough at Hawthorne Manor",category:"Venue",included:true,is_custom:true},
     ],
     custom_categories: []
   };
@@ -116,7 +116,7 @@ async function run() {
   flags.bar_config = {
     default_bar_type:"beer-wine",
     default_guest_count:150,
-    notes:"Rixey Manor is BYOB. We provide bar setup, glassware, ice."
+    notes:"Hawthorne Manor is BYOB. We provide bar setup, glassware, ice."
   };
 
   await patch("venue_config","venue_id=eq."+V,{feature_flags:flags});

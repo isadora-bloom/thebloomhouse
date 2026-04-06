@@ -7,9 +7,7 @@ import {
   Mail, FileCheck, Newspaper, Heart,
   TrendingUp, DollarSign, ArrowRight,
 } from 'lucide-react'
-
-// Hardcoded for demo — Rixey Manor venue ID from seed
-const VENUE_ID = '00000000-0000-0000-0000-000000000001'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 
 interface Stats {
   activeInquiries: number
@@ -26,6 +24,7 @@ interface Activity {
 }
 
 export default function DashboardPage() {
+  const VENUE_ID = useVenueId()
   const [stats, setStats] = useState<Stats>({
     activeInquiries: 0,
     upcomingWeddings: 0,
@@ -105,8 +104,8 @@ export default function DashboardPage() {
       setLoading(false)
     }
 
-    load()
-  }, [])
+    if (VENUE_ID) load()
+  }, [VENUE_ID])
 
   const statCards = [
     {

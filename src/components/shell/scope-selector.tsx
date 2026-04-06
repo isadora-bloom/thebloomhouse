@@ -113,7 +113,7 @@ export function ScopeSelector() {
   const [scope, setScope] = useState<Scope>({
     level: 'venue',
     venueId: '22222222-2222-2222-2222-222222222201',
-    venueName: 'Rixey Manor',
+    venueName: 'Hawthorne Manor',
     companyName: DEFAULT_ORG_NAME,
   })
   const [open, setOpen] = useState(false)

@@ -14,8 +14,8 @@
 
 INSERT INTO auth.users (id, email, raw_user_meta_data, created_at, updated_at, instance_id, aud, role)
 VALUES
-  ('33333333-3333-3333-3333-333333333305', 'grace@rixeymanor.com', '{"first_name":"Grace","last_name":"Kim"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
-  ('33333333-3333-3333-3333-333333333306', 'ben@rixeymanor.com', '{"first_name":"Ben","last_name":"Torres"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
+  ('33333333-3333-3333-3333-333333333305', 'grace@hawthornemanor.com', '{"first_name":"Grace","last_name":"Kim"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
+  ('33333333-3333-3333-3333-333333333306', 'ben@hawthornemanor.com', '{"first_name":"Ben","last_name":"Torres"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
   ('33333333-3333-3333-3333-333333333307', 'lena@crestwoodfarm.com', '{"first_name":"Lena","last_name":"Hart"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
   ('33333333-3333-3333-3333-333333333308', 'marcus@theglasshouse.com', '{"first_name":"Marcus","last_name":"Rivera"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated'),
   ('33333333-3333-3333-3333-333333333309', 'emma@rosehillgardens.com', '{"first_name":"Emma","last_name":"Walsh"}', now(), now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated')
@@ -23,7 +23,7 @@ ON CONFLICT (id) DO NOTHING;
 
 -- Now add their profiles
 INSERT INTO user_profiles (id, venue_id, org_id, role, first_name, last_name) VALUES
-  -- Rixey Manor — 2 more staff
+  -- Hawthorne Manor — 2 more staff
   ('33333333-3333-3333-3333-333333333305', '22222222-2222-2222-2222-222222222201', '11111111-1111-1111-1111-111111111111', 'coordinator', 'Grace', 'Kim'),
   ('33333333-3333-3333-3333-333333333306', '22222222-2222-2222-2222-222222222201', '11111111-1111-1111-1111-111111111111', 'coordinator', 'Ben', 'Torres'),
   -- Crestwood Farm — 1 more
@@ -45,14 +45,14 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO consultant_metrics (id, venue_id, consultant_id, period_start, period_end, inquiries_handled, tours_booked, bookings_closed, conversion_rate, avg_response_time_minutes, avg_booking_value) VALUES
 
   -- ══════════════════════════════════════════════
-  -- RIXEY MANOR — Sarah Chen (venue manager, top performer)
+  -- HAWTHORNE MANOR — Sarah Chen (venue manager, top performer)
   -- ══════════════════════════════════════════════
   ('c0000002-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333301', '2025-10-01', '2025-10-31', 8, 6, 4, 0.50, 45, 15200),
   ('c0000002-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333301', '2025-11-01', '2025-11-30', 6, 4, 3, 0.50, 52, 14800),
   ('c0000002-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333301', '2025-12-01', '2025-12-31', 3, 2, 1, 0.33, 78, 16000),
 
   -- ══════════════════════════════════════════════
-  -- RIXEY MANOR — Grace Kim (coordinator, newer, still learning)
+  -- HAWTHORNE MANOR — Grace Kim (coordinator, newer, still learning)
   -- ══════════════════════════════════════════════
   ('c0000002-0002-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333305', '2025-10-01', '2025-10-31', 4, 2, 1, 0.25, 120, 12500),
   ('c0000002-0002-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333305', '2025-11-01', '2025-11-30', 5, 3, 1, 0.20, 105, 13000),
@@ -62,7 +62,7 @@ INSERT INTO consultant_metrics (id, venue_id, consultant_id, period_start, perio
   ('c0000002-0002-0001-0001-000000000006', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333305', '2026-03-01', '2026-03-28', 7, 5, 3, 0.43, 62, 14500),
 
   -- ══════════════════════════════════════════════
-  -- RIXEY MANOR — Ben Torres (coordinator, strong on tours, slow on email)
+  -- HAWTHORNE MANOR — Ben Torres (coordinator, strong on tours, slow on email)
   -- ══════════════════════════════════════════════
   ('c0000002-0003-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333306', '2025-10-01', '2025-10-31', 5, 4, 3, 0.60, 180, 15800),
   ('c0000002-0003-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333306', '2025-11-01', '2025-11-30', 4, 3, 2, 0.50, 165, 14200),
@@ -134,9 +134,9 @@ ON CONFLICT (id) DO NOTHING;
 -- ============================================
 -- PERFORMANCE PROFILES SUMMARY:
 -- ============================================
--- Sarah Chen (Rixey) — Top performer. Fast responses, high conversion, venue manager.
--- Grace Kim (Rixey) — New hire improving month over month. Response time dropping steadily.
--- Ben Torres (Rixey) — Great at tours/conversion but slow on email (120-200 min response).
+-- Sarah Chen (Hawthorne) — Top performer. Fast responses, high conversion, venue manager.
+-- Grace Kim (Hawthorne) — New hire improving month over month. Response time dropping steadily.
+-- Ben Torres (Hawthorne) — Great at tours/conversion but slow on email (120-200 min response).
 -- Jake Williams (Crestwood) — Steady, reliable. No bookings in Dec (seasonal).
 -- Lena Hart (Crestwood) — High energy, fastest response times at Crestwood, strong conversion.
 -- Maya Patel (Glass House) — Volume leader. 5-11 inquiries/month, fastest company-wide (22-35 min).

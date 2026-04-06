@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
 // Routes that never require authentication
-const PUBLIC_ROUTES = ['/', '/login', '/signup', '/couple/login']
+const PUBLIC_ROUTES = ['/', '/login', '/signup', '/couple/login', '/demo']
 const PUBLIC_PREFIXES = ['/api/', '/_next/']
 
 // Platform routes require coordinator/manager/admin role
@@ -28,8 +28,12 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
   let response = NextResponse.next({ request })
 
-  // Demo mode: skip all auth checks for investor demos
-  if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') {
+  // -----------------------------------------------------------------------
+  // Demo mode: if bloom_demo cookie is set, skip auth checks
+  // This lets people browse the full platform without signing in
+  // -----------------------------------------------------------------------
+  const isDemo = request.cookies.get('bloom_demo')?.value === 'true'
+  if (isDemo) {
     return response
   }
 
@@ -71,7 +75,7 @@ export async function middleware(request: NextRequest) {
   const hostname = request.headers.get('host') || ''
   const isProduction = process.env.NODE_ENV === 'production'
 
-  // Check for venue subdomain: e.g., rixey-manor.bloomhouse.ai
+  // Check for venue subdomain: e.g., hawthorne-manor.bloomhouse.ai
   // In dev we use path-based routing instead
   const baseDomain = process.env.NEXT_PUBLIC_BASE_DOMAIN || 'bloomhouse.ai'
   const subdomain = extractSubdomain(hostname, baseDomain)
@@ -149,7 +153,7 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(loginUrl)
     }
 
-    // Extract venue slug from path: /couple/rixey-manor/dashboard → rixey-manor
+    // Extract venue slug from path: /couple/hawthorne-manor/dashboard → hawthorne-manor
     const couplePathMatch = pathname.match(/^\/couple\/([^/]+)/)
     if (couplePathMatch) {
       response.cookies.set('venue-slug', couplePathMatch[1], {
@@ -210,7 +214,7 @@ export async function middleware(request: NextRequest) {
 
 /**
  * Extract subdomain from hostname.
- * e.g., "rixey-manor.bloomhouse.ai" with baseDomain "bloomhouse.ai" → "rixey-manor"
+ * e.g., "hawthorne-manor.bloomhouse.ai" with baseDomain "bloomhouse.ai" → "hawthorne-manor"
  * Returns null if no subdomain or if it's "www" or "app".
  */
 function extractSubdomain(hostname: string, baseDomain: string): string | null {

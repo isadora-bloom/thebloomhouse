@@ -86,7 +86,7 @@ export interface PersonalityData {
 const DEFAULT_PERSONALITY: PersonalityConfig = {
   ai_name: 'Sage',
   ai_emoji: '',
-  ai_email: 'sage@rixeymanor.com',
+  ai_email: 'sage@hawthornemanor.com',
   owner_name: 'Isadora',
   owner_title: 'Owner',
   warmth_level: 7,

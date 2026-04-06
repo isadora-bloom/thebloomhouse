@@ -19,7 +19,7 @@ INSERT INTO organisations (id, name, plan_tier) VALUES
 -- 2. VENUES
 -- ============================================
 INSERT INTO venues (id, name, slug, org_id, plan_tier, status, google_trends_metro, noaa_station_id, briefing_email, address_line1, city, state, zip, latitude, longitude) VALUES
-  ('22222222-2222-2222-2222-222222222201', 'Rixey Manor', 'rixey-manor', '11111111-1111-1111-1111-111111111111', 'enterprise', 'active', 'US-VA-584', 'USW00093738', 'events@rixeymanor.com', '3186 Rixeyville Rd', 'Culpeper', 'VA', '22701', 38.4735, -77.9966);
+  ('22222222-2222-2222-2222-222222222201', 'Hawthorne Manor', 'hawthorne-manor', '11111111-1111-1111-1111-111111111111', 'enterprise', 'active', 'US-VA-584', 'USW00093738', 'events@hawthornemanor.com', '4200 Hawthorne Estate Dr', 'Culpeper', 'VA', '22701', 38.4735, -77.9966);
 INSERT INTO venues (id, name, slug, org_id, plan_tier, status, google_trends_metro, noaa_station_id, briefing_email, address_line1, city, state, zip, latitude, longitude) VALUES
   ('22222222-2222-2222-2222-222222222202', 'Crestwood Farm', 'crestwood-farm', '11111111-1111-1111-1111-111111111111', 'intelligence', 'active', 'US-VA-584', 'USW00093738', 'hello@crestwoodfarm.com', '1200 Ivy Creek Ln', 'Charlottesville', 'VA', '22902', 38.0293, -78.4767);
 INSERT INTO venues (id, name, slug, org_id, plan_tier, status, google_trends_metro, noaa_station_id, briefing_email, address_line1, city, state, zip, latitude, longitude) VALUES
@@ -31,7 +31,7 @@ INSERT INTO venues (id, name, slug, org_id, plan_tier, status, google_trends_met
 -- 3. VENUE CONFIG (branding per venue)
 -- ============================================
 INSERT INTO venue_config (id, venue_id, business_name, primary_color, secondary_color, accent_color, font_pair, timezone, catering_model, bar_model, capacity, base_price, coordinator_name, coordinator_email, coordinator_phone, portal_tagline) VALUES
-  ('cccc0001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', 'Rixey Manor', '#7D8471', '#5D7A7A', '#A6894A', 'playfair_inter', 'America/New_York', 'byob', 'byob', 200, 8500, 'Sarah Chen', 'sarah@rixeymanor.com', '540-555-0101', 'Where your love story unfolds');
+  ('cccc0001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', 'Hawthorne Manor', '#7D8471', '#5D7A7A', '#A6894A', 'playfair_inter', 'America/New_York', 'byob', 'byob', 200, 8500, 'Sarah Chen', 'sarah@hawthornemanor.com', '540-555-0101', 'Where your love story unfolds');
 INSERT INTO venue_config (id, venue_id, business_name, primary_color, secondary_color, accent_color, font_pair, timezone, catering_model, bar_model, capacity, base_price, coordinator_name, coordinator_email, coordinator_phone, portal_tagline) VALUES
   ('cccc0001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222202', 'Crestwood Farm', '#8B7355', '#6B8E6B', '#CD853F', 'dm_nunito', 'America/New_York', 'preferred_list', 'hybrid', 150, 6500, 'Jake Williams', 'jake@crestwoodfarm.com', '434-555-0201', 'Good people. Great parties.');
 INSERT INTO venue_config (id, venue_id, business_name, primary_color, secondary_color, accent_color, font_pair, timezone, catering_model, bar_model, capacity, base_price, coordinator_name, coordinator_email, coordinator_phone, portal_tagline) VALUES
@@ -55,7 +55,7 @@ INSERT INTO venue_ai_config (id, venue_id, ai_name, ai_emoji, warmth_level, form
 -- 5. AUTH USERS + USER PROFILES (4 coordinators)
 -- ============================================
 INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at) VALUES
-  ('33333333-3333-3333-3333-333333333301', 'sarah@rixeymanor.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now());
+  ('33333333-3333-3333-3333-333333333301', 'sarah@hawthornemanor.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now());
 INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at) VALUES
   ('33333333-3333-3333-3333-333333333302', 'jake@crestwoodfarm.com', 'authenticated', '00000000-0000-0000-0000-000000000000', 'authenticated', now(), now(), '', now());
 INSERT INTO auth.users (id, email, role, instance_id, aud, created_at, updated_at, confirmation_token, email_confirmed_at) VALUES
@@ -75,7 +75,7 @@ INSERT INTO user_profiles (id, venue_id, org_id, role, first_name, last_name) VA
 -- ============================================
 -- 6. WEDDINGS (72 across all venues, 24 months)
 -- ============================================
--- Rixey Manor — 20 weddings
+-- Hawthorne Manor — 20 weddings
 INSERT INTO weddings (id, venue_id, status, source, wedding_date, guest_count_estimate, booking_value, assigned_consultant_id, inquiry_date, first_response_at, tour_date, booked_at, heat_score, temperature_tier) VALUES
   ('44444444-4444-4444-4444-444444000101', '22222222-2222-2222-2222-222222222201', 'completed', 'the_knot', '2024-05-18', 150, 12500, '33333333-3333-3333-3333-333333333301', '2023-11-01', '2023-11-01 02:15:00+00', '2023-11-15', '2023-12-01', 0, 'cold');
 INSERT INTO weddings (id, venue_id, status, source, wedding_date, guest_count_estimate, booking_value, assigned_consultant_id, inquiry_date, first_response_at, tour_date, booked_at, heat_score, temperature_tier) VALUES
@@ -230,7 +230,7 @@ INSERT INTO weddings (id, venue_id, status, source, wedding_date, guest_count_es
 -- ============================================
 -- 7. PEOPLE + CONTACTS (2 partners per wedding, first 10 weddings get contacts)
 -- ============================================
--- Rixey Manor wedding 101 — Emma & Liam
+-- Hawthorne Manor wedding 101 — Emma & Liam
 INSERT INTO people (id, venue_id, wedding_id, role, first_name, last_name, email) VALUES
   ('55555555-5555-5555-5555-555555000101', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000101', 'partner1', 'Emma', 'Rodriguez', 'emma.rodriguez@gmail.com');
 INSERT INTO people (id, venue_id, wedding_id, role, first_name, last_name) VALUES
@@ -238,7 +238,7 @@ INSERT INTO people (id, venue_id, wedding_id, role, first_name, last_name) VALUE
 INSERT INTO contacts (id, person_id, type, value, is_primary) VALUES
   ('56565656-5656-5656-5656-565656000101', '55555555-5555-5555-5555-555555000101', 'email', 'emma.rodriguez@gmail.com', true);
 
--- Rixey Manor wedding 115 (hot inquiry) — Aisha & Marcus
+-- Hawthorne Manor wedding 115 (hot inquiry) — Aisha & Marcus
 INSERT INTO people (id, venue_id, wedding_id, role, first_name, last_name, email) VALUES
   ('55555555-5555-5555-5555-555555000201', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', 'partner1', 'Aisha', 'Johnson', 'aisha.j@outlook.com');
 INSERT INTO people (id, venue_id, wedding_id, role, first_name, last_name) VALUES
@@ -246,7 +246,7 @@ INSERT INTO people (id, venue_id, wedding_id, role, first_name, last_name) VALUE
 INSERT INTO contacts (id, person_id, type, value, is_primary) VALUES
   ('56565656-5656-5656-5656-565656000201', '55555555-5555-5555-5555-555555000201', 'email', 'aisha.j@outlook.com', true);
 
--- Rixey Manor wedding 109 (booked) — Chloe & Ryan
+-- Hawthorne Manor wedding 109 (booked) — Chloe & Ryan
 INSERT INTO people (id, venue_id, wedding_id, role, first_name, last_name, email) VALUES
   ('55555555-5555-5555-5555-555555000301', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'partner1', 'Chloe', 'Martinez', 'chloe.m@gmail.com');
 INSERT INTO people (id, venue_id, wedding_id, role, first_name, last_name) VALUES
@@ -282,9 +282,9 @@ INSERT INTO contacts (id, person_id, type, value, is_primary) VALUES
 -- 8. INTERACTIONS (emails)
 -- ============================================
 INSERT INTO interactions (id, venue_id, wedding_id, person_id, type, direction, subject, body_preview, timestamp) VALUES
-  ('66666666-6666-6666-6666-666666000101', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', '55555555-5555-5555-5555-555555000201', 'email', 'inbound', 'Interested in Rixey Manor for Fall 2027', 'Hi! My fiance Marcus and I just got engaged and we are absolutely in love with Rixey Manor...', '2026-03-24 14:30:00+00');
+  ('66666666-6666-6666-6666-666666000101', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', '55555555-5555-5555-5555-555555000201', 'email', 'inbound', 'Interested in Hawthorne Manor for Fall 2027', 'Hi! My fiance Marcus and I just got engaged and we are absolutely in love with Hawthorne Manor...', '2026-03-24 14:30:00+00');
 INSERT INTO interactions (id, venue_id, wedding_id, person_id, type, direction, subject, body_preview, timestamp) VALUES
-  ('66666666-6666-6666-6666-666666000102', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', '55555555-5555-5555-5555-555555000201', 'email', 'outbound', 'Re: Interested in Rixey Manor for Fall 2027', 'Hi Aisha! Congratulations on your engagement — how exciting! We would love to show you around...', '2026-03-24 17:00:00+00');
+  ('66666666-6666-6666-6666-666666000102', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', '55555555-5555-5555-5555-555555000201', 'email', 'outbound', 'Re: Interested in Hawthorne Manor for Fall 2027', 'Hi Aisha! Congratulations on your engagement — how exciting! We would love to show you around...', '2026-03-24 17:00:00+00');
 INSERT INTO interactions (id, venue_id, wedding_id, person_id, type, direction, subject, body_preview, timestamp) VALUES
   ('66666666-6666-6666-6666-666666000103', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000116', NULL, 'email', 'inbound', 'Pricing info please', 'Hello, I saw your venue on The Knot and wanted to get pricing information for a wedding in spring 2027...', '2026-03-26 10:15:00+00');
 INSERT INTO interactions (id, venue_id, wedding_id, person_id, type, direction, subject, body_preview, timestamp) VALUES
@@ -300,9 +300,9 @@ INSERT INTO interactions (id, venue_id, wedding_id, person_id, type, direction, 
 -- 9. DRAFTS
 -- ============================================
 INSERT INTO drafts (id, venue_id, wedding_id, interaction_id, to_email, subject, draft_body, status, context_type, brain_used, model_used, tokens_used, cost, confidence_score, auto_sent) VALUES
-  ('77777777-7777-7777-7777-777777000101', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', '66666666-6666-6666-6666-666666000101', 'aisha.j@outlook.com', 'Re: Interested in Rixey Manor for Fall 2027', 'Hi Aisha! Congratulations on your engagement — how exciting! Marcus is a lucky guy. We would absolutely love to show you both around Rixey Manor. The hilltop views in autumn are truly magical, and 100 guests is a wonderful size for our space. Would you be available for a tour this weekend? We have Saturday at 11am or Sunday at 2pm open. Warmly, Sage', 'approved', 'inquiry', 'inquiry_brain', 'claude-sonnet-4-20250514', 1250, 0.0045, 92, false);
+  ('77777777-7777-7777-7777-777777000101', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', '66666666-6666-6666-6666-666666000101', 'aisha.j@outlook.com', 'Re: Interested in Hawthorne Manor for Fall 2027', 'Hi Aisha! Congratulations on your engagement — how exciting! Marcus is a lucky guy. We would absolutely love to show you both around Hawthorne Manor. The hilltop views in autumn are truly magical, and 100 guests is a wonderful size for our space. Would you be available for a tour this weekend? We have Saturday at 11am or Sunday at 2pm open. Warmly, Sage', 'approved', 'inquiry', 'inquiry_brain', 'claude-sonnet-4-20250514', 1250, 0.0045, 92, false);
 INSERT INTO drafts (id, venue_id, wedding_id, interaction_id, to_email, subject, draft_body, status, context_type, brain_used, model_used, tokens_used, cost, confidence_score, auto_sent) VALUES
-  ('77777777-7777-7777-7777-777777000102', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000116', '66666666-6666-6666-6666-666666000103', NULL, 'Re: Pricing info please', 'Hi there! Thank you for reaching out about Rixey Manor. We would love to share our pricing details and learn more about your vision for your spring 2027 celebration! Our venue rental starts at $8,500 and includes exclusive use of the entire property. The best way to get a feel for the space is to come visit — would you be interested in scheduling a tour? Warmly, Sage', 'pending', 'inquiry', 'inquiry_brain', 'claude-sonnet-4-20250514', 1180, 0.0042, 88, false);
+  ('77777777-7777-7777-7777-777777000102', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000116', '66666666-6666-6666-6666-666666000103', NULL, 'Re: Pricing info please', 'Hi there! Thank you for reaching out about Hawthorne Manor. We would love to share our pricing details and learn more about your vision for your spring 2027 celebration! Our venue rental starts at $8,500 and includes exclusive use of the entire property. The best way to get a feel for the space is to come visit — would you be interested in scheduling a tour? Warmly, Sage', 'pending', 'inquiry', 'inquiry_brain', 'claude-sonnet-4-20250514', 1180, 0.0042, 88, false);
 INSERT INTO drafts (id, venue_id, wedding_id, interaction_id, to_email, subject, draft_body, status, context_type, brain_used, model_used, tokens_used, cost, confidence_score) VALUES
   ('77777777-7777-7777-7777-777777000103', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000212', '66666666-6666-6666-6666-666666000104', NULL, 'Re: Barn venue for intimate wedding?', 'Hey! Y''all are gonna love Crestwood Farm — it''s the perfect spot for an intimate gathering! 90 guests fits beautifully in our restored barn. We''d love to have you out for a visit so you can see the string lights and the meadow view. How does next weekend work for y''all? Can''t wait to meet y''all! Daisy', 'sent', 'inquiry', 'inquiry_brain', 'claude-sonnet-4-20250514', 1100, 0.0038, 95);
 INSERT INTO drafts (id, venue_id, wedding_id, interaction_id, to_email, subject, draft_body, status, context_type, brain_used, model_used, tokens_used, cost, confidence_score) VALUES
@@ -312,7 +312,7 @@ INSERT INTO drafts (id, venue_id, wedding_id, interaction_id, to_email, subject,
 -- 10. ENGAGEMENT EVENTS
 -- ============================================
 INSERT INTO engagement_events (id, venue_id, wedding_id, event_type, points, metadata) VALUES
-  ('88888888-8888-8888-8888-888888000101', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', 'email_opened', 5, '{"subject": "Interested in Rixey Manor"}');
+  ('88888888-8888-8888-8888-888888000101', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', 'email_opened', 5, '{"subject": "Interested in Hawthorne Manor"}');
 INSERT INTO engagement_events (id, venue_id, wedding_id, event_type, points, metadata) VALUES
   ('88888888-8888-8888-8888-888888000102', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', 'replied_quickly', 15, '{"response_time_minutes": 150}');
 INSERT INTO engagement_events (id, venue_id, wedding_id, event_type, points, metadata) VALUES
@@ -404,13 +404,13 @@ INSERT INTO email_sync_state (id, venue_id, last_history_id, last_sync_at, statu
 -- 18. KNOWLEDGE BASE
 -- ============================================
 INSERT INTO knowledge_base (id, venue_id, category, question, answer, keywords, priority, is_active) VALUES
-  ('b6000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', 'pricing', 'How much does Rixey Manor cost?', 'Rixey Manor''s venue rental starts at $8,500 for exclusive use of the entire property. This includes the ceremony site, reception space, bridal suite, and grounds. Pricing varies by season and day of the week.', ARRAY['price', 'cost', 'how much', 'rental fee', 'rate'], 10, true);
+  ('b6000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', 'pricing', 'How much does Hawthorne Manor cost?', 'Hawthorne Manor''s venue rental starts at $8,500 for exclusive use of the entire property. This includes the ceremony site, reception space, bridal suite, and grounds. Pricing varies by season and day of the week.', ARRAY['price', 'cost', 'how much', 'rental fee', 'rate'], 10, true);
 INSERT INTO knowledge_base (id, venue_id, category, question, answer, keywords, priority, is_active) VALUES
-  ('b6000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', 'catering', 'What is the catering policy?', 'Rixey Manor is BYOB for both food and beverage. You choose your own caterer and bartending service, giving you complete flexibility over your menu and budget.', ARRAY['catering', 'food', 'byob', 'caterer', 'kitchen', 'bar'], 9, true);
+  ('b6000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', 'catering', 'What is the catering policy?', 'Hawthorne Manor is BYOB for both food and beverage. You choose your own caterer and bartending service, giving you complete flexibility over your menu and budget.', ARRAY['catering', 'food', 'byob', 'caterer', 'kitchen', 'bar'], 9, true);
 INSERT INTO knowledge_base (id, venue_id, category, question, answer, keywords, priority, is_active) VALUES
-  ('b6000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', 'capacity', 'How many guests can Rixey Manor hold?', 'Rixey Manor comfortably accommodates up to 200 guests for a seated dinner and up to 250 for a cocktail-style reception.', ARRAY['capacity', 'guests', 'how many', 'size', 'max'], 8, true);
+  ('b6000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', 'capacity', 'How many guests can Hawthorne Manor hold?', 'Hawthorne Manor comfortably accommodates up to 200 guests for a seated dinner and up to 250 for a cocktail-style reception.', ARRAY['capacity', 'guests', 'how many', 'size', 'max'], 8, true);
 INSERT INTO knowledge_base (id, venue_id, category, question, answer, keywords, priority, is_active) VALUES
-  ('b6000001-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222201', 'accommodation', 'Are there rooms on site?', 'Yes! Rixey Manor has 5 guest rooms that can accommodate the wedding party. The bridal suite is included with every booking.', ARRAY['rooms', 'stay', 'overnight', 'accommodation', 'sleep', 'bridal suite'], 7, true);
+  ('b6000001-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222201', 'accommodation', 'Are there rooms on site?', 'Yes! Hawthorne Manor has 5 guest rooms that can accommodate the wedding party. The bridal suite is included with every booking.', ARRAY['rooms', 'stay', 'overnight', 'accommodation', 'sleep', 'bridal suite'], 7, true);
 INSERT INTO knowledge_base (id, venue_id, category, question, answer, keywords, priority, is_active) VALUES
   ('b6000001-0000-0000-0000-000000000005', '22222222-2222-2222-2222-222222222201', 'pets', 'Are pets allowed?', 'Absolutely! We are very pet-friendly. Many of our couples include their dogs in the ceremony. We just ask that you designate a pet handler for the reception.', ARRAY['pets', 'dogs', 'animals', 'pet-friendly'], 6, true);
 INSERT INTO knowledge_base (id, venue_id, category, question, answer, keywords, priority, is_active) VALUES
@@ -455,7 +455,7 @@ INSERT INTO search_trends (id, venue_id, metro, term, week, interest) VALUES
   ('b7000001-0000-0000-0000-000000000016', '22222222-2222-2222-2222-222222222203', 'US-VA-556', 'wedding venue', '2026-03-23', 85);
 
 -- ============================================
--- 20. WEATHER DATA (recent 14 days, Rixey Manor)
+-- 20. WEATHER DATA (recent 14 days, Hawthorne Manor)
 -- ============================================
 INSERT INTO weather_data (id, venue_id, date, high_temp, low_temp, precipitation, conditions, source) VALUES
   ('b8000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '2026-03-14', 62, 38, 0, 'Sunny', 'open_meteo');
@@ -580,7 +580,7 @@ INSERT INTO trend_recommendations (id, venue_id, recommendation_type, title, bod
 -- 25. AI BRIEFINGS (1 weekly per venue)
 -- ============================================
 INSERT INTO ai_briefings (id, venue_id, briefing_type, content, created_at) VALUES
-  ('bd000002-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', 'weekly', '{"summary": "Strong week for Rixey Manor. 2 new inquiries came in (both hot), and the proposal for the November wedding is still pending. Wedding venue searches in your metro are up 22% — this is peak browsing season.", "metrics": {"new_inquiries": 2, "tours_scheduled": 1, "bookings": 0, "lost_deals": 0, "revenue_booked": 0}, "demand_outlook": {"score": 62, "outlook": "positive"}, "trend_highlights": ["Wedding venue searches up 22% in Culpeper/Charlottesville metro", "Engagement ring searches rising — expect inquiries in 3-6 months", "Barn venue interest up 18% (benefits Crestwood Farm more directly)"], "weather_outlook": "Beautiful week ahead — highs in the upper 60s to low 70s through the weekend. Perfect touring weather. One chance of rain on Wednesday.", "anomaly_summary": ["Inquiry volume up 40% vs prior week — likely seasonal spring surge"], "recommendations": ["Follow up with the March 26 inquiry (no response yet — don''t let this one go cold)", "Offer weekend tour slots to both hot leads while weather is perfect", "Refresh spring photos on The Knot — searches are peaking now", "Send the November proposal couple a gentle check-in"], "generated_at": "2026-03-27T08:00:00Z"}', '2026-03-27 08:00:00+00');
+  ('bd000002-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', 'weekly', '{"summary": "Strong week for Hawthorne Manor. 2 new inquiries came in (both hot), and the proposal for the November wedding is still pending. Wedding venue searches in your metro are up 22% — this is peak browsing season.", "metrics": {"new_inquiries": 2, "tours_scheduled": 1, "bookings": 0, "lost_deals": 0, "revenue_booked": 0}, "demand_outlook": {"score": 62, "outlook": "positive"}, "trend_highlights": ["Wedding venue searches up 22% in Culpeper/Charlottesville metro", "Engagement ring searches rising — expect inquiries in 3-6 months", "Barn venue interest up 18% (benefits Crestwood Farm more directly)"], "weather_outlook": "Beautiful week ahead — highs in the upper 60s to low 70s through the weekend. Perfect touring weather. One chance of rain on Wednesday.", "anomaly_summary": ["Inquiry volume up 40% vs prior week — likely seasonal spring surge"], "recommendations": ["Follow up with the March 26 inquiry (no response yet — don''t let this one go cold)", "Offer weekend tour slots to both hot leads while weather is perfect", "Refresh spring photos on The Knot — searches are peaking now", "Send the November proposal couple a gentle check-in"], "generated_at": "2026-03-27T08:00:00Z"}', '2026-03-27 08:00:00+00');
 INSERT INTO ai_briefings (id, venue_id, briefing_type, content, created_at) VALUES
   ('bd000002-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222202', 'weekly', '{"summary": "Crestwood Farm had 1 new inquiry this week and a completed tour. Barn venue searches are trending up 18% in your metro — great timing for spring marketing.", "metrics": {"new_inquiries": 1, "tours_scheduled": 0, "bookings": 0, "lost_deals": 0, "revenue_booked": 0}, "demand_outlook": {"score": 58, "outlook": "neutral"}, "trend_highlights": ["Barn wedding venue searches up 18%", "General wedding venue searches up 22%"], "weather_outlook": "Mild spring weather expected. Great conditions for outdoor tours.", "anomaly_summary": [], "recommendations": ["Follow up with the March 22 inquiry — they responded well to Daisy''s tone", "Update barn photos for spring — fresh greenery sells"], "generated_at": "2026-03-27T08:00:00Z"}', '2026-03-27 08:00:00+00');
 
@@ -704,9 +704,9 @@ INSERT INTO voice_preferences (id, venue_id, preference_type, content, score, sa
 -- 32. VOICE TRAINING SESSIONS + RESPONSES
 -- ============================================
 INSERT INTO voice_training_sessions (id, venue_id, game_type, completed_rounds, total_rounds, staff_email, started_at, completed_at) VALUES
-  ('c4000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', 'would_you_send', 20, 20, 'sarah@rixeymanor.com', '2026-03-20 10:00:00+00', '2026-03-20 10:25:00+00');
+  ('c4000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', 'would_you_send', 20, 20, 'sarah@hawthornemanor.com', '2026-03-20 10:00:00+00', '2026-03-20 10:25:00+00');
 INSERT INTO voice_training_sessions (id, venue_id, game_type, completed_rounds, total_rounds, staff_email, started_at, completed_at) VALUES
-  ('c4000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', 'cringe_or_fine', 15, 15, 'sarah@rixeymanor.com', '2026-03-20 10:30:00+00', '2026-03-20 10:45:00+00');
+  ('c4000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', 'cringe_or_fine', 15, 15, 'sarah@hawthornemanor.com', '2026-03-20 10:30:00+00', '2026-03-20 10:45:00+00');
 INSERT INTO voice_training_sessions (id, venue_id, game_type, completed_rounds, total_rounds, staff_email, started_at) VALUES
   ('c4000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222202', 'would_you_send', 12, 20, 'jake@crestwoodfarm.com', '2026-03-22 14:00:00+00');
 
@@ -808,7 +808,7 @@ INSERT INTO timeline (id, venue_id, wedding_id, time, duration_minutes, title, c
 -- 38. BUDGET (for wedding 109)
 -- ============================================
 INSERT INTO budget (id, venue_id, wedding_id, category, item_name, estimated_cost, actual_cost, paid_amount) VALUES
-  ('cc000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'venue', 'Rixey Manor Venue Rental', 8500, 8500, 8500);
+  ('cc000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'venue', 'Hawthorne Manor Venue Rental', 8500, 8500, 8500);
 INSERT INTO budget (id, venue_id, wedding_id, category, item_name, estimated_cost, actual_cost, paid_amount) VALUES
   ('cc000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'catering', 'BBQ Company Catering', 5200, 5400, 5400);
 INSERT INTO budget (id, venue_id, wedding_id, category, item_name, estimated_cost, actual_cost, paid_amount) VALUES
@@ -826,17 +826,17 @@ INSERT INTO budget (id, venue_id, wedding_id, category, item_name, estimated_cos
 INSERT INTO sage_conversations (id, venue_id, wedding_id, role, content, confidence_score) VALUES
   ('cd000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'user', 'Hey Sage! Can we bring our dog to the ceremony?', NULL);
 INSERT INTO sage_conversations (id, venue_id, wedding_id, role, content, model_used, tokens_used, cost, confidence_score) VALUES
-  ('cd000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'assistant', 'Absolutely! Rixey Manor is very pet-friendly. Many of our couples include their dogs in the ceremony — it always makes for adorable photos! We just ask that you designate a pet handler for the reception so your pup has someone looking out for them while you''re dancing the night away. 🌿', 'claude-sonnet-4-20250514', 450, 0.0015, 95);
+  ('cd000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'assistant', 'Absolutely! Hawthorne Manor is very pet-friendly. Many of our couples include their dogs in the ceremony — it always makes for adorable photos! We just ask that you designate a pet handler for the reception so your pup has someone looking out for them while you''re dancing the night away. 🌿', 'claude-sonnet-4-20250514', 450, 0.0015, 95);
 INSERT INTO sage_conversations (id, venue_id, wedding_id, role, content, confidence_score) VALUES
   ('cd000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'user', 'Perfect! Also, is there a backup plan if it rains on the ceremony?', NULL);
 INSERT INTO sage_conversations (id, venue_id, wedding_id, role, content, model_used, tokens_used, cost, confidence_score, flagged_uncertain) VALUES
-  ('cd000001-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'assistant', 'Great question! Rixey Manor does have a beautiful indoor option for ceremonies. That said, I want to make sure I give you the most up-to-date details on the rain plan setup — let me have Sarah confirm the specifics and get back to you. She''ll know exactly how the indoor transition works! 🌿', 'claude-sonnet-4-20250514', 480, 0.0016, 55, true);
+  ('cd000001-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'assistant', 'Great question! Hawthorne Manor does have a beautiful indoor option for ceremonies. That said, I want to make sure I give you the most up-to-date details on the rain plan setup — let me have Sarah confirm the specifics and get back to you. She''ll know exactly how the indoor transition works! 🌿', 'claude-sonnet-4-20250514', 480, 0.0016, 55, true);
 
 -- ============================================
 -- 40. SAGE UNCERTAIN QUEUE
 -- ============================================
 INSERT INTO sage_uncertain_queue (id, venue_id, wedding_id, conversation_id, question, sage_answer, confidence_score) VALUES
-  ('ce000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'cd000001-0000-0000-0000-000000000004', 'Is there a backup plan if it rains on the ceremony?', 'Rixey Manor does have a beautiful indoor option for ceremonies...', 55);
+  ('ce000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'cd000001-0000-0000-0000-000000000004', 'Is there a backup plan if it rains on the ceremony?', 'Hawthorne Manor does have a beautiful indoor option for ceremonies...', 55);
 
 -- ============================================
 -- 41. PLANNING NOTES

@@ -1,7 +1,7 @@
-// Seed demo data for the REAL Rixey Manor venue
+// Seed demo data for the REAL Hawthorne Manor venue
 const SRK="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpzeHhnd3ByeHVxZ2NhdXpseGNiIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDYzNDQ5MiwiZXhwIjoyMDkwMjEwNDkyfQ.TkgSGTxLe49t6XlCv7_f-2kCTIKWK_iQ-dhTfzNXcro";
 const BASE="https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1";
-const V="22222222-2222-2222-2222-222222222201"; // Real Rixey Manor
+const V="22222222-2222-2222-2222-222222222201"; // Real Hawthorne Manor
 
 function db(n){const d=new Date();d.setDate(d.getDate()-n);return d.toISOString()}
 function ds(n){const d=new Date();d.setDate(d.getDate()-n);return d.toISOString().split("T")[0]}
@@ -26,16 +26,16 @@ async function patch(table, filter, data) {
 }
 
 async function run() {
-  console.log("=== Seeding real Rixey Manor data ===\n");
+  console.log("=== Seeding real Hawthorne Manor data ===\n");
 
   // 1. Venue config
   console.log("1. Venue config...");
   await post("venue_config", {
-    venue_id:V, business_name:"Rixey Manor",
+    venue_id:V, business_name:"Hawthorne Manor",
     primary_color:"#7D8471", secondary_color:"#5D7A7A", accent_color:"#A6894A",
     font_pair:"playfair_inter", timezone:"America/New_York",
     catering_model:"byob", bar_model:"byob", capacity:200, base_price:8500,
-    coordinator_name:"Sarah Chen", coordinator_email:"sarah@rixeymanor.com",
+    coordinator_name:"Sarah Chen", coordinator_email:"sarah@hawthornemanor.com",
     coordinator_phone:"540-555-0101", portal_tagline:"Where your love story unfolds",
     feature_flags:{
       checklist_template:{tasks:[
@@ -139,7 +139,7 @@ async function run() {
         venue_id:V, wedding_id:wid, type:"email", direction:"outbound",
         subject:"Re: "+subjects[i],
         body_preview:"Thank you for reaching out! Congratulations on your engagement.",
-        full_body:"Thank you for reaching out! Congratulations on your engagement. I would love to tell you more about Rixey Manor.",
+        full_body:"Thank you for reaching out! Congratulations on your engagement. I would love to tell you more about Hawthorne Manor.",
         timestamp:db(89 - i*3),
       });
     }
@@ -161,8 +161,8 @@ async function run() {
   // 6. Knowledge base
   console.log("6. Knowledge base...");
   await post("knowledge_base", [
-    {venue_id:V,question:"How much does Rixey Manor cost?",answer:"Full-day venue rental is $8,500. Includes ceremony + reception spaces, tables, chairs, basic linens, bridal and groom suites, on-site coordinator, and parking.",category:"pricing",keywords:["price","cost","rate","fee"],priority:1,is_active:true},
-    {venue_id:V,question:"What is the alcohol/bar policy?",answer:"Rixey Manor is BYOB. You supply all beverages. We provide bar setup, glassware, and ice. ABC license required for anything beyond beer & wine.",category:"bar",keywords:["alcohol","byob","bar","drinks"],priority:1,is_active:true},
+    {venue_id:V,question:"How much does Hawthorne Manor cost?",answer:"Full-day venue rental is $8,500. Includes ceremony + reception spaces, tables, chairs, basic linens, bridal and groom suites, on-site coordinator, and parking.",category:"pricing",keywords:["price","cost","rate","fee"],priority:1,is_active:true},
+    {venue_id:V,question:"What is the alcohol/bar policy?",answer:"Hawthorne Manor is BYOB. You supply all beverages. We provide bar setup, glassware, and ice. ABC license required for anything beyond beer & wine.",category:"bar",keywords:["alcohol","byob","bar","drinks"],priority:1,is_active:true},
     {venue_id:V,question:"What is the rain plan?",answer:"Our covered pavilion seats up to 200 guests with mountain views. We monitor weather and coordinate with your vendors to make the call together.",category:"logistics",keywords:["rain","weather","indoor","backup"],priority:1,is_active:true},
     {venue_id:V,question:"How many guests can you hold?",answer:"Up to 200 guests for a seated dinner. Cocktail-style can accommodate up to 250.",category:"capacity",keywords:["capacity","guests","max","how many"],priority:1,is_active:true},
     {venue_id:V,question:"Are there rooms on site?",answer:"Yes! The bridal suite is a renovated farmhouse (room for 10). Groom suite in the barn loft. We also have a relationship with nearby hotels for guest blocks.",category:"accommodation",keywords:["rooms","stay","overnight","hotel"],priority:2,is_active:true},
@@ -232,7 +232,7 @@ async function run() {
   // 12. Search trends (12 weeks)
   console.log("12. Search trends...");
   const trends = [];
-  for (const term of ["wedding venues virginia","barn wedding virginia","outdoor wedding culpeper","rixey manor wedding","byob wedding venue"]) {
+  for (const term of ["wedding venues virginia","barn wedding virginia","outdoor wedding culpeper","hawthorne manor wedding","byob wedding venue"]) {
     for (let w = 0; w < 12; w++) {
       trends.push({venue_id:V, metro:"US-VA-584", term, week:ds(w*7), interest:40+Math.floor(Math.random()*50)});
     }
@@ -269,7 +269,7 @@ async function run() {
   await post("wedding_config", {venue_id:V, wedding_id:W, total_budget:40000, budget_shared:true, plated_meal:true});
 
   await post("budget_items", [
-    {venue_id:V,wedding_id:W,category:"Venue",item_name:"Venue rental",budgeted:8500,committed:8500,paid:4250,vendor_name:"Rixey Manor",sort_order:1},
+    {venue_id:V,wedding_id:W,category:"Venue",item_name:"Venue rental",budgeted:8500,committed:8500,paid:4250,vendor_name:"Hawthorne Manor",sort_order:1},
     {venue_id:V,wedding_id:W,category:"Photography",item_name:"Photography",budgeted:4200,committed:4200,paid:1000,vendor_name:"Hannah Kate Photography",sort_order:2},
     {venue_id:V,wedding_id:W,category:"Catering",item_name:"Dinner + cocktail",budgeted:8500,committed:8500,paid:2000,vendor_name:"Wildflower Catering",sort_order:3},
     {venue_id:V,wedding_id:W,category:"Flowers",item_name:"Floral package",budgeted:3200,committed:3200,paid:800,vendor_name:"Stems & Soil",sort_order:4},

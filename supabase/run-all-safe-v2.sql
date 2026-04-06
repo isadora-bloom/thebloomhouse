@@ -1033,7 +1033,7 @@ COMMENT ON COLUMN venue_config.portal_tagline IS 'Tagline shown on couple portal
 -- ============================================
 -- 009: FULL FEATURE PARITY
 -- Adds ALL remaining tables needed for complete parity with
--- Rixey Portal, Intel app, and Agent app.
+-- Hawthorne Portal, Intel app, and Agent app.
 -- Depends on: 001-008
 -- ============================================
 
@@ -2419,7 +2419,7 @@ ALTER TABLE organisations ADD COLUMN IF NOT EXISTS stripe_customer_id text;
 -- Link venues to org if not already linked
 UPDATE venues SET org_id = 'de000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
 
--- Set Rixey Manor to enterprise for demo
+-- Set Hawthorne Manor to enterprise for demo
 UPDATE venues SET plan_tier = 'enterprise' WHERE id = '112a63d9-7115-42cd-9ac5-bb48be70e71a';
 
 -- Refresh PostgREST schema cache

@@ -7,9 +7,9 @@
 -- Safe to run multiple times — uses ON CONFLICT DO NOTHING.
 --
 -- Key weddings populated:
---   109 — Chloe & Ryan (Rixey Manor, 2026-05-30, booked) — PRIMARY DEMO
---   110 — Rixey Manor (2026-06-20, booked)
---   111 — Rixey Manor (2026-09-12, booked)
+--   109 — Chloe & Ryan (Hawthorne Manor, 2026-05-30, booked) — PRIMARY DEMO
+--   110 — Hawthorne Manor (2026-06-20, booked)
+--   111 — Hawthorne Manor (2026-09-12, booked)
 --   209 — Taylor & Jordan (Crestwood Farm, 2026-06-06, booked)
 --   313 — Glass House (2026-04-18, booked)
 --
@@ -112,11 +112,11 @@ ON CONFLICT (id) DO NOTHING;
 -- ============================================
 INSERT INTO shuttle_schedule (id, venue_id, wedding_id, route_name, pickup_location, dropoff_location, departure_time, capacity, notes) VALUES
   -- Wedding 109
-  ('dddd0006-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Hotel to Venue (Ceremony)', 'Hampton Inn Culpeper, 791 Madison Rd', 'Rixey Manor, 3186 Rixeyville Rd', '2026-05-30 15:30:00+00', 40, 'Bus arrives at hotel 3:15pm for 3:30pm departure. 15 min drive.'),
-  ('dddd0006-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Venue to Hotel (End of Night)', 'Rixey Manor, 3186 Rixeyville Rd', 'Hampton Inn Culpeper, 791 Madison Rd', '2026-05-30 22:30:00+00', 40, 'Last shuttle. Second run at 10:45 if needed.'),
+  ('dddd0006-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Hotel to Venue (Ceremony)', 'Hampton Inn Culpeper, 791 Madison Rd', 'Hawthorne Manor, 4200 Hawthorne Estate Dr', '2026-05-30 15:30:00+00', 40, 'Bus arrives at hotel 3:15pm for 3:30pm departure. 15 min drive.'),
+  ('dddd0006-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Venue to Hotel (End of Night)', 'Hawthorne Manor, 4200 Hawthorne Estate Dr', 'Hampton Inn Culpeper, 791 Madison Rd', '2026-05-30 22:30:00+00', 40, 'Last shuttle. Second run at 10:45 if needed.'),
   ('dddd0006-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Rehearsal Dinner Shuttle', 'Hampton Inn Culpeper, 791 Madison Rd', 'Foti''s Restaurant, 219 E Davis St, Culpeper', '2026-05-29 17:30:00+00', 30, 'Friday evening — seats for bridal party and immediate family only'),
   -- Wedding 111
-  ('dddd0006-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000111', 'Hotel to Venue', 'Best Western Culpeper, 791 Willis Ln', 'Rixey Manor, 3186 Rixeyville Rd', '2026-09-12 14:30:00+00', 45, 'Larger bus for 190 guest wedding')
+  ('dddd0006-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000111', 'Hotel to Venue', 'Best Western Culpeper, 791 Willis Ln', 'Hawthorne Manor, 4200 Hawthorne Estate Dr', '2026-09-12 14:30:00+00', 45, 'Larger bus for 190 guest wedding')
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================================
@@ -133,8 +133,8 @@ ON CONFLICT (id) DO NOTHING;
 -- ============================================
 INSERT INTO decor_inventory (id, venue_id, wedding_id, item_name, category, quantity, source, vendor_name, notes, leaving_instructions) VALUES
   -- Wedding 109: Chloe & Ryan
-  ('dddd0008-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Wooden Ceremony Arch', 'ceremony', 1, 'borrow', NULL, 'Rixey Manor arch — draped with greenery by Valley Blooms', 'Leave in barn after reception'),
-  ('dddd0008-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Gold Votive Candle Holders', 'tables', 60, 'borrow', NULL, 'From Rixey inventory. 4 per table.', 'Return to storage closet'),
+  ('dddd0008-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Wooden Ceremony Arch', 'ceremony', 1, 'borrow', NULL, 'Hawthorne Manor arch — draped with greenery by Valley Blooms', 'Leave in barn after reception'),
+  ('dddd0008-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Gold Votive Candle Holders', 'tables', 60, 'borrow', NULL, 'From Hawthorne inventory. 4 per table.', 'Return to storage closet'),
   ('dddd0008-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Eucalyptus Garland Runners', 'tables', 15, 'vendor', 'Valley Blooms', 'One per table. Fresh — delivered morning of.', 'Compost after event'),
   ('dddd0008-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Bud Vases with Wildflowers', 'tables', 45, 'vendor', 'Valley Blooms', '3 per table, assorted heights', 'Bride taking home favorites'),
   ('dddd0008-0001-0001-0001-000000000005', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Custom Welcome Sign', 'entrance', 1, 'personal', NULL, 'Acrylic sign with gold lettering — "The Brooks Wedding"', 'Couple taking home'),
@@ -142,7 +142,7 @@ INSERT INTO decor_inventory (id, venue_id, wedding_id, item_name, category, quan
   ('dddd0008-0001-0001-0001-000000000007', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Photo Display Board', 'reception', 1, 'diy', NULL, 'Clothespin photo display with engagement and family photos', 'Couple taking home'),
   ('dddd0008-0001-0001-0001-000000000008', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Linen Napkins (Dusty Rose)', 'tables', 180, 'vendor', 'Party Rentals VA', 'Matching chair sashes also ordered', 'Vendor picking up Monday'),
   ('dddd0008-0001-0001-0001-000000000009', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Sparklers (20")', 'other', 200, 'personal', NULL, 'For send-off. Stored in dry location.', 'Used up'),
-  ('dddd0008-0001-0001-0001-000000000010', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'String Lights (additional)', 'reception', 4, 'borrow', NULL, 'Extra strands from Rixey inventory for patio area', 'Return to storage'),
+  ('dddd0008-0001-0001-0001-000000000010', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'String Lights (additional)', 'reception', 4, 'borrow', NULL, 'Extra strands from Hawthorne inventory for patio area', 'Return to storage'),
   ('dddd0008-0001-0001-0001-000000000011', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Ceremony Aisle Markers', 'ceremony', 12, 'diy', NULL, 'Shepherd hooks with mason jars and wildflowers', 'Couple taking home'),
   ('dddd0008-0001-0001-0001-000000000012', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Cake Table Backdrop (Draped Fabric)', 'reception', 1, 'vendor', 'Party Rentals VA', 'Ivory chiffon backdrop behind cake table', 'Vendor picking up Monday')
 ON CONFLICT (id) DO NOTHING;
@@ -215,7 +215,7 @@ INSERT INTO wedding_worksheets (id, venue_id, wedding_id, section, content) VALU
   ('dddd0013-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'priorities',
    '{"top_three": ["The food has to be incredible — we are both foodies", "Great music and a packed dance floor", "Making sure Abuela Rosa is comfortable and happy"], "vibe_words": ["warm", "joyful", "relaxed but elegant"], "must_haves": ["Our dog Biscuit in the ceremony", "Sparkler exit", "Late night snack station"]}'),
   ('dddd0013-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'story',
-   '{"how_we_met": "We met at a friend''s backyard cookout in Richmond in 2021. Ryan was grilling and Chloe made fun of his technique. They have been inseparable since.", "proposal": "Ryan proposed on the Blue Ridge Parkway overlook near Milepost 20 during a fall hike. He had Biscuit bring the ring in a little backpack.", "why_this_venue": "We drove past Rixey Manor on the way back from that hike and both said ''wow'' at the same time. It just felt right — the hilltop, the mountains, the feeling of being away from everything."}'),
+   '{"how_we_met": "We met at a friend''s backyard cookout in Richmond in 2021. Ryan was grilling and Chloe made fun of his technique. They have been inseparable since.", "proposal": "Ryan proposed on the Blue Ridge Parkway overlook near Milepost 20 during a fall hike. He had Biscuit bring the ring in a little backpack.", "why_this_venue": "We drove past Hawthorne Manor on the way back from that hike and both said ''wow'' at the same time. It just felt right — the hilltop, the mountains, the feeling of being away from everything."}'),
   ('dddd0013-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'feelings',
    '{"most_excited_about": "Seeing everyone we love in one place. Our families live far apart and this will be the first time both sides are together.", "most_nervous_about": "The weather — we really want an outdoor ceremony. Also, the first dance (Ryan is not a dancer).", "dream_moment": "Standing at the hilltop during golden hour, just married, looking at the mountains with Ryan"}'),
   -- Wedding 111 (partial)
@@ -249,13 +249,13 @@ INSERT INTO photo_library (id, venue_id, wedding_id, image_url, caption, tags, i
   ('dddd0015-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'https://images.unsplash.com/photo-1465495976277-4387d4b0b4c6?w=800', 'Inspiration — ceremony arch with greenery', ARRAY['inspiration', 'ceremony', 'arch', 'florals'], false),
   ('dddd0015-0001-0001-0001-000000000005', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'https://images.unsplash.com/photo-1464366400600-7168b8af9bc3?w=800', 'Inspiration — outdoor reception string lights', ARRAY['inspiration', 'reception', 'lighting'], false),
   -- Venue-level photos
-  ('dddd0015-0001-0001-0001-000000000006', '22222222-2222-2222-2222-222222222201', NULL, 'https://images.unsplash.com/photo-1519167758481-83f550bb49b3?w=800', 'Rixey Manor reception hall setup', ARRAY['venue', 'reception', 'interior'], true),
+  ('dddd0015-0001-0001-0001-000000000006', '22222222-2222-2222-2222-222222222201', NULL, 'https://images.unsplash.com/photo-1519167758481-83f550bb49b3?w=800', 'Hawthorne Manor reception hall setup', ARRAY['venue', 'reception', 'interior'], true),
   ('dddd0015-0001-0001-0001-000000000007', '22222222-2222-2222-2222-222222222201', NULL, 'https://images.unsplash.com/photo-1470290378698-263fa7ca60ab?w=800', 'Sunset over the Blue Ridge from the hilltop', ARRAY['venue', 'landscape', 'sunset'], true),
   ('dddd0015-0001-0001-0001-000000000008', '22222222-2222-2222-2222-222222222201', NULL, 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800', 'Bridal suite morning light', ARRAY['venue', 'bridal-suite', 'interior'], true)
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================================
--- 16. BORROW CATALOG (Rixey Manor venue-level inventory)
+-- 16. BORROW CATALOG (Hawthorne Manor venue-level inventory)
 -- ============================================
 INSERT INTO borrow_catalog (id, venue_id, item_name, category, description, image_url, quantity_available, is_active) VALUES
   ('dddd0016-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'Wooden Ceremony Arch (Natural)', 'arbor', 'Handmade white oak arch, 8ft tall x 6ft wide. Can be draped with fabric or greenery.', NULL, 1, true),
@@ -297,13 +297,13 @@ INSERT INTO borrow_selections (id, venue_id, wedding_id, catalog_item_id, quanti
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================================
--- 18. ACCOMMODATIONS (Rixey Manor - venue level)
+-- 18. ACCOMMODATIONS (Hawthorne Manor - venue level)
 -- ============================================
 INSERT INTO accommodations (id, venue_id, name, type, address, website_url, price_per_night, distance_miles, description, is_recommended, sort_order) VALUES
-  ('dddd0018-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'Hampton Inn Culpeper', 'hotel', '791 Madison Rd, Culpeper, VA 22701', 'https://www.hilton.com/en/hotels/chochx-hampton-culpeper/', 149.00, 8.2, 'Our most popular hotel for wedding guests. Clean, reliable, and has a pool. Room block available — mention "Rixey Manor Wedding" for the group rate.', true, 1),
+  ('dddd0018-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'Hampton Inn Culpeper', 'hotel', '791 Madison Rd, Culpeper, VA 22701', 'https://www.hilton.com/en/hotels/chochx-hampton-culpeper/', 149.00, 8.2, 'Our most popular hotel for wedding guests. Clean, reliable, and has a pool. Room block available — mention "Hawthorne Manor Wedding" for the group rate.', true, 1),
   ('dddd0018-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'Best Western Culpeper Inn', 'hotel', '791 Willis Ln, Culpeper, VA 22701', 'https://www.bestwestern.com', 119.00, 7.8, 'Budget-friendly option with free breakfast. Good for families.', true, 2),
   ('dddd0018-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', 'The Cameleer Inn', 'boutique', '206 E Davis St, Culpeper, VA 22701', 'https://www.cameleerinn.com', 195.00, 9.0, 'Charming boutique inn in downtown Culpeper. 6 rooms. Book early — fills up for wedding weekends.', true, 3),
-  ('dddd0018-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', 'Mountain View Farmhouse (Airbnb)', 'airbnb', 'Rixeyville, VA 22737', 'https://airbnb.com', 275.00, 3.5, 'Beautiful farmhouse sleeps 8. Just down the road from Rixey Manor. Perfect for the bridal party or a family group.', true, 4),
+  ('dddd0018-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', 'Mountain View Farmhouse (Airbnb)', 'airbnb', 'Hawthorne Estate, VA 22737', 'https://airbnb.com', 275.00, 3.5, 'Beautiful farmhouse sleeps 8. Just down the road from Hawthorne Manor. Perfect for the bridal party or a family group.', true, 4),
   ('dddd0018-0001-0001-0001-000000000005', '22222222-2222-2222-2222-222222222201', 'Fountain Hall B&B', 'inn', '609 S East St, Culpeper, VA 22701', 'https://www.fountainhall.com', 165.00, 9.5, 'Historic B&B built in 1859. Lovely gardens. Full breakfast included. A romantic option for couples in the wedding party.', true, 5)
 ON CONFLICT (id) DO NOTHING;
 
@@ -431,10 +431,10 @@ INSERT INTO wedding_website_settings (id, venue_id, wedding_id, slug, is_publish
    'Chloe & Ryan',
    ARRAY['home', 'our_story', 'wedding_party', 'details', 'registry', 'faq', 'rsvp', 'things_to_do'],
    '{"home": true, "our_story": true, "wedding_party": true, "details": true, "registry": true, "faq": true, "rsvp": true, "things_to_do": true}',
-   'We met at a friend''s backyard cookout in Richmond in 2021. Ryan was manning the grill and Chloe walked over to critique his burger technique. Three hours of laughing later, they exchanged numbers. Fast forward to October 2024 — Ryan proposed on the Blue Ridge Parkway overlook near Milepost 20 during a fall hike, with their dog Biscuit delivering the ring in a tiny backpack. They chose Rixey Manor because they drove past it on the way home from that hike and both said "wow" at the same time. It just felt right.',
+   'We met at a friend''s backyard cookout in Richmond in 2021. Ryan was manning the grill and Chloe walked over to critique his burger technique. Three hours of laughing later, they exchanged numbers. Fast forward to October 2024 — Ryan proposed on the Blue Ridge Parkway overlook near Milepost 20 during a fall hike, with their dog Biscuit delivering the ring in a tiny backpack. They chose Hawthorne Manor because they drove past it on the way home from that hike and both said "wow" at the same time. It just felt right.',
    'Semi-formal / Cocktail attire. Think garden party — flowy dresses, linen suits welcome. Ceremony is outdoors on grass, so consider your shoe choices!',
    '[{"name": "Crate & Barrel", "url": "https://www.crateandbarrel.com/gift-registry/chloe-martinez-and-ryan-brooks/r123456"}, {"name": "Zola", "url": "https://www.zola.com/registry/chloeandryan2026"}, {"name": "Honeymoon Fund", "url": "https://www.honeyfund.com/site/chloeandryan"}]',
-   '[{"question": "What time should I arrive?", "answer": "The ceremony begins at 4:30 PM. We suggest arriving by 4:00 PM to find your seats and enjoy the hilltop view."}, {"question": "Is there parking?", "answer": "Yes! Free parking is available on-site. Shuttle service is also provided from the Hampton Inn Culpeper for guests staying at the hotel block."}, {"question": "Can I bring a plus one?", "answer": "Due to venue capacity, we can only accommodate guests named on the invitation. If you received a plus one, it will be noted on your invite."}, {"question": "What if it rains?", "answer": "Rixey Manor has a beautiful indoor ceremony option, so we are covered rain or shine! The party goes on either way."}, {"question": "Will there be food options for dietary restrictions?", "answer": "Absolutely! We have vegetarian, gluten-free, and dairy-free options available. Please note any dietary needs on your RSVP card."}]',
+   '[{"question": "What time should I arrive?", "answer": "The ceremony begins at 4:30 PM. We suggest arriving by 4:00 PM to find your seats and enjoy the hilltop view."}, {"question": "Is there parking?", "answer": "Yes! Free parking is available on-site. Shuttle service is also provided from the Hampton Inn Culpeper for guests staying at the hotel block."}, {"question": "Can I bring a plus one?", "answer": "Due to venue capacity, we can only accommodate guests named on the invitation. If you received a plus one, it will be noted on your invite."}, {"question": "What if it rains?", "answer": "Hawthorne Manor has a beautiful indoor ceremony option, so we are covered rain or shine! The party goes on either way."}, {"question": "Will there be food options for dietary restrictions?", "answer": "Absolutely! We have vegetarian, gluten-free, and dairy-free options available. Please note any dietary needs on your RSVP card."}]',
    '{"restaurants": [{"name": "Foti''s Restaurant", "description": "Upscale Italian in downtown Culpeper. Great wine list.", "distance": "9 miles"}, {"name": "Copper Fish", "description": "Fresh seafood and craft cocktails. Lively atmosphere.", "distance": "9 miles"}, {"name": "Far Gohn Brewing", "description": "Local brewery with a great outdoor patio.", "distance": "8 miles"}], "activities": [{"name": "Blue Ridge Parkway", "description": "Scenic drive with breathtaking overlooks. The proposal spot!", "distance": "30 min"}, {"name": "Old Rag Mountain Hike", "description": "Challenging but rewarding hike with 360-degree views at the summit.", "distance": "40 min"}, {"name": "Culpeper Downtown", "description": "Charming small-town Main Street with antique shops, boutiques, and cafes.", "distance": "9 miles"}]}'),
   -- Wedding 111: Published but less detailed
   ('dddd0024-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000111',
@@ -462,7 +462,7 @@ ON CONFLICT (id) DO NOTHING;
 -- 25. TOURS
 -- ============================================
 INSERT INTO tours (id, venue_id, wedding_id, scheduled_at, tour_type, conducted_by, source, outcome, booking_date, competing_venues, notes) VALUES
-  -- Rixey Manor tours
+  -- Hawthorne Manor tours
   ('dddd0025-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', '2025-11-01 14:00:00+00', 'in_person', '33333333-3333-3333-3333-333333333301', 'the_knot', 'completed', '2026-05-30', ARRAY['Clifton Inn', 'Inn at Willow Grove'], 'Chloe cried when she saw the hilltop. Ryan loved the BYOB policy. Booked on the spot.'),
   ('dddd0025-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000110', '2025-11-20 11:00:00+00', 'in_person', '33333333-3333-3333-3333-333333333301', 'referral', 'completed', '2026-06-20', ARRAY['Pippin Hill Farm'], 'Referred by the couple from wedding 107. Intimate vibe — 130 guests.'),
   ('dddd0025-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000111', '2025-12-15 10:00:00+00', 'in_person', '33333333-3333-3333-3333-333333333301', 'google', 'completed', '2026-09-12', ARRAY['Keswick Vineyards', 'The Market at Grelen'], 'Larger wedding, 190 guests. Loved the fall foliage photos. Booked after second visit.'),
@@ -480,7 +480,7 @@ ON CONFLICT (id) DO NOTHING;
 -- 26. LOST DEALS
 -- ============================================
 INSERT INTO lost_deals (id, venue_id, wedding_id, lost_at_stage, reason_category, reason_detail, competitor_name, recovery_attempted, recovery_outcome, lost_at) VALUES
-  ('dddd0026-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000117', 'tour', 'competitor', 'Couple loved Rixey but ultimately went with Early Mountain Vineyards. Said the vineyard backdrop was more their style.', 'Early Mountain Vineyards', true, 'Sent personal note from Sarah. No response.', '2025-01-05 00:00:00+00'),
+  ('dddd0026-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000117', 'tour', 'competitor', 'Couple loved Hawthorne but ultimately went with Early Mountain Vineyards. Said the vineyard backdrop was more their style.', 'Early Mountain Vineyards', true, 'Sent personal note from Sarah. No response.', '2025-01-05 00:00:00+00'),
   ('dddd0026-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000118', 'hold', 'pricing', 'Couple was on a hold but said our pricing was above their budget after talking to their planner. They ended up at a smaller venue in Charlottesville.', NULL, true, 'Offered a midweek discount. They had already signed elsewhere.', '2025-01-10 00:00:00+00'),
   ('dddd0026-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000215', 'inquiry', 'ghosted', 'Initial inquiry seemed warm but never responded to follow-ups. 3 emails sent over 2 weeks.', NULL, true, 'Entered recovery sequence — no reply to any touchpoint.', '2025-03-01 00:00:00+00'),
   ('dddd0026-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222204', '44444444-4444-4444-4444-444444000411', 'tour', 'date_unavailable', 'Couple wanted August 2 but we were already booked. Offered alternative dates but they needed that specific weekend for family travel.', NULL, false, NULL, '2025-01-15 00:00:00+00'),
@@ -501,7 +501,7 @@ ON CONFLICT (id) DO NOTHING;
 -- 28. SOCIAL POSTS
 -- ============================================
 INSERT INTO social_posts (id, venue_id, platform, posted_at, caption, post_url, reach, impressions, saves, shares, comments, likes, website_clicks, profile_visits, engagement_rate, is_viral) VALUES
-  -- Rixey Manor
+  -- Hawthorne Manor
   ('dddd0028-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-03-20 15:00:00+00', 'Golden hour never gets old. This hilltop was made for love stories. Book your tour — link in bio.', 'https://instagram.com/p/example1', 12500, 18200, 342, 89, 67, 1450, 45, 280, 11.6, true),
   ('dddd0028-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-03-15 12:00:00+00', 'Spring is here and the dogwoods are starting to bloom. We cannot wait for wedding season.', 'https://instagram.com/p/example2', 4800, 7200, 95, 23, 31, 620, 12, 85, 12.9, false),
   ('dddd0028-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-03-10 18:00:00+00', 'Saturday setup vibes. Every wedding here tells a different story and we love that.', 'https://instagram.com/p/example3', 3200, 4800, 45, 12, 18, 380, 8, 42, 11.9, false),
@@ -558,7 +558,7 @@ INSERT INTO knowledge_gaps (id, venue_id, question, category, frequency, status,
   -- Resolved gaps
   ('dddd0032-0001-0001-0001-000000000006', '22222222-2222-2222-2222-222222222201', 'Are drones allowed for photography?', 'policies', 3, 'resolved', 'Yes, drones are allowed with FAA Part 107 licensed operators. Photographer must coordinate flight path with Sarah to avoid ceremony disruption.', '2026-02-15 00:00:00+00'),
   ('dddd0032-0001-0001-0001-000000000007', '22222222-2222-2222-2222-222222222201', 'What is the latest the music can play?', 'policies', 5, 'resolved', 'Music must end by 10:00 PM per county noise ordinance. Last call at 9:45 PM. Sparkler exit typically at 10:00 PM.', '2026-01-20 00:00:00+00'),
-  ('dddd0032-0001-0001-0001-000000000008', '22222222-2222-2222-2222-222222222201', 'Is there Wi-Fi for guests?', 'amenities', 2, 'resolved', 'Yes — network "RixeyManor-Guest", password shared at check-in. Note: signal is weak at the hilltop ceremony site.', '2026-01-10 00:00:00+00'),
+  ('dddd0032-0001-0001-0001-000000000008', '22222222-2222-2222-2222-222222222201', 'Is there Wi-Fi for guests?', 'amenities', 2, 'resolved', 'Yes — network "HawthorneManor-Guest", password shared at check-in. Note: signal is weak at the hilltop ceremony site.', '2026-01-10 00:00:00+00'),
   ('dddd0032-0001-0001-0001-000000000009', '22222222-2222-2222-2222-222222222202', 'Can we have a live band in the barn?', 'logistics', 2, 'resolved', 'Yes, the barn has power for a 4-piece band. Larger setups need a generator. Sound check must happen before 4pm.', '2026-02-20 00:00:00+00')
 ON CONFLICT (id) DO NOTHING;
 
@@ -567,10 +567,10 @@ ON CONFLICT (id) DO NOTHING;
 -- ============================================
 INSERT INTO follow_up_sequence_templates (id, venue_id, name, trigger, steps, is_active) VALUES
   ('dddd0033-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'New Inquiry — 3 Touch Sequence', 'new_inquiry',
-   '[{"step": 1, "delay_hours": 0, "action": "auto_reply", "subject_template": "Welcome! Let''s find your perfect date at Rixey Manor", "tone": "warm_enthusiastic", "include_availability": true, "include_pricing": false}, {"step": 2, "delay_hours": 48, "action": "follow_up", "subject_template": "Still thinking about Rixey Manor? Here''s what makes us special", "tone": "helpful_not_pushy", "include_availability": false, "include_pricing": true}, {"step": 3, "delay_hours": 168, "action": "final_touch", "subject_template": "One last thing from Sage at Rixey Manor", "tone": "gentle_close", "include_availability": true, "include_pricing": false}]',
+   '[{"step": 1, "delay_hours": 0, "action": "auto_reply", "subject_template": "Welcome! Let''s find your perfect date at Hawthorne Manor", "tone": "warm_enthusiastic", "include_availability": true, "include_pricing": false}, {"step": 2, "delay_hours": 48, "action": "follow_up", "subject_template": "Still thinking about Hawthorne Manor? Here''s what makes us special", "tone": "helpful_not_pushy", "include_availability": false, "include_pricing": true}, {"step": 3, "delay_hours": 168, "action": "final_touch", "subject_template": "One last thing from Sage at Hawthorne Manor", "tone": "gentle_close", "include_availability": true, "include_pricing": false}]',
    true),
   ('dddd0033-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'Post Tour — 2 Touch Follow-Up', 'post_tour',
-   '[{"step": 1, "delay_hours": 2, "action": "thank_you", "subject_template": "Thank you for visiting Rixey Manor!", "tone": "warm_personal", "include_photos": true, "include_proposal": false}, {"step": 2, "delay_hours": 120, "action": "proposal_nudge", "subject_template": "Your Rixey Manor proposal is ready", "tone": "confident_helpful", "include_photos": false, "include_proposal": true}]',
+   '[{"step": 1, "delay_hours": 2, "action": "thank_you", "subject_template": "Thank you for visiting Hawthorne Manor!", "tone": "warm_personal", "include_photos": true, "include_proposal": false}, {"step": 2, "delay_hours": 120, "action": "proposal_nudge", "subject_template": "Your Hawthorne Manor proposal is ready", "tone": "confident_helpful", "include_photos": false, "include_proposal": true}]',
    true),
   ('dddd0033-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222202', 'New Inquiry — Crestwood Warm Welcome', 'new_inquiry',
    '[{"step": 1, "delay_hours": 0, "action": "auto_reply", "subject_template": "Hey from Crestwood Farm! Let''s chat about your big day", "tone": "playful_warm", "include_availability": true, "include_pricing": false}, {"step": 2, "delay_hours": 72, "action": "follow_up", "subject_template": "Y''all still looking for the perfect barn? 🌻", "tone": "casual_friendly", "include_availability": true, "include_pricing": true}]',
@@ -607,10 +607,10 @@ ON CONFLICT (id) DO NOTHING;
 -- 36. CLIENT CODES
 -- ============================================
 INSERT INTO client_codes (id, venue_id, wedding_id, code, format_template) VALUES
-  ('dddd0036-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'RIXEY-2609', 'RIXEY-YYMM'),
-  ('dddd0036-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000110', 'RIXEY-2610', 'RIXEY-YYMM'),
-  ('dddd0036-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000111', 'RIXEY-2611', 'RIXEY-YYMM'),
-  ('dddd0036-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000112', 'RIXEY-2612', 'RIXEY-YYMM'),
+  ('dddd0036-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'HAWTHORNE-2609', 'HAWTHORNE-YYMM'),
+  ('dddd0036-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000110', 'HAWTHORNE-2610', 'HAWTHORNE-YYMM'),
+  ('dddd0036-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000111', 'HAWTHORNE-2611', 'HAWTHORNE-YYMM'),
+  ('dddd0036-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000112', 'HAWTHORNE-2612', 'HAWTHORNE-YYMM'),
   ('dddd0036-0001-0001-0001-000000000005', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000209', 'CREST-2601', 'CREST-YYMM'),
   ('dddd0036-0001-0001-0001-000000000006', '22222222-2222-2222-2222-222222222203', '44444444-4444-4444-4444-444444000313', 'GLASS-2601', 'GLASS-YYMM'),
   ('dddd0036-0001-0001-0001-000000000007', '22222222-2222-2222-2222-222222222204', '44444444-4444-4444-4444-444444000407', 'ROSE-2601', 'ROSE-YYMM')
@@ -620,7 +620,7 @@ ON CONFLICT (id) DO NOTHING;
 -- 37. ERROR LOGS
 -- ============================================
 INSERT INTO error_logs (id, venue_id, error_type, message, stack_trace, context, resolved, resolved_by, resolved_at, created_at) VALUES
-  ('dddd0037-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'gmail_auth', 'Gmail API token expired for events@rixeymanor.com', 'Error: invalid_grant at GoogleAuth.refreshToken (/lib/services/email/gmail.ts:142)', '{"venue_id": "22222222-2222-2222-2222-222222222201", "email": "events@rixeymanor.com", "last_sync": "2026-03-25T08:00:00Z"}', true, '33333333-3333-3333-3333-333333333301', '2026-03-25 10:30:00+00', '2026-03-25 08:15:00+00'),
+  ('dddd0037-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'gmail_auth', 'Gmail API token expired for events@hawthornemanor.com', 'Error: invalid_grant at GoogleAuth.refreshToken (/lib/services/email/gmail.ts:142)', '{"venue_id": "22222222-2222-2222-2222-222222222201", "email": "events@hawthornemanor.com", "last_sync": "2026-03-25T08:00:00Z"}', true, '33333333-3333-3333-3333-333333333301', '2026-03-25 10:30:00+00', '2026-03-25 08:15:00+00'),
   ('dddd0037-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'ai_timeout', 'Claude API request timed out after 30s during weekly briefing generation', 'Error: AbortError: signal timed out at callAI (/lib/ai/client.ts:89)', '{"venue_id": "22222222-2222-2222-2222-222222222201", "context": "weekly_briefing", "model": "claude-sonnet-4-20250514", "timeout_ms": 30000}', true, NULL, '2026-03-27 08:05:00+00', '2026-03-27 08:01:00+00'),
   ('dddd0037-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222203', 'rate_limit', 'Anthropic API rate limit exceeded — 429 Too Many Requests', 'Error: RateLimitError at callAI (/lib/ai/client.ts:67)', '{"venue_id": "22222222-2222-2222-2222-222222222203", "context": "sage_chat", "retry_after_ms": 5000}', false, NULL, NULL, '2026-03-27 15:30:00+00'),
   ('dddd0037-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222202', 'webhook_failure', 'WeddingWire webhook delivery failed — 502 Bad Gateway', NULL, '{"venue_id": "22222222-2222-2222-2222-222222222202", "webhook_url": "https://api.weddingwire.com/webhooks/v1/inquiry", "attempt": 3}', false, NULL, NULL, '2026-03-26 22:00:00+00')
@@ -630,23 +630,23 @@ ON CONFLICT (id) DO NOTHING;
 -- 38. VENDOR RECOMMENDATIONS — UPDATE with portal tokens
 -- ============================================
 UPDATE vendor_recommendations SET
-  portal_token = 'vnd_bbq_rixey_2026_a1b2c3',
-  bio = 'Born and raised in Culpeper, Virginia. We have been smoking brisket for 15 years and catering weddings at Rixey Manor since it opened. Our farm-to-table BBQ uses locally sourced meats and seasonal sides. We love what we do and it shows in every plate.',
+  portal_token = 'vnd_bbq_hawthorne_2026_a1b2c3',
+  bio = 'Born and raised in Culpeper, Virginia. We have been smoking brisket for 15 years and catering weddings at Hawthorne Manor since it opened. Our farm-to-table BBQ uses locally sourced meats and seasonal sides. We love what we do and it shows in every plate.',
   instagram_url = 'https://instagram.com/bbqcompanyva',
   portfolio_photos = ARRAY['https://images.unsplash.com/photo-1529193591184-b1d58069ecdd?w=600', 'https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=600', 'https://images.unsplash.com/photo-1544025162-d76694265947?w=600'],
   last_updated_by_vendor = '2026-03-15 10:00:00+00'
 WHERE id = 'd2000001-0000-0000-0000-000000000001';
 
 UPDATE vendor_recommendations SET
-  portal_token = 'vnd_lens_rixey_2026_d4e5f6',
-  bio = 'We are a husband-and-wife photography team based in Charlottesville. Our style is documentary with a fine art touch — we capture real moments, not poses. Rixey Manor is one of our favorite venues because the light on that hilltop is unmatched.',
+  portal_token = 'vnd_lens_hawthorne_2026_d4e5f6',
+  bio = 'We are a husband-and-wife photography team based in Charlottesville. Our style is documentary with a fine art touch — we capture real moments, not poses. Hawthorne Manor is one of our favorite venues because the light on that hilltop is unmatched.',
   instagram_url = 'https://instagram.com/lensandlightstudio',
   portfolio_photos = ARRAY['https://images.unsplash.com/photo-1537633552985-df8429e8048b?w=600', 'https://images.unsplash.com/photo-1606216794079-73f85bbd57d5?w=600'],
   last_updated_by_vendor = '2026-03-10 14:00:00+00'
 WHERE id = 'd2000001-0000-0000-0000-000000000002';
 
 UPDATE vendor_recommendations SET
-  portal_token = 'vnd_valley_rixey_2026_g7h8i9',
+  portal_token = 'vnd_valley_hawthorne_2026_g7h8i9',
   bio = 'Floral design rooted in the seasons. We grow 80% of our flowers on our farm in Madison County. Wildflower, garden-style, and organic arrangements are our specialty. We believe flowers should look like they were just gathered from a beautiful garden.',
   instagram_url = 'https://instagram.com/valleybloomsva',
   portfolio_photos = ARRAY['https://images.unsplash.com/photo-1487530811176-3780de880c2d?w=600', 'https://images.unsplash.com/photo-1561128290-006dc4827214?w=600', 'https://images.unsplash.com/photo-1522748906645-95d8adfd52c7?w=600'],
@@ -654,8 +654,8 @@ UPDATE vendor_recommendations SET
 WHERE id = 'd2000001-0000-0000-0000-000000000003';
 
 UPDATE vendor_recommendations SET
-  portal_token = 'vnd_mobilebar_rixey_2026_j1k2l3',
-  bio = 'Full-service mobile bar for BYOB venues. We bring the bartenders, the setup, and the craft cocktail expertise — you bring the booze. We have worked over 50 weddings at Rixey Manor and know the space like the back of our hand.',
+  portal_token = 'vnd_mobilebar_hawthorne_2026_j1k2l3',
+  bio = 'Full-service mobile bar for BYOB venues. We bring the bartenders, the setup, and the craft cocktail expertise — you bring the booze. We have worked over 50 weddings at Hawthorne Manor and know the space like the back of our hand.',
   instagram_url = 'https://instagram.com/mobilebarco',
   portfolio_photos = ARRAY['https://images.unsplash.com/photo-1551024709-8f23befc6f87?w=600'],
   last_updated_by_vendor = '2026-03-20 16:00:00+00'
@@ -682,7 +682,7 @@ INSERT INTO activity_log (id, venue_id, wedding_id, user_id, activity_type, enti
   ('dddd0039-0001-0001-0001-000000000012', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', '33333333-3333-3333-3333-333333333301', 'message_sent', 'messages', NULL, '{"from": "coordinator", "preview": "Such a great choice! Their brisket is incredible..."}', '2026-03-22 10:00:00+00'),
 
   -- Other weddings activity
-  ('dddd0039-0001-0001-0001-000000000013', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', NULL, 'inquiry_received', 'interactions', '66666666-6666-6666-6666-666666000101', '{"source": "google", "subject": "Interested in Rixey Manor for Fall 2027"}', '2026-03-24 14:30:00+00'),
+  ('dddd0039-0001-0001-0001-000000000013', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', NULL, 'inquiry_received', 'interactions', '66666666-6666-6666-6666-666666000101', '{"source": "google", "subject": "Interested in Hawthorne Manor for Fall 2027"}', '2026-03-24 14:30:00+00'),
   ('dddd0039-0001-0001-0001-000000000014', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000116', NULL, 'inquiry_received', 'interactions', '66666666-6666-6666-6666-666666000103', '{"source": "website", "subject": "Pricing info please"}', '2026-03-26 10:15:00+00'),
   ('dddd0039-0001-0001-0001-000000000015', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000113', '33333333-3333-3333-3333-333333333301', 'proposal_sent', 'weddings', '44444444-4444-4444-4444-444444000113', '{"booking_value": 13000, "wedding_date": "2026-11-07"}', '2026-03-10 09:00:00+00'),
   ('dddd0039-0001-0001-0001-000000000016', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000114', '33333333-3333-3333-3333-333333333301', 'tour_scheduled', 'tours', NULL, '{"scheduled_at": "2026-04-01T14:00:00Z", "source": "the_knot"}', '2026-03-15 12:00:00+00'),

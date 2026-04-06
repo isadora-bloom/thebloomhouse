@@ -20,23 +20,32 @@ Unified wedding venue intelligence platform. Three product areas (Agent, Intelli
 - `C:\Users\Ismar\bloom-house-portal` — Portal (React/Express). Reference for promptBuilder, Sage chat.
 - `C:\Users\Ismar\rixey-portal` — Original Rixey portal. Reference for components, Sage prompt.
 
+## Demo vs Real
+- **Demo mode** is cookie-based (`bloom_demo=true`). Visit `/demo` to activate.
+- **Real mode** requires Supabase auth (login/signup). No env var needed.
+- Demo data uses the fictional "Crestwood Collection" (Hawthorne Manor, Crestwood Farm, The Glass House, Rose Hill Gardens). Not real venues.
+- The `NEXT_PUBLIC_DEMO_MODE` env var is deprecated and no longer used.
+- Demo banner + DEMO badge appear automatically when the cookie is set.
+- Login/signup clears the demo cookie.
+
 ## Project Structure
 ```
 src/
   app/(platform)/     — Authenticated shell (Agent, Intel, Portal, Settings)
   app/(auth)/          — Login, signup
+  app/demo/            — Demo entry page (sets bloom_demo cookie)
   app/(couple)/        — Couple-facing portal (future — subdomain routing)
   app/api/             — API routes (agent pipeline, intel, portal sage, cron)
   lib/supabase/        — Browser, server, service role clients
   lib/ai/              — callAI, callAIJson, callAIVision + cost tracking
   lib/services/        — Business logic (email pipeline, heat mapping, etc.)
-  components/shell/    — Sidebar, venue selector, top bar
+  components/shell/    — Sidebar, venue selector, demo banner, top bar
   components/ui/       — shadcn/ui components
   config/prompts/      — AI prompt templates (universal rules, task prompts)
 supabase/
   migrations/          — SQL migrations (run in order)
   functions/           — Edge Functions (email poll, digest, decay)
-  seed.sql             — Crestwood demo seed
+  seed.sql             — Crestwood demo seed (fictional venues)
 ```
 
 ## Design System

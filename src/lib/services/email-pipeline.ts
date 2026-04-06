@@ -53,7 +53,7 @@ interface ProcessAllResult {
 // ---------------------------------------------------------------------------
 
 const AUTO_IGNORE_SENDERS = [
-  'sage@rixeymanor.com',
+  'sage@hawthornemanor.com',
   'notifications@calendly.com',
 ]
 

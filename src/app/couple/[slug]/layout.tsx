@@ -7,9 +7,9 @@ import { FloatingSage } from '@/components/couple/floating-sage'
  * Layout for path-based couple portal: /couple/[slug]/...
  *
  * This is the dev/demo equivalent of the (couple) route group layout.
- * In production, couples access via subdomain (rixey-manor.bloomhouse.ai)
+ * In production, couples access via subdomain (hawthorne-manor.bloomhouse.ai)
  * which maps to the (couple) route group. In dev/demo, they access via
- * /couple/rixey-manor/ which maps here.
+ * /couple/hawthorne-manor/ which maps here.
  *
  * This layout:
  * 1. Extracts the venue slug from the URL

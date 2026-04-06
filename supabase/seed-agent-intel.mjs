@@ -3,7 +3,7 @@
 
 const SRK="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpzeHhnd3ByeHVxZ2NhdXpseGNiIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDYzNDQ5MiwiZXhwIjoyMDkwMjEwNDkyfQ.TkgSGTxLe49t6XlCv7_f-2kCTIKWK_iQ-dhTfzNXcro";
 const BASE="https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1";
-const V="22222222-2222-2222-2222-222222222201"; // Rixey Manor
+const V="22222222-2222-2222-2222-222222222201"; // Hawthorne Manor
 const V2="22222222-2222-2222-2222-222222222202"; // Crestwood Farm
 
 // Existing wedding IDs from seed
@@ -86,12 +86,12 @@ async function run() {
     ["Question about catering policy","Hello, I was reading your website and had a question about the BYOB catering policy. Do we need to hire a licensed caterer or can we self-cater? We are foodies and want to do something unique."],
     ["Tour request — October wedding","We would love to schedule a tour! We are thinking October 2026 for about 100 guests. What dates do you have available for a visit?"],
     ["Rain plan?","Hi Sarah! Quick question — what happens if it rains on the wedding day? Do you have an indoor ceremony option?"],
-    ["Photo locations on property","Hi! Our photographer asked about the best photo spots at Rixey. Could you share a list or photos of popular ceremony/portrait locations?"],
+    ["Photo locations on property","Hi! Our photographer asked about the best photo spots at Hawthorne. Could you share a list or photos of popular ceremony/portrait locations?"],
     ["Table and chair details","What tables and chairs come with the venue rental? Do we need to rent additional seating for the ceremony?"],
     ["Rehearsal dinner question","Can we host the rehearsal dinner on-site the night before? What would that look like cost-wise?"],
     ["Follow up — proposal review","Hi Sarah, just following up on the proposal you sent over last week. Ryan and I have a few questions about the timeline for the deposit."],
     ["Vendor recommendations","Do you have a preferred vendor list? Specifically looking for a florist and DJ who know the venue well."],
-    ["Accommodation options","Are there rooms at Rixey Manor for the wedding party to stay? And is there a hotel block option nearby?"],
+    ["Accommodation options","Are there rooms at Hawthorne Manor for the wedding party to stay? And is there a hotel block option nearby?"],
     ["Weekend availability 2027","Hi! We are looking at spring 2027 — do you have any Saturday availability in April or May?"],
     ["Pricing breakdown","Could you send over a full pricing breakdown including any add-ons like extra hours, ceremony setup, etc.?"],
     ["ADA accessibility","Hi, my grandmother uses a wheelchair. Can you tell me about the accessibility of the ceremony and reception areas?"],
@@ -106,7 +106,7 @@ async function run() {
 
   const outboundReplies = [
     "Thank you for reaching out! Congratulations on your engagement. September 12, 2026 is currently available. I would love to schedule a tour so you can see the property in person.",
-    "Great question! At Rixey Manor, all food must be prepared by a licensed caterer with proper insurance. We have a wonderful preferred vendor list with caterers who know our kitchen setup well.",
+    "Great question! At Hawthorne Manor, all food must be prepared by a licensed caterer with proper insurance. We have a wonderful preferred vendor list with caterers who know our kitchen setup well.",
     "We would love to have you visit! I have openings this Saturday at 11am and next Tuesday at 2pm. Which works better for you?",
     "Great question! We have a beautiful covered pavilion that serves as our rain plan. The ceremony can move there seamlessly and it still has gorgeous views of the mountains.",
     "Of course! Our most popular photo spots are: the garden gazebo, the brick pathway, the grand oak tree, the pond dock, and the sunset overlook. I will send you a PDF with photos of each!",
@@ -136,7 +136,7 @@ async function run() {
   console.log("3. Drafts...");
   const drafts = [
     {venue_id:V, interaction_id:null, status:"pending", subject:"Re: Weekend availability 2027", draft_body:"Hi there! Congratulations on your engagement! We do have a few Saturdays open in spring 2027. Let me pull up the calendar — April 12, April 26, and May 10 are all currently available. Would you like to schedule a tour to see the property? Our spring weekends tend to book quickly!",created_at:daysBefore(1)},
-    {venue_id:V, interaction_id:null, status:"pending", subject:"Re: Pricing breakdown", draft_body:"Thank you for your interest in Rixey Manor! Here is a quick overview of our pricing:\n\n- Venue rental (full day, Fri-Sun): $8,500\n- Ceremony setup: Included\n- Tables, chairs, linens: Included\n- Extra hour: $500/hr\n- Rehearsal dinner add-on: $1,500\n\nI would love to discuss this in more detail during a tour. When works for you?",created_at:daysBefore(1)},
+    {venue_id:V, interaction_id:null, status:"pending", subject:"Re: Pricing breakdown", draft_body:"Thank you for your interest in Hawthorne Manor! Here is a quick overview of our pricing:\n\n- Venue rental (full day, Fri-Sun): $8,500\n- Ceremony setup: Included\n- Tables, chairs, linens: Included\n- Extra hour: $500/hr\n- Rehearsal dinner add-on: $1,500\n\nI would love to discuss this in more detail during a tour. When works for you?",created_at:daysBefore(1)},
     {venue_id:V, interaction_id:null, status:"pending", subject:"Re: ADA accessibility", draft_body:"Great question, and thank you for thinking ahead for your grandmother! Our ceremony space on the lawn is fully accessible via a paved pathway. The reception barn has a ground-level entrance with no steps. Restrooms are also ADA compliant. We can also arrange preferred seating to make sure she has the best view!",created_at:daysBefore(0)},
     {venue_id:V, interaction_id:null, status:"approved", subject:"Re: Tour request — October wedding", draft_body:"We would love to have you visit! I have openings this Saturday at 11am and next Tuesday at 2pm. During the tour, you will see our ceremony lawn, the reception barn, the bridal suite, and all the photo locations. The tour usually takes about 45 minutes. Which time works best?",created_at:daysBefore(3)},
     {venue_id:V, interaction_id:null, status:"sent", subject:"Re: Rain plan?", draft_body:"Great question! We have a beautiful covered pavilion that serves as our rain plan. It can seat up to 200 guests and still has gorgeous views of the mountains and grounds. We monitor the weather closely the week of each wedding and coordinate with your vendors to make the call together. You are always in good hands!",created_at:daysBefore(5)},
@@ -159,7 +159,7 @@ async function run() {
   // ─── 5. MORE KNOWLEDGE BASE ENTRIES ──────────────────────────────────
   console.log("5. Knowledge base...");
   const kb = [
-    {venue_id:V,question:"What is the alcohol policy?",answer:"Rixey Manor is BYOB. You supply all beverages. We provide the bar setup, glassware, and ice. An ABC license is required for anything beyond beer and wine.",category:"bar",source:"manual"},
+    {venue_id:V,question:"What is the alcohol policy?",answer:"Hawthorne Manor is BYOB. You supply all beverages. We provide the bar setup, glassware, and ice. An ABC license is required for anything beyond beer and wine.",category:"bar",source:"manual"},
     {venue_id:V,question:"What time does the venue close?",answer:"Music must end by 11:00 PM. All vendors and guests must vacate by midnight. We offer extended hours until midnight for an additional $500.",category:"logistics",source:"manual"},
     {venue_id:V,question:"Is there a getting-ready space?",answer:"Yes! The bridal suite is a beautifully renovated farmhouse with a full-length mirror, natural light, and room for up to 10 people. The groom suite is in the barn loft with leather seating.",category:"spaces",source:"manual"},
     {venue_id:V,question:"Can we have a live band?",answer:"Absolutely! We have full power available in the barn and on the lawn. Many couples choose a live band for the reception and acoustic music for the ceremony. Sound levels should be reasonable after 10 PM.",category:"entertainment",source:"manual"},
@@ -187,10 +187,10 @@ async function run() {
   // ─── 7. AI BRIEFINGS ─────────────────────────────────────────────────
   console.log("7. AI briefings...");
   const briefings = [
-    {venue_id:V,briefing_type:"weekly",content:{summary:"Strong week for Rixey Manor. 4 new inquiries (2 from The Knot, 1 Instagram, 1 referral). One tour completed — Mia & Ethan were very enthusiastic. Pipeline heat is rising with 3 leads in the hot tier. Two drafts pending approval. Recommendation: add Saturday PM tour slot to reduce scheduling friction.",trend_highlights:["Wedding venue searches up 12% WoW in Virginia","Barn wedding interest steady"],weather_outlook:"Clear skies expected through next Saturday — great for tours",recommendations:["Follow up with Emma & Liam (hot lead, no tour scheduled yet)","Approve pending draft for Sofia & Noah"]},created_at:daysBefore(0)},
+    {venue_id:V,briefing_type:"weekly",content:{summary:"Strong week for Hawthorne Manor. 4 new inquiries (2 from The Knot, 1 Instagram, 1 referral). One tour completed — Mia & Ethan were very enthusiastic. Pipeline heat is rising with 3 leads in the hot tier. Two drafts pending approval. Recommendation: add Saturday PM tour slot to reduce scheduling friction.",trend_highlights:["Wedding venue searches up 12% WoW in Virginia","Barn wedding interest steady"],weather_outlook:"Clear skies expected through next Saturday — great for tours",recommendations:["Follow up with Emma & Liam (hot lead, no tour scheduled yet)","Approve pending draft for Sofia & Noah"]},created_at:daysBefore(0)},
     {venue_id:V,briefing_type:"weekly",content:{summary:"Moderate activity. 2 new inquiries, 1 tour completed, 1 proposal sent. Chloe & Ryan confirmed their booking — deposit received. Lost deal: Lily & James chose a venue closer to DC. Instagram continues to drive quality leads.",trend_highlights:["Elopement searches declining in favor of traditional weddings","Outdoor venue interest seasonal peak approaching"],weather_outlook:"Chance of rain midweek, clear weekend",recommendations:["Update The Knot listing photos","Send follow-up to Ava & Mason (cooling lead)"]},created_at:daysBefore(7)},
     {venue_id:V,briefing_type:"weekly",content:{summary:"Busy week. 5 new inquiries — highest volume this quarter. Tour no-show from WeddingWire lead (follow up). Two proposals outstanding. Budget discussions with Aria & Henry going well. Knowledge gap identified: several couples asking about pet policies — update KB.",trend_highlights:["Virginia wedding costs trending up 8% YoY","Destination-local hybrid trend growing"],weather_outlook:"Warm and sunny — ideal tour weather",recommendations:["Address pet policy knowledge gap","Schedule tour for Luna & Aiden ASAP — hot lead"]},created_at:daysBefore(14)},
-    {venue_id:V,briefing_type:"monthly",content:{summary:"March was Rixey Manor's strongest month in 6 months. 12 new inquiries (up 50% MoM), 4 tours completed, 2 bookings confirmed. Revenue pipeline: $127,000 in active proposals. Instagram driving 25% of new inquiries — ROI on social content is clear. BYOB positioning resonating well with budget-conscious couples. Areas for improvement: response time averaging 4.2 hours (target: under 2 hours).",metrics:{new_inquiries:12,tours_completed:4,bookings:2,proposals_sent:3,lost_deals:1},month_over_month:{inquiries_change:"+50%",tours_change:"+33%",bookings_change:"+100%"},strategic_recommendations:["Invest in Instagram content creation","Reduce response time — consider auto-send for initial replies","Add winter wedding package to capture off-peak demand"]},created_at:daysBefore(2)},
+    {venue_id:V,briefing_type:"monthly",content:{summary:"March was Hawthorne Manor's strongest month in 6 months. 12 new inquiries (up 50% MoM), 4 tours completed, 2 bookings confirmed. Revenue pipeline: $127,000 in active proposals. Instagram driving 25% of new inquiries — ROI on social content is clear. BYOB positioning resonating well with budget-conscious couples. Areas for improvement: response time averaging 4.2 hours (target: under 2 hours).",metrics:{new_inquiries:12,tours_completed:4,bookings:2,proposals_sent:3,lost_deals:1},month_over_month:{inquiries_change:"+50%",tours_change:"+33%",bookings_change:"+100%"},strategic_recommendations:["Invest in Instagram content creation","Reduce response time — consider auto-send for initial replies","Add winter wedding package to capture off-peak demand"]},created_at:daysBefore(2)},
   ];
   await post("ai_briefings", briefings);
 
@@ -207,7 +207,7 @@ async function run() {
   // ─── 9. ENGAGEMENT EVENTS ────────────────────────────────────────────
   console.log("9. Engagement events...");
   const events = [
-    {venue_id:V,wedding_id:"44444444-4444-4444-4444-444444000200",event_type:"email_opened",metadata:{subject:"Welcome to Rixey Manor"},created_at:daysBefore(38)},
+    {venue_id:V,wedding_id:"44444444-4444-4444-4444-444444000200",event_type:"email_opened",metadata:{subject:"Welcome to Hawthorne Manor"},created_at:daysBefore(38)},
     {venue_id:V,wedding_id:"44444444-4444-4444-4444-444444000200",event_type:"link_clicked",metadata:{url:"pricing-guide.pdf"},created_at:daysBefore(37)},
     {venue_id:V,wedding_id:"44444444-4444-4444-4444-444444000200",event_type:"tour_booked",metadata:{date:"2026-03-15"},created_at:daysBefore(35)},
     {venue_id:V,wedding_id:"44444444-4444-4444-4444-444444000201",event_type:"email_opened",metadata:{subject:"Re: Question about catering"},created_at:daysBefore(33)},
@@ -217,14 +217,14 @@ async function run() {
     {venue_id:V,wedding_id:"44444444-4444-4444-4444-444444000209",event_type:"email_reply",metadata:{subject:"We want to book!"},created_at:daysBefore(8)},
     {venue_id:V,wedding_id:"44444444-4444-4444-4444-444444000209",event_type:"proposal_sent",metadata:{amount:13500},created_at:daysBefore(7)},
     {venue_id:V,wedding_id:"44444444-4444-4444-4444-444444000209",event_type:"deposit_received",metadata:{amount:6750},created_at:daysBefore(5)},
-    {venue_id:V,wedding_id:"44444444-4444-4444-4444-444444000206",event_type:"email_opened",metadata:{subject:"Spring 2027 at Rixey Manor"},created_at:daysBefore(15)},
+    {venue_id:V,wedding_id:"44444444-4444-4444-4444-444444000206",event_type:"email_opened",metadata:{subject:"Spring 2027 at Hawthorne Manor"},created_at:daysBefore(15)},
     {venue_id:V,wedding_id:"44444444-4444-4444-4444-444444000206",event_type:"link_clicked",metadata:{url:"gallery"},created_at:daysBefore(14)},
   ];
   await post("engagement_events", events);
 
   // ─── 10. SEARCH TRENDS (more time-series data) ───────────────────────
   console.log("10. Search trends...");
-  const trendKeywords = ["wedding venues virginia","barn wedding virginia","outdoor wedding venue","wedding venue culpeper","rixey manor wedding"];
+  const trendKeywords = ["wedding venues virginia","barn wedding virginia","outdoor wedding venue","wedding venue culpeper","hawthorne manor wedding"];
   const trends = [];
   for (const kw of trendKeywords) {
     for (let week = 0; week < 12; week++) {

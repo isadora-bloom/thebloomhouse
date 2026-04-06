@@ -26,7 +26,7 @@ export default function CoupleLoginPage() {
 
       // Try to determine venue slug from URL or cookie
       const params = new URLSearchParams(window.location.search)
-      const slug = params.get('venue') || 'rixey-manor'
+      const slug = params.get('venue') || 'hawthorne-manor'
 
       const { data: venue } = await supabase
         .from('venues')

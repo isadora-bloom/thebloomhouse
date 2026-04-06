@@ -6,7 +6,7 @@
 -- ============================================
 
 -- Venue IDs
--- Rixey Manor:     22222222-2222-2222-2222-222222222201
+-- Hawthorne Manor:     22222222-2222-2222-2222-222222222201
 -- Crestwood Farm:  22222222-2222-2222-2222-222222222202
 -- Glass House:     22222222-2222-2222-2222-222222222203
 -- Rose Hill:       22222222-2222-2222-2222-222222222204
@@ -16,8 +16,8 @@
 -- ============================================
 
 INSERT INTO vendor_recommendations (id, venue_id, vendor_name, vendor_type, contact_email, contact_phone, website_url, description, is_preferred, click_count) VALUES
--- Rixey Manor vendors
-('ff000001-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'Sarah Jones Photography', 'Photographer', 'sarah@sarahjonesphotography.com', '(540) 555-0101', 'https://sarahjonesphotography.com', 'Fine art wedding photographer specializing in outdoor ceremonies. 10+ years at Rixey.', true, 34),
+-- Hawthorne Manor vendors
+('ff000001-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'Sarah Jones Photography', 'Photographer', 'sarah@sarahjonesphotography.com', '(540) 555-0101', 'https://sarahjonesphotography.com', 'Fine art wedding photographer specializing in outdoor ceremonies. 10+ years at Hawthorne.', true, 34),
 ('ff000001-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'Blue Ridge Films', 'Videographer', 'hello@blueridgefilms.com', '(540) 555-0102', 'https://blueridgefilms.com', 'Cinematic wedding films with same-day edits available.', true, 22),
 ('ff000001-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', 'Wildflower & Vine', 'Florist', 'orders@wildflowerandvine.com', '(540) 555-0103', 'https://wildflowerandvine.com', 'Locally sourced, seasonal arrangements. Garden-style and romantic designs.', true, 45),
 ('ff000001-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', 'DJ Marcus Cole', 'DJ', 'marcus@djmarcuscole.com', '(804) 555-0104', NULL, 'High energy DJ who reads the room. Ceremony + reception packages.', true, 18),
@@ -37,17 +37,17 @@ INSERT INTO vendor_recommendations (id, venue_id, vendor_name, vendor_type, cont
 -- ============================================
 
 INSERT INTO social_posts (id, venue_id, platform, posted_at, caption, reach, impressions, saves, shares, comments, likes, website_clicks, engagement_rate, is_viral) VALUES
--- Rixey Manor - January 2026
-('ff000002-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-01-05 14:00:00+00', 'Winter magic at Rixey Manor. Fresh snow on the ceremony meadow.', 4200, 5100, 89, 34, 67, 312, 23, 4.8, false),
+-- Hawthorne Manor - January 2026
+('ff000002-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-01-05 14:00:00+00', 'Winter magic at Hawthorne Manor. Fresh snow on the ceremony meadow.', 4200, 5100, 89, 34, 67, 312, 23, 4.8, false),
 ('ff000002-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-01-12 16:00:00+00', 'Behind the scenes: Our team prepping for a stunning January wedding.', 3800, 4500, 56, 28, 45, 278, 18, 4.2, false),
 ('ff000002-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', 'facebook', '2026-01-18 12:00:00+00', 'Engagement season is HERE! Book your tour before spring fills up.', 6200, 7800, 0, 89, 34, 156, 67, 3.1, false),
 ('ff000002-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-01-25 15:00:00+00', 'This couple said YES to the venue after their sunset tour!', 8900, 11200, 234, 112, 156, 890, 45, 7.2, true),
--- Rixey Manor - February 2026
+-- Hawthorne Manor - February 2026
 ('ff000002-0001-0001-0001-000000000005', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-02-02 13:00:00+00', 'Valentine vibes at the manor. Love is literally in the air.', 5100, 6300, 78, 45, 89, 456, 34, 5.6, false),
 ('ff000002-0001-0001-0001-000000000006', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-02-10 17:00:00+00', 'Real wedding feature: Emily & James, October garden ceremony', 7200, 8900, 167, 78, 123, 678, 56, 6.1, false),
 ('ff000002-0001-0001-0001-000000000007', '22222222-2222-2222-2222-222222222201', 'facebook', '2026-02-16 11:00:00+00', 'Spring open house announcement! March 15th - tours, tastings, vendors.', 9800, 12400, 0, 156, 67, 234, 123, 4.5, false),
 ('ff000002-0001-0001-0001-000000000008', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-02-22 14:30:00+00', 'New ceremony spot alert: The Willow Arch is ready for spring!', 6700, 8100, 145, 67, 98, 567, 42, 5.9, false),
--- Rixey Manor - March 2026
+-- Hawthorne Manor - March 2026
 ('ff000002-0001-0001-0001-000000000009', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-03-01 15:00:00+00', 'March at the Manor: cherry blossoms starting to bloom on the ceremony path', 5400, 6800, 98, 56, 78, 412, 28, 5.3, false),
 ('ff000002-0001-0001-0001-000000000010', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-03-08 16:00:00+00', 'Tour day! 6 couples falling in love with the space today.', 4100, 5200, 67, 34, 56, 345, 45, 5.1, false),
 ('ff000002-0001-0001-0001-000000000011', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-03-15 12:00:00+00', 'Open house RECAP: 42 couples toured, 8 booked on the spot!', 12300, 15600, 312, 189, 234, 1230, 89, 8.4, true),
@@ -65,7 +65,7 @@ INSERT INTO social_posts (id, venue_id, platform, posted_at, caption, reach, imp
 -- ============================================
 
 INSERT INTO venue_health (id, venue_id, calculated_at, overall_score, data_quality_score, pipeline_score, response_time_score, booking_rate_score) VALUES
--- Rixey Manor - weekly health scores
+-- Hawthorne Manor - weekly health scores
 ('ff000003-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '2026-01-06', 72, 85, 65, 78, 60),
 ('ff000003-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '2026-01-13', 74, 85, 68, 80, 63),
 ('ff000003-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '2026-01-20', 76, 87, 70, 82, 65),

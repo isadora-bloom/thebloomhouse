@@ -7,7 +7,7 @@ import { CoupleNav } from './couple-nav'
  * Resolve the venue slug from (in priority order):
  * 1. `venue-slug` cookie set by the middleware (production subdomain routing)
  * 2. `?venue=` search param (dev convenience)
- * 3. Fallback to 'rixey-manor' for local development
+ * 3. Fallback to 'hawthorne-manor' for local development
  */
 async function resolveVenueSlug(): Promise<string> {
   const cookieStore = await cookies()
@@ -15,7 +15,7 @@ async function resolveVenueSlug(): Promise<string> {
   if (fromCookie) return fromCookie
 
   // Fallback for development — hardcoded default
-  return 'rixey-manor'
+  return 'hawthorne-manor'
 }
 
 async function getVenueBranding() {

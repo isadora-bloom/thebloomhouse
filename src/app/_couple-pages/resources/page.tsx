@@ -195,14 +195,14 @@ export default function ResourcesPage() {
 
   // Derive slug from URL
   const getSlug = useCallback(() => {
-    if (typeof window === 'undefined') return 'rixey-manor'
+    if (typeof window === 'undefined') return 'hawthorne-manor'
     const parts = window.location.pathname.split('/')
     // URL: /couple/{slug}/resources
     const coupleIdx = parts.indexOf('couple')
     if (coupleIdx !== -1 && parts[coupleIdx + 1]) {
       return parts[coupleIdx + 1]
     }
-    return 'rixey-manor'
+    return 'hawthorne-manor'
   }, [])
 
   // ---- Load resources on mount ----

@@ -16,7 +16,7 @@ export interface Scope {
 const DEFAULT_SCOPE: Scope = {
   level: 'venue',
   venueId: '22222222-2222-2222-2222-222222222201',
-  venueName: 'Rixey Manor',
+  venueName: 'Hawthorne Manor',
   companyName: 'The Crestwood Collection',
 }
 

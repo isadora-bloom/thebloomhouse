@@ -5,7 +5,7 @@
 -- Uses ON CONFLICT DO NOTHING so re-running is safe.
 -- Static UUIDs to avoid PL/pgSQL type casting issues.
 
--- Rixey Manor
+-- Hawthorne Manor
 INSERT INTO portal_section_config (id, venue_id, section_key, label, description, visibility, sort_order, icon) VALUES
   ('ffff0001-0000-0000-0000-000000000001'::uuid, '22222222-2222-2222-2222-222222222201', 'dashboard',        'Dashboard',              'Overview of wedding progress and key dates',          'both',       1,  'LayoutDashboard'),
   ('ffff0001-0000-0000-0000-000000000002'::uuid, '22222222-2222-2222-2222-222222222201', 'getting-started',   'Getting Started',        'Welcome guide and first steps for your planning',     'both',       2,  'Rocket'),

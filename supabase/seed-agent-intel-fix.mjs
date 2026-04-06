@@ -40,7 +40,7 @@ async function run() {
   // knowledge_base: cols are category, question, answer, keywords, priority, is_active
   console.log("2. Knowledge base...");
   const kb = [
-    {venue_id:V,question:"What is the alcohol policy?",answer:"Rixey Manor is BYOB. You supply all beverages. We provide the bar setup, glassware, and ice. An ABC license is required for anything beyond beer and wine.",category:"bar",keywords:["alcohol","byob","bar","drinks","liquor"],priority:1,is_active:true},
+    {venue_id:V,question:"What is the alcohol policy?",answer:"Hawthorne Manor is BYOB. You supply all beverages. We provide the bar setup, glassware, and ice. An ABC license is required for anything beyond beer and wine.",category:"bar",keywords:["alcohol","byob","bar","drinks","liquor"],priority:1,is_active:true},
     {venue_id:V,question:"What time does the venue close?",answer:"Music must end by 11:00 PM. All vendors and guests must vacate by midnight. We offer extended hours until midnight for an additional $500.",category:"logistics",keywords:["hours","close","curfew","noise","end time"],priority:2,is_active:true},
     {venue_id:V,question:"Is there a getting-ready space?",answer:"Yes! The bridal suite is a beautifully renovated farmhouse with a full-length mirror, natural light, and room for up to 10 people. The groom suite is in the barn loft.",category:"spaces",keywords:["getting ready","bridal suite","groom suite","prep"],priority:3,is_active:true},
     {venue_id:V,question:"Can we have a live band?",answer:"Absolutely! We have full power available in the barn and on the lawn. Sound levels should be reasonable after 10 PM per Culpeper County ordinance.",category:"entertainment",keywords:["band","music","live","acoustic","sound"],priority:4,is_active:true},
@@ -55,7 +55,7 @@ async function run() {
 
   // search_trends: cols are metro, term, week, interest
   console.log("3. Search trends...");
-  const trendKeywords = ["wedding venues virginia","barn wedding virginia","outdoor wedding venue","wedding venue culpeper","rixey manor wedding"];
+  const trendKeywords = ["wedding venues virginia","barn wedding virginia","outdoor wedding venue","wedding venue culpeper","hawthorne manor wedding"];
   const trends = [];
   for (const kw of trendKeywords) {
     for (let week = 0; week < 12; week++) {

@@ -1,25 +1,33 @@
 import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 
 // ---------------------------------------------------------------------------
-// Demo mode constants — used when NEXT_PUBLIC_DEMO_MODE=true
+// Demo mode constants — used when bloom_demo cookie is set
 // ---------------------------------------------------------------------------
 
-const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true'
-const DEMO_VENUE_ID = '22222222-2222-2222-2222-222222222201' // Rixey Manor
+const DEMO_VENUE_ID = '22222222-2222-2222-2222-222222222201' // Hawthorne Manor
 const DEMO_USER_ID = '33333333-3333-3333-3333-333333333301' // Sarah Chen
 const DEMO_WEDDING_ID = 'ab000000-0000-0000-0000-000000000001' // Chloe & Ryan
 
+/**
+ * Check if the current request is in demo mode (bloom_demo cookie set).
+ */
+export async function isDemoMode(): Promise<boolean> {
+  const cookieStore = await cookies()
+  return cookieStore.get('bloom_demo')?.value === 'true'
+}
+
 // ---------------------------------------------------------------------------
 // Platform auth — coordinator, manager, admin
-// Returns: { userId, venueId } or null
+// Returns: { userId, venueId, role, isDemo } or null
 // ---------------------------------------------------------------------------
 
 export async function getPlatformAuth() {
   // In demo mode, bypass auth and return demo coordinator
-  if (DEMO_MODE) {
-    return { userId: DEMO_USER_ID, venueId: DEMO_VENUE_ID, role: 'coordinator' }
+  if (await isDemoMode()) {
+    return { userId: DEMO_USER_ID, venueId: DEMO_VENUE_ID, role: 'coordinator', isDemo: true }
   }
 
   const supabase = await createServerSupabaseClient()
@@ -38,18 +46,18 @@ export async function getPlatformAuth() {
   const platformRoles = ['coordinator', 'manager', 'org_admin', 'super_admin']
   if (!platformRoles.includes(profile.role)) return null
 
-  return { userId: user.id, venueId: profile.venue_id as string, role: profile.role as string }
+  return { userId: user.id, venueId: profile.venue_id as string, role: profile.role as string, isDemo: false }
 }
 
 // ---------------------------------------------------------------------------
 // Couple auth — couples accessing their portal
-// Returns: { userId, venueId, weddingId } or null
+// Returns: { userId, venueId, weddingId, isDemo } or null
 // ---------------------------------------------------------------------------
 
 export async function getCoupleAuth() {
   // In demo mode, bypass auth and return demo couple
-  if (DEMO_MODE) {
-    return { userId: DEMO_USER_ID, venueId: DEMO_VENUE_ID, weddingId: DEMO_WEDDING_ID }
+  if (await isDemoMode()) {
+    return { userId: DEMO_USER_ID, venueId: DEMO_VENUE_ID, weddingId: DEMO_WEDDING_ID, isDemo: true }
   }
 
   const supabase = await createServerSupabaseClient()
@@ -70,6 +78,7 @@ export async function getCoupleAuth() {
     userId: user.id,
     venueId: profile.venue_id as string,
     weddingId: profile.wedding_id as string,
+    isDemo: false,
   }
 }
 

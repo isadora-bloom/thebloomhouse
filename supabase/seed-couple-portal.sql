@@ -4,7 +4,7 @@
 -- Run AFTER seed.sql and migrations 014-021.
 -- Seeds all couple portal tables for demo/testing.
 --
--- Venue: Rixey Manor (222...201)
+-- Venue: Hawthorne Manor (222...201)
 -- Wedding: 444...000109 (May 30, 2026, booked)
 -- ============================================
 
@@ -92,7 +92,7 @@ INSERT INTO booked_vendors (id, venue_id, wedding_id, vendor_name, category, con
 -- 4. BUDGET ITEMS
 -- ============================================
 INSERT INTO budget_items (id, venue_id, wedding_id, category, item_name, budgeted, committed, paid, vendor_name, notes, sort_order) VALUES
-  ('e4000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Venue', 'Venue rental', 8500, 8500, 4250, 'Rixey Manor', 'Balance due 2 weeks before', 1),
+  ('e4000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Venue', 'Venue rental', 8500, 8500, 4250, 'Hawthorne Manor', 'Balance due 2 weeks before', 1),
   ('e4000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Photography', 'Photography package', 4200, 4200, 1000, 'Hannah Kate Photography', '8hr + second shooter', 2),
   ('e4000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Videography', 'Videography package', 3500, 3500, 800, 'Ridge Run Films', 'Highlight + full ceremony', 3),
   ('e4000001-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Music', 'DJ services', 1800, 1800, 500, 'Blue Ridge Beats', 'Full day', 4),
@@ -255,10 +255,10 @@ UPDATE venue_config SET feature_flags = jsonb_set(
       {"id": "t5", "task_text": "Book DJ or band", "category": "Vendors", "due_offset": "9m", "description": "", "is_custom": false, "included": true},
       {"id": "t6", "task_text": "Book hair & makeup", "category": "Vendors", "due_offset": "8m", "description": "", "is_custom": false, "included": true},
       {"id": "t7", "task_text": "Book officiant", "category": "Vendors", "due_offset": "8m", "description": "", "is_custom": false, "included": true},
-      {"id": "t8", "task_text": "Choose caterer and finalize menu", "category": "Vendors", "due_offset": "7m", "description": "Rixey Manor is BYOB — your caterer handles everything food.", "is_custom": false, "included": true},
+      {"id": "t8", "task_text": "Choose caterer and finalize menu", "category": "Vendors", "due_offset": "7m", "description": "Hawthorne Manor is BYOB — your caterer handles everything food.", "is_custom": false, "included": true},
       {"id": "t9", "task_text": "Hire florist", "category": "Vendors", "due_offset": "8m", "description": "", "is_custom": false, "included": true},
       {"id": "t10", "task_text": "Schedule engagement photos", "category": "Vendors", "due_offset": "7m", "description": "", "is_custom": false, "included": true},
-      {"id": "t11", "task_text": "Submit proof of insurance for caterer", "category": "Venue", "due_offset": "2m", "description": "Required by Rixey Manor for all outside vendors.", "is_custom": true, "included": true},
+      {"id": "t11", "task_text": "Submit proof of insurance for caterer", "category": "Venue", "due_offset": "2m", "description": "Required by Hawthorne Manor for all outside vendors.", "is_custom": true, "included": true},
       {"id": "t12", "task_text": "Find wedding dress/attire", "category": "Attire & Beauty", "due_offset": "9m", "description": "", "is_custom": false, "included": true},
       {"id": "t13", "task_text": "Send save-the-dates", "category": "Guests", "due_offset": "8m", "description": "", "is_custom": false, "included": true},
       {"id": "t14", "task_text": "Send invitations", "category": "Guests", "due_offset": "2m", "description": "", "is_custom": false, "included": true},
@@ -267,7 +267,7 @@ UPDATE venue_config SET feature_flags = jsonb_set(
       {"id": "t17", "task_text": "Finalize seating chart", "category": "Guests", "due_offset": "2w", "description": "", "is_custom": false, "included": true},
       {"id": "t18", "task_text": "Prepare day-of emergency kit", "category": "Other", "due_offset": "1w", "description": "", "is_custom": false, "included": true},
       {"id": "t19", "task_text": "Write vows", "category": "Other", "due_offset": "1w", "description": "", "is_custom": false, "included": true},
-      {"id": "t20", "task_text": "Schedule final walkthrough at Rixey Manor", "category": "Venue", "due_offset": "2w", "description": "Walk the ceremony + reception spaces with Sarah.", "is_custom": true, "included": true}
+      {"id": "t20", "task_text": "Schedule final walkthrough at Hawthorne Manor", "category": "Venue", "due_offset": "2w", "description": "Walk the ceremony + reception spaces with Sarah.", "is_custom": true, "included": true}
     ],
     "custom_categories": []
   }'::jsonb
@@ -302,7 +302,7 @@ UPDATE venue_config SET feature_flags = jsonb_set(
   '{
     "default_bar_type": "beer-wine",
     "default_guest_count": 150,
-    "notes": "Rixey Manor is BYOB. We provide the bar setup, glassware, and ice. You supply all beverages. ABC license required for anything over beer & wine."
+    "notes": "Hawthorne Manor is BYOB. We provide the bar setup, glassware, and ice. You supply all beverages. ABC license required for anything over beer & wine."
   }'::jsonb
 )
 WHERE venue_id = '22222222-2222-2222-2222-222222222201';

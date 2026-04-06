@@ -232,7 +232,7 @@ function filterForDaily(sections: NavSection[]): NavSection[] {
 // Sidebar component
 // ---------------------------------------------------------------------------
 
-export function Sidebar() {
+export function Sidebar({ isDemo = false }: { isDemo?: boolean }) {
   const pathname = usePathname()
   const { tier: planTier } = usePlanTier()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -295,8 +295,13 @@ export function Sidebar() {
     <nav className="flex flex-col h-full">
       {/* Brand + Scope */}
       <div className="pb-3 border-b border-border">
-        <div className="px-6 pt-5 pb-2">
+        <div className="px-6 pt-5 pb-2 flex items-center gap-2">
           <img src="/brand/wordmark-sage.png" alt="The Bloom House" className="h-8 w-auto" />
+          {isDemo && (
+            <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+              Demo
+            </span>
+          )}
         </div>
         <ScopeSelector />
       </div>
@@ -409,11 +414,19 @@ export function Sidebar() {
   return (
     <>
       {/* Mobile header */}
-      <div className="lg:hidden fixed top-0 left-0 right-0 h-14 bg-surface border-b border-border z-40 flex items-center px-4">
+      <div className={cn(
+        'lg:hidden fixed left-0 right-0 h-14 bg-surface border-b border-border z-40 flex items-center px-4',
+        isDemo ? 'top-10' : 'top-0'
+      )}>
         <button onClick={() => setMobileOpen(!mobileOpen)} className="p-2 -ml-2">
           {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
         </button>
         <img src="/brand/wordmark-sage.png" alt="The Bloom House" className="h-6 w-auto ml-3" />
+        {isDemo && (
+          <span className="ml-2 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-full bg-amber-100 text-amber-700">
+            Demo
+          </span>
+        )}
       </div>
 
       {/* Mobile drawer */}

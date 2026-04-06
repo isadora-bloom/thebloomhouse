@@ -1,7 +1,7 @@
 -- ============================================================
 -- BLOOM HOUSE — 6-MONTH INTELLIGENCE SEED
 -- Period: October 2025 → March 2026
--- Venues: Rixey Manor, Crestwood Farm, The Glass House, Rose Hill Gardens
+-- Venues: Hawthorne Manor, Crestwood Farm, The Glass House, Rose Hill Gardens
 -- Run AFTER seed.sql — uses ON CONFLICT (id) DO NOTHING for safety
 -- ============================================================
 -- UUID prefix: eeee____ for all rows in this file
@@ -10,13 +10,13 @@
 -- ============================================================
 -- VENUE ID ALIASES (for readability)
 -- ============================================================
--- Rixey Manor:    22222222-2222-2222-2222-222222222201  (enterprise, 200 cap, $8500)
+-- Hawthorne Manor:    22222222-2222-2222-2222-222222222201  (enterprise, 200 cap, $8500)
 -- Crestwood Farm: 22222222-2222-2222-2222-222222222202  (rustic barn, 150 cap, $6500)
 -- The Glass House: 22222222-2222-2222-2222-222222222203 (modern urban, 250 cap, $12000)
 -- Rose Hill Gardens: 22222222-2222-2222-2222-222222222204 (garden, 180 cap, $9500)
 --
 -- Coordinator IDs:
--- Sarah Chen (Rixey):  33333333-3333-3333-3333-333333333301
+-- Sarah Chen (Hawthorne):  33333333-3333-3333-3333-333333333301
 -- Jake Williams (CW):  33333333-3333-3333-3333-333333333302
 -- Maya Patel (GH):     33333333-3333-3333-3333-333333333303
 -- Olivia Ross (RH):    33333333-3333-3333-3333-333333333304
@@ -29,7 +29,7 @@
 --          Venue-specific term follows seasonal wedding interest
 -- Columns: id, venue_id, metro, term, week, interest
 
--- Rixey Manor (metro: US-VA-584)
+-- Hawthorne Manor (metro: US-VA-584)
 INSERT INTO search_trends (id, venue_id, metro, term, week, interest) VALUES
   ('eeee0101-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'US-VA-584', 'wedding venue', '2025-10-01', 52),
   ('eeee0101-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'US-VA-584', 'wedding venue', '2025-11-01', 48),
@@ -149,7 +149,7 @@ ON CONFLICT (id) DO NOTHING;
 -- All Virginia, slightly different microclimates
 -- Columns: id, venue_id, date, high_temp, low_temp, precipitation, conditions, source
 
--- Rixey Manor (Culpeper — slightly cooler, more rural)
+-- Hawthorne Manor (Culpeper — slightly cooler, more rural)
 INSERT INTO weather_data (id, venue_id, date, high_temp, low_temp, precipitation, conditions, source) VALUES
   ('eeee0201-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '2025-10-01', 67, 44, 3.2, 'Partly Cloudy', 'noaa_historical'),
   ('eeee0201-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '2025-11-01', 54, 34, 3.8, 'Cloudy', 'noaa_historical'),
@@ -159,7 +159,7 @@ INSERT INTO weather_data (id, venue_id, date, high_temp, low_temp, precipitation
   ('eeee0201-0001-0001-0001-000000000006', '22222222-2222-2222-2222-222222222201', '2026-03-01', 54, 34, 3.5, 'Partly Cloudy', 'noaa_historical')
 ON CONFLICT (id) DO NOTHING;
 
--- Crestwood Farm (Charlottesville — similar to Rixey, slightly warmer valley)
+-- Crestwood Farm (Charlottesville — similar to Hawthorne, slightly warmer valley)
 INSERT INTO weather_data (id, venue_id, date, high_temp, low_temp, precipitation, conditions, source) VALUES
   ('eeee0201-0002-0001-0001-000000000001', '22222222-2222-2222-2222-222222222202', '2025-10-01', 69, 46, 3.0, 'Partly Cloudy', 'noaa_historical'),
   ('eeee0201-0002-0001-0001-000000000002', '22222222-2222-2222-2222-222222222202', '2025-11-01', 56, 36, 3.5, 'Rain', 'noaa_historical'),
@@ -255,7 +255,7 @@ INSERT INTO anomaly_alerts (id, venue_id, alert_type, metric_name, current_value
    true, NULL, '2025-11-22 14:00:00+00')
 ON CONFLICT (id) DO NOTHING;
 
--- Dec 2025: Rixey Manor response time warning (holiday)
+-- Dec 2025: Hawthorne Manor response time warning (holiday)
 INSERT INTO anomaly_alerts (id, venue_id, alert_type, metric_name, current_value, baseline_value, change_percent, severity, ai_explanation, causes, acknowledged, acknowledged_by, created_at) VALUES
   ('eeee0401-0000-0000-0001-000000000003', '22222222-2222-2222-2222-222222222201', 'spike', 'avg_response_time', 8.5, 2.1, 305, 'critical',
    'Average response time jumped to 8.5 hours over the holiday period, up from your usual 2.1 hours. Two inquiries from December 22-26 went more than 12 hours without a reply. Fast response time is your strongest competitive advantage — this matters.',
@@ -271,10 +271,10 @@ INSERT INTO anomaly_alerts (id, venue_id, alert_type, metric_name, current_value
    true, '33333333-3333-3333-3333-333333333303', '2026-01-15 08:00:00+00')
 ON CONFLICT (id) DO NOTHING;
 
--- Jan 2026: Rixey Manor inquiry surge too
+-- Jan 2026: Hawthorne Manor inquiry surge too
 INSERT INTO anomaly_alerts (id, venue_id, alert_type, metric_name, current_value, baseline_value, change_percent, severity, ai_explanation, causes, acknowledged, acknowledged_by, created_at) VALUES
   ('eeee0401-0000-0000-0001-000000000005', '22222222-2222-2222-2222-222222222201', 'surge', 'inquiry_volume', 8, 4, 100, 'info',
-   'Strong January for Rixey Manor. 8 new inquiries — double your typical volume. The holiday proposal wave is hitting and your listing photos are performing well.',
+   'Strong January for Hawthorne Manor. 8 new inquiries — double your typical volume. The holiday proposal wave is hitting and your listing photos are performing well.',
    '[{"cause": "Post-holiday engagement wave", "likelihood": "high", "action": "Prioritize tour scheduling for these warm leads"},{"cause": "Updated listing photos from November showing fall colors", "likelihood": "medium", "action": "Continue seasonal photo rotation"}]',
    true, '33333333-3333-3333-3333-333333333301', '2026-01-18 10:00:00+00')
 ON CONFLICT (id) DO NOTHING;
@@ -303,7 +303,7 @@ INSERT INTO anomaly_alerts (id, venue_id, alert_type, metric_name, current_value
    false, '2026-03-18 14:00:00+00')
 ON CONFLICT (id) DO NOTHING;
 
--- Mar 2026: Rixey Manor inquiry volume surge (spring)
+-- Mar 2026: Hawthorne Manor inquiry volume surge (spring)
 INSERT INTO anomaly_alerts (id, venue_id, alert_type, metric_name, current_value, baseline_value, change_percent, severity, ai_explanation, causes, acknowledged, created_at) VALUES
   ('eeee0401-0000-0000-0001-000000000009', '22222222-2222-2222-2222-222222222201', 'surge', 'inquiry_volume', 6, 3, 100, 'info',
    'Inquiry volume doubled this week compared to the prior week. This is a positive signal — spring is peak browsing season and your search visibility appears strong. Wedding venue searches in your metro are up 22% in the last two weeks.',
@@ -338,14 +338,14 @@ ON CONFLICT (id) DO NOTHING;
 
 
 -- ============================================================
--- 5. AI BRIEFINGS — weekly for Rixey + monthly for all venues
+-- 5. AI BRIEFINGS — weekly for Hawthorne + monthly for all venues
 -- ============================================================
 -- Columns: id, venue_id, briefing_type, content (jsonb), delivered_via, delivered_at, created_at
 
--- ---- RIXEY MANOR WEEKLY BRIEFINGS (4 recent weeks) ----
+-- ---- HAWTHORNE MANOR WEEKLY BRIEFINGS (4 recent weeks) ----
 INSERT INTO ai_briefings (id, venue_id, briefing_type, content, delivered_via, delivered_at, created_at) VALUES
   ('eeee0501-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'weekly',
-   '{"summary": "Quiet week at Rixey Manor with just 1 new inquiry. The November proposal couple (Chloe & Ryan) signed their contract — $16,000 booked for May 2026. Response times were excellent at 1.8 hours average.", "highlights": ["Chloe & Ryan booked (May 2026, $16,000)", "Response time average: 1.8 hours", "Instagram engagement up 15% on fall photo carousel"], "recommendations": ["Send welcome packet to Chloe & Ryan within 48 hours", "Reshare the fall carousel — it performed 3x your average reach", "December is slow — use downtime to update knowledge base answers"], "metrics": {"inquiries": 1, "tours": 2, "bookings": 1, "revenue": 16000}}',
+   '{"summary": "Quiet week at Hawthorne Manor with just 1 new inquiry. The November proposal couple (Chloe & Ryan) signed their contract — $16,000 booked for May 2026. Response times were excellent at 1.8 hours average.", "highlights": ["Chloe & Ryan booked (May 2026, $16,000)", "Response time average: 1.8 hours", "Instagram engagement up 15% on fall photo carousel"], "recommendations": ["Send welcome packet to Chloe & Ryan within 48 hours", "Reshare the fall carousel — it performed 3x your average reach", "December is slow — use downtime to update knowledge base answers"], "metrics": {"inquiries": 1, "tours": 2, "bookings": 1, "revenue": 16000}}',
    'email', '2025-12-05 08:00:00+00', '2025-12-05 08:00:00+00'),
 
   ('eeee0501-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'weekly',
@@ -357,11 +357,11 @@ INSERT INTO ai_briefings (id, venue_id, briefing_type, content, delivered_via, d
    'email', '2026-01-13 08:00:00+00', '2026-01-13 08:00:00+00'),
 
   ('eeee0501-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', 'weekly',
-   '{"summary": "Strong week for Rixey Manor. 2 new inquiries came in (both hot), and the proposal for the November wedding is still pending. Wedding venue searches in your metro are up 22% — this is peak browsing season.", "highlights": ["2 new hot inquiries this week", "November proposal still pending — needs follow-up", "Wedding venue searches up 22% in Culpeper/Charlottesville", "Beautiful touring weather ahead (highs 68-73)"], "recommendations": ["Follow up with the March 26 inquiry (no response yet)", "Offer weekend tour slots while weather is perfect", "Refresh spring photos on The Knot — searches are peaking", "Send November proposal couple a gentle check-in"], "metrics": {"inquiries": 2, "tours": 1, "bookings": 0, "revenue": 0}}',
+   '{"summary": "Strong week for Hawthorne Manor. 2 new inquiries came in (both hot), and the proposal for the November wedding is still pending. Wedding venue searches in your metro are up 22% — this is peak browsing season.", "highlights": ["2 new hot inquiries this week", "November proposal still pending — needs follow-up", "Wedding venue searches up 22% in Culpeper/Charlottesville", "Beautiful touring weather ahead (highs 68-73)"], "recommendations": ["Follow up with the March 26 inquiry (no response yet)", "Offer weekend tour slots while weather is perfect", "Refresh spring photos on The Knot — searches are peaking", "Send November proposal couple a gentle check-in"], "metrics": {"inquiries": 2, "tours": 1, "bookings": 0, "revenue": 0}}',
    'email', '2026-03-27 08:00:00+00', '2026-03-27 08:00:00+00')
 ON CONFLICT (id) DO NOTHING;
 
--- ---- RIXEY MANOR MONTHLY BRIEFINGS (6 months) ----
+-- ---- HAWTHORNE MANOR MONTHLY BRIEFINGS (6 months) ----
 INSERT INTO ai_briefings (id, venue_id, briefing_type, content, delivered_via, delivered_at, created_at) VALUES
   ('eeee0502-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'monthly',
    '{"summary": "October was a solid month with 3 inquiries, 2 tours, and 1 booking ($17,500 for Sep 2026). The Knot continues to be your strongest source. Engagement ring searches are climbing — holiday proposal wave is building.", "highlights": ["1 booking: $17,500 (Sep 2026 wedding)", "Inquiry-to-tour rate: 67%", "Average response time: 2.1 hours (excellent)", "Google listing impressions up 12%"], "recommendations": ["Prepare for the January inquiry surge — clear tour availability", "Update fall photos on all listing platforms", "Consider a New Year promotion for winter inquiries"], "metrics": {"inquiries": 3, "tours": 2, "bookings": 1, "revenue": 17500}}',
@@ -468,7 +468,7 @@ INSERT INTO ai_briefings (id, venue_id, briefing_type, content, delivered_via, d
    '{"summary": "March is recovering with 3 inquiries so far. One hot lead from Google (90 guests) has a heat score of 93 but HAS NOT BEEN RESPONDED TO for 48+ hours. This is your most urgent issue. Garden wedding searches hit 75 — your best opportunity window is now.", "highlights": ["3 inquiries in first 3 weeks", "HOT LEAD UNRESPONDED: 48+ hours (heat score 93)", "Garden wedding searches at 75 (annual peak approaching)", "Spring blooms starting — perfect for tours"], "recommendations": ["URGENT: Respond to the March 25 inquiry NOW", "Enable auto-send for at least acknowledgment emails", "Schedule spring garden tours every weekend in April", "Your garden is about to be at its most photogenic — capitalize"], "metrics": {"inquiries": 3, "tours": 1, "bookings": 0, "revenue": 0}}',
    'email', '2026-03-28 08:00:00+00', '2026-03-28 08:00:00+00')
 ON CONFLICT (id) DO NOTHING;
--- Total: 28 briefings (4 weekly + 6 monthly Rixey, 6 monthly x 3 other venues)
+-- Total: 28 briefings (4 weekly + 6 monthly Hawthorne, 6 monthly x 3 other venues)
 
 
 -- ============================================================
@@ -477,7 +477,7 @@ ON CONFLICT (id) DO NOTHING;
 -- Columns: id, venue_id, phrase, theme, sentiment_score, frequency,
 --          approved_for_sage, approved_for_marketing
 
--- Rixey Manor (8 additional phrases beyond seed.sql)
+-- Hawthorne Manor (8 additional phrases beyond seed.sql)
 INSERT INTO review_language (id, venue_id, phrase, theme, sentiment_score, frequency, approved_for_sage, approved_for_marketing, created_at) VALUES
   ('eeee0601-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'Sarah went above and beyond to make our day perfect', 'coordinator', 0.96, 3, true, true, '2025-10-15 10:00:00+00'),
   ('eeee0601-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'the sunset ceremony was a dream come true', 'experience', 0.98, 5, true, true, '2025-11-02 10:00:00+00'),
@@ -539,7 +539,7 @@ ON CONFLICT (id) DO NOTHING;
 -- Columns: id, venue_id, source, period_start, period_end, spend, inquiries, tours,
 --          bookings, revenue, cost_per_inquiry, cost_per_booking, conversion_rate, roi
 
--- Rixey Manor — Top 4 sources × 6 months
+-- Hawthorne Manor — Top 4 sources × 6 months
 INSERT INTO source_attribution (id, venue_id, source, period_start, period_end, spend, inquiries, tours, bookings, revenue, cost_per_inquiry, cost_per_booking, conversion_rate, roi) VALUES
   -- The Knot (top source)
   ('eeee0701-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'the_knot', '2025-10-01', '2025-10-31', 350, 2, 1, 1, 17500, 175, 350, 0.50, 49.0),
@@ -674,7 +674,7 @@ ON CONFLICT (id) DO NOTHING;
 -- ============================================================
 -- Columns: id, venue_id, source, month, amount, notes
 
--- Rixey Manor — the_knot, google, instagram
+-- Hawthorne Manor — the_knot, google, instagram
 INSERT INTO marketing_spend (id, venue_id, source, month, amount, notes) VALUES
   ('eeee0801-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'the_knot', '2025-10-01', 350, 'Standard listing'),
   ('eeee0801-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'the_knot', '2025-11-01', 350, 'Standard listing'),
@@ -762,7 +762,7 @@ ON CONFLICT (id) DO NOTHING;
 -- Columns: id, venue_id, wedding_id, person_id, type, direction, subject, body_preview, timestamp
 
 INSERT INTO interactions (id, venue_id, wedding_id, person_id, type, direction, subject, body_preview, timestamp) VALUES
-  -- Rixey Manor — recent threads
+  -- Hawthorne Manor — recent threads
   ('eeee0901-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', '55555555-5555-5555-5555-555555000301', 'email', 'inbound', 'Question about catering setup day', 'Hi Sarah! Quick question — can our caterer access the kitchen the morning of, or do they need to come the day before? We are finalizing our timeline with Mountain Crust...', '2026-03-18 09:30:00+00'),
   ('eeee0901-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', '55555555-5555-5555-5555-555555000301', 'email', 'outbound', 'Re: Question about catering setup day', 'Hi Chloe! Great question. Your caterer can absolutely access the kitchen starting at 8am the morning of. We also have a prep area behind the barn if they need extra space...', '2026-03-18 11:15:00+00'),
   ('eeee0901-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000113', NULL, 'email', 'inbound', 'Re: Proposal for November 7th', 'Hi Sage, thank you for the detailed proposal. We are discussing it this weekend. One question — is the ceremony site fee included or separate?', '2026-03-20 14:00:00+00'),
@@ -803,7 +803,7 @@ ON CONFLICT (id) DO NOTHING;
 --          confidence_score, auto_sent, feedback_notes, approved_by, approved_at
 
 INSERT INTO drafts (id, venue_id, wedding_id, interaction_id, to_email, subject, draft_body, status, context_type, brain_used, model_used, tokens_used, cost, confidence_score, auto_sent, approved_by, approved_at, created_at) VALUES
-  -- PENDING: Rixey — reply to proposal follow-up (waiting for Sarah)
+  -- PENDING: Hawthorne — reply to proposal follow-up (waiting for Sarah)
   ('eeee1001-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000113', 'eeee0901-0001-0001-0001-000000000003', NULL, 'Re: Proposal for November 7th',
    'Great news that you are reviewing! The ceremony site is absolutely included in the venue rental — no separate fee. You have full access to all ceremony locations on the property, including the hilltop overlook, the garden terrace, and the oak grove. Most of our November couples choose the hilltop for the autumn foliage backdrop. Would you like to schedule a quick call to walk through the proposal details together? Warmly, Sage',
    'pending', 'inquiry', 'inquiry_reply', 'claude-sonnet-4-20250514', 1320, 0.0048, 91, false, NULL, NULL, '2026-03-20 14:05:00+00'),
@@ -823,12 +823,12 @@ INSERT INTO drafts (id, venue_id, wedding_id, interaction_id, to_email, subject,
    'Saturday the 29th at 2pm is perfect! I will have the barn doors open and the string lights on so y''all can see it in all its glory. Fair warning — it looks even better in person than the photos. Just head down the gravel drive and park by the big red barn. Can''t wait to meet y''all! Sage',
    'pending', 'inquiry', 'inquiry_reply', 'claude-sonnet-4-20250514', 980, 0.0034, 94, false, NULL, NULL, '2026-03-24 08:10:00+00'),
 
-  -- APPROVED+SENT: Rixey — catering question reply
+  -- APPROVED+SENT: Hawthorne — catering question reply
   ('eeee1001-0001-0001-0001-000000000005', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'eeee0901-0001-0001-0001-000000000001', 'chloe.m@gmail.com', 'Re: Question about catering setup day',
    'Hi Chloe! Great question. Your caterer can absolutely access the kitchen starting at 8am the morning of. We also have a prep area behind the barn if they need extra space. Mountain Crust is fantastic — they have done several weddings here and know the layout well. Let me know if your caterer needs the floor plan for the kitchen! Warmly, Sage',
    'sent', 'client', 'inquiry_reply', 'claude-sonnet-4-20250514', 1150, 0.0041, 95, false, '33333333-3333-3333-3333-333333333301', '2026-03-18 11:00:00+00', '2026-03-18 09:35:00+00'),
 
-  -- APPROVED+SENT: Rixey — tour confirmation
+  -- APPROVED+SENT: Hawthorne — tour confirmation
   ('eeee1001-0001-0001-0001-000000000006', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000114', 'eeee0901-0001-0001-0001-000000000005', NULL, 'Re: Excited for our tour!',
    'We are so excited to meet you! April 1st at 11am is confirmed. Just a few tips for your visit: wear comfortable shoes as we will walk the grounds, and feel free to bring your photographer if you want to see the light. The drive from Arlington is about 90 minutes and very scenic once you get past Gainesville. We will have coffee and pastries waiting! Warmly, Sage',
    'sent', 'inquiry', 'inquiry_reply', 'claude-sonnet-4-20250514', 1280, 0.0046, 92, false, '33333333-3333-3333-3333-333333333301', '2026-03-22 11:30:00+00', '2026-03-22 10:05:00+00'),
@@ -853,8 +853,8 @@ INSERT INTO drafts (id, venue_id, wedding_id, interaction_id, to_email, subject,
    'Hey Taylor! Absolutely — our top recommendation is Blue Ridge Bar Co. They do amazing craft cocktails and they know our space really well. Tell them Crestwood Farm sent you and they will take great care of y''all. I will email you their contact info separately. Can''t wait to meet y''all! Sage',
    'sent', 'client', 'inquiry_reply', 'claude-sonnet-4-20250514', 920, 0.0032, 96, true, NULL, NULL, '2026-03-16 13:02:00+00'),
 
-  -- AUTO-SENT: Rixey — 3-day follow-up on an older lead
-  ('eeee1001-0001-0001-0001-000000000011', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000110', NULL, 'NULL', 'Following up on your visit to Rixey Manor',
+  -- AUTO-SENT: Hawthorne — 3-day follow-up on an older lead
+  ('eeee1001-0001-0001-0001-000000000011', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000110', NULL, 'NULL', 'Following up on your visit to Hawthorne Manor',
    'Hi there! Just wanted to check in after your tour last week. I hope you both had a chance to talk about what you saw. We had such a lovely time showing you around, and I think your June wedding would be absolutely beautiful here. No pressure at all — just wanted to make sure you had everything you needed to make your decision. If you have any questions, I am always here! Warmly, Sage',
    'sent', 'inquiry', 'follow_up_3_day', 'claude-sonnet-4-20250514', 1380, 0.0050, 88, true, NULL, NULL, '2026-03-12 08:00:00+00'),
 
@@ -872,7 +872,7 @@ ON CONFLICT (id) DO NOTHING;
 -- Columns: id, venue_id, wedding_id, event_type, points, metadata (jsonb), created_at
 
 INSERT INTO engagement_events (id, venue_id, wedding_id, event_type, points, metadata, created_at) VALUES
-  -- Rixey Manor active leads
+  -- Hawthorne Manor active leads
   ('eeee1101-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'email_reply', 15, '{"subject": "Catering setup day"}', '2026-03-18 09:30:00+00'),
   ('eeee1101-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'page_view', 1, '{"page": "/portal/timeline"}', '2026-03-17 20:00:00+00'),
   ('eeee1101-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'page_view', 1, '{"page": "/portal/vendors"}', '2026-03-17 20:05:00+00'),
@@ -933,29 +933,29 @@ ON CONFLICT (id) DO NOTHING;
 -- Columns: id, venue_id, wedding_id, score, temperature_tier, calculated_at
 
 INSERT INTO lead_score_history (id, venue_id, wedding_id, score, temperature_tier, calculated_at) VALUES
-  -- Rixey 109 (Chloe & Ryan) — booked journey
+  -- Hawthorne 109 (Chloe & Ryan) — booked journey
   ('eeee1201-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 40, 'cool', '2025-10-15 12:00:00+00'),
   ('eeee1201-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 60, 'warm', '2025-10-20 14:00:00+00'),
   ('eeee1201-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 75, 'warm', '2025-11-01 10:00:00+00'),
   ('eeee1201-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 72, 'warm', '2026-03-18 09:30:00+00'),
 
-  -- Rixey 112 (Instagram lead) — warming to booked
+  -- Hawthorne 112 (Instagram lead) — warming to booked
   ('eeee1201-0001-0002-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000112', 40, 'cool', '2026-01-10 12:00:00+00'),
   ('eeee1201-0001-0002-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000112', 55, 'warm', '2026-01-15 10:00:00+00'),
   ('eeee1201-0001-0002-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000112', 70, 'warm', '2026-01-25 14:00:00+00'),
   ('eeee1201-0001-0002-0001-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000112', 60, 'warm', '2026-02-10 10:00:00+00'),
 
-  -- Rixey 113 (proposal pending) — warming
+  -- Hawthorne 113 (proposal pending) — warming
   ('eeee1201-0001-0003-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000113', 40, 'cool', '2026-02-20 12:00:00+00'),
   ('eeee1201-0001-0003-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000113', 65, 'warm', '2026-03-05 14:00:00+00'),
   ('eeee1201-0001-0003-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000113', 78, 'warm', '2026-03-20 14:00:00+00'),
 
-  -- Rixey 114 (tour scheduled) — hot
+  -- Hawthorne 114 (tour scheduled) — hot
   ('eeee1201-0001-0004-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000114', 40, 'cool', '2026-03-15 12:00:00+00'),
   ('eeee1201-0001-0004-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000114', 75, 'warm', '2026-03-22 11:45:00+00'),
   ('eeee1201-0001-0004-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000114', 85, 'hot', '2026-03-25 08:00:00+00'),
 
-  -- Rixey 117 (lost deal) — cooling journey
+  -- Hawthorne 117 (lost deal) — cooling journey
   ('eeee1201-0001-0005-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000117', 40, 'cool', '2024-10-01 12:00:00+00'),
   ('eeee1201-0001-0005-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000117', 55, 'warm', '2024-10-15 14:00:00+00'),
   ('eeee1201-0001-0005-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000117', 35, 'cool', '2024-11-15 10:00:00+00'),
@@ -996,7 +996,7 @@ ON CONFLICT (id) DO NOTHING;
 --          supporting_data, priority, status
 
 INSERT INTO trend_recommendations (id, venue_id, recommendation_type, title, body, data_source, supporting_data, priority, status, created_at) VALUES
-  -- Rixey Manor
+  -- Hawthorne Manor
   ('eeee1301-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'content', 'Refresh The Knot gallery with spring photos', '"Wedding venue" searches in your metro surged 93% from December to March. This is your highest-visibility window. Refresh your The Knot gallery with spring photos to capture peak browsing traffic.', 'google_trends', '{"term": "wedding venue", "change_pct": 93, "dec_value": 38, "mar_value": 93}', 'high', 'pending', '2026-03-15 08:00:00+00'),
 
   ('eeee1301-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'engagement', 'Holiday engagement wave predicts strong April inquiries', 'Engagement ring searches peaked at 95 in December, 38% higher than October. Based on the typical 3-6 month engagement-to-inquiry pipeline, expect above-average inquiry volume through May. Ensure tour slots are open.', 'google_trends', '{"term": "engagement ring", "dec_peak": 95, "oct_baseline": 58, "expected_inquiry_lift": "20-35%"}', 'medium', 'pending', '2026-01-15 08:00:00+00'),
@@ -1031,7 +1031,7 @@ ON CONFLICT (id) DO NOTHING;
 -- Extends the 3 existing entries in seed.sql with October-December 2025
 
 INSERT INTO consultant_metrics (id, venue_id, consultant_id, period_start, period_end, inquiries_handled, tours_booked, bookings_closed, conversion_rate, avg_response_time_minutes, avg_booking_value) VALUES
-  -- Sarah Chen (Rixey) — Oct-Dec 2025
+  -- Sarah Chen (Hawthorne) — Oct-Dec 2025
   ('eeee1401-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333301', '2025-10-01', '2025-10-31', 3, 2, 1, 0.33, 126, 17500),
   ('eeee1401-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333301', '2025-11-01', '2025-11-30', 4, 3, 2, 0.50, 105, 13150),
   ('eeee1401-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333301', '2025-12-01', '2025-12-31', 2, 1, 0, 0.00, 510, 0),
@@ -1095,7 +1095,7 @@ ON CONFLICT (id) DO NOTHING;
 -- 2. weather_data:           24 rows (6 months × 4 venues)
 -- 3. economic_indicators:    24 rows (4 indicators × 6 months)
 -- 4. anomaly_alerts:         12 rows (across all venues)
--- 5. ai_briefings:           28 rows (4 weekly + 6 monthly Rixey, 6 monthly × 3 others)
+-- 5. ai_briefings:           28 rows (4 weekly + 6 monthly Hawthorne, 6 monthly × 3 others)
 -- 6. review_language:        38 rows (8 + 10 + 10 + 10 across venues)
 -- 7. source_attribution:     96 rows (4 sources × 6 months × 4 venues)
 -- 8. marketing_spend:        63 rows (3 channels × 6 months × 4 venues)

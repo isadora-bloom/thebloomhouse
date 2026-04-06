@@ -6,7 +6,7 @@
 -- ============================================
 
 -- Venue IDs:
---   Rixey:     22222222-2222-2222-2222-222222222201
+--   Hawthorne:     22222222-2222-2222-2222-222222222201
 --   Crestwood: 22222222-2222-2222-2222-222222222202
 --   Glass:     22222222-2222-2222-2222-222222222203
 --   Rose Hill: 22222222-2222-2222-2222-222222222204
@@ -19,7 +19,7 @@
 -- ============================================
 
 INSERT INTO vendor_recommendations (id, venue_id, vendor_name, vendor_type, contact_email, contact_phone, website_url, description, is_preferred, click_count) VALUES
-('ff000001-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'Sarah Jones Photography', 'Photographer', 'sarah@sarahjonesphotography.com', '(540) 555-0101', 'https://sarahjonesphotography.com', 'Fine art wedding photographer specializing in outdoor ceremonies. 10+ years at Rixey.', true, 34),
+('ff000001-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'Sarah Jones Photography', 'Photographer', 'sarah@sarahjonesphotography.com', '(540) 555-0101', 'https://sarahjonesphotography.com', 'Fine art wedding photographer specializing in outdoor ceremonies. 10+ years at Hawthorne.', true, 34),
 ('ff000001-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'Blue Ridge Films', 'Videographer', 'hello@blueridgefilms.com', '(540) 555-0102', 'https://blueridgefilms.com', 'Cinematic wedding films with same-day edits available.', true, 22),
 ('ff000001-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', 'Wildflower & Vine', 'Florist', 'orders@wildflowerandvine.com', '(540) 555-0103', 'https://wildflowerandvine.com', 'Locally sourced, seasonal arrangements. Garden-style and romantic designs.', true, 45),
 ('ff000001-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', 'DJ Marcus Cole', 'DJ', 'marcus@djmarcuscole.com', '(804) 555-0104', NULL, 'High energy DJ who reads the room. Ceremony + reception packages.', true, 18),
@@ -42,7 +42,7 @@ ON CONFLICT (id) DO NOTHING;
 -- ============================================
 
 INSERT INTO social_posts (id, venue_id, platform, posted_at, caption, reach, impressions, saves, shares, comments, likes, website_clicks, engagement_rate, is_viral) VALUES
-('ff000002-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-01-05 14:00:00+00', 'Winter magic at Rixey Manor. Fresh snow on the ceremony meadow.', 4200, 5100, 89, 34, 67, 312, 23, 4.8, false),
+('ff000002-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-01-05 14:00:00+00', 'Winter magic at Hawthorne Manor. Fresh snow on the ceremony meadow.', 4200, 5100, 89, 34, 67, 312, 23, 4.8, false),
 ('ff000002-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-01-12 16:00:00+00', 'Behind the scenes: Our team prepping for a stunning January wedding.', 3800, 4500, 56, 28, 45, 278, 18, 4.2, false),
 ('ff000002-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', 'facebook', '2026-01-18 12:00:00+00', 'Engagement season is HERE! Book your tour before spring fills up.', 6200, 7800, 0, 89, 34, 156, 67, 3.1, false),
 ('ff000002-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222201', 'instagram', '2026-01-25 15:00:00+00', 'This couple said YES to the venue after their sunset tour!', 8900, 11200, 234, 112, 156, 890, 45, 7.2, true),
