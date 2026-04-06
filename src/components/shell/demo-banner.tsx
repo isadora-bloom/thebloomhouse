@@ -3,6 +3,11 @@
 import { useRouter } from 'next/navigation'
 import { Eye, ArrowRight, X } from 'lucide-react'
 
+/**
+ * Fixed banner at the very top of the page during demo mode.
+ * Height: h-10 (2.5rem / 40px). All other fixed elements (sidebar, mobile header)
+ * must offset by top-10 when demo is active.
+ */
 export function DemoBanner() {
   const router = useRouter()
 
@@ -14,7 +19,7 @@ export function DemoBanner() {
   }
 
   return (
-    <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-between gap-3 text-sm">
+    <div className="fixed top-0 left-0 right-0 z-[60] h-10 bg-amber-50 border-b border-amber-200 px-4 flex items-center justify-between gap-3 text-sm">
       <div className="flex items-center gap-2 text-amber-800">
         <Eye className="w-4 h-4 shrink-0" />
         <span className="font-medium">Demo Mode</span>

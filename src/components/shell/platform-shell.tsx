@@ -30,12 +30,9 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      {isDemo && (
-        <div className="fixed top-0 left-0 right-0 z-50">
-          <DemoBanner />
-        </div>
-      )}
+      {isDemo && <DemoBanner />}
       <Sidebar isDemo={isDemo} />
+      {/* Mobile: banner(2.5rem) + mobile-header(3.5rem) = 6rem. Desktop: banner(2.5rem) only, sidebar handles its own offset */}
       <main className={`lg:pl-64 ${isDemo ? 'pt-24 lg:pt-10' : 'pt-14 lg:pt-0'}`}>
         <div className="p-6 lg:p-8 max-w-7xl mx-auto">
           {children}

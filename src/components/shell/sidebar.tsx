@@ -238,7 +238,7 @@ export function Sidebar({ isDemo = false }: { isDemo?: boolean }) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [scopeLevel, setScopeLevel] = useState<string>('venue')
   const [hasMultipleVenues, setHasMultipleVenues] = useState(false)
-  const [hasPortfolioAccess, setHasPortfolioAccess] = useState(false)
+  const [hasPortfolioAccess, setHasPortfolioAccess] = useState(isDemo)
   const [navMode, setNavMode] = useState<'daily' | 'full'>('daily')
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
 
@@ -433,14 +433,20 @@ export function Sidebar({ isDemo = false }: { isDemo?: boolean }) {
       {mobileOpen && (
         <div className="lg:hidden fixed inset-0 z-30">
           <div className="absolute inset-0 bg-black/30" onClick={() => setMobileOpen(false)} />
-          <div className="absolute left-0 top-14 bottom-0 w-64 bg-surface shadow-xl overflow-y-auto">
+          <div className={cn(
+            'absolute left-0 bottom-0 w-64 bg-surface shadow-xl overflow-y-auto',
+            isDemo ? 'top-[calc(2.5rem+3.5rem)]' : 'top-14'
+          )}>
             {nav}
           </div>
         </div>
       )}
 
       {/* Desktop sidebar */}
-      <aside className="hidden lg:block fixed left-0 top-0 bottom-0 w-64 bg-surface border-r border-border z-30">
+      <aside className={cn(
+        'hidden lg:block fixed left-0 bottom-0 w-64 bg-surface border-r border-border z-30',
+        isDemo ? 'top-10' : 'top-0'
+      )}>
         {nav}
       </aside>
     </>
