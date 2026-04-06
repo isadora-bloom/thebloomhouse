@@ -121,12 +121,14 @@ export function UserMenu({ compact = false }: UserMenuProps) {
         )}
       </button>
 
-      {/* Dropdown */}
+      {/* Dropdown — opens above avatar in sidebar, below in compact/mobile */}
       {open && (
         <div
           className={cn(
-            'absolute right-0 mt-2 w-56 bg-surface border border-border rounded-lg shadow-lg z-50 overflow-hidden',
-            compact ? 'top-full' : 'bottom-full mb-2'
+            'w-56 bg-surface border border-border rounded-lg shadow-lg z-[70] overflow-hidden',
+            compact
+              ? 'absolute right-0 top-full mt-2'
+              : 'fixed bottom-16 left-2'
           )}
         >
           {/* User info */}

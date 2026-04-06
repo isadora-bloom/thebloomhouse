@@ -93,6 +93,14 @@ export function usePlanTier() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    // In demo mode, always show enterprise (full feature set)
+    const isDemo = document.cookie.split('; ').some((c) => c === 'bloom_demo=true')
+    if (isDemo) {
+      setTier('enterprise')
+      setLoading(false)
+      return
+    }
+
     const supabase = createClient()
     supabase
       .from('venues')
