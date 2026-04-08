@@ -37,6 +37,9 @@
   ],
   "exclude": [
     "node_modules",
-    "supabase/functions"
+    "supabase/functions",
+    "e2e",
+    "playwright.config.ts",
+    "crawl-demo.py"
   ]
 }
