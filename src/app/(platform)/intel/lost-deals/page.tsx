@@ -146,7 +146,8 @@ export default function LostDealsPage() {
   const stageData = useMemo(() => {
     const map: Record<string, number> = {}
     for (const d of deals) {
-      map[d.stage] = (map[d.stage] || 0) + 1
+      const key = d.stage || 'unknown'
+      map[key] = (map[key] || 0) + 1
     }
     return Object.entries(map).map(([name, value]) => ({ name: formatLabel(name), value }))
   }, [deals])
@@ -155,7 +156,8 @@ export default function LostDealsPage() {
   const reasonData = useMemo(() => {
     const map: Record<string, number> = {}
     for (const d of deals) {
-      map[d.reason] = (map[d.reason] || 0) + 1
+      const key = d.reason || 'unknown'
+      map[key] = (map[key] || 0) + 1
     }
     return Object.entries(map)
       .map(([name, value]) => ({ name: formatLabel(name), value }))
@@ -182,7 +184,8 @@ export default function LostDealsPage() {
     // Top reason
     const reasonCounts: Record<string, number> = {}
     for (const d of deals) {
-      reasonCounts[d.reason] = (reasonCounts[d.reason] || 0) + 1
+      const key = d.reason || 'unknown'
+      reasonCounts[key] = (reasonCounts[key] || 0) + 1
     }
     const topReasonEntry = Object.entries(reasonCounts).sort((a, b) => b[1] - a[1])[0]
     if (topReasonEntry) {

@@ -80,6 +80,7 @@ function getSupabase() {
 // ---------------------------------------------------------------------------
 
 function fmt$(value: number): string {
+  if (!Number.isFinite(value)) return '$0'
   return `$${Math.round(value).toLocaleString()}`
 }
 
@@ -184,13 +185,15 @@ export default function SourceAttributionPage() {
     const sourceMap = new Map<string, { attr: SourceAttribution[]; spend: number }>()
 
     for (const a of attributions) {
-      const existing = sourceMap.get(a.source_name) ?? { attr: [], spend: 0 }
+      const key = a.source_name || 'Unknown'
+      const existing = sourceMap.get(key) ?? { attr: [], spend: 0 }
       existing.attr.push(a)
-      sourceMap.set(a.source_name, existing)
+      sourceMap.set(key, existing)
     }
 
     for (const s of spendData) {
-      const existing = sourceMap.get(s.source_name) ?? { attr: [], spend: 0 }
+      const key = s.source_name || 'Unknown'
+      const existing = sourceMap.get(key) ?? { attr: [], spend: 0 }
       existing.spend += s.spend
       sourceMap.set(s.source_name, existing)
     }
