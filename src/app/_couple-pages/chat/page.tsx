@@ -122,7 +122,7 @@ export default function SageChatPage() {
           .select('id, rsvp_status')
           .eq('wedding_id', WEDDING_ID),
         supabase
-          .from('couple_budget')
+          .from('budget_items')
           .select('id, payment_due_date')
           .eq('wedding_id', WEDDING_ID)
           .not('payment_due_date', 'is', null),

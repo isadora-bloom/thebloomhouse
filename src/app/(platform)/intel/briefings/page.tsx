@@ -234,31 +234,31 @@ function BriefingHistoryItem({ briefing }: { briefing: Briefing }) {
           {/* Compact metrics */}
           <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
             <span className="text-sage-600">
-              <span className="font-semibold text-sage-900">{content.metrics.new_inquiries}</span>{' '}
+              <span className="font-semibold text-sage-900">{content?.metrics?.new_inquiries ?? 0}</span>{' '}
               inquiries
             </span>
             <span className="text-sage-600">
-              <span className="font-semibold text-sage-900">{content.metrics.tours_scheduled}</span>{' '}
+              <span className="font-semibold text-sage-900">{content?.metrics?.tours_scheduled ?? 0}</span>{' '}
               tours
             </span>
             <span className="text-sage-600">
-              <span className="font-semibold text-sage-900">{content.metrics.bookings}</span>{' '}
+              <span className="font-semibold text-sage-900">{content?.metrics?.bookings ?? 0}</span>{' '}
               bookings
             </span>
             <span className="text-sage-600">
-              <span className="font-semibold text-sage-900">{content.metrics.lost_deals}</span>{' '}
+              <span className="font-semibold text-sage-900">{content?.metrics?.lost_deals ?? 0}</span>{' '}
               lost
             </span>
             <span className="text-sage-600">
               <span className="font-semibold text-sage-900">
-                {formatCurrency(content.metrics.revenue_booked)}
+                {formatCurrency(content?.metrics?.revenue_booked ?? 0)}
               </span>{' '}
               revenue
             </span>
           </div>
 
           {/* Highlights */}
-          {content.trend_highlights.length > 0 && (
+          {content?.trend_highlights?.length > 0 && (
             <div>
               <h4 className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1.5">
                 Highlights
@@ -275,7 +275,7 @@ function BriefingHistoryItem({ briefing }: { briefing: Briefing }) {
           )}
 
           {/* Recommendations */}
-          {content.recommendations.length > 0 && (
+          {content?.recommendations?.length > 0 && (
             <div>
               <h4 className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1.5">
                 Recommendations
@@ -501,7 +501,7 @@ export default function BriefingsPage() {
             </div>
           </div>
 
-          <p className="text-lg text-sage-800 leading-relaxed">{content.summary}</p>
+          <p className="text-lg text-sage-800 leading-relaxed">{content?.summary}</p>
         </div>
       )}
 
@@ -514,35 +514,35 @@ export default function BriefingsPage() {
             icon={FileText}
             iconBg="bg-teal-100"
             iconColor="text-teal-500"
-            value={content.metrics.new_inquiries}
+            value={content?.metrics?.new_inquiries ?? 0}
             label="New Inquiries"
           />
           <StatCard
             icon={Calendar}
             iconBg="bg-sage-100"
             iconColor="text-sage-600"
-            value={content.metrics.tours_scheduled}
+            value={content?.metrics?.tours_scheduled ?? 0}
             label="Tours Scheduled"
           />
           <StatCard
             icon={TrendingUp}
             iconBg="bg-emerald-100"
             iconColor="text-emerald-600"
-            value={content.metrics.bookings}
+            value={content?.metrics?.bookings ?? 0}
             label="Bookings"
           />
           <StatCard
             icon={AlertTriangle}
             iconBg="bg-red-50"
             iconColor="text-red-500"
-            value={content.metrics.lost_deals}
+            value={content?.metrics?.lost_deals ?? 0}
             label="Lost Deals"
           />
           <StatCard
             icon={BarChart3}
             iconBg="bg-gold-100"
             iconColor="text-gold-500"
-            value={formatCurrency(content.metrics.revenue_booked)}
+            value={formatCurrency(content?.metrics?.revenue_booked ?? 0)}
             label="Revenue Booked"
           />
         </div>
@@ -559,9 +559,9 @@ export default function BriefingsPage() {
               <TrendingUp className="w-5 h-5 text-teal-500" />
               Trend Highlights
             </h3>
-            {content.trend_highlights.length > 0 ? (
+            {(content?.trend_highlights?.length ?? 0) > 0 ? (
               <ul className="space-y-3">
-                {content.trend_highlights.map((highlight, i) => (
+                {content?.trend_highlights?.map((highlight, i) => (
                   <li key={i} className="flex items-start gap-2.5">
                     <TrendingUp className="w-4 h-4 text-teal-400 mt-0.5 flex-shrink-0" />
                     <span className="text-sm text-sage-700 leading-relaxed">{highlight}</span>
@@ -579,10 +579,10 @@ export default function BriefingsPage() {
               <Cloud className="w-5 h-5 text-sage-500" />
               Weather Outlook
             </h3>
-            {content.weather_outlook ? (
+            {content?.weather_outlook ? (
               <div className="flex items-start gap-2.5">
                 <Cloud className="w-4 h-4 text-sage-400 mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-sage-700 leading-relaxed">{content.weather_outlook}</p>
+                <p className="text-sm text-sage-700 leading-relaxed">{content?.weather_outlook}</p>
               </div>
             ) : (
               <p className="text-sm text-sage-400">No weather data available.</p>
@@ -595,9 +595,9 @@ export default function BriefingsPage() {
               <AlertTriangle className="w-5 h-5 text-gold-500" />
               Anomaly Summary
             </h3>
-            {content.anomaly_summary.length > 0 ? (
+            {(content?.anomaly_summary?.length ?? 0) > 0 ? (
               <ul className="space-y-3">
-                {content.anomaly_summary.map((anomaly, i) => (
+                {content?.anomaly_summary?.map((anomaly, i) => (
                   <li key={i} className="flex items-start gap-2.5">
                     <AlertTriangle className="w-4 h-4 text-gold-400 mt-0.5 flex-shrink-0" />
                     <span className="text-sm text-sage-700 leading-relaxed">{anomaly}</span>
@@ -615,9 +615,9 @@ export default function BriefingsPage() {
               <Lightbulb className="w-5 h-5 text-gold-500" />
               Recommendations
             </h3>
-            {content.recommendations.length > 0 ? (
+            {(content?.recommendations?.length ?? 0) > 0 ? (
               <ol className="space-y-3">
-                {content.recommendations.map((rec, i) => (
+                {content?.recommendations?.map((rec, i) => (
                   <li key={i} className="flex items-start gap-2.5">
                     <span className="flex-shrink-0 w-5 h-5 rounded-full bg-gold-100 text-gold-700 text-xs font-semibold flex items-center justify-center mt-0.5">
                       {i + 1}

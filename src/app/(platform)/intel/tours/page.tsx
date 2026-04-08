@@ -57,6 +57,7 @@ const SOURCES = ['website', 'the_knot', 'wedding_wire', 'instagram', 'referral',
 // ---------------------------------------------------------------------------
 
 function formatLabel(s: string): string {
+  if (!s) return ''
   return s.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
 }
 

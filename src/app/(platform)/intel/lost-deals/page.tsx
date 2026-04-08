@@ -76,7 +76,7 @@ function stageBadge(stage: string): string {
 }
 
 function formatLabel(s: string): string {
-  if (!s) return ''
+  if (!s) return 'Unknown'
   return s.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
 }
 
@@ -188,7 +188,8 @@ export default function LostDealsPage() {
     if (topReasonEntry) {
       const [reason, count] = topReasonEntry
       const pct = Math.round((count / deals.length) * 100)
-      const label = reason ? reason.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()) : 'Unknown'
+      const formatted = reason ? reason.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()) : ''
+      const label = (formatted && formatted.toLowerCase() !== 'undefined') ? formatted : 'Unknown'
       items.push({
         icon: 'warning',
         text: `${label} is your #1 reason for lost deals (${pct}%) — review your value proposition and messaging around this`,

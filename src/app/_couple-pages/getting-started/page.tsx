@@ -252,19 +252,29 @@ export default function GettingStartedPage() {
         .from('onboarding_progress')
         .select('*')
         .eq('wedding_id', WEDDING_ID)
-        .single(),
+        .maybeSingle(),
       supabase
         .from('weddings')
-        .select('wedding_date, partner1_name, partner2_name')
+        .select('wedding_date, people!people_wedding_id_fkey(first_name, last_name, role)')
         .eq('id', WEDDING_ID)
-        .single(),
+        .maybeSingle(),
     ])
 
     if (!progressRes.error && progressRes.data) {
       setProgress(progressRes.data as OnboardingProgress)
     }
     if (!weddingRes.error && weddingRes.data) {
-      setWedding(weddingRes.data as WeddingInfo)
+      const wd = weddingRes.data as {
+        wedding_date: string | null
+        people: { first_name: string; last_name: string; role: string }[]
+      }
+      const partner1 = wd.people?.find((p) => p.role === 'partner1')
+      const partner2 = wd.people?.find((p) => p.role === 'partner2')
+      setWedding({
+        wedding_date: wd.wedding_date,
+        partner1_name: partner1 ? partner1.first_name : null,
+        partner2_name: partner2 ? partner2.first_name : null,
+      })
     }
     setLoading(false)
   }, [supabase])

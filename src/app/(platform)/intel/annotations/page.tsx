@@ -35,7 +35,7 @@ interface Annotation {
   period_end: string | null
   title: string
   description: string | null
-  type: string
+  annotation_type: string
   affects_metrics: string[] | null
   anomaly_alert_id: string | null
   created_at: string
@@ -62,6 +62,7 @@ function typeBadge(type: string): { bg: string; icon: React.ComponentType<{ clas
 }
 
 function formatLabel(s: string): string {
+  if (!s) return ''
   return s.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
 }
 
@@ -138,7 +139,7 @@ export default function AnnotationsPage() {
       const { error: err } = await supabase.from('annotations').insert({
         title: formTitle,
         description: formDescription || null,
-        type: formType,
+        annotation_type: formType,
         period_start: formStartDate || new Date().toISOString().slice(0, 10),
         period_end: formEndDate || null,
         affects_metrics: formMetrics.length > 0 ? formMetrics : null,
@@ -205,7 +206,7 @@ export default function AnnotationsPage() {
       ) : (
         <div className="space-y-4">
           {annotations.map((a) => {
-            const { bg, icon: TypeIcon } = typeBadge(a.type)
+            const { bg, icon: TypeIcon } = typeBadge(a.annotation_type)
             return (
               <div key={a.id} className="bg-surface border border-border rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
                 <div className="flex items-start justify-between gap-4">
@@ -214,7 +215,7 @@ export default function AnnotationsPage() {
                     <div className="flex items-center gap-2 mb-2 flex-wrap">
                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider border ${bg}`}>
                         <TypeIcon className="w-2.5 h-2.5" />
-                        {formatLabel(a.type)}
+                        {formatLabel(a.annotation_type)}
                       </span>
                       <h3 className="font-heading text-base font-semibold text-sage-900">{a.title}</h3>
                     </div>

@@ -203,7 +203,7 @@ export default function WeddingWebsitePage() {
       .from('wedding_website_settings')
       .select('*')
       .eq('wedding_id', WEDDING_ID)
-      .single()
+      .maybeSingle()
 
     if (data) {
       setSettings({

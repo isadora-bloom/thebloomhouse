@@ -105,8 +105,8 @@ export default function DecorInventoryPage() {
         .from('decor_inventory')
         .select('*')
         .eq('wedding_id', WEDDING_ID)
-        .order('space_name')
-        .order('sort_order', { ascending: true }),
+        .order('category')
+        .order('item_name'),
       supabase
         .from('venue_config')
         .select('feature_flags')

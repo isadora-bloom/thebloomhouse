@@ -36,7 +36,7 @@ interface SourceAttribution {
   tours: number
   bookings: number
   revenue: number
-  created_at: string
+  calculated_at: string
 }
 
 interface MarketingSpend {
@@ -45,7 +45,7 @@ interface MarketingSpend {
   source_name: string
   month: string
   spend: number
-  created_at: string
+  calculated_at: string
 }
 
 interface SourceRow {
@@ -153,7 +153,7 @@ export default function SourceAttributionPage() {
           .from('source_attribution')
           .select('*')
           .eq('venue_id', VENUE_ID)
-          .order('created_at', { ascending: false }),
+          .order('calculated_at', { ascending: false }),
         supabase
           .from('marketing_spend')
           .select('*')

@@ -17,7 +17,6 @@ import {
   ChevronDown,
   ChevronUp,
   StickyNote,
-  Sparkles,
   Filter,
   Eye,
   EyeOff,
@@ -40,22 +39,20 @@ const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 interface ChecklistItem {
   id: string
-  task_text: string
+  title: string
   category: string
   due_date: string | null
   is_completed: boolean
   completed_at: string | null
-  completed_via: 'manual' | 'sage' | null
-  is_custom: boolean
+  description: string | null
   sort_order: number
-  notes: string | null
 }
 
 interface ChecklistFormData {
-  task_text: string
+  title: string
   category: string
   due_date: string
-  notes: string
+  description: string
 }
 
 // ---------------------------------------------------------------------------
@@ -84,61 +81,61 @@ const CATEGORY_ICONS: Record<Category, React.ReactNode> = {
   Other: <MoreHorizontal className="w-4 h-4" />,
 }
 
-const DEFAULT_TASKS: { task_text: string; category: Category; sort_order: number }[] = [
+const DEFAULT_TASKS: { title: string; category: Category; sort_order: number }[] = [
   // Venue (1-2)
-  { task_text: 'Set your budget', category: 'Venue', sort_order: 1 },
-  { task_text: 'Complete alignment worksheets', category: 'Venue', sort_order: 2 },
+  { title: 'Set your budget', category: 'Venue', sort_order: 1 },
+  { title: 'Complete alignment worksheets', category: 'Venue', sort_order: 2 },
   // Vendors (3-13)
-  { task_text: 'Book photographer', category: 'Vendors', sort_order: 3 },
-  { task_text: 'Book videographer', category: 'Vendors', sort_order: 4 },
-  { task_text: 'Book DJ or band', category: 'Vendors', sort_order: 5 },
-  { task_text: 'Book hair & makeup', category: 'Vendors', sort_order: 6 },
-  { task_text: 'Book officiant', category: 'Vendors', sort_order: 7 },
-  { task_text: 'Hire florist', category: 'Vendors', sort_order: 8 },
-  { task_text: 'Choose caterer and menu', category: 'Vendors', sort_order: 9 },
-  { task_text: 'Schedule engagement photos', category: 'Vendors', sort_order: 10 },
-  { task_text: 'Confirm with all vendors (times/locations)', category: 'Vendors', sort_order: 11 },
+  { title: 'Book photographer', category: 'Vendors', sort_order: 3 },
+  { title: 'Book videographer', category: 'Vendors', sort_order: 4 },
+  { title: 'Book DJ or band', category: 'Vendors', sort_order: 5 },
+  { title: 'Book hair & makeup', category: 'Vendors', sort_order: 6 },
+  { title: 'Book officiant', category: 'Vendors', sort_order: 7 },
+  { title: 'Hire florist', category: 'Vendors', sort_order: 8 },
+  { title: 'Choose caterer and menu', category: 'Vendors', sort_order: 9 },
+  { title: 'Schedule engagement photos', category: 'Vendors', sort_order: 10 },
+  { title: 'Confirm with all vendors (times/locations)', category: 'Vendors', sort_order: 11 },
   // Attire & Beauty (12-16)
-  { task_text: 'Find wedding dress/attire', category: 'Attire & Beauty', sort_order: 12 },
-  { task_text: 'Schedule alterations', category: 'Attire & Beauty', sort_order: 13 },
-  { task_text: 'Coordinate wedding party attire', category: 'Attire & Beauty', sort_order: 14 },
-  { task_text: 'Buy wedding rings', category: 'Attire & Beauty', sort_order: 15 },
-  { task_text: 'Final dress fitting', category: 'Attire & Beauty', sort_order: 16 },
+  { title: 'Find wedding dress/attire', category: 'Attire & Beauty', sort_order: 12 },
+  { title: 'Schedule alterations', category: 'Attire & Beauty', sort_order: 13 },
+  { title: 'Coordinate wedding party attire', category: 'Attire & Beauty', sort_order: 14 },
+  { title: 'Buy wedding rings', category: 'Attire & Beauty', sort_order: 15 },
+  { title: 'Final dress fitting', category: 'Attire & Beauty', sort_order: 16 },
   // Decor (17-19)
-  { task_text: 'Plan big rentals', category: 'Decor', sort_order: 17 },
-  { task_text: 'Arrange smaller rentals and decor', category: 'Decor', sort_order: 18 },
-  { task_text: 'Pack decor items (labeled by area)', category: 'Decor', sort_order: 19 },
+  { title: 'Plan big rentals', category: 'Decor', sort_order: 17 },
+  { title: 'Arrange smaller rentals and decor', category: 'Decor', sort_order: 18 },
+  { title: 'Pack decor items (labeled by area)', category: 'Decor', sort_order: 19 },
   // Timeline (20-22)
-  { task_text: 'Draft guest list', category: 'Timeline', sort_order: 20 },
-  { task_text: 'Build day-of timeline', category: 'Timeline', sort_order: 21 },
-  { task_text: 'Finalize detailed timeline with team', category: 'Timeline', sort_order: 22 },
+  { title: 'Draft guest list', category: 'Timeline', sort_order: 20 },
+  { title: 'Build day-of timeline', category: 'Timeline', sort_order: 21 },
+  { title: 'Finalize detailed timeline with team', category: 'Timeline', sort_order: 22 },
   // Guests (23-31)
-  { task_text: 'Send save-the-dates', category: 'Guests', sort_order: 23 },
-  { task_text: 'Create wedding website', category: 'Guests', sort_order: 24 },
-  { task_text: 'Design invitations', category: 'Guests', sort_order: 25 },
-  { task_text: 'Send invitations (2 months before)', category: 'Guests', sort_order: 26 },
-  { task_text: 'Track RSVPs', category: 'Guests', sort_order: 27 },
-  { task_text: 'Chase non-responders', category: 'Guests', sort_order: 28 },
-  { task_text: 'Finalize guest count for caterer', category: 'Guests', sort_order: 29 },
-  { task_text: 'Create seating chart', category: 'Guests', sort_order: 30 },
-  { task_text: 'Reserve hotel room block', category: 'Guests', sort_order: 31 },
+  { title: 'Send save-the-dates', category: 'Guests', sort_order: 23 },
+  { title: 'Create wedding website', category: 'Guests', sort_order: 24 },
+  { title: 'Design invitations', category: 'Guests', sort_order: 25 },
+  { title: 'Send invitations (2 months before)', category: 'Guests', sort_order: 26 },
+  { title: 'Track RSVPs', category: 'Guests', sort_order: 27 },
+  { title: 'Chase non-responders', category: 'Guests', sort_order: 28 },
+  { title: 'Finalize guest count for caterer', category: 'Guests', sort_order: 29 },
+  { title: 'Create seating chart', category: 'Guests', sort_order: 30 },
+  { title: 'Reserve hotel room block', category: 'Guests', sort_order: 31 },
   // Other (32-41)
-  { task_text: 'Arrange transportation', category: 'Other', sort_order: 32 },
-  { task_text: 'Plan rehearsal dinner', category: 'Other', sort_order: 33 },
-  { task_text: 'Obtain marriage license', category: 'Other', sort_order: 34 },
-  { task_text: 'Prepare tips and final payment envelopes', category: 'Other', sort_order: 35 },
-  { task_text: 'Final vendor confirmations', category: 'Other', sort_order: 36 },
-  { task_text: 'Prepare emergency kit', category: 'Other', sort_order: 37 },
-  { task_text: 'Gather ceremony items', category: 'Other', sort_order: 38 },
-  { task_text: 'Plan day-of meals', category: 'Other', sort_order: 39 },
-  { task_text: 'Write vows', category: 'Other', sort_order: 40 },
+  { title: 'Arrange transportation', category: 'Other', sort_order: 32 },
+  { title: 'Plan rehearsal dinner', category: 'Other', sort_order: 33 },
+  { title: 'Obtain marriage license', category: 'Other', sort_order: 34 },
+  { title: 'Prepare tips and final payment envelopes', category: 'Other', sort_order: 35 },
+  { title: 'Final vendor confirmations', category: 'Other', sort_order: 36 },
+  { title: 'Prepare emergency kit', category: 'Other', sort_order: 37 },
+  { title: 'Gather ceremony items', category: 'Other', sort_order: 38 },
+  { title: 'Plan day-of meals', category: 'Other', sort_order: 39 },
+  { title: 'Write vows', category: 'Other', sort_order: 40 },
 ]
 
 const EMPTY_FORM: ChecklistFormData = {
-  task_text: '',
+  title: '',
   category: '',
   due_date: '',
-  notes: '',
+  description: '',
 }
 
 // ---------------------------------------------------------------------------
@@ -210,7 +207,7 @@ export default function ChecklistPage() {
       .maybeSingle()
 
     const flags = (configData?.feature_flags ?? {}) as Record<string, unknown>
-    const template = flags.checklist_template as { tasks?: { task_text: string; category: string; included?: boolean }[] } | undefined
+    const template = flags.checklist_template as { tasks?: { title?: string; task_text?: string; category: string; included?: boolean }[] } | undefined
 
     // Use venue template tasks (only included ones) if available, otherwise hardcoded defaults
     const tasksToSeed = template?.tasks?.filter(t => t.included !== false)
@@ -219,24 +216,20 @@ export default function ChecklistPage() {
       ? tasksToSeed.map((t, i) => ({
           venue_id: VENUE_ID,
           wedding_id: WEDDING_ID,
-          task_text: t.task_text,
+          title: t.title || t.task_text || '',
           category: t.category,
           is_completed: false,
-          completed_via: null,
-          is_custom: false,
           sort_order: i + 1,
-          notes: null,
+          description: null,
         }))
       : DEFAULT_TASKS.map((t) => ({
           venue_id: VENUE_ID,
           wedding_id: WEDDING_ID,
-          task_text: t.task_text,
+          title: t.title,
           category: t.category,
           is_completed: false,
-          completed_via: null,
-          is_custom: false,
           sort_order: t.sort_order,
-          notes: null,
+          description: null,
         }))
 
     await supabase.from('checklist_items').insert(rows)
@@ -285,8 +278,8 @@ export default function ChecklistPage() {
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase()
         if (
-          !item.task_text.toLowerCase().includes(q) &&
-          !(item.notes || '').toLowerCase().includes(q) &&
+          !item.title.toLowerCase().includes(q) &&
+          !(item.description || '').toLowerCase().includes(q) &&
           !item.category.toLowerCase().includes(q)
         ) {
           return false
@@ -336,7 +329,7 @@ export default function ChecklistPage() {
       } else {
         next.add(id)
         const item = items.find((i) => i.id === id)
-        setNoteDrafts((d) => ({ ...d, [id]: item?.notes || '' }))
+        setNoteDrafts((d) => ({ ...d, [id]: item?.description || '' }))
       }
       return next
     })
@@ -345,9 +338,9 @@ export default function ChecklistPage() {
   async function saveNote(id: string) {
     setSavingNote(id)
     const note = noteDrafts[id]?.trim() || null
-    await supabase.from('checklist_items').update({ notes: note }).eq('id', id)
+    await supabase.from('checklist_items').update({ description: note }).eq('id', id)
     setItems((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, notes: note } : i))
+      prev.map((i) => (i.id === id ? { ...i, description: note } : i))
     )
     setSavingNote(null)
   }
@@ -361,26 +354,25 @@ export default function ChecklistPage() {
 
   function openEdit(item: ChecklistItem) {
     setForm({
-      task_text: item.task_text,
+      title: item.title,
       category: item.category || '',
       due_date: item.due_date || '',
-      notes: item.notes || '',
+      description: item.description || '',
     })
     setEditingId(item.id)
     setShowModal(true)
   }
 
   async function handleSave() {
-    if (!form.task_text.trim()) return
+    if (!form.title.trim()) return
 
     const payload = {
       venue_id: VENUE_ID,
       wedding_id: WEDDING_ID,
-      task_text: form.task_text.trim(),
+      title: form.title.trim(),
       category: form.category || 'Other',
       due_date: form.due_date || null,
-      notes: form.notes.trim() || null,
-      is_custom: true,
+      description: form.description.trim() || null,
       sort_order: editingId
         ? items.find((i) => i.id === editingId)?.sort_order || 100
         : items.length + 1,
@@ -590,7 +582,7 @@ export default function ChecklistPage() {
                   const overdue = isOverdue(item)
                   const dueInfo = formatDueDate(item.due_date)
                   const notesExpanded = expandedNotes.has(item.id)
-                  const hasNotes = !!item.notes
+                  const hasNotes = !!item.description
 
                   return (
                     <div key={item.id}>
@@ -624,7 +616,7 @@ export default function ChecklistPage() {
                                   item.is_completed ? 'line-through text-gray-400' : 'text-gray-800'
                                 )}
                               >
-                                {item.task_text}
+                                {item.title}
                               </p>
 
                               {/* Badges row */}
@@ -639,14 +631,6 @@ export default function ChecklistPage() {
                                   >
                                     <Calendar className="w-3 h-3" />
                                     {dueInfo.text}
-                                  </span>
-                                )}
-
-                                {/* Completed by Sage badge */}
-                                {item.completed_via === 'sage' && item.is_completed && (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-purple-50 text-purple-600">
-                                    <Sparkles className="w-3 h-3" />
-                                    Completed by Sage
                                   </span>
                                 )}
 
@@ -684,22 +668,18 @@ export default function ChecklistPage() {
                               >
                                 <StickyNote className="w-3.5 h-3.5" />
                               </button>
-                              {item.is_custom && (
-                                <>
-                                  <button
-                                    onClick={() => openEdit(item)}
-                                    className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                                  >
-                                    <Edit2 className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    onClick={() => handleDelete(item.id)}
-                                    className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </>
-                              )}
+                              <button
+                                onClick={() => openEdit(item)}
+                                className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleDelete(item.id)}
+                                className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -709,7 +689,7 @@ export default function ChecklistPage() {
                       {notesExpanded && (
                         <div className="ml-8 mt-1 mb-2 p-3 bg-amber-50/50 border border-amber-100 rounded-lg">
                           <textarea
-                            value={noteDrafts[item.id] ?? item.notes ?? ''}
+                            value={noteDrafts[item.id] ?? item.description ?? ''}
                             onChange={(e) =>
                               setNoteDrafts((d) => ({ ...d, [item.id]: e.target.value }))
                             }
@@ -767,8 +747,8 @@ export default function ChecklistPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Task</label>
                 <input
                   type="text"
-                  value={form.task_text}
-                  onChange={(e) => setForm({ ...form, task_text: e.target.value })}
+                  value={form.title}
+                  onChange={(e) => setForm({ ...form, title: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
                   style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
                   placeholder="e.g., Book rehearsal dinner venue"
@@ -819,8 +799,8 @@ export default function ChecklistPage() {
                   Notes
                 </label>
                 <textarea
-                  value={form.notes}
-                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:border-transparent"
                   style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
                   rows={2}
@@ -839,7 +819,7 @@ export default function ChecklistPage() {
               </button>
               <button
                 onClick={handleSave}
-                disabled={!form.task_text.trim()}
+                disabled={!form.title.trim()}
                 className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                 style={{ backgroundColor: 'var(--couple-primary)' }}
               >

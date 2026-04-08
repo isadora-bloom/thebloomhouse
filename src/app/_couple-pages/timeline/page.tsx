@@ -1216,12 +1216,12 @@ export default function TimelinePage() {
         .from('timeline')
         .select('*')
         .eq('wedding_id', WEDDING_ID)
-        .single(),
+        .maybeSingle(),
       supabase
         .from('weddings')
         .select('wedding_date')
         .eq('id', WEDDING_ID)
-        .single(),
+        .maybeSingle(),
     ])
 
     let weddingDate: string | null = null

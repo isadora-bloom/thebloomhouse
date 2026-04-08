@@ -611,7 +611,7 @@ export default function BarPlannerPage() {
     try {
       const [shoppingRes, recipesRes, planRes, configRes] = await Promise.all([
         supabase.from('bar_shopping_list').select('*').eq('wedding_id', WEDDING_ID).order('category').order('item_name'),
-        supabase.from('bar_recipes').select('*').eq('wedding_id', WEDDING_ID).order('sort_order', { ascending: true }),
+        supabase.from('bar_recipes').select('*').eq('wedding_id', WEDDING_ID).order('created_at', { ascending: true }),
         supabase.from('bar_planning').select('*').eq('wedding_id', WEDDING_ID).maybeSingle(),
         supabase.from('venue_config').select('bar_model, feature_flags').eq('venue_id', VENUE_ID).maybeSingle(),
       ])

@@ -159,7 +159,7 @@ export default function TransportationPage() {
         .from('shuttle_schedule')
         .select('*')
         .eq('wedding_id', WEDDING_ID)
-        .order('sort_order', { ascending: true }),
+        .order('departure_time', { ascending: true }),
       supabase
         .from('venue_config')
         .select('feature_flags')
