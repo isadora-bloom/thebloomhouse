@@ -274,24 +274,50 @@ export default function GuestListPage() {
   }, [supabase])
 
   const fetchConfig = useCallback(async () => {
-    const { data } = await supabase
+    // 1. Get plated_meal from wedding_config
+    const { data: configData } = await supabase
       .from('wedding_config')
-      .select('food_mode, guest_tags, meal_options')
+      .select('plated_meal')
       .eq('wedding_id', WEDDING_ID)
       .single()
 
-    if (data) {
-      const d = data as Record<string, unknown>
-      const mode = d.food_mode as FoodMode
-      if (mode) {
-        setFoodMode(mode)
+    if (configData) {
+      const d = configData as Record<string, unknown>
+      if (d.plated_meal === true) {
+        setFoodMode('plated')
+      } else if (d.plated_meal === false) {
+        setFoodMode('buffet')
       } else {
         setShowFoodSetup(true)
       }
-      if (d.guest_tags) setTags(d.guest_tags as GuestTag[])
-      if (d.meal_options) setMealOptions(d.meal_options as string[])
     } else {
       setShowFoodSetup(true)
+    }
+
+    // 2. Get tags from guest_tags table
+    const { data: tagData } = await supabase
+      .from('guest_tags')
+      .select('id, tag_name, color')
+      .eq('wedding_id', WEDDING_ID)
+      .order('created_at', { ascending: true })
+
+    if (tagData && tagData.length > 0) {
+      setTags(tagData.map((t: Record<string, unknown>) => ({
+        id: t.id as string,
+        name: t.tag_name as string,
+        color: (t.color as string) || '#3B82F6',
+      })))
+    }
+
+    // 3. Get meal options from guest_meal_options table
+    const { data: mealData } = await supabase
+      .from('guest_meal_options')
+      .select('option_name')
+      .eq('wedding_id', WEDDING_ID)
+      .order('created_at', { ascending: true })
+
+    if (mealData && mealData.length > 0) {
+      setMealOptions(mealData.map((m: Record<string, unknown>) => m.option_name as string))
     }
   }, [supabase])
 
@@ -311,7 +337,8 @@ export default function GuestListPage() {
   async function selectFoodMode(mode: FoodMode) {
     setFoodMode(mode)
     setShowFoodSetup(false)
-    await saveConfig({ food_mode: mode })
+    // plated_meal is a boolean: true = plated, false = anything else (buffet/trucks/stations)
+    await saveConfig({ plated_meal: mode === 'plated' })
   }
 
   // ---- Computed stats ----
@@ -479,21 +506,24 @@ export default function GuestListPage() {
   // ---- Tag management ----
   async function addTag() {
     if (!newTagName.trim()) return
-    const tag: GuestTag = {
-      id: crypto.randomUUID(),
-      name: newTagName.trim(),
+    const tagId = crypto.randomUUID()
+    const { error } = await supabase.from('guest_tags').insert({
+      id: tagId,
+      venue_id: VENUE_ID,
+      wedding_id: WEDDING_ID,
+      tag_name: newTagName.trim(),
       color: newTagColor,
+    })
+    if (!error) {
+      const tag: GuestTag = { id: tagId, name: newTagName.trim(), color: newTagColor }
+      setTags((prev) => [...prev, tag])
+      setNewTagName('')
     }
-    const updated = [...tags, tag]
-    setTags(updated)
-    setNewTagName('')
-    await saveConfig({ guest_tags: updated })
   }
 
   async function deleteTag(id: string) {
-    const updated = tags.filter((t) => t.id !== id)
-    setTags(updated)
-    await saveConfig({ guest_tags: updated })
+    await supabase.from('guest_tags').delete().eq('id', id)
+    setTags((prev) => prev.filter((t) => t.id !== id))
     // Remove tag from guests
     for (const g of guests) {
       if (g.tags?.includes(id)) {
@@ -516,16 +546,24 @@ export default function GuestListPage() {
   // ---- Meal options management ----
   async function addMealOption() {
     if (!newMealOption.trim() || mealOptions.includes(newMealOption.trim())) return
-    const updated = [...mealOptions, newMealOption.trim()]
-    setMealOptions(updated)
-    setNewMealOption('')
-    await saveConfig({ meal_options: updated })
+    const { error } = await supabase.from('guest_meal_options').insert({
+      venue_id: VENUE_ID,
+      wedding_id: WEDDING_ID,
+      option_name: newMealOption.trim(),
+    })
+    if (!error) {
+      setMealOptions((prev) => [...prev, newMealOption.trim()])
+      setNewMealOption('')
+    }
   }
 
   async function removeMealOption(opt: string) {
-    const updated = mealOptions.filter((m) => m !== opt)
-    setMealOptions(updated)
-    await saveConfig({ meal_options: updated })
+    await supabase
+      .from('guest_meal_options')
+      .delete()
+      .eq('wedding_id', WEDDING_ID)
+      .eq('option_name', opt)
+    setMealOptions((prev) => prev.filter((m) => m !== opt))
   }
 
   // ---- CSV Import ----

@@ -146,15 +146,18 @@ export default function SeatingChartPage() {
         .order('created_at', { ascending: true }),
       supabase
         .from('venue_config')
-        .select('floor_plan_url')
+        .select('feature_flags')
         .eq('venue_id', VENUE_ID)
         .maybeSingle(),
     ])
 
     if (tablesRes.data) setTables(tablesRes.data as unknown as SeatingTable[])
     if (guestsRes.data) setGuests(guestsRes.data as unknown as Guest[])
-    if (configRes.data && configRes.data.floor_plan_url) {
-      setFloorPlanUrl(configRes.data.floor_plan_url)
+    if (configRes.data) {
+      const flags = (configRes.data.feature_flags ?? {}) as Record<string, unknown>
+      if (flags.floor_plan_url) {
+        setFloorPlanUrl(flags.floor_plan_url as string)
+      }
     }
     setLoading(false)
   }, [supabase])

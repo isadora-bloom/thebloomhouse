@@ -328,7 +328,7 @@ export default function RelationshipsPage() {
           venue_id,
           person_a_id,
           person_b_id,
-          type,
+          relationship_type,
           notes,
           created_at,
           person_a:people!relationships_person_a_id_fkey ( first_name, last_name, email ),
@@ -347,7 +347,7 @@ export default function RelationshipsPage() {
           venue_id: row.venue_id,
           person_a_id: row.person_a_id,
           person_b_id: row.person_b_id,
-          type: row.type,
+          type: row.relationship_type,
           notes: row.notes,
           created_at: row.created_at,
           person_a_name: a
@@ -401,7 +401,7 @@ export default function RelationshipsPage() {
         venue_id: VENUE_ID,
         person_a_id: personAId,
         person_b_id: personBId,
-        type,
+        relationship_type: type,
         notes: notes || null,
       })
 

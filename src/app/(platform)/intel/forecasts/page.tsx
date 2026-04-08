@@ -38,7 +38,7 @@ interface WeddingRow {
   id: string
   status: string
   booking_value: number | null
-  event_date: string | null
+  wedding_date: string | null
   created_at: string
 }
 
@@ -115,7 +115,7 @@ export default function ForecastsPage() {
     try {
       const { data, error: err } = await supabase
         .from('weddings')
-        .select('id, status, booking_value, event_date, created_at')
+        .select('id, status, booking_value, wedding_date, created_at')
       if (err) throw err
       setWeddings((data ?? []) as WeddingRow[])
       setError(null)
@@ -146,7 +146,7 @@ export default function ForecastsPage() {
       const { start, end } = getQuarterRange(y, q)
 
       const qWeddings = weddings.filter((w) => {
-        const d = w.event_date ?? w.created_at
+        const d = w.wedding_date ?? w.created_at
         return d >= start && d <= end
       })
 
@@ -189,14 +189,14 @@ export default function ForecastsPage() {
   // YoY comparison
   const thisYearRevenue = weddings
     .filter((w) => {
-      const d = w.event_date ?? w.created_at
+      const d = w.wedding_date ?? w.created_at
       return d.startsWith(String(new Date().getFullYear())) && ['contracted', 'completed'].includes(w.status)
     })
     .reduce((s, w) => s + (w.booking_value ?? 0), 0)
 
   const lastYearRevenue = weddings
     .filter((w) => {
-      const d = w.event_date ?? w.created_at
+      const d = w.wedding_date ?? w.created_at
       return d.startsWith(String(new Date().getFullYear() - 1)) && ['contracted', 'completed'].includes(w.status)
     })
     .reduce((s, w) => s + (w.booking_value ?? 0), 0)

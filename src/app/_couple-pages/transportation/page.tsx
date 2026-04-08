@@ -162,7 +162,7 @@ export default function TransportationPage() {
         .order('sort_order', { ascending: true }),
       supabase
         .from('venue_config')
-        .select('shuttle_pickup_locations, shuttle_count, seats_per_shuttle')
+        .select('feature_flags')
         .eq('venue_id', VENUE_ID)
         .maybeSingle(),
     ])
@@ -171,14 +171,17 @@ export default function TransportationPage() {
       setRuns(runsRes.data as ShuttleRun[])
     }
     if (configRes.data) {
-      if (configRes.data.shuttle_pickup_locations) {
-        setPickupSuggestions(configRes.data.shuttle_pickup_locations as string[])
+      const flags = (configRes.data.feature_flags ?? {}) as Record<string, unknown>
+      const sc = (flags.shuttle_config ?? {}) as Record<string, unknown>
+      const pickupLocations = sc.pickup_locations as Array<{ name?: string }> | undefined
+      if (pickupLocations) {
+        setPickupSuggestions(pickupLocations.map((l) => l.name || '').filter(Boolean))
       }
-      if (configRes.data.shuttle_count) {
-        setShuttleCount(configRes.data.shuttle_count)
+      if (sc.available_shuttles) {
+        setShuttleCount(sc.available_shuttles as number)
       }
-      if (configRes.data.seats_per_shuttle) {
-        setSeatsPerShuttle(configRes.data.seats_per_shuttle)
+      if (sc.seats_per_shuttle) {
+        setSeatsPerShuttle(sc.seats_per_shuttle as number)
       }
     }
     setLoading(false)

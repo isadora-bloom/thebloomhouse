@@ -1,7 +1,7 @@
 'use client'
 
 // Feature: configurable via venue_config.feature_flags
-// Tables: room_blocks, bedroom_assignments, guest_list
+// Tables: bedroom_assignments, guest_list
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -39,6 +39,8 @@ const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 // Types
 // ---------------------------------------------------------------------------
 
+// RoomBlock is a UI-level interface; stored in bedroom_assignments
+// with structured JSON in the notes field (marked _type: 'hotel_block')
 interface RoomBlock {
   id: string
   hotel_name: string
@@ -49,7 +51,6 @@ interface RoomBlock {
   booking_link: string | null
   booking_code: string | null
   notes: string | null
-  sort_order: number
 }
 
 interface RoomBlockForm {
@@ -63,15 +64,13 @@ interface RoomBlockForm {
   notes: string
 }
 
+// OnSiteRoom maps to bedroom_assignments: room_name, room_description, guests (text[]), notes
 interface OnSiteRoom {
   id: string
   room_name: string
-  description: string | null
-  friday_guest: string | null
-  saturday_guest: string | null
-  accessibility_notes: string | null
+  room_description: string | null
+  guests: string[]
   notes: string | null
-  sort_order: number
 }
 
 interface Guest {
@@ -96,6 +95,82 @@ const EMPTY_BLOCK_FORM: RoomBlockForm = {
   booking_link: '',
   booking_code: '',
   notes: '',
+}
+
+// ---------------------------------------------------------------------------
+// bedroom_assignments <-> RoomBlock helpers
+// Hotel blocks are stored in bedroom_assignments with structured JSON in notes
+// ---------------------------------------------------------------------------
+
+interface HotelBlockMeta {
+  _type: 'hotel_block'
+  rate_per_night?: number | null
+  rooms_reserved?: number | null
+  booking_deadline?: string | null
+  booking_link?: string | null
+  booking_code?: string | null
+  user_notes?: string | null
+}
+
+function isHotelBlockRow(row: Record<string, unknown>): boolean {
+  try {
+    const notes = row.notes as string | null
+    if (!notes) return false
+    const parsed = JSON.parse(notes)
+    return parsed?._type === 'hotel_block'
+  } catch {
+    return false
+  }
+}
+
+function rowToRoomBlock(row: Record<string, unknown>): RoomBlock {
+  let meta: HotelBlockMeta = { _type: 'hotel_block' }
+  try {
+    meta = JSON.parse(row.notes as string)
+  } catch { /* use defaults */ }
+
+  return {
+    id: row.id as string,
+    hotel_name: (row.room_name as string) || '',
+    block_name: (row.room_description as string) || '',
+    rate_per_night: meta.rate_per_night ?? null,
+    rooms_reserved: meta.rooms_reserved ?? null,
+    booking_deadline: meta.booking_deadline ?? null,
+    booking_link: meta.booking_link ?? null,
+    booking_code: meta.booking_code ?? null,
+    notes: meta.user_notes ?? null,
+  }
+}
+
+function roomBlockToPayload(form: RoomBlockForm) {
+  const meta: HotelBlockMeta = {
+    _type: 'hotel_block',
+    rate_per_night: form.rate_per_night ? parseFloat(form.rate_per_night) : null,
+    rooms_reserved: form.rooms_reserved ? parseInt(form.rooms_reserved) : null,
+    booking_deadline: form.booking_deadline || null,
+    booking_link: form.booking_link.trim() || null,
+    booking_code: form.booking_code.trim() || null,
+    user_notes: form.notes.trim() || null,
+  }
+
+  return {
+    venue_id: VENUE_ID,
+    wedding_id: WEDDING_ID,
+    room_name: form.hotel_name.trim(),
+    room_description: form.block_name.trim() || null,
+    guests: [] as string[],
+    notes: JSON.stringify(meta),
+  }
+}
+
+function rowToOnSiteRoom(row: Record<string, unknown>): OnSiteRoom {
+  return {
+    id: row.id as string,
+    room_name: (row.room_name as string) || '',
+    room_description: (row.room_description as string) || null,
+    guests: (row.guests as string[]) || [],
+    notes: (row.notes as string) || null,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -163,17 +238,12 @@ export default function RoomAssignmentsPage() {
 
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
-    const [blocksRes, roomsRes, guestsRes] = await Promise.all([
-      supabase
-        .from('room_blocks')
-        .select('*')
-        .eq('wedding_id', WEDDING_ID)
-        .order('sort_order', { ascending: true }),
+    const [assignmentsRes, guestsRes] = await Promise.all([
       supabase
         .from('bedroom_assignments')
         .select('*')
         .eq('wedding_id', WEDDING_ID)
-        .order('sort_order', { ascending: true }),
+        .order('created_at', { ascending: true }),
       supabase
         .from('guest_list')
         .select('id, accommodation, person:people(first_name, last_name)')
@@ -181,8 +251,20 @@ export default function RoomAssignmentsPage() {
         .order('created_at', { ascending: true }),
     ])
 
-    if (blocksRes.data) setRoomBlocks(blocksRes.data as unknown as RoomBlock[])
-    if (roomsRes.data) setOnSiteRooms(roomsRes.data as unknown as OnSiteRoom[])
+    if (assignmentsRes.data) {
+      const rows = assignmentsRes.data as Record<string, unknown>[]
+      const blocks: RoomBlock[] = []
+      const rooms: OnSiteRoom[] = []
+      for (const row of rows) {
+        if (isHotelBlockRow(row)) {
+          blocks.push(rowToRoomBlock(row))
+        } else {
+          rooms.push(rowToOnSiteRoom(row))
+        }
+      }
+      setRoomBlocks(blocks)
+      setOnSiteRooms(rooms)
+    }
     if (guestsRes.data) setGuests(guestsRes.data as unknown as Guest[])
     setLoading(false)
   }, [supabase])
@@ -239,26 +321,12 @@ export default function RoomAssignmentsPage() {
   async function handleSaveBlock() {
     if (!blockForm.hotel_name.trim()) return
 
-    const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
-      hotel_name: blockForm.hotel_name.trim(),
-      block_name: blockForm.block_name.trim() || null,
-      rate_per_night: blockForm.rate_per_night ? parseFloat(blockForm.rate_per_night) : null,
-      rooms_reserved: blockForm.rooms_reserved ? parseInt(blockForm.rooms_reserved) : null,
-      booking_deadline: blockForm.booking_deadline || null,
-      booking_link: blockForm.booking_link.trim() || null,
-      booking_code: blockForm.booking_code.trim() || null,
-      notes: blockForm.notes.trim() || null,
-    }
+    const payload = roomBlockToPayload(blockForm)
 
     if (editingBlockId) {
-      await supabase.from('room_blocks').update(payload).eq('id', editingBlockId)
+      await supabase.from('bedroom_assignments').update(payload).eq('id', editingBlockId)
     } else {
-      await supabase.from('room_blocks').insert({
-        ...payload,
-        sort_order: roomBlocks.length,
-      })
+      await supabase.from('bedroom_assignments').insert(payload)
     }
 
     setShowBlockModal(false)
@@ -268,16 +336,16 @@ export default function RoomAssignmentsPage() {
 
   async function handleDeleteBlock(id: string) {
     if (!confirm('Remove this room block?')) return
-    await supabase.from('room_blocks').delete().eq('id', id)
+    await supabase.from('bedroom_assignments').delete().eq('id', id)
     fetchData()
   }
 
   // ---- On-site room guest save ----
-  async function saveRoomGuest(roomId: string, field: 'friday_guest' | 'saturday_guest', value: string) {
-    setSavingRoom(roomId + field)
+  async function saveRoomGuests(roomId: string, updatedGuests: string[]) {
+    setSavingRoom(roomId)
     await supabase
       .from('bedroom_assignments')
-      .update({ [field]: value.trim() || null })
+      .update({ guests: updatedGuests })
       .eq('id', roomId)
 
     setSavingRoom(null)
@@ -529,7 +597,7 @@ export default function RoomAssignmentsPage() {
           {expandedOnSite && (
             <div className="px-5 pb-5 space-y-4">
               <p className="text-xs text-gray-500">
-                These rooms are set up by your venue. Enter guest names for Friday and Saturday nights.
+                These rooms are set up by your venue. Enter guest names (comma-separated) for each room.
                 Changes save automatically when you tab or click away.
               </p>
 
@@ -549,53 +617,31 @@ export default function RoomAssignmentsPage() {
                       >
                         {room.room_name}
                       </h3>
-                      {room.description && (
-                        <p className="text-xs text-gray-500 mt-0.5">{room.description}</p>
-                      )}
-                      {room.accessibility_notes && (
-                        <p className="text-[10px] text-gray-400 mt-1">Accessibility: {room.accessibility_notes}</p>
+                      {room.room_description && (
+                        <p className="text-xs text-gray-500 mt-0.5">{room.room_description}</p>
                       )}
                     </div>
 
-                    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {/* Friday night */}
-                      <div>
-                        <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
-                          Friday Night
-                        </label>
-                        <div className="relative">
-                          <input
-                            type="text"
-                            defaultValue={room.friday_guest || ''}
-                            onBlur={(e) => saveRoomGuest(room.id, 'friday_guest', e.target.value)}
-                            placeholder="Guest name(s)"
-                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                            style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                          />
-                          {savingRoom === room.id + 'friday_guest' && (
-                            <Loader2 className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-300" />
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Saturday night */}
-                      <div>
-                        <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
-                          Saturday Night
-                        </label>
-                        <div className="relative">
-                          <input
-                            type="text"
-                            defaultValue={room.saturday_guest || ''}
-                            onBlur={(e) => saveRoomGuest(room.id, 'saturday_guest', e.target.value)}
-                            placeholder="Guest name(s)"
-                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                            style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                          />
-                          {savingRoom === room.id + 'saturday_guest' && (
-                            <Loader2 className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-300" />
-                          )}
-                        </div>
+                    <div className="p-4">
+                      <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
+                        Assigned Guests
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          defaultValue={(room.guests || []).join(', ')}
+                          onBlur={(e) => {
+                            const val = e.target.value.trim()
+                            const updated = val ? val.split(',').map((g) => g.trim()).filter(Boolean) : []
+                            saveRoomGuests(room.id, updated)
+                          }}
+                          placeholder="Guest names (comma-separated)"
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                          style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                        />
+                        {savingRoom === room.id && (
+                          <Loader2 className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-300" />
+                        )}
                       </div>
                     </div>
 

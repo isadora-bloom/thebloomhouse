@@ -70,7 +70,7 @@ export async function getWeddingContext(weddingId: string): Promise<WeddingConte
     .select(`
       id,
       status,
-      event_date,
+      wedding_date,
       guest_count,
       total_budget,
       venue_id,
@@ -136,7 +136,7 @@ export async function getWeddingContext(weddingId: string): Promise<WeddingConte
     partnerName: partner2
       ? `${partner2.first_name} ${partner2.last_name}`
       : null,
-    eventDate: wedding.event_date as string | null,
+    eventDate: wedding.wedding_date as string | null,
     guestCount: wedding.guest_count as number | null,
     venueName,
     status: wedding.status as string,

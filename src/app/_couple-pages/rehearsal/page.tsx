@@ -385,7 +385,7 @@ export default function RehearsalPage() {
         .maybeSingle(),
       supabase
         .from('venue_config')
-        .select('rehearsal_space_options')
+        .select('feature_flags')
         .eq('venue_id', VENUE_ID)
         .maybeSingle(),
     ])
@@ -440,8 +440,11 @@ export default function RehearsalPage() {
       })
     }
 
-    if (configRes.data && configRes.data.rehearsal_space_options) {
-      setVenueSpaceOptions(configRes.data.rehearsal_space_options as string[])
+    if (configRes.data) {
+      const flags = (configRes.data.feature_flags ?? {}) as Record<string, unknown>
+      if (flags.rehearsal_space_options) {
+        setVenueSpaceOptions(flags.rehearsal_space_options as string[])
+      }
     }
 
     setLoading(false)

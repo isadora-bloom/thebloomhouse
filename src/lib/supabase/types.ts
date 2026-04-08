@@ -78,7 +78,7 @@ export interface Wedding {
   venue_id: string
   source: string | null
   status: string
-  event_date: string | null
+  wedding_date: string | null
   guest_count: number | null
   total_budget: number | null
   total_revenue: number | null

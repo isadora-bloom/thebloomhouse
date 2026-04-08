@@ -35,7 +35,7 @@ interface TourRow {
   id: string
   venue_id: string
   wedding_id: string | null
-  tour_date: string
+  scheduled_at: string
   tour_type: string
   conducted_by: string | null
   couple_name: string | null
@@ -124,7 +124,7 @@ export default function ToursPage() {
       const { data, error: err } = await supabase
         .from('tours')
         .select('*')
-        .order('tour_date', { ascending: false })
+        .order('scheduled_at', { ascending: false })
       if (err) throw err
       setTours((data ?? []) as TourRow[])
       setError(null)
@@ -153,7 +153,7 @@ export default function ToursPage() {
     bookedTours.length > 0
       ? Math.round(
           bookedTours.reduce((s, t) => {
-            const tourDate = new Date(t.tour_date).getTime()
+            const tourDate = new Date(t.scheduled_at).getTime()
             const created = new Date(t.created_at).getTime()
             return s + Math.abs(tourDate - created) / (1000 * 60 * 60 * 24)
           }, 0) / bookedTours.length
@@ -168,7 +168,7 @@ export default function ToursPage() {
     const dayMap: Record<string, { total: number; booked: number }> = {}
     for (const t of yearTours) {
       if (!['completed', 'booked'].includes(t.outcome)) continue
-      const day = new Date(t.tour_date).toLocaleDateString('en-US', { weekday: 'long' })
+      const day = new Date(t.scheduled_at).toLocaleDateString('en-US', { weekday: 'long' })
       if (!dayMap[day]) dayMap[day] = { total: 0, booked: 0 }
       dayMap[day].total++
       if (t.outcome === 'booked') dayMap[day].booked++
@@ -227,7 +227,7 @@ export default function ToursPage() {
     return tours.filter((t) => {
       switch (filter) {
         case 'upcoming':
-          return t.tour_date >= now && t.outcome === 'pending'
+          return t.scheduled_at >= now && t.outcome === 'pending'
         case 'completed':
           return ['completed', 'booked'].includes(t.outcome)
         case 'cancelled':
@@ -243,7 +243,7 @@ export default function ToursPage() {
     const supabase = getSupabase()
     try {
       const { error: err } = await supabase.from('tours').insert({
-        tour_date: formDate || new Date().toISOString().slice(0, 10),
+        scheduled_at: formDate || new Date().toISOString().slice(0, 10),
         tour_type: formType,
         couple_name: formCouple || null,
         conducted_by: formConductor || null,
@@ -392,7 +392,7 @@ export default function ToursPage() {
                     const TypeIcon = tourTypeIcon(t.tour_type)
                     return (
                       <tr key={t.id} className="hover:bg-sage-50/50 transition-colors">
-                        <td className="px-5 py-4 text-sage-700">{new Date(t.tour_date).toLocaleDateString()}</td>
+                        <td className="px-5 py-4 text-sage-700">{new Date(t.scheduled_at).toLocaleDateString()}</td>
                         <td className="px-5 py-4 font-medium text-sage-900">{t.couple_name || '--'}</td>
                         <td className="px-5 py-4 text-sage-700">
                           <span className="inline-flex items-center gap-1">

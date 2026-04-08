@@ -31,8 +31,8 @@ function getSupabase() {
 interface Annotation {
   id: string
   venue_id: string
-  start_date: string
-  end_date: string | null
+  period_start: string
+  period_end: string | null
   title: string
   description: string | null
   type: string
@@ -109,7 +109,7 @@ export default function AnnotationsPage() {
       const { data, error: err } = await supabase
         .from('annotations')
         .select('*')
-        .order('start_date', { ascending: false })
+        .order('period_start', { ascending: false })
       if (err) throw err
       setAnnotations((data ?? []) as Annotation[])
       setError(null)
@@ -139,8 +139,8 @@ export default function AnnotationsPage() {
         title: formTitle,
         description: formDescription || null,
         type: formType,
-        start_date: formStartDate || new Date().toISOString().slice(0, 10),
-        end_date: formEndDate || null,
+        period_start: formStartDate || new Date().toISOString().slice(0, 10),
+        period_end: formEndDate || null,
         affects_metrics: formMetrics.length > 0 ? formMetrics : null,
       })
       if (err) throw err
@@ -222,8 +222,8 @@ export default function AnnotationsPage() {
                     {/* Date range */}
                     <div className="flex items-center gap-1 text-xs text-sage-500 mb-2">
                       <Calendar className="w-3 h-3" />
-                      {new Date(a.start_date).toLocaleDateString()}
-                      {a.end_date && ` - ${new Date(a.end_date).toLocaleDateString()}`}
+                      {new Date(a.period_start).toLocaleDateString()}
+                      {a.period_end && ` - ${new Date(a.period_end).toLocaleDateString()}`}
                     </div>
 
                     {/* Description */}

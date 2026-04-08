@@ -47,7 +47,7 @@ interface ChecklistItem {
   completed_at: string | null
   completed_via: 'manual' | 'sage' | null
   is_custom: boolean
-  display_order: number
+  sort_order: number
   notes: string | null
 }
 
@@ -84,54 +84,54 @@ const CATEGORY_ICONS: Record<Category, React.ReactNode> = {
   Other: <MoreHorizontal className="w-4 h-4" />,
 }
 
-const DEFAULT_TASKS: { task_text: string; category: Category; display_order: number }[] = [
+const DEFAULT_TASKS: { task_text: string; category: Category; sort_order: number }[] = [
   // Venue (1-2)
-  { task_text: 'Set your budget', category: 'Venue', display_order: 1 },
-  { task_text: 'Complete alignment worksheets', category: 'Venue', display_order: 2 },
+  { task_text: 'Set your budget', category: 'Venue', sort_order: 1 },
+  { task_text: 'Complete alignment worksheets', category: 'Venue', sort_order: 2 },
   // Vendors (3-13)
-  { task_text: 'Book photographer', category: 'Vendors', display_order: 3 },
-  { task_text: 'Book videographer', category: 'Vendors', display_order: 4 },
-  { task_text: 'Book DJ or band', category: 'Vendors', display_order: 5 },
-  { task_text: 'Book hair & makeup', category: 'Vendors', display_order: 6 },
-  { task_text: 'Book officiant', category: 'Vendors', display_order: 7 },
-  { task_text: 'Hire florist', category: 'Vendors', display_order: 8 },
-  { task_text: 'Choose caterer and menu', category: 'Vendors', display_order: 9 },
-  { task_text: 'Schedule engagement photos', category: 'Vendors', display_order: 10 },
-  { task_text: 'Confirm with all vendors (times/locations)', category: 'Vendors', display_order: 11 },
+  { task_text: 'Book photographer', category: 'Vendors', sort_order: 3 },
+  { task_text: 'Book videographer', category: 'Vendors', sort_order: 4 },
+  { task_text: 'Book DJ or band', category: 'Vendors', sort_order: 5 },
+  { task_text: 'Book hair & makeup', category: 'Vendors', sort_order: 6 },
+  { task_text: 'Book officiant', category: 'Vendors', sort_order: 7 },
+  { task_text: 'Hire florist', category: 'Vendors', sort_order: 8 },
+  { task_text: 'Choose caterer and menu', category: 'Vendors', sort_order: 9 },
+  { task_text: 'Schedule engagement photos', category: 'Vendors', sort_order: 10 },
+  { task_text: 'Confirm with all vendors (times/locations)', category: 'Vendors', sort_order: 11 },
   // Attire & Beauty (12-16)
-  { task_text: 'Find wedding dress/attire', category: 'Attire & Beauty', display_order: 12 },
-  { task_text: 'Schedule alterations', category: 'Attire & Beauty', display_order: 13 },
-  { task_text: 'Coordinate wedding party attire', category: 'Attire & Beauty', display_order: 14 },
-  { task_text: 'Buy wedding rings', category: 'Attire & Beauty', display_order: 15 },
-  { task_text: 'Final dress fitting', category: 'Attire & Beauty', display_order: 16 },
+  { task_text: 'Find wedding dress/attire', category: 'Attire & Beauty', sort_order: 12 },
+  { task_text: 'Schedule alterations', category: 'Attire & Beauty', sort_order: 13 },
+  { task_text: 'Coordinate wedding party attire', category: 'Attire & Beauty', sort_order: 14 },
+  { task_text: 'Buy wedding rings', category: 'Attire & Beauty', sort_order: 15 },
+  { task_text: 'Final dress fitting', category: 'Attire & Beauty', sort_order: 16 },
   // Decor (17-19)
-  { task_text: 'Plan big rentals', category: 'Decor', display_order: 17 },
-  { task_text: 'Arrange smaller rentals and decor', category: 'Decor', display_order: 18 },
-  { task_text: 'Pack decor items (labeled by area)', category: 'Decor', display_order: 19 },
+  { task_text: 'Plan big rentals', category: 'Decor', sort_order: 17 },
+  { task_text: 'Arrange smaller rentals and decor', category: 'Decor', sort_order: 18 },
+  { task_text: 'Pack decor items (labeled by area)', category: 'Decor', sort_order: 19 },
   // Timeline (20-22)
-  { task_text: 'Draft guest list', category: 'Timeline', display_order: 20 },
-  { task_text: 'Build day-of timeline', category: 'Timeline', display_order: 21 },
-  { task_text: 'Finalize detailed timeline with team', category: 'Timeline', display_order: 22 },
+  { task_text: 'Draft guest list', category: 'Timeline', sort_order: 20 },
+  { task_text: 'Build day-of timeline', category: 'Timeline', sort_order: 21 },
+  { task_text: 'Finalize detailed timeline with team', category: 'Timeline', sort_order: 22 },
   // Guests (23-31)
-  { task_text: 'Send save-the-dates', category: 'Guests', display_order: 23 },
-  { task_text: 'Create wedding website', category: 'Guests', display_order: 24 },
-  { task_text: 'Design invitations', category: 'Guests', display_order: 25 },
-  { task_text: 'Send invitations (2 months before)', category: 'Guests', display_order: 26 },
-  { task_text: 'Track RSVPs', category: 'Guests', display_order: 27 },
-  { task_text: 'Chase non-responders', category: 'Guests', display_order: 28 },
-  { task_text: 'Finalize guest count for caterer', category: 'Guests', display_order: 29 },
-  { task_text: 'Create seating chart', category: 'Guests', display_order: 30 },
-  { task_text: 'Reserve hotel room block', category: 'Guests', display_order: 31 },
+  { task_text: 'Send save-the-dates', category: 'Guests', sort_order: 23 },
+  { task_text: 'Create wedding website', category: 'Guests', sort_order: 24 },
+  { task_text: 'Design invitations', category: 'Guests', sort_order: 25 },
+  { task_text: 'Send invitations (2 months before)', category: 'Guests', sort_order: 26 },
+  { task_text: 'Track RSVPs', category: 'Guests', sort_order: 27 },
+  { task_text: 'Chase non-responders', category: 'Guests', sort_order: 28 },
+  { task_text: 'Finalize guest count for caterer', category: 'Guests', sort_order: 29 },
+  { task_text: 'Create seating chart', category: 'Guests', sort_order: 30 },
+  { task_text: 'Reserve hotel room block', category: 'Guests', sort_order: 31 },
   // Other (32-41)
-  { task_text: 'Arrange transportation', category: 'Other', display_order: 32 },
-  { task_text: 'Plan rehearsal dinner', category: 'Other', display_order: 33 },
-  { task_text: 'Obtain marriage license', category: 'Other', display_order: 34 },
-  { task_text: 'Prepare tips and final payment envelopes', category: 'Other', display_order: 35 },
-  { task_text: 'Final vendor confirmations', category: 'Other', display_order: 36 },
-  { task_text: 'Prepare emergency kit', category: 'Other', display_order: 37 },
-  { task_text: 'Gather ceremony items', category: 'Other', display_order: 38 },
-  { task_text: 'Plan day-of meals', category: 'Other', display_order: 39 },
-  { task_text: 'Write vows', category: 'Other', display_order: 40 },
+  { task_text: 'Arrange transportation', category: 'Other', sort_order: 32 },
+  { task_text: 'Plan rehearsal dinner', category: 'Other', sort_order: 33 },
+  { task_text: 'Obtain marriage license', category: 'Other', sort_order: 34 },
+  { task_text: 'Prepare tips and final payment envelopes', category: 'Other', sort_order: 35 },
+  { task_text: 'Final vendor confirmations', category: 'Other', sort_order: 36 },
+  { task_text: 'Prepare emergency kit', category: 'Other', sort_order: 37 },
+  { task_text: 'Gather ceremony items', category: 'Other', sort_order: 38 },
+  { task_text: 'Plan day-of meals', category: 'Other', sort_order: 39 },
+  { task_text: 'Write vows', category: 'Other', sort_order: 40 },
 ]
 
 const EMPTY_FORM: ChecklistFormData = {
@@ -224,7 +224,7 @@ export default function ChecklistPage() {
           is_completed: false,
           completed_via: null,
           is_custom: false,
-          display_order: i + 1,
+          sort_order: i + 1,
           notes: null,
         }))
       : DEFAULT_TASKS.map((t) => ({
@@ -235,7 +235,7 @@ export default function ChecklistPage() {
           is_completed: false,
           completed_via: null,
           is_custom: false,
-          display_order: t.display_order,
+          sort_order: t.sort_order,
           notes: null,
         }))
 
@@ -248,7 +248,7 @@ export default function ChecklistPage() {
       .from('checklist_items')
       .select('*')
       .eq('wedding_id', WEDDING_ID)
-      .order('display_order', { ascending: true })
+      .order('sort_order', { ascending: true })
 
     if (!error && data) {
       if (data.length === 0 && !initialized) {
@@ -258,7 +258,7 @@ export default function ChecklistPage() {
           .from('checklist_items')
           .select('*')
           .eq('wedding_id', WEDDING_ID)
-          .order('display_order', { ascending: true })
+          .order('sort_order', { ascending: true })
         if (seeded) setItems(seeded as ChecklistItem[])
       } else {
         setItems(data as ChecklistItem[])
@@ -381,8 +381,8 @@ export default function ChecklistPage() {
       due_date: form.due_date || null,
       notes: form.notes.trim() || null,
       is_custom: true,
-      display_order: editingId
-        ? items.find((i) => i.id === editingId)?.display_order || 100
+      sort_order: editingId
+        ? items.find((i) => i.id === editingId)?.sort_order || 100
         : items.length + 1,
     }
 

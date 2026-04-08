@@ -200,7 +200,7 @@ export default function ShuttleConfigPage() {
       const supabase = createClient()
       const { data, error: fetchErr } = await supabase
         .from('venue_config')
-        .select('feature_flags, shuttle_pickup_locations, shuttle_count, seats_per_shuttle')
+        .select('feature_flags')
         .eq('venue_id', VENUE_ID)
         .maybeSingle()
 
@@ -210,18 +210,11 @@ export default function ShuttleConfigPage() {
         const flags = (data.feature_flags ?? {}) as Record<string, unknown>
         const sc = (flags.shuttle_config ?? {}) as Record<string, unknown>
 
-        // Merge legacy flat fields with new config
         const loaded: ShuttleConfig = {
           pickup_locations: (sc.pickup_locations as PickupLocation[]) ?? [],
           default_transit_time: (sc.default_transit_time as number) ?? 25,
-          available_shuttles:
-            (sc.available_shuttles as number) ??
-            (data.shuttle_count as number | null) ??
-            2,
-          seats_per_shuttle:
-            (sc.seats_per_shuttle as number) ??
-            (data.seats_per_shuttle as number | null) ??
-            40,
+          available_shuttles: (sc.available_shuttles as number) ?? 2,
+          seats_per_shuttle: (sc.seats_per_shuttle as number) ?? 40,
           shuttle_provider: (sc.shuttle_provider as string) ?? '',
           provider_contact: (sc.provider_contact as string) ?? '',
           notes_to_couples: (sc.notes_to_couples as string) ?? '',
@@ -269,18 +262,10 @@ export default function ShuttleConfigPage() {
         notes_to_couples: config.notes_to_couples,
       }
 
-      // Also write flat fields so the couple transportation page can read them
-      const pickupNames = config.pickup_locations
-        .map((l) => l.name)
-        .filter(Boolean)
-
       const { error: updateErr } = await supabase
         .from('venue_config')
         .update({
           feature_flags: flags,
-          shuttle_pickup_locations: pickupNames,
-          shuttle_count: config.available_shuttles,
-          seats_per_shuttle: config.seats_per_shuttle,
           updated_at: new Date().toISOString(),
         })
         .eq('venue_id', VENUE_ID)

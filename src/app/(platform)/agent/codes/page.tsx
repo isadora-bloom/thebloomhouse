@@ -25,7 +25,7 @@ interface ClientCode {
   venue_id: string
   wedding_id: string
   code: string
-  format: string | null
+  format_template: string | null
   created_at: string
   // Joined
   partner1_name?: string
@@ -205,7 +205,7 @@ export default function ClientCodesPage() {
           venue_id,
           wedding_id,
           code,
-          format,
+          format_template,
           created_at,
           weddings!client_codes_wedding_id_fkey (
             wedding_date,
@@ -230,7 +230,7 @@ export default function ClientCodesPage() {
           venue_id: row.venue_id,
           wedding_id: row.wedding_id,
           code: row.code,
-          format: row.format,
+          format_template: row.format_template,
           created_at: row.created_at,
           partner1_name: p1
             ? [p1.first_name, p1.last_name].filter(Boolean).join(' ')
@@ -351,7 +351,7 @@ export default function ClientCodesPage() {
       const existingWeddingIds = new Set(codes.map((c) => c.wedding_id))
 
       // Generate codes for weddings without one
-      const newCodes: { venue_id: string; wedding_id: string; code: string; format: string }[] = []
+      const newCodes: { venue_id: string; wedding_id: string; code: string; format_template: string }[] = []
 
       for (const w of weddings) {
         if (existingWeddingIds.has(w.id)) continue
@@ -367,7 +367,7 @@ export default function ClientCodesPage() {
           venue_id: VENUE_ID,
           wedding_id: w.id,
           code,
-          format: 'RM-YYYY-NAME',
+          format_template: 'RM-YYYY-NAME',
         })
       }
 

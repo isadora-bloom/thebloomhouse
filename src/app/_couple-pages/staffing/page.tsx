@@ -1,7 +1,7 @@
 'use client'
 
 // Feature: configurable via venue_config.feature_flags
-// Table: staffing_calculator (JSONB answers + computed results)
+// Table: staffing_assignments (calculator data stored as role='_calculator' with answers in notes)
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -247,17 +247,23 @@ export default function StaffingCalculatorPage() {
   const supabase = createClient()
   const TOTAL_STEPS = 6
 
-  // Load existing data
+  // Load existing data from staffing_assignments (role='_calculator')
   const loadData = useCallback(async () => {
     try {
       const { data } = await supabase
-        .from('staffing_calculator')
-        .select('answers')
+        .from('staffing_assignments')
+        .select('notes')
         .eq('wedding_id', WEDDING_ID)
+        .eq('role', '_calculator')
         .maybeSingle()
 
-      if (data?.answers) {
-        setAnswers((prev) => ({ ...prev, ...data.answers }))
+      if (data?.notes) {
+        try {
+          const parsed = JSON.parse(data.notes as string)
+          if (parsed.answers) {
+            setAnswers((prev) => ({ ...prev, ...parsed.answers }))
+          }
+        } catch { /* ignore parse errors */ }
       }
     } catch (err) {
       console.error('Failed to load staffing:', err)
@@ -281,13 +287,11 @@ export default function StaffingCalculatorPage() {
   const totalStaff = friday.total + saturday.total
   const totalCost = totalStaff * STAFF_RATE
 
-  // Save
+  // Save — store calculator state in staffing_assignments with role='_calculator'
   const handleSave = async () => {
     setSaving(true)
     try {
-      const payload = {
-        venue_id: VENUE_ID,
-        wedding_id: WEDDING_ID,
+      const calculatorData = {
         answers,
         friday_bartenders: friday.bartenders,
         friday_extra_hands: friday.extraHands,
@@ -299,9 +303,29 @@ export default function StaffingCalculatorPage() {
         total_cost: totalCost,
       }
 
-      await supabase
-        .from('staffing_calculator')
-        .upsert(payload, { onConflict: 'wedding_id' })
+      // Check if calculator row exists
+      const { data: existing } = await supabase
+        .from('staffing_assignments')
+        .select('id')
+        .eq('wedding_id', WEDDING_ID)
+        .eq('role', '_calculator')
+        .maybeSingle()
+
+      if (existing) {
+        await supabase
+          .from('staffing_assignments')
+          .update({ notes: JSON.stringify(calculatorData) })
+          .eq('id', existing.id)
+      } else {
+        await supabase
+          .from('staffing_assignments')
+          .insert({
+            venue_id: VENUE_ID,
+            wedding_id: WEDDING_ID,
+            role: '_calculator',
+            notes: JSON.stringify(calculatorData),
+          })
+      }
 
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)

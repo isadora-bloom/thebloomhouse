@@ -34,7 +34,7 @@ interface SocialPost {
   id: string
   venue_id: string
   platform: string
-  post_date: string
+  posted_at: string
   caption: string | null
   url: string | null
   reach: number
@@ -129,7 +129,7 @@ export default function SocialPage() {
     const supabase = getSupabase()
     try {
       const [postRes, weddingRes] = await Promise.all([
-        supabase.from('social_posts').select('*').order('post_date', { ascending: false }),
+        supabase.from('social_posts').select('*').order('posted_at', { ascending: false }),
         supabase.from('weddings').select('id, created_at'),
       ])
       if (postRes.error) throw postRes.error
@@ -152,7 +152,7 @@ export default function SocialPage() {
   // Inquiry correlation: count inquiries in 14-day window after each post
   const postsWithCorrelation = useMemo(() => {
     return posts.map((p) => {
-      const postDate = new Date(p.post_date).getTime()
+      const postDate = new Date(p.posted_at).getTime()
       const windowEnd = postDate + 14 * 24 * 60 * 60 * 1000
       const spikeCount = weddings.filter((w) => {
         const t = new Date(w.created_at).getTime()
@@ -176,7 +176,7 @@ export default function SocialPage() {
     try {
       const { error: err } = await supabase.from('social_posts').insert({
         platform: formPlatform,
-        post_date: formDate || new Date().toISOString().slice(0, 10),
+        posted_at: formDate || new Date().toISOString().slice(0, 10),
         caption: formCaption || null,
         url: formUrl || null,
         reach: Number(formReach) || 0,
@@ -261,7 +261,7 @@ export default function SocialPage() {
                       {formatLabel(p.platform)}
                     </span>
                     <span className="text-xs text-sage-500">
-                      {new Date(p.post_date).toLocaleDateString()}
+                      {new Date(p.posted_at).toLocaleDateString()}
                     </span>
                     {idx === 0 && <span className="text-[10px] font-bold uppercase tracking-wider text-gold-600">Top Engagement</span>}
                     {p.isViral && (

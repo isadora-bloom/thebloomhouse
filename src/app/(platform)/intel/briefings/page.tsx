@@ -214,10 +214,10 @@ function BriefingHistoryItem({ briefing }: { briefing: Briefing }) {
           </span>
           <span
             className={`text-xs font-medium px-2 py-0.5 rounded-full ${outlookStyles(
-              content.demand_outlook.outlook
+              content?.demand_outlook?.outlook ?? 'neutral'
             )}`}
           >
-            {outlookLabel(content.demand_outlook.outlook)} ({content.demand_outlook.score})
+            {outlookLabel(content?.demand_outlook?.outlook ?? 'neutral')} ({content?.demand_outlook?.score ?? '--'})
           </span>
         </div>
         {expanded ? (
@@ -492,11 +492,11 @@ export default function BriefingsPage() {
               </span>
               <span
                 className={`text-xs font-medium px-2.5 py-1 rounded-full ${outlookStyles(
-                  content.demand_outlook.outlook
+                  content?.demand_outlook?.outlook ?? 'neutral'
                 )}`}
               >
-                {outlookLabel(content.demand_outlook.outlook)} Outlook &middot;{' '}
-                {content.demand_outlook.score}/100
+                {outlookLabel(content?.demand_outlook?.outlook ?? 'neutral')} Outlook &middot;{' '}
+                {content?.demand_outlook?.score ?? '--'}/100
               </span>
             </div>
           </div>

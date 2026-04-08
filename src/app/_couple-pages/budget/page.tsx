@@ -56,7 +56,7 @@ interface BudgetItem {
   payment_due_date: string | null
   notes: string | null
   is_custom_category: boolean
-  display_order: number
+  sort_order: number
   payments?: PaymentRecord[]
 }
 
@@ -204,7 +204,7 @@ export default function BudgetPage() {
       .from('budget_items')
       .select('*, budget_payments(*)')
       .eq('wedding_id', WEDDING_ID)
-      .order('display_order', { ascending: true })
+      .order('sort_order', { ascending: true })
 
     if (!error && data) {
       const mapped = data.map((d: Record<string, unknown>) => ({
@@ -218,7 +218,7 @@ export default function BudgetPage() {
         payment_due_date: d.payment_due_date as string | null,
         notes: d.notes as string | null,
         is_custom_category: (d.is_custom_category as boolean) || false,
-        display_order: (d.display_order as number) || 0,
+        sort_order: (d.sort_order as number) || 0,
         payments: ((d.budget_payments || []) as PaymentRecord[]),
       }))
       // Calculate paid from payments
@@ -236,13 +236,13 @@ export default function BudgetPage() {
   const fetchBudgetConfig = useCallback(async () => {
     const { data } = await supabase
       .from('wedding_config')
-      .select('total_budget, share_budget_with_venue')
+      .select('total_budget, budget_shared')
       .eq('wedding_id', WEDDING_ID)
       .single()
 
     if (data) {
       setTotalBudget((data as Record<string, unknown>).total_budget as number || 0)
-      setShareWithVenue((data as Record<string, unknown>).share_budget_with_venue as boolean || false)
+      setShareWithVenue((data as Record<string, unknown>).budget_shared as boolean || false)
     }
   }, [supabase])
 
@@ -320,7 +320,7 @@ export default function BudgetPage() {
     setShareWithVenue(val)
     await supabase
       .from('wedding_config')
-      .upsert({ wedding_id: WEDDING_ID, share_budget_with_venue: val }, { onConflict: 'wedding_id' })
+      .upsert({ wedding_id: WEDDING_ID, budget_shared: val }, { onConflict: 'wedding_id' })
   }
 
   // ---- Item modal ----
@@ -358,8 +358,8 @@ export default function BudgetPage() {
       payment_due_date: form.payment_due_date || null,
       notes: form.notes.trim() || null,
       is_custom_category: isCustom,
-      display_order: editingId
-        ? items.find((i) => i.id === editingId)?.display_order || items.length + 1
+      sort_order: editingId
+        ? items.find((i) => i.id === editingId)?.sort_order || items.length + 1
         : items.length + 1,
     }
 

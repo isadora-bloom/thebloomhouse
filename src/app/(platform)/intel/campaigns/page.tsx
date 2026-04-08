@@ -55,17 +55,18 @@ interface Campaign {
 // ---------------------------------------------------------------------------
 
 function fmt$(v: number): string {
+  if (!Number.isFinite(v)) return '$0'
   return `$${Math.round(v).toLocaleString()}`
 }
 
 function fmtRoi(revenue: number, spend: number): string {
-  if (spend === 0) return '--'
+  if (!Number.isFinite(revenue) || !Number.isFinite(spend) || spend === 0) return '--'
   const roi = ((revenue - spend) / spend) * 100
   return `${roi.toFixed(0)}%`
 }
 
 function costPer(total: number, count: number): string {
-  if (count === 0) return '--'
+  if (!Number.isFinite(total) || !Number.isFinite(count) || count === 0) return '--'
   return fmt$(total / count)
 }
 
@@ -159,10 +160,14 @@ export default function CampaignsPage() {
 
   // ROI comparison chart data
   const chartData = useMemo(() => {
-    return campaigns.map((c) => ({
-      name: c.name.length > 15 ? c.name.slice(0, 15) + '...' : c.name,
-      roi: c.spend > 0 ? Math.round(((c.revenue - c.spend) / c.spend) * 100) : 0,
-    })).sort((a, b) => b.roi - a.roi).slice(0, 10)
+    return campaigns.map((c) => {
+      const spend = Number.isFinite(c.spend) ? c.spend : 0
+      const revenue = Number.isFinite(c.revenue) ? c.revenue : 0
+      return {
+        name: c.name.length > 15 ? c.name.slice(0, 15) + '...' : c.name,
+        roi: spend > 0 ? Math.round(((revenue - spend) / spend) * 100) : 0,
+      }
+    }).sort((a, b) => b.roi - a.roi).slice(0, 10)
   }, [campaigns])
 
   // Open modal for edit

@@ -29,8 +29,8 @@ interface NLQMessage {
 
 interface HistoryRow {
   id: string
-  query: string
-  response: string
+  query_text: string
+  response_text: string
   tokens_used: number | null
   cost: number | null
   helpful: boolean | null
@@ -189,7 +189,7 @@ export default function NaturalLanguageQueryPage() {
       const supabase = createClient()
       const { data } = await supabase
         .from('natural_language_queries')
-        .select('id, query, response, tokens_used, cost, helpful, created_at')
+        .select('id, query_text, response_text, tokens_used, cost, helpful, created_at')
         .order('created_at', { ascending: true })
         .limit(50)
 
@@ -199,7 +199,7 @@ export default function NaturalLanguageQueryPage() {
           msgs.push({
             id: `user-${row.id}`,
             role: 'user',
-            content: row.query,
+            content: row.query_text,
             queryId: null,
             tokensUsed: null,
             cost: null,
@@ -209,7 +209,7 @@ export default function NaturalLanguageQueryPage() {
           msgs.push({
             id: `ai-${row.id}`,
             role: 'assistant',
-            content: row.response,
+            content: row.response_text,
             queryId: row.id,
             tokensUsed: row.tokens_used,
             cost: row.cost,

@@ -296,18 +296,34 @@ export default function GuestCareNotesPage() {
 
   const supabase = createClient()
 
-  // Load existing data
+  // Load existing data — each section is stored as a row in guest_care_notes
+  // with care_type = section key, guest_name = JSON {has}, note = text notes
   const loadData = useCallback(async () => {
     try {
       const { data } = await supabase
         .from('guest_care_notes')
-        .select('data, updated_at')
+        .select('id, care_type, guest_name, note, created_at')
         .eq('wedding_id', WEDDING_ID)
-        .maybeSingle()
 
-      if (data) {
-        setFormData(mergeWithDefaults(data.data))
-        setSavedAt(data.updated_at)
+      if (data && data.length > 0) {
+        const saved: Record<string, Partial<SectionValue>> = {}
+        let latestAt: string | null = null
+        for (const row of data) {
+          const key = row.care_type as string
+          let has: boolean | null = null
+          try {
+            const parsed = JSON.parse(row.guest_name as string)
+            has = parsed.has ?? null
+          } catch {
+            // guest_name might not be JSON — treat as null
+          }
+          saved[key] = { has, notes: (row.note as string) || '' }
+          if (row.created_at && (!latestAt || row.created_at > latestAt)) {
+            latestAt = row.created_at as string
+          }
+        }
+        setFormData(mergeWithDefaults(saved))
+        if (latestAt) setSavedAt(latestAt)
       }
     } catch (err) {
       console.error('Failed to load guest care notes:', err)
@@ -339,20 +355,27 @@ export default function GuestCareNotesPage() {
     setSaved(false)
   }
 
-  // Save
+  // Save — upsert one row per section into guest_care_notes
   const handleSave = async () => {
     setSaving(true)
     try {
-      const payload = {
+      const rows = SECTIONS.map((s) => ({
         venue_id: VENUE_ID,
         wedding_id: WEDDING_ID,
-        data: formData,
-        updated_at: new Date().toISOString(),
-      }
+        care_type: s.key,
+        guest_name: JSON.stringify({ has: formData[s.key]?.has ?? null }),
+        note: formData[s.key]?.notes || '',
+      }))
+
+      // Delete existing rows for this wedding and re-insert
+      await supabase
+        .from('guest_care_notes')
+        .delete()
+        .eq('wedding_id', WEDDING_ID)
 
       await supabase
         .from('guest_care_notes')
-        .upsert(payload, { onConflict: 'wedding_id' })
+        .insert(rows)
 
       setSavedAt(new Date().toISOString())
       setDirty(false)

@@ -36,7 +36,7 @@ interface WeddingRow {
   venue_id: string
   status: string
   booking_value: number | null
-  event_date: string | null
+  wedding_date: string | null
   source: string | null
   created_at: string
 }
@@ -132,7 +132,7 @@ function ClientsPageInner() {
     const supabase = getSupabase()
     try {
       const [weddingRes, personRes, contactRes] = await Promise.all([
-        supabase.from('weddings').select('id, venue_id, status, booking_value, event_date, source, created_at').order('created_at', { ascending: false }),
+        supabase.from('weddings').select('id, venue_id, status, booking_value, wedding_date, source, created_at').order('created_at', { ascending: false }),
         supabase.from('people').select('id, wedding_id, first_name, last_name, role'),
         supabase.from('contacts').select('id, person_id, type, value'),
       ])
@@ -179,7 +179,7 @@ function ClientsPageInner() {
         phone,
         status: w.status,
         source: w.source ?? 'Unknown',
-        eventDate: w.event_date,
+        eventDate: w.wedding_date,
         revenue: w.booking_value ?? 0,
         coordinator: '--',
         created_at: w.created_at,

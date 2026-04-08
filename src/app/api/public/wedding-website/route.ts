@@ -133,7 +133,7 @@ export async function GET(request: NextRequest) {
         .order('name'),
       supabase
         .from('weddings')
-        .select('id, event_date, guest_count')
+        .select('id, wedding_date, guest_count')
         .eq('id', weddingId)
         .single(),
       supabase
@@ -167,7 +167,7 @@ export async function GET(request: NextRequest) {
       meal_options: mealOptions ?? [],
       timeline: timeline ?? [],
       accommodations: accommodations ?? [],
-      event_date: wedding?.event_date ?? null,
+      event_date: wedding?.wedding_date ?? null,
       rsvp_config: rsvpConfig
         ? {
             ask_meal_choice: rsvpConfig.ask_meal_choice ?? true,

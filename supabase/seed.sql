@@ -896,11 +896,11 @@ INSERT INTO contracts (id, venue_id, wedding_id, filename, file_type, storage_pa
 -- 46. INSPO GALLERY
 -- ============================================
 INSERT INTO inspo_gallery (id, venue_id, image_url, caption, tags) VALUES
-  ('d4000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '/placeholder/hilltop-ceremony.jpg', 'Golden hour ceremony on the hilltop', ARRAY['ceremony', 'outdoor', 'golden-hour']);
+  ('d4000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', 'https://images.unsplash.com/photo-1591604466107-ec97de577aff?w=800', 'Golden hour ceremony on the hilltop', ARRAY['ceremony', 'outdoor', 'golden-hour']);
 INSERT INTO inspo_gallery (id, venue_id, image_url, caption, tags) VALUES
-  ('d4000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', '/placeholder/reception-hall.jpg', 'String lights and farm tables in the reception hall', ARRAY['reception', 'indoor', 'rustic']);
+  ('d4000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', 'https://images.unsplash.com/photo-1519167758481-83f550bb49b3?w=800', 'String lights and farm tables in the reception hall', ARRAY['reception', 'indoor', 'rustic']);
 INSERT INTO inspo_gallery (id, venue_id, image_url, caption, tags) VALUES
-  ('d4000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', '/placeholder/bridal-suite.jpg', 'Getting ready in the bridal suite', ARRAY['bridal-suite', 'preparation']);
+  ('d4000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800', 'Getting ready in the bridal suite', ARRAY['bridal-suite', 'preparation']);
 
 -- ============================================
 -- 47. API COSTS
