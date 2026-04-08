@@ -4,7 +4,7 @@ import type { NextRequest } from 'next/server'
 
 // Routes that never require authentication
 const PUBLIC_ROUTES = ['/', '/login', '/signup', '/couple/login', '/demo']
-const PUBLIC_PREFIXES = ['/api/', '/_next/']
+const PUBLIC_PREFIXES = ['/api/', '/_next/', '/demo/']
 
 // Platform routes require coordinator/manager/admin role
 const PLATFORM_PREFIXES = ['/agent', '/intel', '/portal', '/settings']
@@ -27,6 +27,42 @@ function isPlatformRoute(pathname: string): boolean {
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
   let response = NextResponse.next({ request })
+
+  // -----------------------------------------------------------------------
+  // Demo routes: /demo/* → rewrite to the real route with demo cookies
+  // e.g. /demo/agent/inbox → /agent/inbox (with bloom_demo=true cookie)
+  // This makes every demo page crawlable without JS / manual cookie setup.
+  // -----------------------------------------------------------------------
+  if (pathname.startsWith('/demo/')) {
+    const realPath = pathname.replace(/^\/demo/, '') || '/'
+    const rewriteUrl = request.nextUrl.clone()
+    rewriteUrl.pathname = realPath
+
+    // Set cookies on the REQUEST so server components can read them during SSR
+    const demoCookies = {
+      bloom_demo: 'true',
+      bloom_venue: '22222222-2222-2222-2222-222222222201',
+      bloom_scope: JSON.stringify({
+        level: 'venue',
+        venueId: '22222222-2222-2222-2222-222222222201',
+        venueName: 'Hawthorne Manor',
+        companyName: 'The Crestwood Collection',
+      }),
+    }
+    for (const [name, value] of Object.entries(demoCookies)) {
+      request.cookies.set(name, value)
+    }
+
+    // Rewrite to the real path, forwarding the modified request
+    response = NextResponse.rewrite(rewriteUrl, { request })
+
+    // Also set cookies on the RESPONSE so the browser persists them
+    const cookieOpts = { path: '/', maxAge: 86400 } as const
+    for (const [name, value] of Object.entries(demoCookies)) {
+      response.cookies.set(name, value, cookieOpts)
+    }
+    return response
+  }
 
   // -----------------------------------------------------------------------
   // Demo mode: if bloom_demo cookie is set, skip auth checks
