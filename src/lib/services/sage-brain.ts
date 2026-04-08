@@ -37,6 +37,12 @@ export interface SageResponse {
   confidence: number
   tokensUsed: number
   cost: number
+  /** Whether the knowledge base had relevant matches */
+  kbMatch: boolean
+  /** The AI assistant name configured for this venue (e.g. "Sage") */
+  aiName: string
+  /** First name of partner_1, if available */
+  coupleFirstName: string | null
 }
 
 interface WeddingContext {
@@ -358,10 +364,16 @@ export async function generateSageResponse(
 
   const confidence = assessConfidence(result.text, kbMatch)
 
+  // Extract aiName from personality config
+  const aiName = (personalityData.config as Record<string, unknown>)?.ai_name as string | undefined
+
   return {
     response: result.text,
     confidence,
     tokensUsed: result.inputTokens + result.outputTokens,
     cost: result.cost,
+    kbMatch,
+    aiName: aiName || 'Sage',
+    coupleFirstName: weddingContext?.coupleName?.split(' ')[0] ?? null,
   }
 }

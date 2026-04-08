@@ -21,6 +21,7 @@ import { CLIENT_RULES, getClientTaskPrompt } from '@/config/prompts/task-prompts
 import { searchKnowledgeBase } from '@/lib/services/knowledge-base'
 import { buildSageIntelligenceContext } from '@/lib/services/sage-intelligence'
 import { getApprovedPhrases } from '@/lib/services/review-language'
+import { getLearningContext, getVoicePreferences } from '@/lib/services/learning'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -292,8 +293,52 @@ export async function generateClientDraft(
     // Review phrases are enrichment, not critical
   }
 
-  // Assemble the full system prompt (Layer 1 + Client Rules + Layer 2 + Layer 3)
-  const systemPrompt = `${UNIVERSAL_RULES}\n\n${CLIENT_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}`
+  // Add learning context from past feedback (approved drafts, rejections, edits)
+  let learningBlock = ''
+  try {
+    const [learningContext, voicePrefs] = await Promise.all([
+      getLearningContext(venueId, 'client'),
+      getVoicePreferences(venueId),
+    ])
+
+    const sections: string[] = []
+
+    if (learningContext.goodExamples.length > 0) {
+      const examples = learningContext.goodExamples
+        .map((ex) => `Subject: ${ex.subject}\n${ex.body.slice(0, 400)}`)
+        .join('\n---\n')
+      sections.push(`### Approved Draft Examples\nThese drafts were approved by the coordinator. Follow their tone and structure:\n${examples}`)
+    }
+
+    if (learningContext.rejectionReasons.length > 0) {
+      const reasons = learningContext.rejectionReasons.map((r) => `- ${r}`).join('\n')
+      sections.push(`### Patterns to Avoid\nThese are reasons drafts were rejected. Do NOT repeat these mistakes:\n${reasons}`)
+    }
+
+    if (learningContext.editPatterns.length > 0) {
+      const patterns = learningContext.editPatterns
+        .map((p) => `Original: "${p.original.slice(0, 200)}"\nCorrected to: "${p.edited.slice(0, 200)}"`)
+        .join('\n---\n')
+      sections.push(`### Common Corrections\nThe coordinator typically makes these kinds of edits. Incorporate them upfront:\n${patterns}`)
+    }
+
+    if (voicePrefs.bannedPhrases.length > 0) {
+      sections.push(`### Banned Phrases\nNEVER use these phrases: ${voicePrefs.bannedPhrases.join(', ')}`)
+    }
+
+    if (voicePrefs.approvedPhrases.length > 0) {
+      sections.push(`### Approved Phrases\nFeel free to use these phrases naturally: ${voicePrefs.approvedPhrases.join(', ')}`)
+    }
+
+    if (sections.length > 0) {
+      learningBlock = `\n\n## LEARNING FROM PAST FEEDBACK\n${sections.join('\n\n')}`
+    }
+  } catch {
+    // Learning context is enrichment, not critical
+  }
+
+  // Assemble the full system prompt (Layer 1 + Client Rules + Layer 2 + Layer 3 + learning)
+  const systemPrompt = `${UNIVERSAL_RULES}\n\n${CLIENT_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${learningBlock}`
 
   const result = await callAI({
     systemPrompt,
@@ -399,7 +444,44 @@ export async function generateOnboardingEmail(
     contextBlock += `\n\n## SELECTED CLOSING (weave this in naturally):\n"${closingPhrase}"`
   }
 
-  const systemPrompt = `${UNIVERSAL_RULES}\n\n${CLIENT_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}`
+  // Add learning context from past feedback
+  let learningBlock = ''
+  try {
+    const [learningContext, voicePrefs] = await Promise.all([
+      getLearningContext(venueId, 'client'),
+      getVoicePreferences(venueId),
+    ])
+
+    const sections: string[] = []
+
+    if (learningContext.goodExamples.length > 0) {
+      const examples = learningContext.goodExamples
+        .map((ex) => `Subject: ${ex.subject}\n${ex.body.slice(0, 400)}`)
+        .join('\n---\n')
+      sections.push(`### Approved Draft Examples\n${examples}`)
+    }
+
+    if (learningContext.rejectionReasons.length > 0) {
+      const reasons = learningContext.rejectionReasons.map((r) => `- ${r}`).join('\n')
+      sections.push(`### Patterns to Avoid\n${reasons}`)
+    }
+
+    if (voicePrefs.bannedPhrases.length > 0) {
+      sections.push(`### Banned Phrases\nNEVER use: ${voicePrefs.bannedPhrases.join(', ')}`)
+    }
+
+    if (voicePrefs.approvedPhrases.length > 0) {
+      sections.push(`### Approved Phrases\nUse naturally: ${voicePrefs.approvedPhrases.join(', ')}`)
+    }
+
+    if (sections.length > 0) {
+      learningBlock = `\n\n## LEARNING FROM PAST FEEDBACK\n${sections.join('\n\n')}`
+    }
+  } catch {
+    // Learning context is enrichment, not critical
+  }
+
+  const systemPrompt = `${UNIVERSAL_RULES}\n\n${CLIENT_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${learningBlock}`
 
   const result = await callAI({
     systemPrompt,

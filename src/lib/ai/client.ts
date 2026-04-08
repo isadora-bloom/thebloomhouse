@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { createServiceClient } from '@/lib/supabase/service'
+import { calculateCost as calculateModelCost } from '@/lib/ai/cost-tracker'
 
 let anthropicClient: Anthropic | null = null
 
@@ -26,11 +27,8 @@ interface CallAIResult {
   cost: number
 }
 
-const CLAUDE_INPUT_COST_PER_M = 3.0
-const CLAUDE_OUTPUT_COST_PER_M = 15.0
-
-function calculateCost(inputTokens: number, outputTokens: number): number {
-  return (inputTokens * CLAUDE_INPUT_COST_PER_M + outputTokens * CLAUDE_OUTPUT_COST_PER_M) / 1_000_000
+function calculateCost(model: string, inputTokens: number, outputTokens: number): number {
+  return calculateModelCost(model, inputTokens, outputTokens)
 }
 
 async function logUsage(
@@ -81,7 +79,7 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
   const text = response.content[0].type === 'text' ? response.content[0].text : ''
   const inputTokens = response.usage.input_tokens
   const outputTokens = response.usage.output_tokens
-  const cost = calculateCost(inputTokens, outputTokens)
+  const cost = calculateCost(model, inputTokens, outputTokens)
 
   logUsage(venueId, taskType, inputTokens, outputTokens, cost, model)
 
@@ -126,7 +124,7 @@ export async function callAIVision(options: {
   const text = response.content[0].type === 'text' ? response.content[0].text : ''
   const inputTokens = response.usage.input_tokens
   const outputTokens = response.usage.output_tokens
-  const cost = calculateCost(inputTokens, outputTokens)
+  const cost = calculateCost(model, inputTokens, outputTokens)
 
   logUsage(options.venueId, options.taskType ?? 'vision', inputTokens, outputTokens, cost, model)
 

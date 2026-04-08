@@ -151,19 +151,6 @@ export interface Draft {
 // Knowledge & intelligence
 // ---------------------------------------------------------------------------
 
-export interface KnowledgeBaseEntry {
-  id: string
-  venue_id: string
-  category: string
-  question: string
-  answer: string
-  keywords: string[]
-  priority: number
-  is_active: boolean
-  created_at: string
-  updated_at: string
-}
-
 export interface SearchTrend {
   id: string
   venue_id: string
@@ -172,18 +159,6 @@ export interface SearchTrend {
   volume: number
   change_percent: number
   period: string
-  source: string
-  created_at: string
-}
-
-export interface WeatherData {
-  id: string
-  venue_id: string
-  date: string
-  high_temp: number | null
-  low_temp: number | null
-  precipitation: number | null
-  conditions: string | null
   source: string
   created_at: string
 }
@@ -210,43 +185,9 @@ export interface AnomalyAlert {
   created_at: string
 }
 
-export interface AIBriefing {
-  id: string
-  venue_id: string
-  briefing_type: string
-  summary: string
-  details: Record<string, unknown>
-  created_at: string
-}
-
-export interface ReviewLanguage {
-  id: string
-  venue_id: string
-  phrase: string
-  theme: string
-  sentiment_score: number
-  frequency: number
-  source: string
-  approved_for_sage: boolean
-  created_at: string
-}
-
 // ---------------------------------------------------------------------------
 // Portal tables
 // ---------------------------------------------------------------------------
-
-export interface GuestListEntry {
-  id: string
-  wedding_id: string
-  first_name: string
-  last_name: string
-  email: string | null
-  group_name: string | null
-  rsvp_status: string
-  meal_choice: string | null
-  plus_one: boolean
-  created_at: string
-}
 
 export interface TimelineItem {
   id: string
@@ -271,15 +212,6 @@ export interface BudgetItem {
   is_paid: boolean
   notes: string | null
   created_at: string
-}
-
-export interface SageConversation {
-  id: string
-  wedding_id: string
-  venue_id: string
-  status: string
-  created_at: string
-  updated_at: string
 }
 
 export interface Message {
@@ -308,17 +240,11 @@ export interface Database {
       contacts: { Row: Contact }
       interactions: { Row: Interaction }
       drafts: { Row: Draft }
-      knowledge_base: { Row: KnowledgeBaseEntry }
       search_trends: { Row: SearchTrend }
-      weather_data: { Row: WeatherData }
       economic_indicators: { Row: EconomicIndicator }
       anomaly_alerts: { Row: AnomalyAlert }
-      ai_briefings: { Row: AIBriefing }
-      review_language: { Row: ReviewLanguage }
-      guest_list: { Row: GuestListEntry }
       timeline: { Row: TimelineItem }
       budget: { Row: BudgetItem }
-      sage_conversations: { Row: SageConversation }
       messages: { Row: Message }
     }
   }

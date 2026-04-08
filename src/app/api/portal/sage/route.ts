@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { callAI } from '@/lib/ai/client'
-import { buildPersonalityPrompt, type PersonalityData } from '@/lib/ai/personality-builder'
-import { buildSageIntelligenceContext } from '@/lib/services/sage-intelligence'
+import { generateSageResponse } from '@/lib/services/sage-brain'
 import { extractPlanningDecisions, savePlanningNotes } from '@/lib/services/planning-extraction'
 import { createNotification } from '@/lib/services/admin-notifications'
 
@@ -27,12 +25,12 @@ export async function POST(request: NextRequest) {
     const supabase = createServiceClient()
 
     // -----------------------------------------------------------------------
-    // 1. Load venue personality config
+    // 1. Validate venue exists
     // -----------------------------------------------------------------------
 
     const { data: venue } = await supabase
       .from('venues')
-      .select('id, name, slug')
+      .select('id')
       .eq('id', venueId)
       .single()
 
@@ -40,232 +38,46 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Venue not found' }, { status: 404 })
     }
 
-    const { data: aiConfig } = await supabase
-      .from('venue_ai_config')
-      .select('*')
-      .eq('venue_id', venueId)
-      .single()
-
-    const { data: venueConfig } = await supabase
-      .from('venue_config')
-      .select('*')
-      .eq('venue_id', venueId)
-      .single()
-
     // -----------------------------------------------------------------------
-    // 2. Load context: USPs, seasonal, knowledge base, wedding info
+    // 2. Load recent conversation history
     // -----------------------------------------------------------------------
 
-    const [uspsResult, seasonalResult, kbResult, weddingResult, historyResult] = await Promise.all([
-      supabase
-        .from('venue_usps')
-        .select('usp_text')
-        .eq('venue_id', venueId)
-        .eq('is_active', true)
-        .order('sort_order'),
-      supabase
-        .from('venue_seasonal_content')
-        .select('season, imagery, phrases')
-        .eq('venue_id', venueId),
-      supabase
-        .from('knowledge_base')
-        .select('question, answer, category, keywords')
-        .eq('venue_id', venueId)
-        .eq('is_active', true),
-      weddingId
-        ? supabase
-            .from('weddings')
-            .select('*, people(*)')
-            .eq('id', weddingId)
-            .single()
-        : Promise.resolve({ data: null }),
-      // Recent conversation history (last 20 messages)
-      weddingId
-        ? supabase
-            .from('sage_conversations')
-            .select('role, content')
-            .eq('wedding_id', weddingId)
-            .order('created_at', { ascending: false })
-            .limit(20)
-        : Promise.resolve({ data: [] }),
-    ])
+    const { data: historyRows } = weddingId
+      ? await supabase
+          .from('sage_conversations')
+          .select('role, content')
+          .eq('wedding_id', weddingId)
+          .order('created_at', { ascending: false })
+          .limit(20)
+      : { data: [] as { role: string; content: string }[] }
 
-    const usps = (uspsResult.data || []).map((u) => u.usp_text)
-    const seasonal: Record<string, { imagery?: string[]; phrases?: string[] }> = {}
-    for (const s of seasonalResult.data || []) {
-      seasonal[s.season] = {
-        imagery: s.imagery ? [s.imagery] : [],
-        phrases: s.phrases || [],
-      }
-    }
-
-    const kbEntries = kbResult.data || []
-    const wedding = weddingResult.data
-    const conversationHistory = (historyResult.data || []).reverse()
+    const conversationHistory = (historyRows || []).reverse()
 
     // -----------------------------------------------------------------------
-    // 3. Search knowledge base for relevant answers
+    // 3. Generate response via sage-brain (all 4 prompt layers + KB + context)
     // -----------------------------------------------------------------------
 
-    const messageLower = message.toLowerCase()
-    const relevantKB = kbEntries.filter((entry) => {
-      const questionMatch = entry.question.toLowerCase().includes(messageLower) ||
-        messageLower.includes(entry.question.toLowerCase().slice(0, 20))
-      const keywordMatch = (entry.keywords || []).some((kw: string) =>
-        messageLower.includes(kw.toLowerCase())
-      )
-      const categoryMatch = entry.category &&
-        messageLower.includes(entry.category.toLowerCase())
-      return questionMatch || keywordMatch || categoryMatch
-    })
-
-    // -----------------------------------------------------------------------
-    // 4. Build Sage system prompt for portal context
-    // -----------------------------------------------------------------------
-
-    const personalityData: PersonalityData = {
-      config: aiConfig || {},
-      venue: { name: venue.name },
-      venue_config: venueConfig || {},
-      usps,
-      seasonal,
-      signoff: '',
-    }
-
-    const personalityPrompt = buildPersonalityPrompt(personalityData)
-    const aiName = aiConfig?.ai_name || 'Sage'
-
-    // Build wedding context
-    let weddingContext = ''
-    if (wedding) {
-      const people = (wedding.people || []) as Array<{
-        first_name: string
-        last_name: string
-        role: string
-      }>
-      const partners = people.filter(
-        (p) => p.role === 'partner1' || p.role === 'partner2'
-      )
-      const coupleNames = partners.map((p) => p.first_name).join(' & ') || 'the couple'
-
-      weddingContext = `
-## CURRENT COUPLE CONTEXT
-- Couple: ${coupleNames}
-- Wedding date: ${wedding.wedding_date || 'Not set'}
-- Estimated guests: ${wedding.guest_count_estimate || 'Not specified'}
-- Status: ${wedding.status}
-`
-    }
-
-    // Build KB context
-    let kbContext = ''
-    if (relevantKB.length > 0) {
-      kbContext = `
-## RELEVANT KNOWLEDGE BASE ENTRIES
-Use these verified answers when relevant:
-
-${relevantKB.map((kb) => `Q: ${kb.question}\nA: ${kb.answer}`).join('\n\n')}
-`
-    }
-
-    // Build conversation history context
-    let historyContext = ''
-    if (conversationHistory.length > 0) {
-      historyContext = `
-## RECENT CONVERSATION
-${conversationHistory.map((m) => `${m.role === 'user' ? 'Couple' : aiName}: ${m.content}`).join('\n')}
-`
-    }
-
-    // -----------------------------------------------------------------------
-    // 4b. Load intelligence context (trends, weather, reviews, anomalies)
-    // -----------------------------------------------------------------------
-
-    let intelligenceContext = ''
-    try {
-      intelligenceContext = await buildSageIntelligenceContext(venueId)
-    } catch (err) {
-      console.warn('[api/portal/sage] Intelligence context unavailable:', err)
-    }
-
-    const systemPrompt = `${personalityPrompt}
-
----
-
-## PORTAL CONCIERGE MODE
-
-You are responding to a couple through their wedding planning portal (not email).
-Keep responses conversational, warm, and helpful. This is a chat interface, so:
-- Keep messages concise (2-4 paragraphs max)
-- Be friendly and personal
-- Use the couple's names when natural
-- If you don't know something, say so honestly and mention you'll flag it for the coordinator
-- Never fabricate venue details, pricing, or availability
-- You are an AI assistant and should be transparent about that if asked
-${weddingContext}
-${kbContext}
-${intelligenceContext}
-${historyContext}
-`
-
-    // -----------------------------------------------------------------------
-    // 5. Call AI
-    // -----------------------------------------------------------------------
-
-    const aiResult = await callAI({
-      systemPrompt,
-      userPrompt: message,
-      maxTokens: 1000,
-      temperature: 0.4,
+    const sageResult = await generateSageResponse({
       venueId,
-      taskType: 'portal_sage_chat',
+      weddingId: weddingId || venueId, // fallback for non-wedding queries
+      message,
+      conversationHistory,
     })
 
-    // -----------------------------------------------------------------------
-    // 6. Assess confidence
-    // -----------------------------------------------------------------------
+    const { confidence, aiName, coupleFirstName } = sageResult
 
+    // -----------------------------------------------------------------------
+    // 4. Apply confidence-based response modifications
+    // -----------------------------------------------------------------------
     // Confidence tiers:
-    //   ≥80: Sage responds normally
-    //   50-79: Sage responds with caveat ("I believe... but let me confirm")
-    //          + triggers alert for venue staff to review
-    //   <50: Sage gives warm non-answer ("Great question! Let me check with
-    //        your coordinator") + triggers alert
+    //   >=80: Sage responds normally
+    //   50-79: Sage responds with caveat + triggers alert for venue staff
+    //   <50: Sage gives warm non-answer + triggers alert
 
-    let confidence = 85 // default: Sage is generally confident
-
-    if (relevantKB.length > 0) {
-      confidence = 95 // KB has a verified answer
-    } else {
-      // Detect hedging language as a confidence signal
-      const hedges = [
-        "i'm not sure",
-        "i'll need to check",
-        "let me flag",
-        "i don't have",
-        "your coordinator",
-        "i'll have",
-        "check with",
-        "confirm with",
-      ]
-      const responseLower = aiResult.text.toLowerCase()
-      const hedgeCount = hedges.filter((h) => responseLower.includes(h)).length
-      if (hedgeCount >= 2) {
-        confidence = 45
-      } else if (hedgeCount === 1) {
-        confidence = 65
-      }
-    }
-
-    // -----------------------------------------------------------------------
-    // 6b. Apply confidence-based response modifications
-    // -----------------------------------------------------------------------
-
-    let finalResponse = aiResult.text
+    let finalResponse = sageResult.response
 
     if (confidence < 50) {
       // Very uncertain — don't guess, give a warm non-answer
-      const coupleFirstName = wedding?.people?.[0]?.first_name
       const greeting = coupleFirstName ? `Hi ${coupleFirstName}!` : 'Hi there!'
       finalResponse = `${greeting} That's a great question. I want to make sure I give you the right answer, so let me check with your coordinator and get back to you on this. I'll make sure they see your question right away!`
     } else if (confidence < 80) {
@@ -276,7 +88,7 @@ ${historyContext}
     }
 
     // -----------------------------------------------------------------------
-    // 7. Save messages to database
+    // 5. Save messages to database
     // -----------------------------------------------------------------------
 
     // Save user message
@@ -310,8 +122,8 @@ ${historyContext}
         role: 'assistant',
         content: finalResponse,
         model_used: 'claude-sonnet-4-20250514',
-        tokens_used: aiResult.inputTokens + aiResult.outputTokens,
-        cost: aiResult.cost,
+        tokens_used: sageResult.tokensUsed,
+        cost: sageResult.cost,
         confidence_score: confidence,
         flagged_uncertain: confidence < 80,
       })
@@ -319,7 +131,7 @@ ${historyContext}
       .single()
 
     // -----------------------------------------------------------------------
-    // 8. If uncertain, add to queue + alert venue staff
+    // 6. If uncertain, add to queue + alert venue staff
     // -----------------------------------------------------------------------
 
     if (confidence < 80 && sageMsg) {
@@ -349,7 +161,7 @@ ${historyContext}
     }
 
     // -----------------------------------------------------------------------
-    // 9. Return response
+    // 7. Return response
     // -----------------------------------------------------------------------
 
     return NextResponse.json({
