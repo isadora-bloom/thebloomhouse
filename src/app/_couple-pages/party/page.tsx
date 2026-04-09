@@ -12,11 +12,11 @@ import {
   ChevronUp,
   ChevronDown,
   User,
-  RefreshCw,
   Search,
   AlertCircle,
   Check,
   ImageOff,
+  Info,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -142,7 +142,6 @@ export default function WeddingPartyPage() {
   const [guestOptions, setGuestOptions] = useState<GuestOption[]>([])
   const [guestSearch, setGuestSearch] = useState('')
   const [showGuestPicker, setShowGuestPicker] = useState(false)
-  const [syncingToCeremony, setSyncingToCeremony] = useState(false)
   const [syncMessage, setSyncMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
   const supabase = createClient()
@@ -213,6 +212,85 @@ export default function WeddingPartyPage() {
     setGuestSearch('')
   }
 
+  // ---- Ceremony auto-sync helpers ----
+  // Each wedding party member is mirrored into ceremony_order with a marker
+  // in `notes` of the form `[party:<wedding_party.id>] auto-synced from wedding party`.
+  // This lets us find / update / delete the linked ceremony row without needing
+  // a dedicated foreign-key column.
+  function partyMarker(memberId: string): string {
+    return `[party:${memberId}] auto-synced from wedding party`
+  }
+
+  async function upsertCeremonyForPartyMember(member: PartyMember) {
+    const section = roleToCeremonySection(member.role)
+    const ceremonyRole = partyRoleToCeremonyRole(member.role)
+    const ceremonySide = partySideToCeremonySide(member.side)
+    const marker = partyMarker(member.id)
+
+    // Look up an existing ceremony row tied to this party member
+    const { data: existing } = await supabase
+      .from('ceremony_order')
+      .select('id')
+      .eq('wedding_id', WEDDING_ID)
+      .ilike('notes', `%[party:${member.id}]%`)
+      .limit(1)
+
+    const existingId = existing?.[0]?.id as string | undefined
+
+    // If the role no longer maps to a ceremony section (e.g., changed to
+    // officiant/pet/other), remove any existing linked entry.
+    if (!section) {
+      if (existingId) {
+        await supabase.from('ceremony_order').delete().eq('id', existingId)
+      }
+      return
+    }
+
+    if (existingId) {
+      await supabase
+        .from('ceremony_order')
+        .update({
+          participant_name: member.name,
+          role: ceremonyRole,
+          side: ceremonySide,
+          section,
+          notes: marker,
+        })
+        .eq('id', existingId)
+      return
+    }
+
+    // Otherwise insert a new row at the end of the section
+    const { data: maxRow } = await supabase
+      .from('ceremony_order')
+      .select('sort_order')
+      .eq('wedding_id', WEDDING_ID)
+      .eq('section', section)
+      .order('sort_order', { ascending: false })
+      .limit(1)
+
+    const nextOrder = ((maxRow?.[0]?.sort_order as number | undefined) || 0) + 1
+
+    await supabase.from('ceremony_order').insert({
+      venue_id: VENUE_ID,
+      wedding_id: WEDDING_ID,
+      participant_name: member.name,
+      role: ceremonyRole,
+      side: ceremonySide,
+      section,
+      sort_order: nextOrder,
+      notes: marker,
+    })
+  }
+
+  async function deleteCeremonyForPartyMember(memberId: string) {
+    await supabase
+      .from('ceremony_order')
+      .delete()
+      .eq('wedding_id', WEDDING_ID)
+      .ilike('notes', `%[party:${memberId}]%`)
+  }
+
   async function handleSave() {
     if (!form.name.trim()) return
 
@@ -235,23 +313,59 @@ export default function WeddingPartyPage() {
       photo_url: form.photo_url.trim() || null,
     }
 
+    let savedMember: PartyMember | null = null
+
     if (editingId) {
-      await supabase.from('wedding_party').update(payload).eq('id', editingId)
+      const { data, error } = await supabase
+        .from('wedding_party')
+        .update(payload)
+        .eq('id', editingId)
+        .select()
+        .single()
+      if (error) {
+        console.error('Failed to update wedding party member:', error)
+        setSyncMessage({ text: 'Failed to save member.', type: 'error' })
+      } else if (data) {
+        savedMember = data as PartyMember
+      }
     } else {
-      await supabase.from('wedding_party').insert({
-        ...payload,
-        sort_order: maxOrder + 1,
-      })
+      const { data, error } = await supabase
+        .from('wedding_party')
+        .insert({ ...payload, sort_order: maxOrder + 1 })
+        .select()
+        .single()
+      if (error) {
+        console.error('Failed to add wedding party member:', error)
+        setSyncMessage({ text: 'Failed to save member.', type: 'error' })
+      } else if (data) {
+        savedMember = data as PartyMember
+      }
+    }
+
+    // Auto-sync to ceremony order
+    if (savedMember) {
+      try {
+        await upsertCeremonyForPartyMember(savedMember)
+      } catch (err) {
+        console.error('Ceremony auto-sync failed:', err)
+        setSyncMessage({ text: 'Saved, but ceremony sync failed.', type: 'error' })
+      }
     }
 
     setShowModal(false)
     setEditingId(null)
     fetchMembers()
+    if (syncMessage) setTimeout(() => setSyncMessage(null), 4000)
   }
 
   async function handleDelete(member: PartyMember) {
-    if (!confirm(`Remove ${member.name} from the wedding party?`)) return
+    if (!confirm(`Remove ${member.name} from the wedding party? This will also remove them from the ceremony order.`)) return
     await supabase.from('wedding_party').delete().eq('id', member.id)
+    try {
+      await deleteCeremonyForPartyMember(member.id)
+    } catch (err) {
+      console.error('Failed to remove from ceremony order:', err)
+    }
     fetchMembers()
   }
 
@@ -275,84 +389,6 @@ export default function WeddingPartyPage() {
     ])
 
     fetchMembers()
-  }
-
-  // ---- Sync to Ceremony ----
-  async function syncToCeremony() {
-    if (!confirm('This will add your wedding party members to the ceremony order. Continue?')) return
-    setSyncingToCeremony(true)
-    setSyncMessage(null)
-
-    try {
-      // Get existing ceremony order to find max sort_order
-      const { data: existing } = await supabase
-        .from('ceremony_order')
-        .select('sort_order')
-        .eq('wedding_id', WEDDING_ID)
-        .order('sort_order', { ascending: false })
-        .limit(1)
-
-      let nextOrder = (existing?.[0]?.sort_order || 0) + 1
-      let addedCount = 0
-
-      // Build inserts grouped by ceremony section
-      const processional: typeof members = []
-      const familyEscort: typeof members = []
-
-      for (const member of members) {
-        const section = roleToCeremonySection(member.role)
-        if (section === 'processional') processional.push(member)
-        else if (section === 'family_escort') familyEscort.push(member)
-        // null = skip (officiant, reader, musician, pet, other)
-      }
-
-      const inserts = []
-
-      // Family escort first, then processional
-      for (const member of familyEscort) {
-        inserts.push({
-          venue_id: VENUE_ID,
-          wedding_id: WEDDING_ID,
-          participant_name: member.name,
-          role: partyRoleToCeremonyRole(member.role),
-          side: partySideToCeremonySide(member.side),
-          sort_order: nextOrder++,
-          notes: `family_escort | Synced from wedding party`,
-        })
-        addedCount++
-      }
-
-      for (const member of processional) {
-        inserts.push({
-          venue_id: VENUE_ID,
-          wedding_id: WEDDING_ID,
-          participant_name: member.name,
-          role: partyRoleToCeremonyRole(member.role),
-          side: partySideToCeremonySide(member.side),
-          sort_order: nextOrder++,
-          notes: `processional | Synced from wedding party`,
-        })
-        addedCount++
-      }
-
-      if (inserts.length > 0) {
-        const { error } = await supabase.from('ceremony_order').insert(inserts)
-        if (error) throw error
-      }
-
-      setSyncMessage({
-        text: addedCount > 0
-          ? `Added ${addedCount} member${addedCount !== 1 ? 's' : ''} to ceremony order.`
-          : 'No applicable members to sync (roles like officiant, reader, musician are not auto-added).',
-        type: 'success',
-      })
-    } catch (err) {
-      console.error('Sync to ceremony failed:', err)
-      setSyncMessage({ text: 'Failed to sync. Please try again.', type: 'error' })
-    } finally {
-      setSyncingToCeremony(false)
-      setTimeout(() => setSyncMessage(null), 5000)
-    }
   }
 
   // ---- Guest picker helpers ----
@@ -500,17 +536,6 @@ export default function WeddingPartyPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {members.length > 0 && (
-            <button
-              onClick={syncToCeremony}
-              disabled={syncingToCeremony}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors hover:bg-gray-50 disabled:opacity-50"
-              style={{ borderColor: 'var(--couple-primary)', color: 'var(--couple-primary)' }}
-            >
-              <RefreshCw className={cn('w-4 h-4', syncingToCeremony && 'animate-spin')} />
-              Sync to Ceremony
-            </button>
-          )}
           <button
             onClick={() => openAdd()}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
@@ -520,6 +545,22 @@ export default function WeddingPartyPage() {
             Add Member
           </button>
         </div>
+      </div>
+
+      {/* Auto-sync notice */}
+      <div
+        className="flex items-start gap-2 px-4 py-2.5 rounded-lg border text-xs"
+        style={{
+          backgroundColor: 'color-mix(in srgb, var(--couple-primary) 5%, white)',
+          borderColor: 'color-mix(in srgb, var(--couple-primary) 15%, white)',
+          color: 'var(--couple-primary)',
+        }}
+      >
+        <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+        <p>
+          <span className="font-medium">Wedding party members are auto-synced to the ceremony order.</span>{' '}
+          Adds, edits, and removals here update the processional and family escort sections automatically.
+        </p>
       </div>
 
       {/* Sync Message */}

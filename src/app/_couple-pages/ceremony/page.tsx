@@ -18,6 +18,9 @@ import {
   ListOrdered,
   Save,
   Check,
+  Tag,
+  UserPlus,
+  Info,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -102,6 +105,15 @@ interface CeremonyEntry {
   role: string
   section: CeremonySection
   sort_order: number
+  notes: string | null
+}
+
+// Marker helpers — used to identify auto-synced ceremony entries
+const PARTY_MARKER_RE = /\[party:([0-9a-f-]+)\]/i
+const TAG_MARKER_RE = /\[tag:([a-z0-9_-]+)\]/i
+function isAutoSynced(entry: CeremonyEntry): boolean {
+  if (!entry.notes) return false
+  return PARTY_MARKER_RE.test(entry.notes) || TAG_MARKER_RE.test(entry.notes)
 }
 
 // Group entries by sort_order to form "steps" (people walking together)
@@ -261,12 +273,36 @@ function AddPersonModal({
 // ---------------------------------------------------------------------------
 
 function PersonCard({ entry }: { entry: CeremonyEntry }) {
+  const isParty = entry.notes && PARTY_MARKER_RE.test(entry.notes)
+  const isTag = entry.notes && TAG_MARKER_RE.test(entry.notes)
   return (
     <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
       <GripVertical className="w-3.5 h-3.5 text-gray-300 shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-gray-800 truncate">{entry.participant_name}</p>
       </div>
+      {isParty && (
+        <span
+          className="px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 flex items-center gap-0.5"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--couple-primary) 12%, white)',
+            color: 'var(--couple-primary)',
+          }}
+          title="Auto-synced from wedding party"
+        >
+          <UserPlus className="w-2.5 h-2.5" />
+          Party
+        </span>
+      )}
+      {isTag && (
+        <span
+          className="px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 flex items-center gap-0.5 bg-emerald-50 text-emerald-700"
+          title="Added from guest tag"
+        >
+          <Tag className="w-2.5 h-2.5" />
+          Tagged
+        </span>
+      )}
       {entry.role && (
         <span
           className="px-2 py-0.5 rounded-full text-[10px] font-medium text-white shrink-0"
@@ -292,6 +328,7 @@ function SectionBuilder({
   onDelete,
   onTraditionalSort,
   onAddPerson,
+  onAddTaggedGuests,
   isRecessional,
 }: {
   sectionKey: CeremonySection
@@ -302,12 +339,30 @@ function SectionBuilder({
   onDelete: (entryId: string) => void
   onTraditionalSort: (sectionKey: CeremonySection) => void
   onAddPerson: (sectionKey: CeremonySection) => void
+  onAddTaggedGuests?: () => void
   isRecessional?: boolean
 }) {
   const steps = toSteps(entries)
+  const partyAutoCount = entries.filter((e) => e.notes && PARTY_MARKER_RE.test(e.notes)).length
 
   return (
     <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      {/* Auto-sync hint for processional */}
+      {sectionKey === 'processional' && partyAutoCount > 0 && (
+        <div
+          className="px-4 py-2.5 border-b border-gray-100 flex items-start gap-2"
+          style={{ backgroundColor: 'color-mix(in srgb, var(--couple-primary) 5%, white)' }}
+        >
+          <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: 'var(--couple-primary)' }} />
+          <p className="text-xs text-gray-600">
+            <span className="font-medium" style={{ color: 'var(--couple-primary)' }}>
+              {partyAutoCount} wedding party member{partyAutoCount === 1 ? '' : 's'} added automatically.
+            </span>{' '}
+            Remove individuals below to exclude from the processional.
+          </p>
+        </div>
+      )}
+
       {/* Hint bar */}
       {entries.length > 0 && (
         <div className="px-4 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
@@ -394,8 +449,8 @@ function SectionBuilder({
         )}
       </div>
 
-      {/* Add button */}
-      <div className="px-4 py-3 border-t border-gray-100">
+      {/* Add buttons */}
+      <div className="px-4 py-3 border-t border-gray-100 flex items-center gap-4 flex-wrap">
         <button
           onClick={() => onAddPerson(sectionKey)}
           className="text-sm font-medium flex items-center gap-1 hover:opacity-80 transition-opacity"
@@ -403,6 +458,222 @@ function SectionBuilder({
         >
           <Plus className="w-4 h-4" /> Add person
         </button>
+        {sectionKey === 'processional' && onAddTaggedGuests && (
+          <button
+            onClick={onAddTaggedGuests}
+            className="text-sm font-medium flex items-center gap-1 hover:opacity-80 transition-opacity"
+            style={{ color: 'var(--couple-primary)' }}
+          >
+            <Tag className="w-4 h-4" /> Add tagged guests
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Add Tagged Guests Modal
+// ---------------------------------------------------------------------------
+
+interface TaggedGuest {
+  id: string
+  first_name: string
+  last_name: string
+}
+
+function AddTaggedGuestsModal({
+  onClose,
+  onAdd,
+  existingNames,
+  supabase,
+}: {
+  onClose: () => void
+  onAdd: (guests: TaggedGuest[]) => Promise<void>
+  existingNames: Set<string>
+  supabase: ReturnType<typeof createClient>
+}) {
+  const [loading, setLoading] = useState(true)
+  const [guests, setGuests] = useState<TaggedGuest[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [saving, setSaving] = useState(false)
+  const [tagMissing, setTagMissing] = useState(false)
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        // 1) Find the Processional tag for this wedding
+        const { data: tagRows } = await supabase
+          .from('guest_tags')
+          .select('id, tag_name')
+          .eq('wedding_id', WEDDING_ID)
+          .ilike('tag_name', 'Processional')
+
+        if (!tagRows || tagRows.length === 0) {
+          setTagMissing(true)
+          setLoading(false)
+          return
+        }
+
+        const tagIds = tagRows.map((t: { id: string }) => t.id)
+
+        // 2) Get assignments for those tags
+        const { data: assignments } = await supabase
+          .from('guest_tag_assignments')
+          .select('guest_id')
+          .in('tag_id', tagIds)
+
+        const guestIds = Array.from(new Set((assignments || []).map((a: { guest_id: string }) => a.guest_id)))
+        if (guestIds.length === 0) {
+          setGuests([])
+          setLoading(false)
+          return
+        }
+
+        // 3) Fetch guest list rows
+        const { data: guestRows } = await supabase
+          .from('guest_list')
+          .select('id, first_name, last_name')
+          .in('id', guestIds)
+          .eq('wedding_id', WEDDING_ID)
+          .order('last_name', { ascending: true })
+
+        // Filter out guests already in the ceremony order (by name)
+        const filtered = (guestRows || []).filter((g: TaggedGuest) => {
+          const fullName = `${g.first_name} ${g.last_name}`.trim()
+          return !existingNames.has(fullName)
+        })
+        setGuests(filtered as TaggedGuest[])
+      } catch (err) {
+        console.error('Failed to load tagged guests:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+  }, [supabase, existingNames])
+
+  const toggle = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleAll = () => {
+    if (selected.size === guests.length) setSelected(new Set())
+    else setSelected(new Set(guests.map((g) => g.id)))
+  }
+
+  const handleSubmit = async () => {
+    const chosen = guests.filter((g) => selected.has(g.id))
+    if (chosen.length === 0) return
+    setSaving(true)
+    await onAdd(chosen)
+    setSaving(false)
+    onClose()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h2
+            className="text-lg font-semibold"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+          >
+            Add Tagged Guests
+          </h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="space-y-2">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="h-10 bg-gray-100 rounded animate-pulse" />
+            ))}
+          </div>
+        ) : tagMissing ? (
+          <div className="text-center py-6">
+            <Tag className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+            <p className="text-sm text-gray-500 mb-1 font-medium">No Processional tag found.</p>
+            <p className="text-xs text-gray-400">
+              Tag guests as &lsquo;Processional&rsquo; on the guest list page first.
+            </p>
+          </div>
+        ) : guests.length === 0 ? (
+          <div className="text-center py-6">
+            <Tag className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+            <p className="text-sm text-gray-500 mb-1 font-medium">No guests to add.</p>
+            <p className="text-xs text-gray-400">
+              Tag guests as &lsquo;Processional&rsquo; on the guest list page first.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center justify-between text-xs text-gray-500">
+              <span>{guests.length} guest{guests.length === 1 ? '' : 's'} tagged Processional</span>
+              <button
+                type="button"
+                onClick={toggleAll}
+                className="font-medium hover:opacity-80"
+                style={{ color: 'var(--couple-primary)' }}
+              >
+                {selected.size === guests.length ? 'Deselect all' : 'Select all'}
+              </button>
+            </div>
+            <div className="space-y-1 max-h-72 overflow-y-auto">
+              {guests.map((g) => {
+                const isSel = selected.has(g.id)
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => toggle(g.id)}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors text-left"
+                  >
+                    <span
+                      className={cn(
+                        'w-4 h-4 rounded border flex items-center justify-center shrink-0',
+                        isSel ? 'border-transparent' : 'border-gray-300',
+                      )}
+                      style={isSel ? { backgroundColor: 'var(--couple-primary)' } : undefined}
+                    >
+                      {isSel && <Check className="w-3 h-3 text-white" />}
+                    </span>
+                    <span className="text-sm text-gray-700">
+                      {g.first_name} {g.last_name}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </>
+        )}
+
+        <div className="flex justify-end gap-3 pt-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
+          >
+            Cancel
+          </button>
+          {!loading && !tagMissing && guests.length > 0 && (
+            <button
+              onClick={handleSubmit}
+              disabled={selected.size === 0 || saving}
+              className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+              style={{ backgroundColor: 'var(--couple-primary)' }}
+            >
+              {saving ? 'Adding...' : `Add ${selected.size || ''}`}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -419,6 +690,7 @@ export default function CeremonyOrderPage() {
   const [modalSection, setModalSection] = useState<CeremonySection>('processional')
   const [saving, setSaving] = useState(false)
   const [savedMsg, setSavedMsg] = useState(false)
+  const [showTaggedModal, setShowTaggedModal] = useState(false)
 
   const supabase = createClient()
 
@@ -427,7 +699,7 @@ export default function CeremonyOrderPage() {
     try {
       const { data, error } = await supabase
         .from('ceremony_order')
-        .select('id, participant_name, role, section, sort_order')
+        .select('id, participant_name, role, section, sort_order, notes')
         .eq('wedding_id', WEDDING_ID)
         .order('sort_order', { ascending: true })
 
@@ -591,6 +863,35 @@ export default function CeremonyOrderPage() {
     setShowModal(true)
   }
 
+  // ---- Add tagged guests (Processional) ----
+  const handleAddTaggedGuests = async (guests: TaggedGuest[]) => {
+    const processionalEntries = entries.filter((e) => e.section === 'processional')
+    let nextOrder = processionalEntries.length > 0
+      ? Math.max(...processionalEntries.map((e) => e.sort_order)) + 1
+      : 1
+
+    const inserts = guests.map((g) => ({
+      venue_id: VENUE_ID,
+      wedding_id: WEDDING_ID,
+      section: 'processional',
+      participant_name: `${g.first_name} ${g.last_name}`.trim(),
+      role: null,
+      sort_order: nextOrder++,
+      side: 'both',
+      notes: '[tag:processional]',
+    }))
+
+    if (inserts.length === 0) return
+
+    const { error } = await supabase.from('ceremony_order').insert(inserts)
+    if (error) {
+      console.error('Failed to add tagged guests:', error)
+      alert('Failed to add tagged guests. Please try again.')
+      return
+    }
+    fetchEntries()
+  }
+
   // ---- Stats ----
   const processionalCount = entries.filter((e) => e.section === 'processional').length
   const familyEscortCount = entries.filter((e) => e.section === 'family_escort').length
@@ -711,6 +1012,7 @@ export default function CeremonyOrderPage() {
                   onDelete={handleDelete}
                   onTraditionalSort={handleTraditionalSort}
                   onAddPerson={openAddModal}
+                  onAddTaggedGuests={key === 'processional' ? () => setShowTaggedModal(true) : undefined}
                   isRecessional={key === 'recessional'}
                 />
               </section>
@@ -733,6 +1035,22 @@ export default function CeremonyOrderPage() {
           onClose={() => setShowModal(false)}
           onAdd={handleAdd}
           defaultSection={modalSection}
+        />
+      )}
+
+      {/* Add Tagged Guests Modal */}
+      {showTaggedModal && (
+        <AddTaggedGuestsModal
+          onClose={() => setShowTaggedModal(false)}
+          onAdd={handleAddTaggedGuests}
+          existingNames={
+            new Set(
+              entries
+                .filter((e) => e.section === 'processional')
+                .map((e) => e.participant_name.trim()),
+            )
+          }
+          supabase={supabase}
         />
       )}
     </div>
