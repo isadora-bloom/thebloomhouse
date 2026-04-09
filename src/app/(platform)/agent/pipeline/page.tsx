@@ -50,6 +50,7 @@ interface PipelineWedding {
   // Joined
   partner1_name: string | null
   partner2_name: string | null
+  client_code: string | null
 }
 
 interface PipelineColumn {
@@ -194,13 +195,16 @@ function PipelineCardContent({ wedding, onNameClick }: { wedding: PipelineWeddin
         </div>
       </div>
 
-      {/* Source badge */}
+      {/* Source badge + client code */}
       <div className="flex items-center gap-2 mb-2 flex-wrap">
         <span
           className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${source.bg} ${source.text}`}
         >
           {source.label}
         </span>
+        {wedding.client_code && (
+          <span className="text-xs font-mono text-sage-500">{wedding.client_code}</span>
+        )}
         {wedding.guest_count_estimate && (
           <span className="inline-flex items-center gap-1 text-[10px] text-sage-500">
             <Users className="w-3 h-3" />
@@ -361,7 +365,8 @@ export default function PipelinePage() {
           temperature_tier,
           inquiry_date,
           updated_at,
-          people!people_wedding_id_fkey ( role, first_name, last_name )
+          people!people_wedding_id_fkey ( role, first_name, last_name ),
+          client_codes!client_codes_wedding_id_fkey ( code )
         `)
         .eq('venue_id', VENUE_ID)
         .in('status', [
@@ -386,6 +391,8 @@ export default function PipelinePage() {
           const p2 = people.find(
             (p: any) => p.role === 'partner2'
           )
+          const codes = row.client_codes ?? []
+          const clientCode = Array.isArray(codes) && codes.length > 0 ? codes[0]?.code ?? null : null
 
           return {
             id: row.id,
@@ -404,6 +411,7 @@ export default function PipelinePage() {
             partner2_name: p2
               ? [p2.first_name, p2.last_name].filter(Boolean).join(' ')
               : null,
+            client_code: clientCode,
           }
         }
       )

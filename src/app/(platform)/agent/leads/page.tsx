@@ -33,6 +33,7 @@ interface Lead {
   // Joined
   partner1_name: string | null
   partner2_name: string | null
+  client_code: string | null
 }
 
 type TierFilter = 'all' | 'hot' | 'warm' | 'cool' | 'cold' | 'frozen'
@@ -314,9 +315,11 @@ export default function LeadsPage() {
           updated_at,
           wedding_date,
           guest_count_estimate,
-          people!people_wedding_id_fkey ( role, first_name, last_name )
+          people!people_wedding_id_fkey ( role, first_name, last_name ),
+          client_codes!client_codes_wedding_id_fkey ( code )
         `)
         .eq('venue_id', VENUE_ID)
+        .in('status', ['inquiry', 'tour_scheduled', 'tour_completed', 'proposal_sent'])
         .gt('heat_score', 0)
         .order('heat_score', { ascending: false })
 
@@ -326,6 +329,8 @@ export default function LeadsPage() {
         const people = row.people ?? []
         const p1 = people.find((p: any) => p.role === 'partner1')
         const p2 = people.find((p: any) => p.role === 'partner2')
+        const codes = row.client_codes ?? []
+        const clientCode = Array.isArray(codes) && codes.length > 0 ? codes[0]?.code ?? null : null
 
         return {
           id: row.id,
@@ -344,6 +349,7 @@ export default function LeadsPage() {
           partner2_name: p2
             ? [p2.first_name, p2.last_name].filter(Boolean).join(' ')
             : null,
+          client_code: clientCode,
         }
       })
 
@@ -603,9 +609,16 @@ export default function LeadsPage() {
                     >
                       {/* Couple */}
                       <td className="px-4 py-3">
-                        <span className="text-sm font-medium text-sage-900">
-                          {coupleName(lead.partner1_name, lead.partner2_name)}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-sage-900">
+                            {coupleName(lead.partner1_name, lead.partner2_name)}
+                          </span>
+                          {lead.client_code && (
+                            <span className="text-xs font-mono text-sage-500">
+                              {lead.client_code}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Source */}

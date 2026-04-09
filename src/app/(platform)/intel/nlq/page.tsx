@@ -413,21 +413,13 @@ export default function NaturalLanguageQueryPage() {
                   )}
                 </div>
 
-                {/* Feedback + meta for AI messages */}
+                {/* Feedback for AI messages */}
                 {msg.role === 'assistant' && msg.queryId && (
-                  <div className="flex items-center justify-between">
-                    <FeedbackButtons
-                      queryId={msg.queryId}
-                      currentHelpful={msg.helpful}
-                      onFeedback={handleFeedback}
-                    />
-                    {msg.tokensUsed && (
-                      <span className="text-[10px] text-sage-300 mt-2">
-                        {msg.tokensUsed.toLocaleString()} tokens
-                        {msg.cost ? ` / $${msg.cost.toFixed(4)}` : ''}
-                      </span>
-                    )}
-                  </div>
+                  <FeedbackButtons
+                    queryId={msg.queryId}
+                    currentHelpful={msg.helpful}
+                    onFeedback={handleFeedback}
+                  />
                 )}
 
                 {/* Timestamp */}

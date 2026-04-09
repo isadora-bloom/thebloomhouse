@@ -39,6 +39,7 @@ async function getVenueBranding(slug: string) {
       fontPairKey: 'playfair_inter',
       logoUrl: null as string | null,
       portalTagline: null as string | null,
+      clientCode: null as string | null,
     }
   }
 
@@ -47,6 +48,29 @@ async function getVenueBranding(slug: string) {
     .select('primary_color, secondary_color, accent_color, font_pair, logo_url, business_name, portal_tagline')
     .eq('venue_id', venue.id)
     .single()
+
+  // For the demo, fetch the first wedding's client code so the top bar can
+  // display a reference code unobtrusively. In real use this would be scoped
+  // to the currently authenticated couple's wedding_id.
+  const { data: demoWedding } = await supabase
+    .from('weddings')
+    .select('id')
+    .eq('venue_id', venue.id)
+    .in('status', ['booked', 'completed'])
+    .order('wedding_date', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  let clientCode: string | null = null
+  if (demoWedding?.id) {
+    const { data: codeRow } = await supabase
+      .from('client_codes')
+      .select('code')
+      .eq('venue_id', venue.id)
+      .eq('wedding_id', demoWedding.id)
+      .maybeSingle()
+    clientCode = codeRow?.code ?? null
+  }
 
   return {
     venueId: venue.id,
@@ -58,6 +82,7 @@ async function getVenueBranding(slug: string) {
     fontPairKey: config?.font_pair || 'playfair_inter',
     logoUrl: config?.logo_url || null,
     portalTagline: config?.portal_tagline || null,
+    clientCode,
   }
 }
 
@@ -100,6 +125,7 @@ export default async function CoupleSlugLayout({
           venueName={branding.venueName}
           logoUrl={branding.logoUrl}
           base={`/couple/${slug}`}
+          clientCode={branding.clientCode}
         >
           {children}
         </CoupleShell>

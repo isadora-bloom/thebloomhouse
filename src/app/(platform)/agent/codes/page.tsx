@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import {
@@ -8,7 +9,6 @@ import {
   Search,
   Copy,
   CheckCircle2,
-  RefreshCw,
   AlertTriangle,
   ArrowRight,
   Users,
@@ -25,7 +25,6 @@ interface ClientCode {
   venue_id: string
   wedding_id: string
   code: string
-  format_template: string | null
   created_at: string
   // Joined
   partner1_name?: string
@@ -182,6 +181,7 @@ function LookupResult({ wedding, onClear }: { wedding: WeddingLookup; onClear: (
 // ---------------------------------------------------------------------------
 
 export default function ClientCodesPage() {
+  const router = useRouter()
   const VENUE_ID = useVenueId()
   const [codes, setCodes] = useState<ClientCode[]>([])
   const [loading, setLoading] = useState(true)
@@ -191,7 +191,6 @@ export default function ClientCodesPage() {
   const [lookupResult, setLookupResult] = useState<WeddingLookup | null>(null)
   const [lookupLoading, setLookupLoading] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [generating, setGenerating] = useState(false)
 
   const supabase = createClient()
 
@@ -205,7 +204,6 @@ export default function ClientCodesPage() {
           venue_id,
           wedding_id,
           code,
-          format_template,
           created_at,
           weddings!client_codes_wedding_id_fkey (
             wedding_date,
@@ -215,7 +213,7 @@ export default function ClientCodesPage() {
           )
         `)
         .eq('venue_id', VENUE_ID)
-        .order('created_at', { ascending: false })
+        .order('code', { ascending: true })
 
       if (fetchError) throw fetchError
 
@@ -230,7 +228,6 @@ export default function ClientCodesPage() {
           venue_id: row.venue_id,
           wedding_id: row.wedding_id,
           code: row.code,
-          format_template: row.format_template,
           created_at: row.created_at,
           partner1_name: p1
             ? [p1.first_name, p1.last_name].filter(Boolean).join(' ')
@@ -328,61 +325,6 @@ export default function ClientCodesPage() {
     }
   }
 
-  // ---- Auto-generate codes for weddings without one ----
-  const handleGenerate = async () => {
-    setGenerating(true)
-    try {
-      // Get all weddings for this venue
-      const { data: weddings } = await supabase
-        .from('weddings')
-        .select(`
-          id,
-          wedding_date,
-          people!people_wedding_id_fkey ( role, last_name )
-        `)
-        .eq('venue_id', VENUE_ID)
-
-      if (!weddings) {
-        setGenerating(false)
-        return
-      }
-
-      // Get existing codes
-      const existingWeddingIds = new Set(codes.map((c) => c.wedding_id))
-
-      // Generate codes for weddings without one
-      const newCodes: { venue_id: string; wedding_id: string; code: string; format_template: string }[] = []
-
-      for (const w of weddings) {
-        if (existingWeddingIds.has(w.id)) continue
-        const people = (w as any).people ?? []
-        const p1 = people.find((p: any) => p.role === 'partner1')
-        const lastName = (p1?.last_name || 'UNK').toUpperCase().slice(0, 4)
-        const year = w.wedding_date
-          ? new Date(w.wedding_date).getFullYear()
-          : new Date().getFullYear()
-        const code = `RM-${year}-${lastName}`
-
-        newCodes.push({
-          venue_id: VENUE_ID,
-          wedding_id: w.id,
-          code,
-          format_template: 'RM-YYYY-NAME',
-        })
-      }
-
-      if (newCodes.length > 0) {
-        await supabase.from('client_codes').insert(newCodes)
-        await fetchCodes()
-      }
-    } catch (err) {
-      console.error('Failed to generate codes:', err)
-      setError('Failed to generate codes')
-    } finally {
-      setGenerating(false)
-    }
-  }
-
   // ---- Filtering ----
   const filteredCodes = useMemo(() => {
     if (!searchQuery.trim()) return codes
@@ -403,17 +345,9 @@ export default function ClientCodesPage() {
             Client Codes
           </h1>
           <p className="text-sage-600">
-            Every wedding gets a short reference code for quick lookups during calls or in-person conversations. Click any code to copy it, or use the search to find a specific couple.
+            Every wedding gets a short reference code for quick lookups during calls or in-person conversations. New weddings are auto-assigned a sequential code based on your venue prefix. Click any row to open the client profile.
           </p>
         </div>
-        <button
-          onClick={handleGenerate}
-          disabled={generating}
-          className="flex items-center gap-2 px-4 py-2.5 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-        >
-          <RefreshCw className={`w-4 h-4 ${generating ? 'animate-spin' : ''}`} />
-          {generating ? 'Generating...' : 'Auto-Generate'}
-        </button>
       </div>
 
       {/* ---- Error ---- */}
@@ -492,7 +426,7 @@ export default function ClientCodesPage() {
           <p className="text-sm text-sage-600 max-w-md mx-auto">
             {searchQuery
               ? `No codes match "${searchQuery}".`
-              : 'Click "Auto-Generate" to create codes for all existing weddings.'}
+              : 'New weddings will automatically receive a sequential client code.'}
           </p>
         </div>
       ) : (
@@ -534,7 +468,8 @@ export default function ClientCodesPage() {
                   return (
                     <tr
                       key={cc.id}
-                      className="hover:bg-sage-50/50 transition-colors"
+                      onClick={() => router.push(`/intel/clients/${cc.wedding_id}`)}
+                      className="hover:bg-sage-50/50 transition-colors cursor-pointer"
                     >
                       <td className="px-4 py-3">
                         <span className="text-sm font-mono font-bold text-sage-900">
@@ -562,7 +497,10 @@ export default function ClientCodesPage() {
                       </td>
                       <td className="px-4 py-3 text-right">
                         <button
-                          onClick={() => handleCopy(cc.code, cc.id)}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleCopy(cc.code, cc.id)
+                          }}
                           className="p-1.5 rounded-lg text-sage-400 hover:text-sage-600 hover:bg-sage-50 transition-colors"
                           title="Copy code"
                         >

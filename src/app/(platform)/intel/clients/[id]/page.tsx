@@ -283,6 +283,7 @@ export default function ClientProfilePage() {
   const [events, setEvents] = useState<EngagementEventRow[]>([])
   const [scoreHistory, setScoreHistory] = useState<LeadScoreRow[]>([])
   const [drafts, setDrafts] = useState<DraftRow[]>([])
+  const [clientCode, setClientCode] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState(false)
@@ -291,7 +292,7 @@ export default function ClientProfilePage() {
     const supabase = createClient()
 
     try {
-      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes] = await Promise.all([
+      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes, codeRes] = await Promise.all([
         supabase
           .from('weddings')
           .select('*')
@@ -327,6 +328,12 @@ export default function ClientProfilePage() {
           .eq('wedding_id', weddingId)
           .order('created_at', { ascending: false })
           .limit(20),
+        supabase
+          .from('client_codes')
+          .select('code')
+          .eq('wedding_id', weddingId)
+          .eq('venue_id', VENUE_ID)
+          .maybeSingle(),
       ])
 
       if (weddingRes.error) throw weddingRes.error
@@ -337,6 +344,7 @@ export default function ClientProfilePage() {
       setEvents((eventsRes.data ?? []) as EngagementEventRow[])
       setScoreHistory((scoreRes.data ?? []) as LeadScoreRow[])
       setDrafts((draftsRes.data ?? []) as DraftRow[])
+      setClientCode((codeRes.data as { code?: string } | null)?.code ?? null)
       setError(null)
     } catch (err) {
       console.error('Failed to fetch client profile:', err)
@@ -444,9 +452,16 @@ export default function ClientProfilePage() {
 
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div>
-            <h1 className="font-heading text-3xl font-bold text-sage-900 mb-2">
-              {coupleName}
-            </h1>
+            <div className="flex items-center gap-3 flex-wrap mb-2">
+              <h1 className="font-heading text-3xl font-bold text-sage-900">
+                {coupleName}
+              </h1>
+              {clientCode && (
+                <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-sage-50 border border-sage-200 text-sm font-mono font-semibold text-sage-700">
+                  {clientCode}
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${status.bg} ${status.text}`}>
                 {status.label}

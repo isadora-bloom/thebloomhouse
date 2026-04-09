@@ -17,6 +17,8 @@ interface CoupleTopBarProps {
   base: string
   /** Handler that opens the mobile sidebar drawer. */
   onMobileMenuToggle: () => void
+  /** Optional client code (e.g. "HM-0042") shown unobtrusively for quick reference. */
+  clientCode?: string | null
 }
 
 /**
@@ -30,6 +32,7 @@ export function CoupleTopBar({
   logoUrl,
   base,
   onMobileMenuToggle,
+  clientCode,
 }: CoupleTopBarProps) {
   const pathname = usePathname()
   const sageHref = `${base}/chat`
@@ -78,6 +81,14 @@ export function CoupleTopBar({
               {venueName}
             </span>
           </Link>
+          {clientCode && (
+            <span
+              className="hidden md:inline-flex items-center ml-2 px-1.5 py-0.5 rounded text-[11px] font-mono text-gray-400 border border-gray-200"
+              title="Your client reference code"
+            >
+              {clientCode}
+            </span>
+          )}
         </div>
 
         {/* Right: 4 items — Ask Sage, Dashboard, Print, Account */}

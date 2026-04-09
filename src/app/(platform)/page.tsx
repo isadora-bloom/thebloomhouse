@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import {
   Mail, FileCheck, Newspaper, Heart,
-  TrendingUp, DollarSign, ArrowRight, Building2, Layers, MapPin,
+  TrendingUp, ArrowRight, Building2, Layers, MapPin,
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
 
@@ -225,13 +225,6 @@ export default function DashboardPage() {
       color: 'text-emerald-600',
       bg: 'bg-emerald-50',
     },
-    {
-      label: 'AI Cost (Month)',
-      value: `$${stats.aiCost.toFixed(2)}`,
-      icon: DollarSign,
-      color: 'text-gold-600',
-      bg: 'bg-gold-50',
-    },
   ]
 
   // Add a venues count card for company/group scope
@@ -253,7 +246,6 @@ export default function DashboardPage() {
       ]
     : [
         { label: 'Portfolio Overview', href: '/intel/portfolio', icon: Layers, description: 'All venues at a glance' },
-        { label: 'Venue Comparison', href: '/intel/cross', icon: TrendingUp, description: 'Compare performance' },
         { label: 'All Clients', href: '/intel/clients', icon: Heart, description: 'Cross-venue client list' },
       ]
 

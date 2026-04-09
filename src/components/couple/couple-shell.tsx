@@ -9,6 +9,8 @@ interface CoupleShellProps {
   logoUrl: string | null
   /** Base path for all couple-portal links, e.g. "/couple/hawthorne-manor". */
   base: string
+  /** Optional client code (e.g. "HM-0042") shown unobtrusively in the top bar. */
+  clientCode?: string | null
   children: React.ReactNode
 }
 
@@ -21,7 +23,7 @@ interface CoupleShellProps {
  *   - Slide-in sidebar drawer on mobile (hamburger in top bar)
  *   - Main content area offset for both top bar and sidebar
  */
-export function CoupleShell({ venueName, logoUrl, base, children }: CoupleShellProps) {
+export function CoupleShell({ venueName, logoUrl, base, clientCode, children }: CoupleShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
 
   return (
@@ -30,6 +32,7 @@ export function CoupleShell({ venueName, logoUrl, base, children }: CoupleShellP
         venueName={venueName}
         logoUrl={logoUrl}
         base={base}
+        clientCode={clientCode}
         onMobileMenuToggle={() => setMobileOpen(true)}
       />
 

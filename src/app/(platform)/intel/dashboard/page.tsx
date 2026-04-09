@@ -10,7 +10,6 @@ import {
   RefreshCw,
   BarChart3,
   TrendingUp,
-  DollarSign,
   Lightbulb,
   Clock,
   ChevronDown,
@@ -535,10 +534,9 @@ export default function IntelligenceDashboardPage() {
       )}
 
       {/* ---- Quick Stats Row ---- */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {loading ? (
           <>
-            <StatCardSkeleton />
             <StatCardSkeleton />
             <StatCardSkeleton />
             <StatCardSkeleton />
@@ -611,22 +609,6 @@ export default function IntelligenceDashboardPage() {
               </p>
             </div>
 
-            <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="p-2 bg-sage-50 rounded-lg">
-                  <DollarSign className="w-4 h-4 text-sage-600" />
-                </div>
-                <span className="text-sm font-medium text-sage-600">AI Cost This Month</span>
-              </div>
-              <p className="text-3xl font-bold text-sage-900">
-                {aiCostThisMonth != null
-                  ? `$${aiCostThisMonth.toFixed(2)}`
-                  : <span className="text-sage-300">--</span>}
-              </p>
-              <p className="mt-2 text-xs text-sage-500">
-                {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} spend
-              </p>
-            </div>
           </>
         )}
       </div>

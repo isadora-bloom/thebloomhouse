@@ -44,6 +44,7 @@ interface Interaction {
   wedding_status?: string
   classification?: 'inquiry' | 'client' | 'vendor'
   is_read?: boolean
+  client_code?: string | null
 }
 
 type FilterTab = 'all' | 'inquiries' | 'client' | 'unread'
@@ -494,9 +495,16 @@ function ThreadView({
           <ArrowLeft className="w-4 h-4" />
           Back
         </button>
-        <h2 className="font-heading text-lg font-semibold text-sage-900">
-          {interaction.subject || '(No subject)'}
-        </h2>
+        <div className="flex items-center gap-2 flex-wrap">
+          <h2 className="font-heading text-lg font-semibold text-sage-900">
+            {interaction.subject || '(No subject)'}
+          </h2>
+          {interaction.client_code && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded bg-sage-50 border border-sage-200 text-xs font-mono font-semibold text-sage-600">
+              {interaction.client_code}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-3 mt-1 text-sm text-sage-500">
           <span className="flex items-center gap-1">
             <Mail className="w-3.5 h-3.5" />
@@ -610,7 +618,8 @@ export default function InboxPage() {
           people!interactions_person_id_fkey ( first_name, last_name, email ),
           weddings!interactions_wedding_id_fkey (
             status,
-            people ( first_name, last_name, email, role )
+            people ( first_name, last_name, email, role ),
+            client_codes ( code )
           )
         `)
         .eq('venue_id', VENUE_ID)
@@ -641,6 +650,10 @@ export default function InboxPage() {
           : coupleDisplay
         const personEmail = person?.email || partner1?.email || null
         const weddingStatus = wedding?.status ?? null
+        const weddingCodes: Array<{ code?: string }> = Array.isArray(wedding?.client_codes)
+          ? wedding.client_codes
+          : []
+        const clientCode = weddingCodes.length > 0 ? weddingCodes[0]?.code ?? null : null
 
         return {
           id: row.id,
@@ -659,6 +672,7 @@ export default function InboxPage() {
           wedding_status: weddingStatus,
           classification: classifyInteraction(weddingStatus, row.direction),
           is_read: row.direction === 'outbound',
+          client_code: clientCode,
         }
       })
 

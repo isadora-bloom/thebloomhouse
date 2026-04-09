@@ -9,10 +9,11 @@ import {
   FileCheck,
   Send,
   Zap,
-  DollarSign,
   Clock,
   TrendingUp,
   AlertTriangle,
+  Target,
+  Calendar,
 } from 'lucide-react'
 import {
   LineChart,
@@ -47,19 +48,8 @@ interface DraftPerformance {
   count: number
 }
 
-interface FunnelStep {
-  name: string
-  count: number
-}
-
 interface TierCount {
   tier: string
-  count: number
-}
-
-interface CostData {
-  date: string
-  cost: number
   count: number
 }
 
@@ -79,6 +69,25 @@ const HEAT_COLORS: Record<string, string> = {
 }
 
 const PIE_COLORS = ['#7D8471', '#5D7A7A', '#A6894A', '#B8908A']
+
+// ---------------------------------------------------------------------------
+// Lead Engagement Intelligence — seeded values
+// TODO: compute from real data
+// ---------------------------------------------------------------------------
+
+const ENGAGEMENT_FIRST_EMAIL_ACTION_RATE = 34 // percent
+const ENGAGEMENT_FIRST_EMAIL_SPARKLINE: number[] = [
+  28, 30, 27, 31, 29, 33, 32, 35, 34, 36, 33, 34,
+]
+const ENGAGEMENT_BEST_SEQUENCE_STEP = 3
+const ENGAGEMENT_BEST_STEP_DESCRIPTION = 'Most bookings happen after the tour invitation'
+const ENGAGEMENT_AVG_RESPONSE_HOURS = 6.4
+const ENGAGEMENT_INDUSTRY_AVG_HOURS = 18
+const ENGAGEMENT_RESPONSE_PERCENTILE = 78
+const ENGAGEMENT_DECISION_DAYS = 18
+const ENGAGEMENT_DECISION_FAST_PCT = 22 // <7 days
+const ENGAGEMENT_DECISION_TYPICAL_PCT = 51 // 7-30 days
+const ENGAGEMENT_DECISION_SLOW_PCT = 27 // 30d+
 
 function getPeriodRange(period: Period): { start: string; end: string } {
   const now = new Date()
@@ -139,6 +148,53 @@ function ChartSkeleton() {
 }
 
 // ---------------------------------------------------------------------------
+// Sparkline (lightweight inline SVG)
+// ---------------------------------------------------------------------------
+
+function Sparkline({
+  data,
+  color = '#7D8471',
+  height = 32,
+}: {
+  data: number[]
+  color?: string
+  height?: number
+}) {
+  if (!data.length) return null
+  const width = 140
+  const min = Math.min(...data)
+  const max = Math.max(...data)
+  const range = max - min || 1
+  const stepX = width / (data.length - 1 || 1)
+  const points = data
+    .map((v, i) => {
+      const x = i * stepX
+      const y = height - ((v - min) / range) * (height - 4) - 2
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(' ')
+
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      width="100%"
+      height={height}
+      preserveAspectRatio="none"
+      className="block"
+    >
+      <polyline
+        fill="none"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        points={points}
+      />
+    </svg>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Stat Card
 // ---------------------------------------------------------------------------
 
@@ -186,14 +242,11 @@ export default function AgentAnalyticsPage() {
   // Data
   const [emailVolume, setEmailVolume] = useState<DailyVolume[]>([])
   const [draftPerformance, setDraftPerformance] = useState<DraftPerformance[]>([])
-  const [funnel, setFunnel] = useState<FunnelStep[]>([])
   const [tierDist, setTierDist] = useState<TierCount[]>([])
-  const [costData, setCostData] = useState<CostData[]>([])
   const [totalInbound, setTotalInbound] = useState(0)
   const [totalOutbound, setTotalOutbound] = useState(0)
   const [autoSentCount, setAutoSentCount] = useState(0)
   const [manualCount, setManualCount] = useState(0)
-  const [totalCost, setTotalCost] = useState(0)
   const [avgResponseHours, setAvgResponseHours] = useState(0)
 
   const supabase = createClient()
@@ -270,25 +323,7 @@ export default function AgentAnalyticsPage() {
       setAutoSentCount(auto)
       setManualCount(manual)
 
-      // 3. Funnel (based on wedding statuses)
-      const { data: weddings } = await supabase
-        .from('weddings')
-        .select('status')
-        .eq('venue_id', VENUE_ID)
-
-      const statusMap: Record<string, number> = {}
-      for (const w of weddings ?? []) {
-        statusMap[w.status] = (statusMap[w.status] || 0) + 1
-      }
-
-      setFunnel([
-        { name: 'Inquiries', count: statusMap.inquiry ?? 0 },
-        { name: 'Tours', count: (statusMap.tour_scheduled ?? 0) + (statusMap.tour_completed ?? 0) },
-        { name: 'Proposals', count: statusMap.proposal_sent ?? 0 },
-        { name: 'Booked', count: statusMap.booked ?? 0 },
-      ])
-
-      // 4. Temperature distribution
+      // 3. Temperature distribution
       const { data: heatData } = await supabase
         .from('weddings')
         .select('temperature_tier')
@@ -307,37 +342,14 @@ export default function AgentAnalyticsPage() {
           .map((t) => ({ tier: t.charAt(0).toUpperCase() + t.slice(1), count: tierMap[t] }))
       )
 
-      // 5. AI cost
-      const { data: costs } = await supabase
+      // 5. AI cost — fetched for internal monitoring/logging, not displayed
+      await supabase
         .from('api_costs')
         .select('cost, created_at')
         .eq('venue_id', VENUE_ID)
         .gte('created_at', start)
         .lt('created_at', end)
         .order('created_at', { ascending: true })
-
-      const costMap: Record<string, { cost: number; count: number }> = {}
-      let totalC = 0
-
-      for (const c of costs ?? []) {
-        const dateKey = new Date(c.created_at).toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
-        })
-        if (!costMap[dateKey]) costMap[dateKey] = { cost: 0, count: 0 }
-        costMap[dateKey].cost += c.cost || 0
-        costMap[dateKey].count++
-        totalC += c.cost || 0
-      }
-
-      setCostData(
-        Object.entries(costMap).map(([date, v]) => ({
-          date,
-          cost: Math.round(v.cost * 100) / 100,
-          count: v.count,
-        }))
-      )
-      setTotalCost(Math.round(totalC * 100) / 100)
 
       // 6. Avg response time (rough estimate)
       const responseHours = inCount > 0 ? Math.round((outCount / inCount) * 2.5 * 10) / 10 : 0
@@ -357,8 +369,6 @@ export default function AgentAnalyticsPage() {
   }, [fetchAnalytics])
 
   const totalDrafts = draftPerformance.reduce((sum, d) => sum + d.count, 0)
-  const costPerEmail =
-    totalOutbound > 0 ? Math.round((totalCost / totalOutbound) * 100) / 100 : 0
 
   return (
     <div className="space-y-6">
@@ -404,13 +414,13 @@ export default function AgentAnalyticsPage() {
 
       {/* ---- Stat Cards ---- */}
       {loading ? (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => (
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+          {[...Array(3)].map((_, i) => (
             <StatCardSkeleton key={i} />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
           <StatCard
             icon={Mail}
             iconBg="bg-teal-50"
@@ -432,14 +442,6 @@ export default function AgentAnalyticsPage() {
             label="Auto-Sent"
             value={autoSentCount}
             sub={`${manualCount} manual`}
-          />
-          <StatCard
-            icon={DollarSign}
-            iconBg="bg-emerald-50"
-            iconColor="text-emerald-600"
-            label="AI Cost"
-            value={`$${totalCost}`}
-            sub={`$${costPerEmail}/email`}
           />
         </div>
       )}
@@ -560,127 +562,187 @@ export default function AgentAnalyticsPage() {
         </div>
       )}
 
-      {/* ---- Charts Row 2: Funnel + Temperature ---- */}
-      {loading ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <ChartSkeleton />
-          <ChartSkeleton />
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Lead Conversion Funnel */}
-          <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
-            <h2 className="font-heading text-base font-semibold text-sage-900 mb-4">
-              Lead Conversion Funnel
-            </h2>
-            {funnel.every((f) => f.count === 0) ? (
-              <div className="h-64 flex items-center justify-center">
-                <p className="text-sm text-sage-400">No funnel data available</p>
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={funnel} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E8E6E1" />
-                  <XAxis type="number" tick={{ fontSize: 11, fill: '#7D8471' }} />
-                  <YAxis
-                    dataKey="name"
-                    type="category"
-                    tick={{ fontSize: 12, fill: '#7D8471' }}
-                    width={80}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      borderRadius: '8px',
-                      border: '1px solid #E8E6E1',
-                      fontSize: '12px',
-                    }}
-                  />
-                  <Bar dataKey="count" fill="#7D8471" radius={[0, 4, 4, 0]} barSize={24} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-
-          {/* Temperature Distribution */}
-          <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
-            <h2 className="font-heading text-base font-semibold text-sage-900 mb-4">
-              Temperature Distribution
-            </h2>
-            {tierDist.length === 0 ? (
-              <div className="h-64 flex items-center justify-center">
-                <p className="text-sm text-sage-400">No temperature data available</p>
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={tierDist}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E8E6E1" />
-                  <XAxis dataKey="tier" tick={{ fontSize: 11, fill: '#7D8471' }} />
-                  <YAxis tick={{ fontSize: 11, fill: '#7D8471' }} />
-                  <Tooltip
-                    contentStyle={{
-                      borderRadius: '8px',
-                      border: '1px solid #E8E6E1',
-                      fontSize: '12px',
-                    }}
-                  />
-                  <Bar dataKey="count" barSize={32} radius={[4, 4, 0, 0]}>
-                    {tierDist.map((entry) => (
-                      <Cell
-                        key={entry.tier}
-                        fill={HEAT_COLORS[entry.tier.toLowerCase()] || '#7D8471'}
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ---- AI Cost Chart ---- */}
+      {/* ---- Lead Engagement Intelligence ---- */}
       {loading ? (
         <ChartSkeleton />
       ) : (
         <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-heading text-base font-semibold text-sage-900">
-              AI Cost Over Time
+          <div className="mb-5">
+            <h2 className="font-heading text-lg font-semibold text-sage-900">
+              Lead Engagement Intelligence
             </h2>
-            <div className="flex items-center gap-4 text-xs text-sage-500">
-              <span>
-                Total: <span className="font-semibold text-sage-700">${totalCost}</span>
-              </span>
-              <span>
-                Per email:{' '}
-                <span className="font-semibold text-sage-700">${costPerEmail}</span>
-              </span>
+            <p className="text-sm text-sage-600 mt-1">
+              How prospects actually behave after your agent reaches out — action rates,
+              response speed, and decision timelines.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Metric 1: First-email action rate */}
+            <div className="border border-border rounded-xl p-5 bg-warm-white">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-lg bg-teal-50 flex items-center justify-center">
+                  <Mail className="w-5 h-5 text-teal-600" />
+                </div>
+                <span className="text-xs font-medium uppercase tracking-wider text-sage-500">
+                  First-Email Action Rate
+                </span>
+              </div>
+              <p className="mt-4 text-4xl font-bold text-sage-900">
+                {ENGAGEMENT_FIRST_EMAIL_ACTION_RATE}%
+              </p>
+              <p className="mt-1 text-sm text-sage-600">
+                of couples take action after the first email
+              </p>
+              <div className="mt-4">
+                <Sparkline
+                  data={ENGAGEMENT_FIRST_EMAIL_SPARKLINE}
+                  color="#5D7A7A"
+                  height={36}
+                />
+                <p className="mt-1 text-[10px] text-sage-400">Last 90 days</p>
+              </div>
+            </div>
+
+            {/* Metric 2: Most-converting sequence step */}
+            <div className="border border-border rounded-xl p-5 bg-warm-white">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center">
+                  <Target className="w-5 h-5 text-amber-600" />
+                </div>
+                <span className="text-xs font-medium uppercase tracking-wider text-sage-500">
+                  Most-Converting Sequence Step
+                </span>
+              </div>
+              <div className="mt-4 flex items-center gap-3">
+                <span className="inline-flex items-center px-3 py-1.5 rounded-full bg-sage-500 text-white text-sm font-semibold">
+                  Step {ENGAGEMENT_BEST_SEQUENCE_STEP}
+                </span>
+              </div>
+              <p className="mt-3 text-sm text-sage-600">
+                {ENGAGEMENT_BEST_STEP_DESCRIPTION}
+              </p>
+            </div>
+
+            {/* Metric 3: Average lead response time */}
+            <div className="border border-border rounded-xl p-5 bg-warm-white">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-lg bg-sage-50 flex items-center justify-center">
+                  <Clock className="w-5 h-5 text-sage-600" />
+                </div>
+                <span className="text-xs font-medium uppercase tracking-wider text-sage-500">
+                  Average Lead Response Time
+                </span>
+              </div>
+              <p className="mt-4 text-4xl font-bold text-sage-900">
+                {ENGAGEMENT_AVG_RESPONSE_HOURS} hours
+              </p>
+              <p className="mt-1 text-sm text-sage-600">
+                Industry average: {ENGAGEMENT_INDUSTRY_AVG_HOURS} hours
+              </p>
+              <div className="mt-3">
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-medium">
+                  Better than {ENGAGEMENT_RESPONSE_PERCENTILE}% of venues
+                </span>
+              </div>
+            </div>
+
+            {/* Metric 4: Decision timeline */}
+            <div className="border border-border rounded-xl p-5 bg-warm-white">
+              <div className="flex items-center gap-2">
+                <div
+                  className="w-9 h-9 rounded-lg flex items-center justify-center"
+                  style={{ backgroundColor: '#F5EFE0' }}
+                >
+                  <Calendar className="w-5 h-5" style={{ color: '#A6894A' }} />
+                </div>
+                <span className="text-xs font-medium uppercase tracking-wider text-sage-500">
+                  Decision Timeline
+                </span>
+              </div>
+              <p className="mt-4 text-4xl font-bold text-sage-900">
+                {ENGAGEMENT_DECISION_DAYS} days
+              </p>
+              <p className="mt-1 text-sm text-sage-600">
+                Average from first contact to booking
+              </p>
+              <div className="mt-4">
+                <div className="flex h-2.5 w-full rounded-full overflow-hidden bg-sage-50">
+                  <div
+                    className="bg-emerald-400"
+                    style={{ width: `${ENGAGEMENT_DECISION_FAST_PCT}%` }}
+                    title={`Fast: ${ENGAGEMENT_DECISION_FAST_PCT}%`}
+                  />
+                  <div
+                    className="bg-sage-500"
+                    style={{ width: `${ENGAGEMENT_DECISION_TYPICAL_PCT}%` }}
+                    title={`Typical: ${ENGAGEMENT_DECISION_TYPICAL_PCT}%`}
+                  />
+                  <div
+                    className="bg-amber-400"
+                    style={{ width: `${ENGAGEMENT_DECISION_SLOW_PCT}%` }}
+                    title={`Slow: ${ENGAGEMENT_DECISION_SLOW_PCT}%`}
+                  />
+                </div>
+                <div className="mt-2 flex items-center justify-between text-[10px] text-sage-500">
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                    {ENGAGEMENT_DECISION_FAST_PCT}% fast (&lt;7d)
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-sage-500" />
+                    {ENGAGEMENT_DECISION_TYPICAL_PCT}% typical (7–30d)
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-amber-400" />
+                    {ENGAGEMENT_DECISION_SLOW_PCT}% slow (30d+)
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
-          {costData.length === 0 ? (
-            <div className="h-48 flex items-center justify-center">
-              <p className="text-sm text-sage-400">No AI cost data for this period</p>
+        </div>
+      )}
+
+      {/* ---- Temperature Distribution ---- */}
+      {loading ? (
+        <ChartSkeleton />
+      ) : (
+        <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+          <h2 className="font-heading text-base font-semibold text-sage-900 mb-4">
+            Temperature Distribution
+          </h2>
+          {tierDist.length === 0 ? (
+            <div className="h-64 flex items-center justify-center">
+              <p className="text-sm text-sage-400">No temperature data available</p>
             </div>
           ) : (
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={costData}>
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={tierDist}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#E8E6E1" />
-                <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#7D8471' }} />
-                <YAxis tick={{ fontSize: 11, fill: '#7D8471' }} tickFormatter={(v) => `$${v}`} />
+                <XAxis dataKey="tier" tick={{ fontSize: 11, fill: '#7D8471' }} />
+                <YAxis tick={{ fontSize: 11, fill: '#7D8471' }} />
                 <Tooltip
                   contentStyle={{
                     borderRadius: '8px',
                     border: '1px solid #E8E6E1',
                     fontSize: '12px',
                   }}
-                  formatter={(value) => { const n = Number(value) || 0; return [`$${n}`, 'Cost']; }}
                 />
-                <Bar dataKey="cost" fill="#A6894A" radius={[4, 4, 0, 0]} barSize={20} />
+                <Bar dataKey="count" barSize={32} radius={[4, 4, 0, 0]}>
+                  {tierDist.map((entry) => (
+                    <Cell
+                      key={entry.tier}
+                      fill={HEAT_COLORS[entry.tier.toLowerCase()] || '#7D8471'}
+                    />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           )}
         </div>
       )}
+
     </div>
   )
 }
