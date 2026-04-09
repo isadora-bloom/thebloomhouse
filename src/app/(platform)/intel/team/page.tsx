@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope, scopeVenueFilter } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
 import {
   Users,
@@ -294,7 +294,7 @@ function MetricTile({
 // ---------------------------------------------------------------------------
 
 function TeamPerformancePageInner() {
-  const VENUE_ID = useVenueId()
+  const scope = useScope()
   const [consultants, setConsultants] = useState<ConsultantData[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -306,14 +306,29 @@ function TeamPerformancePageInner() {
     const { start, end } = getPeriodDates(period)
 
     try {
-      // Fetch metrics for the period
-      const { data: metricsData, error: metricsErr } = await supabase
+      // Fetch metrics whose period OVERLAPS the requested range
+      // (period_start <= range_end AND period_end >= range_start)
+      let query = supabase
         .from('consultant_metrics')
         .select('*')
-        .eq('venue_id', VENUE_ID)
-        .gte('period_start', start)
-        .lte('period_end', end)
+        .lte('period_start', end)
+        .gte('period_end', start)
         .order('bookings_closed', { ascending: false })
+
+      // Scope filter: venue → single venue, group/company → resolve via scope helper
+      if (scope.level === 'venue' && scope.venueId) {
+        query = query.eq('venue_id', scope.venueId)
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        const venueIds = (members ?? []).map((m) => m.venue_id as string)
+        if (venueIds.length > 0) query = query.in('venue_id', venueIds)
+      }
+      // company scope: no filter, all venues
+
+      const { data: metricsData, error: metricsErr } = await query
 
       if (metricsErr) throw metricsErr
 
@@ -383,7 +398,7 @@ function TeamPerformancePageInner() {
     } finally {
       setLoading(false)
     }
-  }, [period])
+  }, [period, scope.level, scope.venueId, scope.groupId])
 
   useEffect(() => {
     setLoading(true)

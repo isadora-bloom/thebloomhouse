@@ -155,8 +155,8 @@ export default function TeamComparePage() {
         supabase
           .from('consultant_metrics')
           .select('*')
-          .gte('period_start', start)
-          .lte('period_end', end),
+          .lte('period_start', end)
+          .gte('period_end', start),
         supabase.from('user_profiles').select('id, first_name, last_name, role'),
         supabase.from('venues').select('id, name'),
       ])
