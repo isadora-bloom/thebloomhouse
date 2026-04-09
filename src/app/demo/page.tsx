@@ -41,7 +41,7 @@ export default function DemoEntryPage() {
       {/* Entry Buttons */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-lg mb-12">
         <button
-          onClick={() => launchDemo('/agent/inbox')}
+          onClick={() => launchDemo('/')}
           className="flex items-center gap-4 px-6 py-5 bg-white border-2 border-[#7D8471]/20 rounded-2xl hover:border-[#7D8471] hover:shadow-lg transition-all group text-left"
         >
           <div className="bg-[#7D8471]/10 p-3 rounded-xl group-hover:bg-[#7D8471]/20 transition-colors">

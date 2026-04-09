@@ -32,7 +32,7 @@ export default function LoginPage() {
     // Clear demo cookies on real sign-in
     document.cookie = 'bloom_demo=; path=/; max-age=0'
 
-    router.push('/agent/inbox')
+    router.push('/')
   }
 
   return (

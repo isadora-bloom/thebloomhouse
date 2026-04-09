@@ -34,6 +34,19 @@ export function UserMenu({ compact = false }: UserMenuProps) {
 
   useEffect(() => {
     async function loadUser() {
+      // Demo mode: show a fake profile so the menu (with Sign Out) is always visible
+      const isDemo = document.cookie.split('; ').some((c) => c === 'bloom_demo=true')
+      if (isDemo) {
+        setUser({
+          name: 'Demo User',
+          email: 'demo@thebloomhouse.com',
+          initials: 'DU',
+          avatarUrl: null,
+          role: 'owner',
+        })
+        return
+      }
+
       const supabase = createClient()
 
       const { data: { user: authUser } } = await supabase.auth.getUser()
@@ -44,7 +57,7 @@ export function UserMenu({ compact = false }: UserMenuProps) {
         .from('user_profiles')
         .select('full_name, avatar_url, role')
         .eq('id', authUser.id)
-        .single()
+        .maybeSingle()
 
       const name = (profile?.full_name as string) ??
         authUser.user_metadata?.full_name ??
@@ -80,6 +93,11 @@ export function UserMenu({ compact = false }: UserMenuProps) {
   }, [])
 
   async function handleSignOut() {
+    // Clear demo cookies if present
+    document.cookie = 'bloom_demo=; path=/; max-age=0'
+    document.cookie = 'bloom_venue=; path=/; max-age=0'
+    document.cookie = 'bloom_scope=; path=/; max-age=0'
+
     const supabase = createClient()
     await supabase.auth.signOut()
     router.push('/login')

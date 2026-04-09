@@ -193,6 +193,9 @@ function setNavModeCookie(mode: 'daily' | 'full') {
 // Build sections
 // ---------------------------------------------------------------------------
 
+// Sections that are venue-specific (config, training, system) — hidden at group/company scope
+const VENUE_ONLY_SECTIONS = new Set(['Venue Config', 'Brand & Voice', 'System'])
+
 function buildSections(
   scopeLevel: string,
   hasMultipleVenues: boolean,
@@ -200,17 +203,21 @@ function buildSections(
 ): NavSection[] {
   const sections: NavSection[] = []
 
-  // Enterprise Portfolio sections — only for enterprise tier with multiple venues
-  if (hasMultipleVenues && planTier === 'enterprise') {
+  // Portfolio sections — show whenever scope is group/company (or venue with multi-venue access)
+  const showPortfolio =
+    (scopeLevel === 'group' || scopeLevel === 'company' || hasMultipleVenues) &&
+    planTier === 'enterprise'
+  if (showPortfolio) {
     sections.push(...ENTERPRISE_SECTIONS)
   }
 
-  if (scopeLevel === 'venue') {
-    for (const section of VENUE_SECTIONS) {
-      // Intelligence section requires 'intelligence' or 'enterprise' tier
-      if (section.title === 'Intelligence' && planTier === 'starter') continue
-      sections.push(section)
-    }
+  // Show Agent / Manage / Intelligence at every scope level — they aggregate by venue/group/company
+  for (const section of VENUE_SECTIONS) {
+    // Intelligence section requires 'intelligence' or 'enterprise' tier
+    if (section.title === 'Intelligence' && planTier === 'starter') continue
+    // Hide venue-only config sections at group/company scope
+    if (scopeLevel !== 'venue' && VENUE_ONLY_SECTIONS.has(section.title)) continue
+    sections.push(section)
   }
 
   sections.push(SETTINGS_SECTION)
