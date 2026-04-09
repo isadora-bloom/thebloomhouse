@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Heart,
   Save,
@@ -17,9 +18,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Section definitions
 // ---------------------------------------------------------------------------
@@ -287,6 +285,7 @@ function SectionRow({
 // ---------------------------------------------------------------------------
 
 export default function GuestCareNotesPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [formData, setFormData] = useState<GuestCareFormData>(buildDefault())
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -303,7 +302,7 @@ export default function GuestCareNotesPage() {
       const { data } = await supabase
         .from('guest_care_notes')
         .select('id, care_type, guest_name, note, created_at')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
 
       if (data && data.length > 0) {
         const saved: Record<string, Partial<SectionValue>> = {}
@@ -360,8 +359,8 @@ export default function GuestCareNotesPage() {
     setSaving(true)
     try {
       const rows = SECTIONS.map((s) => ({
-        venue_id: VENUE_ID,
-        wedding_id: WEDDING_ID,
+        venue_id: venueId,
+        wedding_id: weddingId,
         care_type: s.key,
         guest_name: JSON.stringify({ has: formData[s.key]?.has ?? null }),
         note: formData[s.key]?.notes || '',
@@ -371,7 +370,7 @@ export default function GuestCareNotesPage() {
       await supabase
         .from('guest_care_notes')
         .delete()
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
 
       await supabase
         .from('guest_care_notes')
@@ -423,7 +422,7 @@ export default function GuestCareNotesPage() {
     return cats
   }, [formData])
 
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-48 bg-gray-200 rounded" />

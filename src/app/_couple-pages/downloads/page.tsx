@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   Download,
@@ -12,9 +13,6 @@ import {
 } from 'lucide-react'
 
 // TODO: Get from auth session / couple context
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -149,6 +147,7 @@ function AssetCard({ asset }: { asset: VenueAsset }) {
 // ---------------------------------------------------------------------------
 
 export default function DownloadsPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [assets, setAssets] = useState<VenueAsset[]>([])
   const [loading, setLoading] = useState(true)
   const [activeFilter, setActiveFilter] = useState<string>('all')
@@ -160,7 +159,7 @@ export default function DownloadsPage() {
     const { data, error } = await supabase
       .from('venue_assets')
       .select('*')
-      .eq('venue_id', VENUE_ID)
+      .eq('venue_id', venueId)
       .order('sort_order', { ascending: true })
       .order('title', { ascending: true })
 

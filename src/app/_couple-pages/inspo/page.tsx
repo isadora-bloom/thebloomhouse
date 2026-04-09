@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Sparkles,
   Plus,
@@ -16,9 +17,6 @@ import {
 } from 'lucide-react'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 const MAX_IMAGES = 50
 
 // ---------------------------------------------------------------------------
@@ -65,6 +63,7 @@ const TAG_OPTIONS = [
 // ---------------------------------------------------------------------------
 
 export default function InspoGalleryPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [images, setImages] = useState<InspoImage[]>([])
   const [loading, setLoading] = useState(true)
   const [showUpload, setShowUpload] = useState(false)
@@ -88,7 +87,7 @@ export default function InspoGalleryPage() {
     const { data, error } = await supabase
       .from('inspo_gallery')
       .select('*')
-      .eq('venue_id', VENUE_ID)
+      .eq('venue_id', venueId)
       .order('created_at', { ascending: false })
 
     if (!error && data) {
@@ -184,7 +183,7 @@ export default function InspoGalleryPage() {
 
       // If file is selected, upload to Supabase Storage
       if (hasFile && selectedFile) {
-        const path = `${WEDDING_ID}/${Date.now()}_${selectedFile.name}`
+        const path = `${weddingId}/${Date.now()}_${selectedFile.name}`
         const { error: uploadErr } = await supabase.storage
           .from('inspo-gallery')
           .upload(path, selectedFile, { contentType: selectedFile.type })
@@ -204,8 +203,8 @@ export default function InspoGalleryPage() {
         .filter(Boolean)
 
       await supabase.from('inspo_gallery').insert({
-        venue_id: VENUE_ID,
-        wedding_id: WEDDING_ID,
+        venue_id: venueId,
+        wedding_id: weddingId,
         image_url: publicUrl,
         caption: form.caption.trim() || null,
         tags: tags.length > 0 ? tags : null,

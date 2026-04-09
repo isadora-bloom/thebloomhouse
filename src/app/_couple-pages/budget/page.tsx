@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   DollarSign,
   Plus,
@@ -28,9 +29,6 @@ import {
   MoreHorizontal,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -175,6 +173,7 @@ function formatDueDate(dateStr: string | null): { text: string; color: string } 
 // ---------------------------------------------------------------------------
 
 export default function BudgetPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [items, setItems] = useState<BudgetItem[]>([])
   const [loading, setLoading] = useState(true)
   const [totalBudget, setTotalBudget] = useState(0)
@@ -202,7 +201,7 @@ export default function BudgetPage() {
     const { data, error } = await supabase
       .from('budget_items')
       .select('*, budget_payments(*)')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('sort_order', { ascending: true })
 
     if (error) {
@@ -253,7 +252,7 @@ export default function BudgetPage() {
     const { data } = await supabase
       .from('wedding_config')
       .select('total_budget, budget_shared')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .single()
 
     if (data) {
@@ -337,7 +336,7 @@ export default function BudgetPage() {
     setEditingBudget(false)
     await supabase
       .from('wedding_config')
-      .upsert({ wedding_id: WEDDING_ID, total_budget: amount }, { onConflict: 'wedding_id' })
+      .upsert({ wedding_id: weddingId, total_budget: amount }, { onConflict: 'wedding_id' })
   }
 
   // ---- Share toggle ----
@@ -346,7 +345,7 @@ export default function BudgetPage() {
     setShareWithVenue(val)
     await supabase
       .from('wedding_config')
-      .upsert({ wedding_id: WEDDING_ID, budget_shared: val }, { onConflict: 'wedding_id' })
+      .upsert({ wedding_id: weddingId, budget_shared: val }, { onConflict: 'wedding_id' })
   }
 
   // ---- Item modal ----
@@ -376,8 +375,8 @@ export default function BudgetPage() {
     // membership; the DB schema (migration 017) has no such column, so we
     // must NOT include it in the insert payload or the write will fail.
     const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       category: form.category,
       item_name: form.item_name.trim(),
       budgeted: parseFloat(form.budgeted) || 0,
@@ -432,8 +431,8 @@ export default function BudgetPage() {
     if (!paymentItemId || !paymentForm.amount) return
     const { error } = await supabase.from('budget_payments').insert({
       budget_item_id: paymentItemId,
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       amount: parseFloat(paymentForm.amount) || 0,
       payment_date: paymentForm.date || new Date().toISOString().split('T')[0],
       payment_method: paymentForm.method,

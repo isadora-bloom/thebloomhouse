@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Palette,
   Heart,
@@ -18,9 +19,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -235,6 +233,7 @@ function Field({
 // ---------------------------------------------------------------------------
 
 export default function WeddingDetailsPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [details, setDetails] = useState<WeddingDetails>(EMPTY_DETAILS)
   const [venueConfig, setVenueConfig] = useState<VenueConfig>(DEFAULT_CONFIG)
   const [loading, setLoading] = useState(true)
@@ -251,13 +250,13 @@ export default function WeddingDetailsPage() {
       supabase
         .from('wedding_details')
         .select('*')
-        .eq('wedding_id', WEDDING_ID)
-        .eq('venue_id', VENUE_ID)
+        .eq('wedding_id', weddingId)
+        .eq('venue_id', venueId)
         .maybeSingle(),
       supabase
         .from('wedding_detail_config')
         .select('*')
-        .eq('venue_id', VENUE_ID)
+        .eq('venue_id', venueId)
         .maybeSingle(),
     ])
 
@@ -423,7 +422,7 @@ export default function WeddingDetailsPage() {
   })()
 
   // ---- Loading ----
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="flex items-center justify-center py-24">
         <Loader2 className="w-8 h-8 text-[#7D8471] animate-spin" />

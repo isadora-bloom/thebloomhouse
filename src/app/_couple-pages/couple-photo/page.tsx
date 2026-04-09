@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   Camera,
@@ -14,9 +15,6 @@ import {
 } from 'lucide-react'
 
 // TODO: Get from auth session / couple context
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -109,6 +107,7 @@ function DropZone({
 // ---------------------------------------------------------------------------
 
 export default function CouplePhotoPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [currentPhotoUrl, setCurrentPhotoUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [uploadState, setUploadState] = useState<UploadState>('idle')
@@ -125,7 +124,7 @@ export default function CouplePhotoPage() {
     const { data, error } = await supabase
       .from('weddings')
       .select('couple_photo_url')
-      .eq('id', WEDDING_ID)
+      .eq('id', weddingId)
       .single()
 
     if (!error && data) {
@@ -206,7 +205,7 @@ export default function CouplePhotoPage() {
 
     try {
       const fileName = generateFileName(selectedFile)
-      const storagePath = `${WEDDING_ID}/${fileName}`
+      const storagePath = `${weddingId}/${fileName}`
 
       // Upload to Supabase Storage
       const { error: uploadError } = await supabase.storage
@@ -231,7 +230,7 @@ export default function CouplePhotoPage() {
       const { error: updateError } = await supabase
         .from('weddings')
         .update({ couple_photo_url: publicUrl })
-        .eq('id', WEDDING_ID)
+        .eq('id', weddingId)
 
       if (updateError) {
         throw new Error(updateError.message)

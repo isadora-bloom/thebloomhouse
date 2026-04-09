@@ -20,10 +20,7 @@ import {
   X as XIcon,
 } from 'lucide-react'
 import { CouplePhotoPrompt } from '@/components/couple/couple-photo-prompt'
-
-// TODO: Get wedding ID from auth session / couple's user profile
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const SLUG = 'hawthorne-manor'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -79,7 +76,7 @@ interface PlanningAlert {
   href: string
 }
 
-function buildAlerts(data: DashboardData): PlanningAlert[] {
+function buildAlerts(data: DashboardData, SLUG: string): PlanningAlert[] {
   const alerts: PlanningAlert[] = []
   const days = daysUntil(data.weddingDate)
 
@@ -215,6 +212,9 @@ function timeAgo(dateStr: string): string {
 const ALERT_PRIORITY: AlertId[] = ['photo', 'budget', 'contracts', 'vendors', 'guests', 'checklist']
 
 export default function CoupleDashboard() {
+  const { slug, weddingId, loading: contextLoading } = useCoupleContext()
+  const SLUG = slug
+  const WEDDING_ID = weddingId
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [showPhotoPrompt, setShowPhotoPrompt] = useState(false)
@@ -259,6 +259,8 @@ export default function CoupleDashboard() {
   }, [data])
 
   useEffect(() => {
+    if (contextLoading || !WEDDING_ID) return
+    const wid: string = WEDDING_ID
     async function loadDashboard() {
       const supabase = createClient()
 
@@ -267,7 +269,7 @@ export default function CoupleDashboard() {
         const { data: wedding } = await supabase
           .from('weddings')
           .select('*, people(*)')
-          .eq('id', WEDDING_ID)
+          .eq('id', wid)
           .single()
 
         if (!wedding) {
@@ -287,43 +289,43 @@ export default function CoupleDashboard() {
           contractsRes,
           bookedVendorsRes,
         ] = await Promise.all([
-          supabase.from('guest_list').select('id, rsvp_status').eq('wedding_id', WEDDING_ID),
+          supabase.from('guest_list').select('id, rsvp_status').eq('wedding_id', wid),
           supabase
             .from('budget_items')
             .select('budgeted, committed, paid, budget_payments(amount)')
-            .eq('wedding_id', WEDDING_ID),
+            .eq('wedding_id', wid),
           supabase
             .from('wedding_config')
             .select('total_budget')
-            .eq('wedding_id', WEDDING_ID)
+            .eq('wedding_id', wid)
             .maybeSingle(),
-          supabase.from('checklist_items').select('id, is_completed, due_date').eq('wedding_id', WEDDING_ID),
+          supabase.from('checklist_items').select('id, is_completed, due_date').eq('wedding_id', wid),
           supabase
             .from('checklist_items')
             .select('id, title, due_date, category')
-            .eq('wedding_id', WEDDING_ID)
+            .eq('wedding_id', wid)
             .eq('is_completed', false)
             .order('due_date', { ascending: true, nullsFirst: false })
             .limit(5),
           supabase
             .from('timeline')
             .select('id, title, time, category')
-            .eq('wedding_id', WEDDING_ID)
+            .eq('wedding_id', wid)
             .order('time', { ascending: true }),
           supabase
             .from('messages')
             .select('id, content, sender_role, created_at')
-            .eq('wedding_id', WEDDING_ID)
+            .eq('wedding_id', wid)
             .order('created_at', { ascending: false })
             .limit(3),
           supabase
             .from('contracts')
             .select('id', { count: 'exact', head: true })
-            .eq('wedding_id', WEDDING_ID),
+            .eq('wedding_id', wid),
           supabase
             .from('booked_vendors')
             .select('id', { count: 'exact', head: true })
-            .eq('wedding_id', WEDDING_ID),
+            .eq('wedding_id', wid),
         ])
 
         const people = (wedding.people || []) as Array<{
@@ -400,9 +402,9 @@ export default function CoupleDashboard() {
     }
 
     loadDashboard()
-  }, [])
+  }, [WEDDING_ID, contextLoading])
 
-  if (loading) {
+  if (loading || contextLoading) {
     return (
       <div className="space-y-6">
         <div className="animate-pulse space-y-6">
@@ -455,7 +457,7 @@ export default function CoupleDashboard() {
   const isAdminPreview = typeof document !== 'undefined' && document.cookie.includes('bloom_scope=')
 
   // Planning alerts — compute from data, filter dismissed, sort by priority, cap at 3
-  const allAlerts = buildAlerts(data)
+  const allAlerts = buildAlerts(data, SLUG)
   const visibleAlerts = ALERT_PRIORITY
     .map((id) => allAlerts.find((a) => a.id === id))
     .filter((a): a is PlanningAlert => !!a && !dismissedAlerts.includes(a.id))
@@ -464,7 +466,7 @@ export default function CoupleDashboard() {
   return (
     <div className="space-y-8">
       {/* Couple photo prompt — first-login only (once per session) */}
-      {showPhotoPrompt && (
+      {showPhotoPrompt && WEDDING_ID && (
         <CouplePhotoPrompt
           weddingId={WEDDING_ID}
           onDismiss={() => setShowPhotoPrompt(false)}

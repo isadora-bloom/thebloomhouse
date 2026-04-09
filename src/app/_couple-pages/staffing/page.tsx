@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Users,
   Info,
@@ -27,9 +28,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 const STAFF_RATE = 350 // 2026 rate per person per day
 
 // ---------------------------------------------------------------------------
@@ -238,6 +236,7 @@ function Toggle({
 // ---------------------------------------------------------------------------
 
 export default function StaffingCalculatorPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [step, setStep] = useState(0)
   const [answers, setAnswers] = useState<StaffingAnswers>(DEFAULT_ANSWERS)
   const [saving, setSaving] = useState(false)
@@ -253,7 +252,7 @@ export default function StaffingCalculatorPage() {
       const { data } = await supabase
         .from('staffing_assignments')
         .select('notes')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .eq('role', '_calculator')
         .maybeSingle()
 
@@ -307,7 +306,7 @@ export default function StaffingCalculatorPage() {
       const { data: existing } = await supabase
         .from('staffing_assignments')
         .select('id')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .eq('role', '_calculator')
         .maybeSingle()
 
@@ -320,8 +319,8 @@ export default function StaffingCalculatorPage() {
         await supabase
           .from('staffing_assignments')
           .insert({
-            venue_id: VENUE_ID,
-            wedding_id: WEDDING_ID,
+            venue_id: venueId,
+            wedding_id: weddingId,
             role: '_calculator',
             notes: JSON.stringify(calculatorData),
           })
@@ -335,7 +334,7 @@ export default function StaffingCalculatorPage() {
     setSaving(false)
   }
 
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-48 bg-gray-200 rounded" />

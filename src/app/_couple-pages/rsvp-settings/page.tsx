@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Settings,
   Save,
@@ -18,9 +19,6 @@ import {
   GripVertical,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -222,6 +220,7 @@ function CustomQuestionEditor({ question, onUpdate, onRemove }: CustomQuestionEd
 // ---------------------------------------------------------------------------
 
 export default function RsvpSettingsPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [config, setConfig] = useState<RsvpConfig>(DEFAULT_CONFIG)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -235,8 +234,8 @@ export default function RsvpSettingsPage() {
     const { data } = await supabase
       .from('rsvp_config')
       .select('*')
-      .eq('venue_id', VENUE_ID)
-      .eq('wedding_id', WEDDING_ID)
+      .eq('venue_id', venueId)
+      .eq('wedding_id', weddingId)
       .maybeSingle()
 
     if (data) {
@@ -273,8 +272,8 @@ export default function RsvpSettingsPage() {
     setSaved(false)
 
     const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       ask_meal_choice: config.ask_meal_choice,
       ask_dietary: config.ask_dietary,
       ask_allergies: config.ask_allergies,
@@ -336,7 +335,7 @@ export default function RsvpSettingsPage() {
     setConfig((prev) => ({ ...prev, ...partial }))
   }
 
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="flex items-center justify-center py-24">
         <Loader2 className="w-6 h-6 animate-spin text-gray-400" />

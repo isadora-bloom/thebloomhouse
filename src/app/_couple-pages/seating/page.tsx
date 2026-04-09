@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   Plus,
@@ -32,9 +33,6 @@ import { TagChip, type TagChipData } from '@/components/couple/tag-chip'
 import { TagPicker } from '@/components/couple/tag-picker'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -112,6 +110,7 @@ function typeIcon(t: TableType): React.ElementType {
 // ---------------------------------------------------------------------------
 
 export default function SeatingChartPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   // Data
   const [tables, setTables] = useState<SeatingTable[]>([])
   const [guests, setGuests] = useState<Guest[]>([])
@@ -150,22 +149,22 @@ export default function SeatingChartPage() {
       supabase
         .from('seating_tables')
         .select('*')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .order('sort_order', { ascending: true }),
       supabase
         .from('guest_list')
         .select('id, table_assignment, rsvp_status, plus_one_name, group_name, first_name, last_name')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .order('created_at', { ascending: true }),
       supabase
         .from('venue_config')
         .select('feature_flags')
-        .eq('venue_id', VENUE_ID)
+        .eq('venue_id', venueId)
         .maybeSingle(),
       supabase
         .from('guest_tags')
         .select('id, tag_name, color')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .order('created_at', { ascending: true }),
     ])
 
@@ -278,8 +277,8 @@ export default function SeatingChartPage() {
     if (!tableForm.table_name.trim()) return
 
     const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       table_name: tableForm.table_name.trim(),
       table_type: tableForm.table_type,
       capacity: tableForm.capacity,
@@ -361,7 +360,7 @@ export default function SeatingChartPage() {
   }
 
   // ---- Loading ----
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-48 bg-gray-200 rounded" />

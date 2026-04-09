@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Sparkles,
   Plus,
@@ -18,9 +19,6 @@ import {
 } from 'lucide-react'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -97,6 +95,7 @@ function timeToMinutes(timeStr: string): number {
 // ---------------------------------------------------------------------------
 
 export default function BeautySchedulePage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [appointments, setAppointments] = useState<BeautyAppointment[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -112,7 +111,7 @@ export default function BeautySchedulePage() {
     const { data, error } = await supabase
       .from('makeup_schedule')
       .select('*')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('sort_order', { ascending: true })
 
     if (!error && data) {
@@ -229,8 +228,8 @@ export default function BeautySchedulePage() {
     if (!form.person_name.trim()) return
 
     const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       person_name: form.person_name.trim(),
       role: form.role,
       hair_time: form.hair_time || null,
@@ -260,7 +259,7 @@ export default function BeautySchedulePage() {
     fetchAppointments()
   }
 
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-48 bg-gray-200 rounded" />

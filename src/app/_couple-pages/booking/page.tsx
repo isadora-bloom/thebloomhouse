@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   CalendarPlus,
@@ -20,8 +21,6 @@ import {
 } from 'lucide-react'
 
 // TODO: Get from auth session
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -351,6 +350,7 @@ function NoCalendlyFallback({ config }: { config: VenueConfig | null }) {
 // ---------------------------------------------------------------------------
 
 export default function BookingPage() {
+  const { venueId, loading: contextLoading } = useCoupleContext()
   const [venueConfig, setVenueConfig] = useState<VenueConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedMeeting, setSelectedMeeting] = useState<MeetingType | null>(
@@ -368,7 +368,7 @@ export default function BookingPage() {
           .select(
             'calendly_link, coordinator_email, coordinator_phone, business_name'
           )
-          .eq('venue_id', VENUE_ID)
+          .eq('venue_id', venueId)
           .single()
 
         if (error) {
@@ -393,7 +393,7 @@ export default function BookingPage() {
     meetings: MEETING_TYPES.filter((m) => m.category === cat),
   }))
 
-  if (loading) {
+  if (contextLoading || !venueId || loading) {
     return (
       <div className="flex items-center justify-center py-24">
         <Loader2

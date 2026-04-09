@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   AlertTriangle,
@@ -20,9 +21,6 @@ import {
   Loader2,
 } from 'lucide-react'
 
-// TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -137,6 +135,7 @@ function CheckToggle({
 // ---------------------------------------------------------------------------
 
 export default function AllergyRegistryPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [records, setRecords] = useState<AllergyRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
@@ -152,21 +151,22 @@ export default function AllergyRegistryPage() {
 
   // ---- Fetch ----
   const fetchRecords = useCallback(async () => {
+    if (!weddingId) return
     const { data, error } = await supabase
       .from('allergy_registry')
       .select('*')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('created_at', { ascending: true })
 
     if (!error && data) {
       setRecords(data as AllergyRecord[])
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
   useEffect(() => {
-    fetchRecords()
-  }, [fetchRecords])
+    if (weddingId) fetchRecords()
+  }, [fetchRecords, weddingId])
 
   // ---- Derived ----
   const severeCount = records.filter((r) => r.severity === 'severe').length
@@ -200,10 +200,11 @@ export default function AllergyRegistryPage() {
 
   async function handleSave() {
     if (!form.guest_name.trim() || !form.allergy.trim()) return
+    if (!venueId || !weddingId) return
 
     const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       guest_name: form.guest_name.trim(),
       allergy: form.allergy.trim(),
       severity: form.severity,
@@ -230,6 +231,7 @@ export default function AllergyRegistryPage() {
 
   // ---- Import from Guest List ----
   async function handleImportFromGuests() {
+    if (!venueId || !weddingId) return
     setImporting(true)
     setImportMessage(null)
 
@@ -238,7 +240,7 @@ export default function AllergyRegistryPage() {
       const { data: guestsWithDietary, error: guestError } = await supabase
         .from('guest_list')
         .select('id, first_name, last_name, dietary_restrictions')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .not('dietary_restrictions', 'is', null)
         .neq('dietary_restrictions', '')
 
@@ -271,8 +273,8 @@ export default function AllergyRegistryPage() {
         if (existingGuestNames.has(guestName.toLowerCase())) continue
 
         const { error: insertError } = await supabase.from('allergy_registry').insert({
-          venue_id: VENUE_ID,
-          wedding_id: WEDDING_ID,
+          venue_id: venueId,
+          wedding_id: weddingId,
           guest_name: guestName,
           allergy: guest.dietary_restrictions,
           severity: 'moderate',
@@ -301,7 +303,7 @@ export default function AllergyRegistryPage() {
   }
 
   // ---- Loading ----
-  if (loading) {
+  if (contextLoading || !venueId || !weddingId || loading) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-48 bg-gray-200 rounded" />

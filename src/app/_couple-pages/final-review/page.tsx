@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   ClipboardCheck,
   Check,
@@ -13,9 +14,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types & Constants
 // ---------------------------------------------------------------------------
@@ -78,6 +76,7 @@ function formatDate(dateStr: string | null): string {
 // ---------------------------------------------------------------------------
 
 export default function FinalReviewPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [finalisations, setFinalisations] = useState<Finalisation[]>([])
   const [wedding, setWedding] = useState<WeddingInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -90,11 +89,11 @@ export default function FinalReviewPage() {
       supabase
         .from('section_finalisations')
         .select('*')
-        .eq('wedding_id', WEDDING_ID),
+        .eq('wedding_id', weddingId),
       supabase
         .from('weddings')
         .select('wedding_date')
-        .eq('id', WEDDING_ID)
+        .eq('id', weddingId)
         .single(),
     ])
 
@@ -138,8 +137,8 @@ export default function FinalReviewPage() {
         .eq('id', existing.id)
     } else {
       await supabase.from('section_finalisations').insert({
-        venue_id: VENUE_ID,
-        wedding_id: WEDDING_ID,
+        venue_id: venueId,
+        wedding_id: weddingId,
         section_name: sectionKey,
         couple_signed_off: true,
         couple_signed_off_at: new Date().toISOString(),
@@ -156,7 +155,7 @@ export default function FinalReviewPage() {
     none: SECTIONS.filter((s) => statusOfSection(getFinalisation(s.key)) === 'none').length,
   }
 
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="space-y-6">
         <div className="h-10 bg-gray-100 rounded-lg w-64 animate-pulse" />

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Users,
   Plus,
@@ -21,9 +22,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types & Constants
 // ---------------------------------------------------------------------------
@@ -134,6 +132,7 @@ function roleLabel(role: string): string {
 // ---------------------------------------------------------------------------
 
 export default function WeddingPartyPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [members, setMembers] = useState<PartyMember[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -151,7 +150,7 @@ export default function WeddingPartyPage() {
     const { data, error } = await supabase
       .from('wedding_party')
       .select('*')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('sort_order', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: true })
 
@@ -166,7 +165,7 @@ export default function WeddingPartyPage() {
     const { data } = await supabase
       .from('guest_list')
       .select('id, first_name, last_name')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('last_name', { ascending: true })
 
     if (data) {
@@ -231,7 +230,7 @@ export default function WeddingPartyPage() {
     const { data: existing } = await supabase
       .from('ceremony_order')
       .select('id')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .ilike('notes', `%[party:${member.id}]%`)
       .limit(1)
 
@@ -264,7 +263,7 @@ export default function WeddingPartyPage() {
     const { data: maxRow } = await supabase
       .from('ceremony_order')
       .select('sort_order')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .eq('section', section)
       .order('sort_order', { ascending: false })
       .limit(1)
@@ -272,8 +271,8 @@ export default function WeddingPartyPage() {
     const nextOrder = ((maxRow?.[0]?.sort_order as number | undefined) || 0) + 1
 
     await supabase.from('ceremony_order').insert({
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       participant_name: member.name,
       role: ceremonyRole,
       side: ceremonySide,
@@ -287,7 +286,7 @@ export default function WeddingPartyPage() {
     await supabase
       .from('ceremony_order')
       .delete()
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .ilike('notes', `%[party:${memberId}]%`)
   }
 
@@ -302,8 +301,8 @@ export default function WeddingPartyPage() {
     const maxOrder = sideMembers.reduce((max, m) => Math.max(max, m.sort_order || 0), 0)
 
     const payload: Record<string, unknown> = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       name: form.name.trim(),
       role: resolvedRole,
       side: form.side,

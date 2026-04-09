@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Check,
   ChevronRight,
@@ -16,9 +17,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -239,6 +237,7 @@ function ProgressRing({ completed, total }: { completed: number; total: number }
 // ---------------------------------------------------------------------------
 
 export default function GettingStartedPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [progress, setProgress] = useState<OnboardingProgress | null>(null)
   const [wedding, setWedding] = useState<WeddingInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -251,12 +250,12 @@ export default function GettingStartedPage() {
       supabase
         .from('onboarding_progress')
         .select('*')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .maybeSingle(),
       supabase
         .from('weddings')
         .select('wedding_date, people!people_wedding_id_fkey(first_name, last_name, role)')
-        .eq('id', WEDDING_ID)
+        .eq('id', weddingId)
         .maybeSingle(),
     ])
 
@@ -333,7 +332,7 @@ export default function GettingStartedPage() {
   const coupleSlug = 'demo' // TODO: get from router params
 
   // ---- Loading ----
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="space-y-6">
         <div className="h-10 bg-gray-100 rounded-lg w-64 animate-pulse" />

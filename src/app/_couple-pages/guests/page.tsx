@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Users,
   Plus,
@@ -36,9 +37,6 @@ import {
 import { cn } from '@/lib/utils'
 import { TagChip } from '@/components/couple/tag-chip'
 import { TagPicker } from '@/components/couple/tag-picker'
-
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -194,6 +192,7 @@ const EMPTY_FORM: GuestFormData = {
 // ---------------------------------------------------------------------------
 
 export default function GuestListPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   // Core state
   const [guests, setGuests] = useState<Guest[]>([])
   const [loading, setLoading] = useState(true)
@@ -253,7 +252,7 @@ export default function GuestListPage() {
     const { data, error } = await supabase
       .from('guest_list')
       .select('*')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('last_name', { ascending: true })
 
     if (!error && data) {
@@ -307,7 +306,7 @@ export default function GuestListPage() {
     const { data: configData } = await supabase
       .from('wedding_config')
       .select('plated_meal')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .single()
 
     if (configData) {
@@ -327,7 +326,7 @@ export default function GuestListPage() {
     const { data: tagData } = await supabase
       .from('guest_tags')
       .select('id, tag_name, color')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('created_at', { ascending: true })
 
     if (tagData && tagData.length > 0) {
@@ -342,7 +341,7 @@ export default function GuestListPage() {
     const { data: mealData } = await supabase
       .from('guest_meal_options')
       .select('option_name')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('created_at', { ascending: true })
 
     if (mealData && mealData.length > 0) {
@@ -359,7 +358,7 @@ export default function GuestListPage() {
   async function saveConfig(updates: Record<string, unknown>) {
     await supabase
       .from('wedding_config')
-      .upsert({ wedding_id: WEDDING_ID, ...updates }, { onConflict: 'wedding_id' })
+      .upsert({ wedding_id: weddingId, ...updates }, { onConflict: 'wedding_id' })
   }
 
   // ---- Food mode setup ----
@@ -510,8 +509,8 @@ export default function GuestListPage() {
     // Note: guest_list does NOT have a `tags` column — tags live in
     // guest_tag_assignments and are synced separately below.
     const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       first_name: form.first_name.trim(),
       last_name: form.last_name.trim(),
       email: form.email.trim() || null,
@@ -581,8 +580,8 @@ export default function GuestListPage() {
     const tagId = crypto.randomUUID()
     const { error } = await supabase.from('guest_tags').insert({
       id: tagId,
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       tag_name: newTagName.trim(),
       color: newTagColor,
     })
@@ -637,8 +636,8 @@ export default function GuestListPage() {
   async function addMealOption() {
     if (!newMealOption.trim() || mealOptions.includes(newMealOption.trim())) return
     const { error } = await supabase.from('guest_meal_options').insert({
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       option_name: newMealOption.trim(),
     })
     if (!error) {
@@ -651,7 +650,7 @@ export default function GuestListPage() {
     await supabase
       .from('guest_meal_options')
       .delete()
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .eq('option_name', opt)
     setMealOptions((prev) => prev.filter((m) => m !== opt))
   }
@@ -699,8 +698,8 @@ export default function GuestListPage() {
   async function importCsv() {
     const toInsert = csvData.map((row) => {
       const guest: Record<string, unknown> = {
-        venue_id: VENUE_ID,
-        wedding_id: WEDDING_ID,
+        venue_id: venueId,
+        wedding_id: weddingId,
         rsvp_status: 'pending',
         has_plus_one: false,
         invitation_sent: false,

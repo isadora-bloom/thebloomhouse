@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   Bus,
@@ -28,9 +29,6 @@ import {
 import { TagChip, type TagChipData } from '@/components/couple/tag-chip'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -159,6 +157,7 @@ interface TaggedGuestRow {
 }
 
 export default function TransportationPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [runs, setRuns] = useState<ShuttleRun[]>([])
   const [loading, setLoading] = useState(true)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
@@ -203,17 +202,17 @@ export default function TransportationPage() {
       supabase
         .from('shuttle_schedule')
         .select('*')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .order('sort_order', { ascending: true }),
       supabase
         .from('venue_config')
         .select('feature_flags')
-        .eq('venue_id', VENUE_ID)
+        .eq('venue_id', venueId)
         .maybeSingle(),
       supabase
         .from('wedding_timeline')
         .select('ceremony_start, reception_end')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .maybeSingle(),
     ])
 
@@ -269,7 +268,7 @@ export default function TransportationPage() {
     const { data: tagRows } = await supabase
       .from('guest_tags')
       .select('id, tag_name, color')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .ilike('tag_name', 'shuttle')
       .limit(1)
 
@@ -462,8 +461,8 @@ export default function TransportationPage() {
 
   async function insertRuns(newRuns: Omit<ShuttleRun, 'id'>[]) {
     const rows = newRuns.map((r) => ({
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       run_label: r.run_label,
       pickup_location: r.pickup_location,
       pickup_time: r.pickup_time,
@@ -721,7 +720,7 @@ export default function TransportationPage() {
   }
 
   // ---- Loading ----
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-48 bg-gray-200 rounded" />

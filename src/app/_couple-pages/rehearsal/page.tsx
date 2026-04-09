@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   CalendarDays,
@@ -34,9 +35,6 @@ import {
 } from 'lucide-react'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types & options
 // ---------------------------------------------------------------------------
@@ -365,6 +363,7 @@ function FormNumber({
 // ---------------------------------------------------------------------------
 
 export default function RehearsalPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [data, setData] = useState<RehearsalData>(EMPTY_DATA)
   const [existingId, setExistingId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -381,12 +380,12 @@ export default function RehearsalPage() {
       supabase
         .from('rehearsal_dinner')
         .select('*')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .maybeSingle(),
       supabase
         .from('venue_config')
         .select('feature_flags')
-        .eq('venue_id', VENUE_ID)
+        .eq('venue_id', venueId)
         .maybeSingle(),
     ])
 
@@ -466,8 +465,8 @@ export default function RehearsalPage() {
     setSaveStatus('saving')
 
     const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       location_type: data.location_type,
       date: data.date || null,
       start_time: data.start_time || null,
@@ -538,7 +537,7 @@ export default function RehearsalPage() {
   }
 
   // ---- Loading ----
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-48 bg-gray-200 rounded" />

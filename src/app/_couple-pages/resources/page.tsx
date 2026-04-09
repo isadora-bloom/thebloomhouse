@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   BookOpen,
@@ -32,8 +33,6 @@ import {
 import { useRouter } from 'next/navigation'
 
 // TODO: Get from auth session
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -88,11 +87,11 @@ function getIcon(iconName: string): React.ElementType {
 // Default Resources (fallback when none configured)
 // ---------------------------------------------------------------------------
 
-function getDefaultResources(slug: string): VenueResource[] {
+function getDefaultResources(slug: string, venueId: string): VenueResource[] {
   return [
     {
       id: 'default-vendors',
-      venue_id: VENUE_ID,
+      venue_id: venueId,
       title: 'Vendor Directory',
       subtitle: 'Browse preferred vendors for your wedding',
       url: `/couple/${slug}/vendors`,
@@ -103,7 +102,7 @@ function getDefaultResources(slug: string): VenueResource[] {
     },
     {
       id: 'default-stays',
-      venue_id: VENUE_ID,
+      venue_id: venueId,
       title: 'Accommodations',
       subtitle: 'Nearby lodging for you and your guests',
       url: `/couple/${slug}/stays`,
@@ -114,7 +113,7 @@ function getDefaultResources(slug: string): VenueResource[] {
     },
     {
       id: 'default-chat',
-      venue_id: VENUE_ID,
+      venue_id: venueId,
       title: 'Chat with Sage',
       subtitle: 'Your AI wedding concierge is here to help',
       url: `/couple/${slug}/chat`,
@@ -188,6 +187,7 @@ function ResourceCard({
 // ---------------------------------------------------------------------------
 
 export default function ResourcesPage() {
+  const { venueId, loading: contextLoading } = useCoupleContext()
   const [resources, setResources] = useState<VenueResource[]>([])
   const [loading, setLoading] = useState(true)
   const [usingDefaults, setUsingDefaults] = useState(false)
@@ -207,6 +207,7 @@ export default function ResourcesPage() {
 
   // ---- Load resources on mount ----
   useEffect(() => {
+    if (contextLoading || !venueId) return
     async function loadResources() {
       try {
         const supabase = createClient()
@@ -214,7 +215,7 @@ export default function ResourcesPage() {
         const { data, error } = await supabase
           .from('venue_resources')
           .select('*')
-          .eq('venue_id', VENUE_ID)
+          .eq('venue_id', venueId!)
           .eq('is_active', true)
           .order('sort_order', { ascending: true })
 
@@ -228,13 +229,13 @@ export default function ResourcesPage() {
         } else {
           // Use defaults
           const slug = getSlug()
-          setResources(getDefaultResources(slug))
+          setResources(getDefaultResources(slug, venueId!))
           setUsingDefaults(true)
         }
       } catch (err) {
         console.error('Failed to load resources:', err)
         const slug = getSlug()
-        setResources(getDefaultResources(slug))
+        setResources(getDefaultResources(slug, venueId!))
         setUsingDefaults(true)
       } finally {
         setLoading(false)
@@ -242,7 +243,7 @@ export default function ResourcesPage() {
     }
 
     loadResources()
-  }, [getSlug])
+  }, [getSlug, venueId, contextLoading])
 
   // ---- Handle click ----
   function handleResourceClick(resource: VenueResource) {
@@ -253,7 +254,7 @@ export default function ResourcesPage() {
     }
   }
 
-  if (loading) {
+  if (contextLoading || !venueId || loading) {
     return (
       <div className="flex items-center justify-center py-24">
         <Loader2

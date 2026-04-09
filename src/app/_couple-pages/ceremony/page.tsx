@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Plus,
   X,
@@ -25,9 +26,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -487,11 +485,13 @@ function AddTaggedGuestsModal({
   onAdd,
   existingNames,
   supabase,
+  weddingId,
 }: {
   onClose: () => void
   onAdd: (guests: TaggedGuest[]) => Promise<void>
   existingNames: Set<string>
   supabase: ReturnType<typeof createClient>
+  weddingId: string
 }) {
   const [loading, setLoading] = useState(true)
   const [guests, setGuests] = useState<TaggedGuest[]>([])
@@ -506,7 +506,7 @@ function AddTaggedGuestsModal({
         const { data: tagRows } = await supabase
           .from('guest_tags')
           .select('id, tag_name')
-          .eq('wedding_id', WEDDING_ID)
+          .eq('wedding_id', weddingId)
           .ilike('tag_name', 'Processional')
 
         if (!tagRows || tagRows.length === 0) {
@@ -535,7 +535,7 @@ function AddTaggedGuestsModal({
           .from('guest_list')
           .select('id, first_name, last_name')
           .in('id', guestIds)
-          .eq('wedding_id', WEDDING_ID)
+          .eq('wedding_id', weddingId)
           .order('last_name', { ascending: true })
 
         // Filter out guests already in the ceremony order (by name)
@@ -684,6 +684,7 @@ function AddTaggedGuestsModal({
 // ---------------------------------------------------------------------------
 
 export default function CeremonyOrderPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [entries, setEntries] = useState<CeremonyEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -700,7 +701,7 @@ export default function CeremonyOrderPage() {
       const { data, error } = await supabase
         .from('ceremony_order')
         .select('id, participant_name, role, section, sort_order, notes')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .order('sort_order', { ascending: true })
 
       if (!error && data) {
@@ -725,8 +726,8 @@ export default function CeremonyOrderPage() {
       : 0
 
     const { error } = await supabase.from('ceremony_order').insert({
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       section,
       participant_name: name,
       role: role || null,
@@ -871,8 +872,8 @@ export default function CeremonyOrderPage() {
       : 1
 
     const inserts = guests.map((g) => ({
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       section: 'processional',
       participant_name: `${g.first_name} ${g.last_name}`.trim(),
       role: null,
@@ -898,7 +899,7 @@ export default function CeremonyOrderPage() {
   const recessionalCount = entries.filter((e) => e.section === 'recessional').length
   const totalCount = entries.length
 
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-48 bg-gray-200 rounded" />
@@ -1051,6 +1052,7 @@ export default function CeremonyOrderPage() {
             )
           }
           supabase={supabase}
+          weddingId={weddingId}
         />
       )}
     </div>

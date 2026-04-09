@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Package,
   Plus,
@@ -16,9 +17,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -62,6 +60,7 @@ type CategoryFilter = 'all' | string
 // ---------------------------------------------------------------------------
 
 export default function VenueInventoryPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [catalog, setCatalog] = useState<CatalogItem[]>([])
   const [selections, setSelections] = useState<Selection[]>([])
   const [loading, setLoading] = useState(true)
@@ -79,14 +78,14 @@ export default function VenueInventoryPage() {
       supabase
         .from('borrow_catalog')
         .select('*')
-        .eq('venue_id', VENUE_ID)
+        .eq('venue_id', venueId)
         .eq('is_active', true)
         .order('category', { ascending: true })
         .order('item_name', { ascending: true }),
       supabase
         .from('borrow_selections')
         .select('*')
-        .eq('wedding_id', WEDDING_ID),
+        .eq('wedding_id', weddingId),
     ])
 
     if (!catalogRes.error && catalogRes.data) {
@@ -127,8 +126,8 @@ export default function VenueInventoryPage() {
   // ---- Add / Remove ----
   async function addToSelections(catalogItemId: string) {
     await supabase.from('borrow_selections').insert({
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       catalog_item_id: catalogItemId,
       quantity: 1,
     })

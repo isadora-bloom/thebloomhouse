@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   BedDouble,
@@ -34,9 +35,6 @@ import {
 import { TagChip, type TagChipData } from '@/components/couple/tag-chip'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -142,7 +140,7 @@ function rowToRoomBlock(row: Record<string, unknown>): RoomBlock {
   }
 }
 
-function roomBlockToPayload(form: RoomBlockForm) {
+function roomBlockToPayload(form: RoomBlockForm, venueId: string, weddingId: string) {
   const meta: HotelBlockMeta = {
     _type: 'hotel_block',
     rate_per_night: form.rate_per_night ? parseFloat(form.rate_per_night) : null,
@@ -154,8 +152,8 @@ function roomBlockToPayload(form: RoomBlockForm) {
   }
 
   return {
-    venue_id: VENUE_ID,
-    wedding_id: WEDDING_ID,
+    venue_id: venueId,
+    wedding_id: weddingId,
     room_name: form.hotel_name.trim(),
     room_description: form.block_name.trim() || null,
     guests: [] as string[],
@@ -212,6 +210,7 @@ function isDeadlinePassed(dateStr: string | null): boolean {
 // ---------------------------------------------------------------------------
 
 export default function RoomAssignmentsPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   // Room blocks
   const [roomBlocks, setRoomBlocks] = useState<RoomBlock[]>([])
   const [showBlockModal, setShowBlockModal] = useState(false)
@@ -246,17 +245,17 @@ export default function RoomAssignmentsPage() {
       supabase
         .from('bedroom_assignments')
         .select('*')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .order('created_at', { ascending: true }),
       supabase
         .from('guest_list')
         .select('id, accommodation, first_name, last_name')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .order('created_at', { ascending: true }),
       supabase
         .from('guest_tags')
         .select('id, tag_name, color')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .ilike('tag_name', 'hotel')
         .limit(1),
     ])
@@ -359,8 +358,9 @@ export default function RoomAssignmentsPage() {
 
   async function handleSaveBlock() {
     if (!blockForm.hotel_name.trim()) return
+    if (!venueId || !weddingId) return
 
-    const payload = roomBlockToPayload(blockForm)
+    const payload = roomBlockToPayload(blockForm, venueId, weddingId)
 
     if (editingBlockId) {
       await supabase.from('bedroom_assignments').update(payload).eq('id', editingBlockId)
@@ -401,7 +401,7 @@ export default function RoomAssignmentsPage() {
   }
 
   // ---- Loading ----
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-48 bg-gray-200 rounded" />

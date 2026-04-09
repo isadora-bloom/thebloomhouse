@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Globe,
   Eye,
@@ -34,9 +35,6 @@ import {
   Loader2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -191,6 +189,7 @@ const DEFAULT_SETTINGS: WebsiteSettings = {
 // ---------------------------------------------------------------------------
 
 export default function WeddingWebsitePage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [settings, setSettings] = useState<WebsiteSettings>(DEFAULT_SETTINGS)
   const [activePanel, setActivePanel] = useState<'editor' | 'preview'>('editor')
   const [expandedSection, setExpandedSection] = useState<string | null>('our_story')
@@ -225,7 +224,7 @@ export default function WeddingWebsitePage() {
     setGalleryUploading(true)
     try {
       const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg'
-      const storagePath = `${WEDDING_ID}/gallery-${Date.now()}.${ext}`
+      const storagePath = `${weddingId}/gallery-${Date.now()}.${ext}`
 
       const { error: uploadError } = await supabase.storage
         .from('couple-photos')
@@ -270,7 +269,7 @@ export default function WeddingWebsitePage() {
     const { data } = await supabase
       .from('wedding_website_settings')
       .select('*')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .maybeSingle()
 
     if (data) {
@@ -289,7 +288,7 @@ export default function WeddingWebsitePage() {
   // ---- Save ----
   async function saveSettings(updated?: Partial<WebsiteSettings>) {
     setSaving(true)
-    const payload = { ...settings, ...updated, wedding_id: WEDDING_ID, venue_id: VENUE_ID }
+    const payload = { ...settings, ...updated, wedding_id: weddingId, venue_id: venueId }
     await supabase.from('wedding_website_settings').upsert(payload, { onConflict: 'wedding_id' })
     if (updated) setSettings(prev => ({ ...prev, ...updated }))
     setSaving(false)

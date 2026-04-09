@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   ClipboardList,
   Check,
@@ -23,9 +24,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types & Constants
 // ---------------------------------------------------------------------------
@@ -142,6 +140,7 @@ const SPLURGE_SKIP_ITEMS = [
 // ---------------------------------------------------------------------------
 
 export default function WorksheetsPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [records, setRecords] = useState<Record<SectionKey, WorksheetRecord | null>>({
     priorities: null,
     story: null,
@@ -180,7 +179,7 @@ export default function WorksheetsPage() {
     const { data, error } = await supabase
       .from('wedding_worksheets')
       .select('*')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
 
     if (!error && data) {
       const bySection: Record<string, WorksheetRecord> = {}
@@ -276,8 +275,8 @@ export default function WorksheetsPage() {
         .eq('id', existing.id)
     } else {
       await supabase.from('wedding_worksheets').insert({
-        venue_id: VENUE_ID,
-        wedding_id: WEDDING_ID,
+        venue_id: venueId,
+        wedding_id: weddingId,
         section,
         content,
       })
@@ -340,8 +339,8 @@ export default function WorksheetsPage() {
 
       // Create admin notification
       await supabase.from('admin_notifications').insert({
-        venue_id: VENUE_ID,
-        wedding_id: WEDDING_ID,
+        venue_id: venueId,
+        wedding_id: weddingId,
         type: 'worksheet_submitted',
         title: 'Worksheets submitted',
         body: 'The couple has submitted their wedding worksheets for review.',
@@ -393,7 +392,7 @@ export default function WorksheetsPage() {
 
   const progressPct = Math.round((completedSections / SECTIONS.length) * 100)
 
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="space-y-6">
         <div className="h-10 bg-gray-100 rounded-lg w-64 animate-pulse" />

@@ -1,13 +1,11 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import { MessagesSquare, Send, Loader2, MessageCircle } from 'lucide-react'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -132,6 +130,7 @@ function formatDateLabel(dateStr: string): string {
 // ---------------------------------------------------------------------------
 
 export default function MessagesPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
@@ -213,6 +212,7 @@ export default function MessagesPage() {
   async function handleSend() {
     const trimmed = input.trim()
     if (!trimmed || sending) return
+    if (!venueId || !weddingId) return
 
     setInput('')
     setSending(true)
@@ -220,8 +220,8 @@ export default function MessagesPage() {
     // Optimistic update
     const tempMsg: Message = {
       id: `temp-${Date.now()}`,
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       sender_id: null,
       sender_role: 'couple',
       content: trimmed,

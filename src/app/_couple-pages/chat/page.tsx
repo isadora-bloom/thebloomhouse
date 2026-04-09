@@ -3,13 +3,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { Send, Sparkles, AlertCircle, Loader2, RotateCcw, FileText, Brain } from 'lucide-react'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 // TODO: Derive venue_id from wedding or session
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -116,6 +114,7 @@ function dayKey(dateStr: string): string {
 }
 
 export default function SageChatPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
@@ -139,24 +138,24 @@ export default function SageChatPage() {
         supabase
           .from('wedding_timeline')
           .select('id', { count: 'exact', head: true })
-          .eq('wedding_id', WEDDING_ID),
+          .eq('wedding_id', weddingId),
         supabase
           .from('booked_vendors')
           .select('id', { count: 'exact', head: true })
-          .eq('wedding_id', WEDDING_ID),
+          .eq('wedding_id', weddingId),
         supabase
           .from('guest_list')
           .select('id, rsvp_status')
-          .eq('wedding_id', WEDDING_ID),
+          .eq('wedding_id', weddingId),
         supabase
           .from('budget_items')
           .select('id, payment_due_date')
-          .eq('wedding_id', WEDDING_ID)
+          .eq('wedding_id', weddingId)
           .not('payment_due_date', 'is', null),
         supabase
           .from('weddings')
           .select('wedding_date')
-          .eq('id', WEDDING_ID)
+          .eq('id', weddingId)
           .single(),
       ])
 
@@ -199,13 +198,13 @@ export default function SageChatPage() {
       const { count } = await supabase
         .from('sage_conversations')
         .select('id', { count: 'exact', head: true })
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
 
       // Fetch the most recent INITIAL_MESSAGE_LIMIT rows (desc), then reverse for display
       const { data } = await supabase
         .from('sage_conversations')
         .select('id, role, content, confidence_score, created_at')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .order('created_at', { ascending: false })
         .limit(INITIAL_MESSAGE_LIMIT)
 
@@ -231,7 +230,7 @@ export default function SageChatPage() {
       const { data } = await supabase
         .from('sage_conversations')
         .select('id, role, content, confidence_score, created_at')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .lt('created_at', oldest.created_at)
         .order('created_at', { ascending: false })
         .limit(INITIAL_MESSAGE_LIMIT)
@@ -283,8 +282,8 @@ export default function SageChatPage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            venueId: VENUE_ID,
-            weddingId: WEDDING_ID,
+            venueId: venueId,
+            weddingId: weddingId,
             message: text.trim(),
           }),
         })

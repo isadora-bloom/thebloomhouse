@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   Palette,
@@ -17,9 +18,6 @@ import {
 } from 'lucide-react'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Preset spaces
 // ---------------------------------------------------------------------------
@@ -76,6 +74,7 @@ const EMPTY_ITEM: ItemFormData = {
 // ---------------------------------------------------------------------------
 
 export default function DecorInventoryPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [items, setItems] = useState<DecorItem[]>([])
   const [loading, setLoading] = useState(true)
   const [expandedSpaces, setExpandedSpaces] = useState<Set<string>>(new Set())
@@ -104,13 +103,13 @@ export default function DecorInventoryPage() {
       supabase
         .from('decor_inventory')
         .select('*')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .order('category')
         .order('item_name'),
       supabase
         .from('venue_config')
         .select('feature_flags')
-        .eq('venue_id', VENUE_ID)
+        .eq('venue_id', venueId)
         .maybeSingle(),
     ])
 
@@ -193,8 +192,8 @@ export default function DecorInventoryPage() {
     if (!itemForm.item_name.trim()) return
 
     const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       space_name: spaceName,
       item_name: itemForm.item_name.trim(),
       source: itemForm.source.trim() || null,
@@ -238,7 +237,7 @@ export default function DecorInventoryPage() {
   }
 
   // ---- Loading ----
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-48 bg-gray-200 rounded" />

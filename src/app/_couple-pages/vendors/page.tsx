@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   Store,
@@ -21,10 +22,6 @@ import {
 } from 'lucide-react'
 
 // TODO: Get from auth session / couple context
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-const SLUG = 'hawthorne-manor'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -287,6 +284,7 @@ function EmptyTypeCard({
 // ---------------------------------------------------------------------------
 
 export default function VendorsPage() {
+  const { venueId, weddingId, slug, loading: contextLoading } = useCoupleContext()
   const [vendors, setVendors] = useState<BookedVendor[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -305,7 +303,7 @@ export default function VendorsPage() {
     const { data, error: fetchErr } = await supabase
       .from('booked_vendors')
       .select('*')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('created_at', { ascending: true })
 
     if (fetchErr) {
@@ -344,7 +342,7 @@ export default function VendorsPage() {
             updated_at: new Date().toISOString(),
           })
           .eq('id', editingId)
-          .eq('wedding_id', WEDDING_ID)
+          .eq('wedding_id', weddingId)
 
         if (updateErr) throw updateErr
       } else {
@@ -352,8 +350,8 @@ export default function VendorsPage() {
         const { error: insertErr } = await supabase
           .from('booked_vendors')
           .insert({
-            venue_id: VENUE_ID,
-            wedding_id: WEDDING_ID,
+            venue_id: venueId,
+            wedding_id: weddingId,
             vendor_type: resolvedType,
             vendor_name: form.vendor_name || null,
             vendor_contact: form.vendor_contact || null,
@@ -425,7 +423,7 @@ export default function VendorsPage() {
     try {
       const timestamp = Date.now()
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-      const storagePath = `${WEDDING_ID}/${vendorId}_${timestamp}_${safeName}`
+      const storagePath = `${weddingId}/${vendorId}_${timestamp}_${safeName}`
 
       // Upload to Supabase Storage
       const { error: uploadErr } = await supabase.storage
@@ -459,8 +457,8 @@ export default function VendorsPage() {
       const vendor = vendors.find(v => v.id === vendorId)
 
       await supabase.from('contracts').insert({
-        venue_id: VENUE_ID,
-        wedding_id: WEDDING_ID,
+        venue_id: venueId,
+        wedding_id: weddingId,
         filename: file.name,
         file_type: fileType,
         storage_path: storagePath,
@@ -849,7 +847,7 @@ export default function VendorsPage() {
             Looking for vendor recommendations from your venue?
           </p>
           <a
-            href={`/couple/${SLUG}/preferred-vendors`}
+            href={`/couple/${slug}/preferred-vendors`}
             className="inline-flex items-center gap-1.5 text-sm font-medium transition-colors hover:opacity-80"
             style={{ color: 'var(--couple-accent)' }}
           >

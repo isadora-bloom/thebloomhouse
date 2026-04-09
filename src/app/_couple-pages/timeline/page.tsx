@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Clock,
   Plus,
@@ -24,9 +25,6 @@ import {
   StickyNote,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1167,6 +1165,7 @@ function autoCalculateTimes(
 // ---------------------------------------------------------------------------
 
 export default function TimelinePage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   // ---- Config state ----
   const [config, setConfig] = useState<TimelineConfig>({
     ceremonyTime: '16:00',
@@ -1215,12 +1214,12 @@ export default function TimelinePage() {
       supabase
         .from('timeline')
         .select('*')
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .maybeSingle(),
       supabase
         .from('weddings')
         .select('wedding_date')
-        .eq('id', WEDDING_ID)
+        .eq('id', weddingId)
         .maybeSingle(),
     ])
 
@@ -1442,8 +1441,8 @@ export default function TimelinePage() {
   async function handleSave() {
     setSaving(true)
     const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       config_json: {
         config,
         events,
@@ -1520,7 +1519,7 @@ export default function TimelinePage() {
   }, [eventsByPhase])
 
   // ---- Loading ----
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="space-y-6">
         <div className="h-10 bg-gray-100 rounded-lg w-64 animate-pulse" />

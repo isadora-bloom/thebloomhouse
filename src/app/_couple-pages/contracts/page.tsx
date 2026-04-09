@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   FileText,
@@ -26,9 +27,6 @@ import {
 } from 'lucide-react'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -440,6 +438,7 @@ function ContractCard({
 // ---------------------------------------------------------------------------
 
 export default function ContractsPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [contracts, setContracts] = useState<Contract[]>([])
   const [vendors, setVendors] = useState<BookedVendor[]>([])
   const [loading, setLoading] = useState(true)
@@ -460,7 +459,7 @@ export default function ContractsPage() {
     const { data, error: fetchErr } = await supabase
       .from('contracts')
       .select('*')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('created_at', { ascending: false })
 
     if (fetchErr) {
@@ -477,7 +476,7 @@ export default function ContractsPage() {
     const { data } = await supabase
       .from('booked_vendors')
       .select('id, vendor_type, vendor_name, is_booked')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('vendor_type')
 
     if (data) {
@@ -500,7 +499,7 @@ export default function ContractsPage() {
     try {
       const timestamp = Date.now()
       const safeName = uploadFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-      const storagePath = `${WEDDING_ID}/${timestamp}_${safeName}`
+      const storagePath = `${weddingId}/${timestamp}_${safeName}`
 
       // Upload to Supabase Storage
       const { error: storageErr } = await supabase.storage

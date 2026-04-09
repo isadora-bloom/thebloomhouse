@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Home,
   MapPin,
@@ -14,9 +15,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// TODO: Get from auth session — VENUE_ID used for fetching venue-level data
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
+// TODO: Get from auth session — venueId used for fetching venue-level data
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -80,6 +79,7 @@ const TYPE_FILTERS: { key: TypeFilter; label: string }[] = [
 // ---------------------------------------------------------------------------
 
 export default function NearbyStaysPage() {
+  const { venueId, loading: contextLoading } = useCoupleContext()
   const [accommodations, setAccommodations] = useState<Accommodation[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
@@ -92,7 +92,7 @@ export default function NearbyStaysPage() {
     const { data, error } = await supabase
       .from('accommodations')
       .select('*')
-      .eq('venue_id', VENUE_ID)
+      .eq('venue_id', venueId)
       .eq('is_recommended', true)
       .order('sort_order', { ascending: true, nullsFirst: false })
       .order('distance_miles', { ascending: true, nullsFirst: false })

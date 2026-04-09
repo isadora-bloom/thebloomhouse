@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   LayoutGrid,
   Users,
@@ -28,9 +29,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -334,6 +332,7 @@ function ColorPicker({
 // ---------------------------------------------------------------------------
 
 export default function TablesPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [tables, setTables] = useState<WeddingTables>(DEFAULT_TABLES)
   const [loading, setLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
@@ -345,8 +344,8 @@ export default function TablesPage() {
     const { data, error } = await supabase
       .from('wedding_tables')
       .select('*')
-      .eq('wedding_id', WEDDING_ID)
-      .eq('venue_id', VENUE_ID)
+      .eq('wedding_id', weddingId)
+      .eq('venue_id', venueId)
       .maybeSingle()
 
     if (!error && data) {
@@ -499,7 +498,7 @@ export default function TablesPage() {
   }, [tables])
 
   // ---- Loading ----
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="flex items-center justify-center py-24">
         <Loader2 className="w-8 h-8 text-[#7D8471] animate-spin" />

@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Wine,
   Beer,
@@ -25,9 +26,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -564,6 +562,7 @@ function ShoppingRow({
 // ---------------------------------------------------------------------------
 
 export default function BarPlannerPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [tab, setTab] = useState<'calculator' | 'list' | 'recipes'>('calculator')
   const [loading, setLoading] = useState(true)
 
@@ -610,10 +609,10 @@ export default function BarPlannerPage() {
   const loadData = useCallback(async () => {
     try {
       const [shoppingRes, recipesRes, planRes, configRes] = await Promise.all([
-        supabase.from('bar_shopping_list').select('*').eq('wedding_id', WEDDING_ID).order('category').order('item_name'),
-        supabase.from('bar_recipes').select('*').eq('wedding_id', WEDDING_ID).order('created_at', { ascending: true }),
-        supabase.from('bar_planning').select('*').eq('wedding_id', WEDDING_ID).maybeSingle(),
-        supabase.from('venue_config').select('bar_model, feature_flags').eq('venue_id', VENUE_ID).maybeSingle(),
+        supabase.from('bar_shopping_list').select('*').eq('wedding_id', weddingId).order('category').order('item_name'),
+        supabase.from('bar_recipes').select('*').eq('wedding_id', weddingId).order('created_at', { ascending: true }),
+        supabase.from('bar_planning').select('*').eq('wedding_id', weddingId).maybeSingle(),
+        supabase.from('venue_config').select('bar_model, feature_flags').eq('venue_id', venueId).maybeSingle(),
       ])
       if (shoppingRes.data) setItems(shoppingRes.data as ShoppingItem[])
       if (recipesRes.data) setRecipes(recipesRes.data as Recipe[])
@@ -685,8 +684,8 @@ export default function BarPlannerPage() {
           try {
             await supabase.from('bar_planning').upsert(
               {
-                venue_id: VENUE_ID,
-                wedding_id: WEDDING_ID,
+                venue_id: venueId,
+                wedding_id: weddingId,
                 guest_count: guests,
                 event_duration_hours: hours,
                 notes_calculator: next.calculator,
@@ -720,8 +719,8 @@ export default function BarPlannerPage() {
     if (!newItem.item_name.trim()) return
     try {
       const { data, error } = await supabase.from('bar_shopping_list').insert({
-        venue_id: VENUE_ID,
-        wedding_id: WEDDING_ID,
+        venue_id: venueId,
+        wedding_id: weddingId,
         item_name: newItem.item_name.trim(),
         quantity: parseFloat(newItem.quantity) || 1,
         unit: newItem.unit || '',
@@ -780,8 +779,8 @@ export default function BarPlannerPage() {
       const { data } = await supabase
         .from('bar_shopping_list')
         .insert({
-          venue_id: VENUE_ID,
-          wedding_id: WEDDING_ID,
+          venue_id: venueId,
+          wedding_id: weddingId,
           item_name: listItem.item_name,
           quantity: listItem.quantity,
           unit: listItem.unit,
@@ -831,8 +830,8 @@ export default function BarPlannerPage() {
       const { data, error } = await supabase
         .from('bar_recipes')
         .insert({
-          venue_id: VENUE_ID,
-          wedding_id: WEDDING_ID,
+          venue_id: venueId,
+          wedding_id: weddingId,
           name: recipeName.trim(),
           ingredients: JSON.stringify(ingredients),
           servings_per_batch: parseInt(recipeServings) || 25,
@@ -875,8 +874,8 @@ export default function BarPlannerPage() {
       const { data } = await supabase
         .from('bar_shopping_list')
         .insert({
-          venue_id: VENUE_ID,
-          wedding_id: WEDDING_ID,
+          venue_id: venueId,
+          wedding_id: weddingId,
           item_name: ing.name,
           quantity: scaled.qty,
           unit: scaled.unit,
@@ -923,7 +922,7 @@ export default function BarPlannerPage() {
 
   // ── Loading state ─────────────────────────────────────────────────────────
 
-  if (loading) {
+  if (contextLoading || !weddingId || !venueId || loading) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-48 bg-gray-200 rounded" />

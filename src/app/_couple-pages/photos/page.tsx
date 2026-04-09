@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   Image as ImageIcon,
   Plus,
@@ -19,9 +20,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // TODO: Get from auth session
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types & Constants
 // ---------------------------------------------------------------------------
@@ -79,6 +77,7 @@ type TagFilter = 'all' | '_website' | '_hero' | string
 // ---------------------------------------------------------------------------
 
 export default function PhotoLibraryPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [photos, setPhotos] = useState<Photo[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -96,7 +95,7 @@ export default function PhotoLibraryPage() {
     const { data, error } = await supabase
       .from('photo_library')
       .select('*')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('created_at', { ascending: false })
 
     if (!error && data) {
@@ -115,7 +114,7 @@ export default function PhotoLibraryPage() {
     const { data } = await supabase
       .from('guest_list')
       .select('id, first_name, last_name')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('first_name', { ascending: true })
 
     if (data) {
@@ -193,8 +192,8 @@ export default function PhotoLibraryPage() {
     if (!form.image_url.trim()) return
 
     const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       image_url: form.image_url.trim(),
       caption: form.caption.trim() || null,
       tags: form.tags,
@@ -208,7 +207,7 @@ export default function PhotoLibraryPage() {
       await supabase
         .from('photo_library')
         .update({ is_hero: false })
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
         .neq('id', editingId || '')
     }
 
@@ -244,7 +243,7 @@ export default function PhotoLibraryPage() {
       await supabase
         .from('photo_library')
         .update({ is_hero: false })
-        .eq('wedding_id', WEDDING_ID)
+        .eq('wedding_id', weddingId)
     }
     await supabase
       .from('photo_library')

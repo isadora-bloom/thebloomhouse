@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
   Store,
@@ -16,9 +17,6 @@ import {
 } from 'lucide-react'
 
 // TODO: Get from auth session / couple context
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -293,6 +291,7 @@ function VendorCard({ vendor }: { vendor: VendorRecommendation }) {
 // ---------------------------------------------------------------------------
 
 export default function PreferredVendorsPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [vendors, setVendors] = useState<VendorRecommendation[]>([])
   const [loading, setLoading] = useState(true)
   const [activeType, setActiveType] = useState<string>('all')
@@ -304,7 +303,7 @@ export default function PreferredVendorsPage() {
     const { data, error } = await supabase
       .from('vendor_recommendations')
       .select('*')
-      .eq('venue_id', VENUE_ID)
+      .eq('venue_id', venueId)
       .order('sort_order', { ascending: true })
       .order('vendor_name', { ascending: true })
 

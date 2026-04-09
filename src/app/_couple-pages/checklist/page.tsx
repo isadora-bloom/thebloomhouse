@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import {
   CheckSquare,
   Plus,
@@ -29,9 +30,6 @@ import {
   MoreHorizontal,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-
-const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -180,6 +178,7 @@ function formatDueDate(dateStr: string | null): { text: string; color: string } 
 // ---------------------------------------------------------------------------
 
 export default function ChecklistPage() {
+  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [items, setItems] = useState<ChecklistItem[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -203,7 +202,7 @@ export default function ChecklistPage() {
     const { data: configData } = await supabase
       .from('venue_config')
       .select('feature_flags')
-      .eq('venue_id', VENUE_ID)
+      .eq('venue_id', venueId)
       .maybeSingle()
 
     const flags = (configData?.feature_flags ?? {}) as Record<string, unknown>
@@ -214,8 +213,8 @@ export default function ChecklistPage() {
 
     const rows = tasksToSeed && tasksToSeed.length > 0
       ? tasksToSeed.map((t, i) => ({
-          venue_id: VENUE_ID,
-          wedding_id: WEDDING_ID,
+          venue_id: venueId,
+          wedding_id: weddingId,
           title: t.title || t.task_text || '',
           category: t.category,
           is_completed: false,
@@ -223,8 +222,8 @@ export default function ChecklistPage() {
           description: null,
         }))
       : DEFAULT_TASKS.map((t) => ({
-          venue_id: VENUE_ID,
-          wedding_id: WEDDING_ID,
+          venue_id: venueId,
+          wedding_id: weddingId,
           title: t.title,
           category: t.category,
           is_completed: false,
@@ -240,7 +239,7 @@ export default function ChecklistPage() {
     const { data, error } = await supabase
       .from('checklist_items')
       .select('*')
-      .eq('wedding_id', WEDDING_ID)
+      .eq('wedding_id', weddingId)
       .order('sort_order', { ascending: true })
 
     if (!error && data) {
@@ -250,7 +249,7 @@ export default function ChecklistPage() {
         const { data: seeded } = await supabase
           .from('checklist_items')
           .select('*')
-          .eq('wedding_id', WEDDING_ID)
+          .eq('wedding_id', weddingId)
           .order('sort_order', { ascending: true })
         if (seeded) setItems(seeded as ChecklistItem[])
       } else {
@@ -367,8 +366,8 @@ export default function ChecklistPage() {
     if (!form.title.trim()) return
 
     const payload = {
-      venue_id: VENUE_ID,
-      wedding_id: WEDDING_ID,
+      venue_id: venueId,
+      wedding_id: weddingId,
       title: form.title.trim(),
       category: form.category || 'Other',
       due_date: form.due_date || null,
