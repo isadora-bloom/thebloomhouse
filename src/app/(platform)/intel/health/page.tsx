@@ -10,6 +10,8 @@ import {
   TrendingUp,
   Lightbulb,
 } from 'lucide-react'
+import { useScope, scopeVenueFilter } from '@/lib/hooks/use-scope'
+import { computeHealthBreakdown } from '@/lib/intel/health-score'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import {
   LineChart,
@@ -36,15 +38,26 @@ function getSupabase() {
 // Types
 // ---------------------------------------------------------------------------
 
-interface VenueHealthRow {
+interface WeddingRow {
   id: string
   venue_id: string
-  overall_score: number
-  data_quality_score: number
-  pipeline_health_score: number
-  response_time_score: number
-  booking_rate_score: number
+  status: string
+  booking_value: number | null
+  source: string | null
+  inquiry_date: string | null
   created_at: string
+}
+
+interface InteractionRow {
+  venue_id: string
+  direction: string
+  timestamp: string
+}
+
+interface VenueHealthHistoryRow {
+  venue_id: string
+  overall_score: number | null
+  calculated_at: string
 }
 
 interface Recommendation {
@@ -181,20 +194,50 @@ function HealthSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function HealthDashboardPage() {
-  const [healthRecords, setHealthRecords] = useState<VenueHealthRow[]>([])
+  const scope = useScope()
+  const scopedVenueIds = scopeVenueFilter(scope)
+  const scopeKey = JSON.stringify(scopedVenueIds)
+
+  const [weddings, setWeddings] = useState<WeddingRow[]>([])
+  const [interactions, setInteractions] = useState<InteractionRow[]>([])
+  const [healthHistoryRows, setHealthHistoryRows] = useState<VenueHealthHistoryRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
     const supabase = getSupabase()
     try {
-      const { data, error: err } = await supabase
+      const ninetyDaysAgo = new Date()
+      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90)
+
+      let weddingQ = supabase
+        .from('weddings')
+        .select('id, venue_id, status, booking_value, source, inquiry_date, created_at')
+      let interactionQ = supabase
+        .from('interactions')
+        .select('venue_id, direction, timestamp')
+        .gte('timestamp', ninetyDaysAgo.toISOString())
+        .order('timestamp', { ascending: true })
+      let healthQ = supabase
         .from('venue_health')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(100)
-      if (err) throw err
-      setHealthRecords((data ?? []) as VenueHealthRow[])
+        .select('venue_id, overall_score, calculated_at')
+        .order('calculated_at', { ascending: true })
+
+      const ids: string[] | null = JSON.parse(scopeKey)
+      if (ids) {
+        weddingQ = weddingQ.in('venue_id', ids)
+        interactionQ = interactionQ.in('venue_id', ids)
+        healthQ = healthQ.in('venue_id', ids)
+      }
+
+      const [wRes, iRes, hRes] = await Promise.all([weddingQ, interactionQ, healthQ])
+      if (wRes.error) throw wRes.error
+      if (iRes.error) throw iRes.error
+      if (hRes.error) throw hRes.error
+
+      setWeddings((wRes.data ?? []) as WeddingRow[])
+      setInteractions((iRes.data ?? []) as InteractionRow[])
+      setHealthHistoryRows((hRes.data ?? []) as VenueHealthHistoryRow[])
       setError(null)
     } catch (err) {
       console.error('Failed to fetch health data:', err)
@@ -202,70 +245,166 @@ export default function HealthDashboardPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scopeKey])
 
   useEffect(() => {
     fetchData()
   }, [fetchData])
 
-  // Latest record
-  const latest = healthRecords[0] ?? null
-  const overallScore = latest?.overall_score ?? 0
-  const dataQuality = latest?.data_quality_score ?? 0
-  const pipelineHealth = latest?.pipeline_health_score ?? 0
-  const responseTime = latest?.response_time_score ?? 0
-  const bookingRate = latest?.booking_rate_score ?? 0
+  // ---- Compute inputs to the health formula from real data ----
+  const metrics = useMemo(() => {
+    const bookedStatuses = ['booked', 'contracted', 'completed']
+    const lostStatuses = ['lost', 'cancelled', 'closed_lost']
 
-  // Historical (last 12 weeks)
+    const totalLeads = weddings.length
+
+    const bookedCount = weddings.filter((w) => bookedStatuses.includes(w.status)).length
+    const bookingConversionRate: number | null =
+      totalLeads > 0 ? bookedCount / totalLeads : null
+
+    // Response time (minutes): avg inbound → next outbound per venue
+    const sortedInt = [...interactions].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    )
+    const inbound = sortedInt.filter((i) => i.direction === 'inbound')
+    const outbound = sortedInt.filter((i) => i.direction === 'outbound')
+    const gapsMinutes: number[] = []
+    for (const ib of inbound) {
+      const reply = outbound.find(
+        (ob) =>
+          ob.venue_id === ib.venue_id &&
+          new Date(ob.timestamp).getTime() > new Date(ib.timestamp).getTime()
+      )
+      if (reply) {
+        const mins =
+          (new Date(reply.timestamp).getTime() - new Date(ib.timestamp).getTime()) / 60000
+        if (mins < 72 * 60) gapsMinutes.push(mins)
+      }
+    }
+    const responseTimeMinutes: number | null =
+      gapsMinutes.length > 0
+        ? gapsMinutes.reduce((a, b) => a + b, 0) / gapsMinutes.length
+        : null
+
+    // Source diversity
+    const sources = new Set(
+      weddings.map((w) => w.source).filter((s): s is string => !!s && s.trim() !== '')
+    )
+    const sourceCount: number | null = sources.size > 0 ? sources.size : null
+
+    // Booking pace: last 30d bookings vs target = totalLeads * (30/90)
+    const thirtyDaysAgo = new Date()
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+    const recentBooked = weddings.filter(
+      (w) =>
+        bookedStatuses.includes(w.status) &&
+        new Date(w.inquiry_date ?? w.created_at) >= thirtyDaysAgo
+    ).length
+    const target = totalLeads * (30 / 90)
+    const bookingPace: number | null =
+      totalLeads > 0 && target > 0 ? Math.min(1, recentBooked / target) : null
+
+    // Pipeline: non-lost fraction
+    const active = weddings.filter((w) => !lostStatuses.includes(w.status)).length
+    const pipelineActiveRatio: number | null =
+      totalLeads > 0 ? active / totalLeads : null
+
+    // Data completeness: fraction of (booking_value, source) fields filled
+    let dataCompleteness: number | null = null
+    if (totalLeads > 0) {
+      let filled = 0
+      let total = 0
+      for (const w of weddings) {
+        total += 2
+        if (w.booking_value != null) filled += 1
+        if (w.source && w.source.trim() !== '') filled += 1
+      }
+      dataCompleteness = total > 0 ? filled / total : null
+    }
+
+    // No reviews table wired in yet — keep null (do NOT default to 100)
+    const avgReviewRating: number | null = null
+
+    return {
+      bookingConversionRate,
+      responseTimeMinutes,
+      avgReviewRating,
+      sourceCount,
+      bookingPace,
+      pipelineActiveRatio,
+      dataCompleteness,
+    }
+  }, [weddings, interactions])
+
+  const breakdown = useMemo(() => computeHealthBreakdown(metrics), [metrics])
+
+  const hasAnyData =
+    breakdown.overall != null ||
+    breakdown.dataQuality != null ||
+    breakdown.pipelineHealth != null ||
+    breakdown.responseTime != null ||
+    breakdown.bookingRate != null
+
+  const overallScore = breakdown.overall ?? 0
+  const dataQuality = breakdown.dataQuality ?? 0
+  const pipelineHealth = breakdown.pipelineHealth ?? 0
+  const responseTime = breakdown.responseTime ?? 0
+  const bookingRate = breakdown.bookingRate ?? 0
+
+  // Historical (last 12 weeks) — from stored venue_health rows
   const historyData = useMemo(() => {
-    // Group by week (take latest per week)
-    const weekMap = new Map<string, number>()
-    for (const r of healthRecords) {
-      const d = new Date(r.created_at)
+    const weekMap = new Map<string, number[]>()
+    for (const r of healthHistoryRows) {
+      if (r.overall_score == null) continue
+      const d = new Date(r.calculated_at)
       const weekStart = new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay())
       const key = weekStart.toISOString().slice(0, 10)
-      if (!weekMap.has(key)) {
-        weekMap.set(key, r.overall_score)
-      }
+      if (!weekMap.has(key)) weekMap.set(key, [])
+      weekMap.get(key)!.push(r.overall_score)
     }
     return Array.from(weekMap.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
       .slice(-12)
-      .map(([date, score]) => ({
+      .map(([date, scores]) => ({
         week: new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        score,
+        score: Math.round(scores.reduce((a, b) => a + b, 0) / scores.length),
       }))
-  }, [healthRecords])
+  }, [healthHistoryRows])
 
   // ---- Compute insights from health data ----
   const healthInsights: InsightItem[] = useMemo(() => {
-    if (!latest) return []
+    if (!hasAnyData) return []
     const items: InsightItem[] = []
 
-    const dimensions: { label: string; score: number }[] = [
-      { label: 'Data Quality', score: dataQuality },
-      { label: 'Pipeline Health', score: pipelineHealth },
-      { label: 'Response Time', score: responseTime },
-      { label: 'Booking Rate', score: bookingRate },
+    const rawDimensions: { label: string; score: number | null }[] = [
+      { label: 'Data Quality', score: breakdown.dataQuality },
+      { label: 'Pipeline Health', score: breakdown.pipelineHealth },
+      { label: 'Response Time', score: breakdown.responseTime },
+      { label: 'Booking Rate', score: breakdown.bookingRate },
     ]
+    const dimensions: { label: string; score: number }[] = rawDimensions.filter(
+      (d): d is { label: string; score: number } => d.score != null
+    )
 
     // Strongest area
-    const strongest = [...dimensions].sort((a, b) => b.score - a.score)[0]
-    if (strongest.score > 60) {
-      items.push({
-        icon: 'trend_up',
-        text: `Great job on ${strongest.label} — scoring ${strongest.score}/100, in the top tier`,
-      })
-    }
+    if (dimensions.length > 0) {
+      const strongest = [...dimensions].sort((a, b) => b.score - a.score)[0]
+      if (strongest.score > 60) {
+        items.push({
+          icon: 'trend_up',
+          text: `Great job on ${strongest.label} — scoring ${strongest.score}/100, in the top tier`,
+        })
+      }
 
-    // Weakest area
-    const weakest = [...dimensions].sort((a, b) => a.score - b.score)[0]
-    if (weakest.score < 70) {
-      items.push({
-        icon: 'trend_down',
-        text: `Your weakest area is ${weakest.label} at ${weakest.score}/100 — focus improvement efforts here for the biggest impact`,
-        priority: weakest.score < 40 ? 'high' : 'medium',
-      })
+      // Weakest area
+      const weakest = [...dimensions].sort((a, b) => a.score - b.score)[0]
+      if (weakest.score < 70) {
+        items.push({
+          icon: 'trend_down',
+          text: `Your weakest area is ${weakest.label} at ${weakest.score}/100 — focus improvement efforts here for the biggest impact`,
+          priority: weakest.score < 40 ? 'high' : 'medium',
+        })
+      }
     }
 
     // Overall health context
@@ -289,7 +428,7 @@ export default function HealthDashboardPage() {
     }
 
     return items
-  }, [latest, dataQuality, pipelineHealth, responseTime, bookingRate, overallScore])
+  }, [hasAnyData, breakdown, overallScore])
 
   // Recommendations
   const recommendations: Recommendation[] = useMemo(() => {
@@ -326,7 +465,7 @@ export default function HealthDashboardPage() {
         icon: Target,
       })
     }
-    if (recs.length === 0 && latest) {
+    if (recs.length === 0 && hasAnyData) {
       recs.push({
         dimension: 'Overall',
         score: overallScore,
@@ -335,7 +474,7 @@ export default function HealthDashboardPage() {
       })
     }
     return recs
-  }, [dataQuality, pipelineHealth, responseTime, bookingRate, overallScore, latest])
+  }, [dataQuality, pipelineHealth, responseTime, bookingRate, overallScore, hasAnyData])
 
   return (
     <div className="space-y-8">
@@ -359,26 +498,40 @@ export default function HealthDashboardPage() {
 
       {loading ? (
         <HealthSkeleton />
-      ) : !latest ? (
+      ) : !hasAnyData ? (
         <div className="bg-surface border border-border rounded-xl p-12 shadow-sm text-center">
           <Activity className="w-12 h-12 text-sage-300 mx-auto mb-4" />
-          <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">No health data</h3>
+          <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">No data</h3>
           <p className="text-sm text-sage-600">Health scores will be calculated once venue activity is tracked.</p>
         </div>
       ) : (
         <>
           {/* Main health ring */}
           <div className="bg-surface border border-border rounded-xl p-8 shadow-sm flex flex-col items-center">
-            <LargeHealthRing score={overallScore} />
+            {breakdown.overall != null ? (
+              <LargeHealthRing score={overallScore} />
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-2xl font-bold text-sage-400">No data</p>
+              </div>
+            )}
             <p className="mt-4 text-sm text-sage-600">Overall Venue Health</p>
           </div>
 
           {/* Dimensional breakdown */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <DimensionCard icon={Database} label="Data Quality" score={dataQuality} />
-            <DimensionCard icon={TrendingUp} label="Pipeline Health" score={pipelineHealth} />
-            <DimensionCard icon={Clock} label="Response Time" score={responseTime} />
-            <DimensionCard icon={Target} label="Booking Rate" score={bookingRate} />
+            {breakdown.dataQuality != null && (
+              <DimensionCard icon={Database} label="Data Quality" score={dataQuality} />
+            )}
+            {breakdown.pipelineHealth != null && (
+              <DimensionCard icon={TrendingUp} label="Pipeline Health" score={pipelineHealth} />
+            )}
+            {breakdown.responseTime != null && (
+              <DimensionCard icon={Clock} label="Response Time" score={responseTime} />
+            )}
+            {breakdown.bookingRate != null && (
+              <DimensionCard icon={Target} label="Booking Rate" score={bookingRate} />
+            )}
           </div>
 
           {/* AI Insights */}

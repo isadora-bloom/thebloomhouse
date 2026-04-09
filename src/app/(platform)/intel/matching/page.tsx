@@ -172,16 +172,25 @@ function MatchingPageInner() {
       const cA = contactsByPerson.get(q.person_a_id) ?? []
       const cB = contactsByPerson.get(q.person_b_id) ?? []
 
+      const nameA = pA
+        ? [pA.first_name, pA.last_name].filter(Boolean).join(' ').trim()
+        : ''
+      const nameB = pB
+        ? [pB.first_name, pB.last_name].filter(Boolean).join(' ').trim()
+        : ''
+      const emailsA = cA.filter((c) => c.type === 'email').map((c) => c.value)
+      const emailsB = cB.filter((c) => c.type === 'email').map((c) => c.value)
+
       return {
         queueItem: q,
         personA: {
-          name: pA ? `${pA.first_name} ${pA.last_name}` : 'Unknown',
-          emails: cA.filter((c) => c.type === 'email').map((c) => c.value),
+          name: nameA || emailsA[0] || 'No name on record',
+          emails: emailsA,
           phones: cA.filter((c) => c.type === 'phone').map((c) => c.value),
         },
         personB: {
-          name: pB ? `${pB.first_name} ${pB.last_name}` : 'Unknown',
-          emails: cB.filter((c) => c.type === 'email').map((c) => c.value),
+          name: nameB || emailsB[0] || 'No name on record',
+          emails: emailsB,
           phones: cB.filter((c) => c.type === 'phone').map((c) => c.value),
         },
       }

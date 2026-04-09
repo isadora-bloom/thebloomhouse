@@ -11,9 +11,10 @@ import {
   AlertCircle,
   Clock,
   ChevronDown,
-  ChevronUp,
   X,
 } from 'lucide-react'
+import { useScope, scopeVenueFilter } from '@/lib/hooks/use-scope'
+import { computeHealthScore } from '@/lib/intel/health-score'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -42,6 +43,7 @@ interface WeddingRow {
   venue_id: string
   status: string
   booking_value: number | null
+  source: string | null
   inquiry_date: string | null
   created_at: string
 }
@@ -66,7 +68,7 @@ interface VenueCardData {
   id: string
   name: string
   status: string
-  healthScore: number
+  healthScore: number | null
   healthBreakdown: {
     data_quality: number
     pipeline: number
@@ -74,10 +76,15 @@ interface VenueCardData {
     booking_rate: number
   } | null
   healthHistory: { date: string; score: number }[]
+  // Status mix (lifetime, within fetch window)
+  inquiryCount: number
+  bookedCount: number
+  completedCount: number
+  lostCount: number
   inquiriesThisMonth: number
   bookingsThisMonth: number
   revenueThisMonth: number
-  totalRevenuePipeline: number
+  totalRevenue: number
   avgResponseHours: number | null
 }
 
@@ -231,7 +238,7 @@ function HealthBreakdownPanel({
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-border">
           <div className="flex items-center gap-3">
-            <HealthRing score={venue.healthScore} size={48} />
+            <HealthRing score={venue.healthScore ?? 0} size={48} />
             <div>
               <h3 className="font-heading text-base font-semibold text-sage-900">{venue.name}</h3>
               <p className="text-xs text-sage-500">Health Score Breakdown</p>
@@ -303,6 +310,10 @@ function HealthBreakdownPanel({
 
 export default function PortfolioOverviewPage() {
   const router = useRouter()
+  const scope = useScope()
+  const scopedVenueIds = scopeVenueFilter(scope)
+  const scopeKey = JSON.stringify(scopedVenueIds)
+
   const [venues, setVenues] = useState<VenueRow[]>([])
   const [weddings, setWeddings] = useState<WeddingRow[]>([])
   const [healthRows, setHealthRows] = useState<VenueHealthRow[]>([])
@@ -314,24 +325,38 @@ export default function PortfolioOverviewPage() {
   const fetchData = useCallback(async () => {
     const supabase = getSupabase()
     try {
-      // Fetch last 90 days of interactions for response time calc
       const ninetyDaysAgo = new Date()
       ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90)
 
+      let venueQ = supabase.from('venues').select('id, name, status, state')
+      let weddingQ = supabase
+        .from('weddings')
+        .select('id, venue_id, status, booking_value, source, inquiry_date, created_at')
+      let healthQ = supabase
+        .from('venue_health')
+        .select(
+          'venue_id, overall_score, data_quality_score, pipeline_score, response_time_score, booking_rate_score, calculated_at'
+        )
+        .order('calculated_at', { ascending: true })
+      let intQ = supabase
+        .from('interactions')
+        .select('venue_id, direction, timestamp')
+        .gte('timestamp', ninetyDaysAgo.toISOString())
+        .order('timestamp', { ascending: true })
+
+      const ids: string[] | null = JSON.parse(scopeKey)
+      if (ids) {
+        venueQ = venueQ.in('id', ids)
+        weddingQ = weddingQ.in('venue_id', ids)
+        healthQ = healthQ.in('venue_id', ids)
+        intQ = intQ.in('venue_id', ids)
+      }
+
       const [venueRes, weddingRes, healthRes, intRes] = await Promise.all([
-        supabase.from('venues').select('id, name, status, state'),
-        supabase
-          .from('weddings')
-          .select('id, venue_id, status, booking_value, inquiry_date, created_at'),
-        supabase
-          .from('venue_health')
-          .select('venue_id, overall_score, data_quality_score, pipeline_score, response_time_score, booking_rate_score, calculated_at')
-          .order('calculated_at', { ascending: true }),
-        supabase
-          .from('interactions')
-          .select('venue_id, direction, timestamp')
-          .gte('timestamp', ninetyDaysAgo.toISOString())
-          .order('timestamp', { ascending: true }),
+        venueQ,
+        weddingQ,
+        healthQ,
+        intQ,
       ])
       if (venueRes.error) throw venueRes.error
       if (weddingRes.error) throw weddingRes.error
@@ -349,7 +374,7 @@ export default function PortfolioOverviewPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scopeKey])
 
   useEffect(() => {
     fetchData()
@@ -360,51 +385,54 @@ export default function PortfolioOverviewPage() {
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
 
   const venueCards: VenueCardData[] = useMemo(() => {
+    const bookedStatuses = ['booked', 'contracted']
+    const lostStatuses = ['lost', 'cancelled', 'closed_lost']
+
     return venues.map((v) => {
       const vWeddings = weddings.filter((w) => w.venue_id === v.id)
 
-      // This month: use inquiry_date OR created_at
-      const thisMonth = vWeddings.filter(
-        (w) => (w.inquiry_date ?? w.created_at) >= monthStart
-      )
+      // Status mix (lifetime within fetched window)
+      const inquiryCount = vWeddings.filter((w) => w.status === 'inquiry').length
+      const bookedCount = vWeddings.filter((w) => bookedStatuses.includes(w.status)).length
+      const completedCount = vWeddings.filter((w) => w.status === 'completed').length
+      const lostCount = vWeddings.filter((w) => lostStatuses.includes(w.status)).length
 
-      // Bookings this month
-      const bookingsThisMonth = thisMonth.filter((w) =>
-        ['booked', 'contracted', 'completed'].includes(w.status)
-      )
-
-      // Revenue: all booked/contracted/completed weddings
+      // Total revenue across booked + contracted + completed
       const allBooked = vWeddings.filter((w) =>
         ['booked', 'contracted', 'completed'].includes(w.status)
       )
-      const totalRevenuePipeline = allBooked.reduce(
-        (s, w) => s + (w.booking_value ?? 0),
-        0
-      )
+      const totalRevenue = allBooked.reduce((s, w) => s + (w.booking_value ?? 0), 0)
 
-      // Revenue this month
+      // This month filters
+      const thisMonth = vWeddings.filter(
+        (w) => (w.inquiry_date ?? w.created_at) >= monthStart
+      )
+      const bookingsThisMonth = thisMonth.filter((w) =>
+        ['booked', 'contracted', 'completed'].includes(w.status)
+      )
       const revenueThisMonth = bookingsThisMonth.reduce(
         (s, w) => s + (w.booking_value ?? 0),
         0
       )
 
-      // Health: latest row
+      // Health: use stored breakdown for the modal, but compute overall from
+      // real data so a venue with missing/stale pre-computed rows still scores
+      // honestly (never silently pegged to 0 or 100).
       const venueHealth = healthRows.filter((h) => h.venue_id === v.id)
-      const latest = venueHealth[venueHealth.length - 1]
+      const storedLatest = venueHealth[venueHealth.length - 1]
+      const healthHistory = venueHealth
+        .filter((h) => h.overall_score != null)
+        .map((h) => ({
+          date: h.calculated_at,
+          score: h.overall_score as number,
+        }))
 
-      // Health history for chart
-      const healthHistory = venueHealth.map((h) => ({
-        date: h.calculated_at,
-        score: h.overall_score,
-      }))
-
-      // Avg response time (rough: time between first inbound and first outbound per thread)
+      // Avg response time — inbound → next outbound per thread
       const venueInts = interactions.filter((i) => i.venue_id === v.id)
       const inbound = venueInts.filter((i) => i.direction === 'inbound')
       const outbound = venueInts.filter((i) => i.direction === 'outbound')
       let avgResponseHours: number | null = null
       if (inbound.length > 0 && outbound.length > 0) {
-        // Simple: avg time gap between consecutive inbound→outbound pairs
         const gaps: number[] = []
         for (const ib of inbound) {
           const reply = outbound.find(
@@ -415,47 +443,73 @@ export default function PortfolioOverviewPage() {
               (new Date(reply.timestamp).getTime() -
                 new Date(ib.timestamp).getTime()) /
               (1000 * 60 * 60)
-            if (gap < 72) gaps.push(gap) // exclude stale
+            if (gap < 72) gaps.push(gap)
           }
         }
         if (gaps.length > 0) {
           avgResponseHours =
-            Math.round((gaps.reduce((a, b) => a + b, 0) / gaps.length) * 10) /
-            10
+            Math.round((gaps.reduce((a, b) => a + b, 0) / gaps.length) * 10) / 10
         }
       }
+
+      const totalLeads = vWeddings.length
+      const hasLeads = totalLeads > 0
+      const bookingRate = hasLeads
+        ? vWeddings.filter((w) => ['booked', 'contracted', 'completed'].includes(w.status)).length /
+          totalLeads
+        : null
+      const sources = new Set(
+        vWeddings
+          .map((w) => (w as WeddingRow & { source?: string | null }).source ?? null)
+          .filter((s): s is string => !!s && s.trim() !== '')
+      )
+      const healthScore = computeHealthScore({
+        bookingConversionRate: bookingRate,
+        responseTimeMinutes: avgResponseHours != null ? avgResponseHours * 60 : null,
+        avgReviewRating: null,
+        sourceCount: sources.size > 0 ? sources.size : null,
+        bookingPace: null,
+      })
 
       return {
         id: v.id,
         name: v.name,
         status: v.status,
-        healthScore: latest?.overall_score ?? 0,
-        healthBreakdown: latest
+        healthScore,
+        healthBreakdown: storedLatest
           ? {
-              data_quality: latest.data_quality_score ?? 0,
-              pipeline: latest.pipeline_score ?? 0,
-              response_time: latest.response_time_score ?? 0,
-              booking_rate: latest.booking_rate_score ?? 0,
+              data_quality: storedLatest.data_quality_score ?? 0,
+              pipeline: storedLatest.pipeline_score ?? 0,
+              response_time: storedLatest.response_time_score ?? 0,
+              booking_rate: storedLatest.booking_rate_score ?? 0,
             }
           : null,
         healthHistory,
+        inquiryCount,
+        bookedCount,
+        completedCount,
+        lostCount,
         inquiriesThisMonth: thisMonth.filter((w) => w.status === 'inquiry').length,
         bookingsThisMonth: bookingsThisMonth.length,
         revenueThisMonth,
-        totalRevenuePipeline,
+        totalRevenue,
         avgResponseHours,
       }
     })
   }, [venues, weddings, healthRows, interactions, monthStart])
 
   // Company-level stats
-  const totalInquiries = venueCards.reduce((s, v) => s + v.inquiriesThisMonth, 0)
-  const totalBookings = venueCards.reduce((s, v) => s + v.bookingsThisMonth, 0)
-  const totalPipelineRevenue = venueCards.reduce((s, v) => s + v.totalRevenuePipeline, 0)
+  const totalInquiries = venueCards.reduce((s, v) => s + v.inquiryCount, 0)
+  const totalBookings = venueCards.reduce((s, v) => s + v.bookedCount + v.completedCount, 0)
+  const totalRevenue = venueCards.reduce((s, v) => s + v.totalRevenue, 0)
+  const totalVenues = venueCards.length
+  const healthScores = venueCards
+    .map((v) => v.healthScore)
+    .filter((s): s is number => s != null)
   const avgHealth =
-    venueCards.length > 0
-      ? Math.round(venueCards.reduce((s, v) => s + v.healthScore, 0) / venueCards.length)
-      : 0
+    healthScores.length > 0
+      ? Math.round(healthScores.reduce((a, b) => a + b, 0) / healthScores.length)
+      : null
 
   const expandedVenue = venueCards.find((v) => v.id === expandedVenueId) ?? null
 
@@ -491,28 +545,35 @@ export default function PortfolioOverviewPage() {
 
       {/* Company-level summary */}
       {!loading && venueCards.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+          <div className="bg-surface border border-border rounded-xl p-4 shadow-sm">
+            <div className="flex items-center gap-2 mb-1">
+              <Building2 className="w-4 h-4 text-sage-500" />
+              <span className="text-xs text-sage-500">Venues</span>
+            </div>
+            <p className="text-2xl font-bold text-sage-900">{totalVenues}</p>
+          </div>
           <div className="bg-surface border border-border rounded-xl p-4 shadow-sm">
             <div className="flex items-center gap-2 mb-1">
               <TrendingUp className="w-4 h-4 text-teal-500" />
-              <span className="text-xs text-sage-500">Inquiries (month)</span>
+              <span className="text-xs text-sage-500">Total Inquiries</span>
             </div>
             <p className="text-2xl font-bold text-sage-900">{totalInquiries}</p>
           </div>
           <div className="bg-surface border border-border rounded-xl p-4 shadow-sm">
             <div className="flex items-center gap-2 mb-1">
               <CalendarCheck className="w-4 h-4 text-gold-500" />
-              <span className="text-xs text-sage-500">Bookings (month)</span>
+              <span className="text-xs text-sage-500">Total Bookings</span>
             </div>
             <p className="text-2xl font-bold text-sage-900">{totalBookings}</p>
           </div>
           <div className="bg-surface border border-border rounded-xl p-4 shadow-sm">
             <div className="flex items-center gap-2 mb-1">
               <DollarSign className="w-4 h-4 text-sage-500" />
-              <span className="text-xs text-sage-500">Pipeline Revenue</span>
+              <span className="text-xs text-sage-500">Total Revenue</span>
             </div>
             <p className="text-2xl font-bold text-sage-900">
-              {fmt$(totalPipelineRevenue)}
+              {fmt$(totalRevenue)}
             </p>
           </div>
           <div className="bg-surface border border-border rounded-xl p-4 shadow-sm">
@@ -520,8 +581,8 @@ export default function PortfolioOverviewPage() {
               <Building2 className="w-4 h-4 text-sage-400" />
               <span className="text-xs text-sage-500">Avg Health</span>
             </div>
-            <p className={`text-2xl font-bold ${healthColor(avgHealth)}`}>
-              {avgHealth}
+            <p className={`text-2xl font-bold ${avgHealth != null ? healthColor(avgHealth) : 'text-sage-400'}`}>
+              {avgHealth ?? '—'}
             </p>
           </div>
         </div>
@@ -550,11 +611,13 @@ export default function PortfolioOverviewPage() {
             <div
               key={vc.id}
               className={`bg-surface border rounded-xl shadow-sm hover:shadow-md transition-all ${
-                vc.healthScore > 70
-                  ? 'border-emerald-200 hover:border-emerald-300'
-                  : vc.healthScore > 40
-                    ? 'border-amber-200 hover:border-amber-300'
-                    : 'border-red-200 hover:border-red-300'
+                vc.healthScore == null
+                  ? 'border-sage-200 hover:border-sage-300'
+                  : vc.healthScore > 70
+                    ? 'border-emerald-200 hover:border-emerald-300'
+                    : vc.healthScore > 40
+                      ? 'border-amber-200 hover:border-amber-300'
+                      : 'border-red-200 hover:border-red-300'
               }`}
             >
               {/* Clickable card body */}
@@ -580,10 +643,16 @@ export default function PortfolioOverviewPage() {
                     </span>
                   </div>
                   <div onClick={(e) => e.stopPropagation()}>
-                    <HealthRing
-                      score={vc.healthScore}
-                      onClick={() => setExpandedVenueId(vc.id)}
-                    />
+                    {vc.healthScore != null ? (
+                      <HealthRing
+                        score={vc.healthScore}
+                        onClick={() => setExpandedVenueId(vc.id)}
+                      />
+                    ) : (
+                      <span className="text-[10px] font-semibold text-sage-400 uppercase tracking-wider">
+                        No data
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -595,7 +664,7 @@ export default function PortfolioOverviewPage() {
                       <span className="text-[10px] text-sage-500">Inquiries</span>
                     </div>
                     <p className="text-base font-bold text-sage-900 tabular-nums">
-                      {vc.inquiriesThisMonth}
+                      {vc.inquiryCount}
                     </p>
                   </div>
                   <div className="bg-warm-white rounded-lg p-2.5 border border-sage-100">
@@ -604,7 +673,7 @@ export default function PortfolioOverviewPage() {
                       <span className="text-[10px] text-sage-500">Booked</span>
                     </div>
                     <p className="text-base font-bold text-sage-900 tabular-nums">
-                      {vc.bookingsThisMonth}
+                      {vc.bookedCount + vc.completedCount}
                     </p>
                   </div>
                   <div className="bg-warm-white rounded-lg p-2.5 border border-sage-100">
@@ -613,7 +682,7 @@ export default function PortfolioOverviewPage() {
                       <span className="text-[10px] text-sage-500">Revenue</span>
                     </div>
                     <p className="text-base font-bold text-sage-900 tabular-nums">
-                      {fmt$(vc.totalRevenuePipeline)}
+                      {fmt$(vc.totalRevenue)}
                     </p>
                   </div>
                   <div className="bg-warm-white rounded-lg p-2.5 border border-sage-100">

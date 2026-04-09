@@ -175,8 +175,8 @@ function EmailListItem({
             }`}
           >
             {interaction.direction === 'inbound'
-              ? interaction.person_name || interaction.person_email || 'Unknown'
-              : `To: ${interaction.person_name || interaction.person_email || 'Unknown'}`}
+              ? interaction.person_name || interaction.person_email || 'No sender on record'
+              : `To: ${interaction.person_name || interaction.person_email || 'No recipient on record'}`}
           </span>
         </div>
         <span className="text-xs text-sage-400 shrink-0">
@@ -500,7 +500,7 @@ function ThreadView({
         <div className="flex items-center gap-3 mt-1 text-sm text-sage-500">
           <span className="flex items-center gap-1">
             <Mail className="w-3.5 h-3.5" />
-            {interaction.person_name || interaction.person_email || 'Unknown'}
+            {interaction.person_name || interaction.person_email || 'No contact on record'}
           </span>
           <span className="flex items-center gap-1">
             <Clock className="w-3.5 h-3.5" />
@@ -608,7 +608,10 @@ export default function InboxPage() {
           gmail_thread_id,
           timestamp,
           people!interactions_person_id_fkey ( first_name, last_name, email ),
-          weddings!interactions_wedding_id_fkey ( status )
+          weddings!interactions_wedding_id_fkey (
+            status,
+            people ( first_name, last_name, email, role )
+          )
         `)
         .eq('venue_id', VENUE_ID)
         .eq('type', 'email')
@@ -620,9 +623,23 @@ export default function InboxPage() {
       const mapped: Interaction[] = (interactionsData ?? []).map((row: any) => {
         const person = row.people
         const wedding = row.weddings
+        // Fall back to the wedding's partner1 when the interaction isn't linked
+        // to a specific person_id yet (common for demo/inquiry data).
+        const weddingPeople: Array<{ first_name?: string; last_name?: string; email?: string; role?: string }> =
+          Array.isArray(wedding?.people) ? wedding.people : []
+        const partner1 = weddingPeople.find((p) => p.role === 'partner1') ?? weddingPeople[0]
+        const partner2 = weddingPeople.find((p) => p.role === 'partner2')
+        const coupleDisplay = partner1
+          ? partner2 && partner2.last_name === partner1.last_name
+            ? `${partner1.first_name} & ${partner2.first_name} ${partner1.last_name}`
+            : partner2
+              ? `${partner1.first_name} ${partner1.last_name} & ${partner2.first_name} ${partner2.last_name}`
+              : [partner1.first_name, partner1.last_name].filter(Boolean).join(' ')
+          : null
         const personName = person
           ? [person.first_name, person.last_name].filter(Boolean).join(' ')
-          : null
+          : coupleDisplay
+        const personEmail = person?.email || partner1?.email || null
         const weddingStatus = wedding?.status ?? null
 
         return {
@@ -638,7 +655,7 @@ export default function InboxPage() {
           gmail_thread_id: row.gmail_thread_id,
           timestamp: row.timestamp,
           person_name: personName || undefined,
-          person_email: person?.email || undefined,
+          person_email: personEmail || undefined,
           wedding_status: weddingStatus,
           classification: classifyInteraction(weddingStatus, row.direction),
           is_read: row.direction === 'outbound',
@@ -682,7 +699,10 @@ export default function InboxPage() {
             full_body,
             gmail_thread_id,
             timestamp,
-            people!interactions_person_id_fkey ( first_name, last_name, email )
+            people!interactions_person_id_fkey ( first_name, last_name, email ),
+            weddings!interactions_wedding_id_fkey (
+              people ( first_name, last_name, email, role )
+            )
           `)
           .eq('venue_id', VENUE_ID)
           .order('timestamp', { ascending: true })
@@ -697,13 +717,25 @@ export default function InboxPage() {
 
         const mapped: Interaction[] = (threadData ?? []).map((row: any) => {
           const person = row.people
+          const wedding = row.weddings
+          const weddingPeople: Array<{ first_name?: string; last_name?: string; email?: string; role?: string }> =
+            Array.isArray(wedding?.people) ? wedding.people : []
+          const partner1 = weddingPeople.find((p) => p.role === 'partner1') ?? weddingPeople[0]
+          const partner2 = weddingPeople.find((p) => p.role === 'partner2')
+          const coupleDisplay = partner1
+            ? partner2 && partner2.last_name === partner1.last_name
+              ? `${partner1.first_name} & ${partner2.first_name} ${partner1.last_name}`
+              : partner2
+                ? `${partner1.first_name} ${partner1.last_name} & ${partner2.first_name} ${partner2.last_name}`
+                : [partner1.first_name, partner1.last_name].filter(Boolean).join(' ')
+            : null
           const personName = person
             ? [person.first_name, person.last_name].filter(Boolean).join(' ')
-            : null
+            : coupleDisplay
           return {
             ...row,
             person_name: personName || undefined,
-            person_email: person?.email || undefined,
+            person_email: person?.email || partner1?.email || undefined,
           }
         })
 

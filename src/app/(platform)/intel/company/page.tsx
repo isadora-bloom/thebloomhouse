@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
-import { useScope } from '@/lib/hooks/use-scope'
+import { useScope, scopeVenueFilter } from '@/lib/hooks/use-scope'
+import { computeHealthScore } from '@/lib/intel/health-score'
 import { UpgradeGate } from '@/components/ui/upgrade-gate'
 import {
   Building2,
@@ -56,7 +57,20 @@ interface WeddingRow {
   status: string
   booking_value: number | null
   source: string | null
+  inquiry_date: string | null
   created_at: string
+}
+
+interface ConsultantMetricRow {
+  venue_id: string
+  avg_response_time_minutes: number | null
+  period_start: string | null
+  period_end: string | null
+}
+
+interface VenueConfigRow {
+  venue_id: string
+  feature_flags: Record<string, unknown> | null
 }
 
 interface VenueStats {
@@ -68,7 +82,7 @@ interface VenueStats {
   tourRate: number
   bookingRate: number
   avgRevenue: number
-  healthScore: number
+  healthScore: number | null
 }
 
 type SortKey = 'venueName' | 'inquiries' | 'tourRate' | 'bookingRate' | 'avgRevenue' | 'healthScore'
@@ -122,8 +136,14 @@ export default function CompanyDashboardPageWrapper() {
 }
 
 function CompanyDashboardInner() {
+  const scope = useScope()
+  const scopedVenueIds = scopeVenueFilter(scope)
+  const scopeKey = JSON.stringify(scopedVenueIds)
+
   const [venues, setVenues] = useState<VenueRow[]>([])
   const [weddings, setWeddings] = useState<WeddingRow[]>([])
+  const [consultantMetrics, setConsultantMetrics] = useState<ConsultantMetricRow[]>([])
+  const [venueConfigs, setVenueConfigs] = useState<VenueConfigRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('bookingRate')
@@ -132,14 +152,37 @@ function CompanyDashboardInner() {
   const fetchData = useCallback(async () => {
     const supabase = getSupabase()
     try {
-      const [venueRes, weddingRes] = await Promise.all([
-        supabase.from('venues').select('id, name, state'),
-        supabase.from('weddings').select('id, venue_id, status, booking_value, source, created_at'),
+      let venueQ = supabase.from('venues').select('id, name, state')
+      let weddingQ = supabase
+        .from('weddings')
+        .select('id, venue_id, status, booking_value, source, inquiry_date, created_at')
+      let cmQ = supabase
+        .from('consultant_metrics')
+        .select('venue_id, avg_response_time_minutes, period_start, period_end')
+        .order('period_end', { ascending: false })
+      let vcQ = supabase.from('venue_config').select('venue_id, feature_flags')
+
+      const ids: string[] | null = JSON.parse(scopeKey)
+      if (ids) {
+        venueQ = venueQ.in('id', ids)
+        weddingQ = weddingQ.in('venue_id', ids)
+        cmQ = cmQ.in('venue_id', ids)
+        vcQ = vcQ.in('venue_id', ids)
+      }
+
+      const [venueRes, weddingRes, cmRes, vcRes] = await Promise.all([
+        venueQ,
+        weddingQ,
+        cmQ,
+        vcQ,
       ])
       if (venueRes.error) throw venueRes.error
       if (weddingRes.error) throw weddingRes.error
+      // Non-fatal — tables may be empty / RLS-limited
       setVenues((venueRes.data ?? []) as VenueRow[])
       setWeddings((weddingRes.data ?? []) as WeddingRow[])
+      setConsultantMetrics((cmRes.data ?? []) as ConsultantMetricRow[])
+      setVenueConfigs((vcRes.data ?? []) as VenueConfigRow[])
       setError(null)
     } catch (err) {
       console.error('Failed to fetch company data:', err)
@@ -147,7 +190,7 @@ function CompanyDashboardInner() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scopeKey])
 
   useEffect(() => {
     fetchData()
@@ -206,6 +249,31 @@ function CompanyDashboardInner() {
       .sort((a, b) => b.value - a.value)
   }, [ytdWeddings])
 
+  // ---- Per-venue response time lookup (from venue_config.feature_flags OR consultant_metrics) ----
+  const venueResponseMinutes = useMemo(() => {
+    const map = new Map<string, number>()
+    // Prefer venue_config.feature_flags.avg_response_time_minutes
+    for (const vc of venueConfigs) {
+      const flags = vc.feature_flags ?? {}
+      const raw = (flags as Record<string, unknown>).avg_response_time_minutes
+      const n = typeof raw === 'number' ? raw : raw != null ? Number(raw) : NaN
+      if (!Number.isNaN(n) && n > 0) map.set(vc.venue_id, n)
+    }
+    // Fall back to consultant_metrics avg per venue
+    const cmByVenue = new Map<string, number[]>()
+    for (const cm of consultantMetrics) {
+      if (cm.avg_response_time_minutes == null) continue
+      if (!cmByVenue.has(cm.venue_id)) cmByVenue.set(cm.venue_id, [])
+      cmByVenue.get(cm.venue_id)!.push(cm.avg_response_time_minutes)
+    }
+    for (const [vid, arr] of cmByVenue) {
+      if (!map.has(vid) && arr.length > 0) {
+        map.set(vid, arr.reduce((a, b) => a + b, 0) / arr.length)
+      }
+    }
+    return map
+  }, [venueConfigs, consultantMetrics])
+
   // ---- Per-venue stats ----
   const venueStats: VenueStats[] = useMemo(() => {
     return venues.map((v) => {
@@ -214,22 +282,32 @@ function CompanyDashboardInner() {
       const tours = vw.filter((w) =>
         ['toured', 'held', 'contracted', 'completed'].includes(w.status)
       ).length
-      const bookings = vw.filter((w) =>
+      const bookedList = vw.filter((w) =>
         ['booked', 'contracted', 'completed'].includes(w.status)
-      ).length
+      )
+      const bookings = bookedList.length
       const tourRate = inquiries > 0 ? tours / inquiries : 0
       const bookingRate = inquiries > 0 ? bookings / inquiries : 0
       const avgRevenue =
         bookings > 0
-          ? vw
-              .filter((w) => ['booked', 'contracted', 'completed'].includes(w.status))
-              .reduce((s, w) => s + (w.booking_value ?? 0), 0) / bookings
+          ? bookedList.reduce((s, w) => s + (w.booking_value ?? 0), 0) / bookings
           : 0
-      // Simple health score: weighted sum of key rates
-      const healthScore = Math.min(
-        100,
-        Math.round(bookingRate * 40 * 100 + tourRate * 30 * 100 + Math.min(inquiries / 50, 1) * 30)
+
+      // Source diversity
+      const sources = new Set(
+        vw.map((w) => w.source).filter((s): s is string => !!s && s.trim() !== '')
       )
+
+      // Nullable inputs: if the venue truly has no data, everything stays null
+      const hasLeads = inquiries > 0
+      const healthScore = computeHealthScore({
+        bookingConversionRate: hasLeads ? bookingRate : null,
+        responseTimeMinutes: venueResponseMinutes.get(v.id) ?? null,
+        avgReviewRating: null,
+        sourceCount: sources.size > 0 ? sources.size : null,
+        bookingPace: null,
+      })
+
       return {
         venueId: v.id,
         venueName: v.name,
@@ -242,7 +320,7 @@ function CompanyDashboardInner() {
         healthScore,
       }
     })
-  }, [venues, ytdWeddings])
+  }, [venues, ytdWeddings, venueResponseMinutes])
 
   // ---- Sort handler ----
   const handleSort = (key: SortKey) => {
@@ -261,11 +339,25 @@ function CompanyDashboardInner() {
       if (typeof av === 'string' && typeof bv === 'string') {
         return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
       }
-      return sortDir === 'asc'
-        ? (av as number) - (bv as number)
-        : (bv as number) - (av as number)
+      // null sorts to the bottom regardless of direction
+      const an = av == null ? Number.NEGATIVE_INFINITY : (av as number)
+      const bn = bv == null ? Number.NEGATIVE_INFINITY : (bv as number)
+      return sortDir === 'asc' ? an - bn : bn - an
     })
   }, [venueStats, sortKey, sortDir])
+
+  // ---- Company-wide avg response time ----
+  const avgResponseTimeDisplay = useMemo(() => {
+    const values: number[] = []
+    for (const v of venues) {
+      const n = venueResponseMinutes.get(v.id)
+      if (n != null && !Number.isNaN(n)) values.push(n)
+    }
+    if (values.length === 0) return '--'
+    const mins = values.reduce((a, b) => a + b, 0) / values.length
+    if (mins < 60) return `${Math.round(mins)}m`
+    return `${(mins / 60).toFixed(1)}h`
+  }, [venues, venueResponseMinutes])
 
   function SortIcon({ col }: { col: SortKey }) {
     if (sortKey !== col) return <ArrowUpDown className="w-3 h-3 text-sage-400" />
@@ -312,7 +404,7 @@ function CompanyDashboardInner() {
             <StatCard icon={DollarSign} label="Revenue YTD" value={fmt$(totalRevenue)} color="gold" />
             <StatCard icon={CalendarCheck} label="Bookings YTD" value={String(totalBookings)} color="sage" />
             <StatCard icon={Target} label="Avg Booking Rate" value={fmtPct(avgBookingRate)} color="emerald" />
-            <StatCard icon={Clock} label="Avg Response Time" value="--" color="indigo" />
+            <StatCard icon={Clock} label="Avg Response Time" value={avgResponseTimeDisplay} color="indigo" />
           </>
         )}
       </div>
@@ -482,7 +574,14 @@ function StatCard({
 // Health Badge
 // ---------------------------------------------------------------------------
 
-function HealthBadge({ score }: { score: number }) {
+function HealthBadge({ score }: { score: number | null }) {
+  if (score == null) {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border bg-sage-50 text-sage-500 border-sage-200">
+        No data
+      </span>
+    )
+  }
   const color =
     score > 70
       ? 'bg-emerald-50 text-emerald-700 border-emerald-200'

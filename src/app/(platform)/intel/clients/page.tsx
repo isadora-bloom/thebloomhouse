@@ -47,6 +47,8 @@ interface PersonRow {
   first_name: string
   last_name: string
   role: string
+  email: string | null
+  phone: string | null
 }
 
 interface ContactRow {
@@ -133,7 +135,7 @@ function ClientsPageInner() {
     try {
       const [weddingRes, personRes, contactRes] = await Promise.all([
         supabase.from('weddings').select('id, venue_id, status, booking_value, wedding_date, source, created_at').order('created_at', { ascending: false }),
-        supabase.from('people').select('id, wedding_id, first_name, last_name, role'),
+        supabase.from('people').select('id, wedding_id, first_name, last_name, role, email, phone'),
         supabase.from('contacts').select('id, person_id, type, value'),
       ])
       if (weddingRes.error) throw weddingRes.error
@@ -159,17 +161,25 @@ function ClientsPageInner() {
   const clients: ClientData[] = useMemo(() => {
     return weddings.map((w) => {
       const wPeople = people.filter((p) => p.wedding_id === w.id)
-      const primaryPerson = wPeople.find((p) => p.role === 'primary') ?? wPeople[0]
-      const name = primaryPerson
-        ? `${primaryPerson.first_name} ${primaryPerson.last_name}`
-        : 'Unknown'
+      const partner1 =
+        wPeople.find((p) => p.role === 'partner1') ??
+        wPeople.find((p) => p.role === 'primary') ??
+        wPeople[0]
+      const partner2 = wPeople.find((p) => p.role === 'partner2')
+      const name = partner1
+        ? partner2
+          ? partner2.last_name === partner1.last_name
+            ? `${partner1.first_name} & ${partner2.first_name} ${partner1.last_name}`
+            : `${partner1.first_name} ${partner1.last_name} & ${partner2.first_name} ${partner2.last_name}`
+          : `${partner1.first_name} ${partner1.last_name}`
+        : 'No name on record'
 
       let email = ''
       let phone = ''
-      if (primaryPerson) {
-        const pContacts = contacts.filter((c) => c.person_id === primaryPerson.id)
-        email = pContacts.find((c) => c.type === 'email')?.value ?? ''
-        phone = pContacts.find((c) => c.type === 'phone')?.value ?? ''
+      if (partner1) {
+        const pContacts = contacts.filter((c) => c.person_id === partner1.id)
+        email = pContacts.find((c) => c.type === 'email')?.value ?? partner1.email ?? ''
+        phone = pContacts.find((c) => c.type === 'phone')?.value ?? partner1.phone ?? ''
       }
 
       return {
@@ -178,7 +188,7 @@ function ClientsPageInner() {
         email,
         phone,
         status: w.status,
-        source: w.source ?? 'Unknown',
+        source: w.source ?? 'Unknown source',
         eventDate: w.wedding_date,
         revenue: w.booking_value ?? 0,
         coordinator: '--',
