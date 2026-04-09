@@ -40,15 +40,12 @@ export interface PersonalityConfig {
 
 export interface VenueInfo {
   name?: string
-  website?: string
-  phone?: string
 }
 
 export interface VenueConfig {
-  website_url?: string
-  phone_number?: string
-  tour_booking_url?: string
-  pricing_calculator_url?: string
+  business_name?: string
+  coordinator_phone?: string
+  coordinator_email?: string
 }
 
 export interface SeasonalContent {
@@ -157,9 +154,9 @@ export function buildPersonalityPrompt(data: PersonalityData): string {
   const aiEmoji = config.ai_emoji ?? ''
   const aiEmail = config.ai_email ?? ''
 
-  const venueName = venue.name ?? 'the venue'
-  const website = venue.website ?? venueConfig.website_url ?? ''
-  const phone = venue.phone ?? venueConfig.phone_number ?? ''
+  const venueName = venue.name ?? venueConfig.business_name ?? 'the venue'
+  const website = ''
+  const phone = venueConfig.coordinator_phone ?? ''
 
   const ownerName = config.owner_name ?? 'the owner'
   const ownerTitle = config.owner_title ?? 'Owner'
@@ -206,11 +203,11 @@ export function buildPersonalityPrompt(data: PersonalityData): string {
     ? 'Use exclamation points naturally to convey warmth!'
     : 'Convey warmth through word choice, not punctuation'
 
-  // Tour booking link
-  const tourLink = venueConfig.tour_booking_url ?? config.tour_booking_link ?? ''
+  // Tour booking link (lives on venue_ai_config, not venue_config)
+  const tourLink = config.tour_booking_link ?? ''
 
-  // Pricing calculator link
-  const pricingLink = venueConfig.pricing_calculator_url ?? config.pricing_calculator_link ?? ''
+  // Pricing calculator link (lives on venue_ai_config, not venue_config)
+  const pricingLink = config.pricing_calculator_link ?? ''
 
   // -----------------------------------------------------------------------
   // Build prompt sections

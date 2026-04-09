@@ -150,12 +150,11 @@ async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
     config: aiConfig,
     venue: {
       name: venueName,
-      website: (venueConfig?.calendly_link as string) ?? undefined,
-      phone: (venueConfig?.coordinator_phone as string) ?? undefined,
     },
     venue_config: {
-      tour_booking_url: (aiConfig.tour_booking_link as string) ?? (venueConfig?.calendly_link as string) ?? undefined,
-      pricing_calculator_url: (aiConfig.pricing_calculator_link as string) ?? undefined,
+      business_name: (venueConfig?.business_name as string) ?? undefined,
+      coordinator_phone: (venueConfig?.coordinator_phone as string) ?? undefined,
+      coordinator_email: (venueConfig?.coordinator_email as string) ?? undefined,
     },
     owner_name: (aiConfig.owner_name as string) ?? (venueConfig?.coordinator_name as string) ?? undefined,
     usps,

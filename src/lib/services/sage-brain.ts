@@ -70,34 +70,40 @@ interface WeddingContext {
 export async function getWeddingContext(weddingId: string): Promise<WeddingContext | null> {
   const supabase = createServiceClient()
 
-  // Load wedding + venue
+  // Load wedding + venue (using actual schema column names)
   const { data: wedding, error: weddingError } = await supabase
     .from('weddings')
     .select(`
       id,
       status,
       wedding_date,
-      guest_count,
-      total_budget,
+      guest_count_estimate,
       venue_id,
       venues ( name )
     `)
     .eq('id', weddingId)
-    .single()
+    .maybeSingle()
 
   if (weddingError || !wedding) return null
 
-  // Load primary contact (person 1)
+  // Load primary contacts (partner1 + partner2)
   const { data: people } = await supabase
     .from('people')
     .select('first_name, last_name, role')
     .eq('wedding_id', weddingId)
-    .in('role', ['partner_1', 'partner_2'])
+    .in('role', ['partner1', 'partner2'])
     .order('role', { ascending: true })
     .limit(2)
 
-  const partner1 = people?.[0]
-  const partner2 = people?.[1]
+  const partner1 = people?.find((p) => p.role === 'partner1') ?? people?.[0]
+  const partner2 = people?.find((p) => p.role === 'partner2') ?? people?.[1]
+
+  // Load wedding budget config (total_budget lives on wedding_config, not weddings)
+  const { data: weddingConfig } = await supabase
+    .from('wedding_config')
+    .select('total_budget')
+    .eq('wedding_id', weddingId)
+    .maybeSingle()
 
   // Load timeline count
   const { count: timelineCount } = await supabase
@@ -105,32 +111,30 @@ export async function getWeddingContext(weddingId: string): Promise<WeddingConte
     .select('id', { count: 'exact', head: true })
     .eq('wedding_id', weddingId)
 
-  // Load budget summary
+  // Load budget summary from budget_items (not the dead `budget` table)
   const { data: budgetItems } = await supabase
-    .from('budget')
-    .select('estimated_cost, actual_cost')
+    .from('budget_items')
+    .select('budgeted, paid')
     .eq('wedding_id', weddingId)
 
   let budgetSpent = 0
   if (budgetItems) {
     for (const item of budgetItems) {
-      budgetSpent += (item.actual_cost as number) ?? 0
+      budgetSpent += (item.paid as number) ?? 0
     }
   }
 
-  // Load checklist progress
+  // Load checklist progress (checklist_items table, not timeline)
   const { count: checklistTotal } = await supabase
-    .from('timeline')
+    .from('checklist_items')
     .select('id', { count: 'exact', head: true })
     .eq('wedding_id', weddingId)
-    .eq('type', 'checklist')
 
   const { count: checklistComplete } = await supabase
-    .from('timeline')
+    .from('checklist_items')
     .select('id', { count: 'exact', head: true })
     .eq('wedding_id', weddingId)
-    .eq('type', 'checklist')
-    .eq('is_complete', true)
+    .eq('is_completed', true)
 
   const venueName =
     (wedding.venues as unknown as { name: string } | null)?.name ?? 'the venue'
@@ -143,11 +147,11 @@ export async function getWeddingContext(weddingId: string): Promise<WeddingConte
       ? `${partner2.first_name} ${partner2.last_name}`
       : null,
     eventDate: wedding.wedding_date as string | null,
-    guestCount: wedding.guest_count as number | null,
+    guestCount: wedding.guest_count_estimate as number | null,
     venueName,
     status: wedding.status as string,
     timelineItems: timelineCount ?? 0,
-    budgetTotal: wedding.total_budget as number | null,
+    budgetTotal: (weddingConfig?.total_budget as number | null) ?? null,
     budgetSpent: budgetSpent > 0 ? budgetSpent : null,
     checklistTotal: checklistTotal ?? 0,
     checklistComplete: checklistComplete ?? 0,
@@ -214,14 +218,14 @@ async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
         .single(),
       supabase
         .from('venues')
-        .select('name, website, phone')
+        .select('name')
         .eq('id', venueId)
-        .single(),
+        .maybeSingle(),
       supabase
         .from('venue_config')
-        .select('website_url, phone_number, tour_booking_url, pricing_calculator_url')
+        .select('coordinator_phone, coordinator_email, business_name')
         .eq('venue_id', venueId)
-        .single(),
+        .maybeSingle(),
       supabase
         .from('venue_usps')
         .select('usp_text')
