@@ -52,10 +52,8 @@ interface Guest {
   rsvp_status: string | null
   plus_one_name: string | null
   group_name: string | null
-  person: {
-    first_name: string | null
-    last_name: string | null
-  } | null
+  first_name: string | null
+  last_name: string | null
 }
 
 interface TableFormData {
@@ -88,10 +86,8 @@ const EMPTY_FORM: TableFormData = {
 // ---------------------------------------------------------------------------
 
 function guestName(guest: Guest): string {
-  if (guest.person) {
-    return [guest.person.first_name, guest.person.last_name].filter(Boolean).join(' ') || 'Unnamed'
-  }
-  return 'Unnamed'
+  const name = [guest.first_name, guest.last_name].filter(Boolean).join(' ')
+  return name || 'Unnamed'
 }
 
 function typeLabel(t: TableType): string {
@@ -141,7 +137,7 @@ export default function SeatingChartPage() {
         .order('sort_order', { ascending: true }),
       supabase
         .from('guest_list')
-        .select('id, table_assignment, rsvp_status, plus_one_name, group_name, person:people(first_name, last_name)')
+        .select('id, table_assignment, rsvp_status, plus_one_name, group_name, first_name, last_name')
         .eq('wedding_id', WEDDING_ID)
         .order('created_at', { ascending: true }),
       supabase

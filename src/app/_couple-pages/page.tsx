@@ -17,6 +17,7 @@ import {
 
 // TODO: Get wedding ID from auth session / couple's user profile
 const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
+const SLUG = 'hawthorne-manor'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -29,8 +30,9 @@ interface DashboardData {
   guestsAttending: number
   guestsPending: number
   guestsDeclined: number
-  budgetEstimated: number
-  budgetActual: number
+  budgetTotal: number
+  budgetBudgeted: number
+  budgetCommitted: number
   budgetPaid: number
   checklistTotal: number
   checklistDone: number
@@ -128,9 +130,17 @@ export default function CoupleDashboard() {
         }
 
         // Fetch related data in parallel
-        const [guests, budget, checklist, timeline, allTimeline, messages] = await Promise.all([
+        const [guests, budgetItemsRes, weddingConfigRes, checklist, timeline, allTimeline, messages] = await Promise.all([
           supabase.from('guest_list').select('id, rsvp_status').eq('wedding_id', WEDDING_ID),
-          supabase.from('budget').select('estimated_cost, actual_cost, paid_amount').eq('wedding_id', WEDDING_ID),
+          supabase
+            .from('budget_items')
+            .select('budgeted, committed, paid, budget_payments(amount)')
+            .eq('wedding_id', WEDDING_ID),
+          supabase
+            .from('wedding_config')
+            .select('total_budget')
+            .eq('wedding_id', WEDDING_ID)
+            .maybeSingle(),
           supabase.from('checklist_items').select('id, is_completed, due_date').eq('wedding_id', WEDDING_ID),
           supabase
             .from('timeline')
@@ -163,7 +173,13 @@ export default function CoupleDashboard() {
           : 'there'
 
         const guestList = guests.data || []
-        const budgetItems = budget.data || []
+        const budgetItems = (budgetItemsRes.data || []) as Array<{
+          budgeted: number | null
+          committed: number | null
+          paid: number | null
+          budget_payments: Array<{ amount: number | null }> | null
+        }>
+        const weddingConfig = weddingConfigRes.data as { total_budget: number | null } | null
         const checklistItems = checklist.data || []
         const allTimelineItems = (allTimeline.data || []) as Array<{ id: string; title: string; time: string | null; category: string | null }>
 
@@ -187,9 +203,13 @@ export default function CoupleDashboard() {
           guestsAttending: guestList.filter((g) => g.rsvp_status === 'attending').length,
           guestsPending: guestList.filter((g) => g.rsvp_status === 'pending').length,
           guestsDeclined: guestList.filter((g) => g.rsvp_status === 'declined').length,
-          budgetEstimated: budgetItems.reduce((s, b) => s + (Number(b.estimated_cost) || 0), 0),
-          budgetActual: budgetItems.reduce((s, b) => s + (Number(b.actual_cost) || 0), 0),
-          budgetPaid: budgetItems.reduce((s, b) => s + (Number(b.paid_amount) || 0), 0),
+          budgetTotal: Number(weddingConfig?.total_budget) || 0,
+          budgetBudgeted: budgetItems.reduce((s, b) => s + (Number(b.budgeted) || 0), 0),
+          budgetCommitted: budgetItems.reduce((s, b) => s + (Number(b.committed) || 0), 0),
+          budgetPaid: budgetItems.reduce((s, b) => {
+            const paymentsSum = (b.budget_payments || []).reduce((ps, p) => ps + (Number(p.amount) || 0), 0)
+            return s + (paymentsSum > 0 ? paymentsSum : Number(b.paid) || 0)
+          }, 0),
           checklistTotal: checklistItems.length,
           checklistDone: checklistItems.filter((c: { is_completed: boolean }) => c.is_completed).length,
           checklistOverdue: overdueCount,
@@ -248,12 +268,13 @@ export default function CoupleDashboard() {
   const checklistPercent = data.checklistTotal > 0
     ? Math.round((data.checklistDone / data.checklistTotal) * 100)
     : 0
-  const budgetRemaining = data.budgetEstimated - data.budgetPaid
-  const budgetCommittedPct = data.budgetEstimated > 0
-    ? Math.round((data.budgetActual / data.budgetEstimated) * 100)
+  // Budget math aligns with budget page: remaining = total budget - committed
+  const budgetRemaining = data.budgetTotal - data.budgetCommitted
+  const budgetCommittedPct = data.budgetTotal > 0
+    ? Math.round((data.budgetCommitted / data.budgetTotal) * 100)
     : 0
-  const budgetPaidPct = data.budgetEstimated > 0
-    ? Math.round((data.budgetPaid / data.budgetEstimated) * 100)
+  const budgetPaidPct = data.budgetTotal > 0
+    ? Math.round((data.budgetPaid / data.budgetTotal) * 100)
     : 0
   const countdownMessage = getCountdownMessage(days)
 
@@ -358,7 +379,7 @@ export default function CoupleDashboard() {
             {fmt$(budgetRemaining)}
           </p>
           <p className="text-xs text-gray-400 mt-1">
-            remaining of {fmt$(data.budgetEstimated)}
+            remaining of {fmt$(data.budgetTotal)}
           </p>
         </div>
 
@@ -396,12 +417,16 @@ export default function CoupleDashboard() {
           </h2>
           <div className="space-y-3">
             <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Total Budgeted</span>
-              <span className="font-medium text-gray-800">{fmt$(data.budgetEstimated)}</span>
+              <span className="text-gray-600">Total Budget</span>
+              <span className="font-medium text-gray-800">{fmt$(data.budgetTotal)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Budgeted</span>
+              <span className="font-medium text-gray-800">{fmt$(data.budgetBudgeted)}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-gray-600">Committed</span>
-              <span className="font-medium text-gray-800">{fmt$(data.budgetActual)}</span>
+              <span className="font-medium text-gray-800">{fmt$(data.budgetCommitted)}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-gray-600">Paid</span>
@@ -584,7 +609,7 @@ export default function CoupleDashboard() {
               Upcoming
             </h2>
             <Link
-              href="/timeline"
+              href={`/couple/${SLUG}/checklist`}
               className="text-sm font-medium flex items-center gap-1 hover:underline"
               style={{ color: 'var(--couple-primary)' }}
             >
@@ -638,7 +663,7 @@ export default function CoupleDashboard() {
               Messages
             </h2>
             <Link
-              href="/chat"
+              href={`/couple/${SLUG}/messages`}
               className="text-sm font-medium flex items-center gap-1 hover:underline"
               style={{ color: 'var(--couple-primary)' }}
             >

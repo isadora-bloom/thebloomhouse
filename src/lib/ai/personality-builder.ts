@@ -314,10 +314,17 @@ You work alongside **${ownerName}** (${ownerTitle}) to ensure every couple gets 
 `
 
   const seasons: Array<'spring' | 'summer' | 'fall' | 'winter'> = ['spring', 'summer', 'fall', 'winter']
+  // Coerce imagery/phrases into string arrays — the DB stores imagery as text
+  // and phrases as text[], but callers (or bad seed data) may pass strings.
+  const toStringArray = (v: unknown): string[] => {
+    if (Array.isArray(v)) return v as string[]
+    if (typeof v === 'string' && v.length > 0) return [v]
+    return []
+  }
   for (const season of seasons) {
     const seasonData = seasonal[season] ?? DEFAULT_SEASONAL_CONTENT[season] ?? {}
-    const imagery = seasonData.imagery ?? []
-    const phrases = seasonData.phrases ?? []
+    const imagery = toStringArray(seasonData.imagery)
+    const phrases = toStringArray(seasonData.phrases)
 
     prompt += `
 **${season.toUpperCase()}:**

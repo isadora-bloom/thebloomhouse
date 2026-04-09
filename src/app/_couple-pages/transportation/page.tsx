@@ -3,7 +3,7 @@
 // Feature: configurable via venue_config.feature_flags
 // Table: shuttle_schedule
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import {
@@ -98,6 +98,33 @@ function dbToDisplay(db: string | null): string {
   return minutesToTime(total)
 }
 
+// Accepts "16:00", "16:00:00", "4:00 PM", "4 PM" and returns "h:mm AM/PM"
+function normalizeTimeInput(input: string): string {
+  const trimmed = input.trim()
+  if (!trimmed) return ''
+  // Already "h:mm AM/PM" form?
+  if (/^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(trimmed)) {
+    return minutesToTime(timeToMinutes(trimmed))
+  }
+  // "HH:MM" or "HH:MM:SS" 24h form
+  const m24 = trimmed.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/)
+  if (m24) {
+    const h = parseInt(m24[1], 10)
+    const mins = parseInt(m24[2], 10)
+    return minutesToTime(h * 60 + mins)
+  }
+  // "4 PM"
+  const mShort = trimmed.match(/^(\d{1,2})\s*(AM|PM)$/i)
+  if (mShort) {
+    let h = parseInt(mShort[1], 10)
+    const period = mShort[2].toUpperCase()
+    if (period === 'AM' && h === 12) h = 0
+    if (period === 'PM' && h !== 12) h += 12
+    return minutesToTime(h * 60)
+  }
+  return trimmed
+}
+
 // ---------------------------------------------------------------------------
 // Shuttle letter helper
 // ---------------------------------------------------------------------------
@@ -150,32 +177,43 @@ export default function TransportationPage() {
   const [preGen, setPreGen] = useState<GeneratorState>(EMPTY_GEN)
   const [postGen, setPostGen] = useState<GeneratorState>(EMPTY_GEN)
 
+  // Generator error surface (e.g. DB insert failures)
+  const [genError, setGenError] = useState<string | null>(null)
+
   const supabase = createClient()
 
   // ---- Fetch ----
   const fetchRuns = useCallback(async () => {
-    const [runsRes, configRes] = await Promise.all([
+    const [runsRes, configRes, timelineRes] = await Promise.all([
       supabase
         .from('shuttle_schedule')
         .select('*')
         .eq('wedding_id', WEDDING_ID)
-        .order('departure_time', { ascending: true }),
+        .order('sort_order', { ascending: true }),
       supabase
         .from('venue_config')
         .select('feature_flags')
         .eq('venue_id', VENUE_ID)
+        .maybeSingle(),
+      supabase
+        .from('wedding_timeline')
+        .select('ceremony_start, reception_end')
+        .eq('wedding_id', WEDDING_ID)
         .maybeSingle(),
     ])
 
     if (runsRes.data) {
       setRuns(runsRes.data as ShuttleRun[])
     }
+
+    let loadedSuggestions: string[] = []
     if (configRes.data) {
       const flags = (configRes.data.feature_flags ?? {}) as Record<string, unknown>
       const sc = (flags.shuttle_config ?? {}) as Record<string, unknown>
       const pickupLocations = sc.pickup_locations as Array<{ name?: string }> | undefined
       if (pickupLocations) {
-        setPickupSuggestions(pickupLocations.map((l) => l.name || '').filter(Boolean))
+        loadedSuggestions = pickupLocations.map((l) => l.name || '').filter(Boolean)
+        setPickupSuggestions(loadedSuggestions)
       }
       if (sc.available_shuttles) {
         setShuttleCount(sc.available_shuttles as number)
@@ -184,6 +222,26 @@ export default function TransportationPage() {
         setSeatsPerShuttle(sc.seats_per_shuttle as number)
       }
     }
+
+    // Pre-populate generator inputs with sensible defaults so the user
+    // can just click "Generate" without hunting for inputs.
+    const ceremonyStart = (timelineRes.data?.ceremony_start as string) || ''
+    const receptionEnd = (timelineRes.data?.reception_end as string) || ''
+    const defaultCeremonyDisplay = ceremonyStart ? normalizeTimeInput(ceremonyStart) : '4:00 PM'
+    const defaultEndDisplay = receptionEnd ? normalizeTimeInput(receptionEnd) : '11:00 PM'
+    const defaultLocation = loadedSuggestions[0] || 'Hotel'
+
+    setPreGen((prev) => ({
+      time: prev.time || defaultCeremonyDisplay,
+      numRuns: prev.numRuns,
+      location: prev.location || defaultLocation,
+    }))
+    setPostGen((prev) => ({
+      time: prev.time || defaultEndDisplay,
+      numRuns: prev.numRuns,
+      location: prev.location || defaultLocation,
+    }))
+
     setLoading(false)
   }, [supabase])
 
@@ -201,8 +259,12 @@ export default function TransportationPage() {
   // ---- Generate Pre-Ceremony Runs ----
   function generatePreCeremony() {
     if (!preGen.time || !preGen.location) return
-    const ceremonyMin = timeToMinutes(preGen.time)
-    if (isNaN(ceremonyMin)) return
+    const normalized = normalizeTimeInput(preGen.time)
+    const ceremonyMin = timeToMinutes(normalized)
+    if (isNaN(ceremonyMin)) {
+      setGenError(`Couldn't parse ceremony time "${preGen.time}". Try "4:00 PM".`)
+      return
+    }
 
     const lastPickup = ceremonyMin - TRANSIT_MINUTES - BUFFER_MINUTES
     const newRuns: Omit<ShuttleRun, 'id'>[] = []
@@ -257,8 +319,12 @@ export default function TransportationPage() {
   // ---- Generate End of Night Runs ----
   function generateEndOfNight() {
     if (!postGen.time || !postGen.location) return
-    const endMin = timeToMinutes(postGen.time)
-    if (isNaN(endMin)) return
+    const normalized = normalizeTimeInput(postGen.time)
+    const endMin = timeToMinutes(normalized)
+    if (isNaN(endMin)) {
+      setGenError(`Couldn't parse end time "${postGen.time}". Try "11:00 PM".`)
+      return
+    }
 
     const newRuns: Omit<ShuttleRun, 'id'>[] = []
 
@@ -322,9 +388,16 @@ export default function TransportationPage() {
       shuttle_id: r.shuttle_id,
     }))
 
-    await supabase.from('shuttle_schedule').insert(rows)
-    setPreGen(EMPTY_GEN)
-    setPostGen(EMPTY_GEN)
+    setGenError(null)
+    const { error } = await supabase.from('shuttle_schedule').insert(rows)
+    if (error) {
+      console.error('[shuttle_schedule insert failed]', error)
+      setGenError(
+        `Couldn't save the schedule (${error.message}). The shuttle_schedule ` +
+          `table may be missing the new columns — run migration 029.`,
+      )
+      return
+    }
     fetchRuns()
   }
 
@@ -690,6 +763,24 @@ export default function TransportationPage() {
           snug schedule.
         </p>
       </div>
+
+      {/* Generator error */}
+      {genError && (
+        <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-100 rounded-xl text-sm text-red-700">
+          <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0 text-red-500" />
+          <div className="flex-1">
+            <p className="font-medium">Couldn&apos;t generate schedule</p>
+            <p className="text-xs mt-0.5">{genError}</p>
+          </div>
+          <button
+            onClick={() => setGenError(null)}
+            className="text-red-400 hover:text-red-600 shrink-0"
+            aria-label="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Smart Run Generators — two panels side by side */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

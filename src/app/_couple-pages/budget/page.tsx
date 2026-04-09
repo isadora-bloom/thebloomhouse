@@ -40,8 +40,8 @@ interface PaymentRecord {
   id: string
   budget_item_id: string
   amount: number
-  date: string
-  method: string
+  payment_date: string
+  payment_method: string
   notes: string | null
 }
 
@@ -55,7 +55,6 @@ interface BudgetItem {
   payment_source: string | null
   payment_due_date: string | null
   notes: string | null
-  is_custom_category: boolean
   sort_order: number
   payments?: PaymentRecord[]
 }
@@ -206,28 +205,45 @@ export default function BudgetPage() {
       .eq('wedding_id', WEDDING_ID)
       .order('sort_order', { ascending: true })
 
-    if (!error && data) {
-      const mapped = data.map((d: Record<string, unknown>) => ({
-        id: d.id as string,
-        category: (d.category as string) || 'Other',
-        item_name: (d.item_name as string) || '',
-        budgeted: (d.budgeted as number) || 0,
-        committed: (d.committed as number) || 0,
-        paid: 0,
-        payment_source: d.payment_source as string | null,
-        payment_due_date: d.payment_due_date as string | null,
-        notes: d.notes as string | null,
-        is_custom_category: (d.is_custom_category as boolean) || false,
-        sort_order: (d.sort_order as number) || 0,
-        payments: ((d.budget_payments || []) as PaymentRecord[]),
-      }))
-      // Calculate paid from payments
-      mapped.forEach((item) => {
-        item.paid = (item.payments || []).reduce((sum: number, p: PaymentRecord) => sum + p.amount, 0)
+    if (error) {
+      console.error('[budget] fetchItems failed:', error)
+      setLoading(false)
+      return
+    }
+
+    if (data) {
+      const mapped = data.map((d: Record<string, unknown>) => {
+        const paidColumn = Number(d.paid) || 0
+        const payments = ((d.budget_payments || []) as PaymentRecord[])
+        const paymentsSum = payments.reduce(
+          (sum: number, p: PaymentRecord) => sum + (Number(p.amount) || 0),
+          0
+        )
+        return {
+          id: d.id as string,
+          category: (d.category as string) || 'Other',
+          item_name: (d.item_name as string) || '',
+          budgeted: Number(d.budgeted) || 0,
+          committed: Number(d.committed) || 0,
+          // Prefer payments sum when payments exist; otherwise fall back
+          // to the budget_items.paid column (used by seed data).
+          paid: paymentsSum > 0 ? paymentsSum : paidColumn,
+          payment_source: d.payment_source as string | null,
+          payment_due_date: d.payment_due_date as string | null,
+          notes: d.notes as string | null,
+          sort_order: (d.sort_order as number) || 0,
+          payments,
+        }
       })
       setItems(mapped)
-      // Collect custom categories
-      const customs = [...new Set(mapped.filter((i) => i.is_custom_category).map((i) => i.category))]
+      // Custom categories = anything on an item that isn't a default category
+      const customs = [
+        ...new Set(
+          mapped
+            .map((i) => i.category)
+            .filter((c) => c && !DEFAULT_CATEGORIES.includes(c))
+        ),
+      ]
       setCustomCategories(customs)
     }
     setLoading(false)
@@ -252,11 +268,16 @@ export default function BudgetPage() {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Computed ----
+  // Total Budget = wedding_config.total_budget (user-set)
+  // Budgeted = SUM of budget_items.budgeted (allocated to line items)
+  // Committed = SUM of budget_items.committed
+  // Paid = SUM of per-item paid (payments sum, fallback to .paid column)
+  // Remaining = Total Budget - Committed
   const totals = useMemo(() => {
     const budgeted = items.reduce((s, i) => s + i.budgeted, 0)
     const committed = items.reduce((s, i) => s + i.committed, 0)
     const paid = items.reduce((s, i) => s + i.paid, 0)
-    const remaining = committed - paid
+    const remaining = totalBudget - committed
     const overBudget = committed > totalBudget && totalBudget > 0
     const underBudget = totalBudget > 0 && committed <= totalBudget
     return { budgeted, committed, paid, remaining, overBudget, underBudget }
@@ -279,10 +300,15 @@ export default function BudgetPage() {
       if (!groups[cat]) groups[cat] = []
       groups[cat].push(item)
     }
-    // Sort by allCategories order
-    return allCategories
+    // Sort: known categories first in their defined order, then any extras.
+    const knownOrder = allCategories
       .filter((c) => groups[c] && groups[c].length > 0)
       .map((c) => ({ category: c, items: groups[c] }))
+    const extras = Object.keys(groups)
+      .filter((c) => !allCategories.includes(c))
+      .sort()
+      .map((c) => ({ category: c, items: groups[c] }))
+    return [...knownOrder, ...extras]
   }, [items, allCategories, searchQuery])
 
   // ---- Toggle category expand ----
@@ -346,7 +372,9 @@ export default function BudgetPage() {
 
   async function handleSaveItem() {
     if (!form.item_name.trim() || !form.category) return
-    const isCustom = !DEFAULT_CATEGORIES.includes(form.category)
+    // Note: `is_custom_category` is tracked client-side via DEFAULT_CATEGORIES
+    // membership; the DB schema (migration 017) has no such column, so we
+    // must NOT include it in the insert payload or the write will fail.
     const payload = {
       venue_id: VENUE_ID,
       wedding_id: WEDDING_ID,
@@ -357,16 +385,28 @@ export default function BudgetPage() {
       payment_source: form.payment_source || null,
       payment_due_date: form.payment_due_date || null,
       notes: form.notes.trim() || null,
-      is_custom_category: isCustom,
       sort_order: editingId
         ? items.find((i) => i.id === editingId)?.sort_order || items.length + 1
         : items.length + 1,
     }
 
     if (editingId) {
-      await supabase.from('budget_items').update(payload).eq('id', editingId)
+      const { error } = await supabase
+        .from('budget_items')
+        .update(payload)
+        .eq('id', editingId)
+      if (error) {
+        console.error('[budget] update failed:', error)
+        alert('Failed to save item: ' + error.message)
+        return
+      }
     } else {
-      await supabase.from('budget_items').insert(payload)
+      const { error } = await supabase.from('budget_items').insert(payload)
+      if (error) {
+        console.error('[budget] insert failed:', error)
+        alert('Failed to add item: ' + error.message)
+        return
+      }
     }
 
     setShowItemModal(false)
@@ -390,13 +430,20 @@ export default function BudgetPage() {
 
   async function handleSavePayment() {
     if (!paymentItemId || !paymentForm.amount) return
-    await supabase.from('budget_payments').insert({
+    const { error } = await supabase.from('budget_payments').insert({
       budget_item_id: paymentItemId,
+      venue_id: VENUE_ID,
+      wedding_id: WEDDING_ID,
       amount: parseFloat(paymentForm.amount) || 0,
-      date: paymentForm.date || new Date().toISOString().split('T')[0],
-      method: paymentForm.method,
+      payment_date: paymentForm.date || new Date().toISOString().split('T')[0],
+      payment_method: paymentForm.method,
       notes: paymentForm.notes.trim() || null,
     })
+    if (error) {
+      console.error('[budget] payment insert failed:', error)
+      alert('Failed to record payment: ' + error.message)
+      return
+    }
     setShowPaymentModal(false)
     setPaymentItemId(null)
     fetchItems()
@@ -793,15 +840,17 @@ export default function BudgetPage() {
                                       <div key={p.id} className="flex items-center justify-between text-xs group/pay">
                                         <div className="flex items-center gap-3">
                                           <span className="text-gray-400">
-                                            {new Date(p.date + 'T00:00:00').toLocaleDateString('en-US', {
-                                              month: 'short',
-                                              day: 'numeric',
-                                              year: 'numeric',
-                                            })}
+                                            {p.payment_date
+                                              ? new Date(p.payment_date + 'T00:00:00').toLocaleDateString('en-US', {
+                                                  month: 'short',
+                                                  day: 'numeric',
+                                                  year: 'numeric',
+                                                })
+                                              : '—'}
                                           </span>
                                           <span className="font-medium text-gray-700">{formatCurrency(p.amount)}</span>
                                           <span className="px-1.5 py-0.5 bg-white rounded text-[10px] text-gray-500">
-                                            {p.method}
+                                            {p.payment_method}
                                           </span>
                                           {p.notes && <span className="text-gray-400 truncate max-w-[120px]">{p.notes}</span>}
                                         </div>

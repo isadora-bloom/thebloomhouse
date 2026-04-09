@@ -73,10 +73,25 @@ export async function getSeasonalContext(venueId: string): Promise<SeasonalConte
     return { season, imagery: [], phrases: [] }
   }
 
+  // `imagery` is stored as text (single string) in the DB; normalize to array.
+  // `phrases` is stored as text[] already.
+  const rawImagery = data.imagery as unknown
+  const imagery: string[] = Array.isArray(rawImagery)
+    ? (rawImagery as string[])
+    : typeof rawImagery === 'string' && rawImagery.length > 0
+      ? [rawImagery]
+      : []
+  const rawPhrases = data.phrases as unknown
+  const phrases: string[] = Array.isArray(rawPhrases)
+    ? (rawPhrases as string[])
+    : typeof rawPhrases === 'string' && rawPhrases.length > 0
+      ? [rawPhrases]
+      : []
+
   return {
     season,
-    imagery: (data.imagery as string[]) ?? [],
-    phrases: (data.phrases as string[]) ?? [],
+    imagery,
+    phrases,
   }
 }
 

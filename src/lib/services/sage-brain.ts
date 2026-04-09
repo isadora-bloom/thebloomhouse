@@ -240,9 +240,23 @@ async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
 
   const seasonal: Record<string, { imagery?: string[]; phrases?: string[] }> = {}
   for (const row of seasonalResult.data ?? []) {
+    // `imagery` is stored as text (single string) in the DB; normalize to array.
+    // `phrases` is stored as text[] and comes back as an array already.
+    const rawImagery = row.imagery as unknown
+    const imageryArr: string[] = Array.isArray(rawImagery)
+      ? (rawImagery as string[])
+      : typeof rawImagery === 'string' && rawImagery.length > 0
+        ? [rawImagery]
+        : []
+    const rawPhrases = row.phrases as unknown
+    const phrasesArr: string[] = Array.isArray(rawPhrases)
+      ? (rawPhrases as string[])
+      : typeof rawPhrases === 'string' && rawPhrases.length > 0
+        ? [rawPhrases]
+        : []
     seasonal[row.season as string] = {
-      imagery: row.imagery as string[],
-      phrases: row.phrases as string[],
+      imagery: imageryArr,
+      phrases: phrasesArr,
     }
   }
 

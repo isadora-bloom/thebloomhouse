@@ -76,10 +76,8 @@ interface OnSiteRoom {
 interface Guest {
   id: string
   accommodation: string | null
-  person: {
-    first_name: string | null
-    last_name: string | null
-  } | null
+  first_name: string | null
+  last_name: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -178,10 +176,8 @@ function rowToOnSiteRoom(row: Record<string, unknown>): OnSiteRoom {
 // ---------------------------------------------------------------------------
 
 function guestName(guest: Guest): string {
-  if (guest.person) {
-    return [guest.person.first_name, guest.person.last_name].filter(Boolean).join(' ') || 'Unnamed'
-  }
-  return 'Unnamed'
+  const name = [guest.first_name, guest.last_name].filter(Boolean).join(' ')
+  return name || 'Unnamed'
 }
 
 function formatDate(dateStr: string | null): string {
@@ -246,7 +242,7 @@ export default function RoomAssignmentsPage() {
         .order('created_at', { ascending: true }),
       supabase
         .from('guest_list')
-        .select('id, accommodation, person:people(first_name, last_name)')
+        .select('id, accommodation, first_name, last_name')
         .eq('wedding_id', WEDDING_ID)
         .order('created_at', { ascending: true }),
     ])

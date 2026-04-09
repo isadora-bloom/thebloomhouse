@@ -170,9 +170,17 @@ export async function POST(request: NextRequest) {
       conversationId: sageMsg?.id || null,
     })
   } catch (err) {
-    console.error('[api/portal/sage] POST error:', err)
+    // Log the full error (with stack) so failures aren't opaque in Vercel logs
+    const message = err instanceof Error ? err.message : String(err)
+    const stack = err instanceof Error ? err.stack : undefined
+    console.error('[api/portal/sage] POST error:', message)
+    if (stack) console.error('[api/portal/sage] stack:', stack)
     return NextResponse.json(
-      { error: 'Internal server error' },
+      {
+        error: 'Internal server error',
+        // Surface the message in non-production to aid debugging
+        ...(process.env.NODE_ENV !== 'production' ? { detail: message } : {}),
+      },
       { status: 500 }
     )
   }

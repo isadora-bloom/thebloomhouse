@@ -1469,7 +1469,7 @@ export default function BarPlannerPage() {
                 className="px-4 py-2 text-white rounded-lg text-sm hover:opacity-90"
                 style={{ backgroundColor: 'var(--couple-primary)' }}
               >
-                Go to Quantity Calculator \u2192
+                Go to Quantity Calculator
               </button>
             </div>
           ) : (

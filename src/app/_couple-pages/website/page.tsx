@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   Globe,
@@ -30,6 +30,8 @@ import {
   Utensils,
   LinkIcon,
   Check,
+  Upload,
+  Loader2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -195,7 +197,73 @@ export default function WeddingWebsitePage() {
   const [saving, setSaving] = useState(false)
   const [copiedSlug, setCopiedSlug] = useState(false)
 
+  // Photo gallery upload state
+  const galleryFileInputRef = useRef<HTMLInputElement>(null)
+  const [galleryUploading, setGalleryUploading] = useState(false)
+  const [galleryUploadError, setGalleryUploadError] = useState<string | null>(null)
+
   const supabase = createClient()
+
+  // ---- Photo gallery upload ----
+  async function handleGalleryFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    // Reset value so re-selecting the same file still triggers onChange
+    e.target.value = ''
+    if (!file) return
+
+    const validTypes = ['image/jpeg', 'image/png', 'image/webp']
+    if (!validTypes.includes(file.type)) {
+      setGalleryUploadError('Please upload a JPEG, PNG, or WebP image.')
+      return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setGalleryUploadError('File size must be under 10MB.')
+      return
+    }
+
+    setGalleryUploadError(null)
+    setGalleryUploading(true)
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg'
+      const storagePath = `${WEDDING_ID}/gallery-${Date.now()}.${ext}`
+
+      const { error: uploadError } = await supabase.storage
+        .from('couple-photos')
+        .upload(storagePath, file, { cacheControl: '3600', upsert: true })
+      if (uploadError) throw new Error(uploadError.message)
+
+      const { data: publicUrlData } = supabase.storage
+        .from('couple-photos')
+        .getPublicUrl(storagePath)
+      const publicUrl = publicUrlData.publicUrl
+
+      // Append to the photo_gallery section's photos array
+      setSettings(prev => ({
+        ...prev,
+        sections: prev.sections.map(s => {
+          if (s.type !== 'photo_gallery') return s
+          const existing = ((s.data.photos as string[]) || []).filter(Boolean)
+          return { ...s, data: { ...s.data, photos: [...existing, publicUrl] } }
+        }),
+      }))
+    } catch (err) {
+      setGalleryUploadError(err instanceof Error ? err.message : 'Upload failed.')
+    } finally {
+      setGalleryUploading(false)
+    }
+  }
+
+  function removeGalleryPhoto(index: number) {
+    setSettings(prev => ({
+      ...prev,
+      sections: prev.sections.map(s => {
+        if (s.type !== 'photo_gallery') return s
+        const photos = [...((s.data.photos as string[]) || [])]
+        photos.splice(index, 1)
+        return { ...s, data: { ...s.data, photos } }
+      }),
+    }))
+  }
 
   // ---- Fetch ----
   const fetchSettings = useCallback(async () => {
@@ -757,26 +825,70 @@ export default function WeddingWebsitePage() {
 
                         {/* Photo Gallery */}
                         {section.type === 'photo_gallery' && (
-                          <div className="space-y-2">
-                            {((section.data.photos as string[]) || ['', '', '']).map((url, i) => (
-                              <div key={i}>
-                                <label className="block text-xs font-medium text-gray-600 mb-1">Photo {i + 1}</label>
-                                <input type="url" value={url}
-                                  onChange={e => {
-                                    const photos = [...((section.data.photos as string[]) || ['', '', ''])]
-                                    photos[i] = e.target.value
-                                    updateSectionData('photo_gallery', { photos })
-                                  }}
-                                  placeholder="https://example.com/photo.jpg"
-                                  className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm" />
+                          <div className="space-y-3">
+                            <p className="text-xs text-gray-500">
+                              Upload photos from your device. They&apos;ll be stored securely and shown on your wedding website.
+                            </p>
+
+                            {/* Thumbnail grid */}
+                            {((section.data.photos as string[]) || []).filter(Boolean).length > 0 && (
+                              <div className="grid grid-cols-3 gap-2">
+                                {((section.data.photos as string[]) || []).filter(Boolean).map((url, i) => (
+                                  <div key={`${url}-${i}`} className="relative group aspect-square rounded-lg overflow-hidden bg-gray-100 border border-gray-200">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                      src={url}
+                                      alt={`Gallery photo ${i + 1}`}
+                                      className="w-full h-full object-cover"
+                                    />
+                                    <button
+                                      onClick={() => removeGalleryPhoto(i)}
+                                      className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
+                                      title="Remove photo"
+                                      type="button"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ))}
                               </div>
-                            ))}
-                            <button onClick={() => {
-                              const photos = [...((section.data.photos as string[]) || []), '']
-                              updateSectionData('photo_gallery', { photos })
-                            }} className="text-xs font-medium flex items-center gap-1" style={{ color: 'var(--couple-primary)' }}>
-                              <Plus className="w-3 h-3" /> Add photo
-                            </button>
+                            )}
+
+                            {/* Upload button */}
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => galleryFileInputRef.current?.click()}
+                                disabled={galleryUploading}
+                                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                                style={{ backgroundColor: 'var(--couple-primary)' }}
+                              >
+                                {galleryUploading ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    Uploading...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Upload className="w-3.5 h-3.5" />
+                                    Upload Photo
+                                  </>
+                                )}
+                              </button>
+                              <span className="text-[10px] text-gray-400">JPEG, PNG, or WebP (max 10MB)</span>
+                            </div>
+
+                            {galleryUploadError && (
+                              <p className="text-xs text-red-600">{galleryUploadError}</p>
+                            )}
+
+                            <input
+                              ref={galleryFileInputRef}
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp"
+                              onChange={handleGalleryFileSelected}
+                              className="hidden"
+                            />
                           </div>
                         )}
 

@@ -23,6 +23,7 @@ import {
 // TODO: Get from auth session / couple context
 const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
+const SLUG = 'hawthorne-manor'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -848,7 +849,7 @@ export default function VendorsPage() {
             Looking for vendor recommendations from your venue?
           </p>
           <a
-            href="/couple/preferred-vendors"
+            href={`/couple/${SLUG}/preferred-vendors`}
             className="inline-flex items-center gap-1.5 text-sm font-medium transition-colors hover:opacity-80"
             style={{ color: 'var(--couple-accent)' }}
           >
