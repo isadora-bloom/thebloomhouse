@@ -90,6 +90,31 @@ function mentionsContracts(text: string): boolean {
 // Chat Page
 // ---------------------------------------------------------------------------
 
+const INITIAL_MESSAGE_LIMIT = 20
+
+function formatDateDivider(dateStr: string): string {
+  const d = new Date(dateStr)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const target = new Date(d)
+  target.setHours(0, 0, 0, 0)
+  const diffDays = Math.round((today.getTime() - target.getTime()) / (1000 * 60 * 60 * 24))
+  if (diffDays === 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  if (diffDays < 7) {
+    return d.toLocaleDateString('en-US', { weekday: 'long' })
+  }
+  const thisYear = new Date().getFullYear()
+  if (d.getFullYear() === thisYear) {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  }
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function dayKey(dateStr: string): string {
+  return new Date(dateStr).toISOString().slice(0, 10)
+}
+
 export default function SageChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -97,6 +122,8 @@ export default function SageChatPage() {
   const [loading, setLoading] = useState(true)
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([])
   const [weddingStateLoaded, setWeddingStateLoaded] = useState(false)
+  const [hasMoreHistory, setHasMoreHistory] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const autoSentRef = useRef(false)
@@ -163,26 +190,67 @@ export default function SageChatPage() {
     loadWeddingState()
   }, [])
 
-  // Load existing conversation history
+  // Load existing conversation history — most recent INITIAL_MESSAGE_LIMIT messages
   useEffect(() => {
     async function loadHistory() {
       const supabase = createClient()
 
+      // Get total count first to know if we should show "Load earlier"
+      const { count } = await supabase
+        .from('sage_conversations')
+        .select('id', { count: 'exact', head: true })
+        .eq('wedding_id', WEDDING_ID)
+
+      // Fetch the most recent INITIAL_MESSAGE_LIMIT rows (desc), then reverse for display
       const { data } = await supabase
         .from('sage_conversations')
         .select('id, role, content, confidence_score, created_at')
         .eq('wedding_id', WEDDING_ID)
-        .order('created_at', { ascending: true })
-        .limit(100)
+        .order('created_at', { ascending: false })
+        .limit(INITIAL_MESSAGE_LIMIT)
 
       if (data) {
-        setMessages(data as Message[])
+        setMessages([...(data as Message[])].reverse())
+      }
+      if ((count ?? 0) > INITIAL_MESSAGE_LIMIT) {
+        setHasMoreHistory(true)
       }
       setLoading(false)
     }
 
     loadHistory()
   }, [])
+
+  // Load earlier messages (pagination)
+  async function loadEarlierMessages() {
+    if (loadingMore || messages.length === 0) return
+    setLoadingMore(true)
+    try {
+      const supabase = createClient()
+      const oldest = messages[0]
+      const { data } = await supabase
+        .from('sage_conversations')
+        .select('id, role, content, confidence_score, created_at')
+        .eq('wedding_id', WEDDING_ID)
+        .lt('created_at', oldest.created_at)
+        .order('created_at', { ascending: false })
+        .limit(INITIAL_MESSAGE_LIMIT)
+
+      if (data && data.length > 0) {
+        const earlier = [...(data as Message[])].reverse()
+        setMessages((prev) => [...earlier, ...prev])
+        if (data.length < INITIAL_MESSAGE_LIMIT) {
+          setHasMoreHistory(false)
+        }
+      } else {
+        setHasMoreHistory(false)
+      }
+    } catch (err) {
+      console.error('Failed to load earlier messages:', err)
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -369,8 +437,39 @@ export default function SageChatPage() {
             </div>
           </div>
         ) : (
-          messages.map((msg) => (
-            <div key={msg.id}>
+          <>
+            {hasMoreHistory && (
+              <div className="flex justify-center pb-2">
+                <button
+                  onClick={loadEarlierMessages}
+                  disabled={loadingMore}
+                  className="text-xs font-medium px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                >
+                  {loadingMore ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Loading...
+                    </span>
+                  ) : (
+                    'Load earlier messages'
+                  )}
+                </button>
+              </div>
+            )}
+            {messages.map((msg, idx) => {
+              const prev = idx > 0 ? messages[idx - 1] : null
+              const showDivider = !prev || dayKey(prev.created_at) !== dayKey(msg.created_at)
+              return (
+                <div key={msg.id}>
+                  {showDivider && (
+                    <div className="flex items-center gap-3 my-4" aria-hidden="true">
+                      <div className="flex-1 h-px bg-gray-100" />
+                      <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">
+                        {formatDateDivider(msg.created_at)}
+                      </span>
+                      <div className="flex-1 h-px bg-gray-100" />
+                    </div>
+                  )}
               <div
                 className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
@@ -488,8 +587,10 @@ export default function SageChatPage() {
                   </p>
                 </div>
               )}
-            </div>
-          ))
+                </div>
+              )
+            })}
+          </>
         )}
 
         {/* Typing indicator — improved */}

@@ -26,7 +26,10 @@ import {
   AlertTriangle,
   BarChart3,
   Table2,
+  Tag,
 } from 'lucide-react'
+import { TagChip, type TagChipData } from '@/components/couple/tag-chip'
+import { TagPicker } from '@/components/couple/tag-picker'
 
 // TODO: Get from auth session
 const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
@@ -54,6 +57,12 @@ interface Guest {
   group_name: string | null
   first_name: string | null
   last_name: string | null
+}
+
+interface GuestTagRow {
+  id: string
+  tag_name: string
+  color: string
 }
 
 interface TableFormData {
@@ -109,6 +118,14 @@ export default function SeatingChartPage() {
   const [floorPlanUrl, setFloorPlanUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
+  // Tag data
+  const [allTags, setAllTags] = useState<TagChipData[]>([])
+  // guest_id -> tag_id[]
+  const [guestTagMap, setGuestTagMap] = useState<Record<string, string[]>>({})
+  // Multi-select tag filter applied to the unassigned list
+  const [filterTagIds, setFilterTagIds] = useState<Set<string>>(new Set())
+  const [showTagFilterMenu, setShowTagFilterMenu] = useState(false)
+
   // Table CRUD modal
   const [showTableModal, setShowTableModal] = useState(false)
   const [editingTableId, setEditingTableId] = useState<string | null>(null)
@@ -129,7 +146,7 @@ export default function SeatingChartPage() {
 
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
-    const [tablesRes, guestsRes, configRes] = await Promise.all([
+    const [tablesRes, guestsRes, configRes, tagsRes] = await Promise.all([
       supabase
         .from('seating_tables')
         .select('*')
@@ -145,6 +162,11 @@ export default function SeatingChartPage() {
         .select('feature_flags')
         .eq('venue_id', VENUE_ID)
         .maybeSingle(),
+      supabase
+        .from('guest_tags')
+        .select('id, tag_name, color')
+        .eq('wedding_id', WEDDING_ID)
+        .order('created_at', { ascending: true }),
     ])
 
     if (tablesRes.data) setTables(tablesRes.data as unknown as SeatingTable[])
@@ -155,6 +177,35 @@ export default function SeatingChartPage() {
         setFloorPlanUrl(flags.floor_plan_url as string)
       }
     }
+
+    // Tags
+    if (tagsRes.data) {
+      setAllTags(
+        (tagsRes.data as GuestTagRow[]).map((t) => ({
+          id: t.id,
+          name: t.tag_name,
+          color: t.color || '#7D8471',
+        })),
+      )
+    }
+
+    // Tag assignments — limited to this wedding's guests
+    const guestIds = ((guestsRes.data as { id: string }[] | null) || []).map((g) => g.id)
+    if (guestIds.length > 0) {
+      const { data: assignmentData } = await supabase
+        .from('guest_tag_assignments')
+        .select('guest_id, tag_id')
+        .in('guest_id', guestIds)
+      const map: Record<string, string[]> = {}
+      if (assignmentData) {
+        for (const row of assignmentData as { guest_id: string; tag_id: string }[]) {
+          if (!map[row.guest_id]) map[row.guest_id] = []
+          map[row.guest_id].push(row.tag_id)
+        }
+      }
+      setGuestTagMap(map)
+    }
+
     setLoading(false)
   }, [supabase])
 
@@ -178,6 +229,16 @@ export default function SeatingChartPage() {
     return guests.filter((g) => !g.table_assignment)
   }, [guests])
 
+  // Tag-filtered version of unassigned list (applied in both the side panel
+  // and the assignment modal so the filters stay in sync).
+  const tagFilteredUnassigned = useMemo(() => {
+    if (filterTagIds.size === 0) return unassignedGuests
+    return unassignedGuests.filter((g) => {
+      const guestTags = guestTagMap[g.id] || []
+      return guestTags.some((tid) => filterTagIds.has(tid))
+    })
+  }, [unassignedGuests, filterTagIds, guestTagMap])
+
   const totalGuests = guests.length
   const assignedCount = totalGuests - unassignedGuests.length
   const totalCapacity = tables.reduce((sum, t) => sum + t.capacity, 0)
@@ -187,12 +248,14 @@ export default function SeatingChartPage() {
   }).length
   const tablesWithSpaceCount = tables.length - tablesFullCount
 
-  // Filtered unassigned guests for assignment modal
+  // Filtered unassigned guests for assignment modal — applies both the
+  // tag filter (from the side panel) and the modal's own search.
   const filteredUnassigned = useMemo(() => {
-    if (!assignSearch.trim()) return unassignedGuests
+    const base = tagFilteredUnassigned
+    if (!assignSearch.trim()) return base
     const q = assignSearch.toLowerCase()
-    return unassignedGuests.filter((g) => guestName(g).toLowerCase().includes(q))
-  }, [unassignedGuests, assignSearch])
+    return base.filter((g) => guestName(g).toLowerCase().includes(q))
+  }, [tagFilteredUnassigned, assignSearch])
 
   // ---- Table CRUD ----
   function openAddTable() {
@@ -608,7 +671,7 @@ export default function SeatingChartPage() {
       {unassignedGuests.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100" style={{ backgroundColor: 'color-mix(in srgb, var(--couple-accent) 5%, white)' }}>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-2">
                 <Users className="w-4 h-4 text-amber-600" />
                 <h2
@@ -618,31 +681,92 @@ export default function SeatingChartPage() {
                   Unassigned Guests
                 </h2>
               </div>
-              <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full">
-                {unassignedGuests.length} guest{unassignedGuests.length !== 1 ? 's' : ''}
-              </span>
+              <div className="flex items-center gap-2">
+                {/* Tag filter */}
+                {allTags.length > 0 && (
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowTagFilterMenu((v) => !v)}
+                      className="flex items-center gap-1.5 px-2.5 py-1 border border-gray-200 rounded-lg text-xs bg-white hover:border-gray-300"
+                    >
+                      <Tag className="w-3 h-3 text-gray-400" />
+                      {filterTagIds.size === 0
+                        ? 'Filter by tag'
+                        : `${filterTagIds.size} tag${filterTagIds.size === 1 ? '' : 's'}`}
+                      <ChevronDown className="w-3 h-3 text-gray-400" />
+                    </button>
+                    {showTagFilterMenu && (
+                      <div className="absolute right-0 top-full mt-1 z-40">
+                        <TagPicker
+                          tags={allTags}
+                          selectedIds={[...filterTagIds]}
+                          onToggle={(tid) => {
+                            setFilterTagIds((prev) => {
+                              const next = new Set(prev)
+                              if (next.has(tid)) next.delete(tid)
+                              else next.add(tid)
+                              return next
+                            })
+                          }}
+                          onClose={() => setShowTagFilterMenu(false)}
+                          title="Filter by tag"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+                {filterTagIds.size > 0 && (
+                  <button
+                    onClick={() => setFilterTagIds(new Set())}
+                    className="text-xs text-gray-400 hover:text-gray-600"
+                  >
+                    Clear
+                  </button>
+                )}
+                <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full">
+                  {tagFilteredUnassigned.length} guest{tagFilteredUnassigned.length !== 1 ? 's' : ''}
+                </span>
+              </div>
             </div>
           </div>
 
           <div className="p-5">
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-              {unassignedGuests.map((guest) => (
-                <div
-                  key={guest.id}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 text-sm text-gray-600"
-                >
-                  <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-[10px] font-medium text-gray-500 shrink-0">
-                    {guestName(guest).charAt(0).toUpperCase()}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <span className="truncate block">{guestName(guest)}</span>
-                    {guest.plus_one_name && (
-                      <span className="text-[10px] text-gray-400">+ {guest.plus_one_name}</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
+            {tagFilteredUnassigned.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-4">
+                No unassigned guests match the selected tag filter.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                {tagFilteredUnassigned.map((guest) => {
+                  const tagIds = guestTagMap[guest.id] || []
+                  return (
+                    <div
+                      key={guest.id}
+                      className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-50 text-sm text-gray-600"
+                    >
+                      <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-[10px] font-medium text-gray-500 shrink-0 mt-0.5">
+                        {guestName(guest).charAt(0).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="truncate block">{guestName(guest)}</span>
+                        {guest.plus_one_name && (
+                          <span className="text-[10px] text-gray-400">+ {guest.plus_one_name}</span>
+                        )}
+                        {tagIds.length > 0 && (
+                          <div className="flex flex-wrap gap-0.5 mt-1">
+                            {tagIds.map((tid) => {
+                              const tag = allTags.find((t) => t.id === tid)
+                              if (!tag) return null
+                              return <TagChip key={tid} tag={tag} />
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -853,14 +977,23 @@ export default function SeatingChartPage() {
                             : 'text-gray-700 hover:bg-gray-50',
                         )}
                       >
-                        <div className="flex items-center gap-2 text-left">
+                        <div className="flex items-center gap-2 text-left flex-1 min-w-0">
                           <div className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-[10px] font-medium text-gray-500 shrink-0">
                             {guestName(guest).charAt(0).toUpperCase()}
                           </div>
-                          <div>
-                            <span className="block">{guestName(guest)}</span>
+                          <div className="min-w-0 flex-1">
+                            <span className="block truncate">{guestName(guest)}</span>
                             {guest.plus_one_name && (
                               <span className="text-[10px] text-gray-400">+ {guest.plus_one_name}</span>
+                            )}
+                            {(guestTagMap[guest.id] || []).length > 0 && (
+                              <div className="flex flex-wrap gap-0.5 mt-0.5">
+                                {(guestTagMap[guest.id] || []).map((tid) => {
+                                  const tag = allTags.find((t) => t.id === tid)
+                                  if (!tag) return null
+                                  return <TagChip key={tid} tag={tag} />
+                                })}
+                              </div>
                             )}
                           </div>
                         </div>

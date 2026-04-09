@@ -27,22 +27,39 @@ export const CLAUDE_COSTS = {
   },
 } as const
 
+export const OPENAI_COSTS = {
+  'gpt-4o-mini': {
+    input: 0.15,
+    output: 0.60,
+  },
+  'gpt-4o': {
+    input: 2.50,
+    output: 10.0,
+  },
+} as const
+
 export type ClaudeModel = keyof typeof CLAUDE_COSTS
+export type OpenAIModel = keyof typeof OPENAI_COSTS
 
 /**
  * Calculate cost for a given model and token usage.
+ * Supports both Claude and OpenAI models.
  */
 export function calculateCost(
   model: string,
   inputTokens: number,
   outputTokens: number
 ): number {
-  const costs = CLAUDE_COSTS[model as ClaudeModel]
-  if (!costs) {
-    // Fallback to Sonnet pricing
-    return (inputTokens * 3.0 + outputTokens * 15.0) / 1_000_000
+  const claudeCosts = CLAUDE_COSTS[model as ClaudeModel]
+  if (claudeCosts) {
+    return (inputTokens * claudeCosts.input + outputTokens * claudeCosts.output) / 1_000_000
   }
-  return (inputTokens * costs.input + outputTokens * costs.output) / 1_000_000
+  const openaiCosts = OPENAI_COSTS[model as OpenAIModel]
+  if (openaiCosts) {
+    return (inputTokens * openaiCosts.input + outputTokens * openaiCosts.output) / 1_000_000
+  }
+  // Fallback to Sonnet pricing
+  return (inputTokens * 3.0 + outputTokens * 15.0) / 1_000_000
 }
 
 // ---------------------------------------------------------------------------

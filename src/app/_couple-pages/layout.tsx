@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getFontUrl, getFontVars } from '@/config/fonts'
-import { CoupleNav } from './couple-nav'
+import { CoupleShell } from '@/components/couple/couple-shell'
 
 /**
  * Resolve the venue slug from (in priority order):
@@ -87,14 +87,13 @@ export default async function CoupleLayout({
       <link href={fontUrl} rel="stylesheet" />
 
       <div style={cssVars} className="min-h-screen bg-[#FAFAF8]">
-        <CoupleNav venueName={branding.venueName} logoUrl={branding.logoUrl} />
-
-        {/* Main content — offset for fixed nav */}
-        <main className="pt-16 lg:pt-16">
-          <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">
-            {children}
-          </div>
-        </main>
+        <CoupleShell
+          venueName={branding.venueName}
+          logoUrl={branding.logoUrl}
+          base=""
+        >
+          {children}
+        </CoupleShell>
       </div>
     </>
   )

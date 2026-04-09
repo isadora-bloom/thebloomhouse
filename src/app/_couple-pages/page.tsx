@@ -13,7 +13,13 @@ import {
   ArrowRight,
   Heart,
   Sparkles,
+  Camera,
+  FileText,
+  Briefcase,
+  ClipboardList,
+  X as XIcon,
 } from 'lucide-react'
+import { CouplePhotoPrompt } from '@/components/couple/couple-photo-prompt'
 
 // TODO: Get wedding ID from auth session / couple's user profile
 const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
@@ -30,7 +36,7 @@ interface DashboardData {
   guestsAttending: number
   guestsPending: number
   guestsDeclined: number
-  budgetTotal: number
+  budgetTotal: number | null
   budgetBudgeted: number
   budgetCommitted: number
   budgetPaid: number
@@ -41,10 +47,10 @@ interface DashboardData {
   timelineReceptionEnd: string | null
   timelineDinnerType: string | null
   timelineEventsCount: number
-  upcomingTimeline: Array<{
+  upcomingTasks: Array<{
     id: string
     title: string
-    time: string | null
+    due_date: string | null
     category: string | null
   }>
   recentMessages: Array<{
@@ -53,6 +59,91 @@ interface DashboardData {
     sender_role: string | null
     created_at: string
   }>
+  // Alert inputs
+  couplePhotoUrl: string | null
+  guestListCount: number
+  contractsCount: number
+  bookedVendorsCount: number
+}
+
+// ---------------------------------------------------------------------------
+// Planning Alerts
+// ---------------------------------------------------------------------------
+
+type AlertId = 'photo' | 'budget' | 'contracts' | 'vendors' | 'guests' | 'checklist'
+
+interface PlanningAlert {
+  id: AlertId
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
+  title: string
+  href: string
+}
+
+function buildAlerts(data: DashboardData): PlanningAlert[] {
+  const alerts: PlanningAlert[] = []
+  const days = daysUntil(data.weddingDate)
+
+  // 1. Photo
+  if (!data.couplePhotoUrl) {
+    alerts.push({
+      id: 'photo',
+      icon: Camera,
+      title: "Add a couple photo — it'll appear on your website and throughout your portal.",
+      href: `/couple/${SLUG}/couple-photo`,
+    })
+  }
+
+  // 2. Budget
+  if (data.budgetTotal === null || data.budgetTotal === 0) {
+    alerts.push({
+      id: 'budget',
+      icon: DollarSign,
+      title: 'Set your overall budget to start tracking spending.',
+      href: `/couple/${SLUG}/budget`,
+    })
+  }
+
+  // 3. Contracts (wedding_date < 6 months away)
+  if (data.contractsCount === 0 && days !== null && days < 183) {
+    alerts.push({
+      id: 'contracts',
+      icon: FileText,
+      title: "It's a good time to start collecting vendor contracts.",
+      href: `/couple/${SLUG}/contracts`,
+    })
+  }
+
+  // 4. Vendors
+  if (data.bookedVendorsCount === 0) {
+    alerts.push({
+      id: 'vendors',
+      icon: Briefcase,
+      title: 'Add your vendors to keep all your contacts in one place.',
+      href: `/couple/${SLUG}/vendors`,
+    })
+  }
+
+  // 5. Guests (wedding_date < 9 months away)
+  if (data.guestListCount === 0 && days !== null && days < 274) {
+    alerts.push({
+      id: 'guests',
+      icon: Users,
+      title: 'Your guest list is empty — add guests to unlock seating, shuttle, and more.',
+      href: `/couple/${SLUG}/guests`,
+    })
+  }
+
+  // 6. Checklist (wedding_date < 6 months away)
+  if (data.checklistDone === 0 && days !== null && days < 183) {
+    alerts.push({
+      id: 'checklist',
+      icon: ClipboardList,
+      title: "Your planning checklist hasn't been started yet.",
+      href: `/couple/${SLUG}/checklist`,
+    })
+  }
+
+  return alerts
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +166,19 @@ function formatDate(dateStr: string | null): string {
     day: 'numeric',
     year: 'numeric',
   })
+}
+
+function formatDueDate(dateStr: string | null): string {
+  if (!dateStr) return 'No due date'
+  const due = new Date(dateStr + 'T00:00:00')
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const diffDays = Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+  if (diffDays < 0) return `Overdue (${due.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`
+  if (diffDays === 0) return 'Due today'
+  if (diffDays === 1) return 'Due tomorrow'
+  if (diffDays < 7) return `Due in ${diffDays} days`
+  return `Due ${due.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
 }
 
 function fmt$(value: number): string {
@@ -108,9 +212,51 @@ function timeAgo(dateStr: string): string {
 // Dashboard Page
 // ---------------------------------------------------------------------------
 
+const ALERT_PRIORITY: AlertId[] = ['photo', 'budget', 'contracts', 'vendors', 'guests', 'checklist']
+
 export default function CoupleDashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [showPhotoPrompt, setShowPhotoPrompt] = useState(false)
+  const [dismissedAlerts, setDismissedAlerts] = useState<AlertId[]>([])
+
+  // Load dismissed alerts from sessionStorage on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const raw = sessionStorage.getItem('bloom_dismissed_alerts')
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) setDismissedAlerts(parsed as AlertId[])
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  function dismissAlert(id: AlertId) {
+    setDismissedAlerts((prev) => {
+      if (prev.includes(id)) return prev
+      const next = [...prev, id]
+      try {
+        sessionStorage.setItem('bloom_dismissed_alerts', JSON.stringify(next))
+      } catch {
+        // ignore
+      }
+      return next
+    })
+  }
+
+  // Trigger the first-login couple photo prompt
+  useEffect(() => {
+    if (!data) return
+    if (typeof window === 'undefined') return
+    if (data.couplePhotoUrl) return
+    const alreadyPrompted = sessionStorage.getItem('bloom_demo_couple_photo_prompted')
+    if (alreadyPrompted) return
+    sessionStorage.setItem('bloom_demo_couple_photo_prompted', '1')
+    setShowPhotoPrompt(true)
+  }, [data])
 
   useEffect(() => {
     async function loadDashboard() {
@@ -130,7 +276,17 @@ export default function CoupleDashboard() {
         }
 
         // Fetch related data in parallel
-        const [guests, budgetItemsRes, weddingConfigRes, checklist, timeline, allTimeline, messages] = await Promise.all([
+        const [
+          guests,
+          budgetItemsRes,
+          weddingConfigRes,
+          checklist,
+          upcomingChecklist,
+          allTimeline,
+          messages,
+          contractsRes,
+          bookedVendorsRes,
+        ] = await Promise.all([
           supabase.from('guest_list').select('id, rsvp_status').eq('wedding_id', WEDDING_ID),
           supabase
             .from('budget_items')
@@ -143,10 +299,11 @@ export default function CoupleDashboard() {
             .maybeSingle(),
           supabase.from('checklist_items').select('id, is_completed, due_date').eq('wedding_id', WEDDING_ID),
           supabase
-            .from('timeline')
-            .select('id, title, time, category')
+            .from('checklist_items')
+            .select('id, title, due_date, category')
             .eq('wedding_id', WEDDING_ID)
-            .order('time', { ascending: true })
+            .eq('is_completed', false)
+            .order('due_date', { ascending: true, nullsFirst: false })
             .limit(5),
           supabase
             .from('timeline')
@@ -159,6 +316,14 @@ export default function CoupleDashboard() {
             .eq('wedding_id', WEDDING_ID)
             .order('created_at', { ascending: false })
             .limit(3),
+          supabase
+            .from('contracts')
+            .select('id', { count: 'exact', head: true })
+            .eq('wedding_id', WEDDING_ID),
+          supabase
+            .from('booked_vendors')
+            .select('id', { count: 'exact', head: true })
+            .eq('wedding_id', WEDDING_ID),
         ])
 
         const people = (wedding.people || []) as Array<{
@@ -203,7 +368,10 @@ export default function CoupleDashboard() {
           guestsAttending: guestList.filter((g) => g.rsvp_status === 'attending').length,
           guestsPending: guestList.filter((g) => g.rsvp_status === 'pending').length,
           guestsDeclined: guestList.filter((g) => g.rsvp_status === 'declined').length,
-          budgetTotal: Number(weddingConfig?.total_budget) || 0,
+          budgetTotal:
+            weddingConfig?.total_budget === null || weddingConfig?.total_budget === undefined
+              ? null
+              : Number(weddingConfig.total_budget),
           budgetBudgeted: budgetItems.reduce((s, b) => s + (Number(b.budgeted) || 0), 0),
           budgetCommitted: budgetItems.reduce((s, b) => s + (Number(b.committed) || 0), 0),
           budgetPaid: budgetItems.reduce((s, b) => {
@@ -217,8 +385,12 @@ export default function CoupleDashboard() {
           timelineReceptionEnd: receptionEndItem?.time || null,
           timelineDinnerType: dinnerItem?.title || null,
           timelineEventsCount: allTimelineItems.length,
-          upcomingTimeline: (timeline.data || []) as DashboardData['upcomingTimeline'],
+          upcomingTasks: (upcomingChecklist.data || []) as DashboardData['upcomingTasks'],
           recentMessages: (messages.data || []) as DashboardData['recentMessages'],
+          couplePhotoUrl: (wedding as { couple_photo_url?: string | null }).couple_photo_url || null,
+          guestListCount: guestList.length,
+          contractsCount: contractsRes.count ?? 0,
+          bookedVendorsCount: bookedVendorsRes.count ?? 0,
         })
       } catch (err) {
         console.error('Failed to load couple dashboard:', err)
@@ -269,20 +441,38 @@ export default function CoupleDashboard() {
     ? Math.round((data.checklistDone / data.checklistTotal) * 100)
     : 0
   // Budget math aligns with budget page: remaining = total budget - committed
-  const budgetRemaining = data.budgetTotal - data.budgetCommitted
-  const budgetCommittedPct = data.budgetTotal > 0
-    ? Math.round((data.budgetCommitted / data.budgetTotal) * 100)
+  const budgetTotalNum = data.budgetTotal ?? 0
+  const budgetRemaining = budgetTotalNum - data.budgetCommitted
+  const budgetCommittedPct = budgetTotalNum > 0
+    ? Math.round((data.budgetCommitted / budgetTotalNum) * 100)
     : 0
-  const budgetPaidPct = data.budgetTotal > 0
-    ? Math.round((data.budgetPaid / data.budgetTotal) * 100)
+  const budgetPaidPct = budgetTotalNum > 0
+    ? Math.round((data.budgetPaid / budgetTotalNum) * 100)
     : 0
   const countdownMessage = getCountdownMessage(days)
 
   // Detect admin preview mode (has bloom_scope cookie = admin user)
   const isAdminPreview = typeof document !== 'undefined' && document.cookie.includes('bloom_scope=')
 
+  // Planning alerts — compute from data, filter dismissed, sort by priority, cap at 3
+  const allAlerts = buildAlerts(data)
+  const visibleAlerts = ALERT_PRIORITY
+    .map((id) => allAlerts.find((a) => a.id === id))
+    .filter((a): a is PlanningAlert => !!a && !dismissedAlerts.includes(a.id))
+    .slice(0, 3)
+
   return (
     <div className="space-y-8">
+      {/* Couple photo prompt — first-login only (once per session) */}
+      {showPhotoPrompt && (
+        <CouplePhotoPrompt
+          weddingId={WEDDING_ID}
+          onDismiss={() => setShowPhotoPrompt(false)}
+          onUploaded={(url) => {
+            setData((prev) => (prev ? { ...prev, couplePhotoUrl: url } : prev))
+          }}
+        />
+      )}
       {/* Admin Preview Banner */}
       {isAdminPreview && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-3">
@@ -342,6 +532,41 @@ export default function CoupleDashboard() {
         )}
       </div>
 
+      {/* Planning Alerts Strip */}
+      {visibleAlerts.length > 0 && (
+        <div className="flex gap-3 overflow-x-auto pb-1 -mx-1 px-1">
+          {visibleAlerts.map((alert) => {
+            const Icon = alert.icon
+            return (
+              <div
+                key={alert.id}
+                className="relative flex items-start gap-3 px-4 py-3 rounded-xl border border-gray-200 bg-white shadow-sm min-w-[280px] flex-1"
+              >
+                <div
+                  className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+                  style={{ backgroundColor: '#7D847115' }}
+                >
+                  <Icon className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
+                </div>
+                <Link
+                  href={alert.href}
+                  className="flex-1 text-sm text-gray-700 leading-snug hover:underline pr-4"
+                >
+                  {alert.title}
+                </Link>
+                <button
+                  onClick={() => dismissAlert(alert.id)}
+                  className="absolute top-2 right-2 text-gray-300 hover:text-gray-500 transition-colors"
+                  aria-label="Dismiss alert"
+                >
+                  <XIcon className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       {/* Quick Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Days Until */}
@@ -379,7 +604,7 @@ export default function CoupleDashboard() {
             {fmt$(budgetRemaining)}
           </p>
           <p className="text-xs text-gray-400 mt-1">
-            remaining of {fmt$(data.budgetTotal)}
+            remaining of {fmt$(budgetTotalNum)}
           </p>
         </div>
 
@@ -418,7 +643,7 @@ export default function CoupleDashboard() {
           <div className="space-y-3">
             <div className="flex justify-between text-sm">
               <span className="text-gray-600">Total Budget</span>
-              <span className="font-medium text-gray-800">{fmt$(data.budgetTotal)}</span>
+              <span className="font-medium text-gray-800">{fmt$(budgetTotalNum)}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-gray-600">Budgeted</span>
@@ -617,13 +842,13 @@ export default function CoupleDashboard() {
             </Link>
           </div>
           <div className="p-5">
-            {data.upcomingTimeline.length === 0 ? (
+            {data.upcomingTasks.length === 0 ? (
               <p className="text-sm text-gray-400 text-center py-4">
-                No timeline items yet. Start building your day-of timeline!
+                Nothing on your checklist! You&apos;re all caught up.
               </p>
             ) : (
               <div className="space-y-3">
-                {data.upcomingTimeline.map((item) => (
+                {data.upcomingTasks.map((item) => (
                   <div key={item.id} className="flex items-start gap-3">
                     <div
                       className="w-2 h-2 rounded-full mt-1.5 shrink-0"
@@ -634,7 +859,7 @@ export default function CoupleDashboard() {
                         {item.title}
                       </p>
                       <p className="text-xs text-gray-400">
-                        {item.time || 'Time TBD'}
+                        {formatDueDate(item.due_date)}
                         {item.category && (
                           <span
                             className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-medium text-white"

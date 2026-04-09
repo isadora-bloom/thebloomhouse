@@ -1,6 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { getFontUrl, getFontVars } from '@/config/fonts'
-import { SlugCoupleNav } from './slug-couple-nav'
+import { CoupleShell } from '@/components/couple/couple-shell'
 import { FloatingSage } from '@/components/couple/floating-sage'
 
 /**
@@ -96,18 +96,13 @@ export default async function CoupleSlugLayout({
       <link href={fontUrl} rel="stylesheet" />
 
       <div style={cssVars} className="min-h-screen bg-[#FAFAF8]">
-        <SlugCoupleNav
+        <CoupleShell
           venueName={branding.venueName}
           logoUrl={branding.logoUrl}
-          venueSlug={slug}
-        />
-
-        {/* Main content — offset for fixed nav */}
-        <main className="pt-16 lg:pt-16">
-          <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">
-            {children}
-          </div>
-        </main>
+          base={`/couple/${slug}`}
+        >
+          {children}
+        </CoupleShell>
 
         {/* Floating Sage button on every page */}
         <FloatingSage venueSlug={slug} />

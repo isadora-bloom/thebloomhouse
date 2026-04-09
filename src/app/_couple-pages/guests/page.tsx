@@ -34,6 +34,8 @@ import {
   Palette,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { TagChip } from '@/components/couple/tag-chip'
+import { TagPicker } from '@/components/couple/tag-picker'
 
 const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const VENUE_ID = '22222222-2222-2222-2222-222222222201'
@@ -63,7 +65,8 @@ interface Guest {
   rsvp_status: RsvpStatus
   meal_choice: string | null
   dietary_restrictions: string | null
-  tags: string[] // tag IDs
+  // Tag IDs are derived from guest_tag_assignments (see guestTagMap state).
+  tags: string[]
   table_assignment: string | null
   notes: string | null
   has_plus_one: boolean
@@ -200,6 +203,10 @@ export default function GuestListPage() {
 
   // Tags & Meals
   const [tags, setTags] = useState<GuestTag[]>([])
+  // Normalized tag assignments: guest_id -> tag_id[]
+  const [guestTagMap, setGuestTagMap] = useState<Record<string, string[]>>({})
+  // Row where the tag picker popover is open
+  const [tagPickerGuestId, setTagPickerGuestId] = useState<string | null>(null)
   const [mealOptions, setMealOptions] = useState<string[]>(DEFAULT_MEAL_OPTIONS)
 
   // Modals
@@ -218,10 +225,14 @@ export default function GuestListPage() {
   // Filters
   const [searchQuery, setSearchQuery] = useState('')
   const [filterRsvp, setFilterRsvp] = useState<RsvpStatus | 'all'>('all')
-  const [filterTag, setFilterTag] = useState<string>('all')
+  // Multi-select tag filter: empty set means no filter
+  const [filterTagIds, setFilterTagIds] = useState<Set<string>>(new Set())
+  const [showTagFilterMenu, setShowTagFilterMenu] = useState(false)
   const [filterMeal, setFilterMeal] = useState<string>('all')
   const [filterDietary, setFilterDietary] = useState<string>('all')
   const [filterTable, setFilterTable] = useState<string>('all')
+  // Sort option: 'name' (last name) or 'tag' (primary tag name)
+  const [sortBy, setSortBy] = useState<'name' | 'tag'>('name')
 
   // Bulk actions
   const [selectedGuests, setSelectedGuests] = useState<Set<string>>(new Set())
@@ -246,6 +257,24 @@ export default function GuestListPage() {
       .order('last_name', { ascending: true })
 
     if (!error && data) {
+      const guestIds = (data as Record<string, unknown>[]).map((d) => d.id as string)
+
+      // Load tag assignments in a separate query, build guest_id -> tag_id[] map
+      let tagMap: Record<string, string[]> = {}
+      if (guestIds.length > 0) {
+        const { data: assignmentData } = await supabase
+          .from('guest_tag_assignments')
+          .select('guest_id, tag_id')
+          .in('guest_id', guestIds)
+        if (assignmentData) {
+          for (const row of assignmentData as { guest_id: string; tag_id: string }[]) {
+            if (!tagMap[row.guest_id]) tagMap[row.guest_id] = []
+            tagMap[row.guest_id].push(row.tag_id)
+          }
+        }
+      }
+      setGuestTagMap(tagMap)
+
       setGuests(
         data.map((d: Record<string, unknown>) => ({
           id: d.id as string,
@@ -258,7 +287,7 @@ export default function GuestListPage() {
           rsvp_status: (d.rsvp_status as RsvpStatus) || 'pending',
           meal_choice: (d.meal_choice as string | null) || (d.meal_preference as string | null),
           dietary_restrictions: d.dietary_restrictions as string | null,
-          tags: (d.tags as string[]) || [],
+          tags: tagMap[d.id as string] || [],
           table_assignment: d.table_assignment as string | null,
           notes: d.notes as string | null,
           has_plus_one: (d.has_plus_one as boolean) || (d.plus_one as boolean) || false,
@@ -392,7 +421,7 @@ export default function GuestListPage() {
 
   // ---- Filtering ----
   const filteredGuests = useMemo(() => {
-    return guests.filter((g) => {
+    const filtered = guests.filter((g) => {
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase()
         const fullName = `${g.first_name} ${g.last_name}`.toLowerCase()
@@ -407,14 +436,35 @@ export default function GuestListPage() {
         ) return false
       }
       if (filterRsvp !== 'all' && g.rsvp_status !== filterRsvp) return false
-      if (filterTag !== 'all' && !(g.tags || []).includes(filterTag)) return false
+      // Multi-select tag filter: match if guest has ANY of the selected tags
+      if (filterTagIds.size > 0) {
+        const guestTags = g.tags || []
+        const hasAny = guestTags.some((tid) => filterTagIds.has(tid))
+        if (!hasAny) return false
+      }
       if (filterMeal !== 'all' && g.meal_choice !== filterMeal) return false
       if (filterDietary === 'has' && !g.dietary_restrictions) return false
       if (filterDietary === 'none' && g.dietary_restrictions) return false
       if (filterTable !== 'all' && g.table_assignment !== filterTable) return false
       return true
     })
-  }, [guests, searchQuery, filterRsvp, filterTag, filterMeal, filterDietary, filterTable, tags])
+
+    // Sorting
+    if (sortBy === 'tag') {
+      return [...filtered].sort((a, b) => {
+        const aTagName = a.tags.length > 0
+          ? (tags.find((t) => t.id === a.tags[0])?.name || '~')
+          : '~~' // Guests without tags sort to end
+        const bTagName = b.tags.length > 0
+          ? (tags.find((t) => t.id === b.tags[0])?.name || '~')
+          : '~~'
+        const cmp = aTagName.localeCompare(bTagName)
+        if (cmp !== 0) return cmp
+        return (a.last_name || '').localeCompare(b.last_name || '')
+      })
+    }
+    return filtered
+  }, [guests, searchQuery, filterRsvp, filterTagIds, filterMeal, filterDietary, filterTable, tags, sortBy])
 
   // ---- Unique tables for filter ----
   const uniqueTables = useMemo(() => {
@@ -457,6 +507,8 @@ export default function GuestListPage() {
   async function handleSaveGuest() {
     if (!form.first_name.trim()) return
 
+    // Note: guest_list does NOT have a `tags` column — tags live in
+    // guest_tag_assignments and are synced separately below.
     const payload = {
       venue_id: VENUE_ID,
       wedding_id: WEDDING_ID,
@@ -469,7 +521,6 @@ export default function GuestListPage() {
       rsvp_status: form.rsvp_status,
       meal_choice: form.meal_choice || null,
       dietary_restrictions: form.dietary_restrictions.trim() || null,
-      tags: form.tags,
       table_assignment: form.table_assignment.trim() || null,
       notes: form.notes.trim() || null,
       has_plus_one: form.has_plus_one,
@@ -480,15 +531,36 @@ export default function GuestListPage() {
       invitation_sent: form.invitation_sent,
     }
 
+    let guestId = editingId
     if (editingId) {
       await supabase.from('guest_list').update(payload).eq('id', editingId)
     } else {
-      await supabase.from('guest_list').insert(payload)
+      const { data: inserted } = await supabase
+        .from('guest_list')
+        .insert(payload)
+        .select('id')
+        .single()
+      if (inserted) guestId = (inserted as { id: string }).id
+    }
+
+    // Sync tag assignments
+    if (guestId) {
+      await syncGuestTagAssignments(guestId, form.tags)
     }
 
     setShowGuestModal(false)
     setEditingId(null)
     fetchGuests()
+  }
+
+  // Replace the full set of tag assignments for a guest with the provided
+  // list of tag IDs. Uses delete-all-then-insert for simplicity.
+  async function syncGuestTagAssignments(guestId: string, tagIds: string[]) {
+    await supabase.from('guest_tag_assignments').delete().eq('guest_id', guestId)
+    if (tagIds.length > 0) {
+      const rows = tagIds.map((tid) => ({ guest_id: guestId, tag_id: tid }))
+      await supabase.from('guest_tag_assignments').insert(rows)
+    }
   }
 
   async function handleDeleteGuest(id: string) {
@@ -522,15 +594,10 @@ export default function GuestListPage() {
   }
 
   async function deleteTag(id: string) {
+    // Cascade delete assignments, then the tag itself
+    await supabase.from('guest_tag_assignments').delete().eq('tag_id', id)
     await supabase.from('guest_tags').delete().eq('id', id)
     setTags((prev) => prev.filter((t) => t.id !== id))
-    // Remove tag from guests
-    for (const g of guests) {
-      if (g.tags?.includes(id)) {
-        const newTags = g.tags.filter((t) => t !== id)
-        await supabase.from('guest_list').update({ tags: newTags }).eq('id', g.id)
-      }
-    }
     fetchGuests()
   }
 
@@ -541,6 +608,29 @@ export default function GuestListPage() {
       if (prev.tags.length >= 4) return prev
       return { ...prev, tags: [...prev.tags, tagId] }
     })
+  }
+
+  // ---- Row-level tag toggle (from picker popover) ----
+  async function toggleGuestTag(guestId: string, tagId: string) {
+    const current = guestTagMap[guestId] || []
+    const has = current.includes(tagId)
+    if (has) {
+      await supabase
+        .from('guest_tag_assignments')
+        .delete()
+        .eq('guest_id', guestId)
+        .eq('tag_id', tagId)
+      const next = current.filter((t) => t !== tagId)
+      setGuestTagMap((prev) => ({ ...prev, [guestId]: next }))
+      setGuests((prev) => prev.map((g) => (g.id === guestId ? { ...g, tags: next } : g)))
+    } else {
+      await supabase
+        .from('guest_tag_assignments')
+        .insert({ guest_id: guestId, tag_id: tagId })
+      const next = [...current, tagId]
+      setGuestTagMap((prev) => ({ ...prev, [guestId]: next }))
+      setGuests((prev) => prev.map((g) => (g.id === guestId ? { ...g, tags: next } : g)))
+    }
   }
 
   // ---- Meal options management ----
@@ -612,7 +702,6 @@ export default function GuestListPage() {
         venue_id: VENUE_ID,
         wedding_id: WEDDING_ID,
         rsvp_status: 'pending',
-        tags: [],
         has_plus_one: false,
         invitation_sent: false,
       }
@@ -684,13 +773,13 @@ export default function GuestListPage() {
         await supabase.from('guest_list').update({ rsvp_status: bulkValue }).eq('id', id)
       }
     } else if (bulkAction === 'tag') {
+      // Assign selected tag to each guest via guest_tag_assignments
       for (const id of ids) {
         const guest = guests.find((g) => g.id === id)
-        if (guest) {
-          const newTags = guest.tags.includes(bulkValue)
-            ? guest.tags
-            : [...guest.tags.slice(0, 3), bulkValue]
-          await supabase.from('guest_list').update({ tags: newTags }).eq('id', id)
+        if (guest && !guest.tags.includes(bulkValue)) {
+          await supabase
+            .from('guest_tag_assignments')
+            .insert({ guest_id: id, tag_id: bulkValue })
         }
       }
     }
@@ -710,21 +799,6 @@ export default function GuestListPage() {
       <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border', opt.bg, opt.color)}>
         {opt.icon}
         {opt.label}
-      </span>
-    )
-  }
-
-  // ---- Tag pill ----
-  function tagPill(tagId: string) {
-    const tag = tags.find((t) => t.id === tagId)
-    if (!tag) return null
-    return (
-      <span
-        key={tagId}
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium text-white"
-        style={{ backgroundColor: tag.color }}
-      >
-        {tag.name}
       </span>
     )
   }
@@ -943,20 +1017,61 @@ export default function GuestListPage() {
               />
             </div>
 
-            {/* Tag filter */}
+            {/* Tag filter (multi-select popover) */}
             {tags.length > 0 && (
-              <select
-                value={filterTag}
-                onChange={(e) => setFilterTag(e.target.value)}
-                className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
-                style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-              >
-                <option value="all">All Tags</option>
-                {tags.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
+              <div className="relative">
+                <button
+                  onClick={() => setShowTagFilterMenu((v) => !v)}
+                  className="flex items-center gap-2 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white hover:border-gray-300 focus:outline-none focus:ring-2"
+                  style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                >
+                  <Tag className="w-3.5 h-3.5 text-gray-400" />
+                  {filterTagIds.size === 0
+                    ? 'Filter by tag'
+                    : `${filterTagIds.size} tag${filterTagIds.size === 1 ? '' : 's'}`}
+                  <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
+                </button>
+                {showTagFilterMenu && (
+                  <div className="absolute left-0 top-full mt-1 z-40">
+                    <TagPicker
+                      tags={tags}
+                      selectedIds={[...filterTagIds]}
+                      onToggle={(tid) => {
+                        setFilterTagIds((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(tid)) next.delete(tid)
+                          else next.add(tid)
+                          return next
+                        })
+                      }}
+                      onClose={() => setShowTagFilterMenu(false)}
+                      title="Filter by tag"
+                    />
+                  </div>
+                )}
+                {filterTagIds.size > 0 && (
+                  <button
+                    onClick={() => setFilterTagIds(new Set())}
+                    className="absolute -top-2 -right-2 w-4 h-4 rounded-full bg-gray-300 hover:bg-gray-400 text-white flex items-center justify-center"
+                    aria-label="Clear tag filter"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                )}
+              </div>
             )}
+
+            {/* Sort by */}
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as 'name' | 'tag')}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+              style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+              title="Sort by"
+            >
+              <option value="name">Sort: Name</option>
+              <option value="tag">Sort: Tag</option>
+            </select>
 
             {/* Meal filter (plated only) */}
             {isPlated && (
@@ -1049,12 +1164,12 @@ export default function GuestListPage() {
                 className="text-lg font-semibold mb-2"
                 style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
               >
-                {searchQuery || filterRsvp !== 'all' || filterTag !== 'all' ? 'No matching guests' : 'No guests yet'}
+                {searchQuery || filterRsvp !== 'all' || filterTagIds.size > 0 ? 'No matching guests' : 'No guests yet'}
               </h3>
               <p className="text-gray-500 text-sm mb-4">
                 {searchQuery ? 'Try a different search.' : 'Add your first guest or import a CSV.'}
               </p>
-              {!searchQuery && filterRsvp === 'all' && filterTag === 'all' && (
+              {!searchQuery && filterRsvp === 'all' && filterTagIds.size === 0 && (
                 <button
                   onClick={openAddGuest}
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
@@ -1162,11 +1277,41 @@ export default function GuestListPage() {
                           </div>
 
                           {/* Tags */}
-                          {guest.tags && guest.tags.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-1.5">
-                              {guest.tags.map((tid) => tagPill(tid))}
-                            </div>
-                          )}
+                          <div className="flex flex-wrap items-center gap-1 mt-1.5 relative">
+                            {guest.tags.map((tid) => {
+                              const t = tags.find((tg) => tg.id === tid)
+                              if (!t) return null
+                              return (
+                                <TagChip
+                                  key={tid}
+                                  tag={t}
+                                  onRemove={() => toggleGuestTag(guest.id, tid)}
+                                />
+                              )
+                            })}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setTagPickerGuestId(tagPickerGuestId === guest.id ? null : guest.id)
+                              }}
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium text-gray-500 bg-gray-100 hover:bg-gray-200 transition-colors"
+                              title="Add tag"
+                            >
+                              <Tag className="w-2.5 h-2.5" />
+                              {guest.tags.length === 0 ? 'Add tag' : '+'}
+                            </button>
+                            {tagPickerGuestId === guest.id && (
+                              <div className="absolute left-0 top-full mt-1 z-30">
+                                <TagPicker
+                                  tags={tags}
+                                  selectedIds={guest.tags}
+                                  onToggle={(tid) => toggleGuestTag(guest.id, tid)}
+                                  onClose={() => setTagPickerGuestId(null)}
+                                />
+                              </div>
+                            )}
+                          </div>
 
                           {/* Plus one */}
                           {guest.has_plus_one && (

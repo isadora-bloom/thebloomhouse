@@ -29,7 +29,9 @@ import {
   Users,
   ClipboardList,
   Search,
+  Tag,
 } from 'lucide-react'
+import { TagChip, type TagChipData } from '@/components/couple/tag-chip'
 
 // TODO: Get from auth session
 const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
@@ -224,6 +226,12 @@ export default function RoomAssignmentsPage() {
   const [guests, setGuests] = useState<Guest[]>([])
   const [showTracker, setShowTracker] = useState(false)
   const [trackerSearch, setTrackerSearch] = useState('')
+  // When true, filter the tracker to show only guests tagged with the Hotel tag
+  const [hotelTagFilter, setHotelTagFilter] = useState(false)
+
+  // Hotel tag data
+  const [hotelTag, setHotelTag] = useState<TagChipData | null>(null)
+  const [hotelTaggedGuestIds, setHotelTaggedGuestIds] = useState<Set<string>>(new Set())
 
   // General
   const [loading, setLoading] = useState(true)
@@ -234,7 +242,7 @@ export default function RoomAssignmentsPage() {
 
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
-    const [assignmentsRes, guestsRes] = await Promise.all([
+    const [assignmentsRes, guestsRes, hotelTagRes] = await Promise.all([
       supabase
         .from('bedroom_assignments')
         .select('*')
@@ -245,6 +253,12 @@ export default function RoomAssignmentsPage() {
         .select('id, accommodation, first_name, last_name')
         .eq('wedding_id', WEDDING_ID)
         .order('created_at', { ascending: true }),
+      supabase
+        .from('guest_tags')
+        .select('id, tag_name, color')
+        .eq('wedding_id', WEDDING_ID)
+        .ilike('tag_name', 'hotel')
+        .limit(1),
     ])
 
     if (assignmentsRes.data) {
@@ -262,6 +276,28 @@ export default function RoomAssignmentsPage() {
       setOnSiteRooms(rooms)
     }
     if (guestsRes.data) setGuests(guestsRes.data as unknown as Guest[])
+
+    // Hotel tag + its assignments
+    const hotelTagRow = hotelTagRes.data && hotelTagRes.data.length > 0 ? hotelTagRes.data[0] : null
+    if (hotelTagRow) {
+      setHotelTag({
+        id: hotelTagRow.id as string,
+        name: hotelTagRow.tag_name as string,
+        color: (hotelTagRow.color as string) || '#8B7355',
+      })
+      const { data: assignments } = await supabase
+        .from('guest_tag_assignments')
+        .select('guest_id')
+        .eq('tag_id', hotelTagRow.id)
+      const ids = new Set(
+        ((assignments as { guest_id: string }[] | null) || []).map((a) => a.guest_id),
+      )
+      setHotelTaggedGuestIds(ids)
+    } else {
+      setHotelTag(null)
+      setHotelTaggedGuestIds(new Set())
+    }
+
     setLoading(false)
   }, [supabase])
 
@@ -287,10 +323,17 @@ export default function RoomAssignmentsPage() {
   const guestsWithoutAccommodation = guests.filter((g) => !g.accommodation)
 
   const filteredGuests = useMemo(() => {
-    if (!trackerSearch.trim()) return guests
+    let base = guests
+    if (hotelTagFilter) {
+      base = base.filter((g) => hotelTaggedGuestIds.has(g.id))
+    }
+    if (!trackerSearch.trim()) return base
     const q = trackerSearch.toLowerCase()
-    return guests.filter((g) => guestName(g).toLowerCase().includes(q))
-  }, [guests, trackerSearch])
+    return base.filter((g) => guestName(g).toLowerCase().includes(q))
+  }, [guests, trackerSearch, hotelTagFilter, hotelTaggedGuestIds])
+
+  // Count of guests with the Hotel tag
+  const hotelTaggedCount = hotelTaggedGuestIds.size
 
   // ---- Room Block CRUD ----
   function openAddBlock() {
@@ -384,7 +427,7 @@ export default function RoomAssignmentsPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
           <p className="text-xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
             {roomBlocks.length}
@@ -409,6 +452,17 @@ export default function RoomAssignmentsPage() {
           </p>
           <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">Guests Tracked</p>
         </div>
+        {hotelTag && (
+          <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm text-center">
+            <p className="text-xl font-bold tabular-nums" style={{ color: hotelTag.color }}>
+              {hotelTaggedCount}
+            </p>
+            <div className="flex items-center justify-center gap-1 mt-0.5">
+              <Tag className="w-2.5 h-2.5 text-gray-400" />
+              <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">Hotel Tag</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ================================================================ */}
@@ -694,17 +748,35 @@ export default function RoomAssignmentsPage() {
               </div>
             ) : (
               <>
-                {/* Search */}
-                <div className="relative">
-                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-300" />
-                  <input
-                    type="text"
-                    value={trackerSearch}
-                    onChange={(e) => setTrackerSearch(e.target.value)}
-                    placeholder="Search guests..."
-                    className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                  />
+                {/* Search + hotel-tag filter toggle */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-300" />
+                    <input
+                      type="text"
+                      value={trackerSearch}
+                      onChange={(e) => setTrackerSearch(e.target.value)}
+                      placeholder="Search guests..."
+                      className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
+                      style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+                    />
+                  </div>
+                  {hotelTag && hotelTaggedCount > 0 && (
+                    <button
+                      onClick={() => setHotelTagFilter((v) => !v)}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-colors',
+                        hotelTagFilter
+                          ? 'text-white border-transparent'
+                          : 'text-gray-600 border-gray-200 bg-white hover:border-gray-300',
+                      )}
+                      style={hotelTagFilter ? { backgroundColor: hotelTag.color } : undefined}
+                    >
+                      <Tag className="w-3 h-3" />
+                      {hotelTagFilter ? 'Showing Hotel-tagged' : `Filter: ${hotelTag.name} (${hotelTaggedCount})`}
+                      {hotelTagFilter && <X className="w-3 h-3" />}
+                    </button>
+                  )}
                 </div>
 
                 {/* Guest list */}
@@ -717,8 +789,11 @@ export default function RoomAssignmentsPage() {
                       <div className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-[10px] font-medium text-gray-500 shrink-0">
                         {guestName(guest).charAt(0).toUpperCase()}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <span className="text-sm text-gray-700 truncate block">{guestName(guest)}</span>
+                      <div className="flex-1 min-w-0 flex items-center gap-2">
+                        <span className="text-sm text-gray-700 truncate">{guestName(guest)}</span>
+                        {hotelTag && hotelTaggedGuestIds.has(guest.id) && (
+                          <TagChip tag={hotelTag} />
+                        )}
                       </div>
                       <select
                         value={guest.accommodation || ''}

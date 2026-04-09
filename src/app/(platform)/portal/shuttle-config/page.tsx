@@ -33,6 +33,7 @@ interface PickupLocation {
 interface ShuttleConfig {
   pickup_locations: PickupLocation[]
   default_transit_time: number
+  arrival_buffer_minutes: number
   available_shuttles: number
   seats_per_shuttle: number
   shuttle_provider: string
@@ -40,9 +41,12 @@ interface ShuttleConfig {
   notes_to_couples: string
 }
 
+const ARRIVAL_BUFFER_OPTIONS = [15, 20, 30, 45, 60]
+
 const DEFAULT_CONFIG: ShuttleConfig = {
   pickup_locations: [],
   default_transit_time: 25,
+  arrival_buffer_minutes: 30,
   available_shuttles: 2,
   seats_per_shuttle: 40,
   shuttle_provider: '',
@@ -213,6 +217,7 @@ export default function ShuttleConfigPage() {
         const loaded: ShuttleConfig = {
           pickup_locations: (sc.pickup_locations as PickupLocation[]) ?? [],
           default_transit_time: (sc.default_transit_time as number) ?? 25,
+          arrival_buffer_minutes: (sc.arrival_buffer_minutes as number) ?? 30,
           available_shuttles: (sc.available_shuttles as number) ?? 2,
           seats_per_shuttle: (sc.seats_per_shuttle as number) ?? 40,
           shuttle_provider: (sc.shuttle_provider as string) ?? '',
@@ -255,6 +260,7 @@ export default function ShuttleConfigPage() {
       flags.shuttle_config = {
         pickup_locations: config.pickup_locations,
         default_transit_time: config.default_transit_time,
+        arrival_buffer_minutes: config.arrival_buffer_minutes,
         available_shuttles: config.available_shuttles,
         seats_per_shuttle: config.seats_per_shuttle,
         shuttle_provider: config.shuttle_provider,
@@ -357,6 +363,29 @@ export default function ShuttleConfigPage() {
         </div>
       ) : (
         <div className="space-y-6">
+          {/* Guest Arrival Timing */}
+          <ConfigSection title="Guest Arrival Timing" icon={Clock}>
+            <div>
+              <label className="block text-sm font-medium text-sage-800 mb-1">
+                How long before the ceremony start time do you want guests to arrive?
+              </label>
+              <p className="text-xs text-sage-500 mb-2">
+                Used when generating the shuttle schedule — guests are targeted to arrive this many minutes before the ceremony.
+              </p>
+              <select
+                value={config.arrival_buffer_minutes}
+                onChange={(e) => update('arrival_buffer_minutes', Number(e.target.value))}
+                className="w-full sm:w-64 px-3 py-2 bg-warm-white border border-border rounded-lg text-sm text-sage-900 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 transition-colors"
+              >
+                {ARRIVAL_BUFFER_OPTIONS.map((n) => (
+                  <option key={n} value={n}>
+                    {n} minutes before ceremony
+                  </option>
+                ))}
+              </select>
+            </div>
+          </ConfigSection>
+
           {/* Pickup Locations */}
           <ConfigSection title="Pickup Locations" icon={MapPin}>
             <p className="text-sm text-sage-600 mb-3">

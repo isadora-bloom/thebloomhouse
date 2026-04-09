@@ -23,7 +23,9 @@ import {
   ChevronUp,
   Settings2,
   Hash,
+  Tag,
 } from 'lucide-react'
+import { TagChip, type TagChipData } from '@/components/couple/tag-chip'
 
 // TODO: Get from auth session
 const WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
@@ -34,7 +36,7 @@ const VENUE_ID = '22222222-2222-2222-2222-222222222201'
 // ---------------------------------------------------------------------------
 
 const TRANSIT_MINUTES = 25
-const BUFFER_MINUTES = 5
+const DEFAULT_ARRIVAL_BUFFER_MINUTES = 30
 const GAP_MINUTES = 30
 
 const RUN_COUNT_OPTIONS = [1, 2, 3, 4]
@@ -149,14 +151,27 @@ const EMPTY_GEN: GeneratorState = { time: '', numRuns: 1, location: '' }
 // Component
 // ---------------------------------------------------------------------------
 
+interface TaggedGuestRow {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  needs_shuttle: boolean | null
+}
+
 export default function TransportationPage() {
   const [runs, setRuns] = useState<ShuttleRun[]>([])
   const [loading, setLoading] = useState(true)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
 
+  // Shuttle tag tracking
+  const [shuttleTag, setShuttleTag] = useState<TagChipData | null>(null)
+  const [shuttleTaggedGuests, setShuttleTaggedGuests] = useState<TaggedGuestRow[]>([])
+  const [autoPopulateStatus, setAutoPopulateStatus] = useState<string | null>(null)
+
   // Fleet configuration
   const [shuttleCount, setShuttleCount] = useState(1)
   const [seatsPerShuttle, setSeatsPerShuttle] = useState(SEATS_PER_SHUTTLE_DEFAULT)
+  const [arrivalBufferMinutes, setArrivalBufferMinutes] = useState(DEFAULT_ARRIVAL_BUFFER_MINUTES)
   const [showFleetConfig, setShowFleetConfig] = useState(false)
 
   // Pickup location suggestions
@@ -221,6 +236,9 @@ export default function TransportationPage() {
       if (sc.seats_per_shuttle) {
         setSeatsPerShuttle(sc.seats_per_shuttle as number)
       }
+      if (typeof sc.arrival_buffer_minutes === 'number') {
+        setArrivalBufferMinutes(sc.arrival_buffer_minutes as number)
+      }
     }
 
     // Pre-populate generator inputs with sensible defaults so the user
@@ -245,9 +263,75 @@ export default function TransportationPage() {
     setLoading(false)
   }, [supabase])
 
+  // Fetch the "Shuttle" system tag and its assigned guests.
+  const fetchShuttleTagged = useCallback(async () => {
+    // Find the shuttle tag for this wedding
+    const { data: tagRows } = await supabase
+      .from('guest_tags')
+      .select('id, tag_name, color')
+      .eq('wedding_id', WEDDING_ID)
+      .ilike('tag_name', 'shuttle')
+      .limit(1)
+
+    const tag = tagRows && tagRows.length > 0 ? tagRows[0] : null
+    if (!tag) {
+      setShuttleTag(null)
+      setShuttleTaggedGuests([])
+      return
+    }
+    setShuttleTag({
+      id: tag.id as string,
+      name: tag.tag_name as string,
+      color: (tag.color as string) || '#5D7A7A',
+    })
+
+    // Find guests assigned this tag
+    const { data: assignments } = await supabase
+      .from('guest_tag_assignments')
+      .select('guest_id')
+      .eq('tag_id', tag.id)
+
+    const guestIds = (assignments || []).map((a) => (a as { guest_id: string }).guest_id)
+    if (guestIds.length === 0) {
+      setShuttleTaggedGuests([])
+      return
+    }
+    const { data: guests } = await supabase
+      .from('guest_list')
+      .select('id, first_name, last_name, needs_shuttle')
+      .in('id', guestIds)
+
+    setShuttleTaggedGuests((guests as TaggedGuestRow[] | null) || [])
+  }, [supabase])
+
   useEffect(() => {
     fetchRuns()
-  }, [fetchRuns])
+    fetchShuttleTagged()
+  }, [fetchRuns, fetchShuttleTagged])
+
+  // Auto-populate: set needs_shuttle = true on all guests tagged "Shuttle".
+  async function autoPopulateShuttleList() {
+    if (!shuttleTag || shuttleTaggedGuests.length === 0) return
+    const idsToUpdate = shuttleTaggedGuests
+      .filter((g) => !g.needs_shuttle)
+      .map((g) => g.id)
+    if (idsToUpdate.length === 0) {
+      setAutoPopulateStatus('All tagged guests are already marked as needing a shuttle.')
+      return
+    }
+    const { error } = await supabase
+      .from('guest_list')
+      .update({ needs_shuttle: true })
+      .in('id', idsToUpdate)
+    if (error) {
+      setAutoPopulateStatus(`Failed: ${error.message}`)
+    } else {
+      setAutoPopulateStatus(
+        `Marked ${idsToUpdate.length} guest${idsToUpdate.length === 1 ? '' : 's'} as needing a shuttle.`,
+      )
+      fetchShuttleTagged()
+    }
+  }
 
   // ---- Location filtering ----
   function filterSuggestions(input: string): string[] {
@@ -266,7 +350,10 @@ export default function TransportationPage() {
       return
     }
 
-    const lastPickup = ceremonyMin - TRANSIT_MINUTES - BUFFER_MINUTES
+    // Target guest arrival: ceremonyMin - arrivalBufferMinutes.
+    // Pickup departs earlier by TRANSIT_MINUTES so they arrive on time.
+    const targetArrival = ceremonyMin - arrivalBufferMinutes
+    const lastPickup = targetArrival - TRANSIT_MINUTES
     const newRuns: Omit<ShuttleRun, 'id'>[] = []
 
     if (shuttleCount > 1) {
@@ -671,6 +758,65 @@ export default function TransportationPage() {
         </p>
       </div>
 
+      {/* Shuttle Tag Stat + Auto-populate */}
+      {shuttleTag && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="flex items-start gap-3">
+              <div
+                className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
+                style={{ backgroundColor: `color-mix(in srgb, ${shuttleTag.color} 15%, white)` }}
+              >
+                <Bus className="w-5 h-5" style={{ color: shuttleTag.color }} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="text-2xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
+                    {shuttleTaggedGuests.length}
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    guest{shuttleTaggedGuests.length === 1 ? '' : 's'} need shuttle
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 mt-1">
+                  <Tag className="w-3 h-3 text-gray-400" />
+                  <span className="text-xs text-gray-500">
+                    Tagged with
+                  </span>
+                  <TagChip tag={shuttleTag} />
+                </div>
+                {shuttleTaggedGuests.length > 0 && (
+                  <p className="text-[11px] text-gray-400 mt-1.5">
+                    {shuttleTaggedGuests.filter((g) => g.needs_shuttle).length} already marked as needing a shuttle.
+                  </p>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={autoPopulateShuttleList}
+              disabled={shuttleTaggedGuests.length === 0}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+              style={{ backgroundColor: 'var(--couple-primary)' }}
+            >
+              <Sparkles className="w-4 h-4" />
+              Auto-populate shuttle list from tagged guests
+            </button>
+          </div>
+          {autoPopulateStatus && (
+            <div className="mt-3 flex items-center gap-2 p-2 bg-emerald-50 border border-emerald-100 rounded-lg text-xs text-emerald-700">
+              <Check className="w-3.5 h-3.5 shrink-0" />
+              <span>{autoPopulateStatus}</span>
+              <button
+                onClick={() => setAutoPopulateStatus(null)}
+                className="ml-auto text-emerald-400 hover:text-emerald-600"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Fleet Configuration */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <button
@@ -796,8 +942,9 @@ export default function TransportationPage() {
             </h2>
           </div>
           <p className="text-xs text-gray-500">
-            Calculates pickup times working backward from your ceremony. {TRANSIT_MINUTES}-min transit,{' '}
-            {BUFFER_MINUTES}-min buffer, {GAP_MINUTES}-min spacing between runs.
+            Calculates pickup times working backward from your ceremony. Guests arrive{' '}
+            {arrivalBufferMinutes} min before ceremony, {TRANSIT_MINUTES}-min transit,{' '}
+            {GAP_MINUTES}-min spacing between runs.
             {shuttleCount > 1 && ` ${shuttleCount} shuttles staggered by 15 min.`}
           </p>
 
