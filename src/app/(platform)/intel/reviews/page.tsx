@@ -13,6 +13,8 @@ import {
   Sparkles,
   Megaphone,
 } from 'lucide-react'
+import { useScope } from '@/lib/hooks/use-scope'
+import { VenueChip } from '@/components/intel/venue-chip'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,6 +30,7 @@ interface ReviewPhrase {
   approved_for_sage: boolean
   approved_for_marketing: boolean
   created_at: string
+  venues?: { name: string | null } | null
 }
 
 type FilterTab = 'all' | 'sage' | 'marketing'
@@ -255,10 +258,12 @@ function PhraseCard({
   phrase,
   onApprove,
   approvingId,
+  showVenue,
 }: {
   phrase: ReviewPhrase
   onApprove: (id: string, context: 'sage' | 'marketing') => void
   approvingId: string | null
+  showVenue: boolean
 }) {
   const themeColor = getThemeColor(phrase.theme)
 
@@ -281,6 +286,7 @@ function PhraseCard({
           <MessageSquare className="w-3 h-3" />
           {phrase.frequency}x mentioned
         </span>
+        {showVenue && <VenueChip venueName={phrase.venues?.name} />}
       </div>
 
       {/* Sentiment bar */}
@@ -337,6 +343,7 @@ function PhraseCard({
 // ---------------------------------------------------------------------------
 
 export default function ReviewAnalysisPage() {
+  const scope = useScope()
   const [phrases, setPhrases] = useState<ReviewPhrase[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -559,6 +566,7 @@ export default function ReviewAnalysisPage() {
               phrase={phrase}
               onApprove={handleApprove}
               approvingId={approvingId}
+              showVenue={scope.level !== 'venue'}
             />
           ))}
         </div>

@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
+import { VenueChip } from '@/components/intel/venue-chip'
 import {
   Bell,
   Mail,
@@ -42,6 +44,7 @@ interface RecentNotification {
   body: string | null
   read: boolean
   created_at: string
+  venue_name?: string | null
 }
 
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSetting[] = [
@@ -165,6 +168,8 @@ function SettingsSkeleton() {
 
 export default function NotificationsPage() {
   const VENUE_ID = useVenueId()
+  const scope = useScope()
+  const showVenueChip = scope.level !== 'venue'
   const [settings, setSettings] = useState<NotificationSetting[]>(DEFAULT_NOTIFICATION_SETTINGS)
   const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([])
   const [loading, setLoading] = useState(true)
@@ -208,12 +213,17 @@ export default function NotificationsPage() {
       // Fetch recent notifications
       const { data: notifs } = await supabase
         .from('notifications')
-        .select('*')
+        .select('*, venues:venue_id ( name )')
         .eq('venue_id', VENUE_ID)
         .order('created_at', { ascending: false })
         .limit(20)
 
-      setRecentNotifications(notifs ?? [])
+      const mappedNotifs: RecentNotification[] = (notifs ?? []).map((row: any) => {
+        const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
+        const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
+        return { ...row, venue_name: venueName }
+      })
+      setRecentNotifications(mappedNotifs)
       setError(null)
     } catch (err) {
       console.error('Failed to load notification settings:', err)
@@ -476,9 +486,12 @@ export default function NotificationsPage() {
                   <span className="w-2 h-2 rounded-full bg-sage-500 mt-1.5 shrink-0" />
                 )}
                 <div className="flex-1 min-w-0">
-                  <p className={`text-sm ${!notif.read ? 'font-medium text-sage-900' : 'text-sage-700'}`}>
-                    {notif.title}
-                  </p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className={`text-sm ${!notif.read ? 'font-medium text-sage-900' : 'text-sage-700'}`}>
+                      {notif.title}
+                    </p>
+                    {showVenueChip && <VenueChip venueName={notif.venue_name} />}
+                  </div>
                   {notif.body && (
                     <p className="text-xs text-sage-500 truncate mt-0.5">{notif.body}</p>
                   )}

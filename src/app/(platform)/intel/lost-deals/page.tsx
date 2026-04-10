@@ -11,6 +11,8 @@ import {
   X,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
+import { useScope } from '@/lib/hooks/use-scope'
+import { VenueChip } from '@/components/intel/venue-chip'
 import {
   PieChart,
   Pie,
@@ -50,6 +52,7 @@ interface LostDeal {
   recovery_attempted: boolean
   recovery_outcome: string | null
   created_at: string
+  venues?: { name: string | null } | null
 }
 
 type StageFilter = 'all' | string
@@ -100,6 +103,7 @@ function StatCardSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function LostDealsPage() {
+  const scope = useScope()
   const [deals, setDeals] = useState<LostDeal[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -119,7 +123,7 @@ export default function LostDealsPage() {
     try {
       const { data, error: err } = await supabase
         .from('lost_deals')
-        .select('*')
+        .select('*, venues:venue_id(name)')
         .order('created_at', { ascending: false })
       if (err) throw err
       setDeals((data ?? []) as LostDeal[])
@@ -418,6 +422,9 @@ export default function LostDealsPage() {
                 <thead>
                   <tr className="border-b border-border bg-warm-white">
                     <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Stage</th>
+                    {scope.level !== 'venue' && (
+                      <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Venue</th>
+                    )}
                     <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Reason</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Competitor</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Notes</th>
@@ -433,6 +440,11 @@ export default function LostDealsPage() {
                           {formatLabel(d.stage)}
                         </span>
                       </td>
+                      {scope.level !== 'venue' && (
+                        <td className="px-6 py-4">
+                          <VenueChip venueName={d.venues?.name} />
+                        </td>
+                      )}
                       <td className="px-6 py-4 text-sage-700">{formatLabel(d.reason)}</td>
                       <td className="px-6 py-4 text-sage-700">{d.competitor ?? '--'}</td>
                       <td className="px-6 py-4 text-sage-600 max-w-xs truncate">{d.notes ?? '--'}</td>

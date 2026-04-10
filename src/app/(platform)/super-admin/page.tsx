@@ -17,8 +17,7 @@ import {
   BarChart3,
 } from 'lucide-react'
 
-// TODO: Replace with auth context — super admin sees all venues
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
+// Super admin queries across all venues — no per-venue scope here.
 
 // ---------------------------------------------------------------------------
 // Types

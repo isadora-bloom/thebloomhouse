@@ -14,6 +14,8 @@ import {
   Clock,
   BarChart3,
 } from 'lucide-react'
+import { useScope } from '@/lib/hooks/use-scope'
+import { VenueChip } from '@/components/intel/venue-chip'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,6 +49,7 @@ interface Briefing {
   type: 'weekly' | 'monthly'
   content: BriefingContent
   created_at: string
+  venues?: { name: string | null } | null
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +191,7 @@ function StatCard({
 // Briefing History Item
 // ---------------------------------------------------------------------------
 
-function BriefingHistoryItem({ briefing }: { briefing: Briefing }) {
+function BriefingHistoryItem({ briefing, showVenue }: { briefing: Briefing; showVenue: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const content = briefing.content
 
@@ -203,6 +206,7 @@ function BriefingHistoryItem({ briefing }: { briefing: Briefing }) {
           <span className="text-sm font-medium text-sage-900">
             {formatDate(briefing.created_at)}
           </span>
+          {showVenue && <VenueChip venueName={briefing.venues?.name} />}
           <span
             className={`text-xs font-medium px-2 py-0.5 rounded-full ${
               briefing.type === 'weekly'
@@ -300,6 +304,7 @@ function BriefingHistoryItem({ briefing }: { briefing: Briefing }) {
 // ---------------------------------------------------------------------------
 
 export default function BriefingsPage() {
+  const scope = useScope()
   const [activeTab, setActiveTab] = useState<'weekly' | 'monthly'>('weekly')
   const [briefing, setBriefing] = useState<Briefing | null>(null)
   const [history, setHistory] = useState<Briefing[]>([])
@@ -479,6 +484,7 @@ export default function BriefingsPage() {
             <div className="flex items-center gap-2 text-xs text-sage-500">
               <Clock className="w-3.5 h-3.5" />
               <span>Generated {formatDateTime(content.generated_at)}</span>
+              {scope.level !== 'venue' && <VenueChip venueName={briefing?.venues?.name} size="sm" />}
             </div>
             <div className="flex items-center gap-2">
               <span
@@ -659,7 +665,7 @@ export default function BriefingsPage() {
           {historyExpanded && (
             <div className="space-y-2">
               {pastBriefings.map((b) => (
-                <BriefingHistoryItem key={b.id} briefing={b} />
+                <BriefingHistoryItem key={b.id} briefing={b} showVenue={scope.level !== 'venue'} />
               ))}
             </div>
           )}

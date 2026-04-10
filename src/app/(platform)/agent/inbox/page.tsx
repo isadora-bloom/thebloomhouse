@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
+import { VenueChip } from '@/components/intel/venue-chip'
 import {
   Mail,
   RefreshCw,
@@ -46,6 +48,7 @@ interface Interaction {
   classification?: 'inquiry' | 'client' | 'vendor'
   is_read?: boolean
   client_code?: string | null
+  venue_name?: string | null
 }
 
 type FilterTab = 'all' | 'inquiries' | 'client' | 'unread'
@@ -148,10 +151,12 @@ function EmailListItem({
   interaction,
   isSelected,
   onClick,
+  showVenueChip,
 }: {
   interaction: Interaction
   isSelected: boolean
   onClick: () => void
+  showVenueChip: boolean
 }) {
   const cls = interaction.classification ?? 'inquiry'
   const badge = classificationBadge(cls)
@@ -196,6 +201,7 @@ function EmailListItem({
         <p className="text-xs text-sage-400 truncate flex-1">
           {interaction.body_preview || 'No preview available'}
         </p>
+        {showVenueChip && <VenueChip venueName={interaction.venue_name} />}
         <span
           className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${badge.bg} ${badge.text}`}
         >
@@ -648,6 +654,8 @@ function ThreadView({
 
 export default function InboxPage() {
   const VENUE_ID = useVenueId()
+  const scope = useScope()
+  const showVenueChip = scope.level !== 'venue'
   const [interactions, setInteractions] = useState<Interaction[]>([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
@@ -698,6 +706,7 @@ export default function InboxPage() {
           body_preview,
           gmail_thread_id,
           timestamp,
+          venues:venue_id ( name ),
           people!interactions_person_id_fkey ( first_name, last_name, email ),
           weddings!interactions_wedding_id_fkey (
             status,
@@ -737,6 +746,8 @@ export default function InboxPage() {
           ? wedding.client_codes
           : []
         const clientCode = weddingCodes.length > 0 ? weddingCodes[0]?.code ?? null : null
+        const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
+        const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
 
         return {
           id: row.id,
@@ -756,6 +767,7 @@ export default function InboxPage() {
           classification: classifyInteraction(weddingStatus, row.direction),
           is_read: row.direction === 'outbound',
           client_code: clientCode,
+          venue_name: venueName,
         }
       })
 
@@ -1104,6 +1116,7 @@ export default function InboxPage() {
                   interaction={interaction}
                   isSelected={interaction.id === selectedId}
                   onClick={() => loadThread(interaction)}
+                  showVenueChip={showVenueChip}
                 />
               ))}
             </div>

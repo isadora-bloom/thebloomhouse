@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
+import { VenueChip } from '@/components/intel/venue-chip'
 import {
   MessageSquare,
   Send,
@@ -30,6 +32,7 @@ interface WeddingThread {
   message_count: number
   last_message_at: string | null
   unread_count: number
+  venue_name?: string | null
 }
 
 interface Message {
@@ -194,6 +197,8 @@ function MessagesSkeleton() {
 
 export default function MessagesPage() {
   const VENUE_ID = useVenueId()
+  const scope = useScope()
+  const showVenueChip = scope.level !== 'venue'
   const [threads, setThreads] = useState<WeddingThread[]>([])
   const [messages, setMessages] = useState<Message[]>([])
   const [selectedWeddingId, setSelectedWeddingId] = useState<string | null>(null)
@@ -213,15 +218,20 @@ export default function MessagesPage() {
       // Get all weddings for this venue with people
       const { data: weddingsData, error: weddingsErr } = await supabase
         .from('weddings')
-        .select('id, people (first_name, last_name, role)')
+        .select('id, venues:venue_id ( name ), people (first_name, last_name, role)')
         .eq('venue_id', VENUE_ID)
 
       if (weddingsErr) throw weddingsErr
 
-      const weddings = (weddingsData ?? []) as unknown as {
-        id: string
-        people: Person[]
-      }[]
+      const weddings = ((weddingsData ?? []) as any[]).map((row) => {
+        const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
+        const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
+        return {
+          id: row.id as string,
+          people: (row.people ?? []) as Person[],
+          venue_name: venueName,
+        }
+      })
 
       // Get message counts per wedding
       const { data: msgCounts, error: msgErr } = await supabase
@@ -249,6 +259,7 @@ export default function MessagesPage() {
           message_count: countMap.get(w.id)?.count ?? 0,
           last_message_at: countMap.get(w.id)?.lastAt ?? null,
           unread_count: 0, // TODO: Track unread status
+          venue_name: w.venue_name,
         }))
         .filter((t) => t.message_count > 0 || true) // Show all for now
         .sort((a, b) => {
@@ -429,6 +440,11 @@ export default function MessagesPage() {
                             </span>
                           )}
                         </div>
+                        {showVenueChip && thread.venue_name && (
+                          <div className="mt-0.5">
+                            <VenueChip venueName={thread.venue_name} />
+                          </div>
+                        )}
                         <div className="flex items-center justify-between gap-2 mt-0.5">
                           <span className="text-xs text-sage-500">
                             {thread.message_count > 0

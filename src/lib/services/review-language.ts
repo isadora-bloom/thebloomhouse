@@ -74,6 +74,7 @@ export interface ReviewLanguageRow {
   approved_for_sage: boolean
   approved_for_marketing: boolean
   created_at: string
+  venues?: { name: string | null } | null
 }
 
 export interface PhrasesByTheme {
@@ -194,7 +195,7 @@ export async function getApprovedPhrases(
 
   const { data, error } = await supabase
     .from('review_language')
-    .select('*')
+    .select('*, venues:venue_id(name)')
     .eq('venue_id', venueId)
     .eq(approvalColumn, true)
     .order('frequency', { ascending: false })
@@ -223,7 +224,7 @@ export async function getTopPhrases(
 
   const { data, error } = await supabase
     .from('review_language')
-    .select('*')
+    .select('*, venues:venue_id(name)')
     .eq('venue_id', venueId)
     .order('frequency', { ascending: false })
     .limit(limit)

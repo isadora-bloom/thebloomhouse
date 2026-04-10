@@ -59,6 +59,7 @@ interface BriefingRow {
   delivered_via: string | null
   delivered_at: string | null
   created_at: string
+  venues?: { name: string | null } | null
 }
 
 // ---------------------------------------------------------------------------
@@ -460,7 +461,7 @@ export async function getLatestBriefing(
 
   const { data, error } = await supabase
     .from('ai_briefings')
-    .select('*')
+    .select('*, venues:venue_id(name)')
     .eq('venue_id', venueId)
     .eq('briefing_type', type)
     .order('created_at', { ascending: false })
@@ -488,7 +489,7 @@ export async function getAllBriefings(
 
   const { data, error } = await supabase
     .from('ai_briefings')
-    .select('*')
+    .select('*, venues:venue_id(name)')
     .eq('venue_id', venueId)
     .order('created_at', { ascending: false })
     .limit(limit)

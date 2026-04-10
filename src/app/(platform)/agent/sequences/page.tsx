@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
+import { VenueChip } from '@/components/intel/venue-chip'
 import {
   Workflow,
   Plus,
@@ -50,6 +52,7 @@ interface Sequence {
   is_active: boolean
   created_at: string
   sequence_steps?: SequenceStep[]
+  venue_name?: string | null
 }
 
 // Local step form data (no id yet for new steps)
@@ -721,6 +724,8 @@ function DefaultTemplatesPanel({
 
 export default function SequencesPage() {
   const VENUE_ID = useVenueId()
+  const scope = useScope()
+  const showVenueChip = scope.level !== 'venue'
   const [sequences, setSequences] = useState<Sequence[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -737,13 +742,19 @@ export default function SequencesPage() {
         .from('follow_up_sequences')
         .select(`
           *,
-          sequence_steps (*)
+          sequence_steps (*),
+          venues:venue_id ( name )
         `)
         .eq('venue_id', VENUE_ID)
         .order('created_at', { ascending: false })
 
       if (fetchError) throw fetchError
-      setSequences((data ?? []) as Sequence[])
+      const mapped: Sequence[] = (data ?? []).map((row: any) => {
+        const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
+        const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
+        return { ...row, venue_name: venueName }
+      })
+      setSequences(mapped)
     } catch (err) {
       console.error('Failed to fetch sequences:', err)
       setError('Failed to load sequences')
@@ -1020,7 +1031,7 @@ export default function SequencesPage() {
                 <div className="p-5">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-3 mb-1.5">
+                      <div className="flex items-center gap-3 mb-1.5 flex-wrap">
                         <h3 className="font-heading text-base font-semibold text-sage-900 truncate">
                           {seq.name}
                         </h3>
@@ -1036,6 +1047,7 @@ export default function SequencesPage() {
                             Inactive
                           </span>
                         )}
+                        {showVenueChip && <VenueChip venueName={seq.venue_name} />}
                       </div>
                       {seq.description && (
                         <p className="text-xs text-sage-500 mb-2 line-clamp-2">{seq.description}</p>

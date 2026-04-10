@@ -11,6 +11,7 @@ import {
   Megaphone,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
+import { VenueChip } from '@/components/intel/venue-chip'
 import {
   BarChart,
   Bar,
@@ -42,6 +43,7 @@ interface SourceAttribution {
   conversion_rate: number
   roi: number
   calculated_at: string
+  venues?: { name: string | null } | null
 }
 
 interface MarketingSpend {
@@ -50,17 +52,21 @@ interface MarketingSpend {
   source: string
   month: string
   amount: number
+  venues?: { name: string | null } | null
 }
 
 interface WeddingRow {
   venue_id: string
   source: string | null
   status: string | null
+  venues?: { name: string | null } | null
 }
 
 interface SourceRow {
   source_key: string
   source_name: string
+  venue_id: string | null
+  venue_name: string | null
   spend: number
   inquiries: number
   tours: number
@@ -208,15 +214,15 @@ export default function SourceAttributionPage() {
       // Build queries scoped appropriately
       const attrQuery = supabase
         .from('source_attribution')
-        .select('*')
+        .select('*, venues:venue_id(name)')
         .order('calculated_at', { ascending: false })
       const spendQuery = supabase
         .from('marketing_spend')
-        .select('*')
+        .select('*, venues:venue_id(name)')
         .order('month', { ascending: true })
       const weddingQuery = supabase
         .from('weddings')
-        .select('venue_id, source, status')
+        .select('venue_id, source, status, venues:venue_id(name)')
         .not('source', 'is', null)
 
       if (venueIds && venueIds.length > 0) {
@@ -235,9 +241,9 @@ export default function SourceAttributionPage() {
       if (spendRes.error) throw spendRes.error
       if (wedRes.error) throw wedRes.error
 
-      setAttributions((attrRes.data ?? []) as SourceAttribution[])
-      setSpendData((spendRes.data ?? []) as MarketingSpend[])
-      setWeddings((wedRes.data ?? []) as WeddingRow[])
+      setAttributions((attrRes.data ?? []) as unknown as SourceAttribution[])
+      setSpendData((spendRes.data ?? []) as unknown as MarketingSpend[])
+      setWeddings((wedRes.data ?? []) as unknown as WeddingRow[])
       setError(null)
     } catch (err) {
       console.error('Failed to fetch source attribution data:', err)
@@ -253,31 +259,54 @@ export default function SourceAttributionPage() {
   }, [fetchData])
 
   // ---- Build aggregated source rows ----
+  // At venue scope: aggregate by source. At company/group scope: aggregate by
+  // source × venue so each row shows which venue the attribution is from.
   // Primary: source_attribution (has spend + revenue). Fallback: weddings (leads + bookings).
   const sourceRows: SourceRow[] = (() => {
-    const sourceMap = new Map<
-      string,
-      {
-        inquiries: number
-        tours: number
-        bookings: number
-        revenue: number
-        spend: number
-      }
-    >()
+    const showByVenue = scope.level !== 'venue'
 
-    const ensure = (key: string) => {
+    interface Agg {
+      inquiries: number
+      tours: number
+      bookings: number
+      revenue: number
+      spend: number
+      venue_id: string | null
+      venue_name: string | null
+      source_key: string
+    }
+
+    const sourceMap = new Map<string, Agg>()
+
+    const makeKey = (sourceKey: string, venueId: string | null) =>
+      showByVenue ? `${sourceKey}|${venueId ?? 'unknown'}` : sourceKey
+
+    const ensure = (
+      sourceKey: string,
+      venueId: string | null,
+      venueName: string | null
+    ): Agg => {
+      const key = makeKey(sourceKey, venueId)
       const existing = sourceMap.get(key)
       if (existing) return existing
-      const fresh = { inquiries: 0, tours: 0, bookings: 0, revenue: 0, spend: 0 }
+      const fresh: Agg = {
+        inquiries: 0,
+        tours: 0,
+        bookings: 0,
+        revenue: 0,
+        spend: 0,
+        venue_id: showByVenue ? venueId : null,
+        venue_name: showByVenue ? venueName : null,
+        source_key: sourceKey,
+      }
       sourceMap.set(key, fresh)
       return fresh
     }
 
     // 1) Roll up from source_attribution
     for (const a of attributions) {
-      const key = (a.source || 'unknown').toLowerCase()
-      const row = ensure(key)
+      const sourceKey = (a.source || 'unknown').toLowerCase()
+      const row = ensure(sourceKey, a.venue_id ?? null, a.venues?.name ?? null)
       row.inquiries += Number(a.inquiries ?? 0)
       row.tours += Number(a.tours ?? 0)
       row.bookings += Number(a.bookings ?? 0)
@@ -287,23 +316,26 @@ export default function SourceAttributionPage() {
 
     // 2) Also roll up spend from marketing_spend (amount column)
     for (const s of spendData) {
-      const key = (s.source || 'unknown').toLowerCase()
-      const row = ensure(key)
+      const sourceKey = (s.source || 'unknown').toLowerCase()
+      const row = ensure(sourceKey, s.venue_id ?? null, s.venues?.name ?? null)
       row.spend += Number(s.amount ?? 0)
     }
 
     // 3) Fallback: if source_attribution is empty/sparse, compute leads + bookings
     //    from weddings.source. Only ADD weddings counts for sources missing from
-    //    attribution (avoid double-counting).
-    const attributedSources = new Set(
-      attributions.map((a) => (a.source || '').toLowerCase())
+    //    attribution (avoid double-counting). When keyed by venue, check per-venue.
+    const attributedKeys = new Set(
+      attributions.map((a) =>
+        makeKey((a.source || '').toLowerCase(), a.venue_id ?? null)
+      )
     )
     const BOOKED_STATUSES = new Set(['booked', 'completed', 'contracted'])
     for (const w of weddings) {
       if (!w.source) continue
-      const key = w.source.toLowerCase()
-      if (attributedSources.has(key)) continue // already covered
-      const row = ensure(key)
+      const sourceKey = w.source.toLowerCase()
+      const venueId = w.venue_id ?? null
+      if (attributedKeys.has(makeKey(sourceKey, venueId))) continue // already covered
+      const row = ensure(sourceKey, venueId, w.venues?.name ?? null)
       row.inquiries += 1
       if (w.status && BOOKED_STATUSES.has(w.status.toLowerCase())) {
         row.bookings += 1
@@ -311,10 +343,12 @@ export default function SourceAttributionPage() {
     }
 
     const rows: SourceRow[] = []
-    for (const [key, data] of sourceMap) {
+    for (const [rowKey, data] of sourceMap) {
       rows.push({
-        source_key: key,
-        source_name: formatSource(key),
+        source_key: rowKey,
+        source_name: formatSource(data.source_key),
+        venue_id: data.venue_id,
+        venue_name: data.venue_name,
         spend: data.spend,
         inquiries: data.inquiries,
         tours: data.tours,
@@ -356,7 +390,10 @@ export default function SourceAttributionPage() {
     .filter((r) => r.bookings > 0)
     .sort((a, b) => a.cost_per_booking - b.cost_per_booking)
     .map((r) => ({
-      source: r.source_name,
+      source:
+        scope.level !== 'venue' && r.venue_name
+          ? `${r.source_name} · ${r.venue_name}`
+          : r.source_name,
       costPerBooking: Math.round(r.cost_per_booking),
       fill: getSourceColor(r.source_name),
     }))
@@ -666,6 +703,9 @@ export default function SourceAttributionPage() {
                           style={{ backgroundColor: getSourceColor(row.source_name) }}
                         />
                         {row.source_name}
+                        {scope.level !== 'venue' && (
+                          <VenueChip venueName={row.venue_name} />
+                        )}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmt$(row.spend)}</td>

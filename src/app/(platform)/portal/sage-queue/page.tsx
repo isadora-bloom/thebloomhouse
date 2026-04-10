@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
+import { VenueChip } from '@/components/intel/venue-chip'
 import {
   MessageSquareWarning,
   Send,
@@ -38,6 +40,7 @@ interface SageQueueItem {
     id: string
     people: { first_name: string; last_name: string; role: string }[]
   } | null
+  venue_name?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -118,9 +121,11 @@ function QueueCardSkeleton() {
 function QueueCard({
   item,
   onRespond,
+  showVenueChip,
 }: {
   item: SageQueueItem
   onRespond: (id: string, answer: string, addToKB: boolean) => Promise<void>
+  showVenueChip: boolean
 }) {
   const [answer, setAnswer] = useState('')
   const [addToKB, setAddToKB] = useState(true)
@@ -152,6 +157,7 @@ function QueueCard({
           <span className="text-sm font-medium text-sage-700">
             {coupleLabel}
           </span>
+          {showVenueChip && <VenueChip venueName={item.venue_name} />}
         </div>
         <span className="text-xs text-sage-400 shrink-0">
           {timeAgo(item.created_at)}
@@ -226,14 +232,17 @@ function QueueCard({
 // Resolved Item
 // ---------------------------------------------------------------------------
 
-function ResolvedItem({ item }: { item: SageQueueItem }) {
+function ResolvedItem({ item, showVenueChip }: { item: SageQueueItem; showVenueChip: boolean }) {
   return (
     <div className="flex items-start gap-3 px-4 py-3">
       <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-sage-700 line-clamp-1">
-          {item.question}
-        </p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="text-sm text-sage-700 line-clamp-1">
+            {item.question}
+          </p>
+          {showVenueChip && <VenueChip venueName={item.venue_name} />}
+        </div>
         <div className="flex items-center gap-3 mt-1 text-xs text-sage-400">
           <span>{getCoupleLabel(item.wedding)}</span>
           {item.resolved_at && <span>Resolved {timeAgo(item.resolved_at)}</span>}
@@ -255,6 +264,8 @@ function ResolvedItem({ item }: { item: SageQueueItem }) {
 
 export default function SageQueuePage() {
   const VENUE_ID = useVenueId()
+  const scope = useScope()
+  const showVenueChip = scope.level !== 'venue'
   const [pendingItems, setPendingItems] = useState<SageQueueItem[]>([])
   const [resolvedItems, setResolvedItems] = useState<SageQueueItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -271,6 +282,7 @@ export default function SageQueuePage() {
           .from('sage_uncertain_queue')
           .select(`
             *,
+            venues:venue_id ( name ),
             wedding:weddings (
               id,
               people (first_name, last_name, role)
@@ -283,6 +295,7 @@ export default function SageQueuePage() {
           .from('sage_uncertain_queue')
           .select(`
             *,
+            venues:venue_id ( name ),
             wedding:weddings (
               id,
               people (first_name, last_name, role)
@@ -297,8 +310,14 @@ export default function SageQueuePage() {
       if (pendingRes.error) throw pendingRes.error
       if (resolvedRes.error) throw resolvedRes.error
 
-      setPendingItems((pendingRes.data ?? []) as unknown as SageQueueItem[])
-      setResolvedItems((resolvedRes.data ?? []) as unknown as SageQueueItem[])
+      const mapRow = (row: any): SageQueueItem => {
+        const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
+        const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
+        return { ...row, venue_name: venueName }
+      }
+
+      setPendingItems((pendingRes.data ?? []).map(mapRow))
+      setResolvedItems((resolvedRes.data ?? []).map(mapRow))
       setError(null)
     } catch (err) {
       console.error('Failed to fetch sage queue:', err)
@@ -412,7 +431,7 @@ export default function SageQueuePage() {
       ) : (
         <div className="space-y-4">
           {pendingItems.map((item) => (
-            <QueueCard key={item.id} item={item} onRespond={handleRespond} />
+            <QueueCard key={item.id} item={item} onRespond={handleRespond} showVenueChip={showVenueChip} />
           ))}
         </div>
       )}
@@ -436,7 +455,7 @@ export default function SageQueuePage() {
           {showResolved && (
             <div className="mt-3 bg-surface border border-border rounded-xl shadow-sm divide-y divide-border">
               {resolvedItems.map((item) => (
-                <ResolvedItem key={item.id} item={item} />
+                <ResolvedItem key={item.id} item={item} showVenueChip={showVenueChip} />
               ))}
             </div>
           )}

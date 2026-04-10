@@ -59,6 +59,7 @@ interface AnomalyAlert {
   causes: AICause[] | null
   acknowledged: boolean
   created_at: string
+  venues?: { name: string | null } | null
 }
 
 // ---------------------------------------------------------------------------
@@ -517,7 +518,7 @@ export async function getActiveAlerts(venueId: string): Promise<AnomalyAlert[]> 
 
   const { data, error } = await supabase
     .from('anomaly_alerts')
-    .select('*')
+    .select('*, venues:venue_id(name)')
     .eq('venue_id', venueId)
     .eq('acknowledged', false)
     .order('created_at', { ascending: false })

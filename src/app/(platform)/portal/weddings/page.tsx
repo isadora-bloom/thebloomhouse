@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
+import { VenueChip } from '@/components/intel/venue-chip'
 import {
   Heart,
   Calendar,
@@ -70,6 +72,7 @@ interface Wedding {
   timeline: TimelineItem[]
   budget: BudgetItem[]
   checklist_items: ChecklistItem[]
+  venue_name?: string | null
 }
 
 type StatusFilter = 'all' | 'booked' | 'completed' | 'inquiry' | 'lost'
@@ -189,7 +192,7 @@ function WeddingCardSkeleton() {
 // Wedding Card
 // ---------------------------------------------------------------------------
 
-function WeddingCard({ wedding, venueSlug }: { wedding: Wedding; venueSlug: string | null }) {
+function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; venueSlug: string | null; showVenueChip: boolean }) {
   const [expanded, setExpanded] = useState(false)
 
   const coupleNames = getCoupleNames(wedding.people)
@@ -217,9 +220,12 @@ function WeddingCard({ wedding, venueSlug }: { wedding: Wedding; venueSlug: stri
       >
         <div className="flex items-start justify-between gap-4 mb-4">
           <div className="min-w-0">
-            <h3 className="font-heading text-lg font-semibold text-sage-900 truncate">
-              {coupleNames}
-            </h3>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="font-heading text-lg font-semibold text-sage-900 truncate">
+                {coupleNames}
+              </h3>
+              {showVenueChip && <VenueChip venueName={wedding.venue_name} size="sm" />}
+            </div>
             <div className="flex items-center gap-3 mt-1 text-sm text-sage-500">
               <span className="flex items-center gap-1">
                 <Calendar className="w-3.5 h-3.5" />
@@ -383,6 +389,8 @@ function WeddingCard({ wedding, venueSlug }: { wedding: Wedding; venueSlug: stri
 
 export default function WeddingsPage() {
   const VENUE_ID = useVenueId()
+  const scope = useScope()
+  const showVenueChip = scope.level !== 'venue'
   const [weddings, setWeddings] = useState<Wedding[]>([])
   const [venueSlug, setVenueSlug] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -408,6 +416,7 @@ export default function WeddingsPage() {
         .from('weddings')
         .select(`
           *,
+          venues:venue_id ( name ),
           people (*),
           timeline (*),
           budget (*),
@@ -423,7 +432,12 @@ export default function WeddingsPage() {
 
       if (fetchErr) throw fetchErr
 
-      setWeddings((data ?? []) as unknown as Wedding[])
+      const mapped: Wedding[] = ((data ?? []) as any[]).map((row) => {
+        const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
+        const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
+        return { ...row, venue_name: venueName } as Wedding
+      })
+      setWeddings(mapped)
       setError(null)
     } catch (err) {
       console.error('Failed to fetch weddings:', err)
@@ -602,7 +616,7 @@ export default function WeddingsPage() {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {sortedWeddings.map((wedding) => (
-            <WeddingCard key={wedding.id} wedding={wedding} venueSlug={venueSlug} />
+            <WeddingCard key={wedding.id} wedding={wedding} venueSlug={venueSlug} showVenueChip={showVenueChip} />
           ))}
         </div>
       )}

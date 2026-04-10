@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
     const supabase = await createServerSupabaseClient()
     const { data: phrases, error } = await supabase
       .from('review_language')
-      .select('*')
+      .select('*, venues:venue_id(name)')
       .eq('venue_id', auth.venueId)
       .order('frequency', { ascending: false })
 

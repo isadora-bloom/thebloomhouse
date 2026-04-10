@@ -40,25 +40,9 @@ export interface Scope {
 const DEMO_ORG_ID = '11111111-1111-1111-1111-111111111111'
 const DEFAULT_ORG_NAME = 'The Crestwood Collection'
 
-// Static fallback groups — used only if venue_groups table doesn't exist yet
-const FALLBACK_GROUPS: VenueGroup[] = [
-  {
-    id: 'group-virginia-estate',
-    name: 'Virginia Estates',
-    venue_ids: [
-      '22222222-2222-2222-2222-222222222201',
-      '22222222-2222-2222-2222-222222222204',
-    ],
-  },
-  {
-    id: 'group-urban',
-    name: 'Urban Collection',
-    venue_ids: [
-      '22222222-2222-2222-2222-222222222202',
-      '22222222-2222-2222-2222-222222222203',
-    ],
-  },
-]
+// No static fallback groups — real data comes from the venue_groups table.
+// If the query fails or returns empty, the selector simply hides the Groups section.
+const FALLBACK_GROUPS: VenueGroup[] = []
 
 // ---------------------------------------------------------------------------
 // Cookie helpers
@@ -110,12 +94,7 @@ export function ScopeSelector() {
   const [venues, setVenues] = useState<Venue[]>([])
   const [groups, setGroups] = useState<VenueGroup[]>([])
   const [orgName, setOrgName] = useState(DEFAULT_ORG_NAME)
-  const [scope, setScope] = useState<Scope>({
-    level: 'venue',
-    venueId: '22222222-2222-2222-2222-222222222201',
-    venueName: 'Hawthorne Manor',
-    companyName: DEFAULT_ORG_NAME,
-  })
+  const [scope, setScope] = useState<Scope | null>(null)
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const ref = useRef<HTMLDivElement>(null)
@@ -222,6 +201,10 @@ export function ScopeSelector() {
     window.location.reload()
   }
 
+  if (loading || !scope) {
+    return <div className="h-[72px] bg-sage-50/50 rounded-xl animate-pulse mx-3 mt-3" />
+  }
+
   const ScopeIcon = SCOPE_ICONS[scope.level]
   const displayName = scope.level === 'venue'
     ? scope.venueName
@@ -234,10 +217,6 @@ export function ScopeSelector() {
     : scope.level === 'group'
       ? 'Venue Group'
       : 'All Venues'
-
-  if (loading) {
-    return <div className="h-[72px] bg-sage-50/50 rounded-xl animate-pulse mx-3 mt-3" />
-  }
 
   return (
     <div ref={ref} className="relative mx-3 mt-3">

@@ -655,11 +655,12 @@ interface BrandVenue {
 
 function BrandSettings({ scope }: { scope: Scope }) {
   const [venues, setVenues] = useState<BrandVenue[]>([])
+  const [orgId, setOrgId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
 
-  // Brand-level editable state
+  // Brand-level editable state (sourced from organisations table)
   const [brandDescription, setBrandDescription] = useState<string>('')
   const [logoUrl, setLogoUrl] = useState<string>('')
   const [primaryColor, setPrimaryColor] = useState<string>('#7D8471')
@@ -686,15 +687,16 @@ function BrandSettings({ scope }: { scope: Scope }) {
         }
         // For company scope: venueIds stays null → fetch all venues
 
-        // 2) Load venues
+        // 2) Load venues (now also pulling org_id so we can resolve the brand)
         let vq = supabase
           .from('venues')
-          .select('id, name, slug')
+          .select('id, name, slug, org_id')
           .order('name', { ascending: true })
         if (venueIds && venueIds.length > 0) {
           vq = vq.in('id', venueIds)
         } else if (venueIds && venueIds.length === 0) {
           setVenues([])
+          setOrgId(null)
           setLoading(false)
           return
         }
@@ -704,11 +706,17 @@ function BrandSettings({ scope }: { scope: Scope }) {
         const ids = (venueRows ?? []).map((v) => v.id as string)
         if (ids.length === 0) {
           setVenues([])
+          setOrgId(null)
           setLoading(false)
           return
         }
 
-        // 3) Load venue_config rows for those venues
+        // 3) Resolve org_id from one of the in-scope venues
+        const resolvedOrgId =
+          (venueRows ?? []).map((v: any) => v.org_id).find((id: string | null) => !!id) ?? null
+        setOrgId(resolvedOrgId)
+
+        // 4) Load venue_config rows for those venues (still needed for the venue grid below)
         const { data: configRows, error: cErr } = await supabase
           .from('venue_config')
           .select('id, venue_id, business_name, logo_url, primary_color, secondary_color, accent_color, capacity, base_price, coordinator_name, brand_description')
@@ -751,14 +759,43 @@ function BrandSettings({ scope }: { scope: Scope }) {
 
         setVenues(joined)
 
-        // Seed brand-level editor state from the first venue's config
-        const first = joined[0]
-        if (first) {
-          setLogoUrl(first.logoUrl ?? '')
-          setBrandDescription(first.brandDescription ?? '')
-          setPrimaryColor(first.primaryColor)
-          setSecondaryColor(first.secondaryColor)
-          setAccentColor(first.accentColor)
+        // 5) Load brand-level fields from the organisations table
+        if (resolvedOrgId) {
+          const { data: org, error: orgErr } = await supabase
+            .from('organisations')
+            .select('logo_url, brand_description, primary_color, secondary_color, accent_color')
+            .eq('id', resolvedOrgId)
+            .maybeSingle()
+          if (orgErr) {
+            console.warn('Failed to load organisations brand fields:', orgErr)
+          }
+          if (org) {
+            setLogoUrl((org as any).logo_url ?? '')
+            setBrandDescription((org as any).brand_description ?? '')
+            setPrimaryColor((org as any).primary_color ?? '#7D8471')
+            setSecondaryColor((org as any).secondary_color ?? '#5D7A7A')
+            setAccentColor((org as any).accent_color ?? '#A6894A')
+          } else {
+            // Fall back to first venue config so the editor isn't empty
+            const first = joined[0]
+            if (first) {
+              setLogoUrl(first.logoUrl ?? '')
+              setBrandDescription(first.brandDescription ?? '')
+              setPrimaryColor(first.primaryColor)
+              setSecondaryColor(first.secondaryColor)
+              setAccentColor(first.accentColor)
+            }
+          }
+        } else {
+          // No org context — fall back to first venue config
+          const first = joined[0]
+          if (first) {
+            setLogoUrl(first.logoUrl ?? '')
+            setBrandDescription(first.brandDescription ?? '')
+            setPrimaryColor(first.primaryColor)
+            setSecondaryColor(first.secondaryColor)
+            setAccentColor(first.accentColor)
+          }
         }
       } catch (err) {
         console.error('Failed to load brand settings:', err)
@@ -775,9 +812,27 @@ function BrandSettings({ scope }: { scope: Scope }) {
     setSaveMessage(null)
 
     try {
-      // Apply brand colors to ALL in-scope venue_config rows
       const venueIds = venues.map((v) => v.venueId)
 
+      // 1) Persist brand-level fields on the organisations row (the source of truth)
+      if (orgId) {
+        const { error: orgErr } = await supabase
+          .from('organisations')
+          .update({
+            logo_url: logoUrl || null,
+            brand_description: brandDescription || null,
+            primary_color: primaryColor,
+            secondary_color: secondaryColor,
+            accent_color: accentColor,
+          })
+          .eq('id', orgId)
+        if (orgErr) throw orgErr
+      } else {
+        console.warn('No org_id resolved for current scope — brand fields not saved to organisations table.')
+      }
+
+      // 2) Cascade brand colors to ALL in-scope venue_config rows (preserves
+      //    existing per-venue color rendering and keeps backwards compatibility)
       const { error: colorErr } = await supabase
         .from('venue_config')
         .update({
@@ -790,19 +845,6 @@ function BrandSettings({ scope }: { scope: Scope }) {
 
       if (colorErr) throw colorErr
 
-      // Store brand logo on the first venue as a placeholder
-      const firstConfigId = venues[0]?.configId
-      if (firstConfigId) {
-        const { error: logoErr } = await supabase
-          .from('venue_config')
-          .update({
-            logo_url: logoUrl || null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', firstConfigId)
-        if (logoErr) throw logoErr
-      }
-
       setSaveMessage('Brand settings saved successfully.')
     } catch (err) {
       console.error('Brand save failed:', err)
@@ -811,7 +853,7 @@ function BrandSettings({ scope }: { scope: Scope }) {
       setSaving(false)
       setTimeout(() => setSaveMessage(null), 3000)
     }
-  }, [venues, primaryColor, secondaryColor, accentColor, logoUrl])
+  }, [venues, orgId, primaryColor, secondaryColor, accentColor, logoUrl, brandDescription])
 
   if (loading) {
     return (
@@ -898,7 +940,7 @@ function BrandSettings({ scope }: { scope: Scope }) {
               />
             </div>
             <p className="text-xs text-sage-500 mt-1">
-              Stored on the first venue&apos;s config as a placeholder until org-level assets are wired.
+              Stored on your organisation and shared across every venue in the brand.
             </p>
           </div>
         </div>

@@ -3,7 +3,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
+import { VenueChip } from '@/components/intel/venue-chip'
 import {
   Hash,
   Search,
@@ -32,6 +34,7 @@ interface ClientCode {
   wedding_date?: string | null
   wedding_status?: string
   heat_score?: number
+  venue_name?: string | null
 }
 
 interface WeddingLookup {
@@ -183,6 +186,8 @@ function LookupResult({ wedding, onClear }: { wedding: WeddingLookup; onClear: (
 export default function ClientCodesPage() {
   const router = useRouter()
   const VENUE_ID = useVenueId()
+  const scope = useScope()
+  const showVenueChip = scope.level !== 'venue'
   const [codes, setCodes] = useState<ClientCode[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -205,6 +210,7 @@ export default function ClientCodesPage() {
           wedding_id,
           code,
           created_at,
+          venues:venue_id ( name ),
           weddings!client_codes_wedding_id_fkey (
             wedding_date,
             status,
@@ -222,6 +228,8 @@ export default function ClientCodesPage() {
         const people = wedding?.people ?? []
         const p1 = people.find((p: any) => p.role === 'partner1')
         const p2 = people.find((p: any) => p.role === 'partner2')
+        const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
+        const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
 
         return {
           id: row.id,
@@ -238,6 +246,7 @@ export default function ClientCodesPage() {
           wedding_date: wedding?.wedding_date,
           wedding_status: wedding?.status,
           heat_score: wedding?.heat_score,
+          venue_name: venueName,
         }
       })
 
@@ -477,9 +486,12 @@ export default function ClientCodesPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-sm font-medium text-sage-900">
-                          {coupleName(cc.partner1_name, cc.partner2_name)}
-                        </span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-medium text-sage-900">
+                            {coupleName(cc.partner1_name, cc.partner2_name)}
+                          </span>
+                          {showVenueChip && <VenueChip venueName={cc.venue_name} />}
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <span className="text-sm text-sage-600">

@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
+import { VenueChip } from '@/components/intel/venue-chip'
 import {
   Flame,
   ArrowUpDown,
@@ -34,6 +36,7 @@ interface Lead {
   partner1_name: string | null
   partner2_name: string | null
   client_code: string | null
+  venue_name: string | null
 }
 
 type TierFilter = 'all' | 'hot' | 'warm' | 'cool' | 'cold' | 'frozen'
@@ -289,6 +292,8 @@ function SortHeader({
 
 export default function LeadsPage() {
   const VENUE_ID = useVenueId()
+  const scope = useScope()
+  const showVenueChip = scope.level !== 'venue'
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -315,6 +320,7 @@ export default function LeadsPage() {
           updated_at,
           wedding_date,
           guest_count_estimate,
+          venues:venue_id ( name ),
           people!people_wedding_id_fkey ( role, first_name, last_name ),
           client_codes!client_codes_wedding_id_fkey ( code )
         `)
@@ -331,6 +337,8 @@ export default function LeadsPage() {
         const p2 = people.find((p: any) => p.role === 'partner2')
         const codes = row.client_codes ?? []
         const clientCode = Array.isArray(codes) && codes.length > 0 ? codes[0]?.code ?? null : null
+        const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
+        const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
 
         return {
           id: row.id,
@@ -350,6 +358,7 @@ export default function LeadsPage() {
             ? [p2.first_name, p2.last_name].filter(Boolean).join(' ')
             : null,
           client_code: clientCode,
+          venue_name: venueName,
         }
       })
 
@@ -609,7 +618,7 @@ export default function LeadsPage() {
                     >
                       {/* Couple */}
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-sm font-medium text-sage-900">
                             {coupleName(lead.partner1_name, lead.partner2_name)}
                           </span>
@@ -618,6 +627,7 @@ export default function LeadsPage() {
                               {lead.client_code}
                             </span>
                           )}
+                          {showVenueChip && <VenueChip venueName={lead.venue_name} />}
                         </div>
                       </td>
 

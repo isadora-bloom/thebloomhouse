@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
+import { VenueChip } from '@/components/intel/venue-chip'
 import {
   FileCheck,
   CheckCircle,
@@ -39,6 +41,7 @@ interface Draft {
   // Joined
   interaction_preview?: string | null
   interaction_subject?: string | null
+  venue_name?: string | null
 }
 
 type FilterTab = 'pending' | 'approved' | 'rejected' | 'sent'
@@ -323,12 +326,14 @@ function DraftCard({
   onEdit,
   onReject,
   isProcessing,
+  showVenueChip,
 }: {
   draft: Draft
   onApprove: (id: string) => void
   onEdit: (draft: Draft) => void
   onReject: (draft: Draft) => void
   isProcessing: boolean
+  showVenueChip: boolean
 }) {
   const conf = confidenceColor(draft.confidence_score)
   const brain = brainBadge(draft.brain_used)
@@ -349,6 +354,7 @@ function DraftCard({
             >
               {status.label}
             </span>
+            {showVenueChip && <VenueChip venueName={draft.venue_name} />}
           </div>
           <p className="text-sm text-sage-600 truncate">
             {draft.subject || '(No subject)'}
@@ -452,6 +458,8 @@ function DraftCard({
 
 export default function ApprovalQueuePage() {
   const VENUE_ID = useVenueId()
+  const scope = useScope()
+  const showVenueChip = scope.level !== 'venue'
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -484,6 +492,7 @@ export default function ApprovalQueuePage() {
             feedback_notes,
             created_at,
             approved_at,
+            venues:venue_id ( name ),
             interactions!drafts_interaction_id_fkey ( subject, body_preview )
           `)
           .eq('venue_id', VENUE_ID)
@@ -498,12 +507,18 @@ export default function ApprovalQueuePage() {
 
         if (fetchError) throw fetchError
 
-        const mapped: Draft[] = (data ?? []).map((row: any) => ({
-          ...row,
-          interaction_preview: row.interactions?.body_preview ?? null,
-          interaction_subject: row.interactions?.subject ?? null,
-          interactions: undefined,
-        }))
+        const mapped: Draft[] = (data ?? []).map((row: any) => {
+          const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
+          const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
+          return {
+            ...row,
+            interaction_preview: row.interactions?.body_preview ?? null,
+            interaction_subject: row.interactions?.subject ?? null,
+            venue_name: venueName,
+            interactions: undefined,
+            venues: undefined,
+          }
+        })
 
         setDrafts(mapped)
         setError(null)
@@ -823,6 +838,7 @@ export default function ApprovalQueuePage() {
               onEdit={setEditingDraft}
               onReject={setRejectingDraft}
               isProcessing={processingId === draft.id}
+              showVenueChip={showVenueChip}
             />
           ))}
         </div>

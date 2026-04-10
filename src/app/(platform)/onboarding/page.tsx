@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useScope } from '@/lib/hooks/use-scope'
 import { FONT_PAIRS } from '@/config/fonts'
 import {
   Building2,
@@ -22,8 +23,9 @@ import {
   SkipForward,
 } from 'lucide-react'
 
-// TODO: Replace with org from auth context after signup flow is wired
-const VENUE_ID = '22222222-2222-2222-2222-222222222201'
+// Venue ID is now resolved from the active scope at render time (see useScope below).
+// TODO: bloom_demo_only — once signup wires the org/venue creation flow, derive
+// VENUE_ID from the new-venue intent rather than the currently selected scope.
 
 // ---------------------------------------------------------------------------
 // Types
@@ -262,6 +264,8 @@ function DimensionSlider({
 // ---------------------------------------------------------------------------
 
 export default function OnboardingPage() {
+  const scope = useScope()
+  const VENUE_ID = scope.venueId
   const [currentStep, setCurrentStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -329,6 +333,11 @@ export default function OnboardingPage() {
 
   // ---- Save progress at each step ----
   const saveStep = useCallback(async () => {
+    const venueId = VENUE_ID
+    if (!venueId) {
+      setError('No venue selected. Please pick a venue from the scope selector before completing onboarding.')
+      return false
+    }
     setSaving(true)
     setError(null)
 
@@ -346,7 +355,7 @@ export default function OnboardingPage() {
           const { error: venueError } = await supabase
             .from('venues')
             .upsert({
-              id: VENUE_ID,
+              id: venueId,
               name: basics.business_name,
               slug,
               status: 'trial',
@@ -357,7 +366,7 @@ export default function OnboardingPage() {
           const { error: configError } = await supabase
             .from('venue_config')
             .upsert({
-              venue_id: VENUE_ID,
+              venue_id: venueId,
               business_name: basics.business_name,
               coordinator_name: basics.coordinator_name || null,
               coordinator_email: basics.coordinator_email || null,
@@ -385,7 +394,7 @@ export default function OnboardingPage() {
               portal_tagline: branding.portal_tagline || null,
               updated_at: new Date().toISOString(),
             })
-            .eq('venue_id', VENUE_ID)
+            .eq('venue_id', venueId)
           if (brandError) throw brandError
           break
         }
@@ -394,7 +403,7 @@ export default function OnboardingPage() {
           const { error: aiError } = await supabase
             .from('venue_ai_config')
             .upsert({
-              venue_id: VENUE_ID,
+              venue_id: venueId,
               ai_name: personality.ai_name,
               ai_emoji: personality.ai_emoji,
               warmth_level: personality.warmth_level,
@@ -418,14 +427,14 @@ export default function OnboardingPage() {
             await supabase
               .from('knowledge_base')
               .delete()
-              .eq('venue_id', VENUE_ID)
+              .eq('venue_id', venueId)
               .in('category', FAQ_CATEGORIES)
 
             const { error: kbError } = await supabase
               .from('knowledge_base')
               .insert(
                 validFaqs.map((f) => ({
-                  venue_id: VENUE_ID,
+                  venue_id: venueId,
                   category: f.category,
                   question: f.question.trim(),
                   answer: f.answer.trim(),
@@ -444,7 +453,7 @@ export default function OnboardingPage() {
               .from('vendor_recommendations')
               .insert(
                 validVendors.map((v) => ({
-                  venue_id: VENUE_ID,
+                  venue_id: venueId,
                   vendor_name: v.vendor_name.trim(),
                   vendor_type: v.vendor_type,
                   contact_email: v.contact_email || null,
@@ -486,7 +495,7 @@ export default function OnboardingPage() {
               .from('knowledge_base')
               .insert(
                 seasonalEntries.map((e) => ({
-                  venue_id: VENUE_ID,
+                  venue_id: venueId,
                   category: e.category,
                   question: e.question,
                   answer: e.answer,
@@ -508,7 +517,7 @@ export default function OnboardingPage() {
 
     setSaving(false)
     return true
-  }, [currentStep, basics, branding, personality, faqs, vendors, seasonal, supabase])
+  }, [currentStep, basics, branding, personality, faqs, vendors, seasonal, supabase, VENUE_ID])
 
   // ---- Navigation ----
   async function handleNext() {
@@ -516,10 +525,13 @@ export default function OnboardingPage() {
     if (success) {
       if (currentStep === STEPS.length - 1) {
         // Final step completed — mark venue active and show celebration
-        await supabase
-          .from('venues')
-          .update({ status: 'active', updated_at: new Date().toISOString() })
-          .eq('id', VENUE_ID)
+        const venueId = VENUE_ID
+        if (venueId) {
+          await supabase
+            .from('venues')
+            .update({ status: 'active', updated_at: new Date().toISOString() })
+            .eq('id', venueId)
+        }
         setCompleted(true)
       } else {
         setCurrentStep((prev) => prev + 1)
@@ -536,11 +548,16 @@ export default function OnboardingPage() {
     setError(null)
     if (currentStep === STEPS.length - 1) {
       // Skip the last optional step — mark active and celebrate
-      supabase
-        .from('venues')
-        .update({ status: 'active', updated_at: new Date().toISOString() })
-        .eq('id', VENUE_ID)
-        .then(() => setCompleted(true))
+      const venueId = VENUE_ID
+      if (venueId) {
+        supabase
+          .from('venues')
+          .update({ status: 'active', updated_at: new Date().toISOString() })
+          .eq('id', venueId)
+          .then(() => setCompleted(true))
+      } else {
+        setCompleted(true)
+      }
     } else {
       setCurrentStep((prev) => prev + 1)
     }

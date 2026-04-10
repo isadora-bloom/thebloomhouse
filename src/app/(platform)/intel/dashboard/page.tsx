@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import {
   AlertTriangle,
   Shield,
@@ -16,6 +17,7 @@ import {
   ChevronUp,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
+import { VenueChip } from '@/components/intel/venue-chip'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +42,7 @@ interface AnomalyAlert {
   causes: AICause[] | null
   acknowledged: boolean
   created_at: string
+  venues?: { name: string | null } | null
 }
 
 // ---------------------------------------------------------------------------
@@ -189,10 +192,12 @@ function AlertCard({
   alert,
   onAcknowledge,
   isAcknowledging,
+  showVenue,
 }: {
   alert: AnomalyAlert
   onAcknowledge: (id: string) => void
   isAcknowledging: boolean
+  showVenue: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const config = severityConfig(alert.severity)
@@ -226,6 +231,7 @@ function AlertCard({
                 <h3 className="font-medium text-sage-900">
                   {formatMetricName(alert.metric_name)}
                 </h3>
+                {showVenue && <VenueChip venueName={alert.venues?.name} />}
                 <span className="text-xs text-sage-500">{timeAgo(alert.created_at)}</span>
               </div>
 
@@ -356,6 +362,7 @@ function calcDemandScore(indicators: Record<string, number>): {
 
 export default function IntelligenceDashboardPage() {
   const venueId = useVenueId()
+  const scope = useScope()
   const supabase = useMemo(() => createClient(), [])
 
   const [alerts, setAlerts] = useState<AnomalyAlert[]>([])
@@ -661,6 +668,7 @@ export default function IntelligenceDashboardPage() {
                 alert={alert}
                 onAcknowledge={handleAcknowledge}
                 isAcknowledging={acknowledgingId === alert.id}
+                showVenue={scope.level !== 'venue'}
               />
             ))}
           </div>
@@ -710,7 +718,10 @@ export default function IntelligenceDashboardPage() {
                       {' '}&mdash;{' '}
                       {formatChangePercent(alert.change_percent)} change from baseline
                     </p>
-                    <p className="text-xs text-sage-500 mt-0.5">{timeAgo(alert.created_at)}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <p className="text-xs text-sage-500">{timeAgo(alert.created_at)}</p>
+                      {scope.level !== 'venue' && <VenueChip venueName={alert.venues?.name} />}
+                    </div>
                   </div>
                   <BarChart3 className="w-4 h-4 text-sage-300 shrink-0" />
                 </div>

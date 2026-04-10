@@ -3,7 +3,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
+import { VenueChip } from '@/components/intel/venue-chip'
 import {
   DndContext,
   DragOverlay,
@@ -51,6 +53,7 @@ interface PipelineWedding {
   partner1_name: string | null
   partner2_name: string | null
   client_code: string | null
+  venue_name: string | null
 }
 
 interface PipelineColumn {
@@ -171,12 +174,19 @@ function ColumnSkeleton() {
 // Pipeline Card (static — used for both sortable wrapper and overlay)
 // ---------------------------------------------------------------------------
 
-function PipelineCardContent({ wedding, onNameClick }: { wedding: PipelineWedding; onNameClick?: () => void }) {
+function PipelineCardContent({ wedding, onNameClick, showVenueChip }: { wedding: PipelineWedding; onNameClick?: () => void; showVenueChip?: boolean }) {
   const source = sourceBadge(wedding.source)
   const days = daysInStage(wedding.updated_at)
 
   return (
     <>
+      {/* Venue chip (multi-venue scope) */}
+      {showVenueChip && wedding.venue_name && (
+        <div className="mb-1.5">
+          <VenueChip venueName={wedding.venue_name} />
+        </div>
+      )}
+
       {/* Couple name + heat dot */}
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -233,7 +243,7 @@ function PipelineCardContent({ wedding, onNameClick }: { wedding: PipelineWeddin
 // Sortable Card (draggable)
 // ---------------------------------------------------------------------------
 
-function SortableCard({ wedding }: { wedding: PipelineWedding }) {
+function SortableCard({ wedding, showVenueChip }: { wedding: PipelineWedding; showVenueChip: boolean }) {
   const cardRouter = useRouter()
   const {
     attributes,
@@ -258,7 +268,7 @@ function SortableCard({ wedding }: { wedding: PipelineWedding }) {
       {...listeners}
       className="bg-surface border border-border rounded-lg p-3 shadow-sm hover:shadow-md transition-shadow cursor-grab active:cursor-grabbing"
     >
-      <PipelineCardContent wedding={wedding} onNameClick={() => cardRouter.push(`/intel/clients/${wedding.id}`)} />
+      <PipelineCardContent wedding={wedding} onNameClick={() => cardRouter.push(`/intel/clients/${wedding.id}`)} showVenueChip={showVenueChip} />
     </div>
   )
 }
@@ -267,7 +277,7 @@ function SortableCard({ wedding }: { wedding: PipelineWedding }) {
 // Droppable Column
 // ---------------------------------------------------------------------------
 
-function DroppableColumn({ column }: { column: PipelineColumn }) {
+function DroppableColumn({ column, showVenueChip }: { column: PipelineColumn; showVenueChip: boolean }) {
   const isLost = column.key === 'lost'
   const isContracted = column.key === 'contracted'
   const { setNodeRef, isOver } = useDroppable({ id: column.key })
@@ -326,7 +336,7 @@ function DroppableColumn({ column }: { column: PipelineColumn }) {
               </div>
             ) : (
               column.weddings.map((wedding) => (
-                <SortableCard key={wedding.id} wedding={wedding} />
+                <SortableCard key={wedding.id} wedding={wedding} showVenueChip={showVenueChip} />
               ))
             )}
           </div>
@@ -343,6 +353,8 @@ function DroppableColumn({ column }: { column: PipelineColumn }) {
 export default function PipelinePage() {
   const router = useRouter()
   const VENUE_ID = useVenueId()
+  const scope = useScope()
+  const showVenueChip = scope.level !== 'venue'
   const [columns, setColumns] = useState<PipelineColumn[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -375,6 +387,7 @@ export default function PipelinePage() {
           temperature_tier,
           inquiry_date,
           updated_at,
+          venues:venue_id ( name ),
           people!people_wedding_id_fkey ( role, first_name, last_name ),
           client_codes!client_codes_wedding_id_fkey ( code )
         `)
@@ -404,6 +417,8 @@ export default function PipelinePage() {
           )
           const codes = row.client_codes ?? []
           const clientCode = Array.isArray(codes) && codes.length > 0 ? codes[0]?.code ?? null : null
+          const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
+          const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
 
           return {
             id: row.id,
@@ -423,6 +438,7 @@ export default function PipelinePage() {
               ? [p2.first_name, p2.last_name].filter(Boolean).join(' ')
               : null,
             client_code: clientCode,
+            venue_name: venueName,
           }
         }
       )
@@ -581,7 +597,7 @@ export default function PipelinePage() {
         >
           <div className="flex gap-4 overflow-x-auto pb-4 -mx-6 lg:-mx-8 px-6 lg:px-8">
             {columns.map((column) => (
-              <DroppableColumn key={column.key} column={column} />
+              <DroppableColumn key={column.key} column={column} showVenueChip={showVenueChip} />
             ))}
           </div>
 
@@ -589,7 +605,7 @@ export default function PipelinePage() {
           <DragOverlay>
             {activeWedding ? (
               <div className="bg-surface border-2 border-sage-400 rounded-lg p-3 shadow-lg w-[280px] rotate-2">
-                <PipelineCardContent wedding={activeWedding} />
+                <PipelineCardContent wedding={activeWedding} showVenueChip={showVenueChip} />
               </div>
             ) : null}
           </DragOverlay>
