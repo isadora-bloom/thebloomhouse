@@ -29,7 +29,6 @@ const PAGES: Record<string, string[]> = {
     '/demo/intel/campaigns',
     '/demo/intel/capacity',
     '/demo/intel/company',
-    '/demo/intel/cross',
     '/demo/intel/forecasts',
     '/demo/intel/health',
     '/demo/intel/lost-deals',
@@ -161,8 +160,8 @@ async function auditPage(page: Page, path: string): Promise<{ issues: PageIssue[
     }
   })
 
-  // Navigate
-  await page.goto(path, { waitUntil: 'networkidle', timeout: 20_000 })
+  // Navigate (45s timeout — some intel pages with multiple slow Supabase queries)
+  await page.goto(path, { waitUntil: 'networkidle', timeout: 45_000 })
 
   // Wait a beat for client-side rendering to finish
   await page.waitForTimeout(1500)

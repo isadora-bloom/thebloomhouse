@@ -16,29 +16,33 @@ const DEMO_VENUE_ID = '22222222-2222-2222-2222-222222222201'
 const DEMO_WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const DEMO_SLUG = 'hawthorne-manor'
 
+/**
+ * Synchronously detect demo mode from the document cookie.
+ * Used as the initial state so the very first render already has IDs
+ * (queries don't fire with null wedding_id on first paint).
+ */
+function detectDemoSync(): boolean {
+  if (typeof document === 'undefined') return false
+  return document.cookie.split('; ').some((c) => c === 'bloom_demo=true')
+}
+
 export function useCoupleContext(): CoupleContext {
   const params = useParams<{ slug?: string }>()
   const slug = params?.slug || DEMO_SLUG
 
-  const [venueId, setVenueId] = useState<string | null>(null)
-  const [weddingId, setWeddingId] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [isDemo, setIsDemo] = useState(false)
+  // Initialize state synchronously for demo mode so the first render
+  // already has the right IDs — no flash of wedding_id=null queries.
+  const initialDemo = detectDemoSync()
+  const [venueId, setVenueId] = useState<string | null>(initialDemo ? DEMO_VENUE_ID : null)
+  const [weddingId, setWeddingId] = useState<string | null>(initialDemo ? DEMO_WEDDING_ID : null)
+  const [loading, setLoading] = useState(!initialDemo)
+  const [isDemo, setIsDemo] = useState(initialDemo)
 
   useEffect(() => {
+    // If we already resolved synchronously (demo mode), skip the async path.
+    if (initialDemo) return
+
     async function resolve() {
-      // Check demo mode first
-      const demo = typeof document !== 'undefined' &&
-        document.cookie.split('; ').some((c) => c === 'bloom_demo=true')
-
-      if (demo) {
-        setIsDemo(true)
-        setVenueId(DEMO_VENUE_ID)
-        setWeddingId(DEMO_WEDDING_ID)
-        setLoading(false)
-        return
-      }
-
       const supabase = createClient()
 
       // Resolve venue from slug
@@ -75,7 +79,18 @@ export function useCoupleContext(): CoupleContext {
     }
 
     resolve()
-  }, [slug])
+  }, [slug, initialDemo])
+
+  // Mark isDemo on second render in case detection runs before document is ready
+  useEffect(() => {
+    const demo = detectDemoSync()
+    if (demo && !isDemo) {
+      setIsDemo(true)
+      if (!venueId) setVenueId(DEMO_VENUE_ID)
+      if (!weddingId) setWeddingId(DEMO_WEDDING_ID)
+      setLoading(false)
+    }
+  }, [isDemo, venueId, weddingId])
 
   return { slug, venueId, weddingId, loading, isDemo }
 }
