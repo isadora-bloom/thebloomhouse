@@ -139,8 +139,9 @@ export default function DecorInventoryPage() {
   const spaces = useMemo(() => {
     const grouped: Record<string, DecorItem[]> = {}
     for (const item of items) {
-      if (!grouped[item.space_name]) grouped[item.space_name] = []
-      grouped[item.space_name].push(item)
+      const space = item.space_name || 'Uncategorized'
+      if (!grouped[space]) grouped[space] = []
+      grouped[space].push(item)
     }
     return grouped
   }, [items])
