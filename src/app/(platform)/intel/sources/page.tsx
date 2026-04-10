@@ -451,6 +451,21 @@ export default function SourceAttributionPage() {
         <p className="text-sage-600">
           Compare lead sources head-to-head — which channels bring the most inquiries, the highest quality leads, and the best conversion rates. Allocate your marketing budget based on real data.
         </p>
+        {scope.level === 'company' && (
+          <p className="text-xs text-sage-500 mt-2">
+            Showing across all venues — {scope.companyName}
+          </p>
+        )}
+        {scope.level === 'group' && (
+          <p className="text-xs text-sage-500 mt-2">
+            Showing across {scope.groupName}
+          </p>
+        )}
+        {scope.level === 'venue' && (
+          <p className="text-xs text-sage-500 mt-2">
+            Showing for {scope.venueName}
+          </p>
+        )}
       </div>
 
       {/* ---- Error state ---- */}
@@ -533,10 +548,18 @@ export default function SourceAttributionPage() {
         <ChartSkeleton />
       ) : costPerBookingData.length > 0 ? (
         <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
-          <h2 className="font-heading text-xl font-semibold text-sage-900 mb-4 flex items-center gap-2">
+          <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-sage-600" />
             Cost per Booking by Source
           </h2>
+          <p className="text-xs text-sage-500 mb-4 mt-1">
+            Showing:{' '}
+            {scope.level === 'company'
+              ? `all venues — ${scope.companyName}`
+              : scope.level === 'group'
+              ? scope.groupName
+              : scope.venueName}
+          </p>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={costPerBookingData} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
@@ -593,6 +616,14 @@ export default function SourceAttributionPage() {
               <ArrowUpDown className="w-5 h-5 text-sage-600" />
               Source Comparison
             </h2>
+            <p className="text-xs text-sage-500 mt-1">
+              Showing:{' '}
+              {scope.level === 'company'
+                ? `all venues — ${scope.companyName}`
+                : scope.level === 'group'
+                ? scope.groupName
+                : scope.venueName}
+            </p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

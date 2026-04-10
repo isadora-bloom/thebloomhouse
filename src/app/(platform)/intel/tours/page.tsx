@@ -322,6 +322,21 @@ export default function ToursPage() {
           <p className="text-sage-600">
             Track every tour — scheduled, completed, cancelled, and no-shows. See conversion rates from tour to booking and identify which tour types and times work best.
           </p>
+          {scope.level === 'company' && (
+            <p className="text-xs text-sage-500 mt-2">
+              Showing across all venues — {scope.companyName}
+            </p>
+          )}
+          {scope.level === 'group' && (
+            <p className="text-xs text-sage-500 mt-2">
+              Showing across {scope.groupName}
+            </p>
+          )}
+          {scope.level === 'venue' && (
+            <p className="text-xs text-sage-500 mt-2">
+              Showing for {scope.venueName}
+            </p>
+          )}
         </div>
         <button
           onClick={() => setShowModal(true)}

@@ -10,6 +10,7 @@ import {
   Phone,
   User,
   AlertCircle,
+  Clock,
 } from 'lucide-react'
 import { UpgradeGate } from '@/components/ui/upgrade-gate'
 
@@ -128,12 +129,17 @@ function MatchingPageInner() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [processing, setProcessing] = useState<string | null>(null)
+  const [showSnoozed, setShowSnoozed] = useState(false)
 
   const fetchData = useCallback(async () => {
     const supabase = getSupabase()
     try {
       const [queueRes, peopleRes, contactRes] = await Promise.all([
-        supabase.from('client_match_queue').select('*').eq('status', 'pending').order('confidence', { ascending: false }),
+        supabase
+          .from('client_match_queue')
+          .select('*')
+          .in('status', ['pending', 'snoozed'])
+          .order('confidence', { ascending: false }),
         supabase.from('people').select('id, first_name, last_name, wedding_id'),
         supabase.from('contacts').select('id, person_id, type, value'),
       ])
@@ -198,8 +204,14 @@ function MatchingPageInner() {
   }, [queue, people, contacts])
 
   // Stats
-  const pendingCount = queue.length
+  const pendingCount = queue.filter((q) => q.status === 'pending').length
+  const snoozedCount = queue.filter((q) => q.status === 'snoozed').length
   const mergedThisMonth = 0 // Would query historical merged records
+
+  // Filter pairs by current tab (pending vs snoozed)
+  const visiblePairs = pairs.filter((p) =>
+    showSnoozed ? p.queueItem.status === 'snoozed' : p.queueItem.status === 'pending'
+  )
 
   // Actions
   const handleMerge = async (id: string) => {
@@ -228,6 +240,37 @@ function MatchingPageInner() {
     }
   }
 
+  const handleSnooze = async (id: string) => {
+    setProcessing(id)
+    const supabase = getSupabase()
+    try {
+      await supabase.from('client_match_queue').update({ status: 'snoozed' }).eq('id', id)
+      // Keep the row but move it out of the pending view by updating its status
+      setQueue((prev) =>
+        prev.map((q) => (q.id === id ? { ...q, status: 'snoozed' } : q))
+      )
+    } catch (err) {
+      console.error('Failed to snooze:', err)
+    } finally {
+      setProcessing(null)
+    }
+  }
+
+  const handleUnsnooze = async (id: string) => {
+    setProcessing(id)
+    const supabase = getSupabase()
+    try {
+      await supabase.from('client_match_queue').update({ status: 'pending' }).eq('id', id)
+      setQueue((prev) =>
+        prev.map((q) => (q.id === id ? { ...q, status: 'pending' } : q))
+      )
+    } catch (err) {
+      console.error('Failed to unsnooze:', err)
+    } finally {
+      setProcessing(null)
+    }
+  }
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -249,16 +292,46 @@ function MatchingPageInner() {
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl">
         <div className="bg-surface border border-border rounded-xl p-5 shadow-sm">
           <p className="text-sm font-medium text-sage-600 mb-1">Pending Matches</p>
           <p className="text-2xl font-bold text-sage-900">{pendingCount}</p>
+        </div>
+        <div className="bg-surface border border-border rounded-xl p-5 shadow-sm">
+          <p className="text-sm font-medium text-sage-600 mb-1">Snoozed</p>
+          <p className="text-2xl font-bold text-sage-900">{snoozedCount}</p>
         </div>
         <div className="bg-surface border border-border rounded-xl p-5 shadow-sm">
           <p className="text-sm font-medium text-sage-600 mb-1">Merged This Month</p>
           <p className="text-2xl font-bold text-sage-900">{mergedThisMonth}</p>
         </div>
       </div>
+
+      {/* Queue filter tabs */}
+      {!loading && (pendingCount > 0 || snoozedCount > 0) && (
+        <div className="flex items-center gap-1 bg-sage-50 rounded-lg p-1 w-fit">
+          <button
+            onClick={() => setShowSnoozed(false)}
+            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+              !showSnoozed
+                ? 'bg-surface text-sage-900 shadow-sm'
+                : 'text-sage-600 hover:text-sage-800'
+            }`}
+          >
+            Pending ({pendingCount})
+          </button>
+          <button
+            onClick={() => setShowSnoozed(true)}
+            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+              showSnoozed
+                ? 'bg-surface text-sage-900 shadow-sm'
+                : 'text-sage-600 hover:text-sage-800'
+            }`}
+          >
+            Snoozed ({snoozedCount})
+          </button>
+        </div>
+      )}
 
       {/* Match queue */}
       {loading ? (
@@ -267,24 +340,38 @@ function MatchingPageInner() {
             <MatchCardSkeleton key={i} />
           ))}
         </div>
-      ) : pairs.length === 0 ? (
+      ) : visiblePairs.length === 0 ? (
         <div className="bg-surface border border-border rounded-xl p-12 shadow-sm text-center">
           <GitMerge className="w-12 h-12 text-sage-300 mx-auto mb-4" />
           <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">
-            No pending matches
+            {showSnoozed ? 'No snoozed matches' : 'No pending matches'}
           </h3>
           <p className="text-sm text-sage-600">
-            Potential duplicates will appear here when detected.
+            {showSnoozed
+              ? 'Pairs marked "Review later" will appear here.'
+              : 'Potential duplicates will appear here when detected.'}
           </p>
         </div>
       ) : (
         <div className="space-y-4">
-          {pairs.map((pair) => {
+          {visiblePairs.map((pair) => {
             const q = pair.queueItem
             const TypeIcon = matchTypeIcon(q.match_type)
             const isProcessing = processing === q.id
+            const isSnoozed = q.status === 'snoozed'
             return (
-              <div key={q.id} className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+              <div
+                key={q.id}
+                className={`bg-surface border border-border rounded-xl p-6 shadow-sm transition-opacity ${
+                  isSnoozed ? 'opacity-60' : ''
+                }`}
+              >
+                {isSnoozed && (
+                  <div className="flex items-center gap-1.5 mb-3 text-xs text-sage-500">
+                    <Clock className="w-3 h-3" />
+                    <span className="font-medium uppercase tracking-wider">Snoozed — Review later</span>
+                  </div>
+                )}
                 {/* Match info */}
                 <div className="flex items-center gap-2 mb-4 flex-wrap">
                   <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider border ${matchTypeBadge(q.match_type)}`}>
@@ -323,7 +410,7 @@ function MatchingPageInner() {
                 </div>
 
                 {/* Actions */}
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-wrap">
                   <button
                     onClick={() => handleMerge(q.id)}
                     disabled={isProcessing}
@@ -340,6 +427,25 @@ function MatchingPageInner() {
                     <XIcon className="w-3.5 h-3.5" />
                     Dismiss
                   </button>
+                  {isSnoozed ? (
+                    <button
+                      onClick={() => handleUnsnooze(q.id)}
+                      disabled={isProcessing}
+                      className="flex items-center gap-1.5 px-4 py-2 border border-sage-200 text-sage-600 hover:bg-sage-50 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      <Clock className="w-3.5 h-3.5" />
+                      Move back to Pending
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleSnooze(q.id)}
+                      disabled={isProcessing}
+                      className="flex items-center gap-1.5 px-4 py-2 border border-sage-200 text-sage-600 hover:bg-sage-50 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      <Clock className="w-3.5 h-3.5" />
+                      Review later
+                    </button>
+                  )}
                 </div>
               </div>
             )

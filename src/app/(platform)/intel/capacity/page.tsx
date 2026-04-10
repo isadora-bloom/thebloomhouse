@@ -268,6 +268,21 @@ export default function CapacityPage() {
             extracting per available date. Use this to price off-peak dates, spot underperforming
             venues, and defend premium rates on booked weekends.
           </p>
+          {scope.level === 'company' && (
+            <p className="text-xs text-sage-500 mt-2">
+              Showing across all venues — {scope.companyName}
+            </p>
+          )}
+          {scope.level === 'group' && (
+            <p className="text-xs text-sage-500 mt-2">
+              Showing across {scope.groupName}
+            </p>
+          )}
+          {scope.level === 'venue' && (
+            <p className="text-xs text-sage-500 mt-2">
+              Showing for {scope.venueName}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2 text-xs text-sage-500 bg-sage-50 border border-border rounded-lg px-3 py-2">
           <CalendarRange className="w-4 h-4 text-sage-400" />
@@ -284,6 +299,20 @@ export default function CapacityPage() {
       )}
 
       {/* Portfolio summary */}
+      <div>
+        <div className="mb-3 flex items-baseline justify-between gap-2">
+          <h2 className="font-heading text-lg font-semibold text-sage-900">
+            {scope.level === 'venue' ? 'Venue summary' : 'Portfolio summary'}
+          </h2>
+          <p className="text-xs text-sage-500">
+            Showing:{' '}
+            {scope.level === 'company'
+              ? `all venues — ${scope.companyName}`
+              : scope.level === 'group'
+              ? scope.groupName
+              : scope.venueName}
+          </p>
+        </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {loading ? (
           Array.from({ length: 4 }).map((_, i) => <StatCardSkeleton key={i} />)
@@ -325,6 +354,7 @@ export default function CapacityPage() {
             </div>
           </>
         )}
+      </div>
       </div>
 
       {/* Per-venue cards */}
