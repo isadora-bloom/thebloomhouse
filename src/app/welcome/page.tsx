@@ -4,18 +4,18 @@ import { cookies } from 'next/headers'
 import Link from 'next/link'
 import { Flower2, LayoutDashboard, Heart, ArrowRight } from 'lucide-react'
 
-export default async function RootPage() {
-  // If in demo mode, redirect to the platform
+export default async function WelcomePage() {
+  // If in demo mode, send to the dashboard
   const cookieStore = await cookies()
   if (cookieStore.get('bloom_demo')?.value === 'true') {
-    redirect('/agent/inbox')
+    redirect('/')
   }
 
-  // If logged in, redirect to platform
+  // If logged in, send to the dashboard
   const supabase = await createServerSupabaseClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (user) {
-    redirect('/agent/inbox')
+    redirect('/')
   }
 
   // Not logged in, not demo — show landing with clear paths

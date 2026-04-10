@@ -3,11 +3,14 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
 // Routes that never require authentication
-const PUBLIC_ROUTES = ['/', '/login', '/signup', '/couple/login', '/demo']
+const PUBLIC_ROUTES = ['/welcome', '/login', '/signup', '/couple/login', '/demo']
 const PUBLIC_PREFIXES = ['/api/', '/_next/', '/demo/']
 
+// The dashboard at / requires auth or demo. Unauthed users get sent to /welcome.
+const DASHBOARD_ROUTE = '/'
+
 // Platform routes require coordinator/manager/admin role
-const PLATFORM_PREFIXES = ['/agent', '/intel', '/portal', '/settings']
+const PLATFORM_PREFIXES = ['/agent', '/intel', '/portal', '/settings', '/onboarding', '/super-admin']
 
 // Couple routes (path-based in dev)
 const COUPLE_PREFIX = '/couple'
@@ -233,7 +236,19 @@ export async function middleware(request: NextRequest) {
   }
 
   // -----------------------------------------------------------------------
-  // 6. Root and other routes — require any authenticated user
+  // 6. Dashboard at / — auth/demo gets through, unauthed → /welcome
+  // -----------------------------------------------------------------------
+  if (pathname === DASHBOARD_ROUTE) {
+    if (!user) {
+      const welcomeUrl = request.nextUrl.clone()
+      welcomeUrl.pathname = '/welcome'
+      return NextResponse.redirect(welcomeUrl)
+    }
+    return response
+  }
+
+  // -----------------------------------------------------------------------
+  // 7. Other routes — require any authenticated user
   // -----------------------------------------------------------------------
   if (!user) {
     const loginUrl = request.nextUrl.clone()
