@@ -88,6 +88,33 @@ interface WeatherRow {
   low_temp: number | null
   precipitation: number | null
   conditions: string | null
+  // Added in migration 035 — monthly climate-normal metrics
+  year: number | null
+  month: number | null
+  avg_temp_4pm_f: number | null
+  avg_humidity_pct: number | null
+  avg_wind_mph: number | null
+  sunny_days: number | null
+  outdoor_event_score: number | null
+}
+
+interface MonthlyClimateRow {
+  year: number
+  month: number // 1-12
+  avg_temp_4pm_f: number
+  precipitation: number
+  avg_humidity_pct: number
+  avg_wind_mph: number
+  sunny_days: number
+  outdoor_event_score: number
+}
+
+interface OutdoorTrendPoint {
+  month: string // Jan-Dec
+  monthIdx: number // 1-12
+  score_2024: number | null
+  score_2025: number | null
+  score_2026: number | null
 }
 
 interface SearchTrend {
@@ -1064,6 +1091,377 @@ function OutdoorScoreChart({
 }
 
 // ---------------------------------------------------------------------------
+// 5b. Outdoor Event Score — 3-Year Trend (multi-line with click-to-detail)
+// ---------------------------------------------------------------------------
+
+const TREND_YEAR_COLORS: Record<'2024' | '2025' | '2026', string> = {
+  '2024': '#0D9488', // deep teal
+  '2025': '#D97706', // warm amber
+  '2026': '#7C3AED', // violet
+}
+
+interface TrendSelection {
+  year: 2024 | 2025 | 2026
+  month: number // 1-12
+}
+
+function OutdoorScoreTrendChart({
+  trendData,
+  climateRows,
+  bestMonths,
+  loading,
+}: {
+  trendData: OutdoorTrendPoint[]
+  climateRows: MonthlyClimateRow[]
+  bestMonths: { month: string; score: number }[]
+  loading: boolean
+}) {
+  const [selected, setSelected] = useState<TrendSelection | null>(null)
+
+  if (loading) return <SkeletonCard className="lg:col-span-3" />
+
+  const hasData = climateRows.length > 0
+
+  if (!hasData) {
+    return (
+      <div className="bg-surface border border-border rounded-xl p-8 shadow-sm text-center lg:col-span-3">
+        <Sun className="w-8 h-8 text-sage-300 mx-auto mb-3" />
+        <p className="text-sm text-sage-500">
+          No 3-year outdoor event data yet. Run migration 035 and seed-weather.sql.
+        </p>
+      </div>
+    )
+  }
+
+  // Find the detail row for the selected point
+  const detail =
+    selected != null
+      ? climateRows.find(
+          (r) => r.year === selected.year && r.month === selected.month
+        )
+      : null
+
+  // Compute trend callout: July temperature change 2024 -> 2025
+  const jul2024 = climateRows.find((r) => r.year === 2024 && r.month === 7)
+  const jul2025 = climateRows.find((r) => r.year === 2025 && r.month === 7)
+  const julyTempDelta =
+    jul2024 && jul2025
+      ? jul2025.avg_temp_4pm_f - jul2024.avg_temp_4pm_f
+      : null
+
+  // Spring rainfall increase: Mar+Apr+May precip 2024 vs 2025
+  const springPrecip = (year: number) =>
+    climateRows
+      .filter((r) => r.year === year && [3, 4, 5].includes(r.month))
+      .reduce((sum, r) => sum + r.precipitation, 0)
+  const spring2024 = springPrecip(2024)
+  const spring2025 = springPrecip(2025)
+  const springRising = spring2025 > spring2024
+
+  const callouts: {
+    label: string
+    color: string
+  }[] = [
+    {
+      label: 'July–August: consistently too hot for outdoor ceremonies',
+      color: 'bg-red-50 text-red-700 border-red-200',
+    },
+    {
+      label: 'October: best month for outdoor events 3 years running',
+      color: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    },
+  ]
+  if (julyTempDelta != null && julyTempDelta > 0) {
+    callouts.push({
+      label: `Average July temperature has risen ${julyTempDelta}°F since 2024`,
+      color: 'bg-amber-50 text-amber-700 border-amber-200',
+    })
+  }
+  if (springRising) {
+    callouts.push({
+      label: 'Spring rainfall increasing year on year',
+      color: 'bg-blue-50 text-blue-700 border-blue-200',
+    })
+  }
+
+  return (
+    <div className="bg-surface border border-border rounded-xl p-6 shadow-sm lg:col-span-3">
+      <div className="flex items-center gap-3 mb-5">
+        <div className="p-2 bg-amber-50 rounded-lg">
+          <Sun className="w-5 h-5 text-amber-600" />
+        </div>
+        <div>
+          <h2 className="font-heading text-lg font-semibold text-sage-900">
+            Outdoor Event Score — 3 Year Trend
+          </h2>
+          <p className="text-xs text-sage-500">
+            Monthly suitability for outdoor events across 2024, 2025, and 2026
+            (projected). Click any month to inspect all metrics.
+          </p>
+        </div>
+      </div>
+
+      {/* Trend callouts */}
+      <div className="flex flex-wrap gap-2 mb-5">
+        {callouts.map((c, i) => (
+          <div
+            key={i}
+            className={cn(
+              'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium',
+              c.color
+            )}
+          >
+            <TrendingUp className="w-3.5 h-3.5" />
+            {c.label}
+          </div>
+        ))}
+      </div>
+
+      {/* Best months 2025 highlight */}
+      {bestMonths.length > 0 && (
+        <div className="mb-5 bg-emerald-50/50 border border-emerald-100 rounded-lg p-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700 mb-2">
+            Top 3 Months for Outdoor Events (2025)
+          </p>
+          <div className="flex flex-wrap gap-3">
+            {bestMonths.map((m, i) => (
+              <div
+                key={m.month}
+                className="flex items-center gap-2 bg-white border border-emerald-200 rounded-lg px-3 py-2"
+              >
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-bold">
+                  {i + 1}
+                </span>
+                <span className="font-semibold text-sage-900">{m.month}</span>
+                <span className="text-sm text-emerald-700">{m.score}/100</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Multi-year line chart */}
+      <div className="h-80">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart
+            data={trendData}
+            margin={{ top: 10, right: 20, bottom: 0, left: -10 }}
+            onClick={(e: unknown) => {
+              // recharts passes an event object — narrow carefully
+              const evt = e as {
+                activePayload?: { payload?: OutdoorTrendPoint }[]
+              }
+              const point = evt?.activePayload?.[0]?.payload
+              if (!point) return
+              // Prefer most recent year with a score for that month
+              const year =
+                point.score_2026 != null
+                  ? 2026
+                  : point.score_2025 != null
+                    ? 2025
+                    : point.score_2024 != null
+                      ? 2024
+                      : null
+              if (year == null) return
+              setSelected({
+                year: year as 2024 | 2025 | 2026,
+                month: point.monthIdx,
+              })
+            }}
+          >
+            <CartesianGrid
+              strokeDasharray="3 3"
+              stroke="#E8E4DF"
+              vertical={false}
+            />
+            <XAxis
+              dataKey="month"
+              tick={{ fontSize: 12, fill: '#6A7060' }}
+              tickLine={false}
+              axisLine={false}
+            />
+            <YAxis
+              domain={[0, 100]}
+              tick={{ fontSize: 11, fill: '#6A7060' }}
+              tickLine={false}
+              axisLine={false}
+              label={{
+                value: 'Outdoor Score',
+                angle: -90,
+                position: 'insideLeft',
+                style: { fontSize: 11, fill: '#9CA38F' },
+              }}
+            />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: '#FFFFFF',
+                border: '1px solid #E8E4DF',
+                borderRadius: '8px',
+                fontSize: '13px',
+              }}
+              labelStyle={{ color: '#31342D', fontWeight: 600 }}
+              formatter={(value, name) => {
+                if (value == null) return ['—', String(name)]
+                const labelMap: Record<string, string> = {
+                  score_2024: '2024',
+                  score_2025: '2025',
+                  score_2026: '2026',
+                }
+                return [`${value}/100`, labelMap[String(name)] ?? String(name)]
+              }}
+            />
+            <Legend
+              wrapperStyle={{ fontSize: '12px' }}
+              formatter={(value: string) => {
+                if (value === 'score_2024') return '2024'
+                if (value === 'score_2025') return '2025'
+                if (value === 'score_2026') return '2026 (Projected)'
+                return value
+              }}
+            />
+
+            {/* Ideal zone reference line at 70 */}
+            <ReferenceLine
+              y={70}
+              stroke="#059669"
+              strokeDasharray="4 4"
+              strokeOpacity={0.5}
+              label={{
+                value: 'Ideal Zone',
+                position: 'right',
+                style: { fontSize: 10, fill: '#059669' },
+              }}
+            />
+
+            <Line
+              type="monotone"
+              dataKey="score_2024"
+              stroke={TREND_YEAR_COLORS['2024']}
+              strokeWidth={3}
+              dot={{ fill: TREND_YEAR_COLORS['2024'], r: 4 }}
+              activeDot={{ r: 7 }}
+              connectNulls
+            />
+            <Line
+              type="monotone"
+              dataKey="score_2025"
+              stroke={TREND_YEAR_COLORS['2025']}
+              strokeWidth={3}
+              dot={{ fill: TREND_YEAR_COLORS['2025'], r: 4 }}
+              activeDot={{ r: 7 }}
+              connectNulls
+            />
+            <Line
+              type="monotone"
+              dataKey="score_2026"
+              stroke={TREND_YEAR_COLORS['2026']}
+              strokeWidth={3}
+              strokeDasharray="6 4"
+              dot={{ fill: TREND_YEAR_COLORS['2026'], r: 4 }}
+              activeDot={{ r: 7 }}
+              connectNulls
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Click-to-detail panel */}
+      {detail ? (
+        <div className="mt-5 bg-sage-50/50 border border-sage-100 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-sage-500">
+                Detail
+              </p>
+              <p className="font-heading text-lg font-semibold text-sage-900">
+                {getMonthName(detail.month - 1)} {detail.year}
+              </p>
+            </div>
+            <div
+              className="text-right"
+              style={{
+                color:
+                  TREND_YEAR_COLORS[
+                    String(detail.year) as '2024' | '2025' | '2026'
+                  ],
+              }}
+            >
+              <p className="text-xs font-semibold uppercase tracking-wider opacity-75">
+                Outdoor Score
+              </p>
+              <p className="font-heading text-2xl font-bold">
+                {detail.outdoor_event_score}/100
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div className="bg-white rounded-lg border border-border p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Thermometer className="w-3.5 h-3.5 text-red-500" />
+                <p className="text-[10px] uppercase tracking-wider text-sage-500 font-semibold">
+                  Temp @ 4pm
+                </p>
+              </div>
+              <p className="font-heading text-lg font-bold text-sage-900">
+                {detail.avg_temp_4pm_f}°F
+              </p>
+            </div>
+            <div className="bg-white rounded-lg border border-border p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <CloudRain className="w-3.5 h-3.5 text-blue-500" />
+                <p className="text-[10px] uppercase tracking-wider text-sage-500 font-semibold">
+                  Rainfall
+                </p>
+              </div>
+              <p className="font-heading text-lg font-bold text-sage-900">
+                {detail.precipitation}&quot;
+              </p>
+            </div>
+            <div className="bg-white rounded-lg border border-border p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <CloudRain className="w-3.5 h-3.5 text-teal-500" />
+                <p className="text-[10px] uppercase tracking-wider text-sage-500 font-semibold">
+                  Humidity
+                </p>
+              </div>
+              <p className="font-heading text-lg font-bold text-sage-900">
+                {detail.avg_humidity_pct}%
+              </p>
+            </div>
+            <div className="bg-white rounded-lg border border-border p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Activity className="w-3.5 h-3.5 text-sage-500" />
+                <p className="text-[10px] uppercase tracking-wider text-sage-500 font-semibold">
+                  Wind
+                </p>
+              </div>
+              <p className="font-heading text-lg font-bold text-sage-900">
+                {detail.avg_wind_mph} mph
+              </p>
+            </div>
+            <div className="bg-white rounded-lg border border-border p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Sun className="w-3.5 h-3.5 text-amber-500" />
+                <p className="text-[10px] uppercase tracking-wider text-sage-500 font-semibold">
+                  Sunny Days
+                </p>
+              </div>
+              <p className="font-heading text-lg font-bold text-sage-900">
+                {detail.sunny_days}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-4 text-xs text-sage-500 italic text-center">
+          Click any month on the chart to see temperature, rainfall, humidity, wind, and sunny-day detail.
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // 6. Weather Risk Breakdown
 // ---------------------------------------------------------------------------
 
@@ -1476,7 +1874,8 @@ export default function MarketPulsePage() {
           .order('created_at', { ascending: false })
           .limit(1),
 
-        // Historical weather data (all available)
+        // Historical weather data — includes daily rows + monthly climate
+        // normal rows added in migration 035 (source = 'climate_norm').
         supabase
           .from('weather_data')
           .select('*')
@@ -1652,6 +2051,70 @@ export default function MarketPulsePage() {
       })
   }, [weatherData])
 
+  // ---- Compute 3-year monthly climate rows (from migration 035 data) ----
+  // Rows where year/month/outdoor_event_score are populated are monthly
+  // climate normals. We group by year+month and keep the latest value per
+  // (year, month) in case multiple venues contributed.
+  const climateRows = useMemo<MonthlyClimateRow[]>(() => {
+    const rows: MonthlyClimateRow[] = []
+    for (const w of weatherData) {
+      if (
+        w.year == null ||
+        w.month == null ||
+        w.outdoor_event_score == null ||
+        w.avg_temp_4pm_f == null
+      ) {
+        continue
+      }
+      rows.push({
+        year: w.year,
+        month: w.month,
+        avg_temp_4pm_f: w.avg_temp_4pm_f,
+        precipitation: w.precipitation ?? 0,
+        avg_humidity_pct: w.avg_humidity_pct ?? 0,
+        avg_wind_mph: w.avg_wind_mph ?? 0,
+        sunny_days: w.sunny_days ?? 0,
+        outdoor_event_score: w.outdoor_event_score,
+      })
+    }
+    return rows
+  }, [weatherData])
+
+  // ---- Pivot climate rows into the recharts multi-line dataset ----
+  const outdoorTrendData = useMemo<OutdoorTrendPoint[]>(() => {
+    const byMonth = new Map<number, OutdoorTrendPoint>()
+    for (let m = 1; m <= 12; m++) {
+      byMonth.set(m, {
+        month: getMonthName(m - 1),
+        monthIdx: m,
+        score_2024: null,
+        score_2025: null,
+        score_2026: null,
+      })
+    }
+    for (const r of climateRows) {
+      const point = byMonth.get(r.month)
+      if (!point) continue
+      if (r.year === 2024) point.score_2024 = r.outdoor_event_score
+      else if (r.year === 2025) point.score_2025 = r.outdoor_event_score
+      else if (r.year === 2026) point.score_2026 = r.outdoor_event_score
+    }
+    return Array.from(byMonth.values())
+  }, [climateRows])
+
+  // ---- Top 3 months for 2025 (most recent complete year) ----
+  const bestMonths2025 = useMemo(() => {
+    return climateRows
+      .filter((r) => r.year === 2025)
+      .slice()
+      .sort((a, b) => b.outdoor_event_score - a.outdoor_event_score)
+      .slice(0, 3)
+      .map((r) => ({
+        month: getMonthName(r.month - 1),
+        score: r.outdoor_event_score,
+      }))
+  }, [climateRows])
+
   // ---- Compute insights ----
   const insights: InsightItem[] = useMemo(() => {
     const items: InsightItem[] = []
@@ -1772,6 +2235,14 @@ export default function MarketPulsePage() {
 
       {/* ---- Google Trends Chart ---- */}
       <GoogleTrendsChart trends={searchTrends} loading={loading} />
+
+      {/* ---- Outdoor Event Score — 3 Year Trend ---- */}
+      <OutdoorScoreTrendChart
+        trendData={outdoorTrendData}
+        climateRows={climateRows}
+        bestMonths={bestMonths2025}
+        loading={loading}
+      />
 
       {/* ---- Outdoor Score + Weather Risk ---- */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

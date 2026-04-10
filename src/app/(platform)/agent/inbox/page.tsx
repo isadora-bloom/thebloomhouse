@@ -20,6 +20,7 @@ import {
   Sparkles,
   CheckCircle,
   XCircle,
+  FileSignature,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -467,25 +468,102 @@ function DraftApprovalCard({
 // Thread View
 // ---------------------------------------------------------------------------
 
+function ContractSigningPrompt({
+  coupleName,
+  onConfirm,
+  onDismiss,
+}: {
+  coupleName: string
+  onConfirm: () => Promise<void>
+  onDismiss: () => Promise<void>
+}) {
+  const [processing, setProcessing] = useState(false)
+
+  const handleConfirm = async () => {
+    setProcessing(true)
+    try {
+      await onConfirm()
+    } finally {
+      setProcessing(false)
+    }
+  }
+
+  const handleDismiss = async () => {
+    setProcessing(true)
+    try {
+      await onDismiss()
+    } finally {
+      setProcessing(false)
+    }
+  }
+
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center justify-between gap-3 mx-4 mt-4">
+      <div className="flex items-center gap-2 text-sm text-amber-900">
+        <FileSignature className="w-4 h-4 text-amber-600 shrink-0" />
+        <span>
+          Possible contract signing detected — move <strong>{coupleName}</strong> to
+          Contracted stage?
+        </span>
+      </div>
+      <div className="flex gap-2 shrink-0">
+        <button
+          onClick={handleConfirm}
+          disabled={processing}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {processing ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <CheckCircle className="w-3.5 h-3.5" />
+          )}
+          Yes, move
+        </button>
+        <button
+          onClick={handleDismiss}
+          disabled={processing}
+          className="px-3 py-1.5 text-amber-800 hover:bg-amber-100 text-xs font-medium rounded-lg border border-amber-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Not yet
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function ThreadView({
   interaction,
   threadMessages,
   draft,
+  signingPrompt,
   onBack,
   onReply,
   onApproveDraft,
   onRejectDraft,
+  onConfirmSigning,
+  onDismissSigning,
 }: {
   interaction: Interaction
   threadMessages: Interaction[]
   draft: { id: string; draft_body: string; subject: string } | null
+  signingPrompt: { notificationId: string | null; coupleName: string } | null
   onBack: () => void
   onReply: () => void
   onApproveDraft: (draftId: string) => Promise<void>
   onRejectDraft: (draftId: string) => Promise<void>
+  onConfirmSigning: () => Promise<void>
+  onDismissSigning: () => Promise<void>
 }) {
   return (
     <div className="flex flex-col h-full">
+      {/* Contract signing prompt banner */}
+      {signingPrompt && (
+        <ContractSigningPrompt
+          coupleName={signingPrompt.coupleName}
+          onConfirm={onConfirmSigning}
+          onDismiss={onDismissSigning}
+        />
+      )}
       {/* Thread header */}
       <div className="p-4 border-b border-border">
         <button
@@ -582,6 +660,11 @@ export default function InboxPage() {
     id: string
     draft_body: string
     subject: string
+  } | null>(null)
+  const [signingPrompt, setSigningPrompt] = useState<{
+    notificationId: string | null
+    coupleName: string
+    weddingId: string
   } | null>(null)
   const [threadLoading, setThreadLoading] = useState(false)
   const [showCompose, setShowCompose] = useState(false)
@@ -696,6 +779,7 @@ export default function InboxPage() {
       setSelectedId(interaction.id)
       setThreadLoading(true)
       setThreadDraft(null)
+      setSigningPrompt(null)
 
       try {
         // Fetch all messages in this thread
@@ -768,6 +852,56 @@ export default function InboxPage() {
 
         if (draftData) {
           setThreadDraft(draftData)
+        }
+
+        // Check for contract signing detection on any interaction in this thread
+        if (interaction.wedding_id) {
+          const threadInteractionIds = (mapped.length > 0 ? mapped : [interaction]).map(
+            (m) => m.id
+          )
+
+          const { data: extractionRows } = await supabase
+            .from('intelligence_extractions')
+            .select('id, interaction_id')
+            .eq('venue_id', VENUE_ID)
+            .eq('extraction_type', 'contract_signing_detected')
+            .in('interaction_id', threadInteractionIds)
+            .limit(1)
+
+          if (extractionRows && extractionRows.length > 0) {
+            // Confirm the wedding is still in a pre-contract stage
+            const { data: weddingRow } = await supabase
+              .from('weddings')
+              .select('status')
+              .eq('id', interaction.wedding_id)
+              .single()
+
+            const preContractStatuses = [
+              'inquiry',
+              'tour_scheduled',
+              'tour_completed',
+              'proposal_sent',
+            ]
+
+            if (weddingRow && preContractStatuses.includes(weddingRow.status as string)) {
+              // Find any unresolved notification for this wedding
+              const { data: notifRows } = await supabase
+                .from('admin_notifications')
+                .select('id')
+                .eq('venue_id', VENUE_ID)
+                .eq('wedding_id', interaction.wedding_id)
+                .eq('type', 'contract_signing_detected')
+                .eq('read', false)
+                .order('created_at', { ascending: false })
+                .limit(1)
+
+              setSigningPrompt({
+                notificationId: notifRows && notifRows.length > 0 ? notifRows[0].id : null,
+                coupleName: interaction.person_name || interaction.person_email || 'this couple',
+                weddingId: interaction.wedding_id,
+              })
+            }
+          }
         }
       } catch (err) {
         console.error('Failed to load thread:', err)
@@ -988,9 +1122,58 @@ export default function InboxPage() {
                     interaction={selectedInteraction}
                     threadMessages={threadMessages}
                     draft={threadDraft}
+                    signingPrompt={
+                      signingPrompt
+                        ? {
+                            notificationId: signingPrompt.notificationId,
+                            coupleName: signingPrompt.coupleName,
+                          }
+                        : null
+                    }
                     onBack={() => setSelectedId(null)}
                     onReply={() => {
                       if (selectedInteraction) loadThread(selectedInteraction)
+                    }}
+                    onConfirmSigning={async () => {
+                      if (!signingPrompt) return
+                      // Move the wedding to Contracted
+                      await supabase
+                        .from('weddings')
+                        .update({
+                          status: 'contracted',
+                          contracted_at: new Date().toISOString(),
+                          updated_at: new Date().toISOString(),
+                        })
+                        .eq('id', signingPrompt.weddingId)
+                        .eq('venue_id', VENUE_ID)
+
+                      // Mark the notification as resolved (read)
+                      if (signingPrompt.notificationId) {
+                        await supabase
+                          .from('admin_notifications')
+                          .update({
+                            read: true,
+                            read_at: new Date().toISOString(),
+                          })
+                          .eq('id', signingPrompt.notificationId)
+                      }
+
+                      setSigningPrompt(null)
+                      // Refetch the thread & list so the status updates
+                      await fetchInteractions()
+                      if (selectedInteraction) await loadThread(selectedInteraction)
+                    }}
+                    onDismissSigning={async () => {
+                      if (signingPrompt?.notificationId) {
+                        await supabase
+                          .from('admin_notifications')
+                          .update({
+                            read: true,
+                            read_at: new Date().toISOString(),
+                          })
+                          .eq('id', signingPrompt.notificationId)
+                      }
+                      setSigningPrompt(null)
                     }}
                     onApproveDraft={async (draftId: string) => {
                       await supabase

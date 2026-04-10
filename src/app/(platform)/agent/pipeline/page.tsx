@@ -68,6 +68,7 @@ const PIPELINE_STAGES: { key: string; label: string }[] = [
   { key: 'tour_scheduled', label: 'Tour Scheduled' },
   { key: 'tour_completed', label: 'Tour Completed' },
   { key: 'proposal_sent', label: 'Proposal Sent' },
+  { key: 'contracted', label: 'Contracted' },
   { key: 'booked', label: 'Booked' },
   { key: 'lost', label: 'Lost' },
 ]
@@ -268,6 +269,7 @@ function SortableCard({ wedding }: { wedding: PipelineWedding }) {
 
 function DroppableColumn({ column }: { column: PipelineColumn }) {
   const isLost = column.key === 'lost'
+  const isContracted = column.key === 'contracted'
   const { setNodeRef, isOver } = useDroppable({ id: column.key })
 
   return (
@@ -279,14 +281,20 @@ function DroppableColumn({ column }: { column: PipelineColumn }) {
             ? 'bg-sage-100 ring-2 ring-sage-300'
             : isLost
               ? 'bg-red-50/50'
-              : 'bg-sage-50'
+              : isContracted
+                ? 'bg-emerald-50 ring-1 ring-emerald-200'
+                : 'bg-sage-50'
         }`}
       >
         {/* Column header */}
         <div className="flex items-center justify-between mb-3 px-1">
           <h3
             className={`text-sm font-semibold ${
-              isLost ? 'text-red-700' : 'text-sage-800'
+              isLost
+                ? 'text-red-700'
+                : isContracted
+                  ? 'text-emerald-800'
+                  : 'text-sage-800'
             }`}
           >
             {column.label}
@@ -295,7 +303,9 @@ function DroppableColumn({ column }: { column: PipelineColumn }) {
             className={`text-xs font-medium px-2 py-0.5 rounded-full ${
               isLost
                 ? 'bg-red-100 text-red-600'
-                : 'bg-sage-100 text-sage-600'
+                : isContracted
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-sage-100 text-sage-600'
             }`}
           >
             {column.weddings.length}
@@ -374,6 +384,7 @@ export default function PipelinePage() {
           'tour_scheduled',
           'tour_completed',
           'proposal_sent',
+          'contracted',
           'booked',
           'lost',
         ])
@@ -587,7 +598,7 @@ export default function PipelinePage() {
 
       {/* ---- Summary row ---- */}
       {!loading && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
           {columns.map((col) => (
             <div
               key={col.key}

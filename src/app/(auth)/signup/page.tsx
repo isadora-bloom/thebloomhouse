@@ -82,12 +82,8 @@ export default function SignupPage() {
     // Clear demo cookies on real sign-up
     document.cookie = 'bloom_demo=; path=/; max-age=0'
 
-    // 3. Redirect based on role
-    if (role === 'coordinator') {
-      router.push('/agent/inbox')
-    } else {
-      router.push('/')
-    }
+    // 3. Always redirect to overview dashboard (not inbox)
+    router.push('/')
   }
 
   const inputClasses =

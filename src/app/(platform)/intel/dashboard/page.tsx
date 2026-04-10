@@ -46,14 +46,29 @@ interface AnomalyAlert {
 // Helpers
 // ---------------------------------------------------------------------------
 
+function formatHoursMinutes(hours: number): string {
+  if (!Number.isFinite(hours) || hours < 0) return '0 hrs 0 mins'
+  const whole = Math.floor(hours)
+  const mins = Math.round((hours - whole) * 60)
+  // Handle rounding overflow (e.g., 6.999 → 7 hrs 0 mins instead of 6 hrs 60 mins)
+  if (mins === 60) return `${whole + 1} hrs 0 mins`
+  return `${whole} hrs ${mins} mins`
+}
+
 function formatMetricName(name: string): string {
   const map: Record<string, string> = {
     inquiry_volume: 'Inquiry Volume',
-    response_time: 'Response Time',
+    weekly_inquiries: 'Weekly Inquiries',
+    response_time: 'Average Response Time',
+    response_time_hour: 'Average Response Time',
+    response_time_hours: 'Average Response Time',
     tour_conversion: 'Tour Conversion',
     booking_rate: 'Booking Rate',
     avg_booking_value: 'Avg Booking Value',
     lost_deal_rate: 'Lost Deal Rate',
+    pipeline_heat_avg: 'Pipeline Heat (Avg)',
+    competitor_mentions: 'Competitor Mentions',
+    instagram_referrals: 'Instagram Referrals',
   }
   return map[name] ?? name
 }
@@ -61,15 +76,23 @@ function formatMetricName(name: string): string {
 function formatMetricValue(name: string, value: number): string {
   switch (name) {
     case 'inquiry_volume':
+    case 'weekly_inquiries':
+    case 'competitor_mentions':
+    case 'instagram_referrals':
       return `${Math.round(value)}`
     case 'response_time':
       return `${Math.round(value)}m`
+    case 'response_time_hour':
+    case 'response_time_hours':
+      return formatHoursMinutes(value)
     case 'tour_conversion':
     case 'booking_rate':
     case 'lost_deal_rate':
       return `${(value * 100).toFixed(1)}%`
     case 'avg_booking_value':
       return `$${Math.round(value).toLocaleString()}`
+    case 'pipeline_heat_avg':
+      return `${Math.round(value)}`
     default:
       return String(value)
   }
@@ -344,7 +367,6 @@ export default function IntelligenceDashboardPage() {
   // Real stat card state
   const [demandScore, setDemandScore] = useState<{ score: number; outlook: 'positive' | 'neutral' | 'caution' } | null>(null)
   const [pendingRecsCount, setPendingRecsCount] = useState<number | null>(null)
-  const [aiCostThisMonth, setAiCostThisMonth] = useState<number | null>(null)
 
   // ---- Fetch alerts ----
   const fetchAlerts = useCallback(async () => {
@@ -391,24 +413,6 @@ export default function IntelligenceDashboardPage() {
         .eq('status', 'pending')
 
       setPendingRecsCount(count ?? 0)
-
-      // 3. AI cost this month
-      const startOfMonth = new Date()
-      startOfMonth.setDate(1)
-      startOfMonth.setHours(0, 0, 0, 0)
-
-      const { data: costRows } = await supabase
-        .from('api_costs')
-        .select('cost')
-        .eq('venue_id', venueId)
-        .gte('created_at', startOfMonth.toISOString())
-
-      if (costRows && costRows.length > 0) {
-        const total = costRows.reduce((sum, row) => sum + (Number(row.cost) || 0), 0)
-        setAiCostThisMonth(total)
-      } else {
-        setAiCostThisMonth(0)
-      }
     } catch (err) {
       console.error('[dashboard] Failed to fetch stat cards:', err)
     }

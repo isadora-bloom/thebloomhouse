@@ -49,6 +49,30 @@ export interface ExtractedSignals {
 }
 
 // ---------------------------------------------------------------------------
+// Contract signing detection — quick regex scan for pipeline automation
+// ---------------------------------------------------------------------------
+
+const SIGNING_PATTERNS = [
+  /signed the contract/i,
+  /contract is signed/i,
+  /sent the signed/i,
+  /signed and returned/i,
+  /we'?ve signed/i,
+  /just signed/i,
+  /attached.*signed/i,
+  /signed.*attached/i,
+]
+
+/**
+ * Scan email body for indicators that the couple has signed a contract.
+ * Used by the email pipeline to surface a "move to Contracted" prompt.
+ */
+export function detectContractSigning(emailBody: string): boolean {
+  if (!emailBody) return false
+  return SIGNING_PATTERNS.some((p) => p.test(emailBody))
+}
+
+// ---------------------------------------------------------------------------
 // Urgency keyword sets
 // ---------------------------------------------------------------------------
 

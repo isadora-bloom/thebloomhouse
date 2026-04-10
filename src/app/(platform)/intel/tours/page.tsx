@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
+import { useScope } from '@/lib/hooks/use-scope'
 import {
   MapPin,
   Plus,
@@ -12,7 +13,6 @@ import {
   Video,
   Phone,
   Users,
-  Filter,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 
@@ -44,6 +44,8 @@ interface TourRow {
   competing_venues: string | null
   notes: string | null
   created_at: string
+  venue?: { name: string | null } | null
+  conductor?: { first_name: string | null; last_name: string | null } | null
 }
 
 type TourFilter = 'all' | 'upcoming' | 'completed' | 'cancelled'
@@ -103,6 +105,7 @@ function StatCardSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function ToursPage() {
+  const scope = useScope()
   const [tours, setTours] = useState<TourRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -122,10 +125,32 @@ export default function ToursPage() {
   const fetchData = useCallback(async () => {
     const supabase = getSupabase()
     try {
-      const { data, error: err } = await supabase
+      // Resolve scope → list of venue IDs (null = all venues / company)
+      let venueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        venueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        venueIds = (members ?? []).map((m) => m.venue_id as string)
+      }
+
+      let query = supabase
         .from('tours')
-        .select('*')
+        .select(`
+          *,
+          venue:venues(name),
+          conductor:user_profiles!conducted_by(first_name, last_name)
+        `)
         .order('scheduled_at', { ascending: false })
+
+      if (venueIds && venueIds.length > 0) {
+        query = query.in('venue_id', venueIds)
+      }
+
+      const { data, error: err } = await query
       if (err) throw err
       setTours((data ?? []) as TourRow[])
       setError(null)
@@ -135,11 +160,19 @@ export default function ToursPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope.level, scope.venueId, scope.groupId])
 
   useEffect(() => {
+    setLoading(true)
     fetchData()
   }, [fetchData])
+
+  // Format helper for conductor full name
+  function conductorName(t: TourRow): string {
+    if (!t.conductor) return '—'
+    const full = [t.conductor.first_name, t.conductor.last_name].filter(Boolean).join(' ')
+    return full || '—'
+  }
 
   // Stats
   const yearStart = new Date(new Date().getFullYear(), 0, 1).toISOString()
@@ -380,11 +413,11 @@ export default function ToursPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border bg-warm-white">
-                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Date</th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Couple</th>
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Date</th>
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Venue</th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Type</th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Conducted By</th>
-                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Source</th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Outcome</th>
                   </tr>
                 </thead>
@@ -393,16 +426,16 @@ export default function ToursPage() {
                     const TypeIcon = tourTypeIcon(t.tour_type)
                     return (
                       <tr key={t.id} className="hover:bg-sage-50/50 transition-colors">
+                        <td className="px-5 py-4 font-medium text-sage-900">{t.couple_name || '—'}</td>
                         <td className="px-5 py-4 text-sage-700">{new Date(t.scheduled_at).toLocaleDateString()}</td>
-                        <td className="px-5 py-4 font-medium text-sage-900">{t.couple_name || '--'}</td>
+                        <td className="px-5 py-4 text-sage-600">{t.venue?.name || '—'}</td>
                         <td className="px-5 py-4 text-sage-700">
                           <span className="inline-flex items-center gap-1">
                             <TypeIcon className="w-3 h-3" />
                             {formatLabel(t.tour_type)}
                           </span>
                         </td>
-                        <td className="px-5 py-4 text-sage-600">{t.conducted_by || '--'}</td>
-                        <td className="px-5 py-4 text-sage-600">{t.source ? formatLabel(t.source) : '--'}</td>
+                        <td className="px-5 py-4 text-sage-600">{conductorName(t)}</td>
                         <td className="px-5 py-4">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${outcomeBadge(t.outcome)}`}>
                             {formatLabel(t.outcome)}

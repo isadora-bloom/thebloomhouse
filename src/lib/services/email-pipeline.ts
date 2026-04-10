@@ -17,6 +17,8 @@ import { classifyEmail, type ClassificationResult } from '@/lib/services/router-
 import { generateInquiryDraft } from '@/lib/services/inquiry-brain'
 import { generateClientDraft } from '@/lib/services/client-brain'
 import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/gmail'
+import { detectContractSigning } from '@/lib/services/extraction'
+import { createNotification } from '@/lib/services/admin-notifications'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -319,6 +321,70 @@ export async function processIncomingEmail(
         metadata: { source: detectedSource, subject: email.subject },
       })
     }
+  }
+
+  // Step 5b: Contract signing detection (notification only)
+  // Scans the email body for phrases indicating the couple has signed/returned
+  // a contract. If the wedding is in a pre-contract stage, flag the interaction
+  // and insert an admin notification so the coordinator can confirm and move
+  // the wedding to the Contracted stage.
+  try {
+    if (weddingId && detectContractSigning(email.body)) {
+      const { data: weddingRow } = await supabase
+        .from('weddings')
+        .select('status')
+        .eq('id', weddingId)
+        .single()
+
+      const currentStatus = weddingRow?.status as string | undefined
+      if (
+        currentStatus &&
+        ['tour_completed', 'proposal_sent'].includes(currentStatus)
+      ) {
+        // Flag the interaction via intelligence_extractions
+        await supabase.from('intelligence_extractions').insert({
+          venue_id: venueId,
+          wedding_id: weddingId,
+          interaction_id: interactionId,
+          extraction_type: 'contract_signing_detected',
+          value: { source: 'regex', from: fromEmail, subject: email.subject },
+          confidence: 0.8,
+        })
+
+        // Build couple name for the notification body
+        let coupleLabel = fromName || fromEmail
+        try {
+          const { data: peopleRows } = await supabase
+            .from('people')
+            .select('first_name, last_name, role')
+            .eq('wedding_id', weddingId)
+          const people = (peopleRows ?? []) as Array<{
+            first_name: string | null
+            last_name: string | null
+            role: string | null
+          }>
+          const p1 = people.find((p) => p.role === 'partner1') ?? people[0]
+          const p2 = people.find((p) => p.role === 'partner2')
+          if (p1) {
+            coupleLabel = p2
+              ? `${p1.first_name ?? ''} & ${p2.first_name ?? ''}`.trim()
+              : [p1.first_name, p1.last_name].filter(Boolean).join(' ')
+          }
+        } catch {
+          /* best-effort */
+        }
+
+        await createNotification({
+          venueId,
+          weddingId,
+          type: 'contract_signing_detected',
+          title: 'Possible contract signing detected',
+          body: `Email from ${coupleLabel} mentions signing. Review and confirm.`,
+        })
+      }
+    }
+  } catch (err) {
+    console.error('[pipeline] Contract signing detection failed:', err)
   }
 
   // Step 6: Route to appropriate brain for draft generation

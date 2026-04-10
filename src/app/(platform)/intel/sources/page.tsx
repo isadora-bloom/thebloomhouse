@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
 import {
   BarChart3,
@@ -25,30 +25,41 @@ import {
 } from 'recharts'
 
 // ---------------------------------------------------------------------------
-// Types
+// Types (aligned to actual DB schema)
 // ---------------------------------------------------------------------------
 
 interface SourceAttribution {
   id: string
   venue_id: string
-  source_name: string
+  source: string
   inquiries: number
   tours: number
   bookings: number
   revenue: number
+  spend: number
+  cost_per_inquiry: number
+  cost_per_booking: number
+  conversion_rate: number
+  roi: number
   calculated_at: string
 }
 
 interface MarketingSpend {
   id: string
   venue_id: string
-  source_name: string
+  source: string
   month: string
-  spend: number
-  calculated_at: string
+  amount: number
+}
+
+interface WeddingRow {
+  venue_id: string
+  source: string | null
+  status: string | null
 }
 
 interface SourceRow {
+  source_key: string
   source_name: string
   spend: number
   inquiries: number
@@ -63,6 +74,34 @@ interface SourceRow {
 
 type SortKey = keyof SourceRow
 type SortDir = 'asc' | 'desc'
+
+// ---------------------------------------------------------------------------
+// Source label mapping — turn raw enum values into human-readable names
+// ---------------------------------------------------------------------------
+
+const SOURCE_LABELS: Record<string, string> = {
+  the_knot: 'The Knot',
+  instagram: 'Instagram',
+  weddingwire: 'Wedding Wire',
+  wedding_wire: 'Wedding Wire',
+  google: 'Google',
+  referral: 'Word of Mouth',
+  direct: 'Direct',
+  website: 'Website',
+  walk_in: 'Walk-in',
+  facebook: 'Facebook',
+  zola: 'Zola',
+  phone: 'Phone',
+  other: 'Other',
+}
+
+function formatSource(source: string): string {
+  const key = source.toLowerCase()
+  return (
+    SOURCE_LABELS[key] ??
+    source.charAt(0).toUpperCase() + source.slice(1).replace(/_/g, ' ')
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Supabase client
@@ -89,14 +128,18 @@ function fmtPct(value: number): string {
 }
 
 const SOURCE_COLORS: Record<string, string> = {
-  'The Knot':     '#E8927C',
-  'WeddingWire':  '#7EAAA0',
-  'Google':       '#A6894A',
-  'Instagram':    '#C084A0',
-  'Referral':     '#7D8471',
-  'Direct':       '#5D7A7A',
-  'Facebook':     '#6A89B7',
-  'Zola':         '#9B8EC4',
+  'The Knot':       '#E8927C',
+  'Wedding Wire':   '#7EAAA0',
+  'Google':         '#A6894A',
+  'Instagram':      '#C084A0',
+  'Word of Mouth':  '#7D8471',
+  'Direct':         '#5D7A7A',
+  'Website':        '#8FA48D',
+  'Walk-in':        '#B29A6A',
+  'Facebook':       '#6A89B7',
+  'Zola':           '#9B8EC4',
+  'Phone':          '#C99B7A',
+  'Other':          '#9AA098',
 }
 
 function getSourceColor(source: string): string {
@@ -136,9 +179,10 @@ function TableSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function SourceAttributionPage() {
-  const VENUE_ID = useVenueId()
+  const scope = useScope()
   const [attributions, setAttributions] = useState<SourceAttribution[]>([])
   const [spendData, setSpendData] = useState<MarketingSpend[]>([])
+  const [weddings, setWeddings] = useState<WeddingRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('revenue')
@@ -149,24 +193,51 @@ export default function SourceAttributionPage() {
     const supabase = getSupabase()
 
     try {
-      const [attrRes, spendRes] = await Promise.all([
-        supabase
-          .from('source_attribution')
-          .select('*')
-          .eq('venue_id', VENUE_ID)
-          .order('calculated_at', { ascending: false }),
-        supabase
-          .from('marketing_spend')
-          .select('*')
-          .eq('venue_id', VENUE_ID)
-          .order('month', { ascending: true }),
+      // Resolve scope → list of venue IDs (null = all venues / company)
+      let venueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        venueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        venueIds = (members ?? []).map((m) => m.venue_id as string)
+      }
+
+      // Build queries scoped appropriately
+      const attrQuery = supabase
+        .from('source_attribution')
+        .select('*')
+        .order('calculated_at', { ascending: false })
+      const spendQuery = supabase
+        .from('marketing_spend')
+        .select('*')
+        .order('month', { ascending: true })
+      const weddingQuery = supabase
+        .from('weddings')
+        .select('venue_id, source, status')
+        .not('source', 'is', null)
+
+      if (venueIds && venueIds.length > 0) {
+        attrQuery.in('venue_id', venueIds)
+        spendQuery.in('venue_id', venueIds)
+        weddingQuery.in('venue_id', venueIds)
+      }
+
+      const [attrRes, spendRes, wedRes] = await Promise.all([
+        attrQuery,
+        spendQuery,
+        weddingQuery,
       ])
 
       if (attrRes.error) throw attrRes.error
       if (spendRes.error) throw spendRes.error
+      if (wedRes.error) throw wedRes.error
 
       setAttributions((attrRes.data ?? []) as SourceAttribution[])
       setSpendData((spendRes.data ?? []) as MarketingSpend[])
+      setWeddings((wedRes.data ?? []) as WeddingRow[])
       setError(null)
     } catch (err) {
       console.error('Failed to fetch source attribution data:', err)
@@ -174,50 +245,85 @@ export default function SourceAttributionPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope.level, scope.venueId, scope.groupId])
 
   useEffect(() => {
+    setLoading(true)
     fetchData()
   }, [fetchData])
 
   // ---- Build aggregated source rows ----
+  // Primary: source_attribution (has spend + revenue). Fallback: weddings (leads + bookings).
   const sourceRows: SourceRow[] = (() => {
-    const sourceMap = new Map<string, { attr: SourceAttribution[]; spend: number }>()
+    const sourceMap = new Map<
+      string,
+      {
+        inquiries: number
+        tours: number
+        bookings: number
+        revenue: number
+        spend: number
+      }
+    >()
 
-    for (const a of attributions) {
-      const key = a.source_name || 'Unknown'
-      const existing = sourceMap.get(key) ?? { attr: [], spend: 0 }
-      existing.attr.push(a)
-      sourceMap.set(key, existing)
+    const ensure = (key: string) => {
+      const existing = sourceMap.get(key)
+      if (existing) return existing
+      const fresh = { inquiries: 0, tours: 0, bookings: 0, revenue: 0, spend: 0 }
+      sourceMap.set(key, fresh)
+      return fresh
     }
 
+    // 1) Roll up from source_attribution
+    for (const a of attributions) {
+      const key = (a.source || 'unknown').toLowerCase()
+      const row = ensure(key)
+      row.inquiries += Number(a.inquiries ?? 0)
+      row.tours += Number(a.tours ?? 0)
+      row.bookings += Number(a.bookings ?? 0)
+      row.revenue += Number(a.revenue ?? 0)
+      row.spend += Number(a.spend ?? 0)
+    }
+
+    // 2) Also roll up spend from marketing_spend (amount column)
     for (const s of spendData) {
-      const key = s.source_name || 'Unknown'
-      const existing = sourceMap.get(key) ?? { attr: [], spend: 0 }
-      existing.spend += s.spend
-      sourceMap.set(s.source_name, existing)
+      const key = (s.source || 'unknown').toLowerCase()
+      const row = ensure(key)
+      row.spend += Number(s.amount ?? 0)
+    }
+
+    // 3) Fallback: if source_attribution is empty/sparse, compute leads + bookings
+    //    from weddings.source. Only ADD weddings counts for sources missing from
+    //    attribution (avoid double-counting).
+    const attributedSources = new Set(
+      attributions.map((a) => (a.source || '').toLowerCase())
+    )
+    const BOOKED_STATUSES = new Set(['booked', 'completed', 'contracted'])
+    for (const w of weddings) {
+      if (!w.source) continue
+      const key = w.source.toLowerCase()
+      if (attributedSources.has(key)) continue // already covered
+      const row = ensure(key)
+      row.inquiries += 1
+      if (w.status && BOOKED_STATUSES.has(w.status.toLowerCase())) {
+        row.bookings += 1
+      }
     }
 
     const rows: SourceRow[] = []
-
-    for (const [source_name, data] of sourceMap) {
-      const inquiries = data.attr.reduce((sum, a) => sum + a.inquiries, 0)
-      const tours = data.attr.reduce((sum, a) => sum + a.tours, 0)
-      const bookings = data.attr.reduce((sum, a) => sum + a.bookings, 0)
-      const revenue = data.attr.reduce((sum, a) => sum + a.revenue, 0)
-      const spend = data.spend
-
+    for (const [key, data] of sourceMap) {
       rows.push({
-        source_name,
-        spend,
-        inquiries,
-        tours,
-        bookings,
-        revenue,
-        cost_per_inquiry: inquiries > 0 ? spend / inquiries : 0,
-        cost_per_booking: bookings > 0 ? spend / bookings : 0,
-        conversion_rate: inquiries > 0 ? bookings / inquiries : 0,
-        roi: spend > 0 ? (revenue - spend) / spend : 0,
+        source_key: key,
+        source_name: formatSource(key),
+        spend: data.spend,
+        inquiries: data.inquiries,
+        tours: data.tours,
+        bookings: data.bookings,
+        revenue: data.revenue,
+        cost_per_inquiry: data.inquiries > 0 ? data.spend / data.inquiries : 0,
+        cost_per_booking: data.bookings > 0 ? data.spend / data.bookings : 0,
+        conversion_rate: data.inquiries > 0 ? data.bookings / data.inquiries : 0,
+        roi: data.spend > 0 ? (data.revenue - data.spend) / data.spend : 0,
       })
     }
 
@@ -261,16 +367,17 @@ export default function SourceAttributionPage() {
     const allSources = new Set<string>()
 
     for (const s of spendData) {
-      allSources.add(s.source_name)
+      const label = formatSource(s.source || 'unknown')
+      allSources.add(label)
       const existing = monthMap.get(s.month) ?? {}
-      existing[s.source_name] = (existing[s.source_name] ?? 0) + s.spend
+      existing[label] = (existing[label] ?? 0) + Number(s.amount ?? 0)
       monthMap.set(s.month, existing)
     }
 
     const months = Array.from(monthMap.keys()).sort()
     return months.map((month) => {
       const row: Record<string, unknown> = {
-        month: new Date(month + '-01').toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+        month: new Date(month).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
       }
       for (const source of allSources) {
         row[source] = monthMap.get(month)?.[source] ?? 0
@@ -279,7 +386,9 @@ export default function SourceAttributionPage() {
     })
   })()
 
-  const allSpendSources = Array.from(new Set(spendData.map((s) => s.source_name)))
+  const allSpendSources = Array.from(
+    new Set(spendData.map((s) => formatSource(s.source || 'unknown')))
+  )
 
   // ---- Summary stats ----
   const totalSpend = sourceRows.reduce((sum, r) => sum + r.spend, 0)
@@ -518,7 +627,7 @@ export default function SourceAttributionPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {sortedRows.map((row) => (
-                  <tr key={row.source_name} className="hover:bg-sage-50/30 transition-colors">
+                  <tr key={row.source_key} className="hover:bg-sage-50/30 transition-colors">
                     <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
                       <div className="flex items-center gap-2">
                         <div
