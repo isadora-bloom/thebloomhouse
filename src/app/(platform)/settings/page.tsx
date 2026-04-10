@@ -3,11 +3,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { FONT_PAIRS, getFontUrl } from '@/config/fonts'
+import { useScope, type Scope } from '@/lib/hooks/use-scope'
 import {
   Settings, Palette, Type, Save, Eye, Building2, User, Clock, DollarSign,
+  Layers, ArrowRight,
 } from 'lucide-react'
 
-// TODO: Wire venue selector — for now we load the first venue_config row
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -31,6 +32,21 @@ interface VenueConfig {
   font_pair: string
   portal_tagline: string | null
   logo_url: string | null
+}
+
+interface VenueRow {
+  id: string
+  name: string
+  slug: string | null
+  capacity: number | null
+  base_price: number | null
+  coordinator_name: string | null
+  logo_url: string | null
+  primary_color: string | null
+  secondary_color: string | null
+  accent_color: string | null
+  business_name: string | null
+  brand_description: string | null
 }
 
 const TIMEZONE_OPTIONS = [
@@ -63,20 +79,51 @@ const inputClasses =
 const selectClasses =
   'w-full border border-border rounded-lg px-3 py-2 text-sage-900 bg-warm-white focus:ring-2 focus:ring-sage-300 focus:border-sage-500 outline-none transition-colors'
 
+// Hex color helper to lighten for background tint
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+function switchToVenue(venueId: string, venueName: string, companyName?: string) {
+  const newScope = { level: 'venue', venueId, venueName, companyName }
+  document.cookie = `bloom_scope=${encodeURIComponent(JSON.stringify(newScope))}; path=/; max-age=${60 * 60 * 24 * 365}`
+  document.cookie = `bloom_venue=${venueId}; path=/; max-age=${60 * 60 * 24 * 365}`
+  window.location.reload()
+}
+
 export default function SettingsPage() {
+  const scope = useScope()
+
+  if (scope.level === 'venue') {
+    return <VenueSettings scope={scope} />
+  }
+  return <BrandSettings scope={scope} />
+}
+
+/* ================================================================== */
+/* Venue Settings — existing editor, now scoped by scope.venueId        */
+/* ================================================================== */
+function VenueSettings({ scope }: { scope: Scope }) {
   const [config, setConfig] = useState<VenueConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
 
-  // Load venue config
+  // Load venue config for the scoped venue
   useEffect(() => {
     async function load() {
+      if (!scope.venueId) {
+        setLoading(false)
+        return
+      }
       const { data, error } = await supabase
         .from('venue_config')
         .select('*')
-        .limit(1)
-        .single()
+        .eq('venue_id', scope.venueId)
+        .maybeSingle()
 
       if (error) {
         console.error('Failed to load venue config:', error)
@@ -87,7 +134,7 @@ export default function SettingsPage() {
       setLoading(false)
     }
     load()
-  }, [])
+  }, [scope.venueId])
 
   // Save handler
   const handleSave = useCallback(async () => {
@@ -136,14 +183,6 @@ export default function SettingsPage() {
   const currentFontPair = FONT_PAIRS[config?.font_pair ?? 'playfair_inter'] ?? FONT_PAIRS.playfair_inter
   const fontUrl = getFontUrl(config?.font_pair ?? 'playfair_inter')
 
-  // Hex color helper to lighten for background tint
-  function hexToRgba(hex: string, alpha: number): string {
-    const r = parseInt(hex.slice(1, 3), 16)
-    const g = parseInt(hex.slice(3, 5), 16)
-    const b = parseInt(hex.slice(5, 7), 16)
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`
-  }
-
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -155,7 +194,9 @@ export default function SettingsPage() {
   if (!config) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-sage-500 text-sm">No venue configuration found. Please seed your database first.</div>
+        <div className="text-sage-500 text-sm">
+          No venue configuration found for {scope.venueName ?? 'this venue'}. Please seed your database first.
+        </div>
       </div>
     )
   }
@@ -171,7 +212,7 @@ export default function SettingsPage() {
         <div>
           <h1 className="font-heading text-3xl font-bold text-sage-900 mb-1 flex items-center gap-3">
             <Settings className="w-8 h-8 text-sage-500" />
-            Venue Settings
+            Venue Settings {scope.venueName && <span className="text-sage-500">— {scope.venueName}</span>}
           </h1>
           <p className="text-sage-600">Configure your venue&apos;s core details — business info, contact details, pricing, branding colors, fonts, and logo. Changes here affect your couple portal, AI emails, and all client-facing materials.</p>
         </div>
@@ -589,6 +630,456 @@ export default function SettingsPage() {
           {saving ? 'Saving...' : 'Save Changes'}
         </button>
       </div>
+    </div>
+  )
+}
+
+/* ================================================================== */
+/* Brand Settings — company/group scope                                 */
+/* ================================================================== */
+interface BrandVenue {
+  venueId: string
+  name: string
+  slug: string | null
+  capacity: number | null
+  basePrice: number | null
+  coordinatorName: string | null
+  logoUrl: string | null
+  primaryColor: string
+  secondaryColor: string
+  accentColor: string
+  businessName: string | null
+  brandDescription: string | null
+  configId: string | null
+}
+
+function BrandSettings({ scope }: { scope: Scope }) {
+  const [venues, setVenues] = useState<BrandVenue[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saveMessage, setSaveMessage] = useState<string | null>(null)
+
+  // Brand-level editable state
+  const [brandDescription, setBrandDescription] = useState<string>('')
+  const [logoUrl, setLogoUrl] = useState<string>('')
+  const [primaryColor, setPrimaryColor] = useState<string>('#7D8471')
+  const [secondaryColor, setSecondaryColor] = useState<string>('#5D7A7A')
+  const [accentColor, setAccentColor] = useState<string>('#A6894A')
+
+  const headerTitle =
+    scope.level === 'group'
+      ? scope.groupName ?? 'Group'
+      : scope.companyName ?? 'Brand'
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      try {
+        // 1) Resolve in-scope venue IDs
+        let venueIds: string[] | null = null
+        if (scope.level === 'group' && scope.groupId) {
+          const { data: members } = await supabase
+            .from('venue_group_members')
+            .select('venue_id')
+            .eq('group_id', scope.groupId)
+          venueIds = (members ?? []).map((m) => m.venue_id as string)
+        }
+        // For company scope: venueIds stays null → fetch all venues
+
+        // 2) Load venues
+        let vq = supabase
+          .from('venues')
+          .select('id, name, slug')
+          .order('name', { ascending: true })
+        if (venueIds && venueIds.length > 0) {
+          vq = vq.in('id', venueIds)
+        } else if (venueIds && venueIds.length === 0) {
+          setVenues([])
+          setLoading(false)
+          return
+        }
+        const { data: venueRows, error: vErr } = await vq
+        if (vErr) throw vErr
+
+        const ids = (venueRows ?? []).map((v) => v.id as string)
+        if (ids.length === 0) {
+          setVenues([])
+          setLoading(false)
+          return
+        }
+
+        // 3) Load venue_config rows for those venues
+        const { data: configRows, error: cErr } = await supabase
+          .from('venue_config')
+          .select('id, venue_id, business_name, logo_url, primary_color, secondary_color, accent_color, capacity, base_price, coordinator_name, brand_description')
+          .in('venue_id', ids)
+        if (cErr) {
+          // brand_description column may not exist — retry without it
+          console.warn('venue_config query failed, retrying without brand_description:', cErr)
+        }
+
+        let safeConfigRows: any[] | null = configRows as any
+        if (cErr) {
+          const retry = await supabase
+            .from('venue_config')
+            .select('id, venue_id, business_name, logo_url, primary_color, secondary_color, accent_color, capacity, base_price, coordinator_name')
+            .in('venue_id', ids)
+          safeConfigRows = (retry.data ?? null) as any[] | null
+        }
+
+        const configByVenueId = new Map<string, VenueRow>()
+        ;(safeConfigRows ?? []).forEach((r: any) => configByVenueId.set(r.venue_id, r))
+
+        const joined: BrandVenue[] = (venueRows ?? []).map((v: any) => {
+          const c = configByVenueId.get(v.id)
+          return {
+            venueId: v.id,
+            name: v.name,
+            slug: v.slug ?? null,
+            capacity: c?.capacity ?? null,
+            basePrice: c?.base_price ?? null,
+            coordinatorName: c?.coordinator_name ?? null,
+            logoUrl: c?.logo_url ?? null,
+            primaryColor: c?.primary_color ?? '#7D8471',
+            secondaryColor: c?.secondary_color ?? '#5D7A7A',
+            accentColor: c?.accent_color ?? '#A6894A',
+            businessName: c?.business_name ?? null,
+            brandDescription: (c as any)?.brand_description ?? null,
+            configId: c?.id ?? null,
+          }
+        })
+
+        setVenues(joined)
+
+        // Seed brand-level editor state from the first venue's config
+        const first = joined[0]
+        if (first) {
+          setLogoUrl(first.logoUrl ?? '')
+          setBrandDescription(first.brandDescription ?? '')
+          setPrimaryColor(first.primaryColor)
+          setSecondaryColor(first.secondaryColor)
+          setAccentColor(first.accentColor)
+        }
+      } catch (err) {
+        console.error('Failed to load brand settings:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+  }, [scope.level, scope.groupId, scope.companyName])
+
+  const handleSave = useCallback(async () => {
+    if (venues.length === 0) return
+    setSaving(true)
+    setSaveMessage(null)
+
+    try {
+      // Apply brand colors to ALL in-scope venue_config rows
+      const venueIds = venues.map((v) => v.venueId)
+
+      const { error: colorErr } = await supabase
+        .from('venue_config')
+        .update({
+          primary_color: primaryColor,
+          secondary_color: secondaryColor,
+          accent_color: accentColor,
+          updated_at: new Date().toISOString(),
+        })
+        .in('venue_id', venueIds)
+
+      if (colorErr) throw colorErr
+
+      // Store brand logo on the first venue as a placeholder
+      const firstConfigId = venues[0]?.configId
+      if (firstConfigId) {
+        const { error: logoErr } = await supabase
+          .from('venue_config')
+          .update({
+            logo_url: logoUrl || null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', firstConfigId)
+        if (logoErr) throw logoErr
+      }
+
+      setSaveMessage('Brand settings saved successfully.')
+    } catch (err) {
+      console.error('Brand save failed:', err)
+      setSaveMessage('Failed to save brand settings.')
+    } finally {
+      setSaving(false)
+      setTimeout(() => setSaveMessage(null), 3000)
+    }
+  }, [venues, primaryColor, secondaryColor, accentColor, logoUrl])
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="animate-pulse text-sage-500 text-sm">Loading brand settings...</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-8">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="font-heading text-3xl font-bold text-sage-900 mb-1 flex items-center gap-3">
+            <Layers className="w-8 h-8 text-sage-500" />
+            Brand Settings <span className="text-sage-500">— {headerTitle}</span>
+          </h1>
+          <p className="text-sage-600">
+            Configure brand-level details that apply across{' '}
+            {venues.length > 0 ? `${venues.length} venue${venues.length === 1 ? '' : 's'}` : 'all venues'} in your{' '}
+            {scope.level === 'group' ? 'group' : 'company'}. To edit a specific venue&apos;s details, click{' '}
+            <span className="font-medium">Configure</span> on a venue card below.
+          </p>
+        </div>
+        <button
+          onClick={handleSave}
+          disabled={saving || venues.length === 0}
+          className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 text-white font-medium rounded-lg px-6 py-2.5 transition-colors"
+        >
+          <Save className="w-4 h-4" />
+          {saving ? 'Saving...' : 'Save Brand Settings'}
+        </button>
+      </div>
+
+      {/* Save feedback */}
+      {saveMessage && (
+        <div className={`px-4 py-2 rounded-lg text-sm font-medium ${
+          saveMessage.includes('success') ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+        }`}>
+          {saveMessage}
+        </div>
+      )}
+
+      {/* ---------------------------------------------------------- */}
+      {/* Brand Info                                                  */}
+      {/* ---------------------------------------------------------- */}
+      <section className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-6">
+        <div className="flex items-center gap-2 mb-2">
+          <Building2 className="w-5 h-5 text-sage-500" />
+          <h2 className="font-heading text-xl font-semibold text-sage-900">Brand Info</h2>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-medium text-sage-700 mb-1">Company Name</label>
+            <input
+              type="text"
+              value={scope.companyName ?? ''}
+              readOnly
+              className={inputClasses + ' opacity-70 cursor-not-allowed'}
+            />
+            <p className="text-xs text-sage-500 mt-1">
+              Company name is set at the organization level.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-sage-700 mb-1">Brand Logo URL</label>
+            <div className="flex items-start gap-3">
+              {logoUrl && (
+                <img
+                  src={logoUrl}
+                  alt="Brand logo"
+                  className="w-16 h-16 object-contain rounded-lg border border-sage-200 bg-white p-1 shrink-0"
+                />
+              )}
+              <input
+                type="text"
+                value={logoUrl}
+                onChange={(e) => setLogoUrl(e.target.value)}
+                placeholder="https://..."
+                className={inputClasses}
+              />
+            </div>
+            <p className="text-xs text-sage-500 mt-1">
+              Stored on the first venue&apos;s config as a placeholder until org-level assets are wired.
+            </p>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-sage-700 mb-1">Brand Description</label>
+          <textarea
+            value={brandDescription}
+            onChange={(e) => setBrandDescription(e.target.value)}
+            placeholder="A short description of your brand — voice, positioning, promise to couples."
+            rows={3}
+            className={inputClasses}
+          />
+          <p className="text-xs text-sage-500 mt-1">
+            Used as context for AI-generated emails and portal copy across all venues.
+          </p>
+        </div>
+      </section>
+
+      {/* ---------------------------------------------------------- */}
+      {/* Brand Colors                                                */}
+      {/* ---------------------------------------------------------- */}
+      <section className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-6">
+        <div className="flex items-center gap-2 mb-2">
+          <Palette className="w-5 h-5 text-sage-500" />
+          <h2 className="font-heading text-xl font-semibold text-sage-900">Brand Colors</h2>
+        </div>
+        <p className="text-sm text-sage-600 -mt-2">
+          These colors will be applied to <strong>all {venues.length} venue{venues.length === 1 ? '' : 's'}</strong> in your {scope.level === 'group' ? 'group' : 'brand'} when you save.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          <div>
+            <label className="block text-sm font-medium text-sage-700 mb-1">Primary Color</label>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                value={primaryColor}
+                onChange={(e) => setPrimaryColor(e.target.value)}
+                className="w-12 h-10 rounded-lg border border-border cursor-pointer"
+              />
+              <input
+                type="text"
+                value={primaryColor}
+                onChange={(e) => {
+                  const val = e.target.value
+                  if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) setPrimaryColor(val)
+                }}
+                className={inputClasses + ' font-mono text-sm'}
+                maxLength={7}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-sage-700 mb-1">Secondary Color</label>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                value={secondaryColor}
+                onChange={(e) => setSecondaryColor(e.target.value)}
+                className="w-12 h-10 rounded-lg border border-border cursor-pointer"
+              />
+              <input
+                type="text"
+                value={secondaryColor}
+                onChange={(e) => {
+                  const val = e.target.value
+                  if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) setSecondaryColor(val)
+                }}
+                className={inputClasses + ' font-mono text-sm'}
+                maxLength={7}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-sage-700 mb-1">Accent Color</label>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                value={accentColor}
+                onChange={(e) => setAccentColor(e.target.value)}
+                className="w-12 h-10 rounded-lg border border-border cursor-pointer"
+              />
+              <input
+                type="text"
+                value={accentColor}
+                onChange={(e) => {
+                  const val = e.target.value
+                  if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) setAccentColor(val)
+                }}
+                className={inputClasses + ' font-mono text-sm'}
+                maxLength={7}
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ---------------------------------------------------------- */}
+      {/* Venues in scope                                             */}
+      {/* ---------------------------------------------------------- */}
+      <section className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Building2 className="w-5 h-5 text-sage-500" />
+            <h2 className="font-heading text-xl font-semibold text-sage-900">
+              Venues ({venues.length})
+            </h2>
+          </div>
+          <p className="text-xs text-sage-500">Click Configure to jump into a specific venue.</p>
+        </div>
+
+        {venues.length === 0 ? (
+          <div className="p-8 text-center text-sage-500 text-sm border border-dashed border-sage-300 rounded-xl">
+            No venues found in this {scope.level === 'group' ? 'group' : 'brand'}.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {venues.map((v) => (
+              <div
+                key={v.venueId}
+                className="border border-border rounded-xl p-5 bg-warm-white hover:shadow-md transition-shadow"
+              >
+                <div className="flex items-start gap-3 mb-4">
+                  {v.logoUrl ? (
+                    <img
+                      src={v.logoUrl}
+                      alt={v.name}
+                      className="w-12 h-12 object-contain rounded-lg border border-sage-200 bg-white p-1 shrink-0"
+                    />
+                  ) : (
+                    <div
+                      className="w-12 h-12 rounded-lg shrink-0 flex items-center justify-center text-white font-bold"
+                      style={{ backgroundColor: v.primaryColor }}
+                    >
+                      {v.name.charAt(0)}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-heading text-base font-semibold text-sage-900 truncate">{v.name}</h3>
+                    {v.businessName && v.businessName !== v.name && (
+                      <p className="text-xs text-sage-500 truncate">{v.businessName}</p>
+                    )}
+                  </div>
+                </div>
+
+                <dl className="space-y-1.5 text-xs text-sage-600 mb-4">
+                  <div className="flex justify-between">
+                    <dt className="text-sage-500">Capacity</dt>
+                    <dd className="font-medium text-sage-800">
+                      {v.capacity != null ? `${v.capacity} guests` : '—'}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-sage-500">Base Price</dt>
+                    <dd className="font-medium text-sage-800">
+                      {v.basePrice != null ? `$${v.basePrice.toLocaleString()}` : '—'}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-sage-500">Coordinator</dt>
+                    <dd className="font-medium text-sage-800 truncate max-w-[60%]">
+                      {v.coordinatorName ?? '—'}
+                    </dd>
+                  </div>
+                </dl>
+
+                <button
+                  onClick={() => switchToVenue(v.venueId, v.name, scope.companyName)}
+                  className="w-full flex items-center justify-center gap-2 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+                >
+                  Configure
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   )
 }
