@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useScope } from '@/lib/hooks/use-scope'
 import {
   AlertTriangle,
@@ -361,7 +360,6 @@ function calcDemandScore(indicators: Record<string, number>): {
 // ---------------------------------------------------------------------------
 
 export default function IntelligenceDashboardPage() {
-  const venueId = useVenueId()
   const scope = useScope()
   const supabase = useMemo(() => createClient(), [])
 
@@ -393,8 +391,9 @@ export default function IntelligenceDashboardPage() {
 
   // ---- Fetch real stat card data ----
   const fetchStatCards = useCallback(async () => {
+    if (scope.loading) return
     try {
-      // 1. Demand score from economic_indicators
+      // 1. Demand score from economic_indicators (not venue-scoped)
       const { data: indicatorRows } = await supabase
         .from('economic_indicators')
         .select('indicator_name, value')
@@ -412,18 +411,33 @@ export default function IntelligenceDashboardPage() {
         setDemandScore(calcDemandScore(latest))
       }
 
+      // Resolve scope → list of venue IDs (null = all venues / company)
+      let venueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        venueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        venueIds = (members ?? []).map((m) => m.venue_id as string)
+      }
+
       // 2. Pending recommendations count
-      const { count } = await supabase
+      let recsQuery = supabase
         .from('trend_recommendations')
         .select('id', { count: 'exact', head: true })
-        .eq('venue_id', venueId)
         .eq('status', 'pending')
+      if (venueIds && venueIds.length > 0) {
+        recsQuery = recsQuery.in('venue_id', venueIds)
+      }
+      const { count } = await recsQuery
 
       setPendingRecsCount(count ?? 0)
     } catch (err) {
       console.error('[dashboard] Failed to fetch stat cards:', err)
     }
-  }, [supabase, venueId])
+  }, [supabase, scope.level, scope.venueId, scope.groupId, scope.loading])
 
   useEffect(() => {
     fetchAlerts()

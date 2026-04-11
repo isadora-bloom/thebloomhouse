@@ -196,6 +196,7 @@ export default function SourceAttributionPage() {
 
   // ---- Fetch data ----
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
 
     try {
@@ -251,7 +252,7 @@ export default function SourceAttributionPage() {
     } finally {
       setLoading(false)
     }
-  }, [scope.level, scope.venueId, scope.groupId])
+  }, [scope.level, scope.venueId, scope.groupId, scope.loading])
 
   useEffect(() => {
     setLoading(true)

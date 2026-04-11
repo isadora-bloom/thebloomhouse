@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -653,9 +652,10 @@ function ThreadView({
 // ---------------------------------------------------------------------------
 
 export default function InboxPage() {
-  const VENUE_ID = useVenueId()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
+  // For compose modal and mutations that need a concrete venue
+  const composeVenueId = scope.venueId ?? ''
   const [interactions, setInteractions] = useState<Interaction[]>([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
@@ -680,20 +680,44 @@ export default function InboxPage() {
 
   const supabase = createClient()
 
+  // ---- Resolve venue IDs from scope ----
+  const resolveVenueIds = useCallback(async (): Promise<string[] | null> => {
+    if (scope.level === 'venue' && scope.venueId) {
+      return [scope.venueId]
+    }
+    if (scope.level === 'group' && scope.groupId) {
+      const { data: members } = await supabase
+        .from('venue_group_members')
+        .select('venue_id')
+        .eq('group_id', scope.groupId)
+      return (members ?? []).map((r) => r.venue_id as string)
+    }
+    return null
+  }, [scope.level, scope.venueId, scope.groupId, supabase])
+
   // ---- Fetch pending draft count ----
   useEffect(() => {
-    supabase
-      .from('drafts')
-      .select('id', { count: 'exact', head: true })
-      .eq('venue_id', VENUE_ID)
-      .eq('status', 'pending')
-      .then(({ count }) => setPendingDraftCount(count ?? 0))
-  }, [threadDraft])
+    if (scope.loading) return
+    ;(async () => {
+      const venueIds = await resolveVenueIds()
+      let q = supabase
+        .from('drafts')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending')
+      if (venueIds && venueIds.length > 0) {
+        q = q.in('venue_id', venueIds)
+      }
+      const { count } = await q
+      setPendingDraftCount(count ?? 0)
+    })()
+  }, [threadDraft, scope.loading, scope.level, scope.venueId, scope.groupId, resolveVenueIds, supabase])
 
   // ---- Fetch interactions ----
   const fetchInteractions = useCallback(async () => {
+    if (scope.loading) return
     try {
-      const { data: interactionsData, error: fetchError } = await supabase
+      const venueIds = await resolveVenueIds()
+      let query = supabase
         .from('interactions')
         .select(`
           id,
@@ -714,8 +738,11 @@ export default function InboxPage() {
             client_codes ( code )
           )
         `)
-        .eq('venue_id', VENUE_ID)
         .eq('type', 'email')
+      if (venueIds && venueIds.length > 0) {
+        query = query.in('venue_id', venueIds)
+      }
+      const { data: interactionsData, error: fetchError } = await query
         .order('timestamp', { ascending: false })
         .limit(200)
 
@@ -779,7 +806,7 @@ export default function InboxPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope.loading, resolveVenueIds, supabase])
 
   useEffect(() => {
     fetchInteractions()
@@ -794,6 +821,7 @@ export default function InboxPage() {
       setSigningPrompt(null)
 
       try {
+        const venueIds = await resolveVenueIds()
         // Fetch all messages in this thread
         let query = supabase
           .from('interactions')
@@ -814,8 +842,10 @@ export default function InboxPage() {
               people ( first_name, last_name, email, role )
             )
           `)
-          .eq('venue_id', VENUE_ID)
           .order('timestamp', { ascending: true })
+        if (venueIds && venueIds.length > 0) {
+          query = query.in('venue_id', venueIds)
+        }
 
         if (interaction.gmail_thread_id) {
           query = query.eq('gmail_thread_id', interaction.gmail_thread_id)
@@ -852,12 +882,15 @@ export default function InboxPage() {
         setThreadMessages(mapped.length > 0 ? mapped : [interaction])
 
         // Check for a pending draft
-        const { data: draftData } = await supabase
+        let draftQuery = supabase
           .from('drafts')
           .select('id, draft_body, subject')
-          .eq('venue_id', VENUE_ID)
           .eq('interaction_id', interaction.id)
           .eq('status', 'pending')
+        if (venueIds && venueIds.length > 0) {
+          draftQuery = draftQuery.in('venue_id', venueIds)
+        }
+        const { data: draftData } = await draftQuery
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle()
@@ -872,13 +905,15 @@ export default function InboxPage() {
             (m) => m.id
           )
 
-          const { data: extractionRows } = await supabase
+          let extractionQuery = supabase
             .from('intelligence_extractions')
             .select('id, interaction_id')
-            .eq('venue_id', VENUE_ID)
             .eq('extraction_type', 'contract_signing_detected')
             .in('interaction_id', threadInteractionIds)
-            .limit(1)
+          if (venueIds && venueIds.length > 0) {
+            extractionQuery = extractionQuery.in('venue_id', venueIds)
+          }
+          const { data: extractionRows } = await extractionQuery.limit(1)
 
           if (extractionRows && extractionRows.length > 0) {
             // Confirm the wedding is still in a pre-contract stage
@@ -897,13 +932,16 @@ export default function InboxPage() {
 
             if (weddingRow && preContractStatuses.includes(weddingRow.status as string)) {
               // Find any unresolved notification for this wedding
-              const { data: notifRows } = await supabase
+              let notifQuery = supabase
                 .from('admin_notifications')
                 .select('id')
-                .eq('venue_id', VENUE_ID)
                 .eq('wedding_id', interaction.wedding_id)
                 .eq('type', 'contract_signing_detected')
                 .eq('read', false)
+              if (venueIds && venueIds.length > 0) {
+                notifQuery = notifQuery.in('venue_id', venueIds)
+              }
+              const { data: notifRows } = await notifQuery
                 .order('created_at', { ascending: false })
                 .limit(1)
 
@@ -921,7 +959,7 @@ export default function InboxPage() {
         setThreadLoading(false)
       }
     },
-    []
+    [resolveVenueIds, supabase]
   )
 
   // ---- Sync emails ----
@@ -1149,7 +1187,7 @@ export default function InboxPage() {
                     }}
                     onConfirmSigning={async () => {
                       if (!signingPrompt) return
-                      // Move the wedding to Contracted
+                      // Move the wedding to Contracted (id is PK; scope filter unnecessary)
                       await supabase
                         .from('weddings')
                         .update({
@@ -1158,7 +1196,6 @@ export default function InboxPage() {
                           updated_at: new Date().toISOString(),
                         })
                         .eq('id', signingPrompt.weddingId)
-                        .eq('venue_id', VENUE_ID)
 
                       // Mark the notification as resolved (read)
                       if (signingPrompt.notificationId) {
@@ -1194,7 +1231,7 @@ export default function InboxPage() {
                         .update({ status: 'approved', approved_at: new Date().toISOString() })
                         .eq('id', draftId)
                       await supabase.from('draft_feedback').insert({
-                        venue_id: VENUE_ID,
+                        venue_id: selectedInteraction?.venue_id,
                         draft_id: draftId,
                         action: 'approved',
                       })
@@ -1213,7 +1250,7 @@ export default function InboxPage() {
                         .update({ status: 'rejected' })
                         .eq('id', draftId)
                       await supabase.from('draft_feedback').insert({
-                        venue_id: VENUE_ID,
+                        venue_id: selectedInteraction?.venue_id,
                         draft_id: draftId,
                         action: 'rejected',
                       })
@@ -1237,7 +1274,7 @@ export default function InboxPage() {
       {/* Compose modal */}
       {showCompose && (
         <ComposeModal
-          venueId={VENUE_ID}
+          venueId={composeVenueId}
           onClose={() => setShowCompose(false)}
           onSent={fetchInteractions}
         />

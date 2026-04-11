@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -388,7 +387,6 @@ function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; 
 // ---------------------------------------------------------------------------
 
 export default function WeddingsPage() {
-  const VENUE_ID = useVenueId()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
   const [weddings, setWeddings] = useState<Wedding[]>([])
@@ -401,16 +399,34 @@ export default function WeddingsPage() {
 
   // ---- Fetch data ----
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
 
     try {
-      // Fetch venue slug for "Open as Couple" links
-      const { data: venueData } = await supabase
-        .from('venues')
-        .select('slug')
-        .eq('id', VENUE_ID)
-        .single()
-      if (venueData) setVenueSlug(venueData.slug)
+      // Resolve scope → list of venue IDs (null = all venues / company)
+      let venueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        venueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        venueIds = (members ?? []).map((m) => m.venue_id as string)
+      }
+
+      // Fetch venue slug for "Open as Couple" links — only meaningful
+      // when a single venue is in scope.
+      if (scope.level === 'venue' && scope.venueId) {
+        const { data: venueData } = await supabase
+          .from('venues')
+          .select('slug')
+          .eq('id', scope.venueId)
+          .single()
+        if (venueData) setVenueSlug(venueData.slug)
+      } else {
+        setVenueSlug(null)
+      }
 
       let query = supabase
         .from('weddings')
@@ -422,7 +438,10 @@ export default function WeddingsPage() {
           budget (*),
           checklist_items (*)
         `)
-        .eq('venue_id', VENUE_ID)
+
+      if (venueIds && venueIds.length > 0) {
+        query = query.in('venue_id', venueIds)
+      }
 
       if (statusFilter !== 'all') {
         query = query.eq('status', statusFilter)
@@ -445,7 +464,7 @@ export default function WeddingsPage() {
     } finally {
       setLoading(false)
     }
-  }, [statusFilter])
+  }, [statusFilter, scope.level, scope.venueId, scope.groupId, scope.loading])
 
   useEffect(() => {
     setLoading(true)

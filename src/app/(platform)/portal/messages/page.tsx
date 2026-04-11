@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -28,6 +27,7 @@ interface Person {
 
 interface WeddingThread {
   id: string
+  venue_id: string
   people: Person[]
   message_count: number
   last_message_at: string | null
@@ -196,7 +196,6 @@ function MessagesSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function MessagesPage() {
-  const VENUE_ID = useVenueId()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
   const [threads, setThreads] = useState<WeddingThread[]>([])
@@ -212,14 +211,30 @@ export default function MessagesPage() {
 
   // ---- Fetch threads ----
   const fetchThreads = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
 
     try {
-      // Get all weddings for this venue with people
-      const { data: weddingsData, error: weddingsErr } = await supabase
+      // Resolve scope → list of venue IDs (null = all venues / company)
+      let venueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        venueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        venueIds = (members ?? []).map((m) => m.venue_id as string)
+      }
+
+      // Get all weddings in scope with people
+      let weddingsQuery = supabase
         .from('weddings')
-        .select('id, venues:venue_id ( name ), people (first_name, last_name, role)')
-        .eq('venue_id', VENUE_ID)
+        .select('id, venue_id, venues:venue_id ( name ), people (first_name, last_name, role)')
+      if (venueIds && venueIds.length > 0) {
+        weddingsQuery = weddingsQuery.in('venue_id', venueIds)
+      }
+      const { data: weddingsData, error: weddingsErr } = await weddingsQuery
 
       if (weddingsErr) throw weddingsErr
 
@@ -228,17 +243,21 @@ export default function MessagesPage() {
         const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
         return {
           id: row.id as string,
+          venue_id: row.venue_id as string,
           people: (row.people ?? []) as Person[],
           venue_name: venueName,
         }
       })
 
       // Get message counts per wedding
-      const { data: msgCounts, error: msgErr } = await supabase
+      let msgQuery = supabase
         .from('messages')
-        .select('wedding_id, created_at')
-        .eq('venue_id', VENUE_ID)
+        .select('wedding_id, created_at, venue_id')
         .order('created_at', { ascending: false })
+      if (venueIds && venueIds.length > 0) {
+        msgQuery = msgQuery.in('venue_id', venueIds)
+      }
+      const { data: msgCounts, error: msgErr } = await msgQuery
 
       if (msgErr) throw msgErr
 
@@ -255,6 +274,7 @@ export default function MessagesPage() {
       const threadList: WeddingThread[] = weddings
         .map((w) => ({
           id: w.id,
+          venue_id: w.venue_id,
           people: w.people,
           message_count: countMap.get(w.id)?.count ?? 0,
           last_message_at: countMap.get(w.id)?.lastAt ?? null,
@@ -283,7 +303,7 @@ export default function MessagesPage() {
     } finally {
       setLoadingThreads(false)
     }
-  }, [selectedWeddingId])
+  }, [selectedWeddingId, scope.level, scope.venueId, scope.groupId, scope.loading])
 
   // ---- Fetch messages for selected wedding ----
   const fetchMessages = useCallback(async () => {
@@ -325,13 +345,15 @@ export default function MessagesPage() {
   // ---- Send message ----
   const handleSend = async () => {
     if (!newMessage.trim() || !selectedWeddingId) return
+    const selected = threads.find((t) => t.id === selectedWeddingId)
+    if (!selected) return
     setSending(true)
 
     const supabase = getSupabase()
 
     try {
       const { error: insertErr } = await supabase.from('messages').insert({
-        venue_id: VENUE_ID,
+        venue_id: selected.venue_id,
         wedding_id: selectedWeddingId,
         sender_role: 'coordinator',
         sender_name: 'Coordinator', // TODO: Use current user name

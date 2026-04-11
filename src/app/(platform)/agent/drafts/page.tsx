@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -457,7 +456,6 @@ function DraftCard({
 // ---------------------------------------------------------------------------
 
 export default function ApprovalQueuePage() {
-  const VENUE_ID = useVenueId()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
   const [drafts, setDrafts] = useState<Draft[]>([])
@@ -470,10 +468,27 @@ export default function ApprovalQueuePage() {
 
   const supabase = createClient()
 
+  // ---- Resolve venue IDs from scope ----
+  const resolveVenueIds = useCallback(async (): Promise<string[] | null> => {
+    if (scope.level === 'venue' && scope.venueId) {
+      return [scope.venueId]
+    }
+    if (scope.level === 'group' && scope.groupId) {
+      const { data: members } = await supabase
+        .from('venue_group_members')
+        .select('venue_id')
+        .eq('group_id', scope.groupId)
+      return (members ?? []).map((r) => r.venue_id as string)
+    }
+    return null
+  }, [scope.level, scope.venueId, scope.groupId, supabase])
+
   // ---- Fetch drafts ----
   const fetchDrafts = useCallback(
     async (status?: string) => {
+      if (scope.loading) return
       try {
+        const venueIds = await resolveVenueIds()
         let query = supabase
           .from('drafts')
           .select(`
@@ -495,9 +510,12 @@ export default function ApprovalQueuePage() {
             venues:venue_id ( name ),
             interactions!drafts_interaction_id_fkey ( subject, body_preview )
           `)
-          .eq('venue_id', VENUE_ID)
           .order('created_at', { ascending: false })
           .limit(100)
+
+        if (venueIds && venueIds.length > 0) {
+          query = query.in('venue_id', venueIds)
+        }
 
         if (status) {
           query = query.eq('status', status)
@@ -529,7 +547,7 @@ export default function ApprovalQueuePage() {
         setLoading(false)
       }
     },
-    []
+    [scope.loading, supabase, resolveVenueIds]
   )
 
   useEffect(() => {
@@ -541,6 +559,7 @@ export default function ApprovalQueuePage() {
   const handleApprove = async (id: string) => {
     setProcessingId(id)
     try {
+      const draftRow = drafts.find((d) => d.id === id)
       // Step 1: Mark as approved
       const { error: updateError } = await supabase
         .from('drafts')
@@ -554,7 +573,7 @@ export default function ApprovalQueuePage() {
 
       // Step 2: Log feedback
       await supabase.from('draft_feedback').insert({
-        venue_id: VENUE_ID,
+        venue_id: draftRow?.venue_id,
         draft_id: id,
         action: 'approved',
       })
@@ -600,7 +619,7 @@ export default function ApprovalQueuePage() {
 
       // Log feedback with edits
       await supabase.from('draft_feedback').insert({
-        venue_id: VENUE_ID,
+        venue_id: original?.venue_id,
         draft_id: id,
         action: 'edited',
         original_body: original?.draft_body,
@@ -632,6 +651,7 @@ export default function ApprovalQueuePage() {
   const handleReject = async (id: string, reason: string) => {
     setProcessingId(id)
     try {
+      const draftRow = drafts.find((d) => d.id === id)
       const { error: updateError } = await supabase
         .from('drafts')
         .update({
@@ -644,7 +664,7 @@ export default function ApprovalQueuePage() {
 
       // Log feedback
       await supabase.from('draft_feedback').insert({
-        venue_id: VENUE_ID,
+        venue_id: draftRow?.venue_id,
         draft_id: id,
         action: 'rejected',
         rejection_reason: reason || null,
@@ -669,28 +689,38 @@ export default function ApprovalQueuePage() {
 
   useEffect(() => {
     const fetchStats = async () => {
+      if (scope.loading) return
+      const venueIds = await resolveVenueIds()
       const todayStart = new Date()
       todayStart.setHours(0, 0, 0, 0)
+      const hasVenueFilter = !!(venueIds && venueIds.length > 0)
+      const vIds = venueIds ?? []
+
+      let approvedQuery = supabase
+        .from('drafts')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'approved')
+        .gte('approved_at', todayStart.toISOString())
+      if (hasVenueFilter) approvedQuery = approvedQuery.in('venue_id', vIds)
+
+      let rejectedQuery = supabase
+        .from('drafts')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'rejected')
+        .gte('created_at', todayStart.toISOString())
+      if (hasVenueFilter) rejectedQuery = rejectedQuery.in('venue_id', vIds)
+
+      let autoSentQuery = supabase
+        .from('drafts')
+        .select('id', { count: 'exact', head: true })
+        .eq('auto_sent', true)
+        .gte('created_at', todayStart.toISOString())
+      if (hasVenueFilter) autoSentQuery = autoSentQuery.in('venue_id', vIds)
 
       const [approved, rejected, autoSent] = await Promise.all([
-        supabase
-          .from('drafts')
-          .select('id', { count: 'exact', head: true })
-          .eq('venue_id', VENUE_ID)
-          .eq('status', 'approved')
-          .gte('approved_at', todayStart.toISOString()),
-        supabase
-          .from('drafts')
-          .select('id', { count: 'exact', head: true })
-          .eq('venue_id', VENUE_ID)
-          .eq('status', 'rejected')
-          .gte('created_at', todayStart.toISOString()),
-        supabase
-          .from('drafts')
-          .select('id', { count: 'exact', head: true })
-          .eq('venue_id', VENUE_ID)
-          .eq('auto_sent', true)
-          .gte('created_at', todayStart.toISOString()),
+        approvedQuery,
+        rejectedQuery,
+        autoSentQuery,
       ])
 
       setStats({
@@ -700,7 +730,7 @@ export default function ApprovalQueuePage() {
       })
     }
     fetchStats()
-  }, [drafts])
+  }, [drafts, scope.loading, scope.level, scope.venueId, scope.groupId, resolveVenueIds, supabase])
 
   // ---- Tab counts ----
   const pendingCount = activeTab === 'pending' ? drafts.length : null

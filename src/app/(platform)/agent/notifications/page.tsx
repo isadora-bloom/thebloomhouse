@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -167,9 +166,10 @@ function SettingsSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function NotificationsPage() {
-  const VENUE_ID = useVenueId()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
+  // Notification settings (venue_config) require a specific venue; fall back to first venue in scope when not at venue level
+  const settingsVenueId = scope.venueId ?? ''
   const [settings, setSettings] = useState<NotificationSetting[]>(DEFAULT_NOTIFICATION_SETTINGS)
   const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([])
   const [loading, setLoading] = useState(true)
@@ -183,25 +183,41 @@ export default function NotificationsPage() {
 
   // ---- Load settings from venue_config ----
   const fetchSettings = useCallback(async () => {
+    if (scope.loading) return
     try {
-      const { data: config } = await supabase
-        .from('venue_config')
-        .select('feature_flags')
-        .eq('venue_id', VENUE_ID)
-        .maybeSingle()
+      // Build venue filter from scope
+      let venueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        venueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        venueIds = (members ?? []).map((r) => r.venue_id as string)
+      }
 
-      if (config?.feature_flags?.notification_settings) {
-        const saved = config.feature_flags.notification_settings as Record<
-          string,
-          { in_app: boolean; email: boolean; push: boolean }
-        >
-        setSettings((prev) =>
-          prev.map((s) =>
-            saved[s.key]
-              ? { ...s, in_app: saved[s.key].in_app, email: saved[s.key].email, push: saved[s.key].push }
-              : s
+      // Settings are per-venue; only load when a specific venue is in scope
+      if (settingsVenueId) {
+        const { data: config } = await supabase
+          .from('venue_config')
+          .select('feature_flags')
+          .eq('venue_id', settingsVenueId)
+          .maybeSingle()
+
+        if (config?.feature_flags?.notification_settings) {
+          const saved = config.feature_flags.notification_settings as Record<
+            string,
+            { in_app: boolean; email: boolean; push: boolean }
+          >
+          setSettings((prev) =>
+            prev.map((s) =>
+              saved[s.key]
+                ? { ...s, in_app: saved[s.key].in_app, email: saved[s.key].email, push: saved[s.key].push }
+                : s
+            )
           )
-        )
+        }
       }
 
       // Check push support
@@ -210,11 +226,14 @@ export default function NotificationsPage() {
         setPushRegistered(Notification.permission === 'granted')
       }
 
-      // Fetch recent notifications
-      const { data: notifs } = await supabase
+      // Fetch recent notifications (scoped)
+      let notifsQuery = supabase
         .from('notifications')
         .select('*, venues:venue_id ( name )')
-        .eq('venue_id', VENUE_ID)
+      if (venueIds && venueIds.length > 0) {
+        notifsQuery = notifsQuery.in('venue_id', venueIds)
+      }
+      const { data: notifs } = await notifsQuery
         .order('created_at', { ascending: false })
         .limit(20)
 
@@ -231,7 +250,7 @@ export default function NotificationsPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope.loading, scope.level, scope.venueId, scope.groupId, settingsVenueId, supabase])
 
   useEffect(() => {
     fetchSettings()
@@ -249,6 +268,10 @@ export default function NotificationsPage() {
 
   // ---- Save settings ----
   const handleSave = async () => {
+    if (!settingsVenueId) {
+      setError('Select a specific venue to edit notification settings')
+      return
+    }
     setSaving(true)
     try {
       // Build the settings object
@@ -261,7 +284,7 @@ export default function NotificationsPage() {
       const { data: existing } = await supabase
         .from('venue_config')
         .select('id, feature_flags')
-        .eq('venue_id', VENUE_ID)
+        .eq('venue_id', settingsVenueId)
         .maybeSingle()
 
       if (existing) {
@@ -276,7 +299,7 @@ export default function NotificationsPage() {
           .eq('id', existing.id)
       } else {
         await supabase.from('venue_config').insert({
-          venue_id: VENUE_ID,
+          venue_id: settingsVenueId,
           feature_flags: { notification_settings: notifSettings },
         })
       }
@@ -294,6 +317,7 @@ export default function NotificationsPage() {
   // ---- Request push permission ----
   const handleRequestPush = async () => {
     if (!pushSupported) return
+    if (!settingsVenueId) return
     try {
       const permission = await Notification.requestPermission()
       if (permission === 'granted') {
@@ -301,7 +325,7 @@ export default function NotificationsPage() {
 
         // Register device token (simplified — real implementation would use service worker)
         await supabase.from('notification_tokens').upsert({
-          venue_id: VENUE_ID,
+          venue_id: settingsVenueId,
           token: 'browser-' + Date.now(),
           platform: 'web',
           active: true,

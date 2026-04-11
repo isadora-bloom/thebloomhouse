@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -185,7 +184,6 @@ function LookupResult({ wedding, onClear }: { wedding: WeddingLookup; onClear: (
 
 export default function ClientCodesPage() {
   const router = useRouter()
-  const VENUE_ID = useVenueId()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
   const [codes, setCodes] = useState<ClientCode[]>([])
@@ -201,8 +199,21 @@ export default function ClientCodesPage() {
 
   // ---- Fetch codes ----
   const fetchCodes = useCallback(async () => {
+    if (scope.loading) return
     try {
-      const { data, error: fetchError } = await supabase
+      // Build venue filter from scope
+      let venueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        venueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        venueIds = (members ?? []).map((r) => r.venue_id as string)
+      }
+
+      let query = supabase
         .from('client_codes')
         .select(`
           id,
@@ -218,8 +229,10 @@ export default function ClientCodesPage() {
             people!people_wedding_id_fkey ( role, first_name, last_name )
           )
         `)
-        .eq('venue_id', VENUE_ID)
-        .order('code', { ascending: true })
+      if (venueIds && venueIds.length > 0) {
+        query = query.in('venue_id', venueIds)
+      }
+      const { data, error: fetchError } = await query.order('code', { ascending: true })
 
       if (fetchError) throw fetchError
 
@@ -258,7 +271,7 @@ export default function ClientCodesPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope.loading, scope.level, scope.venueId, scope.groupId, supabase])
 
   useEffect(() => {
     fetchCodes()
@@ -278,12 +291,26 @@ export default function ClientCodesPage() {
     setLookupResult(null)
 
     try {
-      const { data: codeData } = await supabase
+      // Build venue filter from scope for lookup
+      let lookupVenueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        lookupVenueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        lookupVenueIds = (members ?? []).map((r) => r.venue_id as string)
+      }
+
+      let lookupQuery = supabase
         .from('client_codes')
         .select('wedding_id')
-        .eq('venue_id', VENUE_ID)
         .eq('code', lookupCode.trim().toUpperCase())
-        .maybeSingle()
+      if (lookupVenueIds && lookupVenueIds.length > 0) {
+        lookupQuery = lookupQuery.in('venue_id', lookupVenueIds)
+      }
+      const { data: codeData } = await lookupQuery.maybeSingle()
 
       if (!codeData) {
         setError('Code not found')

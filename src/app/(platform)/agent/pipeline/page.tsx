@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -352,7 +351,6 @@ function DroppableColumn({ column, showVenueChip }: { column: PipelineColumn; sh
 
 export default function PipelinePage() {
   const router = useRouter()
-  const VENUE_ID = useVenueId()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
   const [columns, setColumns] = useState<PipelineColumn[]>([])
@@ -372,9 +370,22 @@ export default function PipelinePage() {
 
   // ---- Fetch pipeline data ----
   const fetchPipeline = useCallback(async () => {
+    if (scope.loading) return
     try {
+      // Build venue filter from scope
+      let venueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        venueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        venueIds = (members ?? []).map((r) => r.venue_id as string)
+      }
+
       // Fetch all non-completed/cancelled weddings with people
-      const { data: weddingsData, error: fetchError } = await supabase
+      let query = supabase
         .from('weddings')
         .select(`
           id,
@@ -391,7 +402,6 @@ export default function PipelinePage() {
           people!people_wedding_id_fkey ( role, first_name, last_name ),
           client_codes!client_codes_wedding_id_fkey ( code )
         `)
-        .eq('venue_id', VENUE_ID)
         .in('status', [
           'inquiry',
           'tour_scheduled',
@@ -401,7 +411,10 @@ export default function PipelinePage() {
           'booked',
           'lost',
         ])
-        .order('heat_score', { ascending: false })
+      if (venueIds && venueIds.length > 0) {
+        query = query.in('venue_id', venueIds)
+      }
+      const { data: weddingsData, error: fetchError } = await query.order('heat_score', { ascending: false })
 
       if (fetchError) throw fetchError
 
@@ -459,7 +472,7 @@ export default function PipelinePage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope.loading, scope.level, scope.venueId, scope.groupId, supabase])
 
   useEffect(() => {
     fetchPipeline()
@@ -525,11 +538,12 @@ export default function PipelinePage() {
 
     // Persist to database
     try {
+      const movedWedding = sourceColumn.weddings.find((w) => w.id === weddingId)
       const { error: updateError } = await supabase
         .from('weddings')
         .update({ status: targetColumnKey, updated_at: new Date().toISOString() })
         .eq('id', weddingId)
-        .eq('venue_id', VENUE_ID)
+        .eq('venue_id', movedWedding?.venue_id ?? '')
 
       if (updateError) throw updateError
     } catch (err) {

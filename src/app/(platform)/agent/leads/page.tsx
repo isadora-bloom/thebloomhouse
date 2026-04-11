@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -291,7 +290,6 @@ function SortHeader({
 // ---------------------------------------------------------------------------
 
 export default function LeadsPage() {
-  const VENUE_ID = useVenueId()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
   const [leads, setLeads] = useState<Lead[]>([])
@@ -306,8 +304,21 @@ export default function LeadsPage() {
 
   // ---- Fetch leads ----
   const fetchLeads = useCallback(async () => {
+    if (scope.loading) return
     try {
-      const { data, error: fetchError } = await supabase
+      // Build venue filter from scope
+      let venueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        venueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        venueIds = (members ?? []).map((r) => r.venue_id as string)
+      }
+
+      let query = supabase
         .from('weddings')
         .select(`
           id,
@@ -324,10 +335,12 @@ export default function LeadsPage() {
           people!people_wedding_id_fkey ( role, first_name, last_name ),
           client_codes!client_codes_wedding_id_fkey ( code )
         `)
-        .eq('venue_id', VENUE_ID)
         .in('status', ['inquiry', 'tour_scheduled', 'tour_completed', 'proposal_sent'])
         .gt('heat_score', 0)
-        .order('heat_score', { ascending: false })
+      if (venueIds && venueIds.length > 0) {
+        query = query.in('venue_id', venueIds)
+      }
+      const { data, error: fetchError } = await query.order('heat_score', { ascending: false })
 
       if (fetchError) throw fetchError
 
@@ -370,7 +383,7 @@ export default function LeadsPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope.loading, scope.level, scope.venueId, scope.groupId, supabase])
 
   useEffect(() => {
     fetchLeads()

@@ -119,12 +119,29 @@ export default function LostDealsPage() {
   const [saving, setSaving] = useState(false)
 
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
     try {
-      const { data, error: err } = await supabase
+      // Resolve scope → list of venue IDs (null = all venues / company)
+      let venueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        venueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        venueIds = (members ?? []).map((m) => m.venue_id as string)
+      }
+
+      let query = supabase
         .from('lost_deals')
         .select('*, venues:venue_id(name)')
         .order('created_at', { ascending: false })
+      if (venueIds && venueIds.length > 0) {
+        query = query.in('venue_id', venueIds)
+      }
+      const { data, error: err } = await query
       if (err) throw err
       setDeals((data ?? []) as LostDeal[])
       setError(null)
@@ -134,7 +151,7 @@ export default function LostDealsPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope.level, scope.venueId, scope.groupId, scope.loading])
 
   useEffect(() => {
     fetchData()

@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -263,7 +262,6 @@ function ResolvedItem({ item, showVenueChip }: { item: SageQueueItem; showVenueC
 // ---------------------------------------------------------------------------
 
 export default function SageQueuePage() {
-  const VENUE_ID = useVenueId()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
   const [pendingItems, setPendingItems] = useState<SageQueueItem[]>([])
@@ -274,38 +272,54 @@ export default function SageQueuePage() {
 
   // ---- Fetch data ----
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
 
     try {
-      const [pendingRes, resolvedRes] = await Promise.all([
-        supabase
-          .from('sage_uncertain_queue')
-          .select(`
-            *,
-            venues:venue_id ( name ),
-            wedding:weddings (
-              id,
-              people (first_name, last_name, role)
-            )
-          `)
-          .eq('venue_id', VENUE_ID)
-          .is('resolved_at', null)
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('sage_uncertain_queue')
-          .select(`
-            *,
-            venues:venue_id ( name ),
-            wedding:weddings (
-              id,
-              people (first_name, last_name, role)
-            )
-          `)
-          .eq('venue_id', VENUE_ID)
-          .not('resolved_at', 'is', null)
-          .order('resolved_at', { ascending: false })
-          .limit(20),
-      ])
+      // Resolve scope → list of venue IDs (null = all venues / company)
+      let venueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        venueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        venueIds = (members ?? []).map((m) => m.venue_id as string)
+      }
+
+      let pendingQuery = supabase
+        .from('sage_uncertain_queue')
+        .select(`
+          *,
+          venues:venue_id ( name ),
+          wedding:weddings (
+            id,
+            people (first_name, last_name, role)
+          )
+        `)
+        .is('resolved_at', null)
+        .order('created_at', { ascending: false })
+      let resolvedQuery = supabase
+        .from('sage_uncertain_queue')
+        .select(`
+          *,
+          venues:venue_id ( name ),
+          wedding:weddings (
+            id,
+            people (first_name, last_name, role)
+          )
+        `)
+        .not('resolved_at', 'is', null)
+        .order('resolved_at', { ascending: false })
+        .limit(20)
+
+      if (venueIds && venueIds.length > 0) {
+        pendingQuery = pendingQuery.in('venue_id', venueIds)
+        resolvedQuery = resolvedQuery.in('venue_id', venueIds)
+      }
+
+      const [pendingRes, resolvedRes] = await Promise.all([pendingQuery, resolvedQuery])
 
       if (pendingRes.error) throw pendingRes.error
       if (resolvedRes.error) throw resolvedRes.error
@@ -325,7 +339,7 @@ export default function SageQueuePage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope.level, scope.venueId, scope.groupId, scope.loading])
 
   useEffect(() => {
     fetchData()
@@ -349,12 +363,12 @@ export default function SageQueuePage() {
       return
     }
 
-    // If adding to KB, also insert into knowledge_base
+    // If adding to KB, also insert into knowledge_base (using the item's own venue_id)
     if (addToKB) {
       const item = pendingItems.find((i) => i.id === id)
       if (item) {
         await supabase.from('knowledge_base').insert({
-          venue_id: VENUE_ID,
+          venue_id: item.venue_id,
           category: 'sage_learned',
           question: item.question,
           answer: answer,
