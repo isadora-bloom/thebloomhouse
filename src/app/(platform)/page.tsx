@@ -50,6 +50,10 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    // Wait for scope to resolve before querying — prevents aborted queries
+    // and the 'Failed to fetch' errors that happen when queries fire with
+    // incomplete scope state.
+    if (scope.loading) return
     async function load() {
       setLoading(true)
       const supabase = createClient()
@@ -179,7 +183,7 @@ export default function DashboardPage() {
     }
 
     load()
-  }, [scope.level, scope.venueId, scope.groupId])
+  }, [scope.level, scope.venueId, scope.groupId, scope.loading])
 
   // ---- Header copy varies by scope ----
   const scopeIcon = scope.level === 'company' ? Building2 : scope.level === 'group' ? Layers : MapPin

@@ -205,6 +205,7 @@ export default function HealthDashboardPage() {
   const [error, setError] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
     try {
       const ninetyDaysAgo = new Date()
@@ -245,7 +246,7 @@ export default function HealthDashboardPage() {
     } finally {
       setLoading(false)
     }
-  }, [scopeKey])
+  }, [scope.loading, scopeKey])
 
   useEffect(() => {
     fetchData()

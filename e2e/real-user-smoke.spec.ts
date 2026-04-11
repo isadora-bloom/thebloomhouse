@@ -71,6 +71,12 @@ async function auditPage(page: Page, path: string): Promise<PageIssue[]> {
     }
   })
 
+  // Capture ACTUAL network failures (not status errors)
+  const networkFailures: string[] = []
+  page.on('requestfailed', req => {
+    networkFailures.push(`${req.method()} ${req.url()} — ${req.failure()?.errorText ?? 'unknown'}`)
+  })
+
   const failedRequests: string[] = []
   page.on('response', resp => {
     if (resp.status() >= 400 && !resp.url().includes('favicon') && !resp.url().includes('_next/static')) {
@@ -105,6 +111,10 @@ async function auditPage(page: Page, path: string): Promise<PageIssue[]> {
 
   for (const req of failedRequests) {
     issues.push({ type: 'failed-request', detail: req })
+  }
+
+  for (const req of networkFailures) {
+    issues.push({ type: 'failed-request', detail: `[network] ${req}` })
   }
 
   return issues

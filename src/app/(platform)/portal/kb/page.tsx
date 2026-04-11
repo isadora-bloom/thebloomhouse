@@ -165,6 +165,7 @@ export default function KnowledgeBasePage() {
   // -------------------------------------------------------------------------
 
   const fetchEntries = useCallback(async () => {
+    if (scope.loading) return
     if (!venueId) {
       setEntries([])
       setLoading(false)
@@ -188,7 +189,7 @@ export default function KnowledgeBasePage() {
 
     setEntries((data ?? []) as KBEntry[])
     setLoading(false)
-  }, [venueId])
+  }, [scope.loading, venueId])
 
   useEffect(() => {
     fetchEntries()

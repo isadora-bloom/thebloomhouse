@@ -302,6 +302,7 @@ function TeamPerformancePageInner() {
 
   // ---- Fetch data ----
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
     const { start, end } = getPeriodDates(period)
 
@@ -398,7 +399,7 @@ function TeamPerformancePageInner() {
     } finally {
       setLoading(false)
     }
-  }, [period, scope.level, scope.venueId, scope.groupId])
+  }, [period, scope.loading, scope.level, scope.venueId, scope.groupId])
 
   useEffect(() => {
     setLoading(true)

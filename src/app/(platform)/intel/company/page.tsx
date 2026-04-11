@@ -150,6 +150,7 @@ function CompanyDashboardInner() {
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
     try {
       let venueQ = supabase.from('venues').select('id, name, state')
@@ -190,7 +191,7 @@ function CompanyDashboardInner() {
     } finally {
       setLoading(false)
     }
-  }, [scopeKey])
+  }, [scope.loading, scopeKey])
 
   useEffect(() => {
     fetchData()

@@ -323,6 +323,7 @@ export default function PortfolioOverviewPage() {
   const [expandedVenueId, setExpandedVenueId] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
     try {
       const ninetyDaysAgo = new Date()
@@ -374,7 +375,7 @@ export default function PortfolioOverviewPage() {
     } finally {
       setLoading(false)
     }
-  }, [scopeKey])
+  }, [scope.loading, scopeKey])
 
   useEffect(() => {
     fetchData()

@@ -167,6 +167,7 @@ export default function CapacityPage() {
   const [error, setError] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
     setLoading(true)
     try {
@@ -195,7 +196,7 @@ export default function CapacityPage() {
     } finally {
       setLoading(false)
     }
-  }, [scopeKey])
+  }, [scope.loading, scopeKey])
 
   useEffect(() => {
     fetchData()

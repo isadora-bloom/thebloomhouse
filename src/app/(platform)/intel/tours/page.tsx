@@ -123,6 +123,7 @@ export default function ToursPage() {
   const [saving, setSaving] = useState(false)
 
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
     try {
       // Resolve scope → list of venue IDs (null = all venues / company)
@@ -160,7 +161,7 @@ export default function ToursPage() {
     } finally {
       setLoading(false)
     }
-  }, [scope.level, scope.venueId, scope.groupId])
+  }, [scope.loading, scope.level, scope.venueId, scope.groupId])
 
   useEffect(() => {
     setLoading(true)

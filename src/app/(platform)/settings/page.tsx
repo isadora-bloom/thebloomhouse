@@ -106,7 +106,7 @@ export default function SettingsPage() {
 /* ================================================================== */
 /* Venue Settings — existing editor, now scoped by scope.venueId        */
 /* ================================================================== */
-function VenueSettings({ scope }: { scope: Scope }) {
+function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
   const [config, setConfig] = useState<VenueConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -114,6 +114,7 @@ function VenueSettings({ scope }: { scope: Scope }) {
 
   // Load venue config for the scoped venue
   useEffect(() => {
+    if (scope.loading) return
     async function load() {
       if (!scope.venueId) {
         setLoading(false)
@@ -134,7 +135,7 @@ function VenueSettings({ scope }: { scope: Scope }) {
       setLoading(false)
     }
     load()
-  }, [scope.venueId])
+  }, [scope.venueId, scope.loading])
 
   // Save handler
   const handleSave = useCallback(async () => {
@@ -653,7 +654,7 @@ interface BrandVenue {
   configId: string | null
 }
 
-function BrandSettings({ scope }: { scope: Scope }) {
+function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
   const [venues, setVenues] = useState<BrandVenue[]>([])
   const [orgId, setOrgId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -673,6 +674,7 @@ function BrandSettings({ scope }: { scope: Scope }) {
       : scope.companyName ?? 'Brand'
 
   useEffect(() => {
+    if (scope.loading) return
     async function load() {
       setLoading(true)
       try {
@@ -804,7 +806,7 @@ function BrandSettings({ scope }: { scope: Scope }) {
       }
     }
     load()
-  }, [scope.level, scope.groupId, scope.companyName])
+  }, [scope.level, scope.groupId, scope.companyName, scope.loading])
 
   const handleSave = useCallback(async () => {
     if (venues.length === 0) return
