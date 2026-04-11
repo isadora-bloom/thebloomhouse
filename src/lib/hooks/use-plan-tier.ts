@@ -101,6 +101,12 @@ export function usePlanTier() {
       return
     }
 
+    // No venue yet (scope still resolving) — skip the query
+    if (!venueId) {
+      setLoading(false)
+      return
+    }
+
     const supabase = createClient()
     supabase
       .from('venues')

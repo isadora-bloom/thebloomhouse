@@ -55,13 +55,16 @@ export function UserMenu({ compact = false }: UserMenuProps) {
       // Try to get profile data
       const { data: profile } = await supabase
         .from('user_profiles')
-        .select('full_name, avatar_url, role')
+        .select('first_name, last_name, avatar_url, role')
         .eq('id', authUser.id)
         .maybeSingle()
 
-      const name = (profile?.full_name as string) ??
-        authUser.user_metadata?.full_name ??
-        authUser.email?.split('@')[0] ??
+      const fullName = profile
+        ? [profile.first_name, profile.last_name].filter(Boolean).join(' ')
+        : ''
+      const name = fullName ||
+        authUser.user_metadata?.full_name ||
+        authUser.email?.split('@')[0] ||
         'User'
 
       const nameParts = name.trim().split(/\s+/)
