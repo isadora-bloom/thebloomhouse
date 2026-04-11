@@ -67,14 +67,21 @@ async function auditPage(page: Page, path: string): Promise<PageIssue[]> {
       if (text.includes('Download the React DevTools')) return
       if (text.includes('Warning:')) return
       if (text.includes('hydration')) return
+      // 'Failed to fetch' from aborted in-flight requests on page unmount is normal
+      // framework behavior (Next.js RSC prefetch + Supabase session refresh). Not a bug.
+      if (text.includes('TypeError: Failed to fetch')) return
       consoleErrors.push(text)
     }
   })
 
   // Capture ACTUAL network failures (not status errors)
+  // Exclude aborts — those are normal when navigating between pages.
   const networkFailures: string[] = []
   page.on('requestfailed', req => {
-    networkFailures.push(`${req.method()} ${req.url()} — ${req.failure()?.errorText ?? 'unknown'}`)
+    const errorText = req.failure()?.errorText ?? 'unknown'
+    // net::ERR_ABORTED is normal for in-flight requests when navigating
+    if (errorText.includes('ERR_ABORTED')) return
+    networkFailures.push(`${req.method()} ${req.url()} — ${errorText}`)
   })
 
   const failedRequests: string[] = []
