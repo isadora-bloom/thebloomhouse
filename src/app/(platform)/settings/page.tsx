@@ -6,7 +6,7 @@ import { FONT_PAIRS, getFontUrl } from '@/config/fonts'
 import { useScope, type Scope } from '@/lib/hooks/use-scope'
 import {
   Settings, Palette, Type, Save, Eye, Building2, User, Clock, DollarSign,
-  Layers, ArrowRight,
+  Layers, ArrowRight, Plus, Trash2, Image as ImageIcon, X,
 } from 'lucide-react'
 
 const supabase = createBrowserClient(
@@ -47,6 +47,37 @@ interface VenueRow {
   accent_color: string | null
   business_name: string | null
   brand_description: string | null
+}
+
+interface BrandAsset {
+  id: string
+  venue_id: string
+  asset_type: string
+  label: string
+  url: string
+  sort_order: number
+  created_at: string
+  venues?: { name: string | null } | null
+}
+
+const ASSET_TYPE_OPTIONS = [
+  { value: 'logo', label: 'Logo' },
+  { value: 'hero_image', label: 'Hero Image' },
+  { value: 'watercolor', label: 'Watercolor' },
+  { value: 'photography', label: 'Photography' },
+  { value: 'texture', label: 'Texture' },
+  { value: 'icon', label: 'Icon' },
+  { value: 'other', label: 'Other' },
+]
+
+const ASSET_TYPE_COLORS: Record<string, string> = {
+  logo: 'bg-purple-50 text-purple-700',
+  hero_image: 'bg-teal-50 text-teal-700',
+  watercolor: 'bg-sky-50 text-sky-700',
+  photography: 'bg-amber-50 text-amber-700',
+  texture: 'bg-rose-50 text-rose-700',
+  icon: 'bg-indigo-50 text-indigo-700',
+  other: 'bg-sage-50 text-sage-700',
 }
 
 const TIMEZONE_OPTIONS = [
@@ -112,6 +143,14 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
 
+  // Brand assets state
+  const [brandAssets, setBrandAssets] = useState<BrandAsset[]>([])
+  const [showAssetForm, setShowAssetForm] = useState(false)
+  const [newAssetType, setNewAssetType] = useState('photography')
+  const [newAssetLabel, setNewAssetLabel] = useState('')
+  const [newAssetUrl, setNewAssetUrl] = useState('')
+  const [savingAsset, setSavingAsset] = useState(false)
+
   // Load venue config for the scoped venue
   useEffect(() => {
     if (scope.loading) return
@@ -132,6 +171,17 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
       if (data) {
         setConfig(data as VenueConfig)
       }
+
+      // Load brand assets
+      if (scope.venueId) {
+        const { data: assets } = await supabase
+          .from('brand_assets')
+          .select('*')
+          .eq('venue_id', scope.venueId)
+          .order('sort_order', { ascending: true })
+        setBrandAssets((assets ?? []) as BrandAsset[])
+      }
+
       setLoading(false)
     }
     load()
@@ -179,6 +229,38 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
   function update<K extends keyof VenueConfig>(key: K, value: VenueConfig[K]) {
     setConfig((prev) => (prev ? { ...prev, [key]: value } : prev))
   }
+
+  // Brand asset handlers
+  const handleAddAsset = useCallback(async () => {
+    if (!scope.venueId || !newAssetLabel.trim() || !newAssetUrl.trim()) return
+    setSavingAsset(true)
+    const { data, error } = await supabase
+      .from('brand_assets')
+      .insert({
+        venue_id: scope.venueId,
+        asset_type: newAssetType,
+        label: newAssetLabel.trim(),
+        url: newAssetUrl.trim(),
+        sort_order: brandAssets.length,
+      })
+      .select()
+      .single()
+    if (!error && data) {
+      setBrandAssets((prev) => [...prev, data as BrandAsset])
+      setNewAssetLabel('')
+      setNewAssetUrl('')
+      setNewAssetType('photography')
+      setShowAssetForm(false)
+    }
+    setSavingAsset(false)
+  }, [scope.venueId, newAssetType, newAssetLabel, newAssetUrl, brandAssets.length])
+
+  const handleDeleteAsset = useCallback(async (assetId: string) => {
+    const { error } = await supabase.from('brand_assets').delete().eq('id', assetId)
+    if (!error) {
+      setBrandAssets((prev) => prev.filter((a) => a.id !== assetId))
+    }
+  }, [])
 
   // Current font pair for preview
   const currentFontPair = FONT_PAIRS[config?.font_pair ?? 'playfair_inter'] ?? FONT_PAIRS.playfair_inter
@@ -523,18 +605,119 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
 
         {/* Brand Assets */}
         <div>
-          <label className="block text-sm font-medium text-sage-700 mb-1">Brand Assets</label>
-          <p className="text-xs text-sage-500 mb-3">
-            Upload venue photography, watercolor images, and textures.
-            These can be used across the platform — emails, proposals, and the client portal.
-            Add assets via the <code className="text-sage-600">brand_assets</code> table in Supabase
-            (type: hero_image, watercolor, photography, texture).
-          </p>
-          <div className="p-4 border border-dashed border-sage-300 rounded-xl text-center bg-warm-white">
-            <Palette className="w-6 h-6 text-sage-300 mx-auto mb-2" />
-            <p className="text-sm text-sage-500">Brand asset management coming with Supabase Storage integration.</p>
-            <p className="text-xs text-sage-400 mt-1">For now, add image URLs directly to the brand_assets table.</p>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <label className="block text-sm font-medium text-sage-700">Brand Assets</label>
+              <p className="text-xs text-sage-500 mt-0.5">
+                Venue photography, watercolors, textures, and icons used across emails, proposals, and the portal.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowAssetForm(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-sage-500 hover:bg-sage-600 text-white rounded-lg transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Upload Asset
+            </button>
           </div>
+
+          {/* Add asset form */}
+          {showAssetForm && (
+            <div className="mb-4 p-4 border border-sage-200 rounded-xl bg-warm-white space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-sage-800">New Brand Asset</h4>
+                <button onClick={() => setShowAssetForm(false)} className="p-1 text-sage-400 hover:text-sage-600">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-sage-600 mb-1">Type</label>
+                  <select
+                    value={newAssetType}
+                    onChange={(e) => setNewAssetType(e.target.value)}
+                    className={selectClasses + ' text-sm'}
+                  >
+                    {ASSET_TYPE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-sage-600 mb-1">Label</label>
+                  <input
+                    type="text"
+                    value={newAssetLabel}
+                    onChange={(e) => setNewAssetLabel(e.target.value)}
+                    placeholder="e.g. Garden Ceremony Shot"
+                    className={inputClasses + ' text-sm'}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-sage-600 mb-1">URL</label>
+                  <input
+                    type="text"
+                    value={newAssetUrl}
+                    onChange={(e) => setNewAssetUrl(e.target.value)}
+                    placeholder="https://..."
+                    className={inputClasses + ' text-sm'}
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  onClick={handleAddAsset}
+                  disabled={!newAssetLabel.trim() || !newAssetUrl.trim() || savingAsset}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-sage-500 hover:bg-sage-600 disabled:opacity-50 text-white rounded-lg transition-colors"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  {savingAsset ? 'Saving...' : 'Save Asset'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Asset grid */}
+          {brandAssets.length === 0 && !showAssetForm ? (
+            <div className="p-4 border border-dashed border-sage-300 rounded-xl text-center bg-warm-white">
+              <ImageIcon className="w-6 h-6 text-sage-300 mx-auto mb-2" />
+              <p className="text-sm text-sage-500">No brand assets yet.</p>
+              <p className="text-xs text-sage-400 mt-1">Add logos, hero images, watercolors, photography, and textures.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+              {brandAssets.map((asset) => (
+                <div
+                  key={asset.id}
+                  className="group relative border border-border rounded-xl overflow-hidden bg-warm-white hover:shadow-md transition-shadow"
+                >
+                  <div className="aspect-[4/3] bg-sage-50 flex items-center justify-center overflow-hidden">
+                    <img
+                      src={asset.url}
+                      alt={asset.label}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        ;(e.target as HTMLImageElement).style.display = 'none'
+                      }}
+                    />
+                  </div>
+                  <div className="p-2.5">
+                    <p className="text-xs font-medium text-sage-800 truncate">{asset.label}</p>
+                    <span className={`inline-block mt-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${ASSET_TYPE_COLORS[asset.asset_type] ?? ASSET_TYPE_COLORS.other}`}>
+                      {ASSET_TYPE_OPTIONS.find((o) => o.value === asset.asset_type)?.label ?? asset.asset_type}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteAsset(asset.id)}
+                    className="absolute top-2 right-2 p-1.5 rounded-lg bg-white/80 text-red-500 opacity-0 group-hover:opacity-100 hover:bg-red-50 transition-all"
+                    title="Delete asset"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* ---------------------------------------------------------------- */}
@@ -661,6 +844,9 @@ function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
 
+  // Brand assets across all in-scope venues
+  const [allBrandAssets, setAllBrandAssets] = useState<BrandAsset[]>([])
+
   // Brand-level editable state (sourced from organisations table)
   const [brandDescription, setBrandDescription] = useState<string>('')
   const [logoUrl, setLogoUrl] = useState<string>('')
@@ -760,6 +946,16 @@ function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
         })
 
         setVenues(joined)
+
+        // Load brand assets across all in-scope venues
+        if (ids.length > 0) {
+          const { data: assetRows } = await supabase
+            .from('brand_assets')
+            .select('*, venues:venue_id(name)')
+            .in('venue_id', ids)
+            .order('sort_order', { ascending: true })
+          setAllBrandAssets((assetRows ?? []) as BrandAsset[])
+        }
 
         // 5) Load brand-level fields from the organisations table
         if (resolvedOrgId) {
@@ -1122,6 +1318,77 @@ function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
               </div>
             ))}
           </div>
+        )}
+      </section>
+
+      {/* ---------------------------------------------------------- */}
+      {/* Brand Assets across venues                                  */}
+      {/* ---------------------------------------------------------- */}
+      <section className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-6">
+        <div className="flex items-center gap-2">
+          <ImageIcon className="w-5 h-5 text-sage-500" />
+          <h2 className="font-heading text-xl font-semibold text-sage-900">Brand Assets</h2>
+          <span className="text-xs text-sage-500 ml-1">({allBrandAssets.length})</span>
+        </div>
+        <p className="text-sm text-sage-600 -mt-2">
+          All brand assets across your venues. To add or remove assets, configure each venue individually.
+        </p>
+
+        {allBrandAssets.length === 0 ? (
+          <div className="p-8 text-center text-sage-500 text-sm border border-dashed border-sage-300 rounded-xl">
+            No brand assets found. Add assets from individual venue settings.
+          </div>
+        ) : (
+          (() => {
+            // Group assets by venue
+            const grouped = new Map<string, { name: string; assets: BrandAsset[] }>()
+            for (const asset of allBrandAssets) {
+              const venueName = (asset.venues as { name: string | null } | null)?.name ?? 'Unknown Venue'
+              const key = asset.venue_id
+              if (!grouped.has(key)) {
+                grouped.set(key, { name: venueName, assets: [] })
+              }
+              grouped.get(key)!.assets.push(asset)
+            }
+            return (
+              <div className="space-y-6">
+                {Array.from(grouped.entries()).map(([venueId, group]) => (
+                  <div key={venueId}>
+                    <h3 className="text-sm font-semibold text-sage-800 mb-3 flex items-center gap-2">
+                      <Building2 className="w-4 h-4 text-sage-400" />
+                      {group.name}
+                      <span className="text-xs font-normal text-sage-500">({group.assets.length} asset{group.assets.length === 1 ? '' : 's'})</span>
+                    </h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                      {group.assets.map((asset) => (
+                        <div
+                          key={asset.id}
+                          className="border border-border rounded-xl overflow-hidden bg-warm-white"
+                        >
+                          <div className="aspect-[4/3] bg-sage-50 flex items-center justify-center overflow-hidden">
+                            <img
+                              src={asset.url}
+                              alt={asset.label}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                ;(e.target as HTMLImageElement).style.display = 'none'
+                              }}
+                            />
+                          </div>
+                          <div className="p-2.5">
+                            <p className="text-xs font-medium text-sage-800 truncate">{asset.label}</p>
+                            <span className={`inline-block mt-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${ASSET_TYPE_COLORS[asset.asset_type] ?? ASSET_TYPE_COLORS.other}`}>
+                              {ASSET_TYPE_OPTIONS.find((o) => o.value === asset.asset_type)?.label ?? asset.asset_type}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          })()
         )}
       </section>
     </div>

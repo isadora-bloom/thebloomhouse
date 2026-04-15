@@ -12,9 +12,17 @@ import {
   MessageSquare,
   Sparkles,
   Megaphone,
+  Save,
+  MapPin,
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
+import { createBrowserClient } from '@supabase/ssr'
 import { VenueChip } from '@/components/intel/venue-chip'
+
+const supabase = createBrowserClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,6 +42,25 @@ interface ReviewPhrase {
 }
 
 type FilterTab = 'all' | 'sage' | 'marketing'
+type PageView = 'phrases' | 'reviews'
+
+interface SourceReview {
+  id: string
+  venue_id: string
+  source: string
+  reviewer_name: string | null
+  rating: number
+  title: string | null
+  body: string
+  review_date: string
+  response_text: string | null
+  response_date: string | null
+  is_featured: boolean
+  sentiment_score: number | null
+  themes: string[] | null
+  created_at: string
+  venues?: { name: string | null } | null
+}
 
 // ---------------------------------------------------------------------------
 // Constants & helpers
@@ -339,11 +366,145 @@ function PhraseCard({
 }
 
 // ---------------------------------------------------------------------------
+// Source badge helper
+// ---------------------------------------------------------------------------
+
+const SOURCE_LABELS: Record<string, { label: string; color: string }> = {
+  google: { label: 'Google', color: 'bg-blue-50 text-blue-700' },
+  the_knot: { label: 'The Knot', color: 'bg-rose-50 text-rose-700' },
+  wedding_wire: { label: 'Wedding Wire', color: 'bg-amber-50 text-amber-700' },
+  yelp: { label: 'Yelp', color: 'bg-red-50 text-red-700' },
+  facebook: { label: 'Facebook', color: 'bg-indigo-50 text-indigo-700' },
+  other: { label: 'Other', color: 'bg-sage-50 text-sage-700' },
+}
+
+function SourceBadge({ source }: { source: string }) {
+  const info = SOURCE_LABELS[source] ?? SOURCE_LABELS.other
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${info.color}`}>
+      {info.label}
+    </span>
+  )
+}
+
+function StarRating({ rating }: { rating: number }) {
+  return (
+    <div className="flex items-center gap-0.5">
+      {[1, 2, 3, 4, 5].map((star) => (
+        <Star
+          key={star}
+          className={`w-4 h-4 ${
+            star <= rating ? 'text-amber-400 fill-amber-400' : 'text-sage-200'
+          }`}
+        />
+      ))}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Source Review Card
+// ---------------------------------------------------------------------------
+
+function SourceReviewCard({
+  review,
+  showVenue,
+  onSaveResponse,
+}: {
+  review: SourceReview
+  showVenue: boolean
+  onSaveResponse: (id: string, text: string) => Promise<void>
+}) {
+  const [responseText, setResponseText] = useState(review.response_text ?? '')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  const handleSave = async () => {
+    setSaving(true)
+    await onSaveResponse(review.id, responseText)
+    setSaving(false)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  return (
+    <div className="bg-surface border border-border rounded-xl p-5 shadow-sm">
+      {/* Header: rating + source + date */}
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        <StarRating rating={review.rating} />
+        <SourceBadge source={review.source} />
+        {review.reviewer_name && (
+          <span className="text-sm font-medium text-sage-800">{review.reviewer_name}</span>
+        )}
+        <span className="text-xs text-sage-500 ml-auto">
+          {new Date(review.review_date).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          })}
+        </span>
+        {showVenue && <VenueChip venueName={review.venues?.name} />}
+      </div>
+
+      {/* Title */}
+      {review.title && (
+        <h3 className="text-sm font-semibold text-sage-900 mb-2">{review.title}</h3>
+      )}
+
+      {/* Body */}
+      <p className="text-sm text-sage-700 leading-relaxed mb-4 whitespace-pre-line">{review.body}</p>
+
+      {/* Themes */}
+      {review.themes && review.themes.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          {review.themes.map((theme) => {
+            const tc = THEME_COLORS[theme] ?? THEME_COLORS.other
+            return (
+              <span key={theme} className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${tc.bg} ${tc.text}`}>
+                {formatThemeName(theme)}
+              </span>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Response textarea */}
+      <div className="border-t border-border pt-3 mt-3">
+        <label className="block text-xs font-medium text-sage-600 mb-1.5">
+          Response {review.response_date ? `(sent ${new Date(review.response_date).toLocaleDateString()})` : '(draft)'}
+        </label>
+        <textarea
+          value={responseText}
+          onChange={(e) => { setResponseText(e.target.value); setSaved(false) }}
+          placeholder="Draft a response to this review..."
+          rows={3}
+          className="w-full px-3 py-2 border border-sage-200 rounded-lg text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 resize-none bg-warm-white"
+        />
+        <div className="flex items-center gap-2 mt-2">
+          <button
+            onClick={handleSave}
+            disabled={saving || saved}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-sage-500 hover:bg-sage-600 disabled:opacity-50 text-white rounded-lg transition-colors"
+          >
+            <Save className="w-3.5 h-3.5" />
+            {saving ? 'Saving...' : saved ? 'Saved' : 'Save Response'}
+          </button>
+          {saved && (
+            <span className="text-xs text-emerald-600 font-medium">Response saved</span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main Page Component
 // ---------------------------------------------------------------------------
 
 export default function ReviewAnalysisPage() {
   const scope = useScope()
+  const [pageView, setPageView] = useState<PageView>('phrases')
   const [phrases, setPhrases] = useState<ReviewPhrase[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -351,6 +512,12 @@ export default function ReviewAnalysisPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [approvingId, setApprovingId] = useState<string | null>(null)
+
+  // Source reviews state
+  const [sourceReviews, setSourceReviews] = useState<SourceReview[]>([])
+  const [reviewsLoading, setReviewsLoading] = useState(false)
+  const [reviewsError, setReviewsError] = useState<string | null>(null)
+  const [reviewSearch, setReviewSearch] = useState('')
 
   // ---- Fetch phrases ----
   const fetchPhrases = useCallback(async () => {
@@ -429,6 +596,75 @@ export default function ReviewAnalysisPage() {
     }
   }
 
+  // ---- Fetch source reviews ----
+  const fetchSourceReviews = useCallback(async () => {
+    setReviewsLoading(true)
+    setReviewsError(null)
+    try {
+      let query = supabase
+        .from('reviews')
+        .select('*, venues:venue_id(name)')
+        .order('review_date', { ascending: false })
+
+      // Scope filtering
+      if (scope.level === 'venue' && scope.venueId) {
+        query = query.eq('venue_id', scope.venueId)
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        const venueIds = (members ?? []).map((m) => m.venue_id as string)
+        if (venueIds.length > 0) {
+          query = query.in('venue_id', venueIds)
+        }
+      }
+      // company scope: no filter, show all
+
+      const { data, error: fetchErr } = await query
+      if (fetchErr) throw fetchErr
+      setSourceReviews((data ?? []) as SourceReview[])
+    } catch (err) {
+      console.error('Failed to fetch source reviews:', err)
+      setReviewsError('Failed to load source reviews')
+    } finally {
+      setReviewsLoading(false)
+    }
+  }, [scope.level, scope.venueId, scope.groupId])
+
+  useEffect(() => {
+    if (pageView === 'reviews') {
+      fetchSourceReviews()
+    }
+  }, [pageView, fetchSourceReviews])
+
+  // ---- Save review response ----
+  const handleSaveResponse = useCallback(async (reviewId: string, responseText: string) => {
+    const { error: updateErr } = await supabase
+      .from('reviews')
+      .update({ response_text: responseText || null, updated_at: new Date().toISOString() })
+      .eq('id', reviewId)
+    if (updateErr) {
+      console.error('Failed to save response:', updateErr)
+    } else {
+      setSourceReviews((prev) =>
+        prev.map((r) => (r.id === reviewId ? { ...r, response_text: responseText || null } : r))
+      )
+    }
+  }, [])
+
+  // ---- Filtered source reviews ----
+  const filteredReviews = sourceReviews.filter((r) => {
+    if (!reviewSearch.trim()) return true
+    const q = reviewSearch.toLowerCase()
+    return (
+      r.body.toLowerCase().includes(q) ||
+      (r.reviewer_name?.toLowerCase().includes(q) ?? false) ||
+      (r.title?.toLowerCase().includes(q) ?? false) ||
+      r.source.toLowerCase().includes(q)
+    )
+  })
+
   // ---- Filtered + searched phrases ----
   const filteredPhrases = phrases.filter((p) => {
     if (!searchQuery.trim()) return true
@@ -456,20 +692,58 @@ export default function ReviewAnalysisPage() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="font-heading text-3xl font-bold text-sage-900 mb-1">
-            Review Language
+            Reviews
           </h1>
           <p className="text-sage-600">
-            Extracted themes and sentiment from your reviews across The Knot, WeddingWire, and Google. See what guests love most — these phrases get fed back into your AI's voice training.
+            {pageView === 'phrases'
+              ? 'Extracted themes and sentiment from your reviews across The Knot, WeddingWire, and Google. See what guests love most — these phrases get fed back into your AI\'s voice training.'
+              : 'Source reviews from Google, The Knot, and WeddingWire. Draft responses and track sentiment.'}
           </p>
         </div>
+        {pageView === 'phrases' && (
+          <button
+            onClick={() => setShowModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            Extract from Review
+          </button>
+        )}
+      </div>
+
+      {/* ---- Page view switcher ---- */}
+      <div className="flex items-center gap-1 bg-sage-50 rounded-lg p-1 w-fit">
         <button
-          onClick={() => setShowModal(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors shrink-0"
+          onClick={() => setPageView('phrases')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+            pageView === 'phrases'
+              ? 'bg-surface text-sage-900 shadow-sm'
+              : 'text-sage-600 hover:text-sage-800'
+          }`}
         >
-          <Plus className="w-4 h-4" />
-          Extract from Review
+          Extracted Phrases
+        </button>
+        <button
+          onClick={() => setPageView('reviews')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+            pageView === 'reviews'
+              ? 'bg-surface text-sage-900 shadow-sm'
+              : 'text-sage-600 hover:text-sage-800'
+          }`}
+        >
+          Source Reviews
+          {sourceReviews.length > 0 && (
+            <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full bg-sage-100 text-sage-600">
+              {sourceReviews.length}
+            </span>
+          )}
         </button>
       </div>
+
+      {/* ================================================================ */}
+      {/* EXTRACTED PHRASES VIEW                                           */}
+      {/* ================================================================ */}
+      {pageView === 'phrases' && <>
 
       {/* ---- Error state ---- */}
       {error && (
@@ -570,6 +844,77 @@ export default function ReviewAnalysisPage() {
             />
           ))}
         </div>
+      )}
+
+      </>}
+
+      {/* ================================================================ */}
+      {/* SOURCE REVIEWS VIEW                                              */}
+      {/* ================================================================ */}
+      {pageView === 'reviews' && (
+        <>
+          {/* Error state */}
+          {reviewsError && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
+              <ThumbsUp className="w-5 h-5 text-red-500 shrink-0 rotate-180" />
+              <p className="text-sm text-red-700">{reviewsError}</p>
+              <button
+                onClick={() => { setReviewsError(null); fetchSourceReviews() }}
+                className="ml-auto text-sm font-medium text-red-600 hover:text-red-800 transition-colors"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {/* Search */}
+          <div className="relative w-full sm:w-72">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-sage-400" />
+            <input
+              type="text"
+              placeholder="Search reviews..."
+              value={reviewSearch}
+              onChange={(e) => setReviewSearch(e.target.value)}
+              className="pl-9 pr-4 py-2 text-sm border border-sage-200 rounded-lg text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 w-full bg-warm-white"
+            />
+          </div>
+
+          {/* Reviews list */}
+          {reviewsLoading ? (
+            <div className="space-y-4">
+              {[...Array(3)].map((_, i) => (
+                <div key={i} className="bg-surface border border-border rounded-xl p-5 shadow-sm animate-pulse">
+                  <div className="h-4 w-48 bg-sage-100 rounded mb-3" />
+                  <div className="h-3 w-full bg-sage-100 rounded mb-2" />
+                  <div className="h-3 w-3/4 bg-sage-100 rounded" />
+                </div>
+              ))}
+            </div>
+          ) : filteredReviews.length === 0 ? (
+            <div className="bg-surface border border-border rounded-xl p-12 shadow-sm text-center">
+              <Quote className="w-12 h-12 text-sage-300 mx-auto mb-4" />
+              <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">
+                {reviewSearch ? 'No matching reviews' : 'No source reviews yet'}
+              </h3>
+              <p className="text-sm text-sage-600 max-w-md mx-auto">
+                {reviewSearch
+                  ? `No reviews match "${reviewSearch}".`
+                  : 'Import reviews from Google, The Knot, or WeddingWire to see them here.'}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {filteredReviews.map((review) => (
+                <SourceReviewCard
+                  key={review.id}
+                  review={review}
+                  showVenue={scope.level !== 'venue'}
+                  onSaveResponse={handleSaveResponse}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {/* ---- Extract Modal ---- */}
