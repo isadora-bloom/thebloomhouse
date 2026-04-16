@@ -8,11 +8,14 @@ import {
   generateWeeklyBriefing,
   generateMonthlyBriefing,
 } from '@/lib/services/briefings'
+import { generateWeeklyDigest } from '@/lib/services/weekly-digest'
+import { measureInsightOutcomes } from '@/lib/services/insight-tracking'
 import { sendAllDigests } from '@/lib/services/daily-digest'
 import { processAllVenueFollowUps } from '@/lib/services/follow-up-sequences'
 import { applyDailyDecay } from '@/lib/services/heat-mapping'
 import { processAllNewEmails, flushPendingAutoSends } from '@/lib/services/email-pipeline'
 import { runAllVenueIntelligence } from '@/lib/services/intelligence-engine'
+import { createNotification } from '@/lib/services/admin-notifications'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -27,10 +30,13 @@ const VALID_JOBS = [
   'anomaly_detection',
   'intelligence_analysis',
   'weekly_briefing',
+  'weekly_digest',
   'monthly_briefing',
   'daily_digest',
   'follow_up_sequences',
   'attribution_refresh',
+  'post_event_feedback_check',
+  'outcome_measurement',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -65,6 +71,9 @@ async function runJob(job: JobName): Promise<unknown> {
     case 'weekly_briefing':
       return generateBriefingsForAllVenues('weekly')
 
+    case 'weekly_digest':
+      return generateDigestsForAllVenues()
+
     case 'monthly_briefing':
       return generateBriefingsForAllVenues('monthly')
 
@@ -76,6 +85,12 @@ async function runJob(job: JobName): Promise<unknown> {
 
     case 'attribution_refresh':
       return refreshAttributionAllVenues()
+
+    case 'post_event_feedback_check':
+      return checkPostEventFeedback()
+
+    case 'outcome_measurement':
+      return measureOutcomesAllVenues()
   }
 }
 
@@ -256,6 +271,88 @@ async function fetchWeatherForAllVenues(): Promise<Record<string, number>> {
 }
 
 /**
+ * Generate weekly intelligence digests for all active venues.
+ * Runs on Mondays — checks day of week before generating.
+ * Creates an admin notification when the digest is ready.
+ */
+async function generateDigestsForAllVenues(): Promise<Record<string, boolean>> {
+  // Only generate on Mondays
+  const dayOfWeek = new Date().getDay()
+  if (dayOfWeek !== 1) {
+    console.log('[cron] Weekly digest skipped — not Monday (day=' + dayOfWeek + ')')
+    return {}
+  }
+
+  const supabase = createServiceClient()
+
+  const { data: venues, error } = await supabase
+    .from('venues')
+    .select('id')
+    .eq('status', 'active')
+
+  if (error || !venues || venues.length === 0) {
+    console.warn('[cron] No active venues found for weekly digest')
+    return {}
+  }
+
+  const results: Record<string, boolean> = {}
+
+  for (const venue of venues) {
+    const id = venue.id as string
+    try {
+      await generateWeeklyDigest(id)
+
+      // Create notification that the digest is ready
+      await createNotification({
+        venueId: id,
+        type: 'weekly_digest',
+        title: 'Your weekly intelligence digest is ready',
+        body: 'Review your leads, performance trends, and actionable insights for this week.',
+      })
+
+      results[id] = true
+    } catch (err) {
+      console.error(`[cron] Weekly digest failed for venue ${id}:`, err)
+      results[id] = false
+    }
+  }
+
+  return results
+}
+
+/**
+ * Measure insight outcomes for all active venues.
+ * Checks pending outcomes whose measurement window has elapsed.
+ */
+async function measureOutcomesAllVenues(): Promise<Record<string, number>> {
+  const supabase = createServiceClient()
+
+  const { data: venues, error } = await supabase
+    .from('venues')
+    .select('id')
+    .eq('status', 'active')
+
+  if (error || !venues || venues.length === 0) {
+    return {}
+  }
+
+  const results: Record<string, number> = {}
+
+  for (const venue of venues) {
+    const id = venue.id as string
+    try {
+      const measured = await measureInsightOutcomes(id)
+      results[id] = measured
+    } catch (err) {
+      console.error(`[cron] Outcome measurement failed for venue ${id}:`, err)
+      results[id] = 0
+    }
+  }
+
+  return results
+}
+
+/**
  * Generate briefings for all venues that have a briefing_email configured.
  */
 async function generateBriefingsForAllVenues(
@@ -291,6 +388,91 @@ async function generateBriefingsForAllVenues(
   }
 
   return results
+}
+
+/**
+ * Check for weddings that happened 3 days ago and don't have feedback yet.
+ * Creates a notification prompting the coordinator to submit feedback.
+ */
+async function checkPostEventFeedback(): Promise<{ notified: number }> {
+  const supabase = createServiceClient()
+
+  // Find weddings where wedding_date was 3 days ago, status is booked or completed,
+  // and no event_feedback row exists yet
+  const threeDaysAgo = new Date()
+  threeDaysAgo.setDate(threeDaysAgo.getDate() - 3)
+  const dateStr = threeDaysAgo.toISOString().split('T')[0]
+
+  const { data: weddings, error } = await supabase
+    .from('weddings')
+    .select(`
+      id,
+      venue_id,
+      wedding_date,
+      status
+    `)
+    .eq('wedding_date', dateStr)
+    .in('status', ['booked', 'completed'])
+
+  if (error || !weddings || weddings.length === 0) {
+    return { notified: 0 }
+  }
+
+  // Filter out weddings that already have feedback
+  const weddingIds = weddings.map((w) => w.id as string)
+  const { data: existingFeedback } = await supabase
+    .from('event_feedback')
+    .select('wedding_id')
+    .in('wedding_id', weddingIds)
+
+  const feedbackWeddingIds = new Set(
+    (existingFeedback ?? []).map((f) => f.wedding_id as string)
+  )
+
+  const needsFeedback = weddings.filter(
+    (w) => !feedbackWeddingIds.has(w.id as string)
+  )
+
+  if (needsFeedback.length === 0) {
+    return { notified: 0 }
+  }
+
+  let notified = 0
+
+  for (const w of needsFeedback) {
+    const weddingId = w.id as string
+    const venueId = w.venue_id as string
+
+    // Get couple names for the notification
+    const { data: people } = await supabase
+      .from('people')
+      .select('first_name, role')
+      .eq('wedding_id', weddingId)
+
+    const coupleNames = (people ?? [])
+      .filter((p) =>
+        ['partner1', 'partner2', 'bride', 'groom', 'partner'].includes(p.role)
+      )
+      .map((p) => p.first_name)
+      .join(' & ')
+
+    const label = coupleNames || 'the couple'
+
+    try {
+      await createNotification({
+        venueId,
+        weddingId,
+        type: 'post_event_feedback',
+        title: `Time to share your feedback on ${label}'s wedding!`,
+        body: `Your observations help Bloom House learn. Complete the post-event feedback while it's fresh.`,
+      })
+      notified++
+    } catch (err) {
+      console.error(`[cron] Feedback notification failed for wedding ${weddingId}:`, err)
+    }
+  }
+
+  return { notified }
 }
 
 // ---------------------------------------------------------------------------

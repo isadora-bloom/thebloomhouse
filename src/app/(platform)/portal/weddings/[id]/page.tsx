@@ -26,6 +26,10 @@ import {
   Loader2,
   Activity,
   AlertCircle,
+  Star,
+  ClipboardCheck,
+  Sparkles,
+  ThumbsUp,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -135,11 +139,47 @@ interface ConsultantRow {
   last_name: string | null
 }
 
+interface EventFeedbackRow {
+  id: string
+  venue_id: string
+  wedding_id: string
+  overall_rating: number
+  couple_satisfaction: number | null
+  timeline_adherence: string | null
+  delay_phases: string[] | null
+  delay_notes: string | null
+  guest_complaints: string | null
+  guest_complaint_count: number | null
+  catering_quality: number | null
+  dietary_handling: number | null
+  service_timing: number | null
+  catering_notes: string | null
+  review_readiness: string | null
+  review_readiness_notes: string | null
+  what_went_well: string | null
+  what_to_change: string | null
+  proactive_response_draft: string | null
+  proactive_response_approved: boolean
+  submitted_at: string | null
+  created_at: string
+}
+
+interface EventFeedbackVendorRow {
+  id: string
+  event_feedback_id: string
+  vendor_id: string | null
+  vendor_name: string
+  vendor_type: string
+  rating: number
+  notes: string | null
+  would_recommend: boolean | null
+}
+
 // ---------------------------------------------------------------------------
 // Tab definitions
 // ---------------------------------------------------------------------------
 
-type TabKey = 'overview' | 'planning-notes' | 'vendors' | 'guests' | 'timeline' | 'budget' | 'communications' | 'internal-notes'
+type TabKey = 'overview' | 'planning-notes' | 'vendors' | 'guests' | 'timeline' | 'budget' | 'communications' | 'internal-notes' | 'feedback'
 
 const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: 'overview', label: 'Overview', icon: Activity },
@@ -150,7 +190,22 @@ const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?
   { key: 'budget', label: 'Budget', icon: DollarSign },
   { key: 'communications', label: 'Communications', icon: MessageCircle },
   { key: 'internal-notes', label: 'Internal Notes', icon: Lock },
+  { key: 'feedback', label: 'Feedback', icon: ClipboardCheck },
 ]
+
+// ---------------------------------------------------------------------------
+// Delay phase options
+// ---------------------------------------------------------------------------
+
+const DELAY_PHASES = [
+  { value: 'ceremony_start', label: 'Ceremony Start' },
+  { value: 'cocktail_to_reception', label: 'Cocktail to Reception' },
+  { value: 'dinner_service', label: 'Dinner Service' },
+  { value: 'formalities', label: 'Formalities (Toasts/Dances)' },
+  { value: 'vendor_setup', label: 'Vendor Setup' },
+  { value: 'photos_ran_long', label: 'Photos Ran Long' },
+  { value: 'other', label: 'Other' },
+] as const
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -851,6 +906,736 @@ function InternalNotesTab({
 }
 
 // ---------------------------------------------------------------------------
+// Star Rating Input
+// ---------------------------------------------------------------------------
+
+function StarRating({
+  value,
+  onChange,
+  readonly = false,
+  size = 'md',
+}: {
+  value: number
+  onChange?: (v: number) => void
+  readonly?: boolean
+  size?: 'sm' | 'md'
+}) {
+  const iconSize = size === 'sm' ? 'w-4 h-4' : 'w-5 h-5'
+
+  return (
+    <div className="inline-flex items-center gap-0.5">
+      {[1, 2, 3, 4, 5].map((star) => (
+        <button
+          key={star}
+          type="button"
+          disabled={readonly}
+          onClick={() => onChange?.(star)}
+          className={cn(
+            'transition-colors',
+            readonly ? 'cursor-default' : 'cursor-pointer hover:scale-110'
+          )}
+        >
+          <Star
+            className={cn(
+              iconSize,
+              star <= value
+                ? 'text-gold-500 fill-gold-500'
+                : 'text-sage-300'
+            )}
+          />
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Post-Event Feedback Tab
+// ---------------------------------------------------------------------------
+
+function PostEventFeedbackTab({
+  wedding,
+  vendors,
+  existingFeedback,
+  existingVendorRatings,
+  onSubmit,
+}: {
+  wedding: WeddingRow
+  vendors: BookedVendorRow[]
+  existingFeedback: EventFeedbackRow | null
+  existingVendorRatings: EventFeedbackVendorRow[]
+  onSubmit: () => void
+}) {
+  const [submitting, setSubmitting] = useState(false)
+  const [generatingDraft, setGeneratingDraft] = useState(false)
+
+  // Form state
+  const [overallRating, setOverallRating] = useState(existingFeedback?.overall_rating ?? 0)
+  const [coupleSatisfaction, setCoupleSatisfaction] = useState(existingFeedback?.couple_satisfaction ?? 0)
+  const [timelineAdherence, setTimelineAdherence] = useState(existingFeedback?.timeline_adherence ?? '')
+  const [delayPhases, setDelayPhases] = useState<string[]>(existingFeedback?.delay_phases ?? [])
+  const [delayNotes, setDelayNotes] = useState(existingFeedback?.delay_notes ?? '')
+  const [guestComplaints, setGuestComplaints] = useState(existingFeedback?.guest_complaints ?? '')
+  const [guestComplaintCount, setGuestComplaintCount] = useState(existingFeedback?.guest_complaint_count ?? 0)
+  const [cateringQuality, setCateringQuality] = useState(existingFeedback?.catering_quality ?? 0)
+  const [dietaryHandling, setDietaryHandling] = useState(existingFeedback?.dietary_handling ?? 0)
+  const [serviceTiming, setServiceTiming] = useState(existingFeedback?.service_timing ?? 0)
+  const [cateringNotes, setCateringNotes] = useState(existingFeedback?.catering_notes ?? '')
+  const [reviewReadiness, setReviewReadiness] = useState(existingFeedback?.review_readiness ?? '')
+  const [reviewReadinessNotes, setReviewReadinessNotes] = useState(existingFeedback?.review_readiness_notes ?? '')
+  const [whatWentWell, setWhatWentWell] = useState(existingFeedback?.what_went_well ?? '')
+  const [whatToChange, setWhatToChange] = useState(existingFeedback?.what_to_change ?? '')
+  const [proactiveDraft, setProactiveDraft] = useState(existingFeedback?.proactive_response_draft ?? '')
+
+  // Per-vendor state
+  const [vendorFeedback, setVendorFeedback] = useState<
+    Record<string, { rating: number; notes: string; wouldRecommend: boolean | null }>
+  >(() => {
+    const initial: Record<string, { rating: number; notes: string; wouldRecommend: boolean | null }> = {}
+    for (const v of vendors) {
+      const existing = existingVendorRatings.find((vr) => vr.vendor_id === v.id)
+      initial[v.id] = {
+        rating: existing?.rating ?? 0,
+        notes: existing?.notes ?? '',
+        wouldRecommend: existing?.would_recommend ?? null,
+      }
+    }
+    return initial
+  })
+
+  const isReadOnly = !!existingFeedback?.submitted_at && !!existingFeedback?.overall_rating
+  const showDelayDetails = timelineAdherence === 'minor_delays' || timelineAdherence === 'significant_delays'
+
+  // Check if wedding date is in the past
+  const weddingInPast = wedding.wedding_date
+    ? new Date(wedding.wedding_date + 'T00:00:00') < new Date()
+    : false
+
+  if (!weddingInPast) {
+    return (
+      <div className="text-center py-12">
+        <ClipboardCheck className="w-10 h-10 text-sage-300 mx-auto mb-3" />
+        <p className="text-sm text-sage-500">Post-event feedback will be available after the wedding date.</p>
+        <p className="text-xs text-sage-400 mt-1">Wedding date: {formatDate(wedding.wedding_date)}</p>
+      </div>
+    )
+  }
+
+  async function handleSubmit() {
+    if (overallRating === 0) {
+      alert('Please provide an overall rating.')
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      const supabase = createClient()
+
+      // Insert event_feedback
+      const { data: feedbackRow, error: fbErr } = await supabase
+        .from('event_feedback')
+        .insert({
+          venue_id: wedding.venue_id,
+          wedding_id: wedding.id,
+          overall_rating: overallRating,
+          couple_satisfaction: coupleSatisfaction || null,
+          timeline_adherence: timelineAdherence || null,
+          delay_phases: delayPhases.length > 0 ? delayPhases : [],
+          delay_notes: delayNotes || null,
+          guest_complaints: guestComplaints || null,
+          guest_complaint_count: guestComplaintCount,
+          catering_quality: cateringQuality || null,
+          dietary_handling: dietaryHandling || null,
+          service_timing: serviceTiming || null,
+          catering_notes: cateringNotes || null,
+          review_readiness: reviewReadiness || null,
+          review_readiness_notes: reviewReadinessNotes || null,
+          what_went_well: whatWentWell || null,
+          what_to_change: whatToChange || null,
+          proactive_response_draft: proactiveDraft || null,
+          submitted_at: new Date().toISOString(),
+        })
+        .select('id')
+        .single()
+
+      if (fbErr) throw fbErr
+
+      // Insert vendor feedback rows
+      const vendorRows = vendors
+        .filter((v) => vendorFeedback[v.id]?.rating > 0)
+        .map((v) => ({
+          event_feedback_id: feedbackRow.id,
+          vendor_id: v.id,
+          vendor_name: v.vendor_name || v.vendor_type,
+          vendor_type: v.vendor_type,
+          rating: vendorFeedback[v.id].rating,
+          notes: vendorFeedback[v.id].notes || null,
+          would_recommend: vendorFeedback[v.id].wouldRecommend,
+        }))
+
+      if (vendorRows.length > 0) {
+        const { error: vrErr } = await supabase
+          .from('event_feedback_vendors')
+          .insert(vendorRows)
+
+        if (vrErr) throw vrErr
+      }
+
+      onSubmit()
+    } catch (err) {
+      console.error('Failed to submit feedback:', err)
+      alert('Failed to submit feedback. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleGenerateDraft() {
+    if (!existingFeedback?.id && overallRating === 0) {
+      alert('Please fill in the feedback form first, then generate the draft.')
+      return
+    }
+
+    // If there's no existing feedback yet, we need to submit first to get an ID
+    // For now, we just call the API with the existing feedback ID
+    if (!existingFeedback?.id) {
+      alert('Please submit the feedback first, then generate the response draft.')
+      return
+    }
+
+    setGeneratingDraft(true)
+    try {
+      const res = await fetch('/api/portal/event-feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          eventFeedbackId: existingFeedback.id,
+          venueId: wedding.venue_id,
+        }),
+      })
+
+      if (!res.ok) {
+        const errData = await res.json()
+        throw new Error(errData.error || 'Failed to generate draft')
+      }
+
+      const data = await res.json()
+      setProactiveDraft(data.draft)
+    } catch (err) {
+      console.error('Failed to generate draft:', err)
+      alert('Failed to generate review response draft. Please try again.')
+    } finally {
+      setGeneratingDraft(false)
+    }
+  }
+
+  function toggleDelayPhase(phase: string) {
+    setDelayPhases((prev) =>
+      prev.includes(phase) ? prev.filter((p) => p !== phase) : [...prev, phase]
+    )
+  }
+
+  // Read-only view
+  if (isReadOnly) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-2 text-xs text-sage-500">
+          <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
+          Feedback submitted on {existingFeedback.submitted_at ? formatShortDate(existingFeedback.submitted_at) : 'Unknown'}
+        </div>
+
+        {/* Overall Assessment */}
+        <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-4">
+          <h3 className="text-sm font-semibold text-sage-900">Overall Assessment</h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div>
+              <p className="text-xs text-sage-500 mb-1">Overall Rating</p>
+              <StarRating value={existingFeedback.overall_rating} readonly />
+            </div>
+            {existingFeedback.couple_satisfaction && (
+              <div>
+                <p className="text-xs text-sage-500 mb-1">Couple Satisfaction</p>
+                <StarRating value={existingFeedback.couple_satisfaction} readonly />
+              </div>
+            )}
+            {existingFeedback.timeline_adherence && (
+              <div>
+                <p className="text-xs text-sage-500 mb-1">Timeline</p>
+                <p className="text-sm font-medium text-sage-900 capitalize">
+                  {existingFeedback.timeline_adherence.replace(/_/g, ' ')}
+                </p>
+              </div>
+            )}
+          </div>
+          {existingFeedback.delay_phases && existingFeedback.delay_phases.length > 0 && (
+            <div>
+              <p className="text-xs text-sage-500 mb-1">Delay Phases</p>
+              <div className="flex flex-wrap gap-1">
+                {existingFeedback.delay_phases.map((phase) => (
+                  <span key={phase} className="px-2 py-0.5 rounded-full text-xs bg-amber-50 text-amber-700 border border-amber-200">
+                    {DELAY_PHASES.find((d) => d.value === phase)?.label ?? phase}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {existingFeedback.delay_notes && (
+            <div>
+              <p className="text-xs text-sage-500 mb-1">Delay Notes</p>
+              <p className="text-sm text-sage-700">{existingFeedback.delay_notes}</p>
+            </div>
+          )}
+        </div>
+
+        {/* Vendor Ratings */}
+        {existingVendorRatings.length > 0 && (
+          <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-3">
+            <h3 className="text-sm font-semibold text-sage-900">Vendor Ratings</h3>
+            <div className="space-y-2">
+              {existingVendorRatings.map((vr) => (
+                <div key={vr.id} className="flex items-center justify-between bg-warm-white rounded-lg p-3 border border-sage-100">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-sage-900">{vr.vendor_name}</span>
+                      <span className="text-xs text-sage-500 capitalize">{vr.vendor_type.replace(/_/g, ' ')}</span>
+                    </div>
+                    {vr.notes && <p className="text-xs text-sage-500 mt-0.5">{vr.notes}</p>}
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <StarRating value={vr.rating} readonly size="sm" />
+                    {vr.would_recommend !== null && (
+                      <span className={cn(
+                        'text-xs px-1.5 py-0.5 rounded',
+                        vr.would_recommend ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
+                      )}>
+                        {vr.would_recommend ? 'Recommended' : 'Not recommended'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Guest Experience */}
+        {(existingFeedback.guest_complaints || existingFeedback.guest_complaint_count) && (
+          <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-2">
+            <h3 className="text-sm font-semibold text-sage-900">Guest Experience</h3>
+            {existingFeedback.guest_complaint_count !== null && existingFeedback.guest_complaint_count > 0 && (
+              <p className="text-sm text-sage-700">Complaints: {existingFeedback.guest_complaint_count}</p>
+            )}
+            {existingFeedback.guest_complaints && (
+              <p className="text-sm text-sage-700">{existingFeedback.guest_complaints}</p>
+            )}
+          </div>
+        )}
+
+        {/* Catering */}
+        {(existingFeedback.catering_quality || existingFeedback.dietary_handling || existingFeedback.service_timing) && (
+          <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-3">
+            <h3 className="text-sm font-semibold text-sage-900">Catering</h3>
+            <div className="grid grid-cols-3 gap-4">
+              {existingFeedback.catering_quality && (
+                <div>
+                  <p className="text-xs text-sage-500 mb-1">Quality</p>
+                  <StarRating value={existingFeedback.catering_quality} readonly size="sm" />
+                </div>
+              )}
+              {existingFeedback.dietary_handling && (
+                <div>
+                  <p className="text-xs text-sage-500 mb-1">Dietary Handling</p>
+                  <StarRating value={existingFeedback.dietary_handling} readonly size="sm" />
+                </div>
+              )}
+              {existingFeedback.service_timing && (
+                <div>
+                  <p className="text-xs text-sage-500 mb-1">Service Timing</p>
+                  <StarRating value={existingFeedback.service_timing} readonly size="sm" />
+                </div>
+              )}
+            </div>
+            {existingFeedback.catering_notes && (
+              <p className="text-sm text-sage-700">{existingFeedback.catering_notes}</p>
+            )}
+          </div>
+        )}
+
+        {/* Freeform */}
+        <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-4">
+          <h3 className="text-sm font-semibold text-sage-900">Reflections</h3>
+          {existingFeedback.what_went_well && (
+            <div>
+              <p className="text-xs text-sage-500 mb-1">What Went Well</p>
+              <p className="text-sm text-sage-700">{existingFeedback.what_went_well}</p>
+            </div>
+          )}
+          {existingFeedback.what_to_change && (
+            <div>
+              <p className="text-xs text-sage-500 mb-1">What Would You Change</p>
+              <p className="text-sm text-sage-700">{existingFeedback.what_to_change}</p>
+            </div>
+          )}
+          {existingFeedback.review_readiness && (
+            <div>
+              <p className="text-xs text-sage-500 mb-1">Review Readiness</p>
+              <p className="text-sm font-medium text-sage-900 capitalize">{existingFeedback.review_readiness}</p>
+              {existingFeedback.review_readiness_notes && (
+                <p className="text-xs text-sage-500 mt-0.5">{existingFeedback.review_readiness_notes}</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Proactive Response Draft */}
+        {existingFeedback.proactive_response_draft && (
+          <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-3">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-gold-500" />
+              <h3 className="text-sm font-semibold text-sage-900">AI Review Response Draft</h3>
+              {existingFeedback.proactive_response_approved && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">Approved</span>
+              )}
+            </div>
+            <p className="text-sm text-sage-700 whitespace-pre-wrap">{existingFeedback.proactive_response_draft}</p>
+            {!existingFeedback.proactive_response_approved && (
+              <button
+                type="button"
+                onClick={handleGenerateDraft}
+                disabled={generatingDraft}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-gold-50 text-gold-700 border border-gold-200 hover:bg-gold-100 transition-colors"
+              >
+                {generatingDraft ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                Regenerate Draft
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Editable form
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-2 text-xs text-sage-500">
+        <ClipboardCheck className="w-3.5 h-3.5" />
+        Share your post-event observations. This helps Bloom House learn and improve.
+      </div>
+
+      {/* Overall Assessment */}
+      <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-5">
+        <h3 className="text-sm font-semibold text-sage-900">Overall Assessment</h3>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-2">
+              Overall Rating <span className="text-red-500">*</span>
+            </label>
+            <StarRating value={overallRating} onChange={setOverallRating} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-2">
+              Couple Satisfaction (your read)
+            </label>
+            <StarRating value={coupleSatisfaction} onChange={setCoupleSatisfaction} />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-sage-700 mb-2">Timeline Adherence</label>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { value: 'on_time', label: 'On Time' },
+              { value: 'minor_delays', label: 'Minor Delays' },
+              { value: 'significant_delays', label: 'Significant Delays' },
+            ].map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setTimelineAdherence(opt.value)}
+                className={cn(
+                  'px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+                  timelineAdherence === opt.value
+                    ? 'bg-sage-600 text-white border-sage-600'
+                    : 'bg-warm-white text-sage-700 border-sage-200 hover:border-sage-400'
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {showDelayDetails && (
+          <div className="space-y-3 pl-4 border-l-2 border-amber-200">
+            <div>
+              <label className="block text-xs font-medium text-sage-700 mb-2">Delay Phases (select all that apply)</label>
+              <div className="flex flex-wrap gap-2">
+                {DELAY_PHASES.map((phase) => (
+                  <button
+                    key={phase.value}
+                    type="button"
+                    onClick={() => toggleDelayPhase(phase.value)}
+                    className={cn(
+                      'px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors',
+                      delayPhases.includes(phase.value)
+                        ? 'bg-amber-600 text-white border-amber-600'
+                        : 'bg-warm-white text-sage-700 border-sage-200 hover:border-amber-400'
+                    )}
+                  >
+                    {phase.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-sage-700 mb-1">Delay Notes</label>
+              <textarea
+                value={delayNotes}
+                onChange={(e) => setDelayNotes(e.target.value)}
+                placeholder="What caused the delays? How were they managed?"
+                className="w-full min-h-[80px] p-3 rounded-lg border border-sage-200 bg-warm-white text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 resize-y"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Per-Vendor Ratings */}
+      {vendors.length > 0 && (
+        <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-4">
+          <h3 className="text-sm font-semibold text-sage-900">Vendor Ratings</h3>
+          <div className="space-y-3">
+            {vendors.map((vendor) => {
+              const vf = vendorFeedback[vendor.id] ?? { rating: 0, notes: '', wouldRecommend: null }
+              return (
+                <div key={vendor.id} className="bg-warm-white rounded-lg p-4 border border-sage-100 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-medium text-sage-900">{vendor.vendor_name || vendor.vendor_type}</span>
+                      <span className="text-xs text-sage-500 ml-2 capitalize">{vendor.vendor_type.replace(/_/g, ' ')}</span>
+                    </div>
+                    <StarRating
+                      value={vf.rating}
+                      onChange={(v) => setVendorFeedback((prev) => ({
+                        ...prev,
+                        [vendor.id]: { ...prev[vendor.id], rating: v },
+                      }))}
+                      size="sm"
+                    />
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="text"
+                      value={vf.notes}
+                      onChange={(e) => setVendorFeedback((prev) => ({
+                        ...prev,
+                        [vendor.id]: { ...prev[vendor.id], notes: e.target.value },
+                      }))}
+                      placeholder="Notes (optional)"
+                      className="flex-1 px-3 py-1.5 rounded-lg border border-sage-200 bg-white text-xs text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-1 focus:ring-sage-300"
+                    />
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="text-[10px] text-sage-500">Recommend?</span>
+                      <button
+                        type="button"
+                        onClick={() => setVendorFeedback((prev) => ({
+                          ...prev,
+                          [vendor.id]: { ...prev[vendor.id], wouldRecommend: vf.wouldRecommend === true ? null : true },
+                        }))}
+                        className={cn(
+                          'p-1 rounded transition-colors',
+                          vf.wouldRecommend === true ? 'bg-emerald-100 text-emerald-600' : 'bg-sage-50 text-sage-400 hover:bg-emerald-50'
+                        )}
+                      >
+                        <ThumbsUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setVendorFeedback((prev) => ({
+                          ...prev,
+                          [vendor.id]: { ...prev[vendor.id], wouldRecommend: vf.wouldRecommend === false ? null : false },
+                        }))}
+                        className={cn(
+                          'p-1 rounded transition-colors rotate-180',
+                          vf.wouldRecommend === false ? 'bg-red-100 text-red-600' : 'bg-sage-50 text-sage-400 hover:bg-red-50'
+                        )}
+                      >
+                        <ThumbsUp className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Guest Experience */}
+      <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-4">
+        <h3 className="text-sm font-semibold text-sage-900">Guest Experience</h3>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="md:col-span-3">
+            <label className="block text-xs font-medium text-sage-700 mb-1">Guest Complaints</label>
+            <textarea
+              value={guestComplaints}
+              onChange={(e) => setGuestComplaints(e.target.value)}
+              placeholder="Any complaints or issues raised by guests?"
+              className="w-full min-h-[80px] p-3 rounded-lg border border-sage-200 bg-warm-white text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 resize-y"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-1">Complaint Count</label>
+            <input
+              type="number"
+              min={0}
+              value={guestComplaintCount}
+              onChange={(e) => setGuestComplaintCount(parseInt(e.target.value) || 0)}
+              className="w-full px-3 py-2 rounded-lg border border-sage-200 bg-warm-white text-sm text-sage-900 focus:outline-none focus:ring-2 focus:ring-sage-300"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Catering */}
+      <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-4">
+        <h3 className="text-sm font-semibold text-sage-900">Catering</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-2">Quality</label>
+            <StarRating value={cateringQuality} onChange={setCateringQuality} size="sm" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-2">Dietary Handling</label>
+            <StarRating value={dietaryHandling} onChange={setDietaryHandling} size="sm" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-2">Service Timing</label>
+            <StarRating value={serviceTiming} onChange={setServiceTiming} size="sm" />
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-sage-700 mb-1">Catering Notes</label>
+          <textarea
+            value={cateringNotes}
+            onChange={(e) => setCateringNotes(e.target.value)}
+            placeholder="Any notes on the catering experience?"
+            className="w-full min-h-[60px] p-3 rounded-lg border border-sage-200 bg-warm-white text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 resize-y"
+          />
+        </div>
+      </div>
+
+      {/* Review Readiness */}
+      <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-4">
+        <h3 className="text-sm font-semibold text-sage-900">Review Readiness</h3>
+        <div>
+          <label className="block text-xs font-medium text-sage-700 mb-2">Would this couple leave a positive review?</label>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { value: 'yes', label: 'Yes' },
+              { value: 'no', label: 'No' },
+              { value: 'wait', label: 'Wait and See' },
+            ].map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setReviewReadiness(opt.value)}
+                className={cn(
+                  'px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+                  reviewReadiness === opt.value
+                    ? 'bg-sage-600 text-white border-sage-600'
+                    : 'bg-warm-white text-sage-700 border-sage-200 hover:border-sage-400'
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-sage-700 mb-1">Review Notes</label>
+          <textarea
+            value={reviewReadinessNotes}
+            onChange={(e) => setReviewReadinessNotes(e.target.value)}
+            placeholder="Any context on review likelihood?"
+            className="w-full min-h-[60px] p-3 rounded-lg border border-sage-200 bg-warm-white text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 resize-y"
+          />
+        </div>
+      </div>
+
+      {/* Reflections */}
+      <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-4">
+        <h3 className="text-sm font-semibold text-sage-900">Reflections</h3>
+        <div>
+          <label className="block text-xs font-medium text-sage-700 mb-1">What went well?</label>
+          <textarea
+            value={whatWentWell}
+            onChange={(e) => setWhatWentWell(e.target.value)}
+            placeholder="Highlights, smooth moments, things that worked beautifully..."
+            className="w-full min-h-[80px] p-3 rounded-lg border border-sage-200 bg-warm-white text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 resize-y"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-sage-700 mb-1">What would you change?</label>
+          <textarea
+            value={whatToChange}
+            onChange={(e) => setWhatToChange(e.target.value)}
+            placeholder="Lessons learned, things to improve for next time..."
+            className="w-full min-h-[80px] p-3 rounded-lg border border-sage-200 bg-warm-white text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 resize-y"
+          />
+        </div>
+      </div>
+
+      {/* Submit + AI Draft */}
+      <div className="flex items-center justify-between gap-4 pt-2">
+        <button
+          type="button"
+          onClick={handleGenerateDraft}
+          disabled={generatingDraft || !existingFeedback?.id}
+          className={cn(
+            'inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors',
+            existingFeedback?.id
+              ? 'bg-gold-50 text-gold-700 border-gold-200 hover:bg-gold-100'
+              : 'bg-sage-50 text-sage-400 border-sage-200 cursor-not-allowed'
+          )}
+          title={existingFeedback?.id ? 'Generate AI review response draft' : 'Submit feedback first to generate a draft'}
+        >
+          {generatingDraft ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+          Generate Review Response Draft
+        </button>
+
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={submitting || overallRating === 0}
+          className={cn(
+            'inline-flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold transition-colors',
+            overallRating > 0
+              ? 'bg-sage-600 text-white hover:bg-sage-700'
+              : 'bg-sage-100 text-sage-400 cursor-not-allowed'
+          )}
+        >
+          {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          Submit Feedback
+        </button>
+      </div>
+
+      {proactiveDraft && (
+        <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-gold-500" />
+            <h3 className="text-sm font-semibold text-sage-900">AI Review Response Draft</h3>
+          </div>
+          <p className="text-sm text-sage-700 whitespace-pre-wrap">{proactiveDraft}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
@@ -878,6 +1663,8 @@ export default function WeddingProfilePage() {
   const [checklist, setChecklist] = useState<ChecklistItemRow[]>([])
   const [internalNotes, setInternalNotes] = useState('')
   const [consultant, setConsultant] = useState<ConsultantRow | null>(null)
+  const [eventFeedback, setEventFeedback] = useState<EventFeedbackRow | null>(null)
+  const [feedbackVendorRatings, setFeedbackVendorRatings] = useState<EventFeedbackVendorRow[]>([])
 
   const fetchData = useCallback(async () => {
     try {
@@ -908,6 +1695,7 @@ export default function WeddingProfilePage() {
         messagesRes,
         sageRes,
         checklistRes,
+        feedbackRes,
       ] = await Promise.all([
         supabase.from('people').select('id, first_name, last_name, role, email, phone').eq('wedding_id', weddingId),
         supabase.from('client_codes').select('code').eq('wedding_id', weddingId).maybeSingle(),
@@ -920,6 +1708,7 @@ export default function WeddingProfilePage() {
         supabase.from('messages').select('id, sender_role, content, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }).limit(100),
         supabase.from('sage_conversations').select('id, role, content, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }).limit(200),
         supabase.from('checklist_items').select('id, title, is_completed, category').eq('wedding_id', weddingId),
+        supabase.from('event_feedback').select('*').eq('wedding_id', weddingId).maybeSingle(),
       ])
 
       setPeople((peopleRes.data ?? []) as PersonRow[])
@@ -933,6 +1722,22 @@ export default function WeddingProfilePage() {
       setMessages((messagesRes.data ?? []) as MessageRow[])
       setSageConversations((sageRes.data ?? []) as SageConversationRow[])
       setChecklist((checklistRes.data ?? []) as ChecklistItemRow[])
+
+      // Fetch event feedback
+      const fb = (feedbackRes.data as EventFeedbackRow | null) ?? null
+      setEventFeedback(fb)
+
+      // If feedback exists, fetch vendor ratings
+      if (fb) {
+        const { data: vrData } = await supabase
+          .from('event_feedback_vendors')
+          .select('id, event_feedback_id, vendor_id, vendor_name, vendor_type, rating, notes, would_recommend')
+          .eq('event_feedback_id', fb.id)
+
+        setFeedbackVendorRatings((vrData ?? []) as EventFeedbackVendorRow[])
+      } else {
+        setFeedbackVendorRatings([])
+      }
 
       // Fetch consultant name if assigned
       if (w.assigned_consultant_id) {
@@ -1171,6 +1976,15 @@ export default function WeddingProfilePage() {
             weddingId={weddingId}
             onSave={saveInternalNotes}
             saving={saving}
+          />
+        )}
+        {activeTab === 'feedback' && (
+          <PostEventFeedbackTab
+            wedding={wedding}
+            vendors={vendors}
+            existingFeedback={eventFeedback}
+            existingVendorRatings={feedbackVendorRatings}
+            onSubmit={fetchData}
           />
         )}
       </div>

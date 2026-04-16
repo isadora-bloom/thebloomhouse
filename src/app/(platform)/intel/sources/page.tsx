@@ -11,6 +11,7 @@ import {
   Megaphone,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
+import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { VenueChip } from '@/components/intel/venue-chip'
 import {
   BarChart,
@@ -505,6 +506,9 @@ export default function SourceAttributionPage() {
           </p>
         )}
       </div>
+
+      {/* ---- Inline insight banner ---- */}
+      <InlineInsightBanner category="source_attribution" />
 
       {/* ---- Error state ---- */}
       {error && (

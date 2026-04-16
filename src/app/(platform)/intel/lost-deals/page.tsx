@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
+import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { useScope } from '@/lib/hooks/use-scope'
 import { VenueChip } from '@/components/intel/venue-chip'
 import {
@@ -310,6 +311,9 @@ export default function LostDealsPage() {
           Record Lost Deal
         </button>
       </div>
+
+      {/* ---- Inline insight banner ---- */}
+      <InlineInsightBanner category="lead_conversion" />
 
       {/* Error */}
       {error && (

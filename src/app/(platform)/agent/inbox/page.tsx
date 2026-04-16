@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
+import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import {
   Mail,
   RefreshCw,
@@ -1171,6 +1172,9 @@ export default function InboxPage() {
           </button>
         </div>
       </div>
+
+      {/* ---- Inline insight banner ---- */}
+      <InlineInsightBanner category="lead_conversion,response_time" />
 
       {/* ---- Error ---- */}
       {error && (

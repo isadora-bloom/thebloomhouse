@@ -2,8 +2,9 @@
  * Bloom House: Intelligence Engine
  *
  * The core pattern detection brain. Analyzes venue operational data across
- * 8 detectors, produces ranked, actionable insights, and stores them in
- * intelligence_insights for surfacing in dashboards and briefings.
+ * 14 detectors (8 sales + 6 operational), produces ranked, actionable
+ * insights, and stores them in intelligence_insights for surfacing in
+ * dashboards and briefings.
  *
  * Design principles:
  *  - No AI calls for detection — pure statistical/heuristic analysis
@@ -1220,6 +1221,1027 @@ async function detectLostDealPatterns(
 }
 
 // ---------------------------------------------------------------------------
+// Detector 9: Portal Engagement → Quality Predictor (Readiness Score)
+// ---------------------------------------------------------------------------
+
+async function detectPortalEngagementQuality(
+  supabase: SupabaseClient,
+  venueId: string
+): Promise<InsightCandidate[]> {
+  try {
+    // Get upcoming weddings within 60 days
+    const now = new Date()
+    const sixtyDaysOut = new Date()
+    sixtyDaysOut.setDate(now.getDate() + 60)
+
+    const { data: upcomingWeddings, error: wErr } = await supabase
+      .from('weddings')
+      .select('id, wedding_date, partner1_name, partner2_name, status')
+      .eq('venue_id', venueId)
+      .in('status', ['booked', 'confirmed'])
+      .gte('wedding_date', now.toISOString().split('T')[0])
+      .lte('wedding_date', sixtyDaysOut.toISOString().split('T')[0])
+
+    if (wErr || !upcomingWeddings || upcomingWeddings.length === 0) return []
+
+    const weddingIds = upcomingWeddings.map(w => w.id as string)
+
+    // Fetch all planning data in parallel
+    const [checklistRes, finalisationsRes, vendorsRes, contractsRes, budgetRes] = await Promise.all([
+      supabase
+        .from('checklist_items')
+        .select('wedding_id, is_completed')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+      supabase
+        .from('section_finalisations')
+        .select('wedding_id, couple_signed_off')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+      supabase
+        .from('booked_vendors')
+        .select('wedding_id, is_booked')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+      supabase
+        .from('contracts')
+        .select('wedding_id')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+      supabase
+        .from('budget_items')
+        .select('wedding_id')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+    ])
+
+    // Build per-wedding readiness map
+    const checklistByWedding = new Map<string, { total: number; completed: number }>()
+    if (checklistRes.data) {
+      for (const item of checklistRes.data) {
+        const wid = item.wedding_id as string
+        const existing = checklistByWedding.get(wid) || { total: 0, completed: 0 }
+        existing.total++
+        if (item.is_completed) existing.completed++
+        checklistByWedding.set(wid, existing)
+      }
+    }
+
+    const finalisationsByWedding = new Map<string, number>()
+    if (finalisationsRes.data) {
+      for (const f of finalisationsRes.data) {
+        const wid = f.wedding_id as string
+        if (f.couple_signed_off) {
+          finalisationsByWedding.set(wid, (finalisationsByWedding.get(wid) || 0) + 1)
+        }
+      }
+    }
+
+    const vendorsByWedding = new Map<string, number>()
+    if (vendorsRes.data) {
+      for (const v of vendorsRes.data) {
+        const wid = v.wedding_id as string
+        if (v.is_booked) {
+          vendorsByWedding.set(wid, (vendorsByWedding.get(wid) || 0) + 1)
+        }
+      }
+    }
+
+    const contractsByWedding = new Map<string, number>()
+    if (contractsRes.data) {
+      for (const c of contractsRes.data) {
+        const wid = c.wedding_id as string
+        contractsByWedding.set(wid, (contractsByWedding.get(wid) || 0) + 1)
+      }
+    }
+
+    const hasBudgetByWedding = new Set<string>()
+    if (budgetRes.data) {
+      for (const b of budgetRes.data) {
+        hasBudgetByWedding.add(b.wedding_id as string)
+      }
+    }
+
+    // Also get historical averages from all completed/past weddings for benchmarking
+    const { data: allFinalisations } = await supabase
+      .from('section_finalisations')
+      .select('wedding_id, couple_signed_off')
+      .eq('venue_id', venueId)
+
+    let avgFinalisations = 7 // default assumption: 7 of 14 sections at midpoint
+    if (allFinalisations && allFinalisations.length > 0) {
+      const perWedding = new Map<string, number>()
+      for (const f of allFinalisations) {
+        if (f.couple_signed_off) {
+          const wid = f.wedding_id as string
+          perWedding.set(wid, (perWedding.get(wid) || 0) + 1)
+        }
+      }
+      if (perWedding.size > 0) {
+        const vals = [...perWedding.values()]
+        avgFinalisations = vals.reduce((s, v) => s + v, 0) / vals.length
+      }
+    }
+
+    const insights: InsightCandidate[] = []
+    const TOTAL_SECTIONS = 14
+
+    for (const wedding of upcomingWeddings) {
+      const wid = wedding.id as string
+      const weddingDate = new Date(wedding.wedding_date as string)
+      const daysToGo = Math.ceil((weddingDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+      const weeksToGo = Math.ceil(daysToGo / 7)
+
+      const checklist = checklistByWedding.get(wid)
+      const checklistPct = checklist && checklist.total > 0
+        ? Math.round((checklist.completed / checklist.total) * 100)
+        : 0
+
+      const finalisedCount = finalisationsByWedding.get(wid) || 0
+      const vendorCount = vendorsByWedding.get(wid) || 0
+      const contractCount = contractsByWedding.get(wid) || 0
+      const hasBudget = hasBudgetByWedding.has(wid)
+
+      // Compute readiness score (0-100)
+      const readiness = Math.min(100, Math.round(
+        (checklistPct * 0.30) +  // 30% weight on checklist
+        ((finalisedCount / TOTAL_SECTIONS) * 100 * 0.30) +  // 30% weight on sections
+        (Math.min(vendorCount / 5, 1) * 100 * 0.15) + // 15% weight on vendors (capped at 5)
+        (Math.min(contractCount / 3, 1) * 100 * 0.15) + // 15% weight on contracts (capped at 3)
+        (hasBudget ? 10 : 0) // 10% weight on having a budget
+      ))
+
+      const coupleName = [wedding.partner1_name, wedding.partner2_name]
+        .filter(Boolean)
+        .join(' & ') || 'Unknown couple'
+
+      const dateStr = weddingDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+      const avgPct = Math.round((avgFinalisations / TOTAL_SECTIONS) * 100)
+
+      // Generate insight if readiness is low and wedding is close
+      if (readiness < 40 && weeksToGo <= 4) {
+        insights.push({
+          insight_type: 'risk',
+          category: 'operational',
+          title: `${coupleName}'s readiness score is ${readiness}/100 with ${weeksToGo} week${weeksToGo !== 1 ? 's' : ''} to go`,
+          body: `Wedding for ${coupleName} on ${dateStr} has only completed ${checklistPct}% of planning checklist items and finalized ${finalisedCount} of ${TOTAL_SECTIONS} sections. ` +
+            `Weddings at this stage typically have ${avgPct}% of sections complete. ` +
+            `With ${vendorCount} vendor${vendorCount !== 1 ? 's' : ''} booked and ${contractCount} contract${contractCount !== 1 ? 's' : ''} on file, there are significant gaps to close.`,
+          action: `Schedule an urgent coordinator check-in with ${coupleName}. Prioritize vendor confirmations and any unsigned contracts. Focus on the must-have sections first.`,
+          priority: weeksToGo <= 2 ? 'critical' : 'high',
+          confidence: 0.75,
+          impact_score: readiness < 20 ? 90 : 70,
+          data_points: {
+            wedding_id: wid,
+            couple_name: coupleName,
+            wedding_date: wedding.wedding_date,
+            days_to_go: daysToGo,
+            readiness_score: readiness,
+            checklist_completion_pct: checklistPct,
+            sections_finalised: finalisedCount,
+            total_sections: TOTAL_SECTIONS,
+            vendors_booked: vendorCount,
+            contracts_count: contractCount,
+            has_budget: hasBudget,
+            avg_finalisations: Math.round(avgFinalisations * 10) / 10,
+          },
+          compared_to: 'venue_average',
+          expires_at: expiresInDays(7),
+        })
+      } else if (readiness < 60 && weeksToGo <= 6) {
+        // Medium-priority warning for moderately behind couples
+        insights.push({
+          insight_type: 'risk',
+          category: 'operational',
+          title: `${coupleName} may need a planning check-in — readiness at ${readiness}/100`,
+          body: `Wedding for ${coupleName} on ${dateStr} has a readiness score of ${readiness}/100 with ${weeksToGo} weeks to go. ` +
+            `They've completed ${checklistPct}% of checklist items and finalized ${finalisedCount} of ${TOTAL_SECTIONS} sections. ` +
+            `The venue average at this stage is ${avgPct}% of sections finalized.`,
+          action: `Consider a gentle check-in with ${coupleName} to see if they need help with any outstanding planning items.`,
+          priority: 'medium',
+          confidence: 0.65,
+          data_points: {
+            wedding_id: wid,
+            couple_name: coupleName,
+            wedding_date: wedding.wedding_date,
+            days_to_go: daysToGo,
+            readiness_score: readiness,
+            checklist_completion_pct: checklistPct,
+            sections_finalised: finalisedCount,
+            vendors_booked: vendorCount,
+          },
+          compared_to: 'venue_average',
+          expires_at: expiresInDays(7),
+        })
+      }
+    }
+
+    return insights
+  } catch (err) {
+    console.error('[intelligence-engine] detectPortalEngagementQuality failed:', err)
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Detector 10: Guest Experience Predictor
+// ---------------------------------------------------------------------------
+
+async function detectGuestExperienceRisks(
+  supabase: SupabaseClient,
+  venueId: string
+): Promise<InsightCandidate[]> {
+  try {
+    // Get upcoming weddings within 30 days
+    const now = new Date()
+    const thirtyDaysOut = new Date()
+    thirtyDaysOut.setDate(now.getDate() + 30)
+
+    const { data: upcomingWeddings, error: wErr } = await supabase
+      .from('weddings')
+      .select('id, wedding_date, partner1_name, partner2_name')
+      .eq('venue_id', venueId)
+      .in('status', ['booked', 'confirmed'])
+      .gte('wedding_date', now.toISOString().split('T')[0])
+      .lte('wedding_date', thirtyDaysOut.toISOString().split('T')[0])
+
+    if (wErr || !upcomingWeddings || upcomingWeddings.length === 0) return []
+
+    const weddingIds = upcomingWeddings.map(w => w.id as string)
+
+    // Fetch guest, dietary, care, and shuttle data in parallel
+    const [guestRes, allergyRes, careRes, shuttleRes] = await Promise.all([
+      supabase
+        .from('guest_list')
+        .select('wedding_id, dietary_restrictions, rsvp_status')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+      supabase
+        .from('allergy_registry')
+        .select('wedding_id, severity')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+      supabase
+        .from('guest_care_notes')
+        .select('wedding_id')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+      supabase
+        .from('shuttle_schedule')
+        .select('wedding_id, capacity')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+    ])
+
+    // Build per-wedding guest data maps
+    const guestsByWedding = new Map<string, { total: number; attending: number; hasDietary: number; missingDietary: number }>()
+    if (guestRes.data) {
+      for (const g of guestRes.data) {
+        const wid = g.wedding_id as string
+        const existing = guestsByWedding.get(wid) || { total: 0, attending: 0, hasDietary: 0, missingDietary: 0 }
+        existing.total++
+        if (g.rsvp_status === 'attending') existing.attending++
+        if (g.dietary_restrictions && (g.dietary_restrictions as string).trim().length > 0) {
+          existing.hasDietary++
+        } else if (g.rsvp_status === 'attending') {
+          existing.missingDietary++
+        }
+        guestsByWedding.set(wid, existing)
+      }
+    }
+
+    const allergyByWedding = new Map<string, { total: number; severe: number }>()
+    if (allergyRes.data) {
+      for (const a of allergyRes.data) {
+        const wid = a.wedding_id as string
+        const existing = allergyByWedding.get(wid) || { total: 0, severe: 0 }
+        existing.total++
+        if (a.severity === 'severe' || a.severity === 'life_threatening') existing.severe++
+        allergyByWedding.set(wid, existing)
+      }
+    }
+
+    const careNotesByWedding = new Map<string, number>()
+    if (careRes.data) {
+      for (const c of careRes.data) {
+        const wid = c.wedding_id as string
+        careNotesByWedding.set(wid, (careNotesByWedding.get(wid) || 0) + 1)
+      }
+    }
+
+    const shuttleByWedding = new Map<string, number>()
+    if (shuttleRes.data) {
+      for (const s of shuttleRes.data) {
+        const wid = s.wedding_id as string
+        shuttleByWedding.set(wid, (shuttleByWedding.get(wid) || 0) + (Number(s.capacity) || 0))
+      }
+    }
+
+    const insights: InsightCandidate[] = []
+
+    for (const wedding of upcomingWeddings) {
+      const wid = wedding.id as string
+      const weddingDate = new Date(wedding.wedding_date as string)
+      const daysToGo = Math.ceil((weddingDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+      const dateStr = weddingDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
+      const coupleName = [wedding.partner1_name, wedding.partner2_name]
+        .filter(Boolean)
+        .join(' & ') || 'the couple'
+
+      const guests = guestsByWedding.get(wid)
+      const allergies = allergyByWedding.get(wid)
+
+      if (!guests || guests.attending === 0) continue
+
+      // Check: dietary info completeness (<80%)
+      const dietaryCompletePct = guests.attending > 0
+        ? Math.round(((guests.attending - guests.missingDietary) / guests.attending) * 100)
+        : 100
+
+      if (dietaryCompletePct < 80 && guests.missingDietary >= 3) {
+        insights.push({
+          insight_type: 'risk',
+          category: 'guest_experience',
+          title: `Wedding on ${dateStr}: ${guests.missingDietary} guests missing dietary info`,
+          body: `${coupleName}'s wedding on ${dateStr} has ${guests.missingDietary} attending guests without dietary restriction information (${dietaryCompletePct}% complete). ` +
+            `Past events with incomplete dietary data had increased catering complaints. ` +
+            (allergies && allergies.severe > 0
+              ? `There are also ${allergies.severe} guests with severe allergies already registered — gaps in dietary data are especially risky.`
+              : `Completing this data before the event ensures accurate catering orders and a better guest experience.`),
+          action: `Send ${coupleName} a reminder to complete dietary information for their remaining guests. The portal's allergy registry makes this easy.`,
+          priority: daysToGo <= 7 && guests.missingDietary >= 10 ? 'high' : 'medium',
+          confidence: 0.7,
+          data_points: {
+            wedding_id: wid,
+            wedding_date: wedding.wedding_date,
+            days_to_go: daysToGo,
+            total_guests: guests.total,
+            attending_guests: guests.attending,
+            missing_dietary: guests.missingDietary,
+            dietary_complete_pct: dietaryCompletePct,
+            allergy_count: allergies?.total || 0,
+            severe_allergies: allergies?.severe || 0,
+          },
+          compared_to: 'completeness_threshold',
+          expires_at: expiresInDays(daysToGo > 0 ? Math.min(daysToGo, 14) : 3),
+        })
+      }
+
+      // Check: shuttle schedule missing when there are many guests
+      const shuttleCapacity = shuttleByWedding.get(wid) || 0
+      if (guests.attending >= 50 && shuttleCapacity === 0) {
+        insights.push({
+          insight_type: 'risk',
+          category: 'guest_experience',
+          title: `No shuttle scheduled for ${guests.attending}-guest wedding on ${dateStr}`,
+          body: `${coupleName}'s wedding has ${guests.attending} attending guests but no shuttle service scheduled. ` +
+            `For events of this size, shuttle coordination helps prevent parking issues and ensures on-time arrivals.`,
+          action: `Check with ${coupleName} about guest transportation plans. If guests are staying at nearby hotels, a shuttle service could significantly improve the experience.`,
+          priority: daysToGo <= 14 ? 'medium' : 'low',
+          confidence: 0.5,
+          data_points: {
+            wedding_id: wid,
+            wedding_date: wedding.wedding_date,
+            attending_guests: guests.attending,
+            shuttle_capacity: 0,
+          },
+          compared_to: 'guest_count_threshold',
+          expires_at: expiresInDays(daysToGo > 0 ? Math.min(daysToGo, 14) : 3),
+        })
+      }
+
+      // Check: severe allergies flagged but no care notes
+      if (allergies && allergies.severe >= 2 && (careNotesByWedding.get(wid) || 0) === 0) {
+        insights.push({
+          insight_type: 'risk',
+          category: 'guest_experience',
+          title: `${allergies.severe} severe allergies registered but no care notes for ${dateStr} wedding`,
+          body: `${coupleName}'s wedding has ${allergies.severe} guests with severe or life-threatening allergies but no guest care notes documenting accommodation plans. ` +
+            `Care notes help your day-of team handle dietary emergencies and ensure these guests are properly accommodated.`,
+          action: `Add guest care notes for each guest with severe allergies. Include their table assignment and ensure the catering team has a list.`,
+          priority: daysToGo <= 14 ? 'high' : 'medium',
+          confidence: 0.8,
+          data_points: {
+            wedding_id: wid,
+            severe_allergies: allergies.severe,
+            care_notes_count: 0,
+          },
+          compared_to: 'safety_threshold',
+          expires_at: expiresInDays(daysToGo > 0 ? Math.min(daysToGo, 7) : 3),
+        })
+      }
+    }
+
+    return insights
+  } catch (err) {
+    console.error('[intelligence-engine] detectGuestExperienceRisks failed:', err)
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Detector 11: Couple Readiness Assessment
+// ---------------------------------------------------------------------------
+
+async function detectCoupleReadiness(
+  supabase: SupabaseClient,
+  venueId: string
+): Promise<InsightCandidate[]> {
+  try {
+    // Get weddings 4-12 weeks out
+    const now = new Date()
+    const fourWeeksOut = new Date()
+    fourWeeksOut.setDate(now.getDate() + 28)
+    const twelveWeeksOut = new Date()
+    twelveWeeksOut.setDate(now.getDate() + 84)
+
+    const { data: upcomingWeddings, error: wErr } = await supabase
+      .from('weddings')
+      .select('id, wedding_date, partner1_name, partner2_name')
+      .eq('venue_id', venueId)
+      .in('status', ['booked', 'confirmed'])
+      .gte('wedding_date', fourWeeksOut.toISOString().split('T')[0])
+      .lte('wedding_date', twelveWeeksOut.toISOString().split('T')[0])
+
+    if (wErr || !upcomingWeddings || upcomingWeddings.length === 0) return []
+
+    const TOTAL_SECTIONS = 14
+
+    // Get all section finalisations to build baseline average
+    const { data: allFinalisations } = await supabase
+      .from('section_finalisations')
+      .select('wedding_id, couple_signed_off')
+      .eq('venue_id', venueId)
+
+    // Build historical per-wedding finalisation counts
+    const finByWedding = new Map<string, number>()
+    if (allFinalisations) {
+      for (const f of allFinalisations) {
+        if (f.couple_signed_off) {
+          const wid = f.wedding_id as string
+          finByWedding.set(wid, (finByWedding.get(wid) || 0) + 1)
+        }
+      }
+    }
+
+    // Calculate overall average across all weddings (need at least 5 for meaningful baseline)
+    const allCounts = [...finByWedding.values()]
+    if (allCounts.length < 5) {
+      // Not enough historical data to compare against — use reasonable defaults
+    }
+    const overallAvg = allCounts.length >= 3
+      ? allCounts.reduce((s, v) => s + v, 0) / allCounts.length
+      : 7 // default midpoint assumption
+
+    // Get checklist completion for upcoming weddings
+    const weddingIds = upcomingWeddings.map(w => w.id as string)
+    const { data: checklistData } = await supabase
+      .from('checklist_items')
+      .select('wedding_id, is_completed')
+      .eq('venue_id', venueId)
+      .in('wedding_id', weddingIds)
+
+    const checklistByWedding = new Map<string, { total: number; completed: number }>()
+    if (checklistData) {
+      for (const item of checklistData) {
+        const wid = item.wedding_id as string
+        const existing = checklistByWedding.get(wid) || { total: 0, completed: 0 }
+        existing.total++
+        if (item.is_completed) existing.completed++
+        checklistByWedding.set(wid, existing)
+      }
+    }
+
+    const insights: InsightCandidate[] = []
+
+    for (const wedding of upcomingWeddings) {
+      const wid = wedding.id as string
+      const weddingDate = new Date(wedding.wedding_date as string)
+      const weeksToGo = Math.ceil((weddingDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24 * 7))
+
+      const finalisedCount = finByWedding.get(wid) || 0
+      const checklist = checklistByWedding.get(wid)
+      const checklistPct = checklist && checklist.total > 0
+        ? Math.round((checklist.completed / checklist.total) * 100)
+        : 0
+
+      const coupleName = [wedding.partner1_name, wedding.partner2_name]
+        .filter(Boolean)
+        .join(' & ') || 'This couple'
+
+      // Compare to average — flag if significantly behind
+      const avgRounded = Math.round(overallAvg * 10) / 10
+      const delta = overallAvg - finalisedCount
+
+      if (delta >= 3 && finalisedCount < TOTAL_SECTIONS * 0.5) {
+        insights.push({
+          insight_type: 'risk',
+          category: 'readiness',
+          title: `${coupleName}: ${finalisedCount} of ${TOTAL_SECTIONS} sections finalized — behind average`,
+          body: `${coupleName} has finalized ${finalisedCount} of ${TOTAL_SECTIONS} sections with ${weeksToGo} weeks to go. ` +
+            `The average for couples at this point is ${avgRounded}. ` +
+            (checklistPct > 0 ? `Their checklist is ${checklistPct}% complete. ` : '') +
+            `Consider a coordinator check-in to help them catch up and avoid last-minute stress.`,
+          action: `Schedule a check-in with ${coupleName} to review remaining sections. Prioritize vendor confirmations, timeline, and guest logistics — these have the highest impact on day-of execution.`,
+          priority: delta >= 5 ? 'high' : 'medium',
+          confidence: confidenceFromN(allCounts.length, 5, 15),
+          data_points: {
+            wedding_id: wid,
+            couple_name: coupleName,
+            wedding_date: wedding.wedding_date,
+            weeks_to_go: weeksToGo,
+            sections_finalised: finalisedCount,
+            total_sections: TOTAL_SECTIONS,
+            venue_average: avgRounded,
+            checklist_completion_pct: checklistPct,
+            delta_from_average: Math.round(delta * 10) / 10,
+          },
+          compared_to: 'venue_average',
+          expires_at: expiresInDays(7),
+        })
+      }
+    }
+
+    return insights
+  } catch (err) {
+    console.error('[intelligence-engine] detectCoupleReadiness failed:', err)
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Detector 12: Review Prediction (Composite)
+// ---------------------------------------------------------------------------
+
+async function detectReviewPrediction(
+  supabase: SupabaseClient,
+  venueId: string
+): Promise<InsightCandidate[]> {
+  try {
+    // Get weddings happening in the next 14 days (or just past within 7 days)
+    const now = new Date()
+    const sevenDaysAgo = new Date()
+    sevenDaysAgo.setDate(now.getDate() - 7)
+    const fourteenDaysOut = new Date()
+    fourteenDaysOut.setDate(now.getDate() + 14)
+
+    const { data: relevantWeddings, error: wErr } = await supabase
+      .from('weddings')
+      .select('id, wedding_date, partner1_name, partner2_name, status')
+      .eq('venue_id', venueId)
+      .in('status', ['booked', 'confirmed', 'completed'])
+      .gte('wedding_date', sevenDaysAgo.toISOString().split('T')[0])
+      .lte('wedding_date', fourteenDaysOut.toISOString().split('T')[0])
+
+    if (wErr || !relevantWeddings || relevantWeddings.length === 0) return []
+
+    const weddingIds = relevantWeddings.map(w => w.id as string)
+
+    // Gather signals in parallel
+    const [checklistRes, finalisationsRes, sageRes, vendorsRes, budgetRes, timelineRes] = await Promise.all([
+      supabase
+        .from('checklist_items')
+        .select('wedding_id, is_completed')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+      supabase
+        .from('section_finalisations')
+        .select('wedding_id, couple_signed_off')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+      // Use sage_conversations count as proxy for portal visit frequency
+      supabase
+        .from('sage_conversations')
+        .select('wedding_id')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+      supabase
+        .from('booked_vendors')
+        .select('wedding_id, is_booked, contract_uploaded')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+      supabase
+        .from('budget_items')
+        .select('wedding_id')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+      supabase
+        .from('timeline')
+        .select('wedding_id')
+        .eq('venue_id', venueId)
+        .in('wedding_id', weddingIds),
+    ])
+
+    // Build per-wedding signal maps
+    const buildCountMap = (data: { wedding_id: unknown }[] | null): Map<string, number> => {
+      const m = new Map<string, number>()
+      if (data) {
+        for (const row of data) {
+          const wid = row.wedding_id as string
+          m.set(wid, (m.get(wid) || 0) + 1)
+        }
+      }
+      return m
+    }
+
+    const sageCountMap = buildCountMap(sageRes.data)
+    const budgetCountMap = buildCountMap(budgetRes.data)
+    const timelineCountMap = buildCountMap(timelineRes.data)
+
+    const insights: InsightCandidate[] = []
+    const TOTAL_SECTIONS = 14
+
+    for (const wedding of relevantWeddings) {
+      const wid = wedding.id as string
+      const weddingDate = new Date(wedding.wedding_date as string)
+      const isPast = weddingDate.getTime() < now.getTime()
+
+      const coupleName = [wedding.partner1_name, wedding.partner2_name]
+        .filter(Boolean)
+        .join(' & ') || 'This couple'
+
+      // Calculate composite score (0-100)
+      let score = 0
+      let signalCount = 0
+
+      // Signal 1: Checklist completion (0-25 points)
+      if (checklistRes.data) {
+        const items = checklistRes.data.filter(i => (i.wedding_id as string) === wid)
+        const completed = items.filter(i => i.is_completed).length
+        const total = items.length
+        if (total > 0) {
+          score += (completed / total) * 25
+          signalCount++
+        }
+      }
+
+      // Signal 2: Section finalisations (0-25 points)
+      if (finalisationsRes.data) {
+        const finalized = finalisationsRes.data.filter(
+          f => (f.wedding_id as string) === wid && f.couple_signed_off
+        ).length
+        score += (finalized / TOTAL_SECTIONS) * 25
+        signalCount++
+      }
+
+      // Signal 3: Portal engagement / Sage usage (0-20 points)
+      const sageCount = sageCountMap.get(wid) || 0
+      score += Math.min(sageCount / 20, 1) * 20 // Cap at 20 conversations
+      if (sageCount > 0) signalCount++
+
+      // Signal 4: Vendor + contract completeness (0-15 points)
+      if (vendorsRes.data) {
+        const vendors = vendorsRes.data.filter(v => (v.wedding_id as string) === wid)
+        const bookedVendors = vendors.filter(v => v.is_booked).length
+        const withContracts = vendors.filter(v => v.contract_uploaded).length
+        score += Math.min(bookedVendors / 5, 1) * 8 + Math.min(withContracts / 3, 1) * 7
+        if (vendors.length > 0) signalCount++
+      }
+
+      // Signal 5: Timeline + budget tracking (0-15 points)
+      const hasTimeline = (timelineCountMap.get(wid) || 0) > 0
+      const hasBudget = (budgetCountMap.get(wid) || 0) > 0
+      score += (hasTimeline ? 8 : 0) + (hasBudget ? 7 : 0)
+      if (hasTimeline || hasBudget) signalCount++
+
+      // Need at least 2 signals to have a meaningful prediction
+      if (signalCount < 2) continue
+
+      score = Math.round(Math.min(100, score))
+
+      if (score > 75) {
+        const actionTiming = isPast ? 'within 48 hours' : 'shortly after the event'
+        insights.push({
+          insight_type: 'opportunity',
+          category: 'review_prediction',
+          title: `${coupleName} likely to leave a positive review (score: ${score}/100)`,
+          body: `Based on planning engagement, ${coupleName} scored ${score}/100 on review likelihood. ` +
+            `They engaged actively with the portal (${sageCount} Sage conversations), ` +
+            `${finalisationsRes.data?.filter(f => (f.wedding_id as string) === wid && f.couple_signed_off).length || 0} sections finalized, ` +
+            `and maintained strong vendor coordination. ` +
+            `Proactively requesting a review ${actionTiming} significantly increases the chance of getting one.`,
+          action: `Send a personalized review request to ${coupleName} ${actionTiming}. Include a direct link to your preferred review platform. A warm, personal ask converts better than an automated email.`,
+          priority: isPast ? 'high' : 'medium',
+          confidence: 0.6 + (signalCount * 0.05),
+          data_points: {
+            wedding_id: wid,
+            couple_name: coupleName,
+            wedding_date: wedding.wedding_date,
+            review_score: score,
+            sage_conversations: sageCount,
+            signal_count: signalCount,
+          },
+          compared_to: 'engagement_composite',
+          expires_at: expiresInDays(isPast ? 7 : 21),
+        })
+      } else if (score < 40) {
+        insights.push({
+          insight_type: 'risk',
+          category: 'review_prediction',
+          title: `${coupleName}'s planning engagement is below average (score: ${score}/100)`,
+          body: `${coupleName}'s portal engagement scored only ${score}/100. ` +
+            `Low planning engagement sometimes correlates with less satisfaction or disengagement. ` +
+            `This doesn't mean the event won't go well, but it's worth monitoring closely and addressing any issues proactively.`,
+          action: `Check in with ${coupleName} to ensure they're feeling supported. After the event, personally follow up rather than relying on automated review requests.`,
+          priority: 'medium',
+          confidence: 0.5 + (signalCount * 0.05),
+          data_points: {
+            wedding_id: wid,
+            couple_name: coupleName,
+            wedding_date: wedding.wedding_date,
+            review_score: score,
+            sage_conversations: sageCount,
+            signal_count: signalCount,
+          },
+          compared_to: 'engagement_composite',
+          expires_at: expiresInDays(isPast ? 7 : 21),
+        })
+      }
+    }
+
+    return insights
+  } catch (err) {
+    console.error('[intelligence-engine] detectReviewPrediction failed:', err)
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Detector 13: Vendor Performance (requires event_feedback tables)
+// ---------------------------------------------------------------------------
+
+async function detectVendorPerformance(
+  supabase: SupabaseClient,
+  venueId: string
+): Promise<InsightCandidate[]> {
+  try {
+    // Gracefully skip if the event_feedback_vendors table doesn't exist yet
+    // (it's being created as migration 044)
+    const { data: vendorRatings, error } = await supabase
+      .from('event_feedback_vendors')
+      .select(`
+        vendor_name,
+        vendor_type,
+        rating,
+        would_recommend,
+        notes,
+        event_feedback_id,
+        event_feedback:event_feedback_id (
+          venue_id
+        )
+      `)
+      .limit(500)
+
+    // If the table doesn't exist, the query will return an error — that's expected
+    if (error) {
+      // Check if it's a "relation does not exist" error — expected if migration hasn't run
+      if (error.message?.includes('does not exist') || error.code === '42P01') {
+        console.log('[intelligence-engine] event_feedback_vendors table not yet available — skipping Detector 13')
+        return []
+      }
+      // Some other error — still return empty gracefully
+      console.warn('[intelligence-engine] detectVendorPerformance query error:', error.message)
+      return []
+    }
+
+    if (!vendorRatings || vendorRatings.length < 3) return []
+
+    // Filter to this venue's ratings
+    const venueRatings = vendorRatings.filter(r => {
+      const fb = r.event_feedback as { venue_id?: string } | null
+      return fb?.venue_id === venueId
+    })
+
+    if (venueRatings.length < 3) return []
+
+    // Group by vendor name (normalized)
+    const vendorStats = new Map<string, {
+      name: string
+      type: string
+      ratings: number[]
+      wouldRecommend: number
+      wouldNotRecommend: number
+      events: number
+    }>()
+
+    for (const rating of venueRatings) {
+      const name = ((rating.vendor_name as string) || 'Unknown').trim().toLowerCase()
+      const existing = vendorStats.get(name) || {
+        name: rating.vendor_name as string,
+        type: rating.vendor_type as string,
+        ratings: [],
+        wouldRecommend: 0,
+        wouldNotRecommend: 0,
+        events: 0,
+      }
+      existing.ratings.push(Number(rating.rating) || 0)
+      if (rating.would_recommend === true) existing.wouldRecommend++
+      if (rating.would_recommend === false) existing.wouldNotRecommend++
+      existing.events++
+      vendorStats.set(name, existing)
+    }
+
+    const insights: InsightCandidate[] = []
+
+    for (const [, stats] of vendorStats) {
+      if (stats.events < 2) continue
+
+      const avgRating = stats.ratings.reduce((s, v) => s + v, 0) / stats.ratings.length
+      const roundedAvg = Math.round(avgRating * 10) / 10
+
+      // Flag underperforming vendors
+      if (avgRating < 3 && stats.events >= 2) {
+        insights.push({
+          insight_type: 'risk',
+          category: 'vendor_quality',
+          title: `Vendor "${stats.name}" rated below average on last ${stats.events} events`,
+          body: `${stats.name} (${stats.type}) has an average rating of ${roundedAvg}/5 across ${stats.events} events. ` +
+            (stats.wouldNotRecommend > 0
+              ? `${stats.wouldNotRecommend} coordinator${stats.wouldNotRecommend > 1 ? 's' : ''} would not recommend them. `
+              : '') +
+            `Consistently low vendor performance affects guest experience and your venue's reputation.`,
+          action: `Have a candid conversation with ${stats.name} about the feedback. If performance doesn't improve, consider recommending alternatives to future couples.`,
+          priority: avgRating < 2.5 ? 'high' : 'medium',
+          confidence: confidenceFromN(stats.events, 3, 5),
+          data_points: {
+            vendor_name: stats.name,
+            vendor_type: stats.type,
+            avg_rating: roundedAvg,
+            total_events: stats.events,
+            individual_ratings: stats.ratings,
+            would_recommend: stats.wouldRecommend,
+            would_not_recommend: stats.wouldNotRecommend,
+          },
+          compared_to: 'vendor_rating_threshold',
+          expires_at: expiresInDays(30),
+        })
+      }
+
+      // Highlight top performers
+      if (avgRating >= 4.5 && stats.events >= 3) {
+        insights.push({
+          insight_type: 'opportunity',
+          category: 'vendor_quality',
+          title: `Vendor "${stats.name}" is performing excellently — consider featuring them`,
+          body: `${stats.name} (${stats.type}) has an average rating of ${roundedAvg}/5 across ${stats.events} events. ` +
+            (stats.wouldRecommend > 0
+              ? `${stats.wouldRecommend} coordinator${stats.wouldRecommend > 1 ? 's' : ''} would recommend them. `
+              : '') +
+            `Consistently high-performing vendors strengthen your venue's overall reputation.`,
+          action: `Feature ${stats.name} in your vendor recommendations to couples. Consider a preferred vendor partnership if you don't have one already.`,
+          priority: 'low',
+          confidence: confidenceFromN(stats.events, 3, 5),
+          data_points: {
+            vendor_name: stats.name,
+            vendor_type: stats.type,
+            avg_rating: roundedAvg,
+            total_events: stats.events,
+            would_recommend: stats.wouldRecommend,
+          },
+          compared_to: 'vendor_rating_threshold',
+          expires_at: expiresInDays(60),
+        })
+      }
+    }
+
+    return insights
+  } catch (err) {
+    // Catch-all for any table-not-found or unexpected errors
+    console.error('[intelligence-engine] detectVendorPerformance failed:', err)
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Detector 14: Timeline Adherence Patterns (requires event_feedback table)
+// ---------------------------------------------------------------------------
+
+async function detectTimelineAdherence(
+  supabase: SupabaseClient,
+  venueId: string
+): Promise<InsightCandidate[]> {
+  try {
+    // Gracefully skip if event_feedback table doesn't exist yet
+    const { data: feedback, error } = await supabase
+      .from('event_feedback')
+      .select('id, timeline_adherence, delay_phases, delay_notes, overall_rating, wedding_id')
+      .eq('venue_id', venueId)
+      .not('timeline_adherence', 'is', null)
+
+    if (error) {
+      if (error.message?.includes('does not exist') || error.code === '42P01') {
+        console.log('[intelligence-engine] event_feedback table not yet available — skipping Detector 14')
+        return []
+      }
+      console.warn('[intelligence-engine] detectTimelineAdherence query error:', error.message)
+      return []
+    }
+
+    if (!feedback || feedback.length < 3) return []
+
+    // Count delay phases across all events
+    const phaseDelayCounts = new Map<string, number>()
+    let totalWithDelays = 0
+    let totalOnTime = 0
+    const delayRatings: number[] = []
+    const onTimeRatings: number[] = []
+
+    for (const fb of feedback) {
+      if (fb.timeline_adherence === 'on_time') {
+        totalOnTime++
+        if (fb.overall_rating) onTimeRatings.push(Number(fb.overall_rating))
+      } else {
+        totalWithDelays++
+        if (fb.overall_rating) delayRatings.push(Number(fb.overall_rating))
+      }
+
+      const phases = fb.delay_phases as string[] | null
+      if (phases && phases.length > 0) {
+        for (const phase of phases) {
+          phaseDelayCounts.set(phase, (phaseDelayCounts.get(phase) || 0) + 1)
+        }
+      }
+    }
+
+    const insights: InsightCandidate[] = []
+
+    // Find phases that repeatedly cause delays
+    const sortedPhases = [...phaseDelayCounts.entries()].sort((a, b) => b[1] - a[1])
+
+    for (const [phase, count] of sortedPhases) {
+      if (count < 2) continue
+
+      const phaseName = phase.replace(/_/g, ' ')
+      const bufferSuggestion = count >= 3 ? '20-minute' : '15-minute'
+
+      insights.push({
+        insight_type: 'recommendation',
+        category: 'operational',
+        title: `Last ${count} weddings had delays during ${phaseName}`,
+        body: `The "${phaseName}" phase has shown up as a delay on ${count} of your last ${feedback.length} events. ` +
+          `This pattern suggests a systemic timing issue rather than a one-off problem. ` +
+          (delayRatings.length > 0 && onTimeRatings.length > 0
+            ? `Events with delays averaged a ${(delayRatings.reduce((s, v) => s + v, 0) / delayRatings.length).toFixed(1)}/5 rating vs ${(onTimeRatings.reduce((s, v) => s + v, 0) / onTimeRatings.length).toFixed(1)}/5 for on-time events. `
+            : '') +
+          `Adding buffer time to this transition can prevent cascading delays through the rest of the evening.`,
+        action: `Add a ${bufferSuggestion} buffer before or after ${phaseName} in your standard timeline template. Brief your day-of team to manage this transition proactively.`,
+        priority: count >= 3 ? 'high' : 'medium',
+        confidence: confidenceFromN(feedback.length, 5, 15),
+        data_points: {
+          delay_phase: phase,
+          delay_count: count,
+          total_events_analyzed: feedback.length,
+          total_with_delays: totalWithDelays,
+          total_on_time: totalOnTime,
+          all_delay_phases: Object.fromEntries(sortedPhases),
+          avg_delay_rating: delayRatings.length > 0
+            ? Math.round((delayRatings.reduce((s, v) => s + v, 0) / delayRatings.length) * 10) / 10
+            : null,
+          avg_ontime_rating: onTimeRatings.length > 0
+            ? Math.round((onTimeRatings.reduce((s, v) => s + v, 0) / onTimeRatings.length) * 10) / 10
+            : null,
+        },
+        compared_to: 'event_history',
+        expires_at: expiresInDays(30),
+      })
+    }
+
+    // Overall timeline adherence insight
+    if (totalWithDelays > 0 && feedback.length >= 5) {
+      const delayRate = totalWithDelays / feedback.length
+      if (delayRate > 0.5) {
+        insights.push({
+          insight_type: 'risk',
+          category: 'operational',
+          title: `${Math.round(delayRate * 100)}% of recent events had timeline delays`,
+          body: `${totalWithDelays} of your last ${feedback.length} events experienced timeline delays. ` +
+            `A delay rate above 50% suggests your standard timeline templates may need adjustment. ` +
+            (delayRatings.length > 0
+              ? `Delayed events averaged ${(delayRatings.reduce((s, v) => s + v, 0) / delayRatings.length).toFixed(1)}/5 vs on-time events at ${onTimeRatings.length > 0 ? (onTimeRatings.reduce((s, v) => s + v, 0) / onTimeRatings.length).toFixed(1) : 'N/A'}/5.`
+              : ''),
+          action: `Review your standard timeline template against actual event timings. Consider adding 10-15 minutes of buffer between each major transition.`,
+          priority: delayRate > 0.7 ? 'high' : 'medium',
+          confidence: confidenceFromN(feedback.length, 5, 15),
+          data_points: {
+            total_events: feedback.length,
+            delayed_events: totalWithDelays,
+            on_time_events: totalOnTime,
+            delay_rate_pct: Math.round(delayRate * 100),
+          },
+          compared_to: 'event_history',
+          expires_at: expiresInDays(30),
+        })
+      }
+    }
+
+    return insights
+  } catch (err) {
+    console.error('[intelligence-engine] detectTimelineAdherence failed:', err)
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Analysis Runner
 // ---------------------------------------------------------------------------
 
@@ -1242,6 +2264,13 @@ export async function runIntelligenceAnalysis(venueId: string): Promise<number> 
     detectPipelineStalls,
     detectSeasonalOpportunities,
     detectLostDealPatterns,
+    // --- Operational pattern detectors (Phase 2) ---
+    detectPortalEngagementQuality,
+    detectGuestExperienceRisks,
+    detectCoupleReadiness,
+    detectReviewPrediction,
+    detectVendorPerformance,
+    detectTimelineAdherence,
   ]
 
   const candidates: InsightCandidate[] = []

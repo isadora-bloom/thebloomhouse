@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Globe, TrendingUp, Clock, BarChart3, MapPin, Users, DollarSign } from 'lucide-react'
+import { Globe, TrendingUp, Clock, BarChart3, MapPin, Users, DollarSign, CalendarDays, AlertTriangle, Compass } from 'lucide-react'
+import { getEventsInRange, getSeasonalAdvisory, type CalendarEvent } from '@/lib/services/calendar-ingest'
 
 // ---------------------------------------------------------------------------
 // Types matching the API response
@@ -229,6 +230,12 @@ export function MarketContextCard() {
             </div>
           )}
 
+          {/* Upcoming date conflicts */}
+          <DateConflicts />
+
+          {/* Seasonal advisory */}
+          <SeasonalAdvisorySection />
+
           {/* If no operational data yet, show the "immediate value" message */}
           {!hasComparisons && market && (
             <div className="flex items-start gap-2 px-3 py-2 bg-sage-50 border border-sage-100 rounded-lg">
@@ -270,6 +277,134 @@ function MarketStat({
         <p className="text-xs text-muted truncate">{label}</p>
         <p className="text-base font-bold text-sage-900">{value}</p>
         {sub && <p className="text-[10px] text-muted capitalize">{sub}</p>}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component: Upcoming Date Conflicts
+// ---------------------------------------------------------------------------
+
+function impactBadge(impact: string): { bg: string; text: string; label: string } {
+  switch (impact) {
+    case 'high': return { bg: 'bg-red-50', text: 'text-red-700', label: 'High impact' }
+    case 'medium': return { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Medium' }
+    default: return { bg: 'bg-gray-50', text: 'text-gray-600', label: 'Low' }
+  }
+}
+
+function DateConflicts() {
+  const [events, setEvents] = useState<CalendarEvent[]>([])
+
+  useEffect(() => {
+    // Compute on client to avoid hydration issues with dates
+    const now = new Date()
+    const start = now.toISOString().split('T')[0]
+    const sixtyDays = new Date()
+    sixtyDays.setDate(now.getDate() + 60)
+    const end = sixtyDays.toISOString().split('T')[0]
+
+    const upcoming = getEventsInRange(start, end, { minImpact: 'medium' })
+    setEvents(upcoming.slice(0, 5)) // Show at most 5
+  }, [])
+
+  if (events.length === 0) return null
+
+  return (
+    <div className="space-y-2">
+      <h3 className="text-xs font-semibold text-muted uppercase tracking-wider flex items-center gap-1.5">
+        <CalendarDays className="w-3.5 h-3.5" />
+        Upcoming Date Conflicts
+      </h3>
+      <div className="grid gap-1.5">
+        {events.map((event) => {
+          const badge = impactBadge(event.impact)
+          const eventDate = new Date(event.date + 'T12:00:00')
+          const formatted = eventDate.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            weekday: 'short',
+          })
+
+          return (
+            <div
+              key={`${event.date}-${event.name}`}
+              className={`flex items-start gap-2.5 px-3 py-2 rounded-lg ${badge.bg}`}
+            >
+              <AlertTriangle className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${badge.text}`} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className={`text-sm font-medium ${badge.text}`}>{event.name}</p>
+                  <span className="text-[10px] text-muted">{formatted}</span>
+                </div>
+                <p className="text-xs text-muted mt-0.5 line-clamp-2">
+                  {event.impact_notes}
+                </p>
+              </div>
+              <span className={`text-[10px] font-semibold shrink-0 mt-0.5 ${badge.text}`}>
+                {badge.label}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component: Seasonal Advisory
+// ---------------------------------------------------------------------------
+
+function trendIcon(trend: string): string {
+  switch (trend) {
+    case 'peak': return 'Peak'
+    case 'rising': return 'Rising'
+    case 'declining': return 'Declining'
+    case 'low': return 'Low'
+    default: return ''
+  }
+}
+
+function trendColor(trend: string): string {
+  switch (trend) {
+    case 'peak': return 'text-emerald-600'
+    case 'rising': return 'text-blue-600'
+    case 'declining': return 'text-amber-600'
+    case 'low': return 'text-red-600'
+    default: return 'text-muted'
+  }
+}
+
+function SeasonalAdvisorySection() {
+  const [advisory, setAdvisory] = useState<ReturnType<typeof getSeasonalAdvisory> | null>(null)
+
+  useEffect(() => {
+    setAdvisory(getSeasonalAdvisory())
+  }, [])
+
+  if (!advisory) return null
+
+  return (
+    <div className="space-y-2">
+      <h3 className="text-xs font-semibold text-muted uppercase tracking-wider flex items-center gap-1.5">
+        <Compass className="w-3.5 h-3.5" />
+        Seasonal Advisory
+      </h3>
+      <div className="px-3 py-3 bg-sage-50/50 border border-sage-100 rounded-lg space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold text-sage-900">{advisory.label}</p>
+          <div className="flex items-center gap-3 text-xs">
+            <span className="text-muted">
+              Inquiries: <span className={`font-semibold ${trendColor(advisory.inquiry_trend)}`}>{trendIcon(advisory.inquiry_trend)}</span>
+            </span>
+            <span className="text-muted">
+              Bookings: <span className={`font-semibold ${trendColor(advisory.booking_trend)}`}>{trendIcon(advisory.booking_trend)}</span>
+            </span>
+          </div>
+        </div>
+        <p className="text-xs text-sage-700 leading-relaxed">{advisory.description}</p>
       </div>
     </div>
   )

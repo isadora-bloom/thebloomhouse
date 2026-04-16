@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { MarketContextCard } from '@/components/intel/market-context-card'
+import { InsightFeed } from '@/components/intel/insight-feed'
 
 interface Stats {
   activeInquiries: number
@@ -298,6 +299,9 @@ export default function DashboardPage() {
 
       {/* Market Intelligence — immediate value from external data */}
       <MarketContextCard />
+
+      {/* Intelligence Insights — top 5 pattern detections */}
+      <InsightFeed limit={5} showViewAll />
 
       {/* Per-venue breakdown (only at group/company scope) */}
       {scope.level !== 'venue' && venueBreakdown.length > 0 && (

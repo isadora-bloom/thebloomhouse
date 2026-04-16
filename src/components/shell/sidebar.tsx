@@ -17,6 +17,7 @@ import {
   LayoutDashboard, TrendingUp, Newspaper, Star,
   MessageSquareText, XCircle, CalendarRange, LineChart,
   Megaphone, Share2, MapPinIcon, UserCheck, Activity,
+  Lightbulb,
   // Enterprise / Multi-venue
   Building2, MapPin, UsersRound, Layers,
   BarChart3, GitMerge,
@@ -136,6 +137,7 @@ const VENUE_SECTIONS: NavSection[] = [
     subtitle: 'Venue insights',
     items: [
       { label: 'Dashboard', href: '/intel/dashboard', icon: LayoutDashboard, daily: true },
+      { label: 'Insights', href: '/intel/insights', icon: Lightbulb, daily: true },
       { label: 'Market Pulse', href: '/intel/market-pulse', icon: Activity, daily: true },
       { label: 'Ask Anything', href: '/intel/nlq', icon: MessageSquareText },
       { label: 'Briefings', href: '/intel/briefings', icon: Newspaper },
@@ -247,6 +249,7 @@ export function Sidebar({ isDemo = false }: { isDemo?: boolean }) {
   const [hasPortfolioAccess, setHasPortfolioAccess] = useState(isDemo)
   const [navMode, setNavMode] = useState<'daily' | 'full'>('daily')
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+  const [insightCount, setInsightCount] = useState<number>(0)
 
   useEffect(() => {
     setNavMode(getNavModeCookie())
@@ -275,6 +278,16 @@ export function Sidebar({ isDemo = false }: { isDemo?: boolean }) {
           })
         }
       })
+
+      // Fetch new insight count for sidebar badge
+      supabase
+        .from('intelligence_insights')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'new')
+        .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
+        .then(({ count: insightsCount }) => {
+          setInsightCount(insightsCount ?? 0)
+        })
     })
   }, [])
 
@@ -295,6 +308,18 @@ export function Sidebar({ isDemo = false }: { isDemo?: boolean }) {
   }
 
   const allSections = buildSections(scopeLevel, hasMultipleVenues && hasPortfolioAccess, planTier)
+
+  // Inject dynamic badge for Insights nav item
+  if (insightCount > 0) {
+    for (const section of allSections) {
+      for (const item of section.items) {
+        if (item.href === '/intel/insights') {
+          item.badge = String(insightCount)
+        }
+      }
+    }
+  }
+
   const sections = navMode === 'daily' ? filterForDaily(allSections) : allSections
 
   const nav = (

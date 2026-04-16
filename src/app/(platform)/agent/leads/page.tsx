@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
+import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import {
   Flame,
   ArrowUpDown,
@@ -469,6 +470,9 @@ export default function LeadsPage() {
           </p>
         </div>
       </div>
+
+      {/* ---- Inline insight banner ---- */}
+      <InlineInsightBanner category="lead_conversion,team_performance" />
 
       {/* ---- Error ---- */}
       {error && (

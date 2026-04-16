@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
+import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import {
   DndContext,
   DragOverlay,
@@ -576,6 +577,9 @@ export default function PipelinePage() {
           Refresh
         </button>
       </div>
+
+      {/* ---- Inline insight banner ---- */}
+      <InlineInsightBanner category="lead_conversion" />
 
       {/* ---- Error ---- */}
       {error && (
