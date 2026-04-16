@@ -137,6 +137,12 @@ export default function ToursPage() {
           .select('venue_id')
           .eq('group_id', scope.groupId)
         venueIds = (members ?? []).map((m) => m.venue_id as string)
+      } else if (scope.orgId) {
+        const { data: orgVenues } = await supabase
+          .from('venues')
+          .select('id')
+          .eq('org_id', scope.orgId)
+        venueIds = (orgVenues ?? []).map((v) => v.id as string)
       }
 
       let query = supabase

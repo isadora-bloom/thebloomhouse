@@ -421,6 +421,13 @@ export default function IntelligenceDashboardPage() {
           .select('venue_id')
           .eq('group_id', scope.groupId)
         venueIds = (members ?? []).map((m) => m.venue_id as string)
+      } else if (scope.orgId) {
+        // company scope — filter to user's org's venues only (prevents cross-org leak)
+        const { data: orgVenues } = await supabase
+          .from('venues')
+          .select('id')
+          .eq('org_id', scope.orgId)
+        venueIds = (orgVenues ?? []).map((v) => v.id as string)
       }
 
       // 2. Pending recommendations count

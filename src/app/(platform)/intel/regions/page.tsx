@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
+import { useScope } from '@/lib/hooks/use-scope'
 import {
   MapPin,
   Building2,
@@ -93,6 +94,7 @@ function RegionCardSkeleton() {
 // ---------------------------------------------------------------------------
 
 function RegionalAnalyticsPageInner() {
+  const scope = useScope()
   const [venues, setVenues] = useState<VenueRow[]>([])
   const [weddings, setWeddings] = useState<WeddingRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -100,13 +102,27 @@ function RegionalAnalyticsPageInner() {
   const [selectedRegion, setSelectedRegion] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
     try {
-      const [venueRes, weddingRes] = await Promise.all([
-        supabase.from('venues').select('id, name, state'),
-        supabase.from('weddings').select('id, venue_id, status, booking_value, created_at'),
-      ])
+      // Filter venues by org_id to prevent cross-org data leak
+      let venueQ = supabase.from('venues').select('id, name, state')
+      if (scope.orgId) {
+        venueQ = venueQ.eq('org_id', scope.orgId)
+      }
+      const venueRes = await venueQ
       if (venueRes.error) throw venueRes.error
+
+      // Filter weddings to only this org's venues
+      const orgVenueIds = (venueRes.data ?? []).map((v: any) => v.id as string)
+      let weddingQ = supabase.from('weddings').select('id, venue_id, status, booking_value, created_at')
+      if (orgVenueIds.length > 0) {
+        weddingQ = weddingQ.in('venue_id', orgVenueIds)
+      }
+
+      const [weddingRes] = await Promise.all([
+        weddingQ,
+      ])
       if (weddingRes.error) throw weddingRes.error
       setVenues((venueRes.data ?? []) as VenueRow[])
       setWeddings((weddingRes.data ?? []) as WeddingRow[])
@@ -117,7 +133,7 @@ function RegionalAnalyticsPageInner() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope.loading, scope.orgId])
 
   useEffect(() => {
     fetchData()

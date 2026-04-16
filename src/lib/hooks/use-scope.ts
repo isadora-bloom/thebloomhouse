@@ -9,6 +9,7 @@ export interface Scope {
   level: ScopeLevel
   venueId?: string
   groupId?: string
+  orgId?: string
   venueName?: string
   groupName?: string
   companyName?: string
@@ -17,6 +18,7 @@ export interface Scope {
 const DEMO_SCOPE: Scope = {
   level: 'venue',
   venueId: '22222222-2222-2222-2222-222222222201',
+  orgId: '11111111-1111-1111-1111-111111111111',
   venueName: 'Hawthorne Manor',
   companyName: 'The Crestwood Collection',
 }
@@ -116,6 +118,7 @@ export function useScope(): Scope & { loading: boolean } {
         const newScope: Scope = {
           level: 'venue',
           venueId: profile.venue_id as string,
+          orgId: (profile.org_id as string | undefined) || (venue?.org_id as string | undefined) || undefined,
           venueName: (venue?.name as string | undefined) ?? undefined,
           companyName: orgName ?? undefined,
         }

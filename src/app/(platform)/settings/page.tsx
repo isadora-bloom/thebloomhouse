@@ -873,7 +873,7 @@ function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
             .eq('group_id', scope.groupId)
           venueIds = (members ?? []).map((m) => m.venue_id as string)
         }
-        // For company scope: venueIds stays null → fetch all venues
+        // For company scope: filter by org_id to prevent cross-org data leak
 
         // 2) Load venues (now also pulling org_id so we can resolve the brand)
         let vq = supabase
@@ -887,6 +887,9 @@ function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
           setOrgId(null)
           setLoading(false)
           return
+        } else if (scope.orgId) {
+          // Company scope — filter to user's org only
+          vq = vq.eq('org_id', scope.orgId)
         }
         const { data: venueRows, error: vErr } = await vq
         if (vErr) throw vErr

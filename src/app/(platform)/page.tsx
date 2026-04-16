@@ -92,8 +92,15 @@ export default function DashboardPage() {
           .select('venue_id')
           .eq('group_id', scope.groupId)
         venueIds = (data ?? []).map((r) => r.venue_id as string)
+      } else if (scope.orgId) {
+        // company scope — filter to user's org's venues only (prevents cross-org leak)
+        const { data: orgVenues } = await supabase
+          .from('venues')
+          .select('id')
+          .eq('org_id', scope.orgId)
+        venueIds = (orgVenues ?? []).map((v) => v.id as string)
       }
-      // company → venueIds stays null (no filter)
+      // company without orgId → venueIds stays null (legacy fallback)
 
       // ---- Helper to apply venue filter to a query ----
       function withVenueFilter<T extends { in: (col: string, vals: string[]) => T }>(q: T): T {
@@ -157,10 +164,13 @@ export default function DashboardPage() {
       let breakdown: VenueRow[] = []
       let venueCount = 1
       if (scope.level !== 'venue') {
-        const venuesQ = supabase.from('venues').select('id, name')
-        const { data: venuesData } = (venueIds && venueIds.length > 0
-          ? await venuesQ.in('id', venueIds)
-          : await venuesQ) as { data: Array<{ id: string; name: string }> | null }
+        let venuesQ = supabase.from('venues').select('id, name')
+        if (venueIds && venueIds.length > 0) {
+          venuesQ = venuesQ.in('id', venueIds)
+        } else if (scope.orgId) {
+          venuesQ = venuesQ.eq('org_id', scope.orgId)
+        }
+        const { data: venuesData } = await venuesQ as { data: Array<{ id: string; name: string }> | null }
 
         venueCount = venuesData?.length ?? 0
 

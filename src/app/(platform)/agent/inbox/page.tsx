@@ -788,8 +788,16 @@ export default function InboxPage() {
         .eq('group_id', scope.groupId)
       return (members ?? []).map((r) => r.venue_id as string)
     }
+    if (scope.orgId) {
+      // company scope — filter to user's org's venues only (prevents cross-org leak)
+      const { data: orgVenues } = await supabase
+        .from('venues')
+        .select('id')
+        .eq('org_id', scope.orgId)
+      return (orgVenues ?? []).map((v) => v.id as string)
+    }
     return null
-  }, [scope.level, scope.venueId, scope.groupId, supabase])
+  }, [scope.level, scope.venueId, scope.groupId, scope.orgId, supabase])
 
   // ---- Fetch pending draft count ----
   useEffect(() => {

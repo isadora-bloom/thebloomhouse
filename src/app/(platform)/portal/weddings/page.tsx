@@ -939,6 +939,13 @@ export default function WeddingsPage() {
           .select('venue_id')
           .eq('group_id', scope.groupId)
         venueIds = (members ?? []).map((m) => m.venue_id as string)
+      } else if (scope.orgId) {
+        // Company scope — filter to user's org's venues only (prevents cross-org leak)
+        const { data: orgVenues } = await supabase
+          .from('venues')
+          .select('id')
+          .eq('org_id', scope.orgId)
+        venueIds = (orgVenues ?? []).map((v) => v.id as string)
       }
 
       // Fetch venue slug for "Open as Couple" links — only meaningful

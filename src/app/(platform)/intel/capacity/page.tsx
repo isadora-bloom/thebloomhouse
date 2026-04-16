@@ -181,6 +181,17 @@ export default function CapacityPage() {
       if (ids) {
         venueQ = venueQ.in('id', ids)
         configQ = configQ.in('venue_id', ids)
+      } else if (scope.orgId) {
+        // Company scope — filter by org_id to prevent cross-org data leak
+        venueQ = venueQ.eq('org_id', scope.orgId)
+        const { data: orgVenueRows } = await supabase
+          .from('venues')
+          .select('id')
+          .eq('org_id', scope.orgId)
+        const orgVenueIds = (orgVenueRows ?? []).map((v) => v.id as string)
+        if (orgVenueIds.length > 0) {
+          configQ = configQ.in('venue_id', orgVenueIds)
+        }
       }
 
       const [venueRes, configRes] = await Promise.all([venueQ, configQ])

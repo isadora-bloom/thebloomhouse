@@ -31,6 +31,7 @@ export interface Scope {
   level: ScopeLevel
   venueId?: string       // set when level='venue'
   groupId?: string       // set when level='group'
+  orgId?: string         // always set — isolates data by organisation
   venueName?: string
   groupName?: string
   companyName?: string
@@ -94,6 +95,7 @@ export function ScopeSelector() {
   const [venues, setVenues] = useState<Venue[]>([])
   const [groups, setGroups] = useState<VenueGroup[]>([])
   const [orgName, setOrgName] = useState(DEFAULT_ORG_NAME)
+  const [resolvedOrgId, setResolvedOrgId] = useState<string | null>(null)
   const [scope, setScope] = useState<Scope | null>(null)
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -103,27 +105,56 @@ export function ScopeSelector() {
     async function load() {
       const supabase = createClient()
 
-      // Load venues
-      const { data: venueData } = await supabase
+      // Resolve the user's org_id from their profile (or use demo org)
+      let userOrgId: string | null = null
+      const isDemoMode = document.cookie.split('; ').some((c) => c === 'bloom_demo=true')
+      if (isDemoMode) {
+        userOrgId = DEMO_ORG_ID
+      } else {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          const { data: profile } = await supabase
+            .from('user_profiles')
+            .select('org_id')
+            .eq('id', user.id)
+            .maybeSingle()
+          userOrgId = (profile?.org_id as string | null) ?? null
+        }
+      }
+
+      // Load venues — filtered by the user's org to prevent cross-org data leak
+      let venueQuery = supabase
         .from('venues')
         .select('id, name, slug, status')
         .order('name')
+      if (userOrgId) {
+        venueQuery = venueQuery.eq('org_id', userOrgId)
+      }
+      const { data: venueData } = await venueQuery
 
       setVenues((venueData ?? []) as Venue[])
 
-      // Load org name
-      const { data: orgData } = await supabase
+      // Load org name — filtered by the user's org
+      let orgQuery = supabase
         .from('organisations')
         .select('name')
         .limit(1)
-        .maybeSingle()
+      if (userOrgId) {
+        orgQuery = orgQuery.eq('id', userOrgId)
+      }
+      const { data: orgData } = await orgQuery.maybeSingle()
       if (orgData?.name) setOrgName(orgData.name)
+      setResolvedOrgId(userOrgId)
 
-      // Load groups from DB (with fallback to static)
-      const { data: groupData, error: groupErr } = await supabase
+      // Load groups from DB (with fallback to static), filtered by org
+      let groupQ = supabase
         .from('venue_groups')
         .select('id, name, venue_group_members(venue_id)')
         .order('name')
+      if (userOrgId) {
+        groupQ = groupQ.eq('org_id', userOrgId)
+      }
+      const { data: groupData, error: groupErr } = await groupQ as { data: any; error: any }
 
       if (!groupErr && groupData && groupData.length > 0) {
         const dbGroups: VenueGroup[] = groupData.map((g: any) => ({
@@ -140,12 +171,13 @@ export function ScopeSelector() {
       // Restore from cookie or default to first venue
       const saved = getScopeCookie()
       if (saved) {
-        setScope({ ...saved, companyName: orgData?.name ?? DEFAULT_ORG_NAME })
+        setScope({ ...saved, orgId: userOrgId ?? saved.orgId, companyName: orgData?.name ?? DEFAULT_ORG_NAME })
       } else if (venueData && venueData.length > 0) {
         const first = venueData[0]
         setScope({
           level: 'venue',
           venueId: first.id,
+          orgId: userOrgId ?? undefined,
           venueName: first.name,
           companyName: orgData?.name ?? DEFAULT_ORG_NAME,
         })
@@ -168,6 +200,7 @@ export function ScopeSelector() {
     const newScope: Scope = {
       level: 'venue',
       venueId: v.id,
+      orgId: resolvedOrgId ?? undefined,
       venueName: v.name,
       companyName: orgName,
     }
@@ -181,6 +214,7 @@ export function ScopeSelector() {
     const newScope: Scope = {
       level: 'group',
       groupId: g.id,
+      orgId: resolvedOrgId ?? undefined,
       groupName: g.name,
       companyName: orgName,
     }
@@ -193,6 +227,7 @@ export function ScopeSelector() {
   function selectCompany() {
     const newScope: Scope = {
       level: 'company',
+      orgId: resolvedOrgId ?? undefined,
       companyName: orgName,
     }
     setScope(newScope)

@@ -345,7 +345,7 @@ export default function PortfolioOverviewPage() {
         .order('timestamp', { ascending: true })
 
       // Portfolio ALWAYS shows all org venues — that's its purpose.
-      // At group scope, filter to group venues. At venue/company scope, show all.
+      // At group scope, filter to group venues. Otherwise filter by org_id.
       if (scope.level === 'group' && scope.groupId) {
         const { data: members } = await supabase
           .from('venue_group_members')
@@ -358,8 +358,21 @@ export default function PortfolioOverviewPage() {
           healthQ = healthQ.in('venue_id', groupIds)
           intQ = intQ.in('venue_id', groupIds)
         }
+      } else if (scope.orgId) {
+        // Filter to user's org venues only — prevents cross-org data leak
+        venueQ = venueQ.eq('org_id', scope.orgId)
+        // For weddings/health/interactions, first resolve org venue IDs
+        const { data: orgVenueRows } = await supabase
+          .from('venues')
+          .select('id')
+          .eq('org_id', scope.orgId)
+        const orgVenueIds = (orgVenueRows ?? []).map((v) => v.id as string)
+        if (orgVenueIds.length > 0) {
+          weddingQ = weddingQ.in('venue_id', orgVenueIds)
+          healthQ = healthQ.in('venue_id', orgVenueIds)
+          intQ = intQ.in('venue_id', orgVenueIds)
+        }
       }
-      // At venue scope or company scope: no filter — show all venues in the org
 
       const [venueRes, weddingRes, healthRes, intRes] = await Promise.all([
         venueQ,

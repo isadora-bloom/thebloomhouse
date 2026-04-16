@@ -269,9 +269,47 @@ export function Sidebar({ isDemo = false }: { isDemo?: boolean }) {
     // Check if org has multiple venues + user role for portfolio access
     import('@/lib/supabase/client').then(({ createClient }) => {
       const supabase = createClient()
-      supabase.from('venues').select('id', { count: 'exact', head: true }).then(({ count }) => {
-        if (count && count > 1) setHasMultipleVenues(true)
-      })
+
+      // Resolve the user's org_id first, then count only their org's venues
+      const isDemoModeSidebar = document.cookie.split('; ').some((c) => c === 'bloom_demo=true')
+      const orgIdFromCookie = (() => {
+        try {
+          const raw = document.cookie.split('; ').find((c) => c.startsWith('bloom_scope='))?.split('=')[1]
+          if (raw) return JSON.parse(decodeURIComponent(raw)).orgId ?? null
+        } catch { /* ignore */ }
+        return null
+      })()
+
+      if (isDemoModeSidebar) {
+        // Demo mode — count only demo org's venues
+        supabase.from('venues').select('id', { count: 'exact', head: true })
+          .eq('org_id', '11111111-1111-1111-1111-111111111111')
+          .then(({ count }) => {
+            if (count && count > 1) setHasMultipleVenues(true)
+          })
+      } else if (orgIdFromCookie) {
+        // Real user with org_id in cookie — count only their org's venues
+        supabase.from('venues').select('id', { count: 'exact', head: true })
+          .eq('org_id', orgIdFromCookie)
+          .then(({ count }) => {
+            if (count && count > 1) setHasMultipleVenues(true)
+          })
+      } else {
+        // Fallback: resolve from user profile
+        supabase.auth.getUser().then(({ data: { user } }) => {
+          if (user) {
+            supabase.from('user_profiles').select('org_id').eq('id', user.id).maybeSingle().then(({ data: profile }) => {
+              const orgId = profile?.org_id as string | null
+              let venueCountQ = supabase.from('venues').select('id', { count: 'exact', head: true })
+              if (orgId) venueCountQ = venueCountQ.eq('org_id', orgId)
+              venueCountQ.then(({ count }) => {
+                if (count && count > 1) setHasMultipleVenues(true)
+              })
+            })
+          }
+        })
+      }
+
       supabase.auth.getUser().then(({ data: { user } }) => {
         if (user) {
           supabase.from('user_profiles').select('role').eq('id', user.id).single().then(({ data }) => {

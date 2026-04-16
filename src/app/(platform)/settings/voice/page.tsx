@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
+import { useScope } from '@/lib/hooks/use-scope'
 import {
   MessageSquare, ThumbsUp, ThumbsDown, Zap, Trophy, ArrowLeft,
   Check, X, BarChart3, Play, Mic,
@@ -100,6 +101,7 @@ const GAME_CONFIGS = {
 // ---------------------------------------------------------------------------
 
 export default function VoiceTrainingPage() {
+  const scope = useScope()
   // Global state
   const [screen, setScreen] = useState<Screen>('select')
   const [activeGame, setActiveGame] = useState<GameType | null>(null)
@@ -127,16 +129,21 @@ export default function VoiceTrainingPage() {
   // -------------------------------------------------------------------------
 
   useEffect(() => {
+    if (scope.loading) return
     async function loadVenueAndStats() {
-      // Get first venue ID
-      const { data: venue } = await supabase
-        .from('venues')
-        .select('id')
-        .limit(1)
-        .single()
+      // Use the scoped venue ID instead of grabbing first venue from DB (prevents cross-org leak)
+      let resolvedVenueId: string | null = scope.venueId ?? null
+      if (!resolvedVenueId) {
+        // Fallback: get first venue from the user's org
+        let vq = supabase.from('venues').select('id').limit(1)
+        if (scope.orgId) vq = vq.eq('org_id', scope.orgId)
+        const { data: venue } = await vq.single()
+        if (!venue) return
+        resolvedVenueId = venue.id
+      }
 
-      if (!venue) return
-      setVenueId(venue.id)
+      setVenueId(resolvedVenueId)
+      const venue = { id: resolvedVenueId }
 
       // Load training stats
       const { data: sessions } = await supabase
@@ -165,7 +172,7 @@ export default function VoiceTrainingPage() {
     }
 
     loadVenueAndStats()
-  }, [])
+  }, [scope.loading, scope.venueId, scope.orgId])
 
   // -------------------------------------------------------------------------
   // Game lifecycle

@@ -618,8 +618,17 @@ export default function ReviewAnalysisPage() {
         if (venueIds.length > 0) {
           query = query.in('venue_id', venueIds)
         }
+      } else if (scope.orgId) {
+        // company scope — filter to user's org's venues only (prevents cross-org leak)
+        const { data: orgVenues } = await supabase
+          .from('venues')
+          .select('id')
+          .eq('org_id', scope.orgId)
+        const orgVenueIds = (orgVenues ?? []).map((v) => v.id as string)
+        if (orgVenueIds.length > 0) {
+          query = query.in('venue_id', orgVenueIds)
+        }
       }
-      // company scope: no filter, show all
 
       const { data, error: fetchErr } = await query
       if (fetchErr) throw fetchErr

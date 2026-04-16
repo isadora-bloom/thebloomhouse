@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
+import { useScope } from '@/lib/hooks/use-scope'
 import {
   Users,
   Trophy,
@@ -140,6 +141,7 @@ function TableSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function TeamComparePage() {
+  const scope = useScope()
   const [rows, setRows] = useState<TeamRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -148,9 +150,16 @@ export default function TeamComparePage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = getSupabase()
     const { start, end } = getPeriodDates(period)
     try {
+      // Resolve org-scoped venue IDs to prevent cross-org data leak
+      let venueQ = supabase.from('venues').select('id, name')
+      if (scope.orgId) {
+        venueQ = venueQ.eq('org_id', scope.orgId)
+      }
+
       const [metricRes, profileRes, venueRes] = await Promise.all([
         supabase
           .from('consultant_metrics')
@@ -158,18 +167,22 @@ export default function TeamComparePage() {
           .lte('period_start', end)
           .gte('period_end', start),
         supabase.from('user_profiles').select('id, first_name, last_name, role'),
-        supabase.from('venues').select('id, name'),
+        venueQ,
       ])
       if (metricRes.error) throw metricRes.error
       if (profileRes.error) throw profileRes.error
       if (venueRes.error) throw venueRes.error
 
-      const metrics = (metricRes.data ?? []) as ConsultantMetric[]
+      const allMetrics = (metricRes.data ?? []) as ConsultantMetric[]
       const profiles = (profileRes.data ?? []) as UserProfile[]
       const venues = (venueRes.data ?? []) as VenueRow[]
 
       const profileMap = new Map(profiles.map((p) => [p.id, p]))
       const venueMap = new Map(venues.map((v) => [v.id, v.name]))
+      const venueIdSet = new Set(venues.map((v) => v.id))
+
+      // Filter metrics to only include the org's venues
+      const metrics = allMetrics.filter((m) => venueIdSet.has(m.venue_id))
 
       // Aggregate by user + venue
       const agg = new Map<string, TeamRow>()
@@ -206,7 +219,7 @@ export default function TeamComparePage() {
     } finally {
       setLoading(false)
     }
-  }, [period])
+  }, [period, scope.loading, scope.orgId])
 
   useEffect(() => {
     setLoading(true)

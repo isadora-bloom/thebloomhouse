@@ -169,6 +169,19 @@ function CompanyDashboardInner() {
         weddingQ = weddingQ.in('venue_id', ids)
         cmQ = cmQ.in('venue_id', ids)
         vcQ = vcQ.in('venue_id', ids)
+      } else if (scope.orgId) {
+        // Company scope — filter by org_id to prevent cross-org data leak
+        venueQ = venueQ.eq('org_id', scope.orgId)
+        const { data: orgVenueRows } = await supabase
+          .from('venues')
+          .select('id')
+          .eq('org_id', scope.orgId)
+        const orgVenueIds = (orgVenueRows ?? []).map((v) => v.id as string)
+        if (orgVenueIds.length > 0) {
+          weddingQ = weddingQ.in('venue_id', orgVenueIds)
+          cmQ = cmQ.in('venue_id', orgVenueIds)
+          vcQ = vcQ.in('venue_id', orgVenueIds)
+        }
       }
 
       const [venueRes, weddingRes, cmRes, vcRes] = await Promise.all([

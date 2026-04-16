@@ -115,7 +115,15 @@ export default function ROIDashboardPage() {
         .eq('group_id', scope.groupId)
       return (data ?? []).map((r) => r.venue_id as string)
     }
-    return null // company = all venues
+    if (scope.orgId) {
+      // company scope — filter to user's org's venues only (prevents cross-org leak)
+      const { data: orgVenues } = await supabase
+        .from('venues')
+        .select('id')
+        .eq('org_id', scope.orgId)
+      return (orgVenues ?? []).map((v) => v.id as string)
+    }
+    return null // company without orgId — legacy fallback
   }, [scope.level, scope.venueId, scope.groupId])
 
   useEffect(() => {

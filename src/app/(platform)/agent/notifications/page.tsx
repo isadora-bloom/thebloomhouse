@@ -316,6 +316,12 @@ export default function NotificationsPage() {
           .select('venue_id')
           .eq('group_id', scope.groupId)
         venueIds = (members ?? []).map((r) => r.venue_id as string)
+      } else if (scope.orgId) {
+        const { data: orgVenues } = await supabase
+          .from('venues')
+          .select('id')
+          .eq('org_id', scope.orgId)
+        venueIds = (orgVenues ?? []).map((v) => v.id as string)
       }
 
       // Settings are per-venue; only load when a specific venue is in scope
