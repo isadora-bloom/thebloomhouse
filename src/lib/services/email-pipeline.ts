@@ -927,7 +927,9 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
     threadId = (interaction?.gmail_thread_id as string) ?? undefined
   }
 
-  // Send via Gmail
+  // Send via Gmail. Approved drafts MUST go through the venue's authenticated
+  // Gmail — the whole product premise is that replies come from the
+  // coordinator's own inbox. No transactional fallback here by design.
   const sentMessageId = await sendEmail(
     draft.venue_id as string,
     draft.to_email as string,
@@ -937,6 +939,11 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
   )
 
   if (!sentMessageId) {
+    console.error(
+      `[pipeline] Approved draft ${draftId} could not be sent: Gmail is not connected for venue ${draft.venue_id}. ` +
+        `Approved drafts must go through the venue's authenticated Gmail (no transactional fallback). ` +
+        `Reconnect Gmail in Settings → Agent to retry.`
+    )
     throw new Error(`Failed to send email for draft ${draftId}`)
   }
 

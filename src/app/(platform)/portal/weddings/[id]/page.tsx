@@ -115,9 +115,9 @@ interface BudgetRow {
   id: string
   category: string | null
   item_name: string
-  estimated_cost: number | null
-  actual_cost: number | null
-  paid_amount: number | null
+  budgeted: number | null
+  committed: number | null
+  paid: number | null
 }
 
 interface MessageRow {
@@ -385,9 +385,9 @@ function OverviewTab({
   const totalChecklist = checklist.length
   const checklistPct = totalChecklist > 0 ? Math.round((completedChecklist / totalChecklist) * 100) : 0
 
-  const totalEstimated = budget.reduce((s, b) => s + (b.estimated_cost ?? 0), 0)
-  const totalActual = budget.reduce((s, b) => s + (b.actual_cost ?? 0), 0)
-  const totalPaid = budget.reduce((s, b) => s + (b.paid_amount ?? 0), 0)
+  const totalEstimated = budget.reduce((s, b) => s + (b.budgeted ?? 0), 0)
+  const totalActual = budget.reduce((s, b) => s + (b.committed ?? 0), 0)
+  const totalPaid = budget.reduce((s, b) => s + (b.paid ?? 0), 0)
 
   const totalGuests = guests.length
   const attending = guests.filter((g) => g.rsvp_status === 'attending').length
@@ -713,9 +713,9 @@ function TimelineTab({ items }: { items: TimelineItemRow[] }) {
 }
 
 function BudgetTab({ items }: { items: BudgetRow[] }) {
-  const totalEstimated = items.reduce((s, b) => s + (b.estimated_cost ?? 0), 0)
-  const totalActual = items.reduce((s, b) => s + (b.actual_cost ?? 0), 0)
-  const totalPaid = items.reduce((s, b) => s + (b.paid_amount ?? 0), 0)
+  const totalEstimated = items.reduce((s, b) => s + (b.budgeted ?? 0), 0)
+  const totalActual = items.reduce((s, b) => s + (b.committed ?? 0), 0)
+  const totalPaid = items.reduce((s, b) => s + (b.paid ?? 0), 0)
   const remaining = totalEstimated - totalActual
 
   // Group by category
@@ -723,9 +723,9 @@ function BudgetTab({ items }: { items: BudgetRow[] }) {
   for (const item of items) {
     const cat = item.category || 'Uncategorized'
     if (!byCategory[cat]) byCategory[cat] = { estimated: 0, actual: 0, paid: 0, count: 0 }
-    byCategory[cat].estimated += item.estimated_cost ?? 0
-    byCategory[cat].actual += item.actual_cost ?? 0
-    byCategory[cat].paid += item.paid_amount ?? 0
+    byCategory[cat].estimated += item.budgeted ?? 0
+    byCategory[cat].actual += item.committed ?? 0
+    byCategory[cat].paid += item.paid ?? 0
     byCategory[cat].count++
   }
 
@@ -1822,7 +1822,7 @@ export default function WeddingProfilePage() {
         supabase.from('booked_vendors').select('id, vendor_type, vendor_name, vendor_contact, is_booked, contract_uploaded, notes').eq('wedding_id', weddingId),
         supabase.from('guest_list').select('id, rsvp_status, dietary_restrictions, table_assignment_id').eq('wedding_id', weddingId),
         supabase.from('timeline').select('id, time, title, description, category, location, sort_order').eq('wedding_id', weddingId).order('sort_order'),
-        supabase.from('budget').select('id, category, item_name, estimated_cost, actual_cost, paid_amount').eq('wedding_id', weddingId),
+        supabase.from('budget_items').select('id, category, item_name, budgeted, committed, paid').eq('wedding_id', weddingId),
         supabase.from('messages').select('id, sender_role, content, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }).limit(100),
         supabase.from('sage_conversations').select('id, role, content, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }).limit(200),
         supabase.from('checklist_items').select('id, title, is_completed, category').eq('wedding_id', weddingId),

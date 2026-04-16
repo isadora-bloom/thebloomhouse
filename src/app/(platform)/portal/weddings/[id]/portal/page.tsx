@@ -74,8 +74,8 @@ interface BudgetItem {
   id: string
   category: string
   item_name: string | null
-  estimated_cost: number | null
-  actual_cost: number | null
+  budgeted: number | null
+  committed: number | null
 }
 
 interface ChecklistItem {
@@ -289,8 +289,8 @@ function DashboardSummary({
 }) {
   const days = daysUntil(wedding.wedding_date)
   const completedChecklist = checklist.filter((c) => c.completed).length
-  const totalBudgetEst = budget.reduce((s, b) => s + (b.estimated_cost ?? 0), 0)
-  const totalBudgetAct = budget.reduce((s, b) => s + (b.actual_cost ?? 0), 0)
+  const totalBudgetEst = budget.reduce((s, b) => s + (b.budgeted ?? 0), 0)
+  const totalBudgetAct = budget.reduce((s, b) => s + (b.committed ?? 0), 0)
   const confirmedGuests = guests.filter((g) => g.rsvp_status === 'confirmed').length
 
   return (
@@ -419,13 +419,13 @@ function BudgetSection({ items }: { items: BudgetItem[] }) {
   for (const item of items) {
     const cat = item.category || 'Uncategorized'
     if (!byCategory[cat]) byCategory[cat] = { estimated: 0, actual: 0, count: 0 }
-    byCategory[cat].estimated += item.estimated_cost ?? 0
-    byCategory[cat].actual += item.actual_cost ?? 0
+    byCategory[cat].estimated += item.budgeted ?? 0
+    byCategory[cat].actual += item.committed ?? 0
     byCategory[cat].count++
   }
 
-  const totalEst = items.reduce((s, b) => s + (b.estimated_cost ?? 0), 0)
-  const totalAct = items.reduce((s, b) => s + (b.actual_cost ?? 0), 0)
+  const totalEst = items.reduce((s, b) => s + (b.budgeted ?? 0), 0)
+  const totalAct = items.reduce((s, b) => s + (b.committed ?? 0), 0)
 
   return (
     <div className="space-y-3">
@@ -685,7 +685,7 @@ export default function AdminPortalViewerPage() {
       ] = await Promise.all([
         supabase.from('people').select('*').eq('wedding_id', weddingId),
         supabase.from('timeline').select('*').eq('wedding_id', weddingId).order('due_date', { ascending: true }),
-        supabase.from('budget').select('*').eq('wedding_id', weddingId).order('category'),
+        supabase.from('budget_items').select('*').eq('wedding_id', weddingId).order('category'),
         supabase.from('checklist_items').select('*').eq('wedding_id', weddingId),
         supabase.from('guest_list').select('*').eq('wedding_id', weddingId).order('last_name'),
         supabase.from('portal_section_config').select('*').eq('venue_id', venueId).neq('visibility', 'off').order('sort_order'),
@@ -749,7 +749,7 @@ export default function AdminPortalViewerPage() {
       case 'timeline':
         return `${timeline.filter((t) => !t.completed).length} upcoming, ${timeline.filter((t) => t.completed).length} done`
       case 'budget':
-        return `${budget.length} items, ${fmt$(budget.reduce((s, b) => s + (b.estimated_cost ?? 0), 0))} est.`
+        return `${budget.length} items, ${fmt$(budget.reduce((s, b) => s + (b.budgeted ?? 0), 0))} est.`
       case 'guests':
         return `${guests.length} guests, ${guests.filter((g) => g.rsvp_status === 'confirmed').length} confirmed`
       case 'checklist':

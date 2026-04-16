@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { sendEmail } from '@/lib/services/email'
 import { randomUUID } from 'crypto'
 
 export async function POST(request: NextRequest) {
@@ -107,15 +108,106 @@ export async function POST(request: NextRequest) {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
     const inviteLink = `${baseUrl}/join?token=${token}`
 
-    // Log the invitation (email sending is a future enhancement)
-    console.log(`[team-invite] Invitation sent to ${email} for role ${role}`)
-    console.log(`[team-invite] Link: ${inviteLink}`)
+    // Resolve org name + inviter name for the email template
+    const { data: org } = await supabase
+      .from('organizations')
+      .select('name')
+      .eq('id', orgId)
+      .maybeSingle()
+
+    const orgName = (org?.name as string) ?? 'The Bloom House'
+
+    let inviterName = 'Your teammate'
+    if (invitedBy) {
+      const { data: inviterProfile } = await supabase
+        .from('user_profiles')
+        .select('full_name, email')
+        .eq('id', invitedBy)
+        .maybeSingle()
+      inviterName =
+        (inviterProfile?.full_name as string) ||
+        (inviterProfile?.email as string) ||
+        'Your teammate'
+    }
+
+    const roleLabelMap: Record<string, string> = {
+      org_admin: 'organisation admin',
+      venue_manager: 'venue manager',
+      coordinator: 'coordinator',
+      readonly: 'read-only member',
+    }
+    const roleLabel = roleLabelMap[role] ?? role
+
+    const subject = `You've been invited to ${orgName} on The Bloom House`
+    const htmlBody = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#FDFAF6;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#2D2D2D;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#FFFFFF;border-radius:8px;overflow:hidden;">
+    <tr>
+      <td style="background:#7D8471;padding:28px;">
+        <h1 style="margin:0;font-size:22px;font-weight:600;color:#FFFFFF;font-family:Georgia,serif;">
+          ${orgName}
+        </h1>
+        <p style="margin:6px 0 0;font-size:14px;color:rgba(255,255,255,0.85);">
+          Team invitation on The Bloom House
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:28px;">
+        <h2 style="margin:0 0 12px;font-size:20px;">You're invited</h2>
+        <p style="margin:0 0 14px;font-size:15px;line-height:1.55;">
+          <strong>${inviterName}</strong> has invited you to join <strong>${orgName}</strong> on The Bloom House.
+        </p>
+        <p style="margin:0 0 20px;font-size:15px;line-height:1.55;">
+          You've been invited as a <strong>${roleLabel}</strong>.
+        </p>
+        <p style="margin:0 0 24px;">
+          <a href="${inviteLink}" style="display:inline-block;padding:12px 24px;background:#7D8471;color:#FFFFFF;text-decoration:none;border-radius:8px;font-weight:600;">
+            Accept invitation
+          </a>
+        </p>
+        <p style="margin:0 0 12px;font-size:13px;color:#6B7280;">
+          Or visit <a href="${inviteLink}" style="color:#7D8471;">${inviteLink}</a>
+        </p>
+        <p style="margin:0;font-size:13px;color:#6B7280;">
+          This invitation expires in 7 days.
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:20px 28px;border-top:1px solid #F3F4F6;">
+        <p style="margin:0;font-size:12px;color:#6B7280;text-align:center;">
+          ${orgName} &middot; Powered by The Bloom House
+        </p>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`
+
+    const emailResult = await sendEmail({
+      to: email,
+      subject,
+      html: htmlBody,
+    })
+
+    if (!emailResult.ok) {
+      console.error('[team-invite] Failed to send invitation email:', emailResult.error)
+    } else {
+      console.log(
+        `[team-invite] Sent invitation to ${email} for role ${role} (id: ${emailResult.id ?? 'n/a'})`
+      )
+    }
 
     return NextResponse.json({
       success: true,
       invitationId: invitation.id,
       inviteLink,
       token,
+      emailSent: emailResult.ok,
+      emailError: emailResult.ok ? undefined : emailResult.error,
     })
   } catch (err) {
     console.error('Team invite error:', err)

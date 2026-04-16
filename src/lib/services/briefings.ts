@@ -17,7 +17,8 @@ import { detectTrendDeviations } from './trends'
 import { getWeatherForDateRange } from './weather'
 import { getLatestIndicators, calculateDemandScore } from './economics'
 import { getActiveAlerts } from './anomaly-detection'
-import { sendEmail } from './gmail'
+import { sendEmail as sendGmail } from './gmail'
+import { sendEmail as sendTransactionalEmail } from './email'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -507,9 +508,11 @@ export async function getAllBriefings(
 // ---------------------------------------------------------------------------
 
 /**
- * Sends a briefing summary email to the venue's briefing_email address
- * using the venue's authenticated Gmail. Fails silently if Gmail is not
- * connected or no briefing_email is configured.
+ * Sends a briefing summary email to the venue's briefing_email address.
+ * Prefers the venue's authenticated Gmail (so the briefing arrives from
+ * their own inbox). If Gmail isn't connected, falls back to Resend via
+ * the transactional `sendEmail` helper. Fails silently if no
+ * briefing_email is configured.
  */
 async function deliverBriefingEmail(
   venueId: string,
@@ -530,9 +533,31 @@ async function deliverBriefingEmail(
     const subject = `${venue?.name ?? 'Bloom House'} — ${subjectPrefix}`
     const body = `${subjectPrefix}\n\n${summary}\n\nView the full briefing in your Bloom House dashboard.`
 
-    const messageId = await sendEmail(venueId, briefingEmail, subject, body)
+    // Try venue's authenticated Gmail first
+    const messageId = await sendGmail(venueId, briefingEmail, subject, body)
     if (messageId) {
-      console.log(`[briefings] Sent ${subjectPrefix} to ${briefingEmail}`)
+      console.log(`[briefings] Sent ${subjectPrefix} via Gmail to ${briefingEmail}`)
+      return
+    }
+
+    // Gmail not connected — fall back to transactional (Resend)
+    console.warn(
+      `[briefings] Gmail not connected for venue ${venueId}, falling back to transactional email`
+    )
+    const fallback = await sendTransactionalEmail({
+      to: briefingEmail,
+      subject,
+      html: body,
+    })
+
+    if (fallback.ok) {
+      console.log(
+        `[briefings] Sent ${subjectPrefix} via Resend to ${briefingEmail} (id: ${fallback.id ?? 'n/a'})`
+      )
+    } else {
+      console.error(
+        `[briefings] Transactional fallback failed for ${briefingEmail}: ${fallback.error}`
+      )
     }
   } catch (err) {
     console.error(`[briefings] Email delivery failed for ${venueId}:`, err)
