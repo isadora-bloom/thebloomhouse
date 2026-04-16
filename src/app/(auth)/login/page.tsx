@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 
 export default function LoginPage() {
@@ -86,6 +87,14 @@ export default function LoginPage() {
               className="w-full rounded-lg border border-border bg-warm-white px-3 py-2 text-sm text-sage-900 placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-sage-500/40 focus:border-sage-500"
               placeholder="Enter your password"
             />
+            <div className="mt-2 text-right">
+              <Link
+                href="/forgot-password"
+                className="text-xs text-sage-600 hover:text-sage-700 hover:underline"
+              >
+                Forgot password?
+              </Link>
+            </div>
           </div>
 
           {error && (

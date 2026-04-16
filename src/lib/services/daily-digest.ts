@@ -6,12 +6,16 @@
  * tours, weddings, engagement events, anomaly alerts, approval stats,
  * and AI cost — into a structured digest with an AI-generated summary.
  *
- * For now, "sending" logs the HTML to console (swap for Resend/SES later).
+ * Sending prefers the venue's authenticated Gmail (so the digest arrives
+ * from their own inbox). If Gmail isn't connected, falls back to Resend
+ * via the transactional `sendEmail` helper. If Resend isn't configured
+ * either, the helper logs to console so dev keeps working.
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI } from '@/lib/ai/client'
-import { sendEmail } from '@/lib/services/gmail'
+import { sendEmail as sendGmail } from '@/lib/services/gmail'
+import { sendEmail as sendTransactionalEmail } from '@/lib/services/email'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -616,18 +620,34 @@ export async function sendDigestEmail(
     const subject = `${digest.venue_name} — Daily Digest for ${digest.date}`
 
     // Send via the venue's authenticated Gmail
-    const messageId = await sendEmail(venueId, briefingEmail, subject, html)
+    const messageId = await sendGmail(venueId, briefingEmail, subject, html)
 
     if (messageId) {
-      console.log(`[daily-digest] Sent to ${briefingEmail} (messageId: ${messageId})`)
+      console.log(`[daily-digest] Sent via Gmail to ${briefingEmail} (messageId: ${messageId})`)
       return { sent: true, to: briefingEmail }
-    } else {
-      // Gmail not connected — fall back to logging
-      console.warn(`[daily-digest] Gmail not connected for venue ${venueId}, logging digest instead`)
-      console.log(`[daily-digest] Subject: ${subject}`)
-      console.log(`[daily-digest] HTML length: ${html.length} chars`)
-      return { sent: false, to: briefingEmail }
     }
+
+    // Gmail not connected — fall back to transactional (Resend)
+    console.warn(
+      `[daily-digest] Gmail not connected for venue ${venueId}, falling back to transactional email`
+    )
+    const fallback = await sendTransactionalEmail({
+      to: briefingEmail,
+      subject,
+      html,
+    })
+
+    if (fallback.ok) {
+      console.log(
+        `[daily-digest] Sent via Resend to ${briefingEmail} (id: ${fallback.id ?? 'n/a'})`
+      )
+      return { sent: true, to: briefingEmail }
+    }
+
+    console.error(
+      `[daily-digest] Transactional fallback failed for venue ${venueId}: ${fallback.error}`
+    )
+    return { sent: false, to: briefingEmail }
   } catch (err) {
     console.error(`[daily-digest] Failed for venue ${venueId}:`, err)
     return { sent: false, to: briefingEmail }

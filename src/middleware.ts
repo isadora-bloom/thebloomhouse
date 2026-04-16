@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
 // Routes that never require authentication
-const PUBLIC_ROUTES = ['/welcome', '/login', '/signup', '/couple/login', '/demo', '/join']
+const PUBLIC_ROUTES = ['/welcome', '/login', '/signup', '/forgot-password', '/reset-password', '/couple/login', '/demo', '/join']
 const PUBLIC_PREFIXES = ['/api/', '/_next/', '/demo/']
 
 // The dashboard at / requires auth or demo. Unauthed users get sent to /welcome.

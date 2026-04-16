@@ -147,11 +147,14 @@ export async function POST(request: NextRequest) {
           break
         }
 
-        // Downgrade to free tier on cancellation
+        // Downgrade to starter tier on cancellation.
+        // NOTE: 'starter' is the free/baseline tier in our schema. The
+        // venues.plan_tier CHECK constraint only allows
+        // ('starter', 'intelligence', 'enterprise') — there is no 'free' value.
         const { error } = await supabase
           .from('venues')
           .update({
-            plan_tier: 'free',
+            plan_tier: 'starter',
             stripe_subscription_id: null,
             updated_at: new Date().toISOString(),
           })
@@ -160,7 +163,7 @@ export async function POST(request: NextRequest) {
         if (error) {
           console.error(`[webhook/stripe] Failed to downgrade venue ${venueId}:`, error.message)
         } else {
-          console.log(`[webhook/stripe] Downgraded venue ${venueId} to free tier`)
+          console.log(`[webhook/stripe] Downgraded venue ${venueId} to starter tier`)
         }
 
         break
@@ -189,9 +192,12 @@ export async function POST(request: NextRequest) {
 function mapSubscriptionToTier(subscription: Record<string, unknown>): string {
   const status = subscription.status as string
 
-  // If subscription is not active, default to free
+  // If subscription is not active, default to the baseline tier.
+  // NOTE: 'starter' is the free/baseline tier in our schema. The
+  // venues.plan_tier CHECK constraint only allows
+  // ('starter', 'intelligence', 'enterprise') — there is no 'free' value.
   if (status !== 'active' && status !== 'trialing') {
-    return 'free'
+    return 'starter'
   }
 
   // Check metadata for explicit tier override

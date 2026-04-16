@@ -8,11 +8,15 @@ let openaiClient: OpenAI | null = null
 
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514'
 const OPENAI_FALLBACK_MODEL = 'gpt-4o-mini'
-const CLAUDE_TIMEOUT_MS = 10_000
+// Complex NLQ/Sage/briefing calls need headroom beyond the default 10s
+const CLAUDE_TIMEOUT_MS = 30_000
 
 function getAnthropic(): Anthropic {
   if (!anthropicClient) {
-    anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+    if (!process.env.ANTHROPIC_API_KEY) {
+      throw new Error('ANTHROPIC_API_KEY is not set')
+    }
+    anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   }
   return anthropicClient
 }

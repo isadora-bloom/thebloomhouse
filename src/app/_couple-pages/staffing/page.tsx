@@ -269,7 +269,7 @@ export default function StaffingCalculatorPage() {
     } finally {
       setLoading(false)
     }
-  }, [supabase])
+  }, [supabase, weddingId])
 
   useEffect(() => {
     loadData()

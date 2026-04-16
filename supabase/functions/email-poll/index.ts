@@ -28,11 +28,46 @@ Deno.serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   )
 
-  // Get all venues with Gmail tokens
+  // Get all venues with Gmail connected. Gmail tokens now live on venue_config
+  // (legacy single-inbox) and/or gmail_connections (multi-Gmail). Collect venue
+  // ids from both sources and then fetch the venue names.
+  const venueIds = new Set<string>()
+
+  const { data: legacyRows, error: legacyError } = await supabase
+    .from('venue_config')
+    .select('venue_id')
+    .not('gmail_tokens', 'is', null)
+
+  if (legacyError) {
+    return Response.json({ error: 'Failed to query venue_config', detail: legacyError.message }, { status: 500 })
+  }
+
+  for (const row of legacyRows ?? []) {
+    if (row.venue_id) venueIds.add(row.venue_id as string)
+  }
+
+  const { data: connectionRows, error: connectionError } = await supabase
+    .from('gmail_connections')
+    .select('venue_id')
+    .eq('sync_enabled', true)
+    .eq('status', 'active')
+
+  if (connectionError) {
+    return Response.json({ error: 'Failed to query gmail_connections', detail: connectionError.message }, { status: 500 })
+  }
+
+  for (const row of connectionRows ?? []) {
+    if (row.venue_id) venueIds.add(row.venue_id as string)
+  }
+
+  if (venueIds.size === 0) {
+    return Response.json({ message: 'No venues with Gmail tokens found', processed: 0 })
+  }
+
   const { data: venues, error: queryError } = await supabase
     .from('venues')
     .select('id, name')
-    .not('gmail_tokens', 'is', null)
+    .in('id', Array.from(venueIds))
 
   if (queryError) {
     return Response.json({ error: 'Failed to query venues', detail: queryError.message }, { status: 500 })
