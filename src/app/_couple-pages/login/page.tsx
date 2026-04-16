@@ -1,9 +1,23 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Heart } from 'lucide-react'
+
+/**
+ * Extract the venue slug from the current URL path.
+ * Paths look like /couple/[slug]/login
+ */
+function getSlugFromPath(): string {
+  if (typeof window === 'undefined') return 'hawthorne-manor'
+  const parts = window.location.pathname.split('/')
+  const coupleIdx = parts.indexOf('couple')
+  if (coupleIdx >= 0 && parts[coupleIdx + 1]) {
+    return parts[coupleIdx + 1]
+  }
+  return 'hawthorne-manor'
+}
 
 interface VenueBranding {
   venueName: string
@@ -99,6 +113,7 @@ export default function CoupleLoginPage() {
   }
 
   const venueName = branding?.venueName || 'Your Venue'
+  const currentSlug = useMemo(() => getSlugFromPath(), [])
 
   return (
     <div
@@ -266,6 +281,20 @@ export default function CoupleLoginPage() {
             >
               Forgot your password?
             </button>
+          </div>
+
+          {/* Register link */}
+          <div className="mt-4 pt-4 border-t border-gray-100 text-center">
+            <p className="text-sm text-gray-500">
+              Don&apos;t have an account?{' '}
+              <a
+                href={`/couple/${currentSlug}/register`}
+                className="font-medium transition-colors hover:underline"
+                style={{ color: 'var(--couple-primary, #7D8471)' }}
+              >
+                Register with your event code
+              </a>
+            </p>
           </div>
         </div>
 

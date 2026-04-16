@@ -20,6 +20,13 @@ import {
   Eye,
   ExternalLink,
   User,
+  Plus,
+  X,
+  Mail,
+  Send,
+  Loader2,
+  UserCheck,
+  UserPlus,
 } from 'lucide-react'
 import { CommunicationPulse } from './[id]/page'
 import Link from 'next/link'
@@ -69,6 +76,9 @@ interface Wedding {
   status: string
   booking_value: number | null
   created_at: string
+  event_code: string | null
+  couple_invited_at: string | null
+  couple_registered_at: string | null
   people: Person[]
   timeline: TimelineItem[]
   budget: BudgetItem[]
@@ -287,6 +297,24 @@ function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; 
             </span>
           )}
           <CommunicationPulse messageCount={wedding.comm_pulse_count ?? 0} />
+
+          {/* Invitation status badge */}
+          {wedding.couple_registered_at ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <UserCheck className="w-3 h-3" />
+              Registered
+            </span>
+          ) : wedding.event_code && wedding.couple_invited_at ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+              <Mail className="w-3 h-3" />
+              Invited (pending)
+            </span>
+          ) : !wedding.event_code ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sage-50 text-sage-500 border border-sage-200">
+              <UserPlus className="w-3 h-3" />
+              Not invited
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -394,6 +422,492 @@ function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; 
 }
 
 // ---------------------------------------------------------------------------
+// Source options
+// ---------------------------------------------------------------------------
+
+const SOURCE_OPTIONS = [
+  { value: 'the_knot', label: 'The Knot' },
+  { value: 'weddingwire', label: 'Wedding Wire' },
+  { value: 'google', label: 'Google' },
+  { value: 'instagram', label: 'Instagram' },
+  { value: 'referral', label: 'Referral' },
+  { value: 'website', label: 'Website' },
+  { value: 'walk_in', label: 'Walk-In' },
+  { value: 'other', label: 'Other' },
+]
+
+// ---------------------------------------------------------------------------
+// New Booking Modal
+// ---------------------------------------------------------------------------
+
+interface BookingForm {
+  partner1FirstName: string
+  partner1LastName: string
+  partner1Email: string
+  partner1Phone: string
+  partner2FirstName: string
+  partner2LastName: string
+  partner2Email: string
+  partner2Phone: string
+  weddingDate: string
+  guestCount: string
+  source: string
+  estimatedValue: string
+  notes: string
+  sendInvite: boolean
+}
+
+const emptyForm: BookingForm = {
+  partner1FirstName: '',
+  partner1LastName: '',
+  partner1Email: '',
+  partner1Phone: '',
+  partner2FirstName: '',
+  partner2LastName: '',
+  partner2Email: '',
+  partner2Phone: '',
+  weddingDate: '',
+  guestCount: '',
+  source: 'website',
+  estimatedValue: '',
+  notes: '',
+  sendInvite: true,
+}
+
+function NewBookingModal({
+  open,
+  onClose,
+  venueId,
+  venueSlug,
+  onCreated,
+}: {
+  open: boolean
+  onClose: () => void
+  venueId: string
+  venueSlug: string | null
+  onCreated: () => void
+}) {
+  const [form, setForm] = useState<BookingForm>({ ...emptyForm })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function set<K extends keyof BookingForm>(key: K, value: BookingForm[K]) {
+    setForm((prev) => ({ ...prev, [key]: value }))
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setError(null)
+
+    if (!form.partner1FirstName.trim() || !form.partner1LastName.trim()) {
+      setError('Partner 1 name is required.')
+      return
+    }
+    if (!form.partner1Email.trim()) {
+      setError('Partner 1 email is required.')
+      return
+    }
+
+    setSaving(true)
+
+    try {
+      const supabase = getSupabase()
+
+      // 1. Generate event code (3 letter venue prefix + 3 digits)
+      const prefix = (venueSlug || 'BLM').slice(0, 3).toUpperCase()
+      const code = `${prefix}-${Math.floor(100 + Math.random() * 900)}`
+
+      // 2. Create wedding record
+      const { data: wedding, error: weddingErr } = await supabase
+        .from('weddings')
+        .insert({
+          venue_id: venueId,
+          status: 'booked',
+          wedding_date: form.weddingDate || null,
+          guest_count_estimate: form.guestCount ? parseInt(form.guestCount) : null,
+          source: form.source || null,
+          booking_value: form.estimatedValue ? parseFloat(form.estimatedValue) : null,
+          notes: form.notes || null,
+          event_code: code,
+          couple_invited_at: form.sendInvite ? new Date().toISOString() : null,
+        })
+        .select()
+        .single()
+
+      if (weddingErr) {
+        // If event code collision, try once more with different code
+        if (weddingErr.message?.includes('unique') || weddingErr.message?.includes('duplicate')) {
+          const retryCode = `${prefix}-${Math.floor(100 + Math.random() * 900)}`
+          const { data: retryWedding, error: retryErr } = await supabase
+            .from('weddings')
+            .insert({
+              venue_id: venueId,
+              status: 'booked',
+              wedding_date: form.weddingDate || null,
+              guest_count_estimate: form.guestCount ? parseInt(form.guestCount) : null,
+              source: form.source || null,
+              booking_value: form.estimatedValue ? parseFloat(form.estimatedValue) : null,
+              notes: form.notes || null,
+              event_code: retryCode,
+              couple_invited_at: form.sendInvite ? new Date().toISOString() : null,
+            })
+            .select()
+            .single()
+          if (retryErr) throw retryErr
+          // Use the retry wedding below
+          await createPeopleAndInvite(supabase, retryWedding, retryCode)
+        } else {
+          throw weddingErr
+        }
+      } else {
+        await createPeopleAndInvite(supabase, wedding, code)
+      }
+
+      // Reset form and close
+      setForm({ ...emptyForm })
+      onClose()
+      onCreated()
+    } catch (err: any) {
+      console.error('Failed to create booking:', err)
+      setError(err?.message || 'Failed to create booking. Please try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function createPeopleAndInvite(
+    supabase: ReturnType<typeof getSupabase>,
+    wedding: any,
+    code: string,
+  ) {
+    // 3. Create people records
+    const peopleToInsert = [
+      {
+        venue_id: venueId,
+        wedding_id: wedding.id,
+        role: 'partner1',
+        first_name: form.partner1FirstName.trim(),
+        last_name: form.partner1LastName.trim(),
+        email: form.partner1Email.trim() || null,
+        phone: form.partner1Phone.trim() || null,
+      },
+    ]
+
+    if (form.partner2FirstName.trim()) {
+      peopleToInsert.push({
+        venue_id: venueId,
+        wedding_id: wedding.id,
+        role: 'partner2',
+        first_name: form.partner2FirstName.trim(),
+        last_name: form.partner2LastName.trim(),
+        email: form.partner2Email.trim() || null,
+        phone: form.partner2Phone.trim() || null,
+      })
+    }
+
+    await supabase.from('people').insert(peopleToInsert)
+
+    // 4. Send invitation email if checked
+    if (form.sendInvite && form.partner1Email.trim()) {
+      await fetch('/api/portal/invite-couple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          weddingId: wedding.id,
+          venueId,
+          email: form.partner1Email.trim(),
+          partnerEmail: form.partner2Email.trim() || null,
+          eventCode: code,
+          coupleName: form.partner2FirstName.trim()
+            ? `${form.partner1FirstName.trim()} & ${form.partner2FirstName.trim()}`
+            : form.partner1FirstName.trim(),
+        }),
+      })
+    }
+  }
+
+  if (!open) return null
+
+  const inputClasses =
+    'w-full rounded-lg border border-sage-200 bg-warm-white px-3 py-2 text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400'
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-8 sm:pt-20">
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 bg-black/40 backdrop-blur-sm"
+        onClick={onClose}
+      />
+
+      {/* Modal */}
+      <div className="relative bg-surface rounded-xl border border-border shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto mx-4">
+        {/* Header */}
+        <div className="sticky top-0 bg-surface border-b border-border px-6 py-4 flex items-center justify-between rounded-t-xl z-10">
+          <h2 className="font-heading text-lg font-semibold text-sage-900">
+            New Booking
+          </h2>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-sage-400 hover:text-sage-600 hover:bg-sage-100 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="p-6 space-y-6">
+          {/* Partner 1 */}
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-sage-500 mb-3">
+              Partner 1
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  First Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={form.partner1FirstName}
+                  onChange={(e) => set('partner1FirstName', e.target.value)}
+                  required
+                  className={inputClasses}
+                  placeholder="First name"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  Last Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={form.partner1LastName}
+                  onChange={(e) => set('partner1LastName', e.target.value)}
+                  required
+                  className={inputClasses}
+                  placeholder="Last name"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  Email <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="email"
+                  value={form.partner1Email}
+                  onChange={(e) => set('partner1Email', e.target.value)}
+                  required
+                  className={inputClasses}
+                  placeholder="partner1@email.com"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  Phone
+                </label>
+                <input
+                  type="tel"
+                  value={form.partner1Phone}
+                  onChange={(e) => set('partner1Phone', e.target.value)}
+                  className={inputClasses}
+                  placeholder="(555) 123-4567"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Partner 2 */}
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-sage-500 mb-3">
+              Partner 2 <span className="text-sage-400 normal-case tracking-normal font-normal">(optional)</span>
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  First Name
+                </label>
+                <input
+                  type="text"
+                  value={form.partner2FirstName}
+                  onChange={(e) => set('partner2FirstName', e.target.value)}
+                  className={inputClasses}
+                  placeholder="First name"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  Last Name
+                </label>
+                <input
+                  type="text"
+                  value={form.partner2LastName}
+                  onChange={(e) => set('partner2LastName', e.target.value)}
+                  className={inputClasses}
+                  placeholder="Last name"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={form.partner2Email}
+                  onChange={(e) => set('partner2Email', e.target.value)}
+                  className={inputClasses}
+                  placeholder="partner2@email.com"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  Phone
+                </label>
+                <input
+                  type="tel"
+                  value={form.partner2Phone}
+                  onChange={(e) => set('partner2Phone', e.target.value)}
+                  className={inputClasses}
+                  placeholder="(555) 987-6543"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Wedding Details */}
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-sage-500 mb-3">
+              Wedding Details
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  Wedding Date
+                </label>
+                <input
+                  type="date"
+                  value={form.weddingDate}
+                  onChange={(e) => set('weddingDate', e.target.value)}
+                  className={inputClasses}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  Estimated Guest Count
+                </label>
+                <input
+                  type="number"
+                  value={form.guestCount}
+                  onChange={(e) => set('guestCount', e.target.value)}
+                  className={inputClasses}
+                  placeholder="150"
+                  min="0"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  Source
+                </label>
+                <select
+                  value={form.source}
+                  onChange={(e) => set('source', e.target.value)}
+                  className={inputClasses}
+                >
+                  {SOURCE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  Package / Estimated Value
+                </label>
+                <input
+                  type="number"
+                  value={form.estimatedValue}
+                  onChange={(e) => set('estimatedValue', e.target.value)}
+                  className={inputClasses}
+                  placeholder="12500"
+                  min="0"
+                  step="100"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Notes */}
+          <div>
+            <label className="block text-sm font-medium text-sage-700 mb-1">
+              Notes
+            </label>
+            <textarea
+              value={form.notes}
+              onChange={(e) => set('notes', e.target.value)}
+              className={cn(inputClasses, 'min-h-[80px] resize-y')}
+              placeholder="Any additional notes about this booking..."
+            />
+          </div>
+
+          {/* Send Invite checkbox */}
+          <label className="flex items-start gap-3 cursor-pointer group">
+            <input
+              type="checkbox"
+              checked={form.sendInvite}
+              onChange={(e) => set('sendInvite', e.target.checked)}
+              className="mt-0.5 w-4 h-4 rounded border-sage-300 text-sage-600 focus:ring-sage-500"
+            />
+            <div>
+              <span className="text-sm font-medium text-sage-900 group-hover:text-sage-700 transition-colors">
+                Send invitation email to the couple
+              </span>
+              <p className="text-xs text-sage-500 mt-0.5">
+                They will receive a link to set up their wedding portal account.
+              </p>
+            </div>
+          </label>
+
+          {/* Error */}
+          {error && (
+            <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex items-center justify-end gap-3 pt-2 border-t border-sage-100">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-sage-600 hover:text-sage-800 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="inline-flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-sage-800 text-white hover:bg-sage-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  <Plus className="w-4 h-4" />
+                  Create Booking
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
@@ -407,6 +921,7 @@ export default function WeddingsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [sortBy, setSortBy] = useState<SortKey>('date')
   const [searchQuery, setSearchQuery] = useState('')
+  const [showNewBooking, setShowNewBooking] = useState(false)
 
   // ---- Fetch data ----
   const fetchData = useCallback(async () => {
@@ -579,6 +1094,15 @@ export default function WeddingsPage() {
             All weddings managed through your portal — booked, in-planning, and completed. Click any couple to view their portal, or open it as the couple would see it.
           </p>
         </div>
+        {scope.level === 'venue' && scope.venueId && (
+          <button
+            onClick={() => setShowNewBooking(true)}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-sage-800 text-white hover:bg-sage-900 transition-colors shrink-0 self-start"
+          >
+            <Plus className="w-4 h-4" />
+            New Booking
+          </button>
+        )}
       </div>
 
       {/* ---- Error state ---- */}
@@ -683,6 +1207,20 @@ export default function WeddingsPage() {
             <WeddingCard key={wedding.id} wedding={wedding} venueSlug={venueSlug} showVenueChip={showVenueChip} />
           ))}
         </div>
+      )}
+
+      {/* New Booking Modal */}
+      {scope.venueId && (
+        <NewBookingModal
+          open={showNewBooking}
+          onClose={() => setShowNewBooking(false)}
+          venueId={scope.venueId}
+          venueSlug={venueSlug}
+          onCreated={() => {
+            setLoading(true)
+            fetchData()
+          }}
+        />
       )}
     </div>
   )

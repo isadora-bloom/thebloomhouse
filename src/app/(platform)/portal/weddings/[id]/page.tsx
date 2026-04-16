@@ -30,6 +30,10 @@ import {
   ClipboardCheck,
   Sparkles,
   ThumbsUp,
+  Send,
+  Mail,
+  UserCheck,
+  UserPlus,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -46,6 +50,9 @@ interface WeddingRow {
   couple_photo_url: string | null
   notes: string | null
   assigned_consultant_id: string | null
+  event_code: string | null
+  couple_invited_at: string | null
+  couple_registered_at: string | null
   created_at: string
   updated_at: string
 }
@@ -1636,6 +1643,117 @@ function PostEventFeedbackTab({
 }
 
 // ---------------------------------------------------------------------------
+// Invite Status Badge
+// ---------------------------------------------------------------------------
+
+function InviteStatusBadge({
+  wedding,
+  weddingId,
+  venueId,
+  venueSlug,
+  people,
+  onUpdated,
+}: {
+  wedding: WeddingRow
+  weddingId: string
+  venueId: string
+  venueSlug: string | null
+  people: PersonRow[]
+  onUpdated: () => void
+}) {
+  const [sending, setSending] = useState(false)
+
+  async function sendInvite() {
+    const partner1 = people.find((p) => p.role === 'partner1' || p.role === 'bride')
+    const partner2 = people.find((p) => p.role === 'partner2' || p.role === 'groom')
+
+    if (!partner1?.email) {
+      alert('Partner 1 must have an email address to send an invitation.')
+      return
+    }
+
+    setSending(true)
+    try {
+      const supabase = createClient()
+
+      // Generate event code if not already set
+      let eventCode = wedding.event_code
+      if (!eventCode) {
+        const prefix = (venueSlug || 'BLM').slice(0, 3).toUpperCase()
+        eventCode = `${prefix}-${Math.floor(100 + Math.random() * 900)}`
+        await supabase
+          .from('weddings')
+          .update({ event_code: eventCode })
+          .eq('id', weddingId)
+      }
+
+      const coupleName = partner2
+        ? `${partner1.first_name} & ${partner2.first_name}`
+        : partner1.first_name
+
+      await fetch('/api/portal/invite-couple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          weddingId,
+          venueId,
+          email: partner1.email,
+          partnerEmail: partner2?.email || null,
+          eventCode,
+          coupleName,
+        }),
+      })
+
+      onUpdated()
+    } catch (err) {
+      console.error('Failed to send invite:', err)
+      alert('Failed to send invitation. Please try again.')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  if (wedding.couple_registered_at) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+        <UserCheck className="w-3.5 h-3.5" />
+        Couple Registered
+      </span>
+    )
+  }
+
+  if (wedding.event_code && wedding.couple_invited_at) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+          <Mail className="w-3.5 h-3.5" />
+          Invited (pending)
+        </span>
+        <button
+          onClick={sendInvite}
+          disabled={sending}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-sage-600 hover:text-sage-800 hover:bg-sage-50 border border-sage-200 transition-colors disabled:opacity-50"
+        >
+          {sending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+          Resend
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <button
+      onClick={sendInvite}
+      disabled={sending}
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-sage-50 text-sage-700 border border-sage-200 hover:bg-sage-100 transition-colors disabled:opacity-50"
+    >
+      {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserPlus className="w-3.5 h-3.5" />}
+      Send Invite
+    </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
@@ -1891,24 +2009,36 @@ export default function WeddingProfilePage() {
           </div>
 
           {/* Action buttons */}
-          <div className="flex items-center gap-2 shrink-0">
-            <Link
-              href={`/portal/weddings/${weddingId}/portal`}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-sage-600 text-white hover:bg-sage-700 transition-colors"
-            >
-              <Eye className="w-3.5 h-3.5" />
-              View Portal
-            </Link>
-            {venue?.slug && (
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <div className="flex items-center gap-2">
               <Link
-                href={`/couple/${venue.slug}?wedding=${weddingId}`}
-                target="_blank"
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100 transition-colors"
+                href={`/portal/weddings/${weddingId}/portal`}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-sage-600 text-white hover:bg-sage-700 transition-colors"
               >
-                <ExternalLink className="w-3.5 h-3.5" />
-                Open as Couple
+                <Eye className="w-3.5 h-3.5" />
+                View Portal
               </Link>
-            )}
+              {venue?.slug && (
+                <Link
+                  href={`/couple/${venue.slug}?wedding=${weddingId}`}
+                  target="_blank"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100 transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Open as Couple
+                </Link>
+              )}
+            </div>
+
+            {/* Invitation status + resend */}
+            <InviteStatusBadge
+              wedding={wedding}
+              weddingId={weddingId}
+              venueId={wedding.venue_id}
+              venueSlug={venue?.slug || null}
+              people={people}
+              onUpdated={fetchData}
+            />
           </div>
         </div>
       </div>
