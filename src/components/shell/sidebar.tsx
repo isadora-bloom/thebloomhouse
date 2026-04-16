@@ -28,6 +28,8 @@ import {
   // Config pages
   Wine, HardHat, Bus, CheckSquare,
   UtensilsCrossed, Armchair, Flower2, HeartHandshake,
+  // Quick Add
+  Upload,
   // Toggle
   ChevronDown, Zap, LayoutList,
 } from 'lucide-react'
@@ -96,6 +98,7 @@ const VENUE_SECTIONS: NavSection[] = [
     subtitle: 'Couples & portal',
     items: [
       { label: 'Weddings', href: '/portal/weddings', icon: Heart, daily: true },
+      { label: 'Quick Add', href: '/portal/quick-add', icon: Upload, daily: true },
       { label: 'Messages', href: '/portal/messages', icon: MessagesSquare, daily: true },
       { label: 'Sage Queue', href: '/portal/sage-queue', icon: MessageCircleQuestion, daily: true },
       { label: 'Knowledge Base', href: '/portal/kb', icon: BookOpen },

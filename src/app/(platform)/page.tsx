@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import {
   Mail, FileCheck, Newspaper, Heart,
   TrendingUp, ArrowRight, Building2, Layers, MapPin,
-  BarChart3,
+  BarChart3, Upload,
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { MarketContextCard } from '@/components/intel/market-context-card'
@@ -281,16 +281,26 @@ export default function DashboardPage() {
   return (
     <div className="space-y-8">
       {/* Welcome */}
-      <div className="flex items-center gap-3">
-        <div className="p-2.5 bg-sage-50 rounded-xl">
-          <ScopeIcon className="w-6 h-6 text-sage-600" />
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-sage-50 rounded-xl">
+            <ScopeIcon className="w-6 h-6 text-sage-600" />
+          </div>
+          <div>
+            <h1 className="font-heading text-3xl font-bold text-sage-900">
+              {scopeName}
+            </h1>
+            <p className="text-sage-600 mt-0.5">{scopeSubtitle}</p>
+          </div>
         </div>
-        <div>
-          <h1 className="font-heading text-3xl font-bold text-sage-900">
-            {scopeName}
-          </h1>
-          <p className="text-sage-600 mt-0.5">{scopeSubtitle}</p>
-        </div>
+        <Link
+          href="/portal/quick-add"
+          className="flex items-center gap-2 px-4 py-2 bg-sage-600 text-white rounded-lg text-sm font-medium hover:bg-sage-700 transition-colors shadow-sm"
+          title="Quick Add — upload data"
+        >
+          <Upload className="w-4 h-4" />
+          <span className="hidden sm:inline">Quick Add</span>
+        </Link>
       </div>
 
       {/* Stat Cards */}
