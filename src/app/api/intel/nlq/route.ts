@@ -6,6 +6,32 @@ import {
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
+// Simple in-memory rate limiter for NLQ (more expensive than Sage chat)
+// 10 requests per 15 minutes per user. Resets on server restart.
+// ---------------------------------------------------------------------------
+
+const nlqRateLimitMap = new Map<string, { count: number; resetAt: number }>()
+const NLQ_RATE_LIMIT = 10 // max requests per window
+const NLQ_RATE_WINDOW = 15 * 60 * 1000 // 15 minutes
+
+function checkNlqRateLimit(identifier: string): boolean {
+  const now = Date.now()
+  const entry = nlqRateLimitMap.get(identifier)
+
+  if (!entry || entry.resetAt < now) {
+    nlqRateLimitMap.set(identifier, { count: 1, resetAt: now + NLQ_RATE_WINDOW })
+    return true
+  }
+
+  if (entry.count >= NLQ_RATE_LIMIT) {
+    return false // rate limited
+  }
+
+  entry.count++
+  return true
+}
+
+// ---------------------------------------------------------------------------
 // POST -- Answer a natural language query
 //   Body: { query: string }
 // ---------------------------------------------------------------------------
@@ -14,6 +40,14 @@ export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  // Rate limit by user ID (authenticated endpoint)
+  if (!checkNlqRateLimit(auth.userId)) {
+    return NextResponse.json(
+      { error: 'Too many queries. Please wait a few minutes before asking another question.' },
+      { status: 429 }
+    )
   }
 
   try {

@@ -22,6 +22,8 @@ import {
   CheckCircle,
   XCircle,
   FileSignature,
+  AlertTriangle,
+  PenLine,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -311,16 +313,67 @@ function ComposeModal({
 
 function ReplyForm({
   interactionId,
+  venueId,
   personEmail,
   onSent,
+  threadLock,
+  currentUserName: userName,
 }: {
   interactionId: string
+  venueId: string
   personEmail: string | undefined
   onSent: () => void
+  threadLock: { locked: boolean; lockedBy: string; lockedAt: string } | null
+  currentUserName: string
 }) {
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
   const [expanded, setExpanded] = useState(false)
+
+  // Acquire thread lock when composer expands
+  const acquireLock = useCallback(async () => {
+    try {
+      await fetch('/api/agent/thread-lock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          venueId,
+          interactionId,
+          lockedBy: userName,
+        }),
+      })
+    } catch {
+      // Lock acquisition is best-effort
+    }
+  }, [venueId, interactionId, userName])
+
+  // Release thread lock when composer closes
+  const releaseLock = useCallback(async () => {
+    try {
+      await fetch('/api/agent/thread-lock', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          venueId,
+          interactionId,
+          lockedBy: userName,
+        }),
+      })
+    } catch {
+      // Lock release is best-effort
+    }
+  }, [venueId, interactionId, userName])
+
+  const handleExpand = () => {
+    setExpanded(true)
+    acquireLock()
+  }
+
+  const handleCollapse = () => {
+    setExpanded(false)
+    setBody('')
+    releaseLock()
+  }
 
   const handleSend = async () => {
     if (!body.trim()) return
@@ -334,6 +387,7 @@ function ReplyForm({
       if (!res.ok) throw new Error('Reply failed')
       setBody('')
       setExpanded(false)
+      releaseLock()
       onSent()
     } catch (err) {
       console.error('Failed to send reply:', err)
@@ -345,8 +399,17 @@ function ReplyForm({
   if (!expanded) {
     return (
       <div className="p-4 border-t border-border">
+        {/* Thread lock warning */}
+        {threadLock?.locked && (
+          <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+            <PenLine className="w-4 h-4 text-amber-600 shrink-0" />
+            <span className="text-sm text-amber-800">
+              <strong>{threadLock.lockedBy}</strong> is currently drafting a reply to this thread
+            </span>
+          </div>
+        )}
         <button
-          onClick={() => setExpanded(true)}
+          onClick={handleExpand}
           className="flex items-center gap-2 text-sm text-sage-500 hover:text-sage-700 transition-colors"
         >
           <Reply className="w-4 h-4" />
@@ -358,6 +421,15 @@ function ReplyForm({
 
   return (
     <div className="p-4 border-t border-border space-y-3">
+      {/* Thread lock warning when composing */}
+      {threadLock?.locked && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+          <span className="text-sm text-amber-800">
+            <strong>{threadLock.lockedBy}</strong> is also drafting a reply. Sending may cause a conflicting response.
+          </span>
+        </div>
+      )}
       <div className="flex items-center gap-2 text-sm text-sage-600">
         <Reply className="w-4 h-4" />
         <span>Replying{personEmail ? ` to ${personEmail}` : ''}</span>
@@ -372,7 +444,7 @@ function ReplyForm({
       />
       <div className="flex items-center justify-end gap-2">
         <button
-          onClick={() => { setExpanded(false); setBody('') }}
+          onClick={handleCollapse}
           className="px-3 py-1.5 text-sm text-sage-500 hover:text-sage-700 transition-colors"
         >
           Cancel
@@ -541,6 +613,8 @@ function ThreadView({
   threadMessages,
   draft,
   signingPrompt,
+  threadLock,
+  currentUserName: userName,
   onBack,
   onReply,
   onApproveDraft,
@@ -552,6 +626,8 @@ function ThreadView({
   threadMessages: Interaction[]
   draft: { id: string; draft_body: string; subject: string } | null
   signingPrompt: { notificationId: string | null; coupleName: string } | null
+  threadLock: { locked: boolean; lockedBy: string; lockedAt: string } | null
+  currentUserName: string
   onBack: () => void
   onReply: () => void
   onApproveDraft: (draftId: string) => Promise<void>
@@ -561,6 +637,15 @@ function ThreadView({
 }) {
   return (
     <div className="flex flex-col h-full">
+      {/* Thread lock warning banner */}
+      {threadLock?.locked && (
+        <div className="mx-4 mt-4 flex items-center gap-2 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <PenLine className="w-4 h-4 text-amber-600 shrink-0" />
+          <span className="text-sm text-amber-800">
+            <strong>{threadLock.lockedBy}</strong> is currently drafting a reply to this thread
+          </span>
+        </div>
+      )}
       {/* Contract signing prompt banner */}
       {signingPrompt && (
         <ContractSigningPrompt
@@ -640,8 +725,11 @@ function ThreadView({
       {/* Reply form */}
       <ReplyForm
         interactionId={interaction.id}
+        venueId={interaction.venue_id}
         personEmail={interaction.person_email}
         onSent={onReply}
+        threadLock={threadLock}
+        currentUserName={userName}
       />
     </div>
   )
@@ -674,9 +762,16 @@ export default function InboxPage() {
     coupleName: string
     weddingId: string
   } | null>(null)
+  const [threadLock, setThreadLock] = useState<{
+    locked: boolean
+    lockedBy: string
+    lockedAt: string
+  } | null>(null)
   const [threadLoading, setThreadLoading] = useState(false)
   const [showCompose, setShowCompose] = useState(false)
   const [pendingDraftCount, setPendingDraftCount] = useState(0)
+  // Current user name for thread locking — in real mode this would come from auth
+  const currentUserName = 'You'
 
   const supabase = createClient()
 
@@ -819,6 +914,7 @@ export default function InboxPage() {
       setThreadLoading(true)
       setThreadDraft(null)
       setSigningPrompt(null)
+      setThreadLock(null)
 
       try {
         const venueIds = await resolveVenueIds()
@@ -952,6 +1048,28 @@ export default function InboxPage() {
               })
             }
           }
+        }
+
+        // Check for thread locks from other coordinators
+        try {
+          const lockParams = new URLSearchParams({
+            venueId: interaction.venue_id,
+            interactionId: interaction.id,
+            currentUser: currentUserName,
+          })
+          const lockRes = await fetch(`/api/agent/thread-lock?${lockParams.toString()}`)
+          if (lockRes.ok) {
+            const lockData = await lockRes.json()
+            if (lockData.locked) {
+              setThreadLock({
+                locked: true,
+                lockedBy: lockData.lockedBy,
+                lockedAt: lockData.lockedAt,
+              })
+            }
+          }
+        } catch {
+          // Thread lock check is best-effort
         }
       } catch (err) {
         console.error('Failed to load thread:', err)
@@ -1181,6 +1299,8 @@ export default function InboxPage() {
                           }
                         : null
                     }
+                    threadLock={threadLock}
+                    currentUserName={currentUserName}
                     onBack={() => setSelectedId(null)}
                     onReply={() => {
                       if (selectedInteraction) loadThread(selectedInteraction)

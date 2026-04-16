@@ -72,6 +72,16 @@ async function getVenueBranding(slug: string) {
     clientCode = codeRow?.code ?? null
   }
 
+  // Fetch wedding date for the Final Review sidebar badge
+  const { data: weddingDateRow } = await supabase
+    .from('weddings')
+    .select('wedding_date')
+    .eq('venue_id', venue.id)
+    .in('status', ['booked', 'completed'])
+    .order('wedding_date', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
   return {
     venueId: venue.id,
     venueSlug: venue.slug,
@@ -83,6 +93,7 @@ async function getVenueBranding(slug: string) {
     logoUrl: config?.logo_url || null,
     portalTagline: config?.portal_tagline || null,
     clientCode,
+    weddingDate: weddingDateRow?.wedding_date || null,
   }
 }
 
@@ -126,6 +137,7 @@ export default async function CoupleSlugLayout({
           logoUrl={branding.logoUrl}
           base={`/couple/${slug}`}
           clientCode={branding.clientCode}
+          weddingDate={branding.weddingDate}
         >
           {children}
         </CoupleShell>

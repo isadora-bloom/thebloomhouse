@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { NextRequest, NextResponse } from 'next/server'
 import { recordEngagementEvent } from '@/lib/services/heat-mapping'
+import { createHmac, timingSafeEqual } from 'crypto'
 
 // ---------------------------------------------------------------------------
 // Calendly webhook handler
@@ -8,9 +9,53 @@ import { recordEngagementEvent } from '@/lib/services/heat-mapping'
 // Creates a tour_booked engagement event when a Calendly invitee is created
 // (i.e., someone books a tour through Calendly).
 //
-// TODO: In production, validate the webhook signature using Calendly's
-// webhook signing key. See: https://developer.calendly.com/api-docs/
+// Signature validation: Calendly signs webhooks using HMAC-SHA256.
+// The signature header is `Calendly-Webhook-Signature` with format:
+//   t=<timestamp>,v1=<signature>
+// See: https://developer.calendly.com/api-docs/ZG9jOjM2MzE2MDM4-webhook-signatures
 // ---------------------------------------------------------------------------
+
+/**
+ * Verify a Calendly webhook signature.
+ * Calendly uses the same format as Stripe: t=<timestamp>,v1=<hmac>
+ */
+function verifyCalendlySignature(
+  rawBody: string,
+  signatureHeader: string,
+  secret: string,
+  toleranceSeconds = 300
+): boolean {
+  try {
+    const parts = signatureHeader.split(',')
+    const tsPart = parts.find((p) => p.startsWith('t='))
+    const v1Part = parts.find((p) => p.startsWith('v1='))
+
+    if (!tsPart || !v1Part) return false
+
+    const timestamp = tsPart.replace('t=', '')
+    const signature = v1Part.replace('v1=', '')
+
+    // Reject stale events
+    const tsNum = parseInt(timestamp, 10)
+    if (isNaN(tsNum)) return false
+    const now = Math.floor(Date.now() / 1000)
+    if (Math.abs(now - tsNum) > toleranceSeconds) return false
+
+    // Compute expected signature: HMAC-SHA256(secret, "timestamp.body")
+    const signedPayload = `${timestamp}.${rawBody}`
+    const expected = createHmac('sha256', secret)
+      .update(signedPayload, 'utf8')
+      .digest('hex')
+
+    const expectedBuf = Buffer.from(expected, 'hex')
+    const actualBuf = Buffer.from(signature, 'hex')
+
+    if (expectedBuf.length !== actualBuf.length) return false
+    return timingSafeEqual(expectedBuf, actualBuf)
+  } catch {
+    return false
+  }
+}
 
 // ---------------------------------------------------------------------------
 // POST — Handle Calendly webhook events
@@ -18,13 +63,31 @@ import { recordEngagementEvent } from '@/lib/services/heat-mapping'
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
+    // Read raw body for signature validation, then parse
+    const rawBody = await request.text()
 
-    // TODO: Validate webhook signature in production
-    // const signature = request.headers.get('calendly-webhook-signature')
-    // if (!signature || !verifyCalendlySignature(rawBody, signature)) {
-    //   return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
-    // }
+    // ---- Signature validation ----
+    const sigHeader = request.headers.get('calendly-webhook-signature')
+    const webhookSecret = process.env.CALENDLY_WEBHOOK_SECRET
+
+    if (webhookSecret) {
+      if (!sigHeader) {
+        console.warn('[webhook/calendly] Missing Calendly-Webhook-Signature header')
+        return NextResponse.json({ error: 'Missing signature' }, { status: 401 })
+      }
+
+      if (!verifyCalendlySignature(rawBody, sigHeader, webhookSecret)) {
+        console.warn('[webhook/calendly] Invalid webhook signature')
+        return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+      }
+    } else {
+      console.warn(
+        '[webhook/calendly] CALENDLY_WEBHOOK_SECRET not set — skipping signature validation. ' +
+        'Set this env var in production.'
+      )
+    }
+
+    const body = JSON.parse(rawBody)
 
     const eventType = body.event as string | undefined
     const payload = body.payload as Record<string, unknown> | undefined

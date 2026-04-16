@@ -822,6 +822,13 @@ export default function AdminPortalViewerPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            href={`/portal/weddings/${weddingId}/print`}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-surface border border-border text-sage-700 hover:bg-sage-50 transition-colors"
+          >
+            <Printer className="w-4 h-4" />
+            Print Day-of Package
+          </Link>
           <button
             onClick={() => window.print()}
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-surface border border-border text-sage-700 hover:bg-sage-50 transition-colors"

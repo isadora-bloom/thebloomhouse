@@ -20,6 +20,9 @@ import {
   TrendingUp,
   ShieldAlert,
   Newspaper,
+  XCircle,
+  Timer,
+  Loader2,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -44,6 +47,17 @@ interface RecentNotification {
   read: boolean
   created_at: string
   venue_name?: string | null
+}
+
+interface PendingAutoSendDetails {
+  draftId: string
+  toEmail: string
+  toName: string | null
+  subject: string
+  threadId?: string
+  sendAt: string
+  confidenceScore: number | null
+  source: string
 }
 
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSetting[] = [
@@ -133,6 +147,112 @@ function timeAgo(dateStr: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Pending Auto-Send Card
+// ---------------------------------------------------------------------------
+
+function PendingAutoSendCard({
+  notification,
+  onCancel,
+}: {
+  notification: RecentNotification
+  onCancel: (notificationId: string, draftId: string) => Promise<void>
+}) {
+  const [timeLeft, setTimeLeft] = useState<number>(0)
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelled, setCancelled] = useState(false)
+
+  let details: PendingAutoSendDetails | null = null
+  try {
+    if (notification.body) {
+      details = JSON.parse(notification.body) as PendingAutoSendDetails
+    }
+  } catch {
+    // Body might not be JSON
+  }
+
+  useEffect(() => {
+    if (!details?.sendAt) return
+    const target = new Date(details.sendAt).getTime()
+
+    const tick = () => {
+      const remaining = Math.max(0, target - Date.now())
+      setTimeLeft(remaining)
+    }
+    tick()
+    const interval = setInterval(tick, 1000)
+    return () => clearInterval(interval)
+  }, [details?.sendAt])
+
+  if (!details) return null
+
+  const minutes = Math.floor(timeLeft / 60000)
+  const seconds = Math.floor((timeLeft % 60000) / 1000)
+  const expired = timeLeft <= 0
+
+  const handleCancel = async () => {
+    setCancelling(true)
+    try {
+      await onCancel(notification.id, details!.draftId)
+      setCancelled(true)
+    } finally {
+      setCancelling(false)
+    }
+  }
+
+  if (cancelled) {
+    return (
+      <div className="px-5 py-4 flex items-center gap-3 bg-red-50/50">
+        <XCircle className="w-5 h-5 text-red-500 shrink-0" />
+        <div className="flex-1">
+          <p className="text-sm font-medium text-red-800">
+            Auto-send cancelled
+          </p>
+          <p className="text-xs text-red-600">
+            Draft to {details.toName || details.toEmail} was not sent.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="px-5 py-4 flex items-start gap-3 bg-amber-50/50">
+      <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+        <Timer className="w-5 h-5 text-amber-700" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-amber-900">
+          {expired ? 'Sending...' : `Auto-sending in ${minutes}:${seconds.toString().padStart(2, '0')}`}
+        </p>
+        <p className="text-xs text-amber-700 mt-0.5">
+          To: {details.toName || details.toEmail}
+          {details.subject ? ` — ${details.subject}` : ''}
+        </p>
+        {details.confidenceScore !== null && (
+          <p className="text-[10px] text-amber-600 mt-0.5">
+            Confidence: {Math.round((details.confidenceScore ?? 0) * 100)}% | Source: {details.source}
+          </p>
+        )}
+      </div>
+      {!expired && (
+        <button
+          onClick={handleCancel}
+          disabled={cancelling}
+          className="flex items-center gap-1.5 px-3 py-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {cancelling ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <XCircle className="w-4 h-4" />
+          )}
+          Cancel Send
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Skeleton
 // ---------------------------------------------------------------------------
 
@@ -172,6 +292,7 @@ export default function NotificationsPage() {
   const settingsVenueId = scope.venueId ?? ''
   const [settings, setSettings] = useState<NotificationSetting[]>(DEFAULT_NOTIFICATION_SETTINGS)
   const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([])
+  const [pendingAutoSends, setPendingAutoSends] = useState<RecentNotification[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -242,7 +363,16 @@ export default function NotificationsPage() {
         const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
         return { ...row, venue_name: venueName }
       })
-      setRecentNotifications(mappedNotifs)
+
+      // Separate pending auto-sends from regular notifications
+      const pending = mappedNotifs.filter(
+        (n) => n.type === 'auto_send_pending' && !n.read
+      )
+      const regular = mappedNotifs.filter(
+        (n) => n.type !== 'auto_send_pending' || n.read
+      )
+      setPendingAutoSends(pending)
+      setRecentNotifications(regular)
       setError(null)
     } catch (err) {
       console.error('Failed to load notification settings:', err)
@@ -311,6 +441,22 @@ export default function NotificationsPage() {
       setError('Failed to save notification settings')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // ---- Cancel pending auto-send ----
+  const handleCancelAutoSend = async (notificationId: string, draftId: string) => {
+    try {
+      const res = await fetch('/api/agent/auto-send-cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notificationId, draftId }),
+      })
+      if (!res.ok) throw new Error('Cancel failed')
+      // Remove from pending list
+      setPendingAutoSends((prev) => prev.filter((n) => n.id !== notificationId))
+    } catch (err) {
+      console.error('Failed to cancel auto-send:', err)
     }
   }
 
@@ -483,6 +629,25 @@ export default function NotificationsPage() {
                 </div>
               )
             })}
+          </div>
+        </div>
+      )}
+
+      {/* ---- Pending Auto-Sends ---- */}
+      {pendingAutoSends.length > 0 && (
+        <div>
+          <h2 className="font-heading text-lg font-semibold text-sage-900 mb-3 flex items-center gap-2">
+            <Timer className="w-5 h-5 text-amber-500" />
+            Pending Auto-Sends
+          </h2>
+          <div className="bg-surface border border-amber-200 rounded-xl shadow-sm overflow-hidden divide-y divide-amber-100">
+            {pendingAutoSends.map((notif) => (
+              <PendingAutoSendCard
+                key={notif.id}
+                notification={notif}
+                onCancel={handleCancelAutoSend}
+              />
+            ))}
           </div>
         </div>
       )}

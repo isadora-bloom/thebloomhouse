@@ -19,7 +19,9 @@ import {
   ListChecks,
   Eye,
   ExternalLink,
+  User,
 } from 'lucide-react'
+import { CommunicationPulse } from './[id]/page'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 
@@ -72,6 +74,7 @@ interface Wedding {
   budget: BudgetItem[]
   checklist_items: ChecklistItem[]
   venue_name?: string | null
+  comm_pulse_count?: number
 }
 
 type StatusFilter = 'all' | 'booked' | 'completed' | 'inquiry' | 'lost'
@@ -264,7 +267,7 @@ function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; 
         </div>
 
         {/* Quick stats */}
-        <div className="flex items-center gap-4 text-sm">
+        <div className="flex items-center gap-4 text-sm flex-wrap">
           {wedding.guest_count != null && (
             <span className="flex items-center gap-1.5 text-sage-600">
               <Users className="w-3.5 h-3.5 text-sage-400" />
@@ -283,6 +286,7 @@ function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; 
               {completedChecklist}/{totalChecklist} tasks
             </span>
           )}
+          <CommunicationPulse messageCount={wedding.comm_pulse_count ?? 0} />
         </div>
       </div>
 
@@ -358,6 +362,13 @@ function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; 
 
           {/* Portal action buttons */}
           <div className="flex items-center gap-2 pt-2 border-t border-sage-100">
+            <Link
+              href={`/portal/weddings/${wedding.id}`}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-sage-800 text-white hover:bg-sage-900 transition-colors"
+            >
+              <User className="w-3.5 h-3.5" />
+              View Profile
+            </Link>
             <Link
               href={`/portal/weddings/${wedding.id}/portal`}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-sage-600 text-white hover:bg-sage-700 transition-colors"
@@ -451,10 +462,44 @@ export default function WeddingsPage() {
 
       if (fetchErr) throw fetchErr
 
+      const weddingIds = ((data ?? []) as any[]).map((r) => r.id as string)
+
+      // Fetch communication pulse: message + sage_conversation counts in last 30 days
+      const thirtyDaysAgo = new Date()
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+      const since = thirtyDaysAgo.toISOString()
+
+      const [msgRes, sageRes] = await Promise.all([
+        weddingIds.length > 0
+          ? supabase
+              .from('messages')
+              .select('wedding_id')
+              .in('wedding_id', weddingIds)
+              .gte('created_at', since)
+          : Promise.resolve({ data: [] }),
+        weddingIds.length > 0
+          ? supabase
+              .from('sage_conversations')
+              .select('wedding_id')
+              .in('wedding_id', weddingIds)
+              .eq('role', 'user')
+              .gte('created_at', since)
+          : Promise.resolve({ data: [] }),
+      ])
+
+      // Tally counts per wedding
+      const commCounts: Record<string, number> = {}
+      for (const row of (msgRes.data ?? []) as { wedding_id: string }[]) {
+        commCounts[row.wedding_id] = (commCounts[row.wedding_id] ?? 0) + 1
+      }
+      for (const row of (sageRes.data ?? []) as { wedding_id: string }[]) {
+        commCounts[row.wedding_id] = (commCounts[row.wedding_id] ?? 0) + 1
+      }
+
       const mapped: Wedding[] = ((data ?? []) as any[]).map((row) => {
         const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
         const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
-        return { ...row, venue_name: venueName } as Wedding
+        return { ...row, venue_name: venueName, comm_pulse_count: commCounts[row.id] ?? 0 } as Wedding
       })
       setWeddings(mapped)
       setError(null)

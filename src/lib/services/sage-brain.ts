@@ -30,6 +30,8 @@ export interface SageResponseOptions {
   message: string
   conversationHistory: Array<{ role: string; content: string }>
   taskType?: string
+  /** Optional file context (extracted text or description) injected into the prompt */
+  fileContext?: string
 }
 
 export interface SageResponse {
@@ -288,7 +290,7 @@ async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
 export async function generateSageResponse(
   options: SageResponseOptions
 ): Promise<SageResponse> {
-  const { venueId, weddingId, message, conversationHistory, taskType } = options
+  const { venueId, weddingId, message, conversationHistory, taskType, fileContext } = options
 
   // Load all context in parallel
   const [personalityData, intelligenceContext, kbResults, weddingContext] =
@@ -349,6 +351,12 @@ export async function generateSageResponse(
     weddingBlock = `\n--- WEDDING CONTEXT ---\n${parts.join('\n')}\n--- END WEDDING CONTEXT ---\n`
   }
 
+  // Build file context block (for uploaded files or contract text)
+  let fileContextBlock = ''
+  if (fileContext) {
+    fileContextBlock = `\n--- ATTACHED FILE CONTEXT ---\nThe user has attached a file or is asking about a specific contract. Here is the content:\n\n${fileContext}\n\nAnswer questions about this file in the context of their wedding planning. Be specific about dates, amounts, and terms you find in the document.\n--- END FILE CONTEXT ---\n`
+  }
+
   // Assemble full system prompt
   const systemPrompt = [
     UNIVERSAL_RULES,
@@ -357,6 +365,7 @@ export async function generateSageResponse(
     weddingBlock,
     kbContext,
     intelligenceContext,
+    fileContextBlock,
   ]
     .filter(Boolean)
     .join('\n\n')

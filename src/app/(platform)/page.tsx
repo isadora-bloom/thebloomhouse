@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import {
   Mail, FileCheck, Newspaper, Heart,
   TrendingUp, ArrowRight, Building2, Layers, MapPin,
+  BarChart3,
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
 
@@ -247,10 +248,12 @@ export default function DashboardPage() {
         { label: 'View Inbox', href: '/agent/inbox', icon: Mail, description: 'Review incoming inquiries' },
         { label: 'Approval Queue', href: '/agent/drafts', icon: FileCheck, description: 'Approve AI-generated drafts' },
         { label: 'Intel Dashboard', href: '/intel/dashboard', icon: Newspaper, description: 'Venue insights and trends' },
+        { label: 'Your Impact', href: '/intel/roi', icon: BarChart3, description: 'See your ROI metrics' },
       ]
     : [
         { label: 'Portfolio Overview', href: '/intel/portfolio', icon: Layers, description: 'All venues at a glance' },
         { label: 'All Clients', href: '/intel/clients', icon: Heart, description: 'Cross-venue client list' },
+        { label: 'Your Impact', href: '/intel/roi', icon: BarChart3, description: 'See your ROI metrics' },
       ]
 
   return (

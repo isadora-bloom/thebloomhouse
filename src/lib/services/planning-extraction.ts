@@ -1,30 +1,54 @@
 /**
  * Bloom House: Planning Decision Extraction Service
  *
- * Extracts planning decisions from Sage conversations using keyword/pattern
- * matching (no AI calls — fast and free). Couples naturally share decisions
- * like "We booked Sarah's Florals" or "150 guests" during chat, and this
- * service captures those into the planning_notes table so coordinators
- * don't have to read every message.
+ * Two extraction layers:
+ *   1. Regex-based (fast, free, synchronous) — catches obvious patterns like
+ *      "We booked Sarah's Florals" or "150 guests".
+ *   2. AI-based (richer, async, fire-and-forget) — uses Claude to extract
+ *      structured planning insights across all 8 categories: vendor, guest_count,
+ *      decor, checklist, cost, date, policy, note.
  *
- * Ported from bloom-house-portal/server/index.js (extractPlanningNotes).
+ * Both layers write to the planning_notes table so coordinators see every
+ * decision without reading every Sage message.
+ *
+ * Ported from bloom-house-portal/server/index.js (extractPlanningNotes)
+ * and expanded with AI extraction inspired by the Rixey Portal approach.
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { callAIJson } from '@/lib/ai/client'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+export type PlanningCategory =
+  | 'vendor'
+  | 'guest_count'
+  | 'decor'
+  | 'checklist'
+  | 'cost'
+  | 'date'
+  | 'policy'
+  | 'note'
+
 export interface PlanningNote {
-  category: 'vendor' | 'guest_count' | 'decor' | 'checklist'
+  category: PlanningCategory
   content: string
   source_message: string
+  confidence?: number
+}
+
+/** Shape returned by the AI extraction prompt. */
+interface AIPlanningNote {
+  category: PlanningCategory
+  content: string
+  confidence: number
 }
 
 interface PlanningPattern {
   patterns: RegExp[]
-  category: PlanningNote['category']
+  category: PlanningCategory
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +229,97 @@ export async function savePlanningNotes(
   } else {
     console.log(`[planning-extraction] Saved ${newNotes.length} note(s)`)
   }
+}
+
+// ---------------------------------------------------------------------------
+// AI-powered extraction (richer, async)
+// ---------------------------------------------------------------------------
+
+const AI_EXTRACTION_PROMPT = `Extract any wedding planning decisions, preferences, or action items from this message.
+
+For each insight, categorize as one of:
+- vendor: A vendor mentioned, booked, or preferred (florist, photographer, DJ, caterer, etc.)
+- guest_count: Guest count mentioned or updated
+- decor: Decoration preference, color palette, theme, or style choice
+- checklist: A task completed or a to-do item mentioned
+- cost: Budget amount, payment mention, or cost discussion
+- date: Date, deadline, or timeline mentioned (ceremony time, rehearsal date, etc.)
+- policy: Venue policy question or clarification
+- note: General planning note that doesn't fit other categories
+
+Return a JSON array of objects with { category, content, confidence }.
+- content: A concise summary of the insight (not the raw message).
+- confidence: 0.0 to 1.0 — how confident you are this is a real planning decision vs. casual chat.
+- Only include items with confidence >= 0.5.
+- If the message contains no planning decisions, return an empty array [].
+- Do NOT extract greetings, thanks, or small talk.`
+
+/**
+ * Uses Claude to extract structured planning notes from a Sage chat message.
+ * Returns an array of notes with confidence scores. Only includes items with
+ * confidence >= 0.5. Returns empty array on failure (never throws).
+ */
+export async function extractPlanningNotesAI(
+  messageText: string,
+  weddingContext?: string
+): Promise<PlanningNote[]> {
+  if (!messageText || messageText.trim().length < 10) return []
+
+  try {
+    const userPrompt = weddingContext
+      ? `Wedding context: ${weddingContext}\n\nMessage:\n${messageText}`
+      : messageText
+
+    const aiNotes = await callAIJson<AIPlanningNote[]>({
+      systemPrompt: AI_EXTRACTION_PROMPT,
+      userPrompt,
+      maxTokens: 1000,
+      temperature: 0.1,
+      taskType: 'planning_extraction',
+    })
+
+    if (!Array.isArray(aiNotes)) return []
+
+    const sourceMessage = messageText.substring(0, 500)
+
+    return aiNotes
+      .filter(
+        (n) =>
+          n &&
+          typeof n.category === 'string' &&
+          typeof n.content === 'string' &&
+          n.content.trim().length > 0 &&
+          (n.confidence ?? 0) >= 0.5
+      )
+      .map((n) => ({
+        category: n.category,
+        content: n.content.trim(),
+        source_message: sourceMessage,
+        confidence: n.confidence,
+      }))
+  } catch (err) {
+    console.error('[planning-extraction] AI extraction failed:', err)
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Combined extraction (regex + AI, deduped)
+// ---------------------------------------------------------------------------
+
+/**
+ * Runs AI extraction on a message and saves any NEW notes that weren't
+ * already captured by the regex pass. Intended to be called fire-and-forget
+ * after the regex extraction has already run.
+ */
+export async function extractAndSaveAINotes(
+  venueId: string,
+  weddingId: string,
+  message: string
+): Promise<void> {
+  const aiNotes = await extractPlanningNotesAI(message)
+  if (aiNotes.length === 0) return
+  await savePlanningNotes(venueId, weddingId, aiNotes)
 }
 
 // ---------------------------------------------------------------------------

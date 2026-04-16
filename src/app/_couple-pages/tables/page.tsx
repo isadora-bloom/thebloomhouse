@@ -25,6 +25,7 @@ import {
   TreePine,
   Shuffle,
   ChevronDown,
+  Ruler,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -1002,6 +1003,9 @@ export default function TablesPage() {
         </div>
       </div>
 
+      {/* Section 11: Linen Calculator */}
+      <LinenCalculator tables={tables} calculations={calculations} />
+
       {/* Sticky Save Bar */}
       <div className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-sm border-t border-gray-200 px-6 py-4">
         <div className="max-w-3xl mx-auto flex items-center justify-between">
@@ -1071,6 +1075,213 @@ function SummaryItem({
       >
         {value}
       </p>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Linen Calculator
+// ---------------------------------------------------------------------------
+
+interface LinenLine {
+  label: string
+  size: string
+  count: number
+}
+
+function LinenCalculator({
+  tables,
+  calculations,
+}: {
+  tables: WeddingTables
+  calculations: {
+    guestTables: number
+    roundTables: number
+    rectTables: number
+    headTableCount: number
+    kidsTableCount: number
+    sweetheartCount: number
+    cocktailTables: number
+    selectedExtras: ExtraTable[]
+    napkinsNeeded: number
+  }
+}) {
+  const lines: LinenLine[] = []
+
+  const shape = tables.table_shape
+
+  // --- Guest tables ---
+  if (shape === 'round' || shape === 'farm') {
+    const count = calculations.guestTables
+    if (count > 0) {
+      if (shape === 'round') {
+        lines.push({ label: 'Round tables', size: '132" round', count })
+      } else {
+        // Farm tables: runners or 90"x156"
+        const sizeLabel =
+          tables.runner_style !== 'none'
+            ? `runners (${tables.runner_style})`
+            : '90"\u00d7156"'
+        lines.push({ label: 'Farm tables (8ft)', size: sizeLabel, count })
+      }
+    }
+  } else if (shape === 'rectangular') {
+    const count = calculations.guestTables
+    if (count > 0) {
+      lines.push({ label: 'Rectangular tables', size: '90"\u00d7132"', count })
+    }
+  } else if (shape === 'mixed') {
+    if (calculations.roundTables > 0) {
+      lines.push({ label: 'Round tables', size: '132" round', count: calculations.roundTables })
+    }
+    if (calculations.rectTables > 0) {
+      lines.push({ label: 'Rectangular tables', size: '90"\u00d7132"', count: calculations.rectTables })
+    }
+  }
+
+  // --- Head table ---
+  if (tables.head_table && calculations.headTableCount > 0) {
+    const headSize =
+      tables.head_table_sided === 'one'
+        ? '90"\u00d7156" (one-sided drape)'
+        : '90"\u00d7132" (two-sided)'
+    lines.push({
+      label: 'Head table',
+      size: headSize,
+      count: calculations.headTableCount,
+    })
+  }
+
+  // --- Sweetheart ---
+  if (calculations.sweetheartCount > 0) {
+    lines.push({ label: 'Sweetheart table', size: '132" round', count: 1 })
+  }
+
+  // --- Kids tables ---
+  if (calculations.kidsTableCount > 0) {
+    lines.push({
+      label: 'Kids tables',
+      size: '90"\u00d7132"',
+      count: calculations.kidsTableCount,
+    })
+  }
+
+  // --- Cocktail tables ---
+  if (calculations.cocktailTables > 0) {
+    lines.push({
+      label: 'Cocktail high-tops',
+      size: '120" round or spandex cover',
+      count: calculations.cocktailTables,
+    })
+  }
+
+  // --- Extra tables (selected) ---
+  const extraCount = calculations.selectedExtras.reduce((sum, e) => sum + e.count, 0)
+  if (extraCount > 0) {
+    lines.push({
+      label: 'Extra tables / stations',
+      size: '90"\u00d7132" (assumed 6ft)',
+      count: extraCount,
+    })
+  }
+
+  const totalLinens = lines.reduce((sum, l) => sum + l.count, 0)
+
+  // Runner style display
+  const runnerLabel =
+    tables.runner_style === 'none' ? 'None' : capitalize(tables.runner_style)
+
+  // Napkin type
+  const napkinType = tables.linen_venue_choice ? 'Venue choice' : 'Linen'
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="px-6 py-4 border-b border-gray-100 flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-[#7D8471]/10 flex items-center justify-center">
+          <Ruler className="w-5 h-5 text-[#7D8471]" />
+        </div>
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">Linen Calculator</h2>
+          <p className="text-xs text-gray-400">
+            Exact linen sizes based on your table configuration
+          </p>
+        </div>
+      </div>
+
+      <div className="p-6 space-y-4">
+        {/* Linen breakdown */}
+        {lines.length > 0 ? (
+          <div className="space-y-2">
+            {lines.map((line, i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-50 border border-gray-100"
+              >
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-medium text-gray-700">{line.label}</span>
+                  <span className="text-xs text-gray-400 ml-2">{line.size}</span>
+                </div>
+                <span className="text-sm font-bold text-[#7D8471] tabular-nums ml-4 shrink-0">
+                  {line.count} {line.count === 1 ? 'cloth' : 'cloths'}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-400 italic">
+            No tables configured yet. Add tables above to see linen needs.
+          </p>
+        )}
+
+        {/* Total */}
+        {lines.length > 0 && (
+          <>
+            <div className="border-t border-gray-200 pt-3 flex items-center justify-between">
+              <span className="text-sm font-semibold text-gray-800">Total tablecloths</span>
+              <span className="text-lg font-bold text-[#7D8471] tabular-nums">
+                {totalLinens}
+              </span>
+            </div>
+
+            {/* Additional details */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+              <div className="bg-[#7D8471]/5 rounded-lg p-3">
+                <p className="text-[11px] uppercase tracking-wide text-[#7D8471]/70 font-medium">
+                  Runner Style
+                </p>
+                <p className="text-sm font-semibold text-gray-800 mt-0.5">{runnerLabel}</p>
+              </div>
+              <div className="bg-[#7D8471]/5 rounded-lg p-3">
+                <p className="text-[11px] uppercase tracking-wide text-[#7D8471]/70 font-medium">
+                  Napkins
+                </p>
+                <p className="text-sm font-semibold text-gray-800 mt-0.5">
+                  {calculations.napkinsNeeded} ({napkinType})
+                </p>
+              </div>
+              <div className="bg-[#7D8471]/5 rounded-lg p-3">
+                <p className="text-[11px] uppercase tracking-wide text-[#7D8471]/70 font-medium">
+                  Charger Plates
+                </p>
+                <p className="text-sm font-semibold text-gray-800 mt-0.5">
+                  {tables.chargers ? `${tables.guest_count} needed` : 'None'}
+                </p>
+              </div>
+            </div>
+
+            {/* Color reminder */}
+            <div className="flex items-center gap-3 py-2 px-3 rounded-lg bg-amber-50 border border-amber-100">
+              <span className="text-amber-500 shrink-0 text-sm">*</span>
+              <p className="text-xs text-amber-700">
+                Tablecloth color: <strong>{capitalize(tables.linen_color)}</strong>
+                {' \u00b7 '}
+                Napkin color: <strong>{capitalize(tables.napkin_color)}</strong>
+                {tables.linen_venue_choice && ' \u00b7 Venue handling selection'}
+              </p>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   )
 }

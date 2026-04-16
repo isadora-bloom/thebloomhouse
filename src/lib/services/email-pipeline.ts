@@ -478,6 +478,9 @@ export async function processIncomingEmail(
       draftId = draft.id as string
 
       // Step 8: Check auto-send eligibility
+      // Instead of sending immediately, create a pending auto-send notification
+      // with a 5-minute delay. The next cron email_poll cycle will flush expired
+      // pending sends. Coordinators can cancel via the notification UI.
       try {
         const { checkAutoSendEligible } = await import('@/lib/services/autonomous-sender')
 
@@ -488,29 +491,38 @@ export async function processIncomingEmail(
         })
 
         if (eligibility.eligible) {
-          // Send via Gmail
-          const sentMessageId = await sendEmail(
+          // Mark draft as pending auto-send (not sent yet)
+          const sendAt = new Date(Date.now() + 5 * 60 * 1000).toISOString()
+
+          await supabase
+            .from('drafts')
+            .update({
+              status: 'auto_send_pending',
+              auto_sent: false,
+              auto_send_source: detectedSource,
+            })
+            .eq('id', draftId)
+
+          // Create a cancellable notification
+          await createNotification({
             venueId,
-            fromEmail,
-            draftSubject,
-            draftBody,
-            email.threadId
-          )
+            weddingId: weddingId ?? undefined,
+            type: 'auto_send_pending',
+            title: `Auto-sending to ${fromName || fromEmail} in 5 minutes`,
+            body: JSON.stringify({
+              draftId,
+              toEmail: fromEmail,
+              toName: fromName,
+              subject: draftSubject,
+              threadId: email.threadId,
+              sendAt,
+              confidenceScore,
+              source: detectedSource,
+            }),
+          })
 
-          if (sentMessageId) {
-            // Mark as auto-sent
-            await supabase
-              .from('drafts')
-              .update({
-                status: 'sent',
-                auto_sent: true,
-                auto_send_source: detectedSource,
-                approved_at: new Date().toISOString(),
-              })
-              .eq('id', draftId)
-
-            autoSent = true
-          }
+          // Mark as auto-sent for the pipeline result (pending)
+          autoSent = true
         }
       } catch (err) {
         console.error('[pipeline] Auto-send check failed:', err)
@@ -588,6 +600,103 @@ export async function processAllNewEmails(venueId: string): Promise<ProcessAllRe
   )
 
   return summary
+}
+
+// ---------------------------------------------------------------------------
+// Exported: flushPendingAutoSends
+// ---------------------------------------------------------------------------
+
+/**
+ * Check for pending auto-send notifications that have passed their 5-minute
+ * delay window. For each one that hasn't been cancelled, actually send the
+ * email via Gmail and update the draft status.
+ *
+ * Called by the cron email_poll job after processing new emails.
+ */
+export async function flushPendingAutoSends(venueId: string): Promise<number> {
+  const supabase = createServiceClient()
+  let sentCount = 0
+
+  // Find unread auto_send_pending notifications for this venue
+  const { data: pendingNotifs } = await supabase
+    .from('admin_notifications')
+    .select('id, body, created_at')
+    .eq('venue_id', venueId)
+    .eq('type', 'auto_send_pending')
+    .eq('read', false)
+    .order('created_at', { ascending: true })
+
+  if (!pendingNotifs || pendingNotifs.length === 0) return 0
+
+  for (const notif of pendingNotifs) {
+    try {
+      // Parse the notification body for draft details
+      const details = JSON.parse(notif.body as string) as {
+        draftId: string
+        toEmail: string
+        subject: string
+        threadId?: string
+        sendAt: string
+      }
+
+      // Check if the delay has passed
+      const sendAt = new Date(details.sendAt).getTime()
+      if (Date.now() < sendAt) continue // Not yet time
+
+      // Verify the draft is still in auto_send_pending status (not cancelled)
+      const { data: draft } = await supabase
+        .from('drafts')
+        .select('id, status, draft_body, venue_id')
+        .eq('id', details.draftId)
+        .single()
+
+      if (!draft || draft.status !== 'auto_send_pending') {
+        // Draft was cancelled or already handled — mark notification as read
+        await supabase
+          .from('admin_notifications')
+          .update({ read: true, read_at: new Date().toISOString() })
+          .eq('id', notif.id)
+        continue
+      }
+
+      // Send the email
+      const sentMessageId = await sendEmail(
+        venueId,
+        details.toEmail,
+        details.subject,
+        draft.draft_body as string,
+        details.threadId
+      )
+
+      if (sentMessageId) {
+        // Mark draft as sent
+        await supabase
+          .from('drafts')
+          .update({
+            status: 'sent',
+            auto_sent: true,
+            approved_at: new Date().toISOString(),
+          })
+          .eq('id', details.draftId)
+
+        // Mark notification as read
+        await supabase
+          .from('admin_notifications')
+          .update({ read: true, read_at: new Date().toISOString() })
+          .eq('id', notif.id)
+
+        sentCount++
+      }
+    } catch (err) {
+      console.error('[pipeline] Failed to flush pending auto-send:', err)
+    }
+  }
+
+  if (sentCount > 0) {
+    console.log(`[pipeline] Flushed ${sentCount} pending auto-sends for venue ${venueId}`)
+  }
+
+  return sentCount
 }
 
 // ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
-import { Send, Sparkles, AlertCircle, Loader2, RotateCcw, FileText, Brain } from 'lucide-react'
+import { Send, Sparkles, AlertCircle, Loader2, RotateCcw, FileText, Brain, Paperclip, X, File as FileIcon } from 'lucide-react'
 
 // TODO: Get from auth session
 // TODO: Derive venue_id from wedding or session
@@ -19,7 +19,27 @@ interface Message {
   confidence_score: number | null
   created_at: string
   failed?: boolean
+  /** Optional attached file metadata (for display in user bubbles) */
+  attachedFile?: {
+    name: string
+    type: string
+    url?: string
+  }
 }
+
+interface ContractContext {
+  id: string
+  filename: string
+  extractedText: string
+}
+
+// ---------------------------------------------------------------------------
+// File upload constants
+// ---------------------------------------------------------------------------
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+const ACCEPTED_FILE_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
+const ACCEPTED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.webp']
 
 interface WeddingState {
   hasTimeline: boolean
@@ -123,9 +143,17 @@ export default function SageChatPage() {
   const [weddingStateLoaded, setWeddingStateLoaded] = useState(false)
   const [hasMoreHistory, setHasMoreHistory] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [attachedFile, setAttachedFile] = useState<File | null>(null)
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null)
+  const [uploadingFile, setUploadingFile] = useState(false)
+  const [fileError, setFileError] = useState<string | null>(null)
+  const [contractContext, setContractContext] = useState<ContractContext | null>(null)
+  const [contractBannerDismissed, setContractBannerDismissed] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const autoSentRef = useRef(false)
+  const contractLoadedRef = useRef(false)
 
   const searchParams = useSearchParams()
 
@@ -220,6 +248,107 @@ export default function SageChatPage() {
     loadHistory()
   }, [])
 
+  // Load contract context if contractId query param is present
+  useEffect(() => {
+    if (contractLoadedRef.current) return
+    const contractId = searchParams.get('contractId')
+    if (!contractId || !weddingId) return
+
+    contractLoadedRef.current = true
+
+    async function loadContract() {
+      const supabase = createClient()
+      const { data } = await supabase
+        .from('contracts')
+        .select('id, filename, extracted_text')
+        .eq('id', contractId!)
+        .eq('wedding_id', weddingId!)
+        .single()
+
+      if (data && data.extracted_text) {
+        setContractContext({
+          id: data.id as string,
+          filename: data.filename as string,
+          extractedText: data.extracted_text as string,
+        })
+      }
+    }
+
+    loadContract()
+  }, [searchParams, weddingId])
+
+  // Handle file selection
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setFileError(null)
+
+    // Validate file type
+    if (!ACCEPTED_FILE_TYPES.includes(file.type)) {
+      setFileError('Please upload a PDF, JPEG, PNG, or WebP file.')
+      e.target.value = ''
+      return
+    }
+
+    // Validate file size
+    if (file.size > MAX_FILE_SIZE) {
+      setFileError('File must be under 10MB.')
+      e.target.value = ''
+      return
+    }
+
+    setAttachedFile(file)
+
+    // Create preview URL for images
+    if (file.type.startsWith('image/')) {
+      const url = URL.createObjectURL(file)
+      setFilePreviewUrl(url)
+    } else {
+      setFilePreviewUrl(null)
+    }
+
+    e.target.value = ''
+    inputRef.current?.focus()
+  }
+
+  function clearAttachedFile() {
+    if (filePreviewUrl) {
+      URL.revokeObjectURL(filePreviewUrl)
+    }
+    setAttachedFile(null)
+    setFilePreviewUrl(null)
+    setFileError(null)
+  }
+
+  // Upload file to Supabase storage and return the signed URL
+  async function uploadFileToStorage(file: File): Promise<string | null> {
+    try {
+      const supabase = createClient()
+      const timestamp = Date.now()
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+      const storagePath = `${weddingId}/chat/${timestamp}_${safeName}`
+
+      const { error: storageErr } = await supabase.storage
+        .from('contracts')
+        .upload(storagePath, file, { upsert: true })
+
+      if (storageErr) {
+        console.error('Storage upload error:', storageErr)
+        return null
+      }
+
+      const { data: urlData } = await supabase.storage
+        .from('contracts')
+        .createSignedUrl(storagePath, 60 * 60 * 24 * 365) // 1 year
+
+      return urlData?.signedUrl || null
+    } catch (err) {
+      console.error('File upload failed:', err)
+      return null
+    }
+  }
+
   // Load earlier messages (pagination)
   async function loadEarlierMessages() {
     if (loadingMore || messages.length === 0) return
@@ -260,11 +389,22 @@ export default function SageChatPage() {
 
   // Send a message (extracted to reuse for retry)
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, retryFileInfo?: Message['attachedFile']) => {
       if (!text.trim() || sending) return
+
+      const currentFile = retryFileInfo ? null : attachedFile
+      const currentFileInfo = retryFileInfo || (currentFile ? {
+        name: currentFile.name,
+        type: currentFile.type,
+      } : undefined)
 
       setInput('')
       setSending(true)
+
+      // Clear file attachment after capturing it
+      if (currentFile) {
+        clearAttachedFile()
+      }
 
       // Optimistically add user message
       const tempId = `temp-${Date.now()}`
@@ -274,10 +414,36 @@ export default function SageChatPage() {
         content: text.trim(),
         confidence_score: null,
         created_at: new Date().toISOString(),
+        attachedFile: currentFileInfo,
       }
       setMessages((prev) => [...prev, tempUserMsg])
 
       try {
+        // Upload file to storage if attached (not for retries)
+        let fileUrl: string | undefined
+        if (currentFile) {
+          setUploadingFile(true)
+          const url = await uploadFileToStorage(currentFile)
+          setUploadingFile(false)
+          if (url) {
+            fileUrl = url
+            // Update the optimistic message with the URL
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === tempId
+                  ? { ...m, attachedFile: { ...m.attachedFile!, url } }
+                  : m
+              )
+            )
+          }
+        }
+
+        // Build file context from contract context (if active and not dismissed)
+        let fileContext: string | undefined
+        if (contractContext && !contractBannerDismissed) {
+          fileContext = `Contract: "${contractContext.filename}"\n\n${contractContext.extractedText.slice(0, 6000)}`
+        }
+
         const res = await fetch('/api/portal/sage', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -285,6 +451,8 @@ export default function SageChatPage() {
             venueId: venueId,
             weddingId: weddingId,
             message: text.trim(),
+            fileUrl,
+            fileContext,
           }),
         })
 
@@ -321,10 +489,11 @@ export default function SageChatPage() {
         setMessages((prev) => [...prev, errorMsg])
       } finally {
         setSending(false)
+        setUploadingFile(false)
         inputRef.current?.focus()
       }
     },
-    [sending]
+    [sending, attachedFile, contractContext, contractBannerDismissed, venueId, weddingId]
   )
 
   // Handle retry for failed messages
@@ -341,8 +510,8 @@ export default function SageChatPage() {
       })
       return cleaned
     })
-    // Resend
-    sendMessage(failedMsg.content)
+    // Resend (pass file info from original message if it had one)
+    sendMessage(failedMsg.content, failedMsg.attachedFile)
   }
 
   // Query parameter support — auto-send ?q=... on mount
@@ -358,7 +527,8 @@ export default function SageChatPage() {
 
   // Regular send
   function handleSend() {
-    sendMessage(input)
+    const text = input.trim() || (attachedFile ? `[Attached: ${attachedFile.name}] Please analyze this file.` : '')
+    if (text) sendMessage(text)
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -390,6 +560,22 @@ export default function SageChatPage() {
           </p>
         </div>
       </div>
+
+      {/* Contract context banner */}
+      {contractContext && !contractBannerDismissed && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg mt-2">
+          <FileText className="w-4 h-4 text-blue-500 shrink-0" />
+          <p className="text-sm text-blue-700 flex-1">
+            Asking about: <span className="font-semibold">{contractContext.filename}</span>
+          </p>
+          <button
+            onClick={() => setContractBannerDismissed(true)}
+            className="text-blue-400 hover:text-blue-600 shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Messages Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto py-6 space-y-4">
@@ -483,6 +669,24 @@ export default function SageChatPage() {
                 )}
 
                 <div className={`max-w-[80%] sm:max-w-[70%]`}>
+                  {/* Attached file preview (above message bubble) */}
+                  {msg.attachedFile && msg.role === 'user' && (
+                    <div className="mb-1.5 rounded-xl overflow-hidden border border-white/20 bg-white/10 max-w-[240px] ml-auto">
+                      {msg.attachedFile.type.startsWith('image/') && msg.attachedFile.url ? (
+                        <img
+                          src={msg.attachedFile.url}
+                          alt={msg.attachedFile.name}
+                          className="w-full max-h-40 object-cover"
+                        />
+                      ) : (
+                        <div className="flex items-center gap-2 px-3 py-2 bg-white/90 rounded-lg">
+                          <FileIcon className="w-4 h-4 text-red-500 shrink-0" />
+                          <span className="text-xs text-gray-700 truncate">{msg.attachedFile.name}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Message bubble */}
                   <div
                     className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
@@ -627,13 +831,72 @@ export default function SageChatPage() {
 
       {/* Input Bar */}
       <div className="border-t border-gray-100 pt-4 pb-2">
-        <div className="flex items-end gap-3">
+        {/* File preview */}
+        {attachedFile && (
+          <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg border border-gray-200">
+            {filePreviewUrl ? (
+              <img
+                src={filePreviewUrl}
+                alt={attachedFile.name}
+                className="w-10 h-10 rounded object-cover shrink-0"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded bg-red-50 border border-red-200 flex items-center justify-center shrink-0">
+                <FileIcon className="w-5 h-5 text-red-500" />
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-gray-800 truncate">{attachedFile.name}</p>
+              <p className="text-xs text-gray-400">
+                {(attachedFile.size / 1024 / 1024).toFixed(1)} MB
+              </p>
+            </div>
+            <button
+              onClick={clearAttachedFile}
+              className="text-gray-400 hover:text-gray-600 shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* File error */}
+        {fileError && (
+          <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            {fileError}
+            <button onClick={() => setFileError(null)} className="ml-auto text-red-400 hover:text-red-600">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          accept={ACCEPTED_EXTENSIONS.join(',')}
+          onChange={handleFileSelect}
+        />
+
+        <div className="flex items-end gap-2">
+          {/* Paperclip attachment button */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={sending || uploadingFile}
+            className="shrink-0 w-11 h-11 rounded-xl flex items-center justify-center border border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50"
+            title="Attach a file (PDF, JPEG, PNG, WebP)"
+          >
+            <Paperclip className="w-4 h-4" />
+          </button>
+
           <textarea
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask Sage anything..."
+            placeholder={attachedFile ? 'Add a message about this file...' : 'Ask Sage anything...'}
             rows={1}
             className="flex-1 resize-none rounded-xl border border-gray-200 px-4 py-3 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:border-transparent"
             style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
@@ -641,7 +904,7 @@ export default function SageChatPage() {
           />
           <button
             onClick={handleSend}
-            disabled={sending || !input.trim()}
+            disabled={sending || (!input.trim() && !attachedFile)}
             className="shrink-0 w-11 h-11 rounded-xl flex items-center justify-center text-white transition-opacity disabled:opacity-50"
             style={{ backgroundColor: 'var(--couple-primary)' }}
           >

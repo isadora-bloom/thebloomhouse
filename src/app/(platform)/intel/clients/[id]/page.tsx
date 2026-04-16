@@ -24,6 +24,13 @@ import {
   AlertCircle,
   Copy,
   CheckCircle,
+  Lightbulb,
+  Store,
+  Palette,
+  ClipboardCheck,
+  CalendarDays,
+  ShieldCheck,
+  StickyNote,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -91,6 +98,55 @@ interface DraftRow {
   status: string
   subject: string | null
   body_preview: string | null
+  confidence_score: number | null
+  brain_used: string | null
+  auto_sent: boolean
+  approved_by: string | null
+  approved_at: string | null
+  created_at: string
+}
+
+interface DraftFeedbackRow {
+  id: string
+  draft_id: string
+  feedback_type: string
+  rejection_reason: string | null
+  created_at: string
+}
+
+interface TourRow {
+  id: string
+  scheduled_date: string | null
+  status: string
+  outcome: string | null
+  notes: string | null
+  created_at: string
+}
+
+interface ActivityLogRow {
+  id: string
+  activity_type: string
+  entity_type: string | null
+  details: Record<string, unknown> | null
+  created_at: string
+}
+
+// Unified timeline event
+interface TimelineEvent {
+  id: string
+  timestamp: string
+  icon: 'inbox' | 'send' | 'robot' | 'check' | 'reject' | 'calendar' | 'document' | 'flame' | 'note' | 'status' | 'tour' | 'contract' | 'edit'
+  title: string
+  description?: string
+  actor?: string
+}
+
+interface PlanningNoteRow {
+  id: string
+  category: string
+  content: string
+  source_message: string | null
+  status: string
   created_at: string
 }
 
@@ -192,6 +248,34 @@ function eventTypeLabel(type: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+function noteCategoryConfig(category: string): {
+  bg: string
+  text: string
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+} {
+  switch (category) {
+    case 'vendor':
+      return { bg: 'bg-purple-50', text: 'text-purple-700', label: 'Vendor', icon: Store }
+    case 'guest_count':
+      return { bg: 'bg-blue-50', text: 'text-blue-700', label: 'Guest Count', icon: Users }
+    case 'decor':
+      return { bg: 'bg-pink-50', text: 'text-pink-700', label: 'Decor', icon: Palette }
+    case 'checklist':
+      return { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Checklist', icon: ClipboardCheck }
+    case 'cost':
+      return { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Cost', icon: DollarSign }
+    case 'date':
+      return { bg: 'bg-indigo-50', text: 'text-indigo-700', label: 'Date', icon: CalendarDays }
+    case 'policy':
+      return { bg: 'bg-teal-50', text: 'text-teal-700', label: 'Policy', icon: ShieldCheck }
+    case 'note':
+      return { bg: 'bg-gray-50', text: 'text-gray-700', label: 'Note', icon: StickyNote }
+    default:
+      return { bg: 'bg-sage-50', text: 'text-sage-600', label: category, icon: Lightbulb }
+  }
+}
+
 function interactionIcon(type: string, direction: string) {
   if (type === 'call') return <PhoneCall className="w-4 h-4" />
   if (type === 'voicemail') return <Voicemail className="w-4 h-4" />
@@ -283,16 +367,21 @@ export default function ClientProfilePage() {
   const [events, setEvents] = useState<EngagementEventRow[]>([])
   const [scoreHistory, setScoreHistory] = useState<LeadScoreRow[]>([])
   const [drafts, setDrafts] = useState<DraftRow[]>([])
+  const [draftFeedback, setDraftFeedback] = useState<DraftFeedbackRow[]>([])
+  const [tours, setTours] = useState<TourRow[]>([])
+  const [activityLog, setActivityLog] = useState<ActivityLogRow[]>([])
+  const [planningNotes, setPlanningNotes] = useState<PlanningNoteRow[]>([])
   const [clientCode, setClientCode] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState(false)
+  const [showTimeline, setShowTimeline] = useState(false)
 
   const fetchData = useCallback(async () => {
     const supabase = createClient()
 
     try {
-      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes, codeRes] = await Promise.all([
+      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes, codeRes, notesRes] = await Promise.all([
         supabase
           .from('weddings')
           .select('*')
@@ -334,6 +423,13 @@ export default function ClientProfilePage() {
           .eq('wedding_id', weddingId)
           .eq('venue_id', VENUE_ID)
           .maybeSingle(),
+        supabase
+          .from('planning_notes')
+          .select('id, category, content, source_message, status, created_at')
+          .eq('wedding_id', weddingId)
+          .eq('venue_id', VENUE_ID)
+          .order('created_at', { ascending: false })
+          .limit(50),
       ])
 
       if (weddingRes.error) throw weddingRes.error
@@ -344,6 +440,7 @@ export default function ClientProfilePage() {
       setEvents((eventsRes.data ?? []) as EngagementEventRow[])
       setScoreHistory((scoreRes.data ?? []) as LeadScoreRow[])
       setDrafts((draftsRes.data ?? []) as DraftRow[])
+      setPlanningNotes((notesRes.data ?? []) as PlanningNoteRow[])
       setClientCode((codeRes.data as { code?: string } | null)?.code ?? null)
       setError(null)
     } catch (err) {
@@ -748,6 +845,50 @@ export default function ClientProfilePage() {
                     </span>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Planning Notes (extracted from Sage conversations) */}
+          {planningNotes.length > 0 && (
+            <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+              <h2 className="font-heading text-base font-semibold text-sage-900 mb-4 flex items-center gap-2">
+                <Lightbulb className="w-4 h-4 text-amber-500" />
+                Planning Notes
+              </h2>
+              <p className="text-xs text-sage-500 mb-3">
+                Auto-extracted from Sage conversations
+              </p>
+              <div className="space-y-3 max-h-[400px] overflow-y-auto">
+                {planningNotes.map((note) => {
+                  const config = noteCategoryConfig(note.category)
+                  const NoteIcon = config.icon
+                  return (
+                    <div key={note.id} className="border-b border-sage-50 pb-2.5 last:border-0 last:pb-0">
+                      <div className="flex items-start gap-2">
+                        <NoteIcon className={cn('w-3.5 h-3.5 mt-0.5 shrink-0', config.text)} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                            <span className={cn(
+                              'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium',
+                              config.bg,
+                              config.text
+                            )}>
+                              {config.label}
+                            </span>
+                          </div>
+                          <p className="text-sm text-sage-800 leading-snug">{note.content}</p>
+                          {note.source_message && (
+                            <p className="text-[11px] text-sage-400 mt-1 line-clamp-1 italic">
+                              &quot;{note.source_message.substring(0, 80)}{note.source_message.length > 80 ? '...' : ''}&quot;
+                            </p>
+                          )}
+                          <p className="text-[10px] text-sage-400 mt-0.5">{fmtDatetime(note.created_at)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}

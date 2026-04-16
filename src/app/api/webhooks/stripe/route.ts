@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { NextRequest, NextResponse } from 'next/server'
+import { createHmac, timingSafeEqual } from 'crypto'
 
 // ---------------------------------------------------------------------------
 // Stripe webhook handler
@@ -7,9 +8,58 @@ import { NextRequest, NextResponse } from 'next/server'
 // Handles subscription lifecycle events to keep venues.plan_tier in sync
 // with Stripe billing status.
 //
-// TODO: In production, validate the webhook signature using Stripe's
-// `stripe.webhooks.constructEvent()` with STRIPE_WEBHOOK_SECRET.
+// Signature validation: Uses Stripe's signing scheme (v1 HMAC-SHA256).
+// When the `stripe` npm package is installed AND STRIPE_WEBHOOK_SECRET is
+// set, prefer `stripe.webhooks.constructEvent()`.  As a fallback we
+// implement the same scheme manually so no extra dependency is required.
 // ---------------------------------------------------------------------------
+
+/**
+ * Verify a Stripe webhook signature (v1 scheme) without the Stripe SDK.
+ * Returns true if the signature is valid, false otherwise.
+ */
+function verifyStripeSignature(
+  rawBody: string,
+  signatureHeader: string,
+  secret: string,
+  toleranceSeconds = 300
+): boolean {
+  try {
+    // Parse the header: "t=<timestamp>,v1=<sig>[,v0=<sig>]..."
+    const parts = signatureHeader.split(',')
+    const tsPart = parts.find((p) => p.startsWith('t='))
+    const v1Parts = parts.filter((p) => p.startsWith('v1='))
+
+    if (!tsPart || v1Parts.length === 0) return false
+
+    const timestamp = parseInt(tsPart.replace('t=', ''), 10)
+    if (isNaN(timestamp)) return false
+
+    // Reject events older than tolerance
+    const now = Math.floor(Date.now() / 1000)
+    if (Math.abs(now - timestamp) > toleranceSeconds) return false
+
+    // Compute expected signature
+    const signedPayload = `${timestamp}.${rawBody}`
+    const expectedSig = createHmac('sha256', secret)
+      .update(signedPayload, 'utf8')
+      .digest('hex')
+
+    // Timing-safe comparison against any v1 signature
+    const expectedBuf = Buffer.from(expectedSig, 'hex')
+    for (const v1 of v1Parts) {
+      const actual = v1.replace('v1=', '')
+      const actualBuf = Buffer.from(actual, 'hex')
+      if (expectedBuf.length === actualBuf.length && timingSafeEqual(expectedBuf, actualBuf)) {
+        return true
+      }
+    }
+
+    return false
+  } catch {
+    return false
+  }
+}
 
 // ---------------------------------------------------------------------------
 // POST — Handle Stripe webhook events
@@ -19,12 +69,28 @@ export async function POST(request: NextRequest) {
   try {
     const rawBody = await request.text()
 
-    // TODO: Validate webhook signature in production
-    // const sig = request.headers.get('stripe-signature')
-    // if (!sig || !process.env.STRIPE_WEBHOOK_SECRET) {
-    //   return NextResponse.json({ error: 'Missing signature' }, { status: 401 })
-    // }
-    // const event = stripe.webhooks.constructEvent(rawBody, sig, process.env.STRIPE_WEBHOOK_SECRET)
+    // ---- Signature validation ----
+    const sig = request.headers.get('stripe-signature')
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET
+
+    if (webhookSecret) {
+      // Production: validate signature
+      if (!sig) {
+        console.warn('[webhook/stripe] Missing stripe-signature header')
+        return NextResponse.json({ error: 'Missing signature' }, { status: 401 })
+      }
+
+      if (!verifyStripeSignature(rawBody, sig, webhookSecret)) {
+        console.warn('[webhook/stripe] Invalid webhook signature')
+        return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+      }
+    } else {
+      // Development: log a warning but allow through
+      console.warn(
+        '[webhook/stripe] STRIPE_WEBHOOK_SECRET not set — skipping signature validation. ' +
+        'Set this env var in production.'
+      )
+    }
 
     const event = JSON.parse(rawBody)
 

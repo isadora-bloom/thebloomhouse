@@ -3,10 +3,11 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
-  LayoutDashboard, MessageCircle, Printer, Menu,
+  LayoutDashboard, MessageCircle, Printer, FileText, Menu,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CoupleUserMenu } from './couple-user-menu'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 
 interface CoupleTopBarProps {
   /** Venue display name shown next to the logo. */
@@ -35,6 +36,7 @@ export function CoupleTopBar({
   clientCode,
 }: CoupleTopBarProps) {
   const pathname = usePathname()
+  const { weddingId } = useCoupleContext()
   const sageHref = `${base}/chat`
   const dashHref = base
 
@@ -121,7 +123,19 @@ export function CoupleTopBar({
             <span className="hidden sm:inline">Dashboard</span>
           </Link>
 
-          {/* 3. Print */}
+          {/* 3. Print Day-of Package */}
+          {weddingId && (
+            <Link
+              href={`/portal/weddings/${weddingId}/print`}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors whitespace-nowrap"
+              title="Print day-of coordination package"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Day-of Package</span>
+            </Link>
+          )}
+
+          {/* 4. Print current page */}
           <button
             type="button"
             onClick={() => window.print()}
@@ -132,7 +146,7 @@ export function CoupleTopBar({
             <Printer className="w-4 h-4" />
           </button>
 
-          {/* 4. Account */}
+          {/* 5. Account */}
           <CoupleUserMenu />
         </div>
       </div>

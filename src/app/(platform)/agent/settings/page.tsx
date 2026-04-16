@@ -17,6 +17,8 @@ import {
   XCircle,
   AlertTriangle,
   CalendarClock,
+  Activity,
+  Inbox,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -212,12 +214,15 @@ export default function AgentSettingsPage() {
   const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const [emailsSynced7d, setEmailsSynced7d] = useState<number>(0)
 
   const supabase = createClient()
 
   // ---- Fetch all data ----
   const fetchData = useCallback(async () => {
-    const [rulesRes, syncRes, aiRes] = await Promise.all([
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+
+    const [rulesRes, syncRes, aiRes, syncedRes] = await Promise.all([
       supabase
         .from('auto_send_rules')
         .select('*')
@@ -234,13 +239,19 @@ export default function AgentSettingsPage() {
         .select('id, venue_id, follow_up_style, max_follow_ups')
         .eq('venue_id', VENUE_ID)
         .maybeSingle(),
+      supabase
+        .from('interactions')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', VENUE_ID)
+        .gte('created_at', sevenDaysAgo),
     ])
 
     if (rulesRes.data) setRules(rulesRes.data as AutoSendRule[])
     if (syncRes.data) setSyncState(syncRes.data as EmailSyncState)
     if (aiRes.data) setAiConfig(aiRes.data as VenueAIConfig)
+    setEmailsSynced7d(syncedRes.count ?? 0)
     setLoading(false)
-  }, [supabase])
+  }, [supabase, VENUE_ID])
 
   useEffect(() => {
     fetchData()
@@ -366,6 +377,76 @@ export default function AgentSettingsPage() {
           Configure your AI agent&apos;s email connection, auto-send thresholds, and operational preferences. Changes here affect how the agent handles all incoming and outgoing communications.
         </p>
       </div>
+
+      {/* Email Health Card */}
+      {(() => {
+        const connected = syncState !== null && syncState.status !== 'disconnected'
+        const hasError = !!syncState?.error_message
+        const status: 'green' | 'amber' | 'red' = !connected
+          ? 'red'
+          : hasError
+            ? 'red'
+            : syncState?.status === 'syncing'
+              ? 'amber'
+              : 'green'
+        const statusColors = {
+          green: 'border-emerald-200 bg-emerald-50/30',
+          amber: 'border-amber-200 bg-amber-50/30',
+          red: 'border-red-200 bg-red-50/30',
+        }
+        const dotColors = {
+          green: 'bg-emerald-400',
+          amber: 'bg-amber-400 animate-pulse',
+          red: 'bg-red-400',
+        }
+        const statusLabels = {
+          green: 'Healthy',
+          amber: 'Syncing',
+          red: connected ? 'Error' : 'Disconnected',
+        }
+        return (
+          <div className={`border rounded-xl p-4 ${statusColors[status]}`}>
+            <div className="flex items-center gap-4 flex-wrap">
+              {/* Status indicator */}
+              <div className="flex items-center gap-2 min-w-[140px]">
+                <Activity className={`w-4 h-4 ${status === 'green' ? 'text-emerald-600' : status === 'amber' ? 'text-amber-600' : 'text-red-500'}`} />
+                <div className="flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-full ${dotColors[status]}`} />
+                  <span className={`text-sm font-semibold ${status === 'green' ? 'text-emerald-700' : status === 'amber' ? 'text-amber-700' : 'text-red-700'}`}>
+                    {statusLabels[status]}
+                  </span>
+                </div>
+              </div>
+
+              {/* Gmail connection */}
+              <div className="flex items-center gap-1.5 text-sm text-sage-600">
+                <Mail className="w-3.5 h-3.5 text-sage-400" />
+                <span>{connected ? 'Gmail Connected' : 'Gmail Not Connected'}</span>
+              </div>
+
+              {/* Last sync */}
+              <div className="flex items-center gap-1.5 text-sm text-sage-600">
+                <Clock className="w-3.5 h-3.5 text-sage-400" />
+                <span>Last sync: {formatSyncTime(syncState?.last_sync_at ?? null)}</span>
+              </div>
+
+              {/* Emails synced 7d */}
+              <div className="flex items-center gap-1.5 text-sm text-sage-600">
+                <Inbox className="w-3.5 h-3.5 text-sage-400" />
+                <span>{emailsSynced7d} emails synced (7d)</span>
+              </div>
+
+              {/* Error message */}
+              {hasError && (
+                <div className="flex items-center gap-1.5 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-2.5 py-1">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate max-w-[300px]">{syncState?.error_message}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Save feedback */}
       {saveMessage && (

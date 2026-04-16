@@ -168,7 +168,22 @@ export default function FinalReviewPage() {
     )
   }
 
-  // Not yet in window
+  // Days until wedding (more precise than weeks for countdown)
+  const daysUntilWedding = wedding?.wedding_date
+    ? Math.max(0, Math.ceil(
+        (new Date(wedding.wedding_date).getTime() - Date.now()) / (24 * 60 * 60 * 1000)
+      ))
+    : null
+
+  const formattedWeddingDate = wedding?.wedding_date
+    ? new Date(wedding.wedding_date).toLocaleDateString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : null
+
+  // Not yet in window — show preview of sections (read-only) with sign-offs disabled
   if (!isWithinWindow) {
     return (
       <div className="space-y-6">
@@ -184,19 +199,56 @@ export default function FinalReviewPage() {
           </p>
         </div>
 
-        <div className="text-center py-16 bg-white rounded-xl border border-gray-100 shadow-sm">
+        <div className="text-center py-10 bg-white rounded-xl border border-gray-100 shadow-sm">
           <Lock className="w-12 h-12 mx-auto mb-4 text-gray-300" />
           <h3
             className="text-lg font-semibold mb-2"
             style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
           >
-            Not quite yet
+            Not quite yet!
           </h3>
           <p className="text-gray-500 text-sm max-w-md mx-auto">
-            {weeksUntilWedding !== null
-              ? `Your wedding is ${weeksUntilWedding} weeks away. The final review will open when you're within 6 weeks. Keep planning!`
+            {weeksUntilWedding !== null && formattedWeddingDate
+              ? `Final review opens 6 weeks before your wedding (${formattedWeddingDate}). You have ${daysUntilWedding} days to go! Keep planning \u2014 we'll be ready when you are.`
               : 'Set your wedding date in your profile to see when the final review opens.'}
           </p>
+        </div>
+
+        {/* Preview of sections (read-only, so they know what to expect) */}
+        <div>
+          <h3 className="text-sm font-medium text-gray-400 mb-3 uppercase tracking-wide">
+            Sections you will review
+          </h3>
+          <div className="space-y-2 opacity-60 pointer-events-none select-none">
+            {SECTIONS.map((section) => (
+              <div
+                key={section.key}
+                className="bg-white rounded-xl border border-gray-100 shadow-sm p-4"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-3 h-3 rounded-full shrink-0 bg-gray-200" />
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-medium text-gray-800 text-sm">{section.label}</h3>
+                    <p className="text-xs text-gray-500">{section.description}</p>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <div className="text-center">
+                      <div className="w-8 h-8 rounded-lg border-2 border-gray-200 flex items-center justify-center">
+                        <Lock className="w-3 h-3 text-gray-300" />
+                      </div>
+                      <p className="text-[9px] text-gray-400 mt-1">You</p>
+                    </div>
+                    <div className="text-center">
+                      <div className="w-8 h-8 rounded-lg border-2 border-gray-200 bg-gray-50 flex items-center justify-center">
+                        <Shield className="w-3.5 h-3.5 text-gray-300" />
+                      </div>
+                      <p className="text-[9px] text-gray-400 mt-1">Venue</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     )
@@ -213,7 +265,11 @@ export default function FinalReviewPage() {
           Final Review
         </h1>
         <p className="text-gray-500 text-sm">
-          {weeksUntilWedding !== null && `${weeksUntilWedding} weeks to go. `}
+          {daysUntilWedding !== null && daysUntilWedding > 0
+            ? `${daysUntilWedding} days until your wedding \u2014 let's lock everything in! `
+            : weeksUntilWedding !== null
+              ? `${weeksUntilWedding} weeks to go. `
+              : ''}
           Confirm each section is ready, then your coordinator signs off.
         </p>
       </div>

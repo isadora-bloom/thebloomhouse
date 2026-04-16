@@ -23,6 +23,8 @@ import {
   Eye,
   EyeOff,
   StickyNote,
+  Link2,
+  Unlink,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -57,6 +59,8 @@ interface TimelineEvent {
   requiresOffsite?: boolean
   // Duration in cocktail-hour mode (no first look)
   cocktailDuration?: number
+  // Event chaining: true if user manually broke the chain
+  isChainBreak?: boolean
 }
 
 type DinnerType = 'buffet' | 'plated' | 'multi_course'
@@ -72,6 +76,7 @@ interface TimelineConfig {
   formalitiesTiming: FormalitiesTiming
   weddingDate: string | null
   latitude: number
+  longitude: number
 }
 
 interface CustomEvent {
@@ -816,7 +821,12 @@ function buildDefaultEvents(config: TimelineConfig): TimelineEvent[] {
 // Sunset Calculation
 // ---------------------------------------------------------------------------
 
-function calculateSunset(dateStr: string | null, latitude: number): string | null {
+/**
+ * Calculate sunset time for a given date and latitude/longitude.
+ * Uses solar declination math with equation of time and longitude correction.
+ * Returns local time in "HH:MM" format, accounting for US DST rules.
+ */
+function calculateSunset(dateStr: string | null, latitude: number, longitude: number = -77.5): string | null {
   if (!dateStr) return null
 
   const date = new Date(dateStr)
@@ -842,13 +852,17 @@ function calculateSunset(dateStr: string | null, latitude: number): string | nul
 
   const hourAngle = Math.acos(cosHourAngle) * (180 / Math.PI)
 
-  // Solar noon in hours (approximate — 12:00 local standard)
   // Equation of time correction (simplified)
   const B = (2 * Math.PI / 365) * (dayOfYear - 81)
   const eqOfTime = 9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B) // in minutes
 
-  // Sunset time in hours (local standard time, no timezone offset for simplicity)
-  const solarNoon = 12 - eqOfTime / 60
+  // Determine timezone offset from longitude (standard time zone meridian)
+  // US Eastern: -75, Central: -90, Mountain: -105, Pacific: -120
+  const stdMeridian = Math.round(longitude / 15) * 15
+
+  // Solar noon corrected for longitude offset from standard meridian and equation of time
+  const longitudeCorrection = (stdMeridian - longitude) * 4 // in minutes
+  const solarNoon = 12 + (longitudeCorrection - eqOfTime) / 60
   const sunsetHours = solarNoon + hourAngle / 15
 
   // DST handling (US rules: 2nd Sunday March - 1st Sunday November)
@@ -1161,6 +1175,75 @@ function autoCalculateTimes(
 }
 
 // ---------------------------------------------------------------------------
+// Event Chaining Engine
+// ---------------------------------------------------------------------------
+
+/**
+ * Recalculate chained event times within a phase after an event's duration
+ * or start time changes. Events in the same phase are chained by default.
+ *
+ * - Changing one event's duration shifts all subsequent events in the chain.
+ * - A manually-set time (`manualTime: true`) breaks the chain at that event,
+ *   but subsequent events still chain forward from it.
+ * - Concurrent events (canBeConcurrent) don't participate in chaining.
+ */
+function recalculateChain(
+  events: TimelineEvent[],
+  editedIndex: number,
+): TimelineEvent[] {
+  const edited = events[editedIndex]
+  const phase = edited.phase
+
+  // Get all included events in this phase, preserving original indices
+  const phaseEvents = events
+    .map((e, i) => ({ ...e, _originalIndex: i }))
+    .filter(e => e.phase === phase && e.included && !e.canBeConcurrent && !e.isTimeMarker)
+
+  if (phaseEvents.length <= 1) return events
+
+  // Find edited event within phase events
+  const editedPhaseIndex = phaseEvents.findIndex(e => e._originalIndex === editedIndex)
+  if (editedPhaseIndex === -1) return events
+
+  // Cascade forward from edited event
+  for (let i = editedPhaseIndex + 1; i < phaseEvents.length; i++) {
+    const prev = phaseEvents[i - 1]
+    const curr = phaseEvents[i]
+
+    // If this event has a manually set time and is a chain break, respect it
+    // but still cascade from it to subsequent events
+    if (curr.manualTime && curr.isChainBreak) continue
+
+    // Calculate end time of previous event
+    if (!prev.time) continue
+    const prevEndMinutes = timeToMinutes(prev.time) + prev.duration
+    phaseEvents[i] = { ...phaseEvents[i], time: minutesToTime(prevEndMinutes) }
+  }
+
+  // Write back
+  const result = [...events]
+  for (const pe of phaseEvents) {
+    result[pe._originalIndex] = {
+      ...result[pe._originalIndex],
+      time: pe.time,
+    }
+  }
+  return result
+}
+
+/**
+ * Check if an event is part of a chain (not concurrent, not a time marker,
+ * and in a phase with other sequential events).
+ */
+function isChainedEvent(event: TimelineEvent, allEvents: TimelineEvent[]): boolean {
+  if (event.canBeConcurrent || event.isTimeMarker || !event.included) return false
+  const phaseEvents = allEvents.filter(
+    e => e.phase === event.phase && e.included && !e.canBeConcurrent && !e.isTimeMarker
+  )
+  return phaseEvents.length > 1
+}
+
+// ---------------------------------------------------------------------------
 // Timeline Page Component
 // ---------------------------------------------------------------------------
 
@@ -1177,6 +1260,7 @@ export default function TimelinePage() {
     formalitiesTiming: 'before',
     weddingDate: null,
     latitude: 38.4,
+    longitude: -77.5,
   })
 
   // ---- Event state ----
@@ -1205,12 +1289,19 @@ export default function TimelinePage() {
 
   // ---- Sunset calculation ----
   const sunsetTime = useMemo(() => {
-    return calculateSunset(config.weddingDate, config.latitude)
-  }, [config.weddingDate, config.latitude])
+    return calculateSunset(config.weddingDate, config.latitude, config.longitude)
+  }, [config.weddingDate, config.latitude, config.longitude])
+
+  // ---- Golden hour = ~1 hour before sunset ----
+  const goldenHourTime = useMemo(() => {
+    if (!sunsetTime) return null
+    const sunsetMins = timeToMinutes(sunsetTime)
+    return minutesToTime(sunsetMins - 60)
+  }, [sunsetTime])
 
   // ---- Fetch saved data ----
   const fetchData = useCallback(async () => {
-    const [timelineRes, weddingRes] = await Promise.all([
+    const [timelineRes, weddingRes, venueRes] = await Promise.all([
       supabase
         .from('timeline')
         .select('*')
@@ -1221,12 +1312,23 @@ export default function TimelinePage() {
         .select('wedding_date')
         .eq('id', weddingId)
         .maybeSingle(),
+      venueId
+        ? supabase
+            .from('venues')
+            .select('latitude, longitude')
+            .eq('id', venueId)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
     ])
 
     let weddingDate: string | null = null
     if (!weddingRes.error && weddingRes.data) {
       weddingDate = weddingRes.data.wedding_date
     }
+
+    // Use venue coordinates if available, otherwise keep defaults
+    const venueLat = venueRes?.data?.latitude ?? 38.4
+    const venueLng = venueRes?.data?.longitude ?? -77.5
 
     if (!timelineRes.error && timelineRes.data && timelineRes.data.config_json) {
       // Restore saved state
@@ -1236,7 +1338,7 @@ export default function TimelinePage() {
         customEvents?: CustomEvent[]
       }
       if (saved.config) {
-        setConfig({ ...saved.config, weddingDate })
+        setConfig({ ...saved.config, weddingDate, latitude: venueLat, longitude: venueLng })
       }
       if (saved.events) {
         setEvents(saved.events)
@@ -1246,11 +1348,11 @@ export default function TimelinePage() {
       }
     } else {
       // Initialize with defaults
-      const initConfig = { ...config, weddingDate }
+      const initConfig = { ...config, weddingDate, latitude: venueLat, longitude: venueLng }
       setConfig(initConfig)
       const defaults = buildDefaultEvents(initConfig)
       if (initConfig.autoCalculate) {
-        const sunset = calculateSunset(weddingDate, initConfig.latitude)
+        const sunset = calculateSunset(weddingDate, initConfig.latitude, initConfig.longitude)
         setEvents(autoCalculateTimes(defaults, initConfig, sunset))
       } else {
         setEvents(defaults)
@@ -1338,7 +1440,13 @@ export default function TimelinePage() {
         e.id === eventId ? { ...e, duration: Math.max(0, duration) } : e
       )
       if (config.autoCalculate) {
+        // Full recalculate handles phase-level chaining
         return autoCalculateTimes(updated, config, sunsetTime)
+      }
+      // When auto-calculate is off, still cascade within the phase (event chaining)
+      const editedIdx = updated.findIndex(e => e.id === eventId)
+      if (editedIdx !== -1) {
+        return recalculateChain(updated, editedIdx)
       }
       return updated
     })
@@ -1346,18 +1454,27 @@ export default function TimelinePage() {
   }
 
   function updateEventTime(eventId: string, time: string) {
-    setEvents(prev =>
-      prev.map(e =>
-        e.id === eventId ? { ...e, time, manualTime: true } : e
+    setEvents(prev => {
+      const updated = prev.map(e =>
+        e.id === eventId ? { ...e, time, manualTime: true, isChainBreak: true } : e
       )
-    )
+      if (config.autoCalculate) {
+        return autoCalculateTimes(updated, config, sunsetTime)
+      }
+      // When auto-calculate is off, cascade from the manually-set event
+      const editedIdx = updated.findIndex(e => e.id === eventId)
+      if (editedIdx !== -1) {
+        return recalculateChain(updated, editedIdx)
+      }
+      return updated
+    })
     setDirty(true)
   }
 
   function clearManualTime(eventId: string) {
     setEvents(prev => {
       const updated = prev.map(e =>
-        e.id === eventId ? { ...e, manualTime: false } : e
+        e.id === eventId ? { ...e, manualTime: false, isChainBreak: false } : e
       )
       if (config.autoCalculate) {
         return autoCalculateTimes(updated, config, sunsetTime)
@@ -1718,6 +1835,51 @@ export default function TimelinePage() {
       )}
 
       {/* ================================================================ */}
+      {/* GOLDEN HOUR / SUNSET CALLOUT */}
+      {/* ================================================================ */}
+      {sunsetTime && goldenHourTime && (
+        <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-rose-50 rounded-xl border border-amber-200 shadow-sm px-5 py-4">
+          <div className="flex items-start gap-3">
+            <Sun className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+            <div className="flex-1 space-y-1.5">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-sm font-semibold text-amber-900">
+                  Golden Hour: {formatTime12(goldenHourTime)}
+                </span>
+                <span className="text-sm text-amber-700">
+                  <Sunset className="w-3.5 h-3.5 inline mr-1" />
+                  Sunset: {formatTime12(sunsetTime)}
+                </span>
+              </div>
+              {/* Check if there's a Photos event and show scheduling tip */}
+              {(() => {
+                const photoEvent = events.find(e =>
+                  (e.id === 'photo_couple' || e.phase === 'photos') && e.included && e.time
+                )
+                if (photoEvent) {
+                  const photoMins = timeToMinutes(photoEvent.time)
+                  const goldenMins = timeToMinutes(goldenHourTime)
+                  const isBeforeGolden = photoMins + photoEvent.duration <= goldenMins + 60
+                  return (
+                    <p className="text-xs text-amber-700">
+                      {isBeforeGolden
+                        ? `Outdoor photos are scheduled during golden hour light -- perfect timing.`
+                        : `Schedule outdoor photos before ${formatTime12(goldenHourTime)} for the best golden hour light.`}
+                    </p>
+                  )
+                }
+                return (
+                  <p className="text-xs text-amber-700">
+                    Schedule outdoor photos before {formatTime12(goldenHourTime)} for golden hour light.
+                  </p>
+                )
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================================================================ */}
       {/* TOOLBAR */}
       {/* ================================================================ */}
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1931,6 +2093,26 @@ export default function TimelinePage() {
                                 >
                                   manual
                                 </button>
+                              )}
+                              {/* Chain indicator */}
+                              {event.included && isChainedEvent(event, events) && (
+                                event.manualTime && event.isChainBreak ? (
+                                  <span
+                                    className="inline-flex items-center gap-0.5 text-[10px] bg-gray-50 text-gray-400 px-1.5 py-0.5 rounded font-medium"
+                                    title="Chain broken — time set manually. Subsequent events still chain from this."
+                                  >
+                                    <Unlink className="w-2.5 h-2.5" />
+                                    unchained
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="inline-flex items-center gap-0.5 text-[10px] bg-teal-50 text-teal-600 px-1.5 py-0.5 rounded font-medium"
+                                    title="Chained — time auto-adjusts when previous events change"
+                                  >
+                                    <Link2 className="w-2.5 h-2.5" />
+                                    chained
+                                  </span>
+                                )
                               )}
                             </div>
                             <p className="text-xs text-gray-400 mt-0.5">{event.description}</p>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
@@ -146,11 +147,13 @@ function ContractCard({
   contract,
   onAnalyze,
   onDelete,
+  onAskSage,
   isAnalyzing,
 }: {
   contract: Contract
   onAnalyze: (id: string, imageBase64?: string, mediaType?: string) => void
   onDelete: (id: string) => void
+  onAskSage: (contractId: string) => void
   isAnalyzing: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -328,6 +331,15 @@ function ContractCard({
                   <Sparkles className="w-3 h-3" />
                   Ask
                 </button>
+                <button
+                  onClick={() => onAskSage(contract.id)}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg text-white transition-opacity hover:opacity-90"
+                  style={{ backgroundColor: 'var(--couple-primary)' }}
+                  title="Open Sage chat with this contract loaded"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  Ask Sage
+                </button>
               </>
             )}
             <button
@@ -438,7 +450,8 @@ function ContractCard({
 // ---------------------------------------------------------------------------
 
 export default function ContractsPage() {
-  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
+  const { slug, venueId, weddingId, loading: contextLoading } = useCoupleContext()
+  const router = useRouter()
   const [contracts, setContracts] = useState<Contract[]>([])
   const [vendors, setVendors] = useState<BookedVendor[]>([])
   const [loading, setLoading] = useState(true)
@@ -598,6 +611,11 @@ export default function ContractsPage() {
     } finally {
       setAnalyzingId(null)
     }
+  }
+
+  // ---- Ask Sage about a contract — navigate to chat with contractId ----
+  function handleAskSage(contractId: string) {
+    router.push(`/couple/${slug}/chat?contractId=${contractId}`)
   }
 
   // ---- Delete contract ----
@@ -841,6 +859,7 @@ export default function ContractsPage() {
               contract={contract}
               onAnalyze={handleAnalyze}
               onDelete={handleDelete}
+              onAskSage={handleAskSage}
               isAnalyzing={analyzingId === contract.id}
             />
           ))}

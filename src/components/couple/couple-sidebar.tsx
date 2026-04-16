@@ -22,6 +22,8 @@ interface NavItem {
   label: string
   href: string
   icon: React.ComponentType<{ className?: string }>
+  /** Optional badge text shown next to the label */
+  badge?: string
 }
 
 interface NavSection {
@@ -114,12 +116,35 @@ interface CoupleSidebarProps {
   mobileOpen: boolean
   /** Callback to close the mobile drawer (used on link click / overlay click). */
   onMobileClose: () => void
+  /** Wedding date string (ISO) — used to show a badge on Final Review when within 6 weeks. */
+  weddingDate?: string | null
 }
 
-export function CoupleSidebar({ base, mobileOpen, onMobileClose }: CoupleSidebarProps) {
+export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: CoupleSidebarProps) {
   const pathname = usePathname()
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const sections = buildCoupleSidebarSections(base)
+
+  // Compute Final Review badge: show when wedding is within 6 weeks (42 days)
+  const finalReviewBadge = (() => {
+    if (!weddingDate) return undefined
+    const daysUntil = Math.ceil(
+      (new Date(weddingDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+    )
+    if (daysUntil <= 42 && daysUntil > 0) return `${daysUntil}d`
+    return undefined
+  })()
+
+  // Inject badge into Final Review nav item
+  if (finalReviewBadge) {
+    for (const section of sections) {
+      for (const item of section.items) {
+        if (item.href.endsWith('/final-review')) {
+          item.badge = finalReviewBadge
+        }
+      }
+    }
+  }
 
   function isActive(href: string) {
     return pathname === href || pathname.startsWith(href + '/')
@@ -184,6 +209,18 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose }: CoupleSidebar
                         >
                           <item.icon className="w-4 h-4 shrink-0" />
                           <span className="flex-1">{item.label}</span>
+                          {item.badge && (
+                            <span
+                              className={cn(
+                                'ml-auto px-1.5 py-0.5 rounded-full text-[10px] font-bold leading-none',
+                                active
+                                  ? 'bg-white/20 text-white'
+                                  : 'bg-amber-100 text-amber-700'
+                              )}
+                            >
+                              {item.badge}
+                            </span>
+                          )}
                         </Link>
                       </li>
                     )

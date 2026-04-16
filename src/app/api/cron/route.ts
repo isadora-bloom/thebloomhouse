@@ -11,7 +11,7 @@ import {
 import { sendAllDigests } from '@/lib/services/daily-digest'
 import { processAllVenueFollowUps } from '@/lib/services/follow-up-sequences'
 import { applyDailyDecay } from '@/lib/services/heat-mapping'
-import { processAllNewEmails } from '@/lib/services/email-pipeline'
+import { processAllNewEmails, flushPendingAutoSends } from '@/lib/services/email-pipeline'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -92,7 +92,9 @@ async function pollEmailsAllVenues(): Promise<Record<string, number>> {
     const id = v.venue_id as string
     try {
       const result = await processAllNewEmails(id)
-      results[id] = result.processed
+      // Flush any pending auto-sends whose 5-minute delay has elapsed
+      const flushed = await flushPendingAutoSends(id)
+      results[id] = result.processed + flushed
     } catch (err) {
       console.error(`[cron] Email poll failed for venue ${id}:`, err)
       results[id] = 0
