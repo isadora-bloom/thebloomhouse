@@ -272,17 +272,11 @@ export default function OnboardingPage() {
   const scope = useScope()
   const VENUE_ID = scope.venueId
 
-  // Show loading until scope resolves — prevents "No venue selected" errors
-  if (scope.loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-warm-white">
-        <div className="text-center">
-          <div className="animate-spin w-8 h-8 border-2 border-sage-300 border-t-sage-600 rounded-full mx-auto mb-4" />
-          <p className="text-sage-600 text-sm">Setting up your workspace...</p>
-        </div>
-      </div>
-    )
-  }
+  // Track whether scope has resolved (client-only to avoid hydration mismatch)
+  const [scopeReady, setScopeReady] = useState(false)
+  useEffect(() => {
+    if (!scope.loading && scope.venueId) setScopeReady(true)
+  }, [scope.loading, scope.venueId])
   const [currentStep, setCurrentStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -450,18 +444,17 @@ export default function OnboardingPage() {
 
           const { error: venueError } = await supabase
             .from('venues')
-            .upsert({
-              id: venueId,
+            .update({
               name: basics.business_name,
               slug,
               address_line1: basics.address || null,
               city: basics.city || null,
               state: basics.state || null,
               zip: basics.zip || null,
-              timezone: basics.timezone,
               status: 'trial',
               updated_at: new Date().toISOString(),
-            }, { onConflict: 'id' })
+            })
+            .eq('id', venueId)
           if (venueError) throw venueError
 
           const { error: configError } = await supabase
@@ -701,6 +694,17 @@ export default function OnboardingPage() {
 
   // ---- Voice preview ----
   const voicePreview = generateVoicePreview(personality, basics.business_name || 'Your Venue')
+
+  if (!scopeReady) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-warm-white">
+        <div className="text-center">
+          <div className="animate-spin w-8 h-8 border-2 border-sage-300 border-t-sage-600 rounded-full mx-auto mb-4" />
+          <p className="text-sage-600 text-sm">Setting up your workspace...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-warm-white">
