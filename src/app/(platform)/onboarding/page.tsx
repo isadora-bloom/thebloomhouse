@@ -271,6 +271,18 @@ function DimensionSlider({
 export default function OnboardingPage() {
   const scope = useScope()
   const VENUE_ID = scope.venueId
+
+  // Show loading until scope resolves — prevents "No venue selected" errors
+  if (scope.loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-warm-white">
+        <div className="text-center">
+          <div className="animate-spin w-8 h-8 border-2 border-sage-300 border-t-sage-600 rounded-full mx-auto mb-4" />
+          <p className="text-sage-600 text-sm">Setting up your workspace...</p>
+        </div>
+      </div>
+    )
+  }
   const [currentStep, setCurrentStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -418,12 +430,23 @@ export default function OnboardingPage() {
       switch (currentStep) {
         case 0: {
           // Save venue basics to venues + venue_config
-          const slug = basics.business_name
+          let slug = basics.business_name
             .toLowerCase()
             .replace(/[^a-z0-9\s-]/g, '')
             .replace(/\s+/g, '-')
             .replace(/-+/g, '-')
             .trim()
+
+          // Check if slug is taken by another venue
+          const { data: existing } = await supabase
+            .from('venues')
+            .select('id')
+            .eq('slug', slug)
+            .neq('id', venueId)
+            .maybeSingle()
+          if (existing) {
+            slug = `${slug}-${Math.floor(1000 + Math.random() * 9000)}`
+          }
 
           const { error: venueError } = await supabase
             .from('venues')
