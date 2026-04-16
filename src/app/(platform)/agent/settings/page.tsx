@@ -216,6 +216,10 @@ export default function AgentSettingsPage() {
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [emailsSynced7d, setEmailsSynced7d] = useState<number>(0)
 
+  // Gmail connection state (from API, not just sync state)
+  const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; email?: string } | null>(null)
+  const [gmailConnecting, setGmailConnecting] = useState(false)
+
   const supabase = createClient()
 
   // ---- Fetch all data ----
@@ -256,6 +260,98 @@ export default function AgentSettingsPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  // ---- Gmail status check ----
+  useEffect(() => {
+    async function checkGmailStatus() {
+      try {
+        const res = await fetch('/api/agent/gmail')
+        if (res.ok) {
+          const data = await res.json()
+          setGmailStatus({ connected: data.connected, email: data.email })
+        }
+      } catch {
+        // Silently fail
+      }
+    }
+    checkGmailStatus()
+  }, [])
+
+  // ---- Gmail OAuth callback handler ----
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('code')
+    if (!code) return
+
+    async function handleCallback() {
+      setGmailConnecting(true)
+      try {
+        const redirectUri = `${window.location.origin}/agent/settings`
+        const res = await fetch('/api/agent/gmail', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, redirectUri }),
+        })
+        const data = await res.json()
+        if (data.connected) {
+          setGmailStatus({ connected: true, email: data.email })
+          // Re-fetch sync state
+          fetchData()
+        }
+      } catch {
+        // Error handled silently
+      } finally {
+        setGmailConnecting(false)
+        // Clean URL
+        window.history.replaceState({}, '', '/agent/settings')
+      }
+    }
+
+    handleCallback()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ---- Gmail connect ----
+  async function connectGmail() {
+    setGmailConnecting(true)
+    try {
+      const redirectUri = `${window.location.origin}/agent/settings`
+      const res = await fetch(`/api/agent/gmail?action=auth-url&redirectUri=${encodeURIComponent(redirectUri)}`)
+      const data = await res.json()
+      if (data.url) {
+        window.location.href = data.url
+      } else {
+        setSaveMessage(data.error || 'Gmail integration is not configured.')
+        setGmailConnecting(false)
+      }
+    } catch {
+      setSaveMessage('Failed to initiate Gmail connection.')
+      setGmailConnecting(false)
+    }
+  }
+
+  // ---- Gmail disconnect ----
+  async function disconnectGmail() {
+    setGmailConnecting(true)
+    try {
+      const res = await fetch('/api/agent/gmail', { method: 'DELETE' })
+      const data = await res.json()
+      if (data.success) {
+        setGmailStatus({ connected: false })
+        setSyncState(null)
+        setSaveMessage('Gmail disconnected successfully.')
+        setTimeout(() => setSaveMessage(null), 3000)
+      } else {
+        setSaveMessage(data.error || 'Failed to disconnect Gmail.')
+        setTimeout(() => setSaveMessage(null), 3000)
+      }
+    } catch {
+      setSaveMessage('Failed to disconnect Gmail.')
+      setTimeout(() => setSaveMessage(null), 3000)
+    } finally {
+      setGmailConnecting(false)
+    }
+  }
 
   // ---- Toggle a rule ----
   function toggleRule(id: string) {
@@ -346,7 +442,7 @@ export default function AgentSettingsPage() {
     { key: 'follow-ups', label: 'Follow-Up Sequences', icon: <CalendarClock className="w-4 h-4" /> },
   ]
 
-  const gmailConnected = syncState !== null && syncState.status !== 'disconnected'
+  const gmailConnected = gmailStatus?.connected ?? (syncState !== null && syncState.status !== 'disconnected')
 
   if (loading) {
     return (
@@ -380,7 +476,7 @@ export default function AgentSettingsPage() {
 
       {/* Email Health Card */}
       {(() => {
-        const connected = syncState !== null && syncState.status !== 'disconnected'
+        const connected = gmailStatus?.connected ?? (syncState !== null && syncState.status !== 'disconnected')
         const hasError = !!syncState?.error_message
         const status: 'green' | 'amber' | 'red' = !connected
           ? 'red'
@@ -596,6 +692,15 @@ export default function AgentSettingsPage() {
               </div>
             </div>
 
+            {gmailStatus?.email && (
+              <div className="mt-3 text-sm text-sage-600">
+                <p className="flex items-center gap-2">
+                  <Mail className="w-3.5 h-3.5 text-sage-400" />
+                  Account: <span className="font-medium text-sage-800">{gmailStatus.email}</span>
+                </p>
+              </div>
+            )}
+
             <div className="flex items-center gap-3 mt-6 pt-4 border-t border-border">
               <button
                 onClick={triggerSync}
@@ -606,14 +711,32 @@ export default function AgentSettingsPage() {
                 {syncing ? 'Syncing...' : 'Sync Now'}
               </button>
 
-              {!gmailConnected && (
-                <a
-                  href="/api/auth/gmail"
-                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
+              {!gmailConnected ? (
+                <button
+                  onClick={connectGmail}
+                  disabled={gmailConnecting}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
                 >
-                  <Mail className="w-4 h-4" />
-                  Connect Gmail
-                </a>
+                  {gmailConnecting ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Mail className="w-4 h-4" />
+                  )}
+                  {gmailConnecting ? 'Connecting...' : 'Connect Gmail'}
+                </button>
+              ) : (
+                <button
+                  onClick={disconnectGmail}
+                  disabled={gmailConnecting}
+                  className="flex items-center gap-2 text-red-600 hover:text-red-700 border border-red-200 hover:border-red-300 disabled:opacity-50 font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
+                >
+                  {gmailConnecting ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <XCircle className="w-4 h-4" />
+                  )}
+                  {gmailConnecting ? 'Disconnecting...' : 'Disconnect Gmail'}
+                </button>
               )}
             </div>
           </div>

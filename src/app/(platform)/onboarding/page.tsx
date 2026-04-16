@@ -391,19 +391,20 @@ export default function OnboardingPage() {
         })))
       }
 
-      // Check Gmail connection
-      const { data: gmailConfig } = await supabase
-        .from('venue_config')
-        .select('gmail_tokens, coordinator_email')
-        .eq('venue_id', VENUE_ID!)
-        .maybeSingle()
-
-      if (cancelled) return
-      if (gmailConfig?.gmail_tokens) {
-        setGmailConnected(true)
-        setGmailEmail(gmailConfig.coordinator_email || 'Connected')
+      // Check Gmail connection via API
+      try {
+        const gmailRes = await fetch('/api/agent/gmail')
+        if (!cancelled && gmailRes.ok) {
+          const gmailData = await gmailRes.json()
+          if (gmailData.connected) {
+            setGmailConnected(true)
+            setGmailEmail(gmailData.email || 'Connected')
+          }
+        }
+      } catch {
+        // Silently fail — user can still connect later
       }
-      setGmailChecked(true)
+      if (!cancelled) setGmailChecked(true)
     }
 
     loadExisting()
@@ -585,7 +586,7 @@ export default function OnboardingPage() {
     setGmailLoading(true)
     try {
       const redirectUri = `${window.location.origin}/onboarding`
-      const res = await fetch(`/api/agent/gmail?redirectUri=${encodeURIComponent(redirectUri)}`)
+      const res = await fetch(`/api/agent/gmail?action=auth-url&redirectUri=${encodeURIComponent(redirectUri)}`)
       const data = await res.json()
       if (data.url) {
         window.location.href = data.url
@@ -595,6 +596,24 @@ export default function OnboardingPage() {
       }
     } catch {
       setError('Failed to initiate Gmail connection. You can try again later in Settings.')
+      setGmailLoading(false)
+    }
+  }
+
+  async function handleGmailDisconnect() {
+    setGmailLoading(true)
+    try {
+      const res = await fetch('/api/agent/gmail', { method: 'DELETE' })
+      const data = await res.json()
+      if (data.success) {
+        setGmailConnected(false)
+        setGmailEmail(null)
+      } else {
+        setError(data.error || 'Failed to disconnect Gmail.')
+      }
+    } catch {
+      setError('Failed to disconnect Gmail.')
+    } finally {
       setGmailLoading(false)
     }
   }
@@ -616,11 +635,13 @@ export default function OnboardingPage() {
         const data = await res.json()
         if (data.connected) {
           setGmailConnected(true)
-          setGmailEmail('Connected')
+          setGmailEmail(data.email || 'Connected')
           // Clean URL
           window.history.replaceState({}, '', '/onboarding')
           // Jump to Gmail step
           setCurrentStep(1)
+        } else {
+          setError(data.error || 'Failed to complete Gmail connection.')
         }
       } catch {
         setError('Failed to complete Gmail connection.')
@@ -873,6 +894,18 @@ export default function OnboardingPage() {
                           Connected as <span className="font-medium text-sage-700">{gmailEmail}</span>
                         </p>
                       </div>
+                      <button
+                        onClick={handleGmailDisconnect}
+                        disabled={gmailLoading}
+                        className="inline-flex items-center gap-2 text-sm font-medium text-red-600 hover:text-red-700 border border-red-200 hover:border-red-300 rounded-lg px-4 py-2 transition-colors"
+                      >
+                        {gmailLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Mail className="w-4 h-4" />
+                        )}
+                        Disconnect
+                      </button>
                     </>
                   ) : gmailChecked ? (
                     <>
