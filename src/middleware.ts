@@ -3,14 +3,14 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
 // Routes that never require authentication
-const PUBLIC_ROUTES = ['/welcome', '/login', '/signup', '/couple/login', '/demo']
+const PUBLIC_ROUTES = ['/welcome', '/login', '/signup', '/couple/login', '/demo', '/join']
 const PUBLIC_PREFIXES = ['/api/', '/_next/', '/demo/']
 
 // The dashboard at / requires auth or demo. Unauthed users get sent to /welcome.
 const DASHBOARD_ROUTE = '/'
 
 // Platform routes require coordinator/manager/admin role
-const PLATFORM_PREFIXES = ['/agent', '/intel', '/portal', '/settings', '/onboarding', '/super-admin']
+const PLATFORM_PREFIXES = ['/agent', '/intel', '/portal', '/settings', '/onboarding', '/setup', '/super-admin']
 
 // Couple routes (path-based in dev)
 const COUPLE_PREFIX = '/couple'

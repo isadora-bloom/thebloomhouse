@@ -19,6 +19,7 @@ import { generateClientDraft } from '@/lib/services/client-brain'
 import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/gmail'
 import { detectContractSigning } from '@/lib/services/extraction'
 import { createNotification } from '@/lib/services/admin-notifications'
+import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -739,6 +740,24 @@ export async function approveDraft(draftId: string, userId: string): Promise<voi
     original_body: draft.draft_body ?? '',
     email_category: draft.context_type ?? 'inquiry',
   })
+
+  // Track coordinator action for metrics
+  if (draft.venue_id) {
+    trackCoordinatorAction(draft.venue_id as string, userId, 'draft_approved').catch(console.error)
+
+    // Track response time (time from draft creation to approval)
+    const { data: draftRow } = await supabase
+      .from('drafts')
+      .select('created_at, approved_at')
+      .eq('id', draftId)
+      .single()
+    if (draftRow?.created_at && draftRow?.approved_at) {
+      const created = new Date(draftRow.created_at as string).getTime()
+      const approved = new Date(draftRow.approved_at as string).getTime()
+      const minutes = (approved - created) / (1000 * 60)
+      trackResponseTime(draft.venue_id as string, userId, minutes).catch(console.error)
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -788,6 +807,11 @@ export async function rejectDraft(
     rejection_reason: reason ?? null,
     email_category: draft.context_type ?? 'inquiry',
   })
+
+  // Track coordinator action for metrics
+  if (draft.venue_id) {
+    trackCoordinatorAction(draft.venue_id as string, userId, 'draft_rejected').catch(console.error)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -839,6 +863,24 @@ export async function editAndApproveDraft(
     edited_body: editedBody,
     email_category: draft.context_type ?? 'inquiry',
   })
+
+  // Track coordinator action for metrics
+  if (draft.venue_id) {
+    trackCoordinatorAction(draft.venue_id as string, userId, 'draft_approved').catch(console.error)
+
+    // Track response time
+    const { data: draftRow } = await supabase
+      .from('drafts')
+      .select('created_at, approved_at')
+      .eq('id', draftId)
+      .single()
+    if (draftRow?.created_at && draftRow?.approved_at) {
+      const created = new Date(draftRow.created_at as string).getTime()
+      const approved = new Date(draftRow.approved_at as string).getTime()
+      const minutes = (approved - created) / (1000 * 60)
+      trackResponseTime(draft.venue_id as string, userId, minutes).catch(console.error)
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

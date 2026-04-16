@@ -172,6 +172,7 @@ const SETTINGS_SECTION: NavSection = {
   title: 'Settings',
   items: [
     { label: 'Venue Settings', href: '/settings', icon: Settings, daily: true },
+    { label: 'Team', href: '/settings/team', icon: Users, daily: true },
     { label: 'Onboarding', href: '/onboarding', icon: Building },
     { label: 'Super Admin', href: '/super-admin', icon: ShieldCheck },
   ],

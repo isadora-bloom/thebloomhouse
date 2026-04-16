@@ -24,11 +24,11 @@ export async function POST(request: NextRequest) {
     }
 
     if (role === 'coordinator' || role === 'venue_manager') {
-      // 2. Create a fresh organisation
+      // 2. Create a fresh organisation (no venue yet — that happens in /setup)
       const { data: org, error: orgError } = await supabase
         .from('organisations')
         .insert({
-          name: fullName ? `${fullName}'s Venues` : 'My Venues',
+          name: fullName ? `${fullName}'s Company` : 'My Company',
           owner_id: authData.user.id,
           is_demo: false,
         })
@@ -40,44 +40,13 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Failed to create organisation.' }, { status: 500 })
       }
 
-      // 3. Create a fresh venue with a temporary slug
-      const slug = `venue-${Date.now()}`
-      const { data: venue, error: venueError } = await supabase
-        .from('venues')
-        .insert({
-          name: 'My Venue',
-          slug,
-          org_id: org.id,
-          status: 'trial',
-          is_demo: false,
-        })
-        .select('id')
-        .single()
-
-      if (venueError) {
-        console.error('Failed to create venue:', venueError)
-        return NextResponse.json({ error: 'Failed to create venue.' }, { status: 500 })
-      }
-
-      // 4. Create venue_config with onboarding_completed = false
-      const { error: configError } = await supabase.from('venue_config').insert({
-        venue_id: venue.id,
-        business_name: 'My Venue',
-        timezone: 'America/New_York',
-        onboarding_completed: false,
-      })
-
-      if (configError) {
-        console.error('Failed to create venue_config:', configError)
-      }
-
-      // 5. Create user_profile linked to the new venue
+      // 3. Create user_profile with org_admin role, NO venue_id yet
       const nameParts = (fullName || '').split(' ')
       const { error: profileError } = await supabase.from('user_profiles').insert({
         id: authData.user.id,
-        venue_id: venue.id,
+        venue_id: null,
         org_id: org.id,
-        role: 'coordinator',
+        role: 'org_admin',
         first_name: nameParts[0] || null,
         last_name: nameParts.slice(1).join(' ') || null,
       })
@@ -88,8 +57,8 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        venueId: venue.id,
-        needsOnboarding: true,
+        orgId: org.id,
+        needsSetup: true,
       })
     }
 

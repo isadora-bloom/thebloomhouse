@@ -44,7 +44,7 @@ export default function SignupPage() {
     setLoading(true)
 
     try {
-      // 1. Call our API route which creates user + fresh venue + profile
+      // 1. Call our API route which creates user + org + profile (no venue)
       const res = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -81,9 +81,9 @@ export default function SignupPage() {
       document.cookie = 'bloom_demo=; path=/; max-age=0'
       document.cookie = 'bloom_scope=; path=/; max-age=0'
 
-      // 4. Redirect coordinators to onboarding, couples to home
-      if (data.needsOnboarding) {
-        router.push('/onboarding')
+      // 4. Redirect coordinators to /setup (company setup wizard), couples to home
+      if (data.needsSetup) {
+        router.push('/setup')
       } else {
         router.push('/')
       }

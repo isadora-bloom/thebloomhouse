@@ -10,7 +10,7 @@ import { ScopeIndicator } from './scope-indicator'
  * Client wrapper for the platform layout.
  * Hides the sidebar + shell chrome on standalone routes like /onboarding.
  */
-const STANDALONE_ROUTES = ['/onboarding']
+const STANDALONE_ROUTES = ['/onboarding', '/setup']
 
 function useIsDemo(): boolean {
   const [isDemo, setIsDemo] = useState(false)

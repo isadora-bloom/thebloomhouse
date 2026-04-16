@@ -43,10 +43,31 @@ export default function DashboardPage() {
   const scope = useScope()
   const router = useRouter()
 
-  // ---- Redirect to onboarding if venue is unconfigured ----
+  // ---- Redirect to setup/onboarding based on user state ----
   useEffect(() => {
-    if (scope.loading || !scope.venueId) return
+    if (scope.loading) return
 
+    // If user has no venue at all → they need to complete company setup
+    if (!scope.venueId) {
+      // Verify via DB that user truly has no venue (cookie might be stale)
+      const supabase = createClient()
+      supabase.auth.getUser().then(({ data: { user } }) => {
+        if (!user) return
+        supabase
+          .from('user_profiles')
+          .select('venue_id')
+          .eq('id', user.id)
+          .maybeSingle()
+          .then(({ data: profile }) => {
+            if (!profile?.venue_id) {
+              router.push('/setup')
+            }
+          })
+      })
+      return
+    }
+
+    // If user has venue but onboarding is incomplete → go to onboarding
     const supabase = createClient()
     supabase
       .from('venue_config')
