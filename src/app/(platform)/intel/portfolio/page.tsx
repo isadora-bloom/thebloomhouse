@@ -13,7 +13,7 @@ import {
   ChevronDown,
   X,
 } from 'lucide-react'
-import { useScope, scopeVenueFilter } from '@/lib/hooks/use-scope'
+import { useScope } from '@/lib/hooks/use-scope'
 import { computeHealthScore } from '@/lib/intel/health-score'
 
 // ---------------------------------------------------------------------------
@@ -311,8 +311,7 @@ function HealthBreakdownPanel({
 export default function PortfolioOverviewPage() {
   const router = useRouter()
   const scope = useScope()
-  const scopedVenueIds = scopeVenueFilter(scope)
-  const scopeKey = JSON.stringify(scopedVenueIds)
+  // Portfolio always shows all org venues (scopeVenueFilter not used here)
 
   const [venues, setVenues] = useState<VenueRow[]>([])
   const [weddings, setWeddings] = useState<WeddingRow[]>([])
@@ -345,13 +344,22 @@ export default function PortfolioOverviewPage() {
         .gte('timestamp', ninetyDaysAgo.toISOString())
         .order('timestamp', { ascending: true })
 
-      const ids: string[] | null = JSON.parse(scopeKey)
-      if (ids) {
-        venueQ = venueQ.in('id', ids)
-        weddingQ = weddingQ.in('venue_id', ids)
-        healthQ = healthQ.in('venue_id', ids)
-        intQ = intQ.in('venue_id', ids)
+      // Portfolio ALWAYS shows all org venues — that's its purpose.
+      // At group scope, filter to group venues. At venue/company scope, show all.
+      if (scope.level === 'group' && scope.groupId) {
+        const { data: members } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        const groupIds = (members ?? []).map((m) => m.venue_id as string)
+        if (groupIds.length > 0) {
+          venueQ = venueQ.in('id', groupIds)
+          weddingQ = weddingQ.in('venue_id', groupIds)
+          healthQ = healthQ.in('venue_id', groupIds)
+          intQ = intQ.in('venue_id', groupIds)
+        }
       }
+      // At venue scope or company scope: no filter — show all venues in the org
 
       const [venueRes, weddingRes, healthRes, intRes] = await Promise.all([
         venueQ,
@@ -375,7 +383,7 @@ export default function PortfolioOverviewPage() {
     } finally {
       setLoading(false)
     }
-  }, [scope.loading, scopeKey])
+  }, [scope.loading, scope.level, scope.groupId])
 
   useEffect(() => {
     fetchData()
