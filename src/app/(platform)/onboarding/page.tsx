@@ -323,7 +323,7 @@ export default function OnboardingPage() {
       // Load venue basics
       const { data: venue } = await supabase
         .from('venues')
-        .select('name, address, city, state, zip, timezone')
+        .select('name, address_line1, city, state, zip, timezone')
         .eq('id', VENUE_ID!)
         .maybeSingle()
 
@@ -341,7 +341,7 @@ export default function OnboardingPage() {
         setBasics((prev) => ({
           ...prev,
           business_name: config?.business_name || venue?.name || prev.business_name,
-          address: venue?.address || prev.address,
+          address: (venue as Record<string, unknown>)?.address_line1 as string || prev.address,
           city: venue?.city || prev.city,
           state: venue?.state || prev.state,
           zip: venue?.zip || prev.zip,
@@ -431,7 +431,7 @@ export default function OnboardingPage() {
               id: venueId,
               name: basics.business_name,
               slug,
-              address: basics.address || null,
+              address_line1: basics.address || null,
               city: basics.city || null,
               state: basics.state || null,
               zip: basics.zip || null,
