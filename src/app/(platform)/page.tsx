@@ -9,6 +9,7 @@ import {
   BarChart3,
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
+import { MarketContextCard } from '@/components/intel/market-context-card'
 
 interface Stats {
   activeInquiries: number
@@ -294,6 +295,9 @@ export default function DashboardPage() {
           </div>
         ))}
       </div>
+
+      {/* Market Intelligence — immediate value from external data */}
+      <MarketContextCard />
 
       {/* Per-venue breakdown (only at group/company scope) */}
       {scope.level !== 'venue' && venueBreakdown.length > 0 && (

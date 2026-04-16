@@ -12,6 +12,7 @@ import { sendAllDigests } from '@/lib/services/daily-digest'
 import { processAllVenueFollowUps } from '@/lib/services/follow-up-sequences'
 import { applyDailyDecay } from '@/lib/services/heat-mapping'
 import { processAllNewEmails, flushPendingAutoSends } from '@/lib/services/email-pipeline'
+import { runAllVenueIntelligence } from '@/lib/services/intelligence-engine'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -24,6 +25,7 @@ const VALID_JOBS = [
   'weather_forecast',
   'economic_indicators',
   'anomaly_detection',
+  'intelligence_analysis',
   'weekly_briefing',
   'monthly_briefing',
   'daily_digest',
@@ -56,6 +58,9 @@ async function runJob(job: JobName): Promise<unknown> {
 
     case 'anomaly_detection':
       return runAllVenueAnomalies()
+
+    case 'intelligence_analysis':
+      return runAllVenueIntelligence()
 
     case 'weekly_briefing':
       return generateBriefingsForAllVenues('weekly')

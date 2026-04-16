@@ -31,6 +31,15 @@ import {
   CalendarDays,
   ShieldCheck,
   StickyNote,
+  Bot,
+  XCircle,
+  MapPin,
+  FileSignature,
+  PenLine,
+  Inbox,
+  ChevronDown,
+  ChevronUp,
+  History,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -285,6 +294,43 @@ function interactionIcon(type: string, direction: string) {
     : <ArrowUpRight className="w-4 h-4" />
 }
 
+function timelineIconConfig(icon: string): {
+  component: React.ReactNode
+  bg: string
+  text: string
+} {
+  switch (icon) {
+    case 'inbox':
+      return { component: <Inbox className="w-3.5 h-3.5" />, bg: 'bg-blue-100', text: 'text-blue-600' }
+    case 'send':
+      return { component: <Send className="w-3.5 h-3.5" />, bg: 'bg-emerald-100', text: 'text-emerald-600' }
+    case 'robot':
+      return { component: <Bot className="w-3.5 h-3.5" />, bg: 'bg-purple-100', text: 'text-purple-600' }
+    case 'check':
+      return { component: <CheckCircle className="w-3.5 h-3.5" />, bg: 'bg-emerald-100', text: 'text-emerald-600' }
+    case 'reject':
+      return { component: <XCircle className="w-3.5 h-3.5" />, bg: 'bg-red-100', text: 'text-red-600' }
+    case 'calendar':
+      return { component: <Calendar className="w-3.5 h-3.5" />, bg: 'bg-indigo-100', text: 'text-indigo-600' }
+    case 'document':
+      return { component: <FileText className="w-3.5 h-3.5" />, bg: 'bg-amber-100', text: 'text-amber-600' }
+    case 'flame':
+      return { component: <Flame className="w-3.5 h-3.5" />, bg: 'bg-red-100', text: 'text-red-600' }
+    case 'note':
+      return { component: <Lightbulb className="w-3.5 h-3.5" />, bg: 'bg-amber-100', text: 'text-amber-600' }
+    case 'status':
+      return { component: <ArrowUpRight className="w-3.5 h-3.5" />, bg: 'bg-teal-100', text: 'text-teal-600' }
+    case 'tour':
+      return { component: <MapPin className="w-3.5 h-3.5" />, bg: 'bg-indigo-100', text: 'text-indigo-600' }
+    case 'contract':
+      return { component: <FileSignature className="w-3.5 h-3.5" />, bg: 'bg-emerald-100', text: 'text-emerald-600' }
+    case 'edit':
+      return { component: <PenLine className="w-3.5 h-3.5" />, bg: 'bg-sky-100', text: 'text-sky-600' }
+    default:
+      return { component: <Clock className="w-3.5 h-3.5" />, bg: 'bg-sage-100', text: 'text-sage-600' }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Skeleton
 // ---------------------------------------------------------------------------
@@ -381,7 +427,7 @@ export default function ClientProfilePage() {
     const supabase = createClient()
 
     try {
-      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes, codeRes, notesRes] = await Promise.all([
+      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes, codeRes, notesRes, feedbackRes, toursRes, activityRes] = await Promise.all([
         supabase
           .from('weddings')
           .select('*')
@@ -413,7 +459,7 @@ export default function ClientProfilePage() {
           .order('calculated_at', { ascending: true }),
         supabase
           .from('drafts')
-          .select('id, status, subject, body_preview, created_at')
+          .select('id, status, subject, body_preview, confidence_score, brain_used, auto_sent, approved_by, approved_at, created_at')
           .eq('wedding_id', weddingId)
           .order('created_at', { ascending: false })
           .limit(20),
@@ -430,18 +476,56 @@ export default function ClientProfilePage() {
           .eq('venue_id', VENUE_ID)
           .order('created_at', { ascending: false })
           .limit(50),
+        supabase
+          .from('draft_feedback')
+          .select('id, draft_id, feedback_type, rejection_reason, created_at')
+          .eq('venue_id', VENUE_ID)
+          .in('draft_id', [weddingId]) // Placeholder — we'll filter in JS after fetching drafts
+          .order('created_at', { ascending: false })
+          .limit(50),
+        supabase
+          .from('tours')
+          .select('id, scheduled_date, status, outcome, notes, created_at')
+          .eq('wedding_id', weddingId)
+          .eq('venue_id', VENUE_ID)
+          .order('scheduled_date', { ascending: false })
+          .limit(20),
+        supabase
+          .from('activity_log')
+          .select('id, activity_type, entity_type, details, created_at')
+          .eq('venue_id', VENUE_ID)
+          .eq('wedding_id', weddingId)
+          .order('created_at', { ascending: false })
+          .limit(50),
       ])
 
       if (weddingRes.error) throw weddingRes.error
 
+      const fetchedDrafts = (draftsRes.data ?? []) as DraftRow[]
       setWedding(weddingRes.data as WeddingDetail)
       setPeople((peopleRes.data ?? []) as PersonRow[])
       setInteractions((intRes.data ?? []) as InteractionRow[])
       setEvents((eventsRes.data ?? []) as EngagementEventRow[])
       setScoreHistory((scoreRes.data ?? []) as LeadScoreRow[])
-      setDrafts((draftsRes.data ?? []) as DraftRow[])
+      setDrafts(fetchedDrafts)
       setPlanningNotes((notesRes.data ?? []) as PlanningNoteRow[])
       setClientCode((codeRes.data as { code?: string } | null)?.code ?? null)
+      setTours((toursRes.data ?? []) as TourRow[])
+      setActivityLog((activityRes.data ?? []) as ActivityLogRow[])
+
+      // Fetch draft feedback using actual draft IDs
+      if (fetchedDrafts.length > 0) {
+        const draftIds = fetchedDrafts.map((d) => d.id)
+        const { data: feedbackData } = await supabase
+          .from('draft_feedback')
+          .select('id, draft_id, feedback_type, rejection_reason, created_at')
+          .in('draft_id', draftIds)
+          .order('created_at', { ascending: false })
+          .limit(50)
+        setDraftFeedback((feedbackData ?? []) as DraftFeedbackRow[])
+      } else {
+        setDraftFeedback([])
+      }
       setError(null)
     } catch (err) {
       console.error('Failed to fetch client profile:', err)
@@ -499,6 +583,215 @@ export default function ClientProfilePage() {
     const outbound = interactions.filter((i) => i.direction === 'outbound').length
     return { total, inbound, outbound }
   }, [interactions])
+
+  // Build unified timeline
+  const timelineEvents = useMemo((): TimelineEvent[] => {
+    if (!wedding) return []
+    const events: TimelineEvent[] = []
+
+    // Interactions (emails, calls, etc.)
+    for (const int of interactions) {
+      if (int.direction === 'inbound') {
+        events.push({
+          id: `int-in-${int.id}`,
+          timestamp: int.timestamp,
+          icon: 'inbox',
+          title: `${int.type === 'email' ? 'Email' : int.type} received`,
+          description: int.subject || int.body_preview || undefined,
+          actor: coupleName,
+        })
+      } else {
+        events.push({
+          id: `int-out-${int.id}`,
+          timestamp: int.timestamp,
+          icon: 'send',
+          title: `${int.type === 'email' ? 'Email' : int.type} sent`,
+          description: int.subject || int.body_preview || undefined,
+          actor: 'Venue',
+        })
+      }
+    }
+
+    // Draft generation events
+    for (const draft of drafts) {
+      const confidence = draft.confidence_score !== null
+        ? ` (confidence: ${Math.round((draft.confidence_score ?? 0) * 100)}%)`
+        : ''
+      events.push({
+        id: `draft-gen-${draft.id}`,
+        timestamp: draft.created_at,
+        icon: 'robot',
+        title: `AI draft generated${confidence}`,
+        description: draft.subject || undefined,
+        actor: draft.brain_used ? `${draft.brain_used} brain` : 'AI',
+      })
+
+      // Draft approval/rejection/send events
+      if (draft.approved_at && draft.status === 'approved') {
+        events.push({
+          id: `draft-approve-${draft.id}`,
+          timestamp: draft.approved_at,
+          icon: 'check',
+          title: 'Draft approved',
+          description: draft.subject || undefined,
+          actor: draft.approved_by || 'Coordinator',
+        })
+      }
+      if (draft.status === 'sent') {
+        events.push({
+          id: `draft-sent-${draft.id}`,
+          timestamp: draft.approved_at || draft.created_at,
+          icon: 'send',
+          title: draft.auto_sent ? 'Auto-sent by AI' : 'Response sent',
+          description: draft.subject || undefined,
+          actor: draft.auto_sent ? 'AI' : 'Coordinator',
+        })
+      }
+      if (draft.status === 'rejected') {
+        events.push({
+          id: `draft-reject-${draft.id}`,
+          timestamp: draft.approved_at || draft.created_at,
+          icon: 'reject',
+          title: 'Draft rejected',
+          description: draft.subject || undefined,
+          actor: draft.approved_by || 'Coordinator',
+        })
+      }
+    }
+
+    // Draft feedback
+    for (const fb of draftFeedback) {
+      if (fb.feedback_type === 'edited') {
+        events.push({
+          id: `fb-edit-${fb.id}`,
+          timestamp: fb.created_at,
+          icon: 'edit',
+          title: 'Draft edited before sending',
+          actor: 'Coordinator',
+        })
+      }
+    }
+
+    // Tours
+    for (const tour of tours) {
+      if (tour.scheduled_date) {
+        events.push({
+          id: `tour-sched-${tour.id}`,
+          timestamp: tour.created_at,
+          icon: 'calendar',
+          title: `Tour scheduled for ${fmtDate(tour.scheduled_date)}`,
+          actor: 'Coordinator',
+        })
+      }
+      if (tour.status === 'completed') {
+        events.push({
+          id: `tour-comp-${tour.id}`,
+          timestamp: tour.scheduled_date || tour.created_at,
+          icon: 'tour',
+          title: `Tour completed${tour.outcome ? ` — outcome: ${tour.outcome}` : ''}`,
+          description: tour.notes || undefined,
+          actor: 'Coordinator',
+        })
+      }
+    }
+
+    // Activity log events (pipeline changes, status updates, etc.)
+    for (const activity of activityLog) {
+      const details = activity.details || {}
+      if (activity.activity_type === 'status_change') {
+        events.push({
+          id: `act-status-${activity.id}`,
+          timestamp: activity.created_at,
+          icon: 'status',
+          title: `Moved to ${(details.new_status as string) || 'new stage'}`,
+          description: details.old_status ? `From ${details.old_status as string}` : undefined,
+          actor: (details.changed_by as string) || 'System',
+        })
+      } else if (activity.activity_type === 'proposal_sent') {
+        events.push({
+          id: `act-proposal-${activity.id}`,
+          timestamp: activity.created_at,
+          icon: 'document',
+          title: 'Proposal sent',
+          actor: (details.sent_by as string) || 'Coordinator',
+        })
+      } else if (activity.activity_type === 'contract_signed') {
+        events.push({
+          id: `act-contract-${activity.id}`,
+          timestamp: activity.created_at,
+          icon: 'contract',
+          title: 'Contract signed',
+          description: details.method ? `Detected via ${details.method as string}` : undefined,
+          actor: coupleName,
+        })
+      }
+    }
+
+    // Wedding milestone dates
+    if (wedding.inquiry_date) {
+      events.push({
+        id: 'milestone-inquiry',
+        timestamp: wedding.inquiry_date,
+        icon: 'inbox',
+        title: `Inquiry received${wedding.source ? ` via ${wedding.source.replace(/_/g, ' ')}` : ''}`,
+        actor: coupleName,
+      })
+    }
+    if (wedding.first_response_at) {
+      const responseTimeMinutes = wedding.inquiry_date
+        ? Math.round((new Date(wedding.first_response_at).getTime() - new Date(wedding.inquiry_date).getTime()) / 60000)
+        : null
+      events.push({
+        id: 'milestone-first-response',
+        timestamp: wedding.first_response_at,
+        icon: 'send',
+        title: `First response sent${responseTimeMinutes !== null ? ` (${responseTimeMinutes} min response time)` : ''}`,
+        actor: 'Venue',
+      })
+    }
+    if (wedding.booked_at) {
+      events.push({
+        id: 'milestone-booked',
+        timestamp: wedding.booked_at,
+        icon: 'check',
+        title: 'Booked',
+        description: wedding.booking_value ? `Booking value: ${fmt$(wedding.booking_value)}` : undefined,
+        actor: coupleName,
+      })
+    }
+
+    // Planning notes (AI-extracted insights)
+    for (const note of planningNotes) {
+      events.push({
+        id: `note-${note.id}`,
+        timestamp: note.created_at,
+        icon: 'note',
+        title: `AI extracted: ${note.category.replace(/_/g, ' ')}`,
+        description: note.content.length > 100 ? note.content.slice(0, 100) + '...' : note.content,
+        actor: 'AI',
+      })
+    }
+
+    // Deduplicate by preferring milestone events when they share similar timestamps
+    // Sort chronologically (oldest first)
+    events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+
+    // Simple dedup: remove events that share the same id prefix and are within 1 minute
+    const deduped: TimelineEvent[] = []
+    for (const event of events) {
+      const last = deduped[deduped.length - 1]
+      if (
+        last &&
+        last.title === event.title &&
+        Math.abs(new Date(last.timestamp).getTime() - new Date(event.timestamp).getTime()) < 60000
+      ) {
+        continue // Skip duplicate
+      }
+      deduped.push(event)
+    }
+
+    return deduped
+  }, [wedding, interactions, drafts, draftFeedback, tours, activityLog, planningNotes, coupleName])
 
   // Copy tracking ID
   function copyTrackingId() {
@@ -657,6 +950,108 @@ export default function ClientProfilePage() {
                 <p className="text-sm text-sage-400">No contact info available</p>
               )}
             </div>
+          </div>
+
+          {/* Unified Lead Journey Timeline */}
+          <div className="bg-surface border border-border rounded-xl shadow-sm">
+            <div className="px-6 py-4 border-b border-border flex items-center justify-between">
+              <h2 className="font-heading text-base font-semibold text-sage-900 flex items-center gap-2">
+                <History className="w-4 h-4 text-teal-500" />
+                Lead Journey
+              </h2>
+              <button
+                onClick={() => setShowTimeline(!showTimeline)}
+                className="flex items-center gap-1.5 text-xs font-medium text-sage-500 hover:text-sage-700 transition-colors"
+              >
+                {showTimeline ? (
+                  <>Hide <ChevronUp className="w-3.5 h-3.5" /></>
+                ) : (
+                  <>{timelineEvents.length} events <ChevronDown className="w-3.5 h-3.5" /></>
+                )}
+              </button>
+            </div>
+
+            {showTimeline && (
+              timelineEvents.length === 0 ? (
+                <div className="p-8 text-center">
+                  <History className="w-8 h-8 text-sage-300 mx-auto mb-2" />
+                  <p className="text-sm text-sage-500">No timeline events recorded yet</p>
+                </div>
+              ) : (
+                <div className="px-6 py-4 max-h-[600px] overflow-y-auto">
+                  <div className="relative">
+                    {/* Vertical connecting line */}
+                    <div className="absolute left-[13px] top-2 bottom-2 w-[2px] bg-sage-100" />
+
+                    <div className="space-y-4">
+                      {timelineEvents.map((event) => {
+                        const iconConfig = timelineIconConfig(event.icon)
+                        return (
+                          <div key={event.id} className="flex gap-3 relative">
+                            {/* Icon */}
+                            <div className={cn(
+                              'w-7 h-7 rounded-full flex items-center justify-center shrink-0 z-10',
+                              iconConfig.bg,
+                              iconConfig.text
+                            )}>
+                              {iconConfig.component}
+                            </div>
+
+                            {/* Content */}
+                            <div className="flex-1 min-w-0 pb-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium text-sage-900 leading-snug">
+                                    {event.title}
+                                  </p>
+                                  {event.description && (
+                                    <p className="text-xs text-sage-500 mt-0.5 line-clamp-2">
+                                      {event.description}
+                                    </p>
+                                  )}
+                                  {event.actor && (
+                                    <p className="text-[10px] text-sage-400 mt-0.5">
+                                      {event.actor}
+                                    </p>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-sage-400 whitespace-nowrap shrink-0 mt-0.5">
+                                  {fmtDatetime(event.timestamp)}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )
+            )}
+
+            {/* Collapsed summary when timeline is hidden */}
+            {!showTimeline && timelineEvents.length > 0 && (
+              <div className="px-6 py-3 flex items-center gap-4 text-xs text-sage-500">
+                <span className="flex items-center gap-1">
+                  <Inbox className="w-3 h-3 text-blue-500" />
+                  {timelineEvents.filter((e) => e.icon === 'inbox').length} received
+                </span>
+                <span className="flex items-center gap-1">
+                  <Send className="w-3 h-3 text-emerald-500" />
+                  {timelineEvents.filter((e) => e.icon === 'send').length} sent
+                </span>
+                <span className="flex items-center gap-1">
+                  <Bot className="w-3 h-3 text-purple-500" />
+                  {timelineEvents.filter((e) => e.icon === 'robot').length} AI drafts
+                </span>
+                {timelineEvents.some((e) => e.icon === 'tour') && (
+                  <span className="flex items-center gap-1">
+                    <MapPin className="w-3 h-3 text-indigo-500" />
+                    {timelineEvents.filter((e) => e.icon === 'tour' || e.icon === 'calendar').length} tour events
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Interaction Timeline */}
