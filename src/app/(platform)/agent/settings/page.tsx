@@ -19,6 +19,12 @@ import {
   CalendarClock,
   Activity,
   Inbox,
+  Trash2,
+  Star,
+  Pencil,
+  Check,
+  Plus,
+  User,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -219,6 +225,13 @@ export default function AgentSettingsPage() {
   // Gmail connection state (from API, not just sync state)
   const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; email?: string } | null>(null)
   const [gmailConnecting, setGmailConnecting] = useState(false)
+  const [gmailConnections, setGmailConnections] = useState<Array<{
+    id: string; emailAddress: string; isPrimary: boolean; label: string | null;
+    syncEnabled: boolean; lastSyncAt: string | null; status: string;
+    errorMessage: string | null; userId: string | null; userName: string | null;
+  }>>([])
+  const [editingLabel, setEditingLabel] = useState<string | null>(null)
+  const [labelDraft, setLabelDraft] = useState('')
 
   const supabase = createClient()
 
@@ -262,20 +275,24 @@ export default function AgentSettingsPage() {
   }, [fetchData])
 
   // ---- Gmail status check ----
-  useEffect(() => {
-    async function checkGmailStatus() {
-      try {
-        const res = await fetch('/api/agent/gmail')
-        if (res.ok) {
-          const data = await res.json()
-          setGmailStatus({ connected: data.connected, email: data.email })
+  const fetchGmailStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/agent/gmail')
+      if (res.ok) {
+        const data = await res.json()
+        setGmailStatus({ connected: data.connected, email: data.email })
+        if (data.connections) {
+          setGmailConnections(data.connections)
         }
-      } catch {
-        // Silently fail
       }
+    } catch {
+      // Silently fail
     }
-    checkGmailStatus()
   }, [])
+
+  useEffect(() => {
+    fetchGmailStatus()
+  }, [fetchGmailStatus])
 
   // ---- Gmail OAuth callback handler ----
   useEffect(() => {
@@ -295,8 +312,9 @@ export default function AgentSettingsPage() {
         const data = await res.json()
         if (data.connected) {
           setGmailStatus({ connected: true, email: data.email })
-          // Re-fetch sync state
+          // Re-fetch sync state + connections
           fetchData()
+          fetchGmailStatus()
         }
       } catch {
         // Error handled silently
@@ -330,17 +348,25 @@ export default function AgentSettingsPage() {
     }
   }
 
-  // ---- Gmail disconnect ----
-  async function disconnectGmail() {
+  // ---- Gmail disconnect (all or specific connection) ----
+  async function disconnectGmail(connectionId?: string) {
     setGmailConnecting(true)
     try {
-      const res = await fetch('/api/agent/gmail', { method: 'DELETE' })
+      const url = connectionId
+        ? `/api/agent/gmail?connectionId=${connectionId}`
+        : '/api/agent/gmail'
+      const res = await fetch(url, { method: 'DELETE' })
       const data = await res.json()
       if (data.success) {
-        setGmailStatus({ connected: false })
-        setSyncState(null)
+        if (!connectionId) {
+          setGmailStatus({ connected: false })
+          setGmailConnections([])
+          setSyncState(null)
+        }
         setSaveMessage('Gmail disconnected successfully.')
         setTimeout(() => setSaveMessage(null), 3000)
+        fetchGmailStatus()
+        fetchData()
       } else {
         setSaveMessage(data.error || 'Failed to disconnect Gmail.')
         setTimeout(() => setSaveMessage(null), 3000)
@@ -350,6 +376,58 @@ export default function AgentSettingsPage() {
       setTimeout(() => setSaveMessage(null), 3000)
     } finally {
       setGmailConnecting(false)
+    }
+  }
+
+  // ---- Set connection as primary ----
+  async function setPrimary(connectionId: string) {
+    try {
+      const res = await fetch('/api/agent/gmail', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId, isPrimary: true }),
+      })
+      if (res.ok) {
+        fetchGmailStatus()
+        setSaveMessage('Primary inbox updated.')
+        setTimeout(() => setSaveMessage(null), 3000)
+      }
+    } catch {
+      setSaveMessage('Failed to update primary inbox.')
+      setTimeout(() => setSaveMessage(null), 3000)
+    }
+  }
+
+  // ---- Update connection label ----
+  async function saveLabel(connectionId: string) {
+    try {
+      const res = await fetch('/api/agent/gmail', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId, label: labelDraft }),
+      })
+      if (res.ok) {
+        setEditingLabel(null)
+        fetchGmailStatus()
+      }
+    } catch {
+      // Silently fail
+    }
+  }
+
+  // ---- Toggle sync ----
+  async function toggleSync(connectionId: string, currentlyEnabled: boolean) {
+    try {
+      const res = await fetch('/api/agent/gmail', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId, syncEnabled: !currentlyEnabled }),
+      })
+      if (res.ok) {
+        fetchGmailStatus()
+      }
+    } catch {
+      // Silently fail
     }
   }
 
@@ -636,109 +714,207 @@ export default function AgentSettingsPage() {
       {/* ================================================================== */}
       {activeTab === 'gmail' && (
         <div className="space-y-6">
-          <div>
-            <h2 className="font-heading text-xl font-semibold text-sage-900">Gmail Connection</h2>
-            <p className="text-sm text-sage-500 mt-1">
-              Manage your Gmail integration for email sync and sending.
-            </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-heading text-xl font-semibold text-sage-900">Gmail Connections</h2>
+              <p className="text-sm text-sage-500 mt-1">
+                Connect one or more Gmail accounts. Each account syncs independently and can be labeled.
+              </p>
+            </div>
+            <button
+              onClick={connectGmail}
+              disabled={gmailConnecting}
+              className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
+            >
+              {gmailConnecting ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <Plus className="w-4 h-4" />
+              )}
+              {gmailConnecting ? 'Connecting...' : 'Connect Gmail Account'}
+            </button>
           </div>
 
-          {/* Connection Status Card */}
-          <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
-            <div className="flex items-start gap-4">
-              <div className={`p-3 rounded-xl ${gmailConnected ? 'bg-green-50' : 'bg-red-50'}`}>
-                <Mail className={`w-6 h-6 ${gmailConnected ? 'text-green-600' : 'text-red-500'}`} />
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-1">
-                  <h3 className="font-heading text-lg font-semibold text-sage-900">Gmail</h3>
-                  {gmailConnected ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
-                      <CheckCircle2 className="w-3 h-3" />
-                      Connected
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
-                      <XCircle className="w-3 h-3" />
-                      Not Connected
-                    </span>
-                  )}
-                </div>
-
-                {syncState && (
-                  <div className="space-y-1.5 text-sm text-sage-600 mt-2">
-                    <p className="flex items-center gap-2">
-                      <Clock className="w-3.5 h-3.5 text-sage-400" />
-                      Last sync: {formatSyncTime(syncState.last_sync_at)}
-                    </p>
-                    {syncState.status && (
-                      <p className="flex items-center gap-2">
-                        <span className={`w-2 h-2 rounded-full ${
-                          syncState.status === 'synced' ? 'bg-green-400' :
-                          syncState.status === 'syncing' ? 'bg-amber-400 animate-pulse' :
-                          syncState.status === 'error' ? 'bg-red-400' : 'bg-sage-300'
+          {/* Connection List */}
+          {gmailConnections.length > 0 ? (
+            <div className="space-y-3">
+              {gmailConnections.map((conn) => (
+                <div
+                  key={conn.id}
+                  className={`bg-surface border rounded-xl p-5 shadow-sm transition-all ${
+                    conn.status === 'error' ? 'border-red-200' :
+                    conn.isPrimary ? 'border-sage-300' : 'border-border'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3 flex-1 min-w-0">
+                      <div className={`p-2.5 rounded-xl ${
+                        conn.status === 'active' ? 'bg-green-50' :
+                        conn.status === 'error' ? 'bg-red-50' : 'bg-sage-50'
+                      }`}>
+                        <Mail className={`w-5 h-5 ${
+                          conn.status === 'active' ? 'text-green-600' :
+                          conn.status === 'error' ? 'text-red-500' : 'text-sage-400'
                         }`} />
-                        Status: <span className="capitalize">{syncState.status}</span>
-                      </p>
-                    )}
-                    {syncState.error_message && (
-                      <div className="flex items-start gap-2 mt-2 bg-red-50 border border-red-200 rounded-lg p-3">
-                        <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
-                        <p className="text-xs text-red-700">{syncState.error_message}</p>
                       </div>
-                    )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium text-sage-900 text-sm truncate">{conn.emailAddress}</span>
+                          {conn.isPrimary && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                              <Star className="w-2.5 h-2.5" />
+                              Primary
+                            </span>
+                          )}
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                            conn.status === 'active' ? 'bg-green-50 text-green-700' :
+                            conn.status === 'error' ? 'bg-red-50 text-red-700' : 'bg-sage-50 text-sage-600'
+                          }`}>
+                            {conn.status === 'active' ? 'Active' : conn.status === 'error' ? 'Error' : 'Disconnected'}
+                          </span>
+                        </div>
+
+                        {/* Label */}
+                        <div className="mt-1 flex items-center gap-2">
+                          {editingLabel === conn.id ? (
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={labelDraft}
+                                onChange={(e) => setLabelDraft(e.target.value)}
+                                placeholder="e.g. Inquiry inbox"
+                                className={inputClasses + ' max-w-[200px] text-xs py-1'}
+                                autoFocus
+                                onKeyDown={(e) => { if (e.key === 'Enter') saveLabel(conn.id) }}
+                              />
+                              <button onClick={() => saveLabel(conn.id)} className="p-1 text-sage-500 hover:text-sage-700">
+                                <Check className="w-3.5 h-3.5" />
+                              </button>
+                              <button onClick={() => setEditingLabel(null)} className="p-1 text-sage-400 hover:text-sage-600">
+                                <XCircle className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => { setEditingLabel(conn.id); setLabelDraft(conn.label || '') }}
+                              className="flex items-center gap-1 text-xs text-sage-500 hover:text-sage-700 transition-colors"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              {conn.label || 'Add label'}
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Meta */}
+                        <div className="flex items-center gap-4 mt-2 text-xs text-sage-500">
+                          {conn.userName && (
+                            <span className="flex items-center gap-1">
+                              <User className="w-3 h-3" />
+                              {conn.userName}
+                            </span>
+                          )}
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            Last sync: {formatSyncTime(conn.lastSyncAt)}
+                          </span>
+                        </div>
+
+                        {/* Error */}
+                        {conn.errorMessage && (
+                          <div className="mt-2 flex items-start gap-1.5 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg p-2">
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                            <span className="truncate">{conn.errorMessage}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {/* Toggle sync */}
+                      <button
+                        onClick={() => toggleSync(conn.id, conn.syncEnabled)}
+                        className="text-sage-500 hover:text-sage-700 transition-colors"
+                        title={conn.syncEnabled ? 'Disable sync' : 'Enable sync'}
+                      >
+                        {conn.syncEnabled ? (
+                          <ToggleRight className="w-7 h-7 text-sage-500" />
+                        ) : (
+                          <ToggleLeft className="w-7 h-7 text-sage-300" />
+                        )}
+                      </button>
+
+                      {/* Set as primary */}
+                      {!conn.isPrimary && (
+                        <button
+                          onClick={() => setPrimary(conn.id)}
+                          className="p-1.5 rounded-lg text-sage-400 hover:text-amber-500 hover:bg-amber-50 transition-colors"
+                          title="Set as primary"
+                        >
+                          <Star className="w-4 h-4" />
+                        </button>
+                      )}
+
+                      {/* Disconnect */}
+                      <button
+                        onClick={() => disconnectGmail(conn.id)}
+                        className="p-1.5 rounded-lg text-sage-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                        title="Disconnect this account"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                )}
+                </div>
+              ))}
+            </div>
+          ) : !gmailConnected ? (
+            <div className="bg-surface border border-border rounded-xl p-12 text-center">
+              <Mail className="w-12 h-12 text-sage-300 mx-auto mb-4" />
+              <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">No Gmail accounts connected</h3>
+              <p className="text-sm text-sage-500 max-w-md mx-auto">
+                Connect a Gmail account to start syncing emails. You can connect multiple accounts for different coordinators or inboxes.
+              </p>
+            </div>
+          ) : (
+            /* Legacy single connection (no gmail_connections rows yet) */
+            <div className="bg-surface border border-sage-300 rounded-xl p-5 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 rounded-xl bg-green-50">
+                  <Mail className="w-5 h-5 text-green-600" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-sage-900 text-sm">{gmailStatus?.email || 'Connected'}</span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                      <Star className="w-2.5 h-2.5" />
+                      Primary
+                    </span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-50 text-green-700">Active</span>
+                  </div>
+                  <p className="text-xs text-sage-500 mt-1">Legacy connection. Connect another Gmail to migrate to the new multi-account system.</p>
+                </div>
+                <button
+                  onClick={() => disconnectGmail()}
+                  className="p-1.5 rounded-lg text-sage-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                  title="Disconnect"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
             </div>
+          )}
 
-            {gmailStatus?.email && (
-              <div className="mt-3 text-sm text-sage-600">
-                <p className="flex items-center gap-2">
-                  <Mail className="w-3.5 h-3.5 text-sage-400" />
-                  Account: <span className="font-medium text-sage-800">{gmailStatus.email}</span>
-                </p>
-              </div>
-            )}
-
-            <div className="flex items-center gap-3 mt-6 pt-4 border-t border-border">
-              <button
-                onClick={triggerSync}
-                disabled={syncing || !gmailConnected}
-                className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
-              >
-                <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-                {syncing ? 'Syncing...' : 'Sync Now'}
-              </button>
-
-              {!gmailConnected ? (
-                <button
-                  onClick={connectGmail}
-                  disabled={gmailConnecting}
-                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
-                >
-                  {gmailConnecting ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Mail className="w-4 h-4" />
-                  )}
-                  {gmailConnecting ? 'Connecting...' : 'Connect Gmail'}
-                </button>
-              ) : (
-                <button
-                  onClick={disconnectGmail}
-                  disabled={gmailConnecting}
-                  className="flex items-center gap-2 text-red-600 hover:text-red-700 border border-red-200 hover:border-red-300 disabled:opacity-50 font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
-                >
-                  {gmailConnecting ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <XCircle className="w-4 h-4" />
-                  )}
-                  {gmailConnecting ? 'Disconnecting...' : 'Disconnect Gmail'}
-                </button>
-              )}
-            </div>
+          {/* Sync actions */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={triggerSync}
+              disabled={syncing || !gmailConnected}
+              className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
+            >
+              <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Syncing...' : 'Sync All Now'}
+            </button>
           </div>
 
           {/* Sync info */}
@@ -747,7 +923,7 @@ export default function AgentSettingsPage() {
             <ul className="space-y-3 text-sm text-sage-600">
               <li className="flex items-start gap-3">
                 <span className="w-6 h-6 bg-sage-100 rounded-full flex items-center justify-center text-xs font-bold text-sage-700 shrink-0 mt-0.5">1</span>
-                The Agent polls Gmail every 5 minutes for new messages via Edge Functions.
+                The Agent polls all connected Gmail accounts every 5 minutes for new messages.
               </li>
               <li className="flex items-start gap-3">
                 <span className="w-6 h-6 bg-sage-100 rounded-full flex items-center justify-center text-xs font-bold text-sage-700 shrink-0 mt-0.5">2</span>
@@ -759,7 +935,7 @@ export default function AgentSettingsPage() {
               </li>
               <li className="flex items-start gap-3">
                 <span className="w-6 h-6 bg-sage-100 rounded-full flex items-center justify-center text-xs font-bold text-sage-700 shrink-0 mt-0.5">4</span>
-                Use the &quot;Sync Now&quot; button to trigger an immediate sync outside the 5-minute cycle.
+                Each email is tagged with which Gmail account it came from, for coordinator attribution.
               </li>
             </ul>
           </div>

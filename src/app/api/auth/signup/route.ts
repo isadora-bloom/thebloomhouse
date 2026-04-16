@@ -62,8 +62,15 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Couple signup — just create the auth user, no venue
-    // (Couple flow creates profile via event code registration)
+    if (role === 'couple') {
+      // Don't create orphan auth user — couples register via event code
+      return NextResponse.json({
+        error: 'Couples register through their venue invitation link, not direct signup. Ask your venue coordinator for your event code.',
+        coupleRedirect: true
+      }, { status: 400 })
+    }
+
+    // Unknown role
     return NextResponse.json({ success: true })
   } catch (err) {
     console.error('Signup error:', err)

@@ -2,8 +2,12 @@
  * Bloom House: Gmail API Service
  *
  * Fetches and sends emails via the Gmail API using the `googleapis` package.
- * Handles OAuth token storage per venue (in venue_config.gmail_tokens) and
- * tracks sync state in the email_sync_state table.
+ *
+ * Supports multi-Gmail connections: each venue can have multiple connected
+ * Gmail accounts stored in the `gmail_connections` table. Backward compatible
+ * with the legacy `venue_config.gmail_tokens` field — if a connection is
+ * requested and only the legacy field exists, it is automatically migrated
+ * to a `gmail_connections` row.
  *
  * If `googleapis` is not installed, all exports degrade to stub functions
  * that log a warning and return null/empty arrays.
@@ -59,6 +63,25 @@ export interface ParsedEmail {
   body: string
   date: string
   labels: string[]
+  /** Which gmail_connection this email came from */
+  connectionId?: string
+}
+
+export interface GmailConnection {
+  id: string
+  venue_id: string
+  user_id: string | null
+  email_address: string
+  gmail_tokens: GmailTokens
+  is_primary: boolean
+  label: string | null
+  sync_enabled: boolean
+  last_sync_at: string | null
+  last_history_id: string | null
+  status: string
+  error_message: string | null
+  created_at: string
+  updated_at: string
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +103,119 @@ function getOAuth2Client() {
 }
 
 /**
- * Read stored Gmail tokens for a venue from venue_config.
+ * Migrate legacy venue_config.gmail_tokens to gmail_connections table.
+ * Called on first access when no gmail_connections rows exist but
+ * venue_config.gmail_tokens does.
+ */
+async function migrateLegacyTokens(venueId: string): Promise<GmailConnection | null> {
+  const supabase = createServiceClient()
+
+  const { data: config } = await supabase
+    .from('venue_config')
+    .select('gmail_tokens, coordinator_email')
+    .eq('venue_id', venueId)
+    .single()
+
+  if (!config?.gmail_tokens) return null
+
+  const tokens = config.gmail_tokens as GmailTokens
+  const email = config.coordinator_email || 'unknown@gmail.com'
+
+  // Insert into gmail_connections
+  const { data: connection, error } = await supabase
+    .from('gmail_connections')
+    .insert({
+      venue_id: venueId,
+      email_address: email,
+      gmail_tokens: tokens,
+      is_primary: true,
+      label: 'Primary Inbox',
+      sync_enabled: true,
+      status: 'active',
+    })
+    .select()
+    .single()
+
+  if (error) {
+    console.error(`[gmail] Failed to migrate legacy tokens for venue ${venueId}:`, error.message)
+    return null
+  }
+
+  console.log(`[gmail] Migrated legacy tokens to gmail_connections for venue ${venueId}`)
+  return connection as GmailConnection
+}
+
+/**
+ * Get all gmail connections for a venue. If none exist but legacy
+ * venue_config.gmail_tokens does, migrate it first.
+ */
+export async function getConnections(venueId: string): Promise<GmailConnection[]> {
+  const supabase = createServiceClient()
+
+  const { data: connections } = await supabase
+    .from('gmail_connections')
+    .select('*')
+    .eq('venue_id', venueId)
+    .order('is_primary', { ascending: false })
+    .order('created_at', { ascending: true })
+
+  if (connections && connections.length > 0) {
+    return connections as GmailConnection[]
+  }
+
+  // No connections — try migrating legacy tokens
+  const migrated = await migrateLegacyTokens(venueId)
+  if (migrated) return [migrated]
+
+  return []
+}
+
+/**
+ * Get a specific connection, or the primary one for the venue.
+ */
+async function getConnection(venueId: string, connectionId?: string): Promise<GmailConnection | null> {
+  const supabase = createServiceClient()
+
+  if (connectionId) {
+    const { data } = await supabase
+      .from('gmail_connections')
+      .select('*')
+      .eq('id', connectionId)
+      .eq('venue_id', venueId)
+      .single()
+    return (data as GmailConnection) ?? null
+  }
+
+  // Get primary connection
+  const { data: primary } = await supabase
+    .from('gmail_connections')
+    .select('*')
+    .eq('venue_id', venueId)
+    .eq('is_primary', true)
+    .limit(1)
+    .maybeSingle()
+
+  if (primary) return primary as GmailConnection
+
+  // Fallback: first active connection
+  const { data: first } = await supabase
+    .from('gmail_connections')
+    .select('*')
+    .eq('venue_id', venueId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (first) return first as GmailConnection
+
+  // Try legacy migration
+  return await migrateLegacyTokens(venueId)
+}
+
+/**
+ * Read stored Gmail tokens for a venue from venue_config (legacy).
+ * Kept for backward compatibility during migration period.
  */
 async function getStoredTokens(venueId: string): Promise<GmailTokens | null> {
   const supabase = createServiceClient()
@@ -97,7 +232,7 @@ async function getStoredTokens(venueId: string): Promise<GmailTokens | null> {
 }
 
 /**
- * Persist Gmail tokens to venue_config.gmail_tokens.
+ * Persist Gmail tokens to venue_config.gmail_tokens (legacy).
  */
 async function storeTokens(venueId: string, tokens: GmailTokens): Promise<void> {
   const supabase = createServiceClient()
@@ -113,13 +248,30 @@ async function storeTokens(venueId: string, tokens: GmailTokens): Promise<void> 
 }
 
 /**
+ * Persist tokens to a gmail_connections row.
+ */
+async function storeConnectionTokens(connectionId: string, tokens: GmailTokens): Promise<void> {
+  const supabase = createServiceClient()
+
+  const { error } = await supabase
+    .from('gmail_connections')
+    .update({ gmail_tokens: tokens, updated_at: new Date().toISOString() })
+    .eq('id', connectionId)
+
+  if (error) {
+    console.error(`[gmail] Failed to store tokens for connection ${connectionId}:`, error.message)
+  }
+}
+
+/**
  * Ensure stored tokens are fresh. If the access token is expired (or will
  * expire within 5 minutes), use the refresh token to get a new one and
  * persist the updated tokens.
  */
 async function ensureFreshTokens(
-  venueId: string,
-  tokens: GmailTokens
+  tokens: GmailTokens,
+  connectionId?: string,
+  venueId?: string
 ): Promise<GmailTokens | null> {
   const bufferMs = 5 * 60 * 1000 // 5 minutes
   const isExpired = tokens.expiry_date < Date.now() + bufferMs
@@ -146,11 +298,30 @@ async function ensureFreshTokens(
       token_type: credentials.token_type ?? 'Bearer',
     }
 
-    await storeTokens(venueId, refreshed)
-    console.log(`[gmail] Refreshed access token for venue ${venueId}`)
+    // Store refreshed tokens
+    if (connectionId) {
+      await storeConnectionTokens(connectionId, refreshed)
+    } else if (venueId) {
+      await storeTokens(venueId, refreshed)
+    }
+
+    console.log(`[gmail] Refreshed access token for ${connectionId ?? venueId}`)
     return refreshed
   } catch (err) {
-    console.error(`[gmail] Token refresh failed for venue ${venueId}:`, err)
+    console.error(`[gmail] Token refresh failed:`, err)
+
+    // Mark connection as error if we have a connectionId
+    if (connectionId) {
+      const supabase = createServiceClient()
+      await supabase
+        .from('gmail_connections')
+        .update({
+          status: 'error',
+          error_message: 'Token refresh failed — reconnect Gmail',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', connectionId)
+    }
     return null
   }
 }
@@ -184,6 +355,31 @@ async function updateSyncState(
   if (error) {
     console.error(`[gmail] Failed to update sync state for venue ${venueId}:`, error.message)
   }
+}
+
+/**
+ * Update a connection's sync state.
+ */
+async function updateConnectionSyncState(
+  connectionId: string,
+  historyId: string | null,
+  status: 'active' | 'error',
+  errorMessage?: string
+): Promise<void> {
+  const supabase = createServiceClient()
+
+  const payload: Record<string, unknown> = {
+    last_sync_at: new Date().toISOString(),
+    status,
+    error_message: errorMessage ?? null,
+    updated_at: new Date().toISOString(),
+  }
+
+  if (historyId) {
+    payload.last_history_id = historyId
+  }
+
+  await supabase.from('gmail_connections').update(payload).eq('id', connectionId)
 }
 
 /**
@@ -307,21 +503,25 @@ export function getOAuthUrl(venueId: string, redirectUri: string): string | null
 // ---------------------------------------------------------------------------
 
 /**
- * Exchange an authorization code for tokens and store them in venue_config.
- * Returns true on success, false on failure.
+ * Exchange an authorization code for tokens and store them.
+ * Creates a gmail_connections row and also writes to venue_config for
+ * backward compatibility.
+ *
+ * Returns the created connection ID on success, null on failure.
  */
 export async function handleOAuthCallback(
   venueId: string,
   code: string,
-  redirectUri: string
-): Promise<boolean> {
+  redirectUri: string,
+  userId?: string
+): Promise<string | null> {
   if (!google) {
     console.warn('[gmail] googleapis not available — cannot handle OAuth callback')
-    return false
+    return null
   }
 
   const auth = getOAuth2Client()
-  if (!auth) return false
+  if (!auth) return null
 
   auth.redirectUri = redirectUri
 
@@ -330,7 +530,7 @@ export async function handleOAuthCallback(
 
     if (!tokens.access_token || !tokens.refresh_token) {
       console.error('[gmail] OAuth token exchange returned incomplete tokens')
-      return false
+      return null
     }
 
     const gmailTokens: GmailTokens = {
@@ -340,12 +540,63 @@ export async function handleOAuthCallback(
       token_type: tokens.token_type ?? 'Bearer',
     }
 
+    // Get email address from the token
+    auth.setCredentials(gmailTokens)
+    const gmail = google.gmail({ version: 'v1', auth })
+    let emailAddress = 'unknown@gmail.com'
+    try {
+      const profile = await gmail.users.getProfile({ userId: 'me' })
+      emailAddress = profile.data.emailAddress ?? emailAddress
+    } catch {
+      // Best effort
+    }
+
+    // Store in venue_config for backward compatibility
     await storeTokens(venueId, gmailTokens)
-    console.log(`[gmail] OAuth tokens stored for venue ${venueId}`)
-    return true
+
+    const supabase = createServiceClient()
+
+    // Check if any connection is primary for this venue
+    const { data: existingPrimary } = await supabase
+      .from('gmail_connections')
+      .select('id')
+      .eq('venue_id', venueId)
+      .eq('is_primary', true)
+      .limit(1)
+      .maybeSingle()
+
+    // Create gmail_connections row
+    const { data: connection, error } = await supabase
+      .from('gmail_connections')
+      .upsert(
+        {
+          venue_id: venueId,
+          user_id: userId ?? null,
+          email_address: emailAddress,
+          gmail_tokens: gmailTokens,
+          is_primary: !existingPrimary, // primary if no existing primary
+          label: null,
+          sync_enabled: true,
+          status: 'active',
+          error_message: null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'venue_id,email_address' }
+      )
+      .select('id')
+      .single()
+
+    if (error) {
+      console.error(`[gmail] Failed to create gmail_connection for venue ${venueId}:`, error.message)
+      // Tokens are still in venue_config, so old flow works
+      return null
+    }
+
+    console.log(`[gmail] OAuth tokens stored for venue ${venueId} (connection ${connection.id})`)
+    return connection.id as string
   } catch (err) {
     console.error(`[gmail] OAuth token exchange failed for venue ${venueId}:`, err)
-    return false
+    return null
   }
 }
 
@@ -354,23 +605,48 @@ export async function handleOAuthCallback(
 // ---------------------------------------------------------------------------
 
 /**
- * Create an authenticated Gmail API client from stored tokens.
- * Handles token refresh if the access token is expired.
+ * Create an authenticated Gmail API client.
+ *
+ * If connectionId is provided, uses that specific connection's tokens.
+ * Otherwise uses the primary connection for the venue.
+ * Falls back to legacy venue_config.gmail_tokens if no connections exist.
+ *
  * Returns null if no tokens are stored or googleapis is unavailable.
  */
-export async function getGmailClient(venueId: string) {
+export async function getGmailClient(venueId: string, connectionId?: string) {
   if (!google) {
     console.warn('[gmail] googleapis not available — cannot create Gmail client')
     return null
   }
 
+  // Try connections first
+  const connection = await getConnection(venueId, connectionId)
+
+  if (connection) {
+    const tokens = await ensureFreshTokens(connection.gmail_tokens, connection.id)
+    if (!tokens) return null
+
+    const auth = getOAuth2Client()
+    if (!auth) return null
+
+    auth.setCredentials({
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expiry_date: tokens.expiry_date,
+      token_type: tokens.token_type,
+    })
+
+    return google.gmail({ version: 'v1', auth })
+  }
+
+  // Fallback to legacy venue_config tokens
   const storedTokens = await getStoredTokens(venueId)
   if (!storedTokens) {
     console.warn(`[gmail] No Gmail tokens found for venue ${venueId}`)
     return null
   }
 
-  const tokens = await ensureFreshTokens(venueId, storedTokens)
+  const tokens = await ensureFreshTokens(storedTokens, undefined, venueId)
   if (!tokens) return null
 
   const auth = getOAuth2Client()
@@ -391,14 +667,143 @@ export async function getGmailClient(venueId: string) {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch emails since last sync using the history API (or list API for the
- * initial sync when no history ID exists). Updates email_sync_state.
+ * Fetch emails from ALL active gmail_connections for a venue.
+ * Falls back to the legacy single-connection flow if no connections exist.
  *
- * Returns an array of parsed email objects.
+ * Returns an array of parsed email objects, each tagged with the connectionId
+ * it came from.
  */
 export async function fetchNewEmails(
   venueId: string,
   maxResults = 50
+): Promise<ParsedEmail[]> {
+  const connections = await getConnections(venueId)
+
+  if (connections.length === 0) {
+    // Legacy flow — single connection from venue_config
+    return fetchNewEmailsLegacy(venueId, maxResults)
+  }
+
+  const allEmails: ParsedEmail[] = []
+
+  for (const conn of connections) {
+    if (!conn.sync_enabled || conn.status === 'disconnected') continue
+
+    try {
+      const emails = await fetchNewEmailsFromConnection(conn, maxResults)
+      allEmails.push(...emails)
+    } catch (err) {
+      console.error(`[gmail] Failed to fetch from connection ${conn.id} (${conn.email_address}):`, err)
+      const errorMessage = err instanceof Error ? err.message : String(err)
+      await updateConnectionSyncState(conn.id, null, 'error', errorMessage)
+    }
+  }
+
+  // Also update the venue-level sync state
+  await updateSyncState(venueId, null, 'synced')
+
+  console.log(`[gmail] Fetched ${allEmails.length} new emails across ${connections.length} connections for venue ${venueId}`)
+  return allEmails
+}
+
+/**
+ * Fetch emails from a specific gmail_connection.
+ */
+async function fetchNewEmailsFromConnection(
+  conn: GmailConnection,
+  maxResults: number
+): Promise<ParsedEmail[]> {
+  const gmail = await getGmailClient(conn.venue_id, conn.id)
+  if (!gmail) return []
+
+  const emails: ParsedEmail[] = []
+
+  try {
+    let messageIds: string[] = []
+
+    if (conn.last_history_id) {
+      // Incremental sync via history API
+      try {
+        const historyResponse = await gmail.users.history.list({
+          userId: 'me',
+          startHistoryId: conn.last_history_id,
+          historyTypes: ['messageAdded'],
+          maxResults,
+        })
+
+        const historyRecords = historyResponse.data.history ?? []
+
+        for (const record of historyRecords) {
+          const messagesAdded = record.messagesAdded ?? []
+          for (const added of messagesAdded) {
+            if (added.message?.id) {
+              messageIds.push(added.message.id)
+            }
+          }
+        }
+
+        messageIds = [...new Set(messageIds)]
+      } catch (historyErr: unknown) {
+        const errObj = historyErr as { code?: number }
+        if (errObj.code === 404) {
+          console.warn(`[gmail] History ID expired for connection ${conn.id} — falling back to list`)
+          messageIds = await fetchMessageIdsByList(gmail, maxResults)
+        } else {
+          throw historyErr
+        }
+      }
+    } else {
+      messageIds = await fetchMessageIdsByList(gmail, maxResults)
+    }
+
+    // Fetch full message details
+    for (const messageId of messageIds.slice(0, maxResults)) {
+      try {
+        const msgResponse = await gmail.users.messages.get({
+          userId: 'me',
+          id: messageId,
+          format: 'full',
+        })
+
+        const msg = msgResponse.data
+        const headers = (msg.payload?.headers ?? []) as Array<{ name: string; value: string }>
+
+        emails.push({
+          messageId: msg.id ?? messageId,
+          threadId: msg.threadId ?? '',
+          from: getHeader(headers, 'From'),
+          to: getHeader(headers, 'To'),
+          subject: getHeader(headers, 'Subject'),
+          body: parseEmailBody(msg.payload as Record<string, unknown>),
+          date: getHeader(headers, 'Date'),
+          labels: (msg.labelIds ?? []) as string[],
+          connectionId: conn.id,
+        })
+      } catch (msgErr) {
+        console.error(`[gmail] Failed to fetch message ${messageId}:`, msgErr)
+      }
+    }
+
+    // Get the current history ID for next sync
+    const profileResponse = await gmail.users.getProfile({ userId: 'me' })
+    const currentHistoryId = String(profileResponse.data.historyId ?? '')
+
+    await updateConnectionSyncState(conn.id, currentHistoryId, 'active')
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err)
+    console.error(`[gmail] Sync failed for connection ${conn.id}:`, errorMessage)
+    await updateConnectionSyncState(conn.id, null, 'error', errorMessage)
+  }
+
+  return emails
+}
+
+/**
+ * Legacy single-connection fetch (for venues that haven't migrated).
+ */
+async function fetchNewEmailsLegacy(
+  venueId: string,
+  maxResults: number
 ): Promise<ParsedEmail[]> {
   const gmail = await getGmailClient(venueId)
   if (!gmail) return []
@@ -410,7 +815,6 @@ export async function fetchNewEmails(
     let messageIds: string[] = []
 
     if (syncState?.last_history_id) {
-      // Incremental sync via history API
       try {
         const historyResponse = await gmail.users.history.list({
           userId: 'me',
@@ -430,10 +834,8 @@ export async function fetchNewEmails(
           }
         }
 
-        // Deduplicate
         messageIds = [...new Set(messageIds)]
       } catch (historyErr: unknown) {
-        // History ID may have expired (404) — fall back to list
         const errObj = historyErr as { code?: number }
         if (errObj.code === 404) {
           console.warn(`[gmail] History ID expired for venue ${venueId} — falling back to list`)
@@ -443,11 +845,9 @@ export async function fetchNewEmails(
         }
       }
     } else {
-      // Initial sync — use list API
       messageIds = await fetchMessageIdsByList(gmail, maxResults)
     }
 
-    // Fetch full message details
     for (const messageId of messageIds.slice(0, maxResults)) {
       try {
         const msgResponse = await gmail.users.messages.get({
@@ -474,15 +874,12 @@ export async function fetchNewEmails(
       }
     }
 
-    // Get the current history ID for next sync
     const profileResponse = await gmail.users.getProfile({ userId: 'me' })
     const currentHistoryId = String(profileResponse.data.historyId ?? '')
 
     await updateSyncState(venueId, currentHistoryId, 'synced')
 
-    console.log(
-      `[gmail] Fetched ${emails.length} new emails for venue ${venueId}`
-    )
+    console.log(`[gmail] Fetched ${emails.length} new emails for venue ${venueId}`)
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err)
     console.error(`[gmail] Sync failed for venue ${venueId}:`, errorMessage)
@@ -525,9 +922,10 @@ export async function sendEmail(
   to: string,
   subject: string,
   body: string,
-  threadId?: string
+  threadId?: string,
+  connectionId?: string
 ): Promise<string | null> {
-  const gmail = await getGmailClient(venueId)
+  const gmail = await getGmailClient(venueId, connectionId)
   if (!gmail) return null
 
   try {

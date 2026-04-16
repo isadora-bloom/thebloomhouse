@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { NextRequest, NextResponse } from 'next/server'
 import { recordEngagementEvent } from '@/lib/services/heat-mapping'
+import { trackCoordinatorAction } from '@/lib/services/consultant-tracking'
 import { createHmac, timingSafeEqual } from 'crypto'
 
 // ---------------------------------------------------------------------------
@@ -168,6 +169,19 @@ export async function POST(request: NextRequest) {
       `[webhook/calendly] Recorded tour_booked for wedding ${weddingId} ` +
         `(score: ${result.previousScore} -> ${result.newScore})`
     )
+
+    // Track tour_booked in consultant_metrics
+    // Try to find the coordinator who owns this wedding
+    const { data: weddingRow } = await supabase
+      .from('weddings')
+      .select('assigned_to')
+      .eq('id', weddingId)
+      .single()
+
+    if (weddingRow?.assigned_to) {
+      await trackCoordinatorAction(venueId, weddingRow.assigned_to as string, 'tour_booked')
+      console.log(`[webhook/calendly] Tracked tour_booked for consultant ${weddingRow.assigned_to}`)
+    }
 
     return NextResponse.json({ received: true, engagementRecorded: true })
   } catch (err) {

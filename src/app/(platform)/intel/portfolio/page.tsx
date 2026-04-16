@@ -12,6 +12,7 @@ import {
   Clock,
   ChevronDown,
   X,
+  Plus,
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { computeHealthScore } from '@/lib/intel/health-score'
@@ -538,13 +539,22 @@ export default function PortfolioOverviewPage() {
   return (
     <div className="space-y-8">
       {/* Header */}
-      <div>
-        <h1 className="font-heading text-3xl font-bold text-sage-900 mb-1">
-          Portfolio Overview
-        </h1>
-        <p className="text-sage-600">
-          All venues at a glance — health scores, inquiry volume, bookings, and response times side by side. Click any venue card to drill into that venue's dashboard, or click a health score for the breakdown.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-3xl font-bold text-sage-900 mb-1">
+            Portfolio Overview
+          </h1>
+          <p className="text-sage-600">
+            All venues at a glance — health scores, inquiry volume, bookings, and response times side by side. Click any venue card to drill into that venue&apos;s dashboard, or click a health score for the breakdown.
+          </p>
+        </div>
+        <button
+          onClick={() => router.push('/settings')}
+          className="flex items-center gap-2 px-4 py-2.5 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors shrink-0"
+        >
+          <Plus className="w-4 h-4" />
+          Add Venue
+        </button>
       </div>
 
       {/* Error */}

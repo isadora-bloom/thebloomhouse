@@ -563,6 +563,13 @@ function NewBookingModal({
         await createPeopleAndInvite(supabase, wedding, code)
       }
 
+      // Track booking_closed in consultant_metrics
+      fetch('/api/tracking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'booking_closed' }),
+      }).catch((trackErr) => console.warn('Booking tracking failed:', trackErr))
+
       // Reset form and close
       setForm({ ...emptyForm })
       onClose()

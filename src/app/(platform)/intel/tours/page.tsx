@@ -295,6 +295,14 @@ export default function ToursPage() {
         outcome: 'pending',
       })
       if (err) throw err
+
+      // Track tour_booked in consultant_metrics
+      fetch('/api/tracking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'tour_booked' }),
+      }).catch((trackErr) => console.warn('Tour tracking failed:', trackErr))
+
       setShowModal(false)
       setFormDate('')
       setFormType('in_person')

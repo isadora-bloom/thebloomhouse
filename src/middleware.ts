@@ -167,9 +167,9 @@ export async function middleware(request: NextRequest) {
   // 4. Couple routes (path-based, dev mode): /couple/*
   // -----------------------------------------------------------------------
   if (pathname.startsWith(COUPLE_PREFIX)) {
-    // The couple login page is always public
-    // Matches both /couple/login and /couple/[slug]/login
-    if (pathname === '/couple/login' || /^\/couple\/[^/]+\/login\/?$/.test(pathname)) {
+    // The couple login and registration pages are always public
+    // Matches /couple/login, /couple/[slug]/login, and /couple/[slug]/register
+    if (pathname === '/couple/login' || /^\/couple\/[^/]+\/(login|register)\/?$/.test(pathname)) {
       return response
     }
 
@@ -224,7 +224,7 @@ export async function middleware(request: NextRequest) {
       .eq('id', user.id)
       .single()
 
-    const platformRoles = ['super_admin', 'org_admin', 'venue_manager', 'coordinator']
+    const platformRoles = ['super_admin', 'org_admin', 'venue_manager', 'coordinator', 'readonly']
     if (!profile || !platformRoles.includes(profile.role)) {
       // User exists but doesn't have a platform role
       const loginUrl = request.nextUrl.clone()

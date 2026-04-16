@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { User, Lock, Mail, ArrowRight } from 'lucide-react'
+import { User, Lock, Mail, ArrowRight, Heart } from 'lucide-react'
 import Link from 'next/link'
 
 type Role = 'coordinator' | 'couple'
@@ -18,6 +18,7 @@ export default function SignupPage() {
   const [role, setRole] = useState<Role>('coordinator')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [coupleRedirect, setCoupleRedirect] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -59,6 +60,11 @@ export default function SignupPage() {
       const data = await res.json()
 
       if (!res.ok || data.error) {
+        if (data.coupleRedirect) {
+          setCoupleRedirect(true)
+          setLoading(false)
+          return
+        }
         setError(data.error || 'Failed to create account.')
         setLoading(false)
         return
@@ -249,6 +255,22 @@ export default function SignupPage() {
               </button>
             </div>
           </div>
+
+          {/* Couple redirect message */}
+          {coupleRedirect && (
+            <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+              <p className="font-medium mb-1">Couples register through their venue</p>
+              <p className="text-blue-600 text-xs mb-2">
+                Your venue coordinator should have sent you an invitation link with an event code. Use that link to register for your wedding portal.
+              </p>
+              <Link
+                href="/couple/login"
+                className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 transition-colors"
+              >
+                Go to Couple Login <ArrowRight className="w-3 h-3" />
+              </Link>
+            </div>
+          )}
 
           {/* Error */}
           {error && (

@@ -33,6 +33,7 @@ interface IncomingEmail {
   subject: string
   body: string
   date: string
+  connectionId?: string
 }
 
 interface PipelineResult {
@@ -250,21 +251,26 @@ export async function processIncomingEmail(
   }
 
   // Step 4: Create interaction record
+  const interactionPayload: Record<string, unknown> = {
+    venue_id: venueId,
+    wedding_id: weddingId,
+    person_id: personId,
+    type: 'email',
+    direction: 'inbound',
+    subject: email.subject,
+    body_preview: email.body.slice(0, 300),
+    full_body: email.body,
+    gmail_message_id: email.messageId,
+    gmail_thread_id: email.threadId,
+    timestamp: email.date,
+  }
+  if (email.connectionId) {
+    interactionPayload.gmail_connection_id = email.connectionId
+  }
+
   const { data: interaction, error: interactionError } = await supabase
     .from('interactions')
-    .insert({
-      venue_id: venueId,
-      wedding_id: weddingId,
-      person_id: personId,
-      type: 'email',
-      direction: 'inbound',
-      subject: email.subject,
-      body_preview: email.body.slice(0, 300),
-      full_body: email.body,
-      gmail_message_id: email.messageId,
-      gmail_thread_id: email.threadId,
-      timestamp: email.date,
-    })
+    .insert(interactionPayload)
     .select('id')
     .single()
 
@@ -569,6 +575,7 @@ export async function processAllNewEmails(venueId: string): Promise<ProcessAllRe
         subject: email.subject,
         body: email.body,
         date: email.date,
+        connectionId: email.connectionId,
       })
 
       summary.results.push(result)

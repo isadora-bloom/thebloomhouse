@@ -843,6 +843,9 @@ function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const [showAddVenue, setShowAddVenue] = useState(false)
+  const [addVenueForm, setAddVenueForm] = useState({ name: '', city: '', state: '', capacity: '', priceRange: '' })
+  const [addingVenue, setAddingVenue] = useState(false)
 
   // Brand assets across all in-scope venues
   const [allBrandAssets, setAllBrandAssets] = useState<BrandAsset[]>([])
@@ -1055,6 +1058,63 @@ function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
       setTimeout(() => setSaveMessage(null), 3000)
     }
   }, [venues, orgId, primaryColor, secondaryColor, accentColor, logoUrl, brandDescription])
+
+  const handleAddVenue = useCallback(async () => {
+    if (!addVenueForm.name.trim() || !orgId) return
+    setAddingVenue(true)
+    try {
+      const slug = addVenueForm.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      // Create venue
+      const { data: venue, error: venueErr } = await supabase
+        .from('venues')
+        .insert({
+          name: addVenueForm.name.trim(),
+          slug,
+          org_id: orgId,
+          city: addVenueForm.city.trim() || null,
+          state: addVenueForm.state.trim() || null,
+          status: 'trial',
+          is_demo: false,
+        })
+        .select('id, name, slug')
+        .single()
+      if (venueErr) throw venueErr
+
+      // Create venue_config
+      const { error: configErr } = await supabase
+        .from('venue_config')
+        .insert({
+          venue_id: venue.id,
+          business_name: addVenueForm.name.trim(),
+          capacity: addVenueForm.capacity ? parseInt(addVenueForm.capacity) : null,
+          base_price: addVenueForm.priceRange ? parseFloat(addVenueForm.priceRange) : null,
+          onboarding_completed: false,
+          primary_color: primaryColor,
+          secondary_color: secondaryColor,
+          accent_color: accentColor,
+        })
+      if (configErr) throw configErr
+
+      // Ask if they want to configure now
+      setShowAddVenue(false)
+      setAddVenueForm({ name: '', city: '', state: '', capacity: '', priceRange: '' })
+
+      const configureNow = window.confirm(`"${venue.name}" created! Configure this venue now? This will switch your scope to the new venue and start onboarding.`)
+      if (configureNow) {
+        switchToVenue(venue.id, venue.name, scope.companyName)
+        // After reload, dashboard will detect onboarding_completed=false and redirect to /onboarding
+      } else {
+        // Refresh the venue list
+        window.location.reload()
+      }
+    } catch (err) {
+      console.error('Failed to add venue:', err)
+      setSaveMessage('Failed to add venue. Please try again.')
+      setTimeout(() => setSaveMessage(null), 3000)
+    } finally {
+      setAddingVenue(false)
+    }
+  }, [addVenueForm, orgId, primaryColor, secondaryColor, accentColor, scope.companyName])
 
   if (loading) {
     return (
@@ -1320,6 +1380,14 @@ function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
                 </button>
               </div>
             ))}
+            {/* Add Venue Card */}
+            <div
+              onClick={() => setShowAddVenue(true)}
+              className="border-2 border-dashed border-sage-300 rounded-xl p-6 flex flex-col items-center justify-center gap-3 cursor-pointer hover:border-sage-500 hover:bg-sage-50/50 transition-colors min-h-[200px]"
+            >
+              <Plus className="w-8 h-8 text-sage-400" />
+              <p className="text-sm font-medium text-sage-600">Add Venue</p>
+            </div>
           </div>
         )}
       </section>
@@ -1394,6 +1462,96 @@ function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
           })()
         )}
       </section>
+
+      {/* ---------------------------------------------------------- */}
+      {/* Add Venue Modal                                             */}
+      {/* ---------------------------------------------------------- */}
+      {showAddVenue && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setShowAddVenue(false)} />
+          <div className="relative bg-surface rounded-xl shadow-xl w-full max-w-md p-6 mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="font-heading text-lg font-semibold text-sage-900">Add Venue</h3>
+              <button onClick={() => setShowAddVenue(false)} className="p-1.5 rounded-lg hover:bg-sage-50">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">Venue Name *</label>
+                <input
+                  type="text"
+                  value={addVenueForm.name}
+                  onChange={(e) => setAddVenueForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. Rose Hill Gardens"
+                  className={inputClasses}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-sage-700 mb-1">City</label>
+                  <input
+                    type="text"
+                    value={addVenueForm.city}
+                    onChange={(e) => setAddVenueForm((f) => ({ ...f, city: e.target.value }))}
+                    placeholder="Richmond"
+                    className={inputClasses}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-sage-700 mb-1">State</label>
+                  <input
+                    type="text"
+                    value={addVenueForm.state}
+                    onChange={(e) => setAddVenueForm((f) => ({ ...f, state: e.target.value }))}
+                    placeholder="VA"
+                    className={inputClasses}
+                    maxLength={2}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-sage-700 mb-1">Max Capacity</label>
+                  <input
+                    type="number"
+                    value={addVenueForm.capacity}
+                    onChange={(e) => setAddVenueForm((f) => ({ ...f, capacity: e.target.value }))}
+                    placeholder="250"
+                    className={inputClasses}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-sage-700 mb-1">Base Price ($)</label>
+                  <input
+                    type="number"
+                    value={addVenueForm.priceRange}
+                    onChange={(e) => setAddVenueForm((f) => ({ ...f, priceRange: e.target.value }))}
+                    placeholder="8500"
+                    className={inputClasses}
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  onClick={() => setShowAddVenue(false)}
+                  className="px-4 py-2 text-sm font-medium text-sage-600 hover:text-sage-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleAddVenue}
+                  disabled={!addVenueForm.name.trim() || addingVenue}
+                  className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
+                >
+                  <Plus className="w-4 h-4" />
+                  {addingVenue ? 'Creating...' : 'Create Venue'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

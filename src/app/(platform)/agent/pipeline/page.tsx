@@ -553,6 +553,15 @@ export default function PipelinePage() {
         .eq('venue_id', movedWedding?.venue_id ?? '')
 
       if (updateError) throw updateError
+
+      // Track booking_closed when a wedding moves to 'booked'
+      if (targetColumnKey === 'booked') {
+        fetch('/api/tracking', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'booking_closed' }),
+        }).catch((trackErr) => console.warn('Booking tracking failed:', trackErr))
+      }
     } catch (err) {
       console.error('Failed to update wedding status:', err)
       // Revert on failure
