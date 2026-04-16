@@ -505,11 +505,20 @@ export default function OnboardingPage() {
           break
         }
         case 5: {
-          // Go Live — mark venue active
+          // Go Live — mark venue active and onboarding complete
           await supabase
             .from('venues')
             .update({ status: 'active', updated_at: new Date().toISOString() })
             .eq('id', venueId)
+
+          // Mark onboarding as completed so dashboard doesn't redirect back here
+          const { error: onboardingError } = await supabase
+            .from('venue_config')
+            .update({ onboarding_completed: true, updated_at: new Date().toISOString() })
+            .eq('venue_id', venueId)
+          if (onboardingError) {
+            console.error('Failed to mark onboarding complete:', onboardingError)
+          }
           break
         }
       }

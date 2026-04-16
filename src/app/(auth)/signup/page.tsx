@@ -43,47 +43,54 @@ export default function SignupPage() {
 
     setLoading(true)
 
-    const supabase = createClient()
-
-    // 1. Create auth user
-    const { data: authData, error: signUpError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          first_name: firstName.trim(),
-          last_name: lastName.trim(),
+    try {
+      // 1. Call our API route which creates user + fresh venue + profile
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password,
           role,
-        },
-      },
-    })
-
-    if (signUpError) {
-      setError(signUpError.message)
-      setLoading(false)
-      return
-    }
-
-    // 2. Insert user profile
-    if (authData.user) {
-      const { error: profileError } = await supabase.from('user_profiles').insert({
-        id: authData.user.id,
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
-        role,
+          fullName: `${firstName.trim()} ${lastName.trim()}`,
+        }),
       })
 
-      if (profileError) {
-        console.error('Failed to create user profile:', profileError)
-        // Don't block signup — auth user was created, profile can be retried
+      const data = await res.json()
+
+      if (!res.ok || data.error) {
+        setError(data.error || 'Failed to create account.')
+        setLoading(false)
+        return
       }
+
+      // 2. Sign in the user (the API created the auth user, now we need a session)
+      const supabase = createClient()
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      })
+
+      if (signInError) {
+        setError(signInError.message)
+        setLoading(false)
+        return
+      }
+
+      // 3. Clear demo cookies on real sign-up
+      document.cookie = 'bloom_demo=; path=/; max-age=0'
+      document.cookie = 'bloom_scope=; path=/; max-age=0'
+
+      // 4. Redirect coordinators to onboarding, couples to home
+      if (data.needsOnboarding) {
+        router.push('/onboarding')
+      } else {
+        router.push('/')
+      }
+    } catch {
+      setError('An unexpected error occurred. Please try again.')
+      setLoading(false)
     }
-
-    // Clear demo cookies on real sign-up
-    document.cookie = 'bloom_demo=; path=/; max-age=0'
-
-    // 3. Always redirect to overview dashboard (not inbox)
-    router.push('/')
   }
 
   const inputClasses =

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import {
   Mail, FileCheck, Newspaper, Heart,
@@ -40,6 +41,25 @@ interface VenueRow {
 
 export default function DashboardPage() {
   const scope = useScope()
+  const router = useRouter()
+
+  // ---- Redirect to onboarding if venue is unconfigured ----
+  useEffect(() => {
+    if (scope.loading || !scope.venueId) return
+
+    const supabase = createClient()
+    supabase
+      .from('venue_config')
+      .select('onboarding_completed')
+      .eq('venue_id', scope.venueId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data && data.onboarding_completed === false) {
+          router.push('/onboarding')
+        }
+      })
+  }, [scope.venueId, scope.loading, router])
+
   const [stats, setStats] = useState<Stats>({
     activeInquiries: 0,
     upcomingWeddings: 0,
