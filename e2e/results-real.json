@@ -1,0 +1,1011 @@
+{
+  "config": {
+    "configFile": "C:\\Users\\Ismar\\bloom-house\\playwright.config.ts",
+    "rootDir": "C:/Users/Ismar/bloom-house/e2e",
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "C:/Users/Ismar/bloom-house/test-results",
+        "repeatEach": 1,
+        "retries": 1,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "C:/Users/Ismar/bloom-house/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 60000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.59.1",
+    "workers": 4,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "real-user-smoke.spec.ts",
+      "file": "real-user-smoke.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Real authenticated user flow",
+          "file": "real-user-smoke.spec.ts",
+          "line": 130,
+          "column": 6,
+          "specs": [
+            {
+              "title": "login as real coordinator",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3741,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:13:55.706Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-dada8-w-login-as-real-coordinator-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-5fb3efea3bb64c133350",
+              "file": "real-user-smoke.spec.ts",
+              "line": 133,
+              "column": 7
+            },
+            {
+              "title": "real user page: /",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8325,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:13:59.801Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authenticated-user-flow-real-user-page--chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-b5e47041c811b6274cec",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /agent/inbox",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8383,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:14:08.163Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-05486--real-user-page-agent-inbox-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-a0a412ef8d7f3785c688",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /agent/pipeline",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 7657,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:14:16.588Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-29d7b-al-user-page-agent-pipeline-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-f74929427e5e4500acef",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /agent/leads",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8449,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:14:24.282Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-25abb--real-user-page-agent-leads-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-4ff758fcea1eb13e397a",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /agent/drafts",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8025,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:14:32.805Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-b4620-real-user-page-agent-drafts-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-2a8e4d4b5c59d1f673e0",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /agent/codes",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8272,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:14:40.880Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-95eee--real-user-page-agent-codes-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-b7b729045d31ae3ecbab",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /agent/sequences",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8449,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:14:49.204Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-23833-l-user-page-agent-sequences-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-48ffa1d28bda2fb9c627",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /intel/dashboard",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8127,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:14:57.706Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-50220-l-user-page-intel-dashboard-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-a3769139f1bc8325ce72",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /intel/clients",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8141,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:15:05.882Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-6075e-eal-user-page-intel-clients-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-d309ca9513bf28d45f32",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /intel/portfolio",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8257,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:15:14.063Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-e8590-l-user-page-intel-portfolio-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-1ff4034154e3481c240d",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /intel/company",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [
+                    {
+                      "type": "issues",
+                      "description": "[{\"type\":\"console-error\",\"detail\":\"Failed to load resource: net::ERR_NETWORK_CHANGED\"},{\"type\":\"console-error\",\"detail\":\"Failed to load resource: net::ERR_NETWORK_CHANGED\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://bloom-house-iota.vercel.app/agent/pipeline?_rsc=fvwhj — net::ERR_NETWORK_CHANGED\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://bloom-house-iota.vercel.app/agent/pipeline?_rsc=4awzu — net::ERR_NETWORK_CHANGED\"}]"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 12498,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:15:22.390Z",
+                      "annotations": [
+                        {
+                          "type": "issues",
+                          "description": "[{\"type\":\"console-error\",\"detail\":\"Failed to load resource: net::ERR_NETWORK_CHANGED\"},{\"type\":\"console-error\",\"detail\":\"Failed to load resource: net::ERR_NETWORK_CHANGED\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://bloom-house-iota.vercel.app/agent/pipeline?_rsc=fvwhj — net::ERR_NETWORK_CHANGED\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://bloom-house-iota.vercel.app/agent/pipeline?_rsc=4awzu — net::ERR_NETWORK_CHANGED\"}]"
+                        }
+                      ],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-9caa6-eal-user-page-intel-company-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-811245eb2bf1d51cc72c",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /intel/lost-deals",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8347,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:15:34.999Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-25235--user-page-intel-lost-deals-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-415c468d0b7cf772ad53",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /intel/sources",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8607,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:15:43.382Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-ecfdc-eal-user-page-intel-sources-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-ef7bec3fd3d17c58c0ce",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /intel/tours",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8140,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:15:52.030Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-0a602--real-user-page-intel-tours-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-62ac376b4215c78ee12e",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /intel/team",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8374,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:16:00.205Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-2aeb3-w-real-user-page-intel-team-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-44cdef4221d8e4df5222",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /intel/capacity",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8296,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:16:08.617Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-b0367-al-user-page-intel-capacity-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-430452a4e5be90f1b9ce",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /intel/health",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8437,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:16:16.949Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-9980b-real-user-page-intel-health-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-3524bb4b9de54fed8a1c",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /portal/weddings",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 7740,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:16:25.422Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-a703d-l-user-page-portal-weddings-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-1aa802b5249f319b397b",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /portal/messages",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 12529,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:16:33.197Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-7d29f-l-user-page-portal-messages-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-b07cff4c749d9b0cec8d",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /portal/sage-queue",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8547,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:16:45.763Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-711fb-user-page-portal-sage-queue-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-a405608161068a4a33e9",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /portal/kb",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 9081,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:16:54.396Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-debb9-ow-real-user-page-portal-kb-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-0ccc1e1f0c6ef727e99a",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            },
+            {
+              "title": "real user page: /settings",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8686,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-16T12:17:03.510Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authe-325be-low-real-user-page-settings-chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-dd2dd1749ac4b660524e",
+              "file": "real-user-smoke.spec.ts",
+              "line": 148,
+              "column": 9
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-04-16T12:13:53.325Z",
+    "duration": 200917.413,
+    "expected": 23,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}

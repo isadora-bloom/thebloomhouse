@@ -1,0 +1,131 @@
+{
+  "config": {
+    "configFile": "C:\\Users\\Ismar\\bloom-house\\playwright.config.ts",
+    "rootDir": "C:/Users/Ismar/bloom-house/e2e",
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "C:/Users/Ismar/bloom-house/test-results",
+        "repeatEach": 1,
+        "retries": 1,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "C:/Users/Ismar/bloom-house/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 60000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.59.1",
+    "workers": 4,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "real-user-smoke.spec.ts",
+      "file": "real-user-smoke.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Real authenticated user flow",
+          "file": "real-user-smoke.spec.ts",
+          "line": 123,
+          "column": 6,
+          "specs": [
+            {
+              "title": "real user page: /",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [
+                    {
+                      "type": "issues",
+                      "description": "[{\"type\":\"console-error\",\"detail\":\"TypeError: Failed to fetch\\n    at https://bloom-house-iota.vercel.app/_next/static/chunks/16fbx.9.~5g8u.js?dpl=dpl_XizFNLHNpc1Whx3QDeiU31XquvG1:24:34431\\n    at t2 (https://bloom-house-iota.vercel.app/\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://bloom-house-iota.vercel.app/settings?_rsc=1r34m — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://jsxxgwprxuqgcauzlxcb.supabase.co/auth/v1/user — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://bloom-house-iota.vercel.app/agent/drafts?_rsc=1r34m — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://bloom-house-iota.vercel.app/intel/dashboard?_rsc=1r34m — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://bloom-house-iota.vercel.app/agent/inbox?_rsc=1r34m — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/venues?select=id — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/weddings?select=id&status=eq.inquiry — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/weddings?select=id&wedding_date=gte.2026-04-11&wedding_date=lte.2026-05-11 — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/drafts?select=id&status=eq.pending — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/weddings?select=id&status=eq.inquiry&venue_id=in.%2822222222-2222-2222-2222-222222222201%29 — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/weddings?select=id&wedding_date=gte.2026-04-11&wedding_date=lte.2026-05-11&venue_id=in.%2822222222-2222-2222-2222-222222222201%29 — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/drafts?select=id&status=eq.pending&venue_id=in.%2822222222-2222-2222-2222-222222222201%29 — net::ERR_ABORTED\"}]"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 10198,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-11T12:18:58.291Z",
+                      "annotations": [
+                        {
+                          "type": "issues",
+                          "description": "[{\"type\":\"console-error\",\"detail\":\"TypeError: Failed to fetch\\n    at https://bloom-house-iota.vercel.app/_next/static/chunks/16fbx.9.~5g8u.js?dpl=dpl_XizFNLHNpc1Whx3QDeiU31XquvG1:24:34431\\n    at t2 (https://bloom-house-iota.vercel.app/\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://bloom-house-iota.vercel.app/settings?_rsc=1r34m — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://jsxxgwprxuqgcauzlxcb.supabase.co/auth/v1/user — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://bloom-house-iota.vercel.app/agent/drafts?_rsc=1r34m — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://bloom-house-iota.vercel.app/intel/dashboard?_rsc=1r34m — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] GET https://bloom-house-iota.vercel.app/agent/inbox?_rsc=1r34m — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/venues?select=id — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/weddings?select=id&status=eq.inquiry — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/weddings?select=id&wedding_date=gte.2026-04-11&wedding_date=lte.2026-05-11 — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/drafts?select=id&status=eq.pending — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/weddings?select=id&status=eq.inquiry&venue_id=in.%2822222222-2222-2222-2222-222222222201%29 — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/weddings?select=id&wedding_date=gte.2026-04-11&wedding_date=lte.2026-05-11&venue_id=in.%2822222222-2222-2222-2222-222222222201%29 — net::ERR_ABORTED\"},{\"type\":\"failed-request\",\"detail\":\"[network] HEAD https://jsxxgwprxuqgcauzlxcb.supabase.co/rest/v1/drafts?select=id&status=eq.pending&venue_id=in.%2822222222-2222-2222-2222-222222222201%29 — net::ERR_ABORTED\"}]"
+                        }
+                      ],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Ismar\\bloom-house\\test-results\\real-user-smoke-Real-authenticated-user-flow-real-user-page--chromium\\test-finished-1.png"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "a12b222802b86563c4f1-b5e47041c811b6274cec",
+              "file": "real-user-smoke.spec.ts",
+              "line": 141,
+              "column": 9
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-04-11T12:18:55.762Z",
+    "duration": 15229.187,
+    "expected": 1,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}
