@@ -294,75 +294,80 @@ export default function AgentSettingsPage() {
     fetchGmailStatus()
   }, [fetchGmailStatus])
 
-  // ---- Gmail OAuth callback handler ----
+  // ---- Gmail OAuth callback result handler ----
+  // The new /api/auth/gmail flow redirects back with ?gmail=connected or
+  // ?gmail=error&reason=...
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    const code = params.get('code')
-    if (!code) return
+    const gmail = params.get('gmail')
+    if (!gmail) return
 
-    async function handleCallback() {
-      setGmailConnecting(true)
-      try {
-        const redirectUri = `${window.location.origin}/agent/settings`
-        const res = await fetch('/api/agent/gmail', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code, redirectUri }),
-        })
-        const data = await res.json()
-        if (data.connected) {
-          setGmailStatus({ connected: true, email: data.email })
-          // Re-fetch sync state + connections
-          fetchData()
-          fetchGmailStatus()
-        }
-      } catch {
-        // Error handled silently
-      } finally {
-        setGmailConnecting(false)
-        // Clean URL
-        window.history.replaceState({}, '', '/agent/settings')
+    if (gmail === 'connected') {
+      const email = params.get('email') ?? undefined
+      setGmailStatus({ connected: true, email })
+      setSaveMessage('Gmail connected successfully.')
+      setTimeout(() => setSaveMessage(null), 3000)
+      fetchData()
+      fetchGmailStatus()
+    } else if (gmail === 'error') {
+      const reason = params.get('reason') || 'unknown'
+      const friendly: Record<string, string> = {
+        access_denied: 'You declined Google access.',
+        not_configured: 'Gmail integration is not configured.',
+        bad_state: 'Security check failed. Please try again.',
+        no_refresh_token: 'Google did not return a refresh token. Remove Bloom from your Google account permissions and try again.',
+        token_exchange_failed: 'Google rejected the authorization code.',
+        db_write_failed: 'Could not save your Gmail connection.',
+        auth_mismatch: 'Session mismatch. Please sign in again and retry.',
       }
+      setSaveMessage(friendly[reason] || `Failed to connect Gmail (${reason}).`)
+      setTimeout(() => setSaveMessage(null), 5000)
     }
 
-    handleCallback()
+    // Clean URL
+    window.history.replaceState({}, '', '/agent/settings')
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ---- Gmail connect ----
-  async function connectGmail() {
+  // Redirects through /api/auth/gmail which handles OAuth + CSRF state.
+  function connectGmail() {
     setGmailConnecting(true)
-    try {
-      const redirectUri = `${window.location.origin}/agent/settings`
-      const res = await fetch(`/api/agent/gmail?action=auth-url&redirectUri=${encodeURIComponent(redirectUri)}`)
-      const data = await res.json()
-      if (data.url) {
-        window.location.href = data.url
-      } else {
-        setSaveMessage(data.error || 'Gmail integration is not configured.')
-        setGmailConnecting(false)
-      }
-    } catch {
-      setSaveMessage('Failed to initiate Gmail connection.')
-      setGmailConnecting(false)
-    }
+    const returnTo = '/agent/settings'
+    window.location.href = `/api/auth/gmail?returnTo=${encodeURIComponent(returnTo)}`
   }
 
   // ---- Gmail disconnect (all or specific connection) ----
   async function disconnectGmail(connectionId?: string) {
     setGmailConnecting(true)
     try {
-      const url = connectionId
-        ? `/api/agent/gmail?connectionId=${connectionId}`
-        : '/api/agent/gmail'
-      const res = await fetch(url, { method: 'DELETE' })
+      // New per-connection disconnect path that revokes the Google token
+      if (connectionId) {
+        const res = await fetch('/api/auth/gmail/disconnect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId }),
+        })
+        const data = await res.json()
+        if (data.ok) {
+          setSaveMessage('Gmail disconnected successfully.')
+          setTimeout(() => setSaveMessage(null), 3000)
+          fetchGmailStatus()
+          fetchData()
+        } else {
+          setSaveMessage(data.reason || 'Failed to disconnect Gmail.')
+          setTimeout(() => setSaveMessage(null), 3000)
+        }
+        return
+      }
+
+      // No specific connection → disconnect all via legacy endpoint
+      const res = await fetch('/api/agent/gmail', { method: 'DELETE' })
       const data = await res.json()
       if (data.success) {
-        if (!connectionId) {
-          setGmailStatus({ connected: false })
-          setGmailConnections([])
-          setSyncState(null)
-        }
+        setGmailStatus({ connected: false })
+        setGmailConnections([])
+        setSyncState(null)
         setSaveMessage('Gmail disconnected successfully.')
         setTimeout(() => setSaveMessage(null), 3000)
         fetchGmailStatus()

@@ -582,34 +582,44 @@ export default function OnboardingPage() {
   }
 
   // ---- Gmail OAuth ----
-  async function handleGmailConnect() {
+  // Uses /api/auth/gmail which redirects to Google consent, then comes back
+  // to /api/auth/gmail/callback, which redirects here with ?gmail=connected
+  // or ?gmail=error&reason=...
+  function handleGmailConnect() {
     setGmailLoading(true)
-    try {
-      const redirectUri = `${window.location.origin}/onboarding`
-      const res = await fetch(`/api/agent/gmail?action=auth-url&redirectUri=${encodeURIComponent(redirectUri)}`)
-      const data = await res.json()
-      if (data.url) {
-        window.location.href = data.url
-      } else {
-        setError(data.error || 'Gmail integration is not configured yet. You can connect it later in Settings.')
-        setGmailLoading(false)
-      }
-    } catch {
-      setError('Failed to initiate Gmail connection. You can try again later in Settings.')
-      setGmailLoading(false)
-    }
+    const returnTo = '/onboarding'
+    window.location.href = `/api/auth/gmail?returnTo=${encodeURIComponent(returnTo)}`
   }
 
   async function handleGmailDisconnect() {
     setGmailLoading(true)
     try {
-      const res = await fetch('/api/agent/gmail', { method: 'DELETE' })
+      // First get current connections so we know which one to disconnect
+      const statusRes = await fetch('/api/agent/gmail')
+      const statusData = await statusRes.json()
+      const primary = (statusData.connections ?? []).find(
+        (c: { isPrimary: boolean }) => c.isPrimary
+      ) ?? statusData.connections?.[0]
+
+      if (!primary?.id) {
+        // Fall back to the legacy DELETE-all path if we can't find a row
+        await fetch('/api/agent/gmail', { method: 'DELETE' })
+        setGmailConnected(false)
+        setGmailEmail(null)
+        return
+      }
+
+      const res = await fetch('/api/auth/gmail/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: primary.id }),
+      })
       const data = await res.json()
-      if (data.success) {
+      if (data.ok) {
         setGmailConnected(false)
         setGmailEmail(null)
       } else {
-        setError(data.error || 'Failed to disconnect Gmail.')
+        setError(data.reason || 'Failed to disconnect Gmail.')
       }
     } catch {
       setError('Failed to disconnect Gmail.')
@@ -618,37 +628,33 @@ export default function OnboardingPage() {
     }
   }
 
-  // Handle Gmail OAuth callback on mount
+  // Handle Gmail OAuth callback result on mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    const code = params.get('code')
-    if (!code) return
+    const gmail = params.get('gmail')
+    if (!gmail) return
 
-    async function handleCallback() {
-      try {
-        const redirectUri = `${window.location.origin}/onboarding`
-        const res = await fetch('/api/agent/gmail', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code, redirectUri }),
-        })
-        const data = await res.json()
-        if (data.connected) {
-          setGmailConnected(true)
-          setGmailEmail(data.email || 'Connected')
-          // Clean URL
-          window.history.replaceState({}, '', '/onboarding')
-          // Jump to Gmail step
-          setCurrentStep(1)
-        } else {
-          setError(data.error || 'Failed to complete Gmail connection.')
-        }
-      } catch {
-        setError('Failed to complete Gmail connection.')
+    if (gmail === 'connected') {
+      setGmailConnected(true)
+      const email = params.get('email')
+      if (email) setGmailEmail(email)
+      else setGmailEmail('Connected')
+      setCurrentStep(1)
+    } else if (gmail === 'error') {
+      const reason = params.get('reason') || 'unknown'
+      const friendly: Record<string, string> = {
+        access_denied: 'You declined Google access. You can connect Gmail later in Settings.',
+        not_configured: 'Gmail integration is not configured yet. You can connect it later in Settings.',
+        bad_state: 'Security check failed (session expired). Please try again.',
+        no_refresh_token: 'Google did not return a refresh token. Please remove Bloom from your Google account permissions and try again.',
+        token_exchange_failed: 'Google rejected the authorization code. Please try again.',
+        db_write_failed: 'Could not save your Gmail connection. Please try again.',
       }
+      setError(friendly[reason] || `Failed to connect Gmail (${reason}).`)
     }
 
-    handleCallback()
+    // Clean URL
+    window.history.replaceState({}, '', '/onboarding')
   }, [])
 
   // ---- Test Draft ----
