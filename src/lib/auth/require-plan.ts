@@ -6,7 +6,7 @@ import {
   tierMeetsMinimum,
   TIER_DISPLAY,
   type PlanTier,
-} from '@/lib/hooks/use-plan-tier'
+} from '@/lib/auth/plan-tiers'
 
 // ---------------------------------------------------------------------------
 // requirePlan — API-layer plan tier enforcement

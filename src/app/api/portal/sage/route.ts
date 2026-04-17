@@ -5,6 +5,7 @@ import { extractPlanningDecisions, savePlanningNotes, extractAndSaveAINotes } fr
 import { createNotification } from '@/lib/services/admin-notifications'
 import { callAIVision } from '@/lib/ai/client'
 import { rateLimit, secondsUntil } from '@/lib/rate-limit'
+import { getCoupleAuth, getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // Rate limit: 20 requests per 15 minutes per wedding (falls back to venue or
@@ -30,6 +31,50 @@ export async function POST(request: NextRequest) {
         { error: 'venueId and message are required' },
         { status: 400 }
       )
+    }
+
+    // -----------------------------------------------------------------------
+    // AUTHZ (BUG-09A fix): verify the caller actually has access to the
+    // venueId + weddingId they are claiming in the body. Previously the
+    // endpoint trusted body values, which let any authenticated user read
+    // any wedding's sage_conversations history.
+    // -----------------------------------------------------------------------
+    const demo = await isDemoMode()
+    if (!demo) {
+      // Try couple auth first (most common caller). Couples may only chat
+      // about their own wedding at their own venue.
+      const couple = await getCoupleAuth()
+      if (couple) {
+        if (couple.venueId !== venueId) {
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+        }
+        if (weddingId && couple.weddingId !== weddingId) {
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+        }
+      } else {
+        // Fall back to platform auth. Coordinators may test Sage against any
+        // wedding at their own venue, but not a different venue.
+        const platform = await getPlatformAuth()
+        if (!platform) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+        if (platform.venueId !== venueId) {
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+        }
+        if (weddingId) {
+          // Verify wedding belongs to this venue before letting the
+          // coordinator read its history.
+          const svc = createServiceClient()
+          const { data: w } = await svc
+            .from('weddings')
+            .select('venue_id')
+            .eq('id', weddingId)
+            .maybeSingle()
+          if (!w || w.venue_id !== venueId) {
+            return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+          }
+        }
+      }
     }
 
     // Rate limit by wedding ID (or venue ID for non-wedding queries)

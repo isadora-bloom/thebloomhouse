@@ -14,7 +14,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 // produce a reliable answer — we return a friendly empty-state instead.
 // ---------------------------------------------------------------------------
 
-export const NLQ_MIN_WEDDINGS = 10
+const NLQ_MIN_WEDDINGS = 10
 
 // ---------------------------------------------------------------------------
 // Rate limit for NLQ (more expensive than Sage chat): 10 requests per 15
