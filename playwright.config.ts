@@ -63,10 +63,12 @@ export default defineConfig({
   ],
   webServer: USE_LOCAL
     ? {
-        command: 'npm run dev',
+        // Force webpack (no Turbopack) — Turbopack has a reproducible crash on
+        // Windows during CSS compiles that kills dev mid-run. See BUG-DEV-01.
+        command: 'npx next dev --webpack',
         url: 'http://localhost:3000/welcome',
         reuseExistingServer: true,
-        timeout: 120_000,
+        timeout: 180_000,
         stdout: 'ignore',
         stderr: 'pipe',
       }
