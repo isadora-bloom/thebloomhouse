@@ -27,8 +27,10 @@ import {
   Gift,
   Users,
   MoreHorizontal,
+  Download,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { exportToCsv } from '@/lib/utils/csv-export'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,6 +55,7 @@ interface BudgetItem {
   payment_source: string | null
   payment_due_date: string | null
   notes: string | null
+  vendor_name: string | null
   sort_order: number
   payments?: PaymentRecord[]
 }
@@ -173,7 +176,7 @@ function formatDueDate(dateStr: string | null): { text: string; color: string } 
 // ---------------------------------------------------------------------------
 
 export default function BudgetPage() {
-  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
+  const { slug, venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [items, setItems] = useState<BudgetItem[]>([])
   const [loading, setLoading] = useState(true)
   const [totalBudget, setTotalBudget] = useState(0)
@@ -230,6 +233,7 @@ export default function BudgetPage() {
           payment_source: d.payment_source as string | null,
           payment_due_date: d.payment_due_date as string | null,
           notes: d.notes as string | null,
+          vendor_name: (d.vendor_name as string | null) ?? null,
           sort_order: (d.sort_order as number) || 0,
           payments,
         }
@@ -462,6 +466,30 @@ export default function BudgetPage() {
     setNewCategoryName('')
   }
 
+  // ---- CSV Export ----
+  function exportBudgetCsv() {
+    const columns = [
+      { key: 'category', label: 'Category' },
+      { key: 'item', label: 'Item' },
+      { key: 'budgeted', label: 'Budgeted' },
+      { key: 'committed', label: 'Committed' },
+      { key: 'paid', label: 'Paid' },
+      { key: 'vendor', label: 'Vendor' },
+      { key: 'notes', label: 'Notes' },
+    ]
+    const rows = items.map((i) => ({
+      category: i.category,
+      item: i.item_name,
+      budgeted: i.budgeted,
+      committed: i.committed,
+      paid: i.paid,
+      vendor: i.vendor_name || '',
+      notes: i.notes || '',
+    }))
+    const dateStr = new Date().toISOString().split('T')[0]
+    exportToCsv(`budget-${slug}-${dateStr}.csv`, columns, rows)
+  }
+
   // ---- Render ----
   return (
     <div className="space-y-6">
@@ -477,6 +505,14 @@ export default function BudgetPage() {
           <p className="text-gray-500 text-sm">Track every dollar of your wedding budget.</p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={exportBudgetCsv}
+            disabled={items.length === 0}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Download className="w-4 h-4" />
+            Export CSV
+          </button>
           <button
             onClick={() => setShowCategoryModal(true)}
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50"

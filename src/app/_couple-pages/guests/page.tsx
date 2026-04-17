@@ -35,6 +35,7 @@ import {
   Palette,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { exportToCsv } from '@/lib/utils/csv-export'
 import { TagChip } from '@/components/couple/tag-chip'
 import { TagPicker } from '@/components/couple/tag-picker'
 
@@ -723,20 +724,35 @@ export default function GuestListPage() {
 
   // ---- CSV Export ----
   function exportCsv() {
-    const headers = ['First Name', 'Last Name', 'Email', 'Phone', 'Group', 'RSVP', 'Meal', 'Dietary', 'Table', 'Plus One', 'Plus One Meal', 'Plus One Dietary']
-    const rows = guests.map((g) => [
-      g.first_name, g.last_name, g.email || '', g.phone || '', g.group_side,
-      g.rsvp_status, g.meal_choice || '', g.dietary_restrictions || '', g.table_assignment || '',
-      g.has_plus_one ? g.plus_one_name || 'Yes' : '', g.plus_one_meal_choice || '', g.plus_one_dietary || '',
-    ])
-    const csv = [headers, ...rows].map((r) => r.map((v) => `"${v}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'guest-list.csv'
-    a.click()
-    URL.revokeObjectURL(url)
+    const columns = [
+      { key: 'first_name', label: 'First Name' },
+      { key: 'last_name', label: 'Last Name' },
+      { key: 'email', label: 'Email' },
+      { key: 'phone', label: 'Phone' },
+      { key: 'group_side', label: 'Group' },
+      { key: 'rsvp_status', label: 'RSVP' },
+      { key: 'meal_choice', label: 'Meal' },
+      { key: 'dietary_restrictions', label: 'Dietary' },
+      { key: 'table_assignment', label: 'Table' },
+      { key: 'plus_one', label: 'Plus One' },
+      { key: 'plus_one_meal_choice', label: 'Plus One Meal' },
+      { key: 'plus_one_dietary', label: 'Plus One Dietary' },
+    ]
+    const rows = guests.map((g) => ({
+      first_name: g.first_name,
+      last_name: g.last_name,
+      email: g.email || '',
+      phone: g.phone || '',
+      group_side: g.group_side,
+      rsvp_status: g.rsvp_status,
+      meal_choice: g.meal_choice || '',
+      dietary_restrictions: g.dietary_restrictions || '',
+      table_assignment: g.table_assignment || '',
+      plus_one: g.has_plus_one ? g.plus_one_name || 'Yes' : '',
+      plus_one_meal_choice: g.plus_one_meal_choice || '',
+      plus_one_dietary: g.plus_one_dietary || '',
+    }))
+    exportToCsv('guest-list.csv', columns, rows)
   }
 
   // ---- Bulk actions ----

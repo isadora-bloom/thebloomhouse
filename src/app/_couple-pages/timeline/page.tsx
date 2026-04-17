@@ -25,8 +25,10 @@ import {
   StickyNote,
   Link2,
   Unlink,
+  Download,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { exportToCsv } from '@/lib/utils/csv-export'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1248,7 +1250,7 @@ function isChainedEvent(event: TimelineEvent, allEvents: TimelineEvent[]): boole
 // ---------------------------------------------------------------------------
 
 export default function TimelinePage() {
-  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
+  const { slug, venueId, weddingId, loading: contextLoading } = useCoupleContext()
   // ---- Config state ----
   const [config, setConfig] = useState<TimelineConfig>({
     ceremonyTime: '16:00',
@@ -1577,6 +1579,33 @@ export default function TimelinePage() {
     setSaving(false)
   }
 
+  // ---- CSV Export ----
+  function exportTimelineCsv() {
+    const columns = [
+      { key: 'time', label: 'Time' },
+      { key: 'duration', label: 'Duration' },
+      { key: 'event', label: 'Event' },
+      { key: 'location', label: 'Location' },
+      { key: 'assignees', label: 'Assignees' },
+      { key: 'notes', label: 'Notes' },
+    ]
+    const included = events.filter((e) => e.included && e.time)
+    const sorted = [...included].sort(
+      (a, b) => timeToMinutes(a.time) - timeToMinutes(b.time)
+    )
+    const rows = sorted.map((e) => ({
+      time: formatTime12(e.time),
+      duration: `${e.duration} min`,
+      event: e.name,
+      // Location and assignees are not modeled on timeline events yet.
+      location: '',
+      assignees: '',
+      notes: e.notes || '',
+    }))
+    const dateStr = new Date().toISOString().split('T')[0]
+    exportToCsv(`timeline-${slug}-${dateStr}.csv`, columns, rows)
+  }
+
   // ---- Reset to defaults ----
   function resetToDefaults() {
     if (!confirm('Reset all timeline events to defaults? Your customizations will be lost.')) return
@@ -1655,22 +1684,34 @@ export default function TimelinePage() {
       {/* ================================================================ */}
       {/* HEADER */}
       {/* ================================================================ */}
-      <div>
-        <h1
-          className="text-3xl font-bold mb-1"
-          style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary, #7D8471)' }}
-        >
-          Your Wedding Timeline
-        </h1>
-        <p className="text-gray-500 text-sm">
-          Map out the flow of your day, from getting ready to the grand exit.
-          {sunsetTime && (
-            <span className="ml-2 inline-flex items-center gap-1 text-amber-600">
-              <Sunset className="w-3.5 h-3.5" />
-              Sunset at {formatTime12(sunsetTime)}
-            </span>
-          )}
-        </p>
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <h1
+            className="text-3xl font-bold mb-1"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary, #7D8471)' }}
+          >
+            Your Wedding Timeline
+          </h1>
+          <p className="text-gray-500 text-sm">
+            Map out the flow of your day, from getting ready to the grand exit.
+            {sunsetTime && (
+              <span className="ml-2 inline-flex items-center gap-1 text-amber-600">
+                <Sunset className="w-3.5 h-3.5" />
+                Sunset at {formatTime12(sunsetTime)}
+              </span>
+            )}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={exportTimelineCsv}
+            disabled={events.filter((e) => e.included && e.time).length === 0}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Download className="w-4 h-4" />
+            Export CSV
+          </button>
+        </div>
       </div>
 
       {/* ================================================================ */}
