@@ -28,7 +28,7 @@ import {
   UserCheck,
   UserPlus,
 } from 'lucide-react'
-import { CommunicationPulse } from './[id]/page'
+import { CommunicationPulse } from './communication-pulse'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 
