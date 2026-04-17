@@ -4,34 +4,15 @@ import { generateSageResponse } from '@/lib/services/sage-brain'
 import { extractPlanningDecisions, savePlanningNotes, extractAndSaveAINotes } from '@/lib/services/planning-extraction'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { callAIVision } from '@/lib/ai/client'
+import { rateLimit, secondsUntil } from '@/lib/rate-limit'
 
 // ---------------------------------------------------------------------------
-// Simple in-memory rate limiter
-// Resets on server restart (fine for v1 — catches rapid-fire abuse within a
-// single serverless function instance). For production, consider Vercel Edge
-// Config or an external store like Redis.
+// Rate limit: 20 requests per 15 minutes per wedding (falls back to venue or
+// 'anonymous'). Persistent across cold starts via Supabase (BUG-12).
 // ---------------------------------------------------------------------------
 
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
-const RATE_LIMIT = 20 // max requests per window
-const RATE_WINDOW = 15 * 60 * 1000 // 15 minutes
-
-function checkRateLimit(identifier: string): boolean {
-  const now = Date.now()
-  const entry = rateLimitMap.get(identifier)
-
-  if (!entry || entry.resetAt < now) {
-    rateLimitMap.set(identifier, { count: 1, resetAt: now + RATE_WINDOW })
-    return true
-  }
-
-  if (entry.count >= RATE_LIMIT) {
-    return false // rate limited
-  }
-
-  entry.count++
-  return true
-}
+const SAGE_RATE_LIMIT = 20 // max requests per window
+const SAGE_RATE_WINDOW_SEC = 15 * 60 // 15 minutes
 
 // ---------------------------------------------------------------------------
 // POST — Sage portal chat
@@ -53,10 +34,17 @@ export async function POST(request: NextRequest) {
 
     // Rate limit by wedding ID (or venue ID for non-wedding queries)
     const rateLimitId = weddingId || venueId || 'anonymous'
-    if (!checkRateLimit(rateLimitId)) {
+    const rl = await rateLimit(`sage:${rateLimitId}`, {
+      limit: SAGE_RATE_LIMIT,
+      windowSec: SAGE_RATE_WINDOW_SEC,
+    })
+    if (!rl.ok) {
       return NextResponse.json(
         { error: 'Too many requests. Please wait a few minutes before sending another message.' },
-        { status: 429 }
+        {
+          status: 429,
+          headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) },
+        }
       )
     }
 

@@ -4,32 +4,15 @@ import {
   markQueryHelpful,
 } from '@/lib/services/intel-brain'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { rateLimit, secondsUntil } from '@/lib/rate-limit'
 
 // ---------------------------------------------------------------------------
-// Simple in-memory rate limiter for NLQ (more expensive than Sage chat)
-// 10 requests per 15 minutes per user. Resets on server restart.
+// Rate limit for NLQ (more expensive than Sage chat): 10 requests per 15
+// minutes per user. Persistent across cold starts via Supabase (BUG-12).
 // ---------------------------------------------------------------------------
 
-const nlqRateLimitMap = new Map<string, { count: number; resetAt: number }>()
 const NLQ_RATE_LIMIT = 10 // max requests per window
-const NLQ_RATE_WINDOW = 15 * 60 * 1000 // 15 minutes
-
-function checkNlqRateLimit(identifier: string): boolean {
-  const now = Date.now()
-  const entry = nlqRateLimitMap.get(identifier)
-
-  if (!entry || entry.resetAt < now) {
-    nlqRateLimitMap.set(identifier, { count: 1, resetAt: now + NLQ_RATE_WINDOW })
-    return true
-  }
-
-  if (entry.count >= NLQ_RATE_LIMIT) {
-    return false // rate limited
-  }
-
-  entry.count++
-  return true
-}
+const NLQ_RATE_WINDOW_SEC = 15 * 60 // 15 minutes
 
 // ---------------------------------------------------------------------------
 // POST -- Answer a natural language query
@@ -43,10 +26,17 @@ export async function POST(request: NextRequest) {
   }
 
   // Rate limit by user ID (authenticated endpoint)
-  if (!checkNlqRateLimit(auth.userId)) {
+  const rl = await rateLimit(`nlq:${auth.userId}`, {
+    limit: NLQ_RATE_LIMIT,
+    windowSec: NLQ_RATE_WINDOW_SEC,
+  })
+  if (!rl.ok) {
     return NextResponse.json(
       { error: 'Too many queries. Please wait a few minutes before asking another question.' },
-      { status: 429 }
+      {
+        status: 429,
+        headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) },
+      }
     )
   }
 
