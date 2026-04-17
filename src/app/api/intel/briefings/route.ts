@@ -6,6 +6,7 @@ import {
   generateMonthlyBriefing,
 } from '@/lib/services/briefings'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 // ---------------------------------------------------------------------------
 // GET — Latest briefing(s)
@@ -14,6 +15,9 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 // ---------------------------------------------------------------------------
 
 export async function GET(request: NextRequest) {
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -43,6 +47,9 @@ export async function GET(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

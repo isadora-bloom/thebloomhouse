@@ -5,12 +5,16 @@ import {
   acknowledgeAlert,
 } from '@/lib/services/anomaly-detection'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 // ---------------------------------------------------------------------------
 // GET — Active (unacknowledged) anomaly alerts
 // ---------------------------------------------------------------------------
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -29,7 +33,10 @@ export async function GET() {
 // POST — Run anomaly detection manually
 // ---------------------------------------------------------------------------
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -50,6 +57,9 @@ export async function POST() {
 // ---------------------------------------------------------------------------
 
 export async function PATCH(request: NextRequest) {
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

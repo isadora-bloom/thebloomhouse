@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth, unauthorized, serverError } from '@/lib/api/auth-helpers'
 import { generatePositioningSuggestions } from '@/lib/services/intel-brain'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 // ---------------------------------------------------------------------------
 // POST — Generate AI positioning suggestions for the venue
@@ -8,6 +9,9 @@ import { generatePositioningSuggestions } from '@/lib/services/intel-brain'
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
 

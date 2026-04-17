@@ -25,6 +25,8 @@ interface NLQMessage {
   cost: number | null
   helpful: boolean | null
   created_at: string
+  needsMoreData?: boolean
+  weddingCount?: number
 }
 
 interface HistoryRow {
@@ -268,6 +270,24 @@ export default function NaturalLanguageQueryPage() {
       if (!res.ok) throw new Error('Failed to query')
       const data = await res.json()
 
+      // GAP-07 empty-state: not enough weddings for a reliable answer.
+      if (data.needs_more_data) {
+        const needsDataMsg: NLQMessage = {
+          id: `needs-data-${Date.now()}`,
+          role: 'assistant',
+          content: data.message,
+          queryId: null,
+          tokensUsed: null,
+          cost: null,
+          helpful: null,
+          created_at: new Date().toISOString(),
+          needsMoreData: true,
+          weddingCount: data.wedding_count,
+        }
+        setMessages((prev) => [...prev, needsDataMsg])
+        return
+      }
+
       const aiMsg: NLQMessage = {
         id: `ai-${data.queryId || Date.now()}`,
         role: 'assistant',
@@ -399,19 +419,41 @@ export default function NaturalLanguageQueryPage() {
 
               <div className={`max-w-[80%] sm:max-w-[70%]`}>
                 {/* Bubble */}
-                <div
-                  className={`rounded-2xl px-4 py-3 text-sm ${
-                    msg.role === 'user'
-                      ? 'bg-sage-500 text-white rounded-br-md'
-                      : 'bg-surface border border-border text-sage-800 shadow-sm rounded-bl-md'
-                  }`}
-                >
-                  {msg.role === 'assistant' ? (
-                    <div className="space-y-1">{renderResponse(msg.content)}</div>
-                  ) : (
-                    msg.content
-                  )}
-                </div>
+                {msg.role === 'assistant' && msg.needsMoreData ? (
+                  <div className="rounded-2xl rounded-bl-md px-4 py-4 text-sm bg-gold-50 border border-gold-200 text-sage-800 shadow-sm">
+                    <div className="flex items-start gap-2 mb-2">
+                      <BarChart3 className="w-4 h-4 text-gold-500 mt-0.5 shrink-0" />
+                      <div className="font-semibold text-sage-900">
+                        Not enough data yet
+                      </div>
+                    </div>
+                    <p className="leading-relaxed text-sage-700 mb-2">
+                      {msg.content}
+                    </p>
+                    {typeof msg.weddingCount === 'number' && (
+                      <p className="text-xs text-sage-500">
+                        Current wedding count:{' '}
+                        <span className="font-semibold text-sage-700">
+                          {msg.weddingCount}
+                        </span>
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div
+                    className={`rounded-2xl px-4 py-3 text-sm ${
+                      msg.role === 'user'
+                        ? 'bg-sage-500 text-white rounded-br-md'
+                        : 'bg-surface border border-border text-sage-800 shadow-sm rounded-bl-md'
+                    }`}
+                  >
+                    {msg.role === 'assistant' ? (
+                      <div className="space-y-1">{renderResponse(msg.content)}</div>
+                    ) : (
+                      msg.content
+                    )}
+                  </div>
+                )}
 
                 {/* Feedback for AI messages */}
                 {msg.role === 'assistant' && msg.queryId && (

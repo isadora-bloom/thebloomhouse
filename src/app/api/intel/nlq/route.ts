@@ -5,6 +5,16 @@ import {
 } from '@/lib/services/intel-brain'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { rateLimit, secondsUntil } from '@/lib/rate-limit'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { createServiceClient } from '@/lib/supabase/service'
+
+// ---------------------------------------------------------------------------
+// Minimum weddings required before NLQ will attempt to answer.
+// Under this threshold, the venue does not have enough data for the AI to
+// produce a reliable answer — we return a friendly empty-state instead.
+// ---------------------------------------------------------------------------
+
+export const NLQ_MIN_WEDDINGS = 10
 
 // ---------------------------------------------------------------------------
 // Rate limit for NLQ (more expensive than Sage chat): 10 requests per 15
@@ -20,6 +30,9 @@ const NLQ_RATE_WINDOW_SEC = 15 * 60 // 15 minutes
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -51,6 +64,26 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // ---- "Need more data" guard (GAP-07) ------------------------------------
+    // Count weddings for the venue. If below NLQ_MIN_WEDDINGS, return a
+    // friendly empty-state (HTTP 200, not an error) so the UI can render a
+    // message instead of an AI answer.
+    const service = createServiceClient()
+    const { count: weddingCount } = await service
+      .from('weddings')
+      .select('id', { count: 'exact', head: true })
+      .eq('venue_id', auth.venueId)
+
+    const n = weddingCount ?? 0
+    if (n < NLQ_MIN_WEDDINGS) {
+      return NextResponse.json({
+        answer: null,
+        needs_more_data: true,
+        wedding_count: n,
+        message: `We need at least ${NLQ_MIN_WEDDINGS} weddings to answer reliably. You have ${n}. Come back after logging a few more inquiries.`,
+      })
+    }
+
     const result = await answerNaturalLanguageQuery(
       auth.venueId,
       auth.userId,
@@ -75,6 +108,9 @@ export async function POST(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export async function PATCH(request: NextRequest) {
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

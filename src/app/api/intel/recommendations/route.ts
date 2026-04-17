@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth, unauthorized, serverError } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 // ---------------------------------------------------------------------------
 // GET — List recommendations for the authenticated venue
@@ -8,6 +9,9 @@ import { createServiceClient } from '@/lib/supabase/service'
 // ---------------------------------------------------------------------------
 
 export async function GET(request: NextRequest) {
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
 
@@ -43,6 +47,9 @@ export async function GET(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export async function PATCH(request: NextRequest) {
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
 

@@ -4,6 +4,7 @@ import {
   getOutcomesForVenue,
   getOutcomeForInsight,
 } from '@/lib/services/insight-tracking'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 // ---------------------------------------------------------------------------
 // GET — Fetch insight outcomes
@@ -13,6 +14,9 @@ import {
 // ---------------------------------------------------------------------------
 
 export async function GET(req: NextRequest) {
+  const plan = await requirePlan(req, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
