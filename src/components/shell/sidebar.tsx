@@ -32,6 +32,8 @@ import {
   Upload,
   // Toggle
   ChevronDown, Zap, LayoutList,
+  // Billing
+  CreditCard,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -173,6 +175,7 @@ const SETTINGS_SECTION: NavSection = {
   items: [
     { label: 'Venue Settings', href: '/settings', icon: Settings, daily: true },
     { label: 'Team', href: '/settings/team', icon: Users, daily: true },
+    { label: 'Billing', href: '/settings/billing', icon: CreditCard, daily: true },
     { label: 'Onboarding', href: '/onboarding', icon: Building },
     { label: 'Super Admin', href: '/super-admin', icon: ShieldCheck },
   ],
@@ -476,6 +479,23 @@ export function Sidebar({ isDemo = false }: { isDemo?: boolean }) {
           )
         })}
       </div>
+
+      {/* Upgrade CTA — only for starter-tier venues, hidden in demo */}
+      {planTier === 'starter' && !isDemo && (
+        <div className="px-3 pb-2">
+          <Link
+            href="/pricing"
+            onClick={() => setMobileOpen(false)}
+            className="flex items-center gap-2 w-full px-3 py-2.5 rounded-lg text-sm font-medium bg-gradient-to-br from-sage-600 to-sage-700 text-white hover:from-sage-700 hover:to-sage-800 transition-all shadow-sm"
+          >
+            <Sparkles className="w-4 h-4 shrink-0" />
+            <div className="flex-1 text-left">
+              <div className="leading-tight">Upgrade plan</div>
+              <div className="text-[10px] opacity-80 font-normal">Unlock Intelligence</div>
+            </div>
+          </Link>
+        </div>
+      )}
 
       {/* User menu */}
       <div className="p-4 border-t border-border flex items-center justify-between">
