@@ -607,6 +607,7 @@ export default function BarPlannerPage() {
   // ── Load data ──────────────────────────────────────────────────────────────
 
   const loadData = useCallback(async () => {
+    if (!weddingId || !venueId) return
     try {
       const [shoppingRes, recipesRes, planRes, configRes] = await Promise.all([
         supabase.from('bar_shopping_list').select('*').eq('wedding_id', weddingId).order('category').order('item_name'),
@@ -656,11 +657,13 @@ export default function BarPlannerPage() {
       console.error('[BarPlanner] Load failed:', err)
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId, venueId])
 
+  // BUG-04A: wait for context ids before firing fetch.
   useEffect(() => {
+    if (!weddingId || !venueId) return
     loadData()
-  }, [loadData])
+  }, [weddingId, venueId, loadData])
 
   // ── Recalculate preview when inputs change ────────────────────────────────
 

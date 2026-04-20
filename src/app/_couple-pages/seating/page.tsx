@@ -145,6 +145,7 @@ export default function SeatingChartPage() {
 
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
+    if (!weddingId || !venueId) return
     const [tablesRes, guestsRes, configRes, tagsRes] = await Promise.all([
       supabase
         .from('seating_tables')
@@ -206,11 +207,13 @@ export default function SeatingChartPage() {
     }
 
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId, venueId])
 
+  // BUG-04A: wait for context ids before firing fetch.
   useEffect(() => {
+    if (!weddingId || !venueId) return
     fetchData()
-  }, [fetchData])
+  }, [weddingId, venueId, fetchData])
 
   // ---- Derived data ----
   const guestsByTable = useMemo(() => {

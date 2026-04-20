@@ -74,6 +74,7 @@ export default function VenueInventoryPage() {
 
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
+    if (!venueId || !weddingId) return
     const [catalogRes, selectionsRes] = await Promise.all([
       supabase
         .from('borrow_catalog')
@@ -95,11 +96,13 @@ export default function VenueInventoryPage() {
       setSelections(selectionsRes.data as Selection[])
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, venueId, weddingId])
 
+  // BUG-04A: wait for context ids before firing fetch.
   useEffect(() => {
+    if (!venueId || !weddingId) return
     fetchData()
-  }, [fetchData])
+  }, [venueId, weddingId, fetchData])
 
   // ---- Helpers ----
   function getSelection(catalogItemId: string): Selection | undefined {

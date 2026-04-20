@@ -92,6 +92,7 @@ export default function PhotoLibraryPage() {
 
   // ---- Fetch ----
   const fetchPhotos = useCallback(async () => {
+    if (!weddingId) return
     const { data, error } = await supabase
       .from('photo_library')
       .select('*')
@@ -108,9 +109,10 @@ export default function PhotoLibraryPage() {
       )
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
   const fetchGuests = useCallback(async () => {
+    if (!weddingId) return
     const { data } = await supabase
       .from('guest_list')
       .select('id, first_name, last_name')
@@ -120,12 +122,14 @@ export default function PhotoLibraryPage() {
     if (data) {
       setGuestNames(data as GuestName[])
     }
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchPhotos()
     fetchGuests()
-  }, [fetchPhotos, fetchGuests])
+  }, [weddingId, fetchPhotos, fetchGuests])
 
   // ---- Derived ----
   const filtered = photos.filter((p) => {

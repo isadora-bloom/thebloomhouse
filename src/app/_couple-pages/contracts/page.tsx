@@ -469,6 +469,7 @@ export default function ContractsPage() {
 
   // ---- Fetch contracts ----
   const fetchContracts = useCallback(async () => {
+    if (!weddingId) return
     const { data, error: fetchErr } = await supabase
       .from('contracts')
       .select('*')
@@ -482,10 +483,11 @@ export default function ContractsPage() {
       setContracts(data as Contract[])
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
   // ---- Fetch vendors for linking ----
   const fetchVendors = useCallback(async () => {
+    if (!weddingId) return
     const { data } = await supabase
       .from('booked_vendors')
       .select('id, vendor_type, vendor_name, is_booked')
@@ -495,12 +497,16 @@ export default function ContractsPage() {
     if (data) {
       setVendors(data as BookedVendor[])
     }
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // Wait for useCoupleContext to resolve weddingId before firing the first
+  // fetch. Without this gate the effect fires with weddingId=null on mount
+  // (BUG-04A clone — same pattern as budget/page.tsx).
   useEffect(() => {
+    if (!weddingId) return
     fetchContracts()
     fetchVendors()
-  }, [fetchContracts, fetchVendors])
+  }, [weddingId, fetchContracts, fetchVendors])
 
   // ---- Upload file to storage + create record ----
   async function handleUpload() {

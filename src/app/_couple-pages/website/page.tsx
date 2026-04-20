@@ -266,6 +266,7 @@ export default function WeddingWebsitePage() {
 
   // ---- Fetch ----
   const fetchSettings = useCallback(async () => {
+    if (!weddingId) return
     const { data } = await supabase
       .from('wedding_website_settings')
       .select('*')
@@ -279,11 +280,13 @@ export default function WeddingWebsitePage() {
         sections: data.sections || DEFAULT_SETTINGS.sections,
       })
     }
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchSettings()
-  }, [fetchSettings])
+  }, [weddingId, fetchSettings])
 
   // ---- Save ----
   async function saveSettings(updated?: Partial<WebsiteSettings>) {

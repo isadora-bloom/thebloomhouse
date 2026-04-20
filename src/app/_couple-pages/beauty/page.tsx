@@ -108,6 +108,7 @@ export default function BeautySchedulePage() {
 
   // ---- Fetch ----
   const fetchAppointments = useCallback(async () => {
+    if (!weddingId) return
     const { data, error } = await supabase
       .from('makeup_schedule')
       .select('*')
@@ -118,11 +119,13 @@ export default function BeautySchedulePage() {
       setAppointments(data as BeautyAppointment[])
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchAppointments()
-  }, [fetchAppointments])
+  }, [weddingId, fetchAppointments])
 
   // ---- Sorted by earliest appointment ----
   const sortedAppointments = useMemo(() => {

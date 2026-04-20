@@ -201,6 +201,7 @@ export default function BudgetPage() {
 
   // ---- Fetch ----
   const fetchItems = useCallback(async () => {
+    if (!weddingId) return
     const { data, error } = await supabase
       .from('budget_items')
       .select('*, budget_payments(*)')
@@ -250,9 +251,10 @@ export default function BudgetPage() {
       setCustomCategories(customs)
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
   const fetchBudgetConfig = useCallback(async () => {
+    if (!weddingId) return
     const { data } = await supabase
       .from('wedding_config')
       .select('total_budget, budget_shared')
@@ -263,12 +265,16 @@ export default function BudgetPage() {
       setTotalBudget((data as Record<string, unknown>).total_budget as number || 0)
       setShareWithVenue((data as Record<string, unknown>).budget_shared as boolean || false)
     }
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // Wait for useCoupleContext to resolve weddingId before firing the first
+  // fetch. Previously this effect had [] deps and fired on mount with
+  // weddingId = null, sending `wedding_id='null'` to PostgREST (BUG-04A).
   useEffect(() => {
+    if (!weddingId) return
     fetchItems()
     fetchBudgetConfig()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [weddingId, fetchItems, fetchBudgetConfig])
 
   // ---- Computed ----
   // Total Budget = wedding_config.total_budget (user-set)

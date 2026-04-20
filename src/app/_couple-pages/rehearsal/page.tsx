@@ -376,6 +376,7 @@ export default function RehearsalPage() {
 
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
+    if (!weddingId || !venueId) return
     const [rehearsalRes, configRes] = await Promise.all([
       supabase
         .from('rehearsal_dinner')
@@ -447,11 +448,13 @@ export default function RehearsalPage() {
     }
 
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId, venueId])
 
+  // BUG-04A: wait for context ids before firing fetch.
   useEffect(() => {
+    if (!weddingId || !venueId) return
     fetchData()
-  }, [fetchData])
+  }, [weddingId, venueId, fetchData])
 
   // ---- Update field ----
   function updateField<K extends keyof RehearsalData>(field: K, value: RehearsalData[K]) {

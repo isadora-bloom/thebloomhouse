@@ -245,6 +245,7 @@ export default function WeddingDetailsPage() {
 
   // ---- Fetch wedding details + venue config ----
   const fetchData = useCallback(async () => {
+    if (!weddingId || !venueId) return
     // Fetch both in parallel
     const [detailsResult, configResult] = await Promise.all([
       supabase
@@ -295,11 +296,13 @@ export default function WeddingDetailsPage() {
     }
 
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId, venueId])
 
+  // BUG-04A: wait for context ids before firing fetch.
   useEffect(() => {
+    if (!weddingId || !venueId) return
     fetchData()
-  }, [fetchData])
+  }, [weddingId, venueId, fetchData])
 
   // ---- Auto-save with debounce ----
   const saveDetails = useCallback(

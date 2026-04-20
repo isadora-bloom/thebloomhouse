@@ -300,6 +300,7 @@ export default function PreferredVendorsPage() {
 
   // ---- Fetch vendors ----
   const fetchVendors = useCallback(async () => {
+    if (!venueId) return
     const { data, error } = await supabase
       .from('vendor_recommendations')
       .select('*')
@@ -311,11 +312,13 @@ export default function PreferredVendorsPage() {
       setVendors(data as VendorRecommendation[])
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, venueId])
 
+  // BUG-04A: wait for venueId before firing fetch.
   useEffect(() => {
+    if (!venueId) return
     fetchVendors()
-  }, [fetchVendors])
+  }, [venueId, fetchVendors])
 
   // ---- Derived data ----
   const vendorTypes = Array.from(new Set(vendors.map((v) => v.vendor_type))).sort()

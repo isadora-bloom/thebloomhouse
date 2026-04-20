@@ -99,6 +99,7 @@ export default function DecorInventoryPage() {
 
   // ---- Fetch ----
   const fetchItems = useCallback(async () => {
+    if (!weddingId || !venueId) return
     const [itemsRes, configRes] = await Promise.all([
       supabase
         .from('decor_inventory')
@@ -129,11 +130,13 @@ export default function DecorInventoryPage() {
       setExpandedSpaces(spaces)
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId, venueId])
 
+  // BUG-04A: wait for context ids before firing fetch.
   useEffect(() => {
+    if (!weddingId || !venueId) return
     fetchItems()
-  }, [fetchItems])
+  }, [weddingId, venueId, fetchItems])
 
   // ---- Group by space ----
   const spaces = useMemo(() => {

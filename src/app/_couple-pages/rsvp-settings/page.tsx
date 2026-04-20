@@ -231,6 +231,7 @@ export default function RsvpSettingsPage() {
 
   // ---- Fetch config ----
   const fetchConfig = useCallback(async () => {
+    if (!venueId || !weddingId) return
     const { data } = await supabase
       .from('rsvp_config')
       .select('*')
@@ -260,11 +261,13 @@ export default function RsvpSettingsPage() {
       })
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, venueId, weddingId])
 
+  // BUG-04A: wait for context ids before firing fetch.
   useEffect(() => {
+    if (!venueId || !weddingId) return
     fetchConfig()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [venueId, weddingId, fetchConfig])
 
   // ---- Save config ----
   async function handleSave() {

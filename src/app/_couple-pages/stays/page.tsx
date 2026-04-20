@@ -89,6 +89,7 @@ export default function NearbyStaysPage() {
 
   // ---- Fetch ----
   const fetchAccommodations = useCallback(async () => {
+    if (!venueId) return
     const { data, error } = await supabase
       .from('accommodations')
       .select('*')
@@ -101,11 +102,13 @@ export default function NearbyStaysPage() {
       setAccommodations(data as Accommodation[])
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, venueId])
 
+  // BUG-04A: wait for venueId before firing fetch.
   useEffect(() => {
+    if (!venueId) return
     fetchAccommodations()
-  }, [fetchAccommodations])
+  }, [venueId, fetchAccommodations])
 
   // ---- Filtered ----
   const filtered = accommodations.filter((a) => {

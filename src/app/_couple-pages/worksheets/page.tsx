@@ -176,6 +176,7 @@ export default function WorksheetsPage() {
 
   // ---- Fetch ----
   const fetchWorksheets = useCallback(async () => {
+    if (!weddingId) return
     const { data, error } = await supabase
       .from('wedding_worksheets')
       .select('*')
@@ -228,11 +229,13 @@ export default function WorksheetsPage() {
       }
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchWorksheets()
-  }, [fetchWorksheets])
+  }, [weddingId, fetchWorksheets])
 
   // ---- Save ----
   async function saveSection(section: SectionKey) {

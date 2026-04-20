@@ -156,6 +156,7 @@ export default function DownloadsPage() {
 
   // ---- Fetch assets ----
   const fetchAssets = useCallback(async () => {
+    if (!venueId) return
     const { data, error } = await supabase
       .from('venue_assets')
       .select('*')
@@ -167,11 +168,13 @@ export default function DownloadsPage() {
       setAssets(data as VenueAsset[])
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, venueId])
 
+  // BUG-04A: wait for venueId before firing fetch.
   useEffect(() => {
+    if (!venueId) return
     fetchAssets()
-  }, [fetchAssets])
+  }, [venueId, fetchAssets])
 
   // ---- Derived data ----
   const fileTypes = Array.from(

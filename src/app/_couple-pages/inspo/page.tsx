@@ -84,6 +84,7 @@ export default function InspoGalleryPage() {
 
   // ---- Fetch ----
   const fetchImages = useCallback(async () => {
+    if (!venueId) return
     const { data, error } = await supabase
       .from('inspo_gallery')
       .select('*')
@@ -94,11 +95,13 @@ export default function InspoGalleryPage() {
       setImages(data as InspoImage[])
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, venueId])
 
+  // BUG-04A: wait for venueId before firing fetch.
   useEffect(() => {
+    if (!venueId) return
     fetchImages()
-  }, [fetchImages])
+  }, [venueId, fetchImages])
 
   // ---- Filter ----
   const filteredImages = images.filter((img) => {

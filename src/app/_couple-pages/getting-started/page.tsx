@@ -246,6 +246,7 @@ export default function GettingStartedPage() {
 
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
+    if (!weddingId) return
     const [progressRes, weddingRes] = await Promise.all([
       supabase
         .from('onboarding_progress')
@@ -276,11 +277,13 @@ export default function GettingStartedPage() {
       })
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchData()
-  }, [fetchData])
+  }, [weddingId, fetchData])
 
   // ---- Completion tracking ----
   const completedSteps = useMemo(() => {

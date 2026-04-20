@@ -298,6 +298,7 @@ export default function GuestCareNotesPage() {
   // Load existing data — each section is stored as a row in guest_care_notes
   // with care_type = section key, guest_name = JSON {has}, note = text notes
   const loadData = useCallback(async () => {
+    if (!weddingId) return
     try {
       const { data } = await supabase
         .from('guest_care_notes')
@@ -329,11 +330,13 @@ export default function GuestCareNotesPage() {
     } finally {
       setLoading(false)
     }
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     loadData()
-  }, [loadData])
+  }, [weddingId, loadData])
 
   // Section value setters
   const setHas = (key: string, val: boolean | null) => {

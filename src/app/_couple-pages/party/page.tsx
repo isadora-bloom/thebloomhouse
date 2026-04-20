@@ -147,6 +147,7 @@ export default function WeddingPartyPage() {
 
   // ---- Fetch ----
   const fetchMembers = useCallback(async () => {
+    if (!weddingId) return
     const { data, error } = await supabase
       .from('wedding_party')
       .select('*')
@@ -158,10 +159,11 @@ export default function WeddingPartyPage() {
       setMembers(data as PartyMember[])
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
   // ---- Fetch guest list for picker ----
   const fetchGuests = useCallback(async () => {
+    if (!weddingId) return
     const { data } = await supabase
       .from('guest_list')
       .select('id, first_name, last_name')
@@ -171,12 +173,14 @@ export default function WeddingPartyPage() {
     if (data) {
       setGuestOptions(data as GuestOption[])
     }
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchMembers()
     fetchGuests()
-  }, [fetchMembers, fetchGuests])
+  }, [weddingId, fetchMembers, fetchGuests])
 
   // ---- Derived ----
   const partner1Members = members.filter((m) => m.side === 'partner_1' || m.side === 'bride')

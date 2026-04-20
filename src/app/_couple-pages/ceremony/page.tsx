@@ -697,6 +697,7 @@ export default function CeremonyOrderPage() {
 
   // ---- Fetch ----
   const fetchEntries = useCallback(async () => {
+    if (!weddingId) return
     try {
       const { data, error } = await supabase
         .from('ceremony_order')
@@ -712,11 +713,13 @@ export default function CeremonyOrderPage() {
     } finally {
       setLoading(false)
     }
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchEntries()
-  }, [fetchEntries])
+  }, [weddingId, fetchEntries])
 
   // ---- Add person ----
   const handleAdd = async (name: string, role: string, section: CeremonySection) => {

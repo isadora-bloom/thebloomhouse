@@ -250,6 +250,7 @@ export default function GuestListPage() {
 
   // ---- Fetch ----
   const fetchGuests = useCallback(async () => {
+    if (!weddingId) return
     const { data, error } = await supabase
       .from('guest_list')
       .select('*')
@@ -300,9 +301,10 @@ export default function GuestListPage() {
       )
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
   const fetchConfig = useCallback(async () => {
+    if (!weddingId) return
     // 1. Get plated_meal from wedding_config
     const { data: configData } = await supabase
       .from('wedding_config')
@@ -348,12 +350,14 @@ export default function GuestListPage() {
     if (mealData && mealData.length > 0) {
       setMealOptions(mealData.map((m: Record<string, unknown>) => m.option_name as string))
     }
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchGuests()
     fetchConfig()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [weddingId, fetchGuests, fetchConfig])
 
   // ---- Save config helper ----
   async function saveConfig(updates: Record<string, unknown>) {

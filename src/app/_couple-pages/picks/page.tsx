@@ -161,6 +161,7 @@ export default function PicksPage() {
 
   // ---- Fetch picks ----
   const fetchPicks = useCallback(async () => {
+    if (!venueId) return
     const { data, error } = await supabase
       .from('storefront')
       .select('*')
@@ -173,11 +174,13 @@ export default function PicksPage() {
       setPicks(data as StorefrontPick[])
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, venueId])
 
+  // BUG-04A: wait for venueId before firing fetch.
   useEffect(() => {
+    if (!venueId) return
     fetchPicks()
-  }, [fetchPicks])
+  }, [venueId, fetchPicks])
 
   // ---- Derived data ----
   const categories = Array.from(new Set(picks.map((p) => p.category))).sort()

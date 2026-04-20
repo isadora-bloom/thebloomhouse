@@ -383,8 +383,10 @@ export default function BookingPage() {
       }
     }
 
+    // BUG-04A: wait for venueId before firing fetch.
+    if (!venueId) return
     loadConfig()
-  }, [])
+  }, [venueId])
 
   // Group meeting types by category
   const groupedMeetings = CATEGORY_ORDER.map((cat) => ({

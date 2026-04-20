@@ -198,6 +198,7 @@ export default function ChecklistPage() {
   // First checks venue_config.feature_flags.checklist_template for venue-specific tasks,
   // falls back to hardcoded DEFAULT_TASKS if no template configured.
   const seedDefaults = useCallback(async () => {
+    if (!venueId || !weddingId) return
     // Try to load venue-specific checklist template
     const { data: configData } = await supabase
       .from('venue_config')
@@ -232,10 +233,11 @@ export default function ChecklistPage() {
         }))
 
     await supabase.from('checklist_items').insert(rows)
-  }, [supabase])
+  }, [supabase, venueId, weddingId])
 
   // ---- Fetch ----
   const fetchItems = useCallback(async () => {
+    if (!weddingId) return
     const { data, error } = await supabase
       .from('checklist_items')
       .select('*')
@@ -257,11 +259,13 @@ export default function ChecklistPage() {
       }
     }
     setLoading(false)
-  }, [supabase, initialized, seedDefaults])
+  }, [supabase, weddingId, initialized, seedDefaults])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchItems()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [weddingId, fetchItems])
 
   // ---- Computed ----
   const totalItems = items.length

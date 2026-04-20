@@ -121,6 +121,7 @@ export default function CouplePhotoPage() {
 
   // ---- Fetch current photo ----
   const fetchCurrentPhoto = useCallback(async () => {
+    if (!weddingId) return
     const { data, error } = await supabase
       .from('weddings')
       .select('couple_photo_url')
@@ -131,11 +132,13 @@ export default function CouplePhotoPage() {
       setCurrentPhotoUrl(data.couple_photo_url || null)
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchCurrentPhoto()
-  }, [fetchCurrentPhoto])
+  }, [weddingId, fetchCurrentPhoto])
 
   // ---- File select handler ----
   function handleFileSelect(file: File) {

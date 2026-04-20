@@ -248,6 +248,7 @@ export default function StaffingCalculatorPage() {
 
   // Load existing data from staffing_assignments (role='_calculator')
   const loadData = useCallback(async () => {
+    if (!weddingId) return
     try {
       const { data } = await supabase
         .from('staffing_assignments')
@@ -271,9 +272,11 @@ export default function StaffingCalculatorPage() {
     }
   }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     loadData()
-  }, [loadData])
+  }, [weddingId, loadData])
 
   const update = <K extends keyof StaffingAnswers>(key: K, value: StaffingAnswers[K]) => {
     setAnswers((prev) => ({ ...prev, [key]: value }))

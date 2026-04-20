@@ -85,6 +85,7 @@ export default function FinalReviewPage() {
 
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
+    if (!weddingId) return
     const [finRes, wedRes] = await Promise.all([
       supabase
         .from('section_finalisations')
@@ -104,11 +105,13 @@ export default function FinalReviewPage() {
       setWedding(wedRes.data as WeddingInfo)
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchData()
-  }, [fetchData])
+  }, [weddingId, fetchData])
 
   // ---- Computed ----
   const weeksUntilWedding = wedding?.wedding_date

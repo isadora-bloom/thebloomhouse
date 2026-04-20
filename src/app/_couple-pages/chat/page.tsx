@@ -214,8 +214,10 @@ export default function SageChatPage() {
       setWeddingStateLoaded(true)
     }
 
+    // BUG-04A: wait for weddingId before firing fetch.
+    if (!weddingId) return
     loadWeddingState()
-  }, [])
+  }, [weddingId])
 
   // Load existing conversation history — most recent INITIAL_MESSAGE_LIMIT messages
   useEffect(() => {
@@ -245,8 +247,10 @@ export default function SageChatPage() {
       setLoading(false)
     }
 
+    // BUG-04A: wait for weddingId before firing fetch.
+    if (!weddingId) return
     loadHistory()
-  }, [])
+  }, [weddingId])
 
   // Load contract context if contractId query param is present
   useEffect(() => {

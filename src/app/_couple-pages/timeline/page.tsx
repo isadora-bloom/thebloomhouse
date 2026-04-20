@@ -1303,6 +1303,7 @@ export default function TimelinePage() {
 
   // ---- Fetch saved data ----
   const fetchData = useCallback(async () => {
+    if (!weddingId) return
     const [timelineRes, weddingRes, venueRes] = await Promise.all([
       supabase
         .from('timeline')
@@ -1363,11 +1364,13 @@ export default function TimelinePage() {
 
     setLoading(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supabase])
+  }, [supabase, weddingId, venueId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchData()
-  }, [fetchData])
+  }, [weddingId, fetchData])
 
   // ---- Recalculate when config changes ----
   useEffect(() => {

@@ -342,6 +342,7 @@ export default function TablesPage() {
 
   // ---- Fetch ----
   const fetchTables = useCallback(async () => {
+    if (!weddingId || !venueId) return
     const { data, error } = await supabase
       .from('wedding_tables')
       .select('*')
@@ -360,11 +361,13 @@ export default function TablesPage() {
       })
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId, venueId])
 
+  // BUG-04A: wait for context ids before firing fetch.
   useEffect(() => {
+    if (!weddingId || !venueId) return
     fetchTables()
-  }, [fetchTables])
+  }, [weddingId, venueId, fetchTables])
 
   // Merge saved extras with defaults (in case new extras were added)
   function mergeExtras(saved: ExtraTable[] | null): ExtraTable[] {

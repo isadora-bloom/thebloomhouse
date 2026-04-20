@@ -198,6 +198,7 @@ export default function TransportationPage() {
 
   // ---- Fetch ----
   const fetchRuns = useCallback(async () => {
+    if (!weddingId || !venueId) return
     const [runsRes, configRes, timelineRes] = await Promise.all([
       supabase
         .from('shuttle_schedule')
@@ -260,10 +261,11 @@ export default function TransportationPage() {
     }))
 
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId, venueId])
 
   // Fetch the "Shuttle" system tag and its assigned guests.
   const fetchShuttleTagged = useCallback(async () => {
+    if (!weddingId) return
     // Find the shuttle tag for this wedding
     const { data: tagRows } = await supabase
       .from('guest_tags')
@@ -301,12 +303,14 @@ export default function TransportationPage() {
       .in('id', guestIds)
 
     setShuttleTaggedGuests((guests as TaggedGuestRow[] | null) || [])
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for context ids before firing fetch.
   useEffect(() => {
+    if (!weddingId || !venueId) return
     fetchRuns()
     fetchShuttleTagged()
-  }, [fetchRuns, fetchShuttleTagged])
+  }, [weddingId, venueId, fetchRuns, fetchShuttleTagged])
 
   // Auto-populate: set needs_shuttle = true on all guests tagged "Shuttle".
   async function autoPopulateShuttleList() {

@@ -241,6 +241,7 @@ export default function RoomAssignmentsPage() {
 
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
+    if (!weddingId) return
     const [assignmentsRes, guestsRes, hotelTagRes] = await Promise.all([
       supabase
         .from('bedroom_assignments')
@@ -298,11 +299,13 @@ export default function RoomAssignmentsPage() {
     }
 
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchData()
-  }, [fetchData])
+  }, [weddingId, fetchData])
 
   // ---- Derived ----
   const totalBlockRooms = roomBlocks.reduce((sum, b) => sum + (b.rooms_reserved || 0), 0)

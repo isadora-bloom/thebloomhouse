@@ -300,6 +300,7 @@ export default function VendorsPage() {
 
   // ---- Fetch vendors ----
   const fetchVendors = useCallback(async () => {
+    if (!weddingId) return
     const { data, error: fetchErr } = await supabase
       .from('booked_vendors')
       .select('*')
@@ -313,11 +314,13 @@ export default function VendorsPage() {
       setVendors(data as BookedVendor[])
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, weddingId])
 
+  // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
+    if (!weddingId) return
     fetchVendors()
-  }, [fetchVendors])
+  }, [weddingId, fetchVendors])
 
   // ---- Add / Edit vendor ----
   async function handleSubmit(e: React.FormEvent) {
