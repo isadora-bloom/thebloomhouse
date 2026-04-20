@@ -46,22 +46,43 @@ export async function requirePlan(
     return { ok: false, status: 401, message: 'Unauthorized' }
   }
 
-  // Look up the user's venue and the venue's plan tier.
+  // Look up the user's venue and the venue's plan tier. For org-level
+  // admins with no venue scoped, fall back to the first venue in their org
+  // (mirrors getPlatformAuth).
   const service = createServiceClient()
   const { data: profile } = await service
     .from('user_profiles')
-    .select('venue_id')
+    .select('venue_id, org_id, role')
     .eq('id', user.id)
     .single()
 
-  if (!profile?.venue_id) {
-    return { ok: false, status: 401, message: 'No venue associated with this account' }
+  if (!profile) {
+    return { ok: false, status: 401, message: 'No profile associated with this account' }
+  }
+
+  let resolvedVenueId = profile.venue_id as string | null
+  if (!resolvedVenueId) {
+    const isAdmin = profile.role === 'org_admin' || profile.role === 'super_admin'
+    if (!isAdmin || !profile.org_id) {
+      return { ok: false, status: 401, message: 'No venue associated with this account' }
+    }
+    const { data: firstVenue } = await service
+      .from('venues')
+      .select('id')
+      .eq('org_id', profile.org_id as string)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+    resolvedVenueId = (firstVenue?.id as string | undefined) ?? null
+    if (!resolvedVenueId) {
+      return { ok: false, status: 401, message: 'No venue associated with this account' }
+    }
   }
 
   const { data: venue } = await service
     .from('venues')
     .select('plan_tier')
-    .eq('id', profile.venue_id)
+    .eq('id', resolvedVenueId)
     .single()
 
   const currentTier = (venue?.plan_tier as PlanTier | undefined) ?? 'starter'

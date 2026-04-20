@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import {
   Building2,
@@ -68,7 +68,11 @@ const selectClasses =
 
 export default function SetupPage() {
   const router = useRouter()
-  const [step, setStep] = useState(1) // 1=company, 2=venue, 3=team
+  const searchParams = useSearchParams()
+  // mode=add — existing org owner adding another venue. Skips the company
+  // step and skips the "already has venue → redirect to /onboarding" guard.
+  const addMode = searchParams?.get('mode') === 'add'
+  const [step, setStep] = useState(addMode ? 2 : 1) // 1=company, 2=venue, 3=team
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -123,8 +127,9 @@ export default function SetupPage() {
 
       setOrgId(profile.org_id as string)
 
-      // If user already has a venue_id, they've already done setup — skip to onboarding
-      if (profile.venue_id) {
+      // If user already has a venue_id AND this isn't add-another-venue mode,
+      // they've already done setup — skip to onboarding.
+      if (profile.venue_id && !addMode) {
         router.push('/onboarding')
         return
       }
@@ -142,7 +147,7 @@ export default function SetupPage() {
     }
 
     resolve()
-  }, [router])
+  }, [router, addMode])
 
   // ---------------------------------------------------------------------------
   // Step 1: Save company name
@@ -266,6 +271,13 @@ export default function SetupPage() {
       document.cookie = `bloom_venue=${venue.id}; path=/; max-age=${60 * 60 * 24 * 365}`
 
       setCreatedVenueId(venue.id)
+      // In add-mode, the user is an existing org owner adding a sub-venue;
+      // they already have a team, so skip the team invite step and go
+      // straight into the new venue's onboarding wizard.
+      if (addMode) {
+        router.push('/onboarding')
+        return
+      }
       setStep(3)
     } catch {
       setError('Something went wrong. Please try again.')
@@ -338,11 +350,13 @@ export default function SetupPage() {
   // ---------------------------------------------------------------------------
   // Progress bar
   // ---------------------------------------------------------------------------
-  const steps = [
-    { num: 1, label: 'Your Company', icon: Building2 },
-    { num: 2, label: 'First Venue', icon: MapPin },
-    { num: 3, label: 'Your Team', icon: Users },
-  ]
+  const steps = addMode
+    ? [{ num: 2, label: 'Venue Details', icon: MapPin }]
+    : [
+        { num: 1, label: 'Your Company', icon: Building2 },
+        { num: 2, label: 'First Venue', icon: MapPin },
+        { num: 3, label: 'Your Team', icon: Users },
+      ]
 
   // ---------------------------------------------------------------------------
   // Render

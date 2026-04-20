@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { Sidebar } from './sidebar'
 import { DemoBanner } from './demo-banner'
 import { ScopeIndicator } from './scope-indicator'
+import { UserMenu } from './user-menu'
 
 /**
  * Client wrapper for the platform layout.
@@ -26,7 +27,22 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
   const isStandalone = STANDALONE_ROUTES.some((route) => pathname.startsWith(route))
 
   if (isStandalone) {
-    return <>{children}</>
+    // Standalone routes (/setup, /onboarding) don't get the sidebar, but a
+    // user must always be able to sign out — otherwise they're trapped inside
+    // the wizard. Render a minimal top bar with just the UserMenu.
+    return (
+      <>
+        {isDemo && <DemoBanner />}
+        <div
+          className={`sticky z-30 bg-warm-white/90 backdrop-blur-sm border-b border-border px-6 lg:px-8 py-3 flex items-center justify-end ${
+            isDemo ? 'top-10' : 'top-0'
+          }`}
+        >
+          <UserMenu compact />
+        </div>
+        {children}
+      </>
+    )
   }
 
   return (

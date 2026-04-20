@@ -110,7 +110,7 @@ export async function POST(request: NextRequest) {
 
     // Resolve org name + inviter name for the email template
     const { data: org } = await supabase
-      .from('organizations')
+      .from('organisations')
       .select('name')
       .eq('id', orgId)
       .maybeSingle()

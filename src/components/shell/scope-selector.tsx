@@ -354,10 +354,16 @@ export function ScopeSelector() {
 
           {/* Manage groups */}
           <div className="p-2 border-t border-border flex gap-2">
-            <button className="flex items-center gap-2 flex-1 px-3 py-2 text-xs text-sage-500 hover:text-sage-800 rounded-lg hover:bg-sage-50 transition-colors">
+            <button
+              onClick={() => { setOpen(false); window.location.href = '/setup?mode=add' }}
+              className="flex items-center gap-2 flex-1 px-3 py-2 text-xs text-sage-500 hover:text-sage-800 rounded-lg hover:bg-sage-50 transition-colors"
+            >
               <Plus className="w-3.5 h-3.5" /> Add Venue
             </button>
-            <button className="flex items-center gap-2 flex-1 px-3 py-2 text-xs text-sage-500 hover:text-sage-800 rounded-lg hover:bg-sage-50 transition-colors">
+            <button
+              onClick={() => { setOpen(false); window.location.href = '/settings/groups' }}
+              className="flex items-center gap-2 flex-1 px-3 py-2 text-xs text-sage-500 hover:text-sage-800 rounded-lg hover:bg-sage-50 transition-colors"
+            >
               <Settings className="w-3.5 h-3.5" /> Manage Groups
             </button>
           </div>

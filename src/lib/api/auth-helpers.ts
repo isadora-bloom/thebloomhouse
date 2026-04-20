@@ -27,7 +27,7 @@ export async function isDemoMode(): Promise<boolean> {
 export async function getPlatformAuth() {
   // In demo mode, bypass auth and return demo coordinator
   if (await isDemoMode()) {
-    return { userId: DEMO_USER_ID, venueId: DEMO_VENUE_ID, role: 'coordinator', isDemo: true }
+    return { userId: DEMO_USER_ID, venueId: DEMO_VENUE_ID, orgId: null as string | null, role: 'coordinator', isDemo: true }
   }
 
   const supabase = await createServerSupabaseClient()
@@ -37,16 +37,44 @@ export async function getPlatformAuth() {
   const service = createServiceClient()
   const { data: profile } = await service
     .from('user_profiles')
-    .select('venue_id, role')
+    .select('venue_id, org_id, role')
     .eq('id', user.id)
     .single()
 
-  if (!profile?.venue_id) return null
+  if (!profile) return null
 
   const platformRoles = ['coordinator', 'manager', 'org_admin', 'super_admin']
   if (!platformRoles.includes(profile.role)) return null
 
-  return { userId: user.id, venueId: profile.venue_id as string, role: profile.role as string, isDemo: false }
+  // Venue-scoped roles (coordinator, manager) MUST have a venue_id. For
+  // org-level roles (org_admin, super_admin), we fall back to the first
+  // venue in their org so they can log in even before picking a venue.
+  let venueId = profile.venue_id as string | null
+  const isAdmin = profile.role === 'org_admin' || profile.role === 'super_admin'
+  if (!venueId) {
+    if (!isAdmin) return null
+    if (profile.org_id) {
+      const { data: firstVenue } = await service
+        .from('venues')
+        .select('id')
+        .eq('org_id', profile.org_id as string)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle()
+      venueId = (firstVenue?.id as string | undefined) ?? null
+    }
+    // Admin with no venues at all — return null so the caller redirects to
+    // /setup. Client-side dashboard guard already handles this.
+    if (!venueId) return null
+  }
+
+  return {
+    userId: user.id,
+    venueId: venueId as string,
+    orgId: (profile.org_id as string | null) ?? null,
+    role: profile.role as string,
+    isDemo: false,
+  }
 }
 
 // ---------------------------------------------------------------------------

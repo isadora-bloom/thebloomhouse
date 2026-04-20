@@ -91,12 +91,28 @@ export function useScope(): Scope & { loading: boolean } {
 
         const { data: profile } = await supabase
           .from('user_profiles')
-          .select('venue_id, org_id')
+          .select('venue_id, org_id, role')
           .eq('id', user.id)
           .maybeSingle()
         if (cancelled) return
 
-        if (!profile?.venue_id) {
+        // Resolve venue: prefer profile.venue_id, then fall back to first
+        // venue in org for org-level admins (mirrors server auth-helpers).
+        let resolvedVenueId = (profile?.venue_id as string | undefined) ?? null
+        if (!resolvedVenueId && profile?.org_id) {
+          const isAdmin = profile.role === 'org_admin' || profile.role === 'super_admin'
+          if (isAdmin) {
+            const { data: firstVenue } = await supabase
+              .from('venues')
+              .select('id')
+              .eq('org_id', profile.org_id as string)
+              .order('created_at', { ascending: true })
+              .limit(1)
+              .maybeSingle()
+            resolvedVenueId = (firstVenue?.id as string | undefined) ?? null
+          }
+        }
+        if (!resolvedVenueId) {
           setLoading(false)
           return
         }
@@ -104,7 +120,7 @@ export function useScope(): Scope & { loading: boolean } {
         const { data: venue } = await supabase
           .from('venues')
           .select('name, org_id, organisations(name)')
-          .eq('id', profile.venue_id as string)
+          .eq('id', resolvedVenueId)
           .maybeSingle()
         if (cancelled) return
 
@@ -117,8 +133,8 @@ export function useScope(): Scope & { loading: boolean } {
 
         const newScope: Scope = {
           level: 'venue',
-          venueId: profile.venue_id as string,
-          orgId: (profile.org_id as string | undefined) || (venue?.org_id as string | undefined) || undefined,
+          venueId: resolvedVenueId,
+          orgId: (profile?.org_id as string | undefined) || (venue?.org_id as string | undefined) || undefined,
           venueName: (venue?.name as string | undefined) ?? undefined,
           companyName: orgName ?? undefined,
         }
