@@ -36,6 +36,13 @@ export interface PersonalityConfig {
   signature_closer?: string | null
   tour_booking_link?: string
   pricing_calculator_link?: string
+  // Sage identity (migration 059). Optional here because this type is also
+  // used before those columns were added; resolveSageIdentity() fills in
+  // defaults when these come back null/undefined.
+  ai_role?: string
+  ai_purposes?: string[]
+  ai_custom_purpose?: string | null
+  ai_opener_shape?: string
 }
 
 export interface VenueInfo {

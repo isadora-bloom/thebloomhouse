@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/gmail'
 import { createServiceClient } from '@/lib/supabase/service'
-import { appendAIDisclosure } from '@/lib/services/ai-disclosure'
+import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
 
 // ---------------------------------------------------------------------------
 // POST — Compose and send a new email
@@ -25,9 +25,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing email body' }, { status: 400 })
     }
 
-    // Enforce AI disclosure on every outbound Sage message. This helper is
-    // the single chokepoint — see src/lib/services/ai-disclosure.ts.
-    const bodyWithDisclosure = appendAIDisclosure(body)
+    // Enforce AI disclosure on every outbound Sage message. Context carries
+    // the per-venue Sage name / role / venue name so the footer is
+    // personalised. See src/lib/services/ai-disclosure.ts.
+    const disclosureCtx = await fetchDisclosureContext(auth.venueId)
+    const bodyWithDisclosure = appendAIDisclosure(body, disclosureCtx)
 
     const sentMessageId = await sendEmail(
       auth.venueId,

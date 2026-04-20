@@ -65,9 +65,29 @@ export interface VenueAIConfig {
   signature_greeting: string | null
   signature_closer: string | null
   signoff: string
+  // Sage identity (migration 059). ai_name already exists above.
+  // ai_role is CHECK-constrained to an "AI <noun>" label.
+  // ai_opener_shape controls structural variation across first-touch openers.
+  ai_role: SageRole
+  ai_purposes: string[]
+  ai_custom_purpose: string | null
+  ai_opener_shape: SageOpenerShape
   created_at: string
   updated_at: string
 }
+
+export type SageRole =
+  | 'AI assistant'
+  | 'AI concierge'
+  | 'AI wedding helper'
+  | 'AI coordinator'
+  | 'AI guide'
+
+export type SageOpenerShape =
+  | 'direct'
+  | 'warm-story'
+  | 'question-first'
+  | 'practical'
 
 // ---------------------------------------------------------------------------
 // Wedding & people

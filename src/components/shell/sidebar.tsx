@@ -133,6 +133,7 @@ const VENUE_SECTIONS: NavSection[] = [
     items: [
       { label: 'Teach Voice', href: '/agent/learning', icon: GraduationCap },
       { label: 'Rules', href: '/agent/rules', icon: ScrollText },
+      { label: 'Sage Identity', href: '/settings/sage-identity', icon: Sparkles },
       { label: 'AI Personality', href: '/settings/personality', icon: Sparkles },
       { label: 'Voice Games', href: '/settings/voice', icon: Mic },
     ],

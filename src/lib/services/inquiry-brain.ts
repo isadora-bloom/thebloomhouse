@@ -16,6 +16,7 @@
 
 import { callAI } from '@/lib/ai/client'
 import { buildPersonalityPrompt, type PersonalityData } from '@/lib/ai/personality-builder'
+import { resolveSageIdentity, renderOpenerConstraints } from '@/lib/services/sage-identity'
 import { selectPhrase } from '@/lib/ai/phrase-selector'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
@@ -360,6 +361,22 @@ export async function generateInquiryDraft(
 
   if (greeting) {
     contextBlock += `\n\n## SELECTED GREETING (use this as your AI introduction):\n"${greeting}"`
+  }
+
+  // First-touch openers only: inject the per-venue Sage identity constraints
+  // (role label, purposes, structural shape). These are CONSTRAINTS, not a
+  // template — Claude writes a fresh sentence per couple so no two couples
+  // at the same venue get the same opener skeleton.
+  if (taskType === 'new_inquiry') {
+    const identity = resolveSageIdentity({
+      ai_name: personalityData.config.ai_name as string | null,
+      ai_role: personalityData.config.ai_role as import('@/lib/supabase/types').SageRole | null,
+      ai_purposes: personalityData.config.ai_purposes as string[] | null,
+      ai_custom_purpose: personalityData.config.ai_custom_purpose as string | null,
+      ai_opener_shape: personalityData.config.ai_opener_shape as import('@/lib/supabase/types').SageOpenerShape | null,
+      venue_name: venueName,
+    })
+    contextBlock += `\n\n${renderOpenerConstraints(identity)}`
   }
 
   contextBlock += kbContext

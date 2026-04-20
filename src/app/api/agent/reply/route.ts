@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/gmail'
 import { createServiceClient } from '@/lib/supabase/service'
-import { appendAIDisclosure } from '@/lib/services/ai-disclosure'
+import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
 
 // ---------------------------------------------------------------------------
 // POST — Reply to an existing email thread
@@ -50,7 +50,8 @@ export async function POST(request: NextRequest) {
 
     // Enforce AI disclosure — idempotent, so safe if the body already
     // contains the marker (e.g. from a quoted prior thread).
-    const bodyWithDisclosure = appendAIDisclosure(body)
+    const disclosureCtx = await fetchDisclosureContext(auth.venueId)
+    const bodyWithDisclosure = appendAIDisclosure(body, disclosureCtx)
 
     const sentMessageId = await sendEmail(
       auth.venueId,
