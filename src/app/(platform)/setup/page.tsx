@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import {
@@ -66,7 +66,17 @@ const selectClasses =
 // Setup Wizard
 // ---------------------------------------------------------------------------
 
+// useSearchParams() forces CSR bailout; Next.js requires a Suspense boundary
+// around any component that calls it, or the static prerender fails.
 export default function SetupPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-sm text-sage-500">Loading setup…</div>}>
+      <SetupPageInner />
+    </Suspense>
+  )
+}
+
+function SetupPageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
   // mode=add — existing org owner adding another venue. Skips the company

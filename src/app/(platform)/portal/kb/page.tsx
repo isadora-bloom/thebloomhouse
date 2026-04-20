@@ -376,10 +376,34 @@ export default function KnowledgeBasePage() {
 
     setCsvUploading(true)
     try {
-      const text = await file.text()
+      // Support .csv, .tsv, .xlsx, .xls, .ods. For Excel-family formats we
+      // parse with SheetJS client-side and convert the first non-empty sheet
+      // to CSV, then feed through the same parser below.
+      const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+      let text: string
+      if (['xlsx', 'xls', 'xlsb', 'ods'].includes(ext)) {
+        // Lazy-load SheetJS only when someone actually uploads an Excel file,
+        // so the default KB page bundle stays lean.
+        const XLSX = await import('xlsx')
+        const buffer = await file.arrayBuffer()
+        const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' })
+        let csv = ''
+        for (const name of workbook.SheetNames) {
+          const out = XLSX.utils.sheet_to_csv(workbook.Sheets[name], { blankrows: false })
+          if (out.trim()) { csv = out; break }
+        }
+        if (!csv) {
+          setError('Excel file is empty or has no readable sheet.')
+          return
+        }
+        text = csv
+      } else {
+        text = await file.text()
+      }
+
       const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
       if (lines.length < 2) {
-        setError('CSV must have a header row and at least one data row')
+        setError('File must have a header row and at least one data row')
         return
       }
       const header = lines[0]
@@ -479,12 +503,12 @@ export default function KnowledgeBasePage() {
             className="inline-flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 rounded-lg text-sm font-medium hover:bg-sage-50 transition-colors disabled:opacity-50"
           >
             <Upload className="w-4 h-4" />
-            {csvUploading ? 'Uploading...' : 'Upload CSV'}
+            {csvUploading ? 'Uploading...' : 'Upload CSV / Excel'}
           </button>
           <input
             ref={csvInputRef}
             type="file"
-            accept=".csv"
+            accept=".csv,.tsv,.xlsx,.xls,.xlsb,.ods"
             onChange={handleCSVUpload}
             className="hidden"
           />

@@ -909,7 +909,7 @@ export default function QuickAddPage() {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".csv,.tsv,.txt,.xlsx,.xls,.pdf,.jpg,.jpeg,.png,.webp,.json,.vcf,.docx"
+              accept=".csv,.tsv,.txt,.xlsx,.xls,.xlsb,.ods,.pdf,.jpg,.jpeg,.png,.webp,.json,.vcf,.docx"
               onChange={handleFileSelect}
               className="hidden"
             />

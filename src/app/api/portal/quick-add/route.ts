@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import * as XLSX from 'xlsx'
 import { callAIJson, callAIVision } from '@/lib/ai/client'
 import {
   detectDataType,
@@ -35,7 +36,7 @@ function getFileStrategy(fileName: string, mimeType: string): FileStrategy {
   if (ext === 'csv' || ext === 'tsv' || ext === 'txt') return 'text'
   if (ext === 'json') return 'json'
   if (ext === 'vcf') return 'vcf'
-  if (ext === 'xlsx' || ext === 'xls') return 'xlsx'
+  if (ext === 'xlsx' || ext === 'xls' || ext === 'xlsb' || ext === 'ods') return 'xlsx'
   if (ext === 'docx') return 'docx'
   if (ext === 'pdf' || mimeType.startsWith('image/')) return 'vision'
 
@@ -82,6 +83,40 @@ async function extractDocxText(buffer: ArrayBuffer): Promise<string> {
  */
 function isGoogleSheetsUrl(text: string): boolean {
   return /docs\.google\.com\/spreadsheets/.test(text.trim())
+}
+
+/**
+ * Pull the spreadsheet id + optional gid out of a Google Sheets URL.
+ * Returns null if we can't recognise it.
+ */
+function parseGoogleSheetsUrl(url: string): { id: string; gid: string | null } | null {
+  const idMatch = url.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/)
+  if (!idMatch) return null
+  const gidMatch = url.match(/[#?&]gid=(\d+)/)
+  return { id: idMatch[1], gid: gidMatch?.[1] ?? null }
+}
+
+/**
+ * Fetch a Google Sheet as CSV using the public export endpoint. Requires the
+ * sheet to be shared as "Anyone with the link" (viewer) or fully public. If
+ * the sheet is private, Google returns an HTML login page — we detect that
+ * and surface a clear error.
+ */
+async function fetchGoogleSheetCsv(id: string, gid: string | null): Promise<string> {
+  const gidParam = gid ? `&gid=${gid}` : ''
+  const exportUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv${gidParam}`
+
+  const res = await fetch(exportUrl, { redirect: 'follow' })
+  if (!res.ok) {
+    throw new Error(`Google Sheets returned HTTP ${res.status}. Make sure the sheet is shared as "Anyone with the link".`)
+  }
+
+  const text = await res.text()
+  // Private sheets redirect to an HTML login page; catch that.
+  if (text.trimStart().toLowerCase().startsWith('<!doctype html') || text.includes('<html')) {
+    throw new Error('This Google Sheet is private. Share it as "Anyone with the link (Viewer)" and try again.')
+  }
+  return text
 }
 
 export async function POST(request: NextRequest) {
@@ -161,25 +196,38 @@ export async function POST(request: NextRequest) {
         }
 
         case 'xlsx': {
-          // XLSX is a binary format. We can't easily parse it without a library.
-          // Try reading as text (will be garbled for real XLSX).
-          // Warn the user to save as CSV instead.
-          const rawText = await file.text()
+          // Parse .xlsx / .xls / .ods via SheetJS. First sheet with data wins.
+          try {
+            const buffer = await file.arrayBuffer()
+            const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' })
 
-          // Check if it looks like actual tabular data (old XLS can sometimes be TSV/HTML)
-          const lines = rawText.split('\n').filter((l) => l.trim())
-          if (lines.length > 1 && (lines[0].includes('\t') || lines[0].includes(','))) {
-            // It might actually be a CSV with .xlsx extension, or an HTML table
-            content = rawText
-          } else {
-            fileWarning = 'Excel files (.xlsx/.xls) cannot be parsed directly. Please save as CSV first, then re-upload. Attempting best-effort text extraction.'
-            content = rawText.replace(/[^\x20-\x7E\t\n\r]/g, ' ').replace(/\s+/g, ' ').trim()
+            // Find the first sheet that actually has rows
+            let chosenSheetName: string | null = null
+            let chosenCsv = ''
+            for (const sheetName of workbook.SheetNames) {
+              const sheet = workbook.Sheets[sheetName]
+              const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false })
+              if (csv.trim().length > 0) {
+                chosenSheetName = sheetName
+                chosenCsv = csv
+                break
+              }
+            }
 
-            if (content.length < 10) {
+            if (!chosenCsv) {
               return NextResponse.json({
-                error: 'Cannot read Excel file directly. Please open it in Excel or Google Sheets and save as CSV (.csv), then upload the CSV.',
+                error: 'Excel file is empty or contains no readable data.',
               }, { status: 400 })
             }
+
+            content = chosenCsv
+            if (workbook.SheetNames.length > 1) {
+              fileWarning = `Workbook has ${workbook.SheetNames.length} sheets; imported "${chosenSheetName}". Split into separate files to import others.`
+            }
+          } catch (err) {
+            return NextResponse.json({
+              error: `Could not parse Excel file: ${err instanceof Error ? err.message : 'unknown error'}. Try saving as CSV.`,
+            }, { status: 400 })
           }
           break
         }
@@ -247,16 +295,25 @@ Return ONLY the CSV text. No explanation, no markdown code blocks. Just raw CSV.
     } else if (pastedData) {
       const trimmed = pastedData.trim()
 
-      // Check for Google Sheets URL
+      // Google Sheets URL — fetch the sheet's CSV export directly
       if (isGoogleSheetsUrl(trimmed)) {
-        return NextResponse.json({
-          error: 'Google Sheets URL detected. To import from Google Sheets: open the sheet, go to File > Download > CSV (.csv), then upload the downloaded file. Direct Google Sheets API integration is coming soon.',
-          isGoogleSheetsUrl: true,
-        }, { status: 400 })
+        const parsed = parseGoogleSheetsUrl(trimmed)
+        if (!parsed) {
+          return NextResponse.json({
+            error: 'Could not extract the sheet ID from that Google Sheets URL.',
+          }, { status: 400 })
+        }
+        try {
+          content = await fetchGoogleSheetCsv(parsed.id, parsed.gid)
+          fileName = `Google Sheet ${parsed.id}${parsed.gid ? ` (tab ${parsed.gid})` : ''}`
+        } catch (err) {
+          return NextResponse.json({
+            error: err instanceof Error ? err.message : 'Failed to fetch Google Sheet.',
+          }, { status: 400 })
+        }
       }
-
       // Try parsing as JSON if it looks like JSON
-      if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      else if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
         try {
           const rows = parseJSON(trimmed)
           content = rows.map((row) => row.map((cell) => {
