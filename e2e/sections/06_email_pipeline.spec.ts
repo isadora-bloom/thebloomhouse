@@ -170,18 +170,23 @@ test.describe('§6 Email Pipeline', () => {
     expect(wrongVenueRows ?? []).toHaveLength(0)
   })
 
-  // BUG-06A (discovered by this test): the `interactions` table has
-  // venue_isolation RLS (migration 006 line 128) scoped via
-  // `user_profiles.venue_id`, but an authenticated coordinator for venue B
-  // can still read venue A rows through the anon PostgREST endpoint. The
-  // leak suggests either (a) a permissive demo/anon policy from a later
-  // migration is shadowing venue_isolation, (b) the anon role is not being
-  // swapped to authenticated after signInWithPassword in this env, or (c)
-  // user_profiles.venue_id is not populated for the test coordinator at
-  // read time. Marked test.fail() so the suite is honest: the assertion is
-  // expected to fail until the policy is fixed. Flip back to a normal test
-  // once RLS enforces venue scope.
-  test.fail('d) BUG-06A: venue scope isolation on interactions is NOT enforced (expected-fail)', async () => {
+  // BUG-06A (investigated April 17 2026):
+  // Reproduction (tmp-bug06a-deep.mjs) confirmed the leak is real AND wider
+  // than first suspected. A brand-new authenticated coordinator scoped to
+  // venue B can:
+  //   1) read 28 rows from user_profiles (should be 1)
+  //   2) read 78 interactions rows across 4 venues (should be 0 for venue A)
+  //   3) INSERT an interactions row with venue_id pointing at venue A
+  // The migration files in this repo declare correct venue_isolation policies
+  // on interactions / drafts / user_profiles, so the extra permissive
+  // policies present in the live DB were not introduced via a tracked
+  // migration — likely applied ad hoc in the Supabase SQL editor during
+  // earlier debugging. Migration 055_fix_interactions_rls.sql drops every
+  // existing policy on these three tables and re-declares clean per-verb
+  // policies scoped TO authenticated with both USING and WITH CHECK clauses.
+  // TODO: once 055 is applied in production Supabase, flip this from
+  // test.fail(...) back to test(...) and delete this block.
+  test.fail('d) BUG-06A: venue scope isolation on interactions is NOT enforced (expected-fail until migration 055 applied)', async () => {
     // Two separate venues under the same org. We insert an inbound email
     // thread in venue A and log in a coordinator for venue B via the anon
     // (RLS-enforced) client, then confirm venue B coordinator sees zero rows.
