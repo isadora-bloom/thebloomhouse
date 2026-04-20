@@ -42,6 +42,7 @@ const created = {
   orgId: null,
   venue1Id: null,
   venue2Id: null,
+  venue3Id: null,
   groupId: null,
   inviteId: null,
 }
@@ -313,6 +314,83 @@ async function run() {
     else fail(`authed user expected 1 group, saw ${ownGroups?.length ?? 0}`)
   }
 
+  // ─── STEP 10: AUTHED-client write path (reproduces real /setup) ────────────
+  step(10, 'Authed client can INSERT/UPDATE venues, organisations, venue_config')
+
+  // Critical: the previous steps used the SERVICE role which bypasses RLS.
+  // The real /setup page uses the browser client (authed as the user),
+  // which goes through RLS. If the write policies are missing, the browser
+  // will see "new row violates row-level security policy" — this step
+  // catches that regression.
+  if (!signin?.session) {
+    fail('no session from step 9; cannot test authed writes')
+  } else {
+    const authed = createClient(
+      env.NEXT_PUBLIC_SUPABASE_URL,
+      env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      {
+        auth: { persistSession: false },
+        global: { headers: { Authorization: `Bearer ${signin.session.access_token}` } },
+      }
+    )
+
+    // 10a. UPDATE organisations.name (mirrors /setup saveCompany)
+    const { error: orgUpdErr } = await authed
+      .from('organisations')
+      .update({ name: `Renamed ${RUN_ID}` })
+      .eq('id', created.orgId)
+    if (orgUpdErr) fail('authed UPDATE organisations.name', orgUpdErr)
+    else pass('authed UPDATE organisations.name')
+
+    // 10b. INSERT a third venue (mirrors /setup createVenue via browser)
+    const v3Slug = `rixey-authed-${RUN_ID}`
+    const { data: v3, error: v3Err } = await authed
+      .from('venues')
+      .insert({
+        name: 'Rixey Authed',
+        slug: v3Slug,
+        org_id: created.orgId,
+        status: 'trial',
+        is_demo: false,
+        city: 'Jeffersonton',
+        state: 'VA',
+      })
+      .select('id')
+      .single()
+    if (v3Err) fail('authed INSERT venues', v3Err)
+    else {
+      pass('authed INSERT venues (org-scoped write policy in effect)')
+
+      // 10c. INSERT venue_config for that venue
+      const { error: cfgErr } = await authed.from('venue_config').insert({
+        venue_id: v3.id,
+        business_name: 'Rixey Authed',
+        timezone: 'America/New_York',
+        capacity: 100,
+        base_price: 10000,
+        onboarding_completed: false,
+      })
+      if (cfgErr) fail('authed INSERT venue_config', cfgErr)
+      else pass('authed INSERT venue_config')
+
+      // Track for cleanup
+      created.venue3Id = v3.id
+    }
+
+    // 10d. Cross-org INSERT must fail — prove the policy isn't just "allow all"
+    const { error: crossErr } = await authed
+      .from('venues')
+      .insert({
+        name: 'Evil Cross-Org Venue',
+        slug: `evil-${RUN_ID}`,
+        org_id: '11111111-1111-1111-1111-111111111111',  // demo org
+        status: 'trial',
+        is_demo: false,
+      })
+    if (crossErr) pass(`cross-org INSERT blocked (${crossErr.code})`)
+    else fail('cross-org INSERT was allowed — policy too permissive')
+  }
+
   console.log(`\n=== ${FAILED === 0 ? 'ALL CHECKS PASSED' : `${FAILED} CHECK(S) FAILED`} ===`)
 }
 
@@ -329,7 +407,7 @@ async function cleanup() {
     console.log('  venue_group + members removed')
   }
   // Non-cascading children of venues
-  const vids = [created.venue1Id, created.venue2Id].filter(Boolean)
+  const vids = [created.venue1Id, created.venue2Id, created.venue3Id].filter(Boolean)
   if (vids.length) {
     for (const t of ['venue_config', 'wedding_details', 'wedding_tables', 'storefront', 'venue_assets', 'venue_resources']) {
       await sb.from(t).delete().in('venue_id', vids)
