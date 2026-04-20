@@ -20,6 +20,7 @@ import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/gmai
 import { detectContractSigning } from '@/lib/services/extraction'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
+import { appendAIDisclosure } from '@/lib/services/ai-disclosure'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -667,12 +668,12 @@ export async function flushPendingAutoSends(venueId: string): Promise<number> {
         continue
       }
 
-      // Send the email
+      // Send the email — enforce AI disclosure at the send boundary
       const sentMessageId = await sendEmail(
         venueId,
         details.toEmail,
         details.subject,
-        draft.draft_body as string,
+        appendAIDisclosure(draft.draft_body as string),
         details.threadId
       )
 
@@ -930,11 +931,12 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
   // Send via Gmail. Approved drafts MUST go through the venue's authenticated
   // Gmail — the whole product premise is that replies come from the
   // coordinator's own inbox. No transactional fallback here by design.
+  // AI disclosure is enforced at the send boundary regardless of approval path.
   const sentMessageId = await sendEmail(
     draft.venue_id as string,
     draft.to_email as string,
     draft.subject as string,
-    draft.draft_body as string,
+    appendAIDisclosure(draft.draft_body as string),
     threadId
   )
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/gmail'
 import { createServiceClient } from '@/lib/supabase/service'
+import { appendAIDisclosure } from '@/lib/services/ai-disclosure'
 
 // ---------------------------------------------------------------------------
 // POST — Reply to an existing email thread
@@ -47,11 +48,15 @@ export async function POST(request: NextRequest) {
       ? interaction.subject
       : `Re: ${interaction.subject || '(No subject)'}`
 
+    // Enforce AI disclosure — idempotent, so safe if the body already
+    // contains the marker (e.g. from a quoted prior thread).
+    const bodyWithDisclosure = appendAIDisclosure(body)
+
     const sentMessageId = await sendEmail(
       auth.venueId,
       recipientEmail,
       subject,
-      body,
+      bodyWithDisclosure,
       interaction.gmail_thread_id || undefined
     )
 
@@ -62,7 +67,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Log the outbound reply
+    // Log the outbound reply (store the version the recipient actually saw)
     await supabase.from('interactions').insert({
       venue_id: auth.venueId,
       wedding_id: null,
@@ -70,8 +75,8 @@ export async function POST(request: NextRequest) {
       type: 'email',
       direction: 'outbound',
       subject,
-      body_preview: body.slice(0, 200),
-      full_body: body,
+      body_preview: bodyWithDisclosure.slice(0, 200),
+      full_body: bodyWithDisclosure,
       gmail_thread_id: interaction.gmail_thread_id,
       gmail_message_id: sentMessageId,
       timestamp: new Date().toISOString(),
