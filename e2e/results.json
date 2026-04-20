@@ -79,65 +79,101 @@
     "updateSnapshots": "missing",
     "updateSourceMethod": "patch",
     "version": "1.59.1",
-    "workers": 1,
-    "webServer": {
-      "command": "npm run dev",
-      "url": "http://localhost:3000/welcome",
-      "reuseExistingServer": true,
-      "timeout": 120000,
-      "stdout": "ignore",
-      "stderr": "pipe"
-    }
+    "workers": 2,
+    "webServer": null
   },
   "suites": [
     {
-      "title": "sections\\00_harness.spec.ts",
-      "file": "sections/00_harness.spec.ts",
+      "title": "sections\\07_voice_training.spec.ts",
+      "file": "sections/07_voice_training.spec.ts",
       "column": 0,
       "line": 0,
-      "specs": [
+      "specs": [],
+      "suites": [
         {
-          "title": "welcome page loads",
-          "ok": true,
-          "tags": [],
-          "tests": [
+          "title": "§7 Voice Training",
+          "file": "sections/07_voice_training.spec.ts",
+          "line": 65,
+          "column": 6,
+          "specs": [
             {
-              "timeout": 60000,
-              "annotations": [],
-              "expectedStatus": "passed",
-              "projectId": "chromium-desktop",
-              "projectName": "chromium-desktop",
-              "results": [
+              "title": "a) session start writes a voice_training_sessions row tied to the venue",
+              "ok": true,
+              "tags": [],
+              "tests": [
                 {
-                  "workerIndex": 0,
-                  "parallelIndex": 0,
-                  "status": "passed",
-                  "duration": 3709,
-                  "errors": [],
-                  "stdout": [],
-                  "stderr": [],
-                  "retry": 0,
-                  "startTime": "2026-04-17T12:12:39.034Z",
+                  "timeout": 60000,
                   "annotations": [],
-                  "attachments": []
+                  "expectedStatus": "passed",
+                  "projectId": "chromium-desktop",
+                  "projectName": "chromium-desktop",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1965,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-20T11:23:25.838Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
                 }
               ],
-              "status": "expected"
+              "id": "be16ebbd5e924671ac20-3fb1d9e2e07b3d9463f4",
+              "file": "sections/07_voice_training.spec.ts",
+              "line": 79,
+              "column": 7
+            },
+            {
+              "title": "c) venue A training data is not visible when scoped to venue B",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium-desktop",
+                  "projectName": "chromium-desktop",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2222,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-04-20T11:23:27.850Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "be16ebbd5e924671ac20-2cc2ccffe0497024129e",
+              "file": "sections/07_voice_training.spec.ts",
+              "line": 140,
+              "column": 7
             }
-          ],
-          "id": "40689d0e96c696e7c04a-91d4c1b7c6d7950a0fb8",
-          "file": "sections/00_harness.spec.ts",
-          "line": 7,
-          "column": 5
+          ]
         }
       ]
     }
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-04-17T12:12:17.067Z",
-    "duration": 28277.436999999998,
-    "expected": 1,
+    "startTime": "2026-04-20T11:23:23.809Z",
+    "duration": 6365.5830000000005,
+    "expected": 2,
     "skipped": 0,
     "unexpected": 0,
     "flaky": 0

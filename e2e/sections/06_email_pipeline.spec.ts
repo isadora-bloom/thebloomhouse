@@ -184,9 +184,8 @@ test.describe('§6 Email Pipeline', () => {
   // earlier debugging. Migration 055_fix_interactions_rls.sql drops every
   // existing policy on these three tables and re-declares clean per-verb
   // policies scoped TO authenticated with both USING and WITH CHECK clauses.
-  // TODO: once 055 is applied in production Supabase, flip this from
-  // test.fail(...) back to test(...) and delete this block.
-  test.fail('d) BUG-06A: venue scope isolation on interactions is NOT enforced (expected-fail until migration 055 applied)', async () => {
+  // Migration 055 + 056 applied 2026-04-20 — flipped back to a real assertion.
+  test('d) BUG-06A: venue scope isolation on interactions is enforced', async () => {
     // Two separate venues under the same org. We insert an inbound email
     // thread in venue A and log in a coordinator for venue B via the anon
     // (RLS-enforced) client, then confirm venue B coordinator sees zero rows.
