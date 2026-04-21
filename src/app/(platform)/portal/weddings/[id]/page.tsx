@@ -34,6 +34,7 @@ import {
   Mail,
   UserCheck,
   UserPlus,
+  Check,
 } from 'lucide-react'
 import { CommunicationPulse } from '../communication-pulse'
 
@@ -187,10 +188,11 @@ interface EventFeedbackVendorRow {
 // Tab definitions
 // ---------------------------------------------------------------------------
 
-type TabKey = 'overview' | 'planning-notes' | 'vendors' | 'guests' | 'timeline' | 'budget' | 'ceremony-chairs' | 'communications' | 'internal-notes' | 'feedback'
+type TabKey = 'overview' | 'completeness' | 'planning-notes' | 'vendors' | 'guests' | 'timeline' | 'budget' | 'ceremony-chairs' | 'communications' | 'internal-notes' | 'feedback'
 
 const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: 'overview', label: 'Overview', icon: Activity },
+  { key: 'completeness', label: 'File Completeness', icon: CheckCircle },
   { key: 'planning-notes', label: 'Planning Notes', icon: StickyNote },
   { key: 'vendors', label: 'Vendors', icon: Utensils },
   { key: 'guests', label: 'Guests', icon: Users },
@@ -678,6 +680,148 @@ function TimelineTab({ items }: { items: TimelineItemRow[] }) {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function CompletenessTab({ weddingId, guests, vendors, checklist, budgetItems, timelineItems }: {
+  weddingId: string
+  guests: GuestRow[]
+  vendors: BookedVendorRow[]
+  checklist: ChecklistItemRow[]
+  budgetItems: BudgetRow[]
+  timelineItems: TimelineItemRow[]
+}) {
+  const supabase = createClient()
+  const [extra, setExtra] = useState<Record<string, boolean>>({})
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    ;(async () => {
+      const checks: Record<string, boolean> = {}
+
+      const safeCount = async (table: string) => {
+        const { count } = await supabase.from(table).select('*', { count: 'exact', head: true }).eq('wedding_id', weddingId)
+        return (count ?? 0) > 0
+      }
+
+      const [details, ceremony, chairs, allergies, shuttles, makeup, rehearsal, bedrooms, decor, bar, staffing, contracts, photos] = await Promise.all([
+        supabase.from('wedding_details').select('*').eq('wedding_id', weddingId).maybeSingle(),
+        safeCount('ceremony_order'),
+        supabase.from('ceremony_chair_plans').select('plan').eq('wedding_id', weddingId).maybeSingle(),
+        safeCount('allergy_registry'),
+        safeCount('shuttle_schedule'),
+        safeCount('makeup_schedule'),
+        supabase.from('rehearsal_dinner').select('*').eq('wedding_id', weddingId).maybeSingle(),
+        supabase.from('bedroom_assignments').select('*').eq('wedding_id', weddingId).maybeSingle(),
+        safeCount('decor_inventory'),
+        safeCount('bar_shopping_list'),
+        supabase.from('staffing_plans').select('*').eq('wedding_id', weddingId).maybeSingle(),
+        safeCount('contracts'),
+        safeCount('wedding_photos'),
+      ])
+
+      const d = details.data || {} as Record<string, unknown>
+      checks.wedding_colors = !!d.wedding_colors
+      checks.ceremony_location = !!d.ceremony_location
+      checks.arbor_choice = !!d.arbor_choice
+      checks.dogs_info = d.dogs_coming !== null && d.dogs_coming !== undefined
+      checks.send_off_type = !!d.send_off_type
+      checks.seating_method = !!d.seating_method
+      checks.ceremony_order = ceremony
+      checks.ceremony_chairs = !!(chairs.data?.plan?.rows?.length)
+      checks.allergies = allergies
+      checks.shuttles = shuttles
+      checks.makeup = makeup
+      checks.rehearsal = !!(rehearsal.data?.bar_type || rehearsal.data?.food_type)
+      checks.bedrooms = !!(bedrooms.data && Object.values(bedrooms.data).some((v: unknown) => typeof v === 'string' && v.length > 0))
+      checks.decor = decor
+      checks.bar = bar
+      checks.staffing = !!staffing.data
+      checks.contracts = contracts
+      checks.photos = photos
+
+      setExtra(checks)
+      setLoading(false)
+    })()
+  }, [weddingId])
+
+  const sections = [
+    { title: 'Basics', items: [
+      { label: 'Guests added', done: guests.length > 0, detail: guests.length > 0 ? `${guests.length} guests` : undefined },
+      { label: 'Budget started', done: budgetItems.length > 0 },
+      { label: 'Checklist started', done: checklist.length > 0, detail: checklist.length > 0 ? `${checklist.filter(c => c.is_completed).length}/${checklist.length} done` : undefined },
+      { label: 'Wedding colors', done: extra.wedding_colors },
+      { label: 'Dogs info', done: extra.dogs_info },
+    ]},
+    { title: 'Ceremony & Day-of', items: [
+      { label: 'Ceremony location', done: extra.ceremony_location },
+      { label: 'Arbor choice', done: extra.arbor_choice },
+      { label: 'Ceremony order', done: extra.ceremony_order },
+      { label: 'Ceremony chairs', done: extra.ceremony_chairs },
+      { label: 'Timeline built', done: timelineItems.length > 0 },
+      { label: 'H&M schedule', done: extra.makeup },
+      { label: 'Rehearsal dinner', done: extra.rehearsal },
+    ]},
+    { title: 'Logistics', items: [
+      { label: 'Vendors booked', done: vendors.length > 0, detail: vendors.length > 0 ? `${vendors.length} vendors` : undefined },
+      { label: 'Contracts uploaded', done: extra.contracts },
+      { label: 'Shuttle schedule', done: extra.shuttles },
+      { label: 'Bedroom assignments', done: extra.bedrooms },
+      { label: 'Staffing plan', done: extra.staffing },
+    ]},
+    { title: 'Details & Content', items: [
+      { label: 'Allergy registry', done: extra.allergies },
+      { label: 'Bar planner', done: extra.bar },
+      { label: 'Decor inventory', done: extra.decor },
+      { label: 'Photos uploaded', done: extra.photos },
+      { label: 'Send-off type', done: extra.send_off_type },
+      { label: 'Seating method', done: extra.seating_method },
+    ]},
+  ]
+
+  const totalItems = sections.reduce((s, sec) => s + sec.items.length, 0)
+  const doneItems = sections.reduce((s, sec) => s + sec.items.filter(i => i.done).length, 0)
+  const pct = totalItems > 0 ? Math.round((doneItems / totalItems) * 100) : 0
+
+  if (loading) return <p className="text-muted-foreground text-sm py-4">Checking completeness...</p>
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-lg border p-4">
+        <div className="flex items-center justify-between mb-2">
+          <p className="font-medium text-sm">Wedding File Completeness</p>
+          <span className="text-lg font-bold">{pct}%</span>
+        </div>
+        <div className="w-full h-2.5 bg-muted rounded-full overflow-hidden">
+          <div className={cn('h-full rounded-full transition-all', pct === 100 ? 'bg-green-500' : pct >= 70 ? 'bg-primary' : 'bg-amber-500')}
+            style={{ width: `${pct}%` }} />
+        </div>
+        <p className="text-xs text-muted-foreground mt-1">{doneItems} of {totalItems} items</p>
+      </div>
+
+      {sections.map(sec => {
+        const done = sec.items.filter(i => i.done).length
+        return (
+          <div key={sec.title} className="rounded-lg border overflow-hidden">
+            <div className={cn('px-4 py-2.5 border-b flex items-center justify-between', done === sec.items.length ? 'bg-green-50' : 'bg-muted/50')}>
+              <p className="text-sm font-medium">{sec.title}</p>
+              <span className="text-xs text-muted-foreground">{done}/{sec.items.length}</span>
+            </div>
+            <div className="divide-y">
+              {sec.items.map(item => (
+                <div key={item.label} className="flex items-center gap-3 px-4 py-2">
+                  <span className={cn('w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0', item.done ? 'bg-green-100 text-green-600' : 'bg-muted')}>
+                    {item.done ? <Check className="w-2.5 h-2.5" /> : <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/30" />}
+                  </span>
+                  <span className={cn('text-sm flex-1', item.done ? 'text-foreground' : 'text-muted-foreground')}>{item.label}</span>
+                  {item.done && item.detail && <span className="text-xs text-muted-foreground">{item.detail}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -2101,6 +2245,9 @@ export default function WeddingProfilePage() {
             sageConversations={sageConversations}
             consultant={consultant}
           />
+        )}
+        {activeTab === 'completeness' && (
+          <CompletenessTab weddingId={weddingId} guests={guests} vendors={vendors} checklist={checklist} budgetItems={budgetItems} timelineItems={timelineItems} />
         )}
         {activeTab === 'planning-notes' && (
           <PlanningNotesTab notes={planningNotes} />
