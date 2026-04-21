@@ -41,6 +41,9 @@ interface Interaction {
   subject: string | null
   body_preview: string | null
   full_body: string | null
+  from_email?: string | null
+  from_name?: string | null
+  to_email?: string | null
   gmail_thread_id: string | null
   timestamp: string
   // Joined
@@ -832,6 +835,9 @@ export default function InboxPage() {
           direction,
           subject,
           body_preview,
+          from_email,
+          from_name,
+          to_email,
           gmail_thread_id,
           timestamp,
           venues:venue_id ( name ),
@@ -868,10 +874,23 @@ export default function InboxPage() {
               ? `${partner1.first_name} ${partner1.last_name} & ${partner2.first_name} ${partner2.last_name}`
               : [partner1.first_name, partner1.last_name].filter(Boolean).join(' ')
           : null
-        const personName = person
+        // Prefer the joined people row, then the couple on the wedding,
+        // then the raw from_email/from_name captured by the pipeline on
+        // inbound (or to_email on outbound). The raw fields are the
+        // last-line-of-defence when person_id never resolved.
+        const joinedPersonName = person
           ? [person.first_name, person.last_name].filter(Boolean).join(' ')
-          : coupleDisplay
-        const personEmail = person?.email || partner1?.email || null
+          : null
+        const rawFromName = typeof row.from_name === 'string' ? row.from_name.trim() : ''
+        const personName =
+          joinedPersonName ||
+          coupleDisplay ||
+          (rawFromName || null)
+        const personEmail =
+          person?.email ||
+          partner1?.email ||
+          (row.direction === 'outbound' ? row.to_email : row.from_email) ||
+          null
         const weddingStatus = wedding?.status ?? null
         const weddingCodes: Array<{ code?: string }> = Array.isArray(wedding?.client_codes)
           ? wedding.client_codes
@@ -940,6 +959,9 @@ export default function InboxPage() {
             subject,
             body_preview,
             full_body,
+            from_email,
+            from_name,
+            to_email,
             gmail_thread_id,
             timestamp,
             people!interactions_person_id_fkey ( first_name, last_name, email ),
@@ -974,13 +996,23 @@ export default function InboxPage() {
                 ? `${partner1.first_name} ${partner1.last_name} & ${partner2.first_name} ${partner2.last_name}`
                 : [partner1.first_name, partner1.last_name].filter(Boolean).join(' ')
             : null
-          const personName = person
+          const joinedPersonName = person
             ? [person.first_name, person.last_name].filter(Boolean).join(' ')
-            : coupleDisplay
+            : null
+          const rawFromName = typeof row.from_name === 'string' ? row.from_name.trim() : ''
+          const personName =
+            joinedPersonName ||
+            coupleDisplay ||
+            (rawFromName || null)
+          const personEmail =
+            person?.email ||
+            partner1?.email ||
+            (row.direction === 'outbound' ? row.to_email : row.from_email) ||
+            null
           return {
             ...row,
             person_name: personName || undefined,
-            person_email: person?.email || partner1?.email || undefined,
+            person_email: personEmail || undefined,
           }
         })
 

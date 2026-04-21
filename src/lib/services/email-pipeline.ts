@@ -158,31 +158,59 @@ async function findOrCreateContact(
 ): Promise<{ personId: string | null; weddingId: string | null; isNew: boolean }> {
   const supabase = createServiceClient()
 
-  // Look up existing contact
-  const { data: existing } = await supabase
-    .from('contacts')
-    .select('person_id, people(id, wedding_id)')
+  // 1. Direct match on people.email within this venue.
+  const { data: byEmail } = await supabase
+    .from('people')
+    .select('id, wedding_id')
     .eq('venue_id', venueId)
-    .eq('contact_type', 'email')
-    .ilike('contact_value', email)
+    .ilike('email', email)
     .limit(1)
 
-  if (existing && existing.length > 0) {
-    const person = existing[0].people as unknown as { id: string; wedding_id: string | null } | null
+  if (byEmail && byEmail.length > 0) {
     return {
-      personId: person?.id ?? existing[0].person_id,
-      weddingId: person?.wedding_id ?? null,
+      personId: byEmail[0].id,
+      weddingId: byEmail[0].wedding_id,
       isNew: false,
     }
   }
 
-  // Create new person
+  // 2. Match through the contacts table. contacts has no venue_id column;
+  // scope through people.venue_id via the FK join.
+  const { data: byContact } = await supabase
+    .from('contacts')
+    .select('person_id, people!inner(id, wedding_id, venue_id)')
+    .eq('type', 'email')
+    .ilike('value', email)
+    .eq('people.venue_id', venueId)
+    .limit(1)
+
+  if (byContact && byContact.length > 0) {
+    const row = byContact[0] as unknown as {
+      person_id: string
+      people: { id: string; wedding_id: string | null } | null
+    }
+    return {
+      personId: row.people?.id ?? row.person_id,
+      weddingId: row.people?.wedding_id ?? null,
+      isNew: false,
+    }
+  }
+
+  // 3. Create a new person. Split the display name into first/last so the
+  // inbox join (first_name, last_name, email) has something to render.
+  // people.role must be one of the CHECK values; 'partner1' is the default
+  // for an inquiry sender.
+  const [firstName, ...rest] = (name ?? '').trim().split(/\s+/).filter(Boolean)
+  const lastName = rest.join(' ') || null
+
   const { data: newPerson, error: personError } = await supabase
     .from('people')
     .insert({
       venue_id: venueId,
-      full_name: name ?? email.split('@')[0],
-      role: 'primary',
+      role: 'partner1',
+      first_name: firstName || email.split('@')[0],
+      last_name: lastName,
+      email,
     })
     .select('id')
     .single()
@@ -192,12 +220,12 @@ async function findOrCreateContact(
     return { personId: null, weddingId: null, isNew: true }
   }
 
-  // Create contact record
+  // 4. Mirror the email onto contacts so subsequent lookups that go through
+  // contacts find it. contacts has no venue_id; tenancy is via person_id.
   await supabase.from('contacts').insert({
-    venue_id: venueId,
     person_id: newPerson.id,
-    contact_type: 'email',
-    contact_value: email,
+    type: 'email',
+    value: email,
     is_primary: true,
   })
 
@@ -290,7 +318,9 @@ export async function processIncomingEmail(
     }
   }
 
-  // Step 4: Create interaction record
+  // Step 4: Create interaction record. Always store the raw from_email /
+  // from_name so the inbox can render a sender even when person_id is null
+  // (per migration 063 — don't rely on the people join alone).
   const interactionPayload: Record<string, unknown> = {
     venue_id: venueId,
     wedding_id: weddingId,
@@ -300,6 +330,8 @@ export async function processIncomingEmail(
     subject: email.subject,
     body_preview: email.body.slice(0, 300),
     full_body: email.body,
+    from_email: fromEmail,
+    from_name: fromName,
     gmail_message_id: email.messageId,
     gmail_thread_id: email.threadId,
     timestamp: email.date,
@@ -1022,6 +1054,7 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
     subject: draft.subject,
     body_preview: (draft.draft_body as string).slice(0, 300),
     full_body: draft.draft_body,
+    to_email: draft.to_email,
     gmail_message_id: sentMessageId,
     gmail_thread_id: threadId ?? null,
     timestamp: new Date().toISOString(),
