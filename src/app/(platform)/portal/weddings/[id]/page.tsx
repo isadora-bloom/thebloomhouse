@@ -188,7 +188,7 @@ interface EventFeedbackVendorRow {
 // Tab definitions
 // ---------------------------------------------------------------------------
 
-type TabKey = 'overview' | 'completeness' | 'planning-notes' | 'vendors' | 'guests' | 'timeline' | 'budget' | 'ceremony-chairs' | 'communications' | 'internal-notes' | 'feedback'
+type TabKey = 'overview' | 'completeness' | 'planning-notes' | 'vendors' | 'guests' | 'timeline' | 'budget' | 'ceremony-chairs' | 'table-map' | 'communications' | 'internal-notes' | 'feedback'
 
 const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: 'overview', label: 'Overview', icon: Activity },
@@ -199,6 +199,7 @@ const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?
   { key: 'timeline', label: 'Timeline', icon: Clock },
   { key: 'budget', label: 'Budget', icon: DollarSign },
   { key: 'ceremony-chairs', label: 'Ceremony Chairs', icon: ListChecks },
+  { key: 'table-map', label: 'Table Map', icon: Eye },
   { key: 'communications', label: 'Communications', icon: MessageCircle },
   { key: 'internal-notes', label: 'Internal Notes', icon: Lock },
   { key: 'feedback', label: 'Feedback', icon: ClipboardCheck },
@@ -2266,6 +2267,17 @@ export default function WeddingProfilePage() {
         )}
         {activeTab === 'ceremony-chairs' && (
           <CeremonyChairsTab weddingId={weddingId} />
+        )}
+        {activeTab === 'table-map' && (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">View the couple&apos;s floor plan layout. Use the full editor to place tables.</p>
+            <Link
+              href={`/portal/weddings/${weddingId}/table-map`}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 transition"
+            >
+              Open Table Map Editor
+            </Link>
+          </div>
         )}
         {activeTab === 'communications' && (
           <CommunicationsTab messages={messages} sageConversations={sageConversations} />
