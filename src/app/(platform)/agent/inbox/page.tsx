@@ -1175,6 +1175,54 @@ export default function InboxPage() {
     }
   }
 
+  // ---- Reprocess orphans into the pipeline ----
+  // For every inbound email with a person_id but no wedding_id, run the
+  // router brain to decide if it's an inquiry and, if so, create the
+  // weddings row + link the person. Pairs with the sender backfill:
+  // run that first so person_id is populated.
+  const [reprocessing, setReprocessing] = useState(false)
+  const [reprocessStatus, setReprocessStatus] = useState<string | null>(null)
+  const handleReprocessOrphans = async () => {
+    setReprocessing(true)
+    setReprocessStatus('Classifying orphan emails…')
+    try {
+      let totalCreated = 0
+      let totalLinked = 0
+      let totalSkipped = 0
+      let lastRemaining = Infinity
+      for (let i = 0; i < 100; i++) {
+        const res = await fetch('/api/agent/reprocess-orphans?limit=25', { method: 'POST' })
+        if (!res.ok) throw new Error(`Reprocess failed (${res.status})`)
+        const data = (await res.json()) as {
+          processed: number
+          linked: number
+          created: number
+          skipped: number
+          remaining: number
+        }
+        totalCreated += data.created
+        totalLinked += data.linked
+        totalSkipped += data.skipped
+        setReprocessStatus(
+          `Created ${totalCreated} inquiries, linked ${totalLinked} to existing weddings, ${data.remaining} orphan emails remaining…`
+        )
+        if (data.processed === 0 || data.remaining === 0) break
+        if (data.remaining >= lastRemaining) break
+        lastRemaining = data.remaining
+      }
+      await fetchInteractions()
+      setReprocessStatus(
+        `Done. ${totalCreated} new inquiries, ${totalLinked} linked, ${totalSkipped} skipped. Check /agent/pipeline.`
+      )
+    } catch (err) {
+      console.error('Failed to reprocess orphans:', err)
+      setReprocessStatus('Reprocess failed. Check console and try again.')
+    } finally {
+      setReprocessing(false)
+      setTimeout(() => setReprocessStatus(null), 10000)
+    }
+  }
+
   // ---- Filtering ----
   const filteredInteractions = interactions.filter((i) => {
     // Tab filter
@@ -1258,11 +1306,25 @@ export default function InboxPage() {
             <RefreshCw className={`w-4 h-4 ${backfilling ? 'animate-spin' : ''}`} />
             {backfilling ? 'Recovering…' : 'Recover senders'}
           </button>
+          <button
+            onClick={handleReprocessOrphans}
+            disabled={reprocessing}
+            title="Run AI classification on orphan emails and create pipeline entries for new inquiries"
+            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Sparkles className={`w-4 h-4 ${reprocessing ? 'animate-pulse' : ''}`} />
+            {reprocessing ? 'Classifying…' : 'Build pipeline'}
+          </button>
         </div>
       </div>
       {backfillStatus && (
         <div className="bg-sage-50 border border-sage-200 rounded-lg px-4 py-2 text-sm text-sage-700">
           {backfillStatus}
+        </div>
+      )}
+      {reprocessStatus && (
+        <div className="bg-teal-50 border border-teal-200 rounded-lg px-4 py-2 text-sm text-teal-700">
+          {reprocessStatus}
         </div>
       )}
 
