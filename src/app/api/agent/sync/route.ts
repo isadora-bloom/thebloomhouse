@@ -22,7 +22,7 @@ import { processIncomingEmail } from '@/lib/services/email-pipeline'
 // the pipeline fixes all of that at the source.
 // ---------------------------------------------------------------------------
 
-export async function POST() {
+export async function POST(req: Request) {
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -34,7 +34,17 @@ export async function POST() {
       return NextResponse.json({ error: 'No venue in scope' }, { status: 400 })
     }
 
-    const newEmails = await fetchNewEmails(venueId)
+    // Optional ?days=N triggers a backfill: ignore last_history_id and
+    // pull newer_than:Nd via Gmail search. maxResults scales so a 30-day
+    // pull can actually pull 30 days of mail, not 50 messages.
+    const url = new URL(req.url)
+    const daysParam = Number(url.searchParams.get('days') ?? '')
+    const days = Number.isFinite(daysParam) && daysParam > 0
+      ? Math.min(365, Math.floor(daysParam))
+      : undefined
+    const maxResults = days ? 500 : 50
+
+    const newEmails = await fetchNewEmails(venueId, maxResults, days ? { sinceDays: days } : undefined)
 
     let processed = 0
     let outbound = 0

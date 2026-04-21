@@ -675,13 +675,14 @@ export async function getGmailClient(venueId: string, connectionId?: string) {
  */
 export async function fetchNewEmails(
   venueId: string,
-  maxResults = 50
+  maxResults = 50,
+  opts?: { sinceDays?: number }
 ): Promise<ParsedEmail[]> {
   const connections = await getConnections(venueId)
 
   if (connections.length === 0) {
     // Legacy flow — single connection from venue_config
-    return fetchNewEmailsLegacy(venueId, maxResults)
+    return fetchNewEmailsLegacy(venueId, maxResults, opts)
   }
 
   const allEmails: ParsedEmail[] = []
@@ -690,7 +691,7 @@ export async function fetchNewEmails(
     if (!conn.sync_enabled || conn.status === 'disconnected') continue
 
     try {
-      const emails = await fetchNewEmailsFromConnection(conn, maxResults)
+      const emails = await fetchNewEmailsFromConnection(conn, maxResults, opts)
       allEmails.push(...emails)
     } catch (err) {
       console.error(`[gmail] Failed to fetch from connection ${conn.id} (${conn.email_address}):`, err)
@@ -711,7 +712,8 @@ export async function fetchNewEmails(
  */
 async function fetchNewEmailsFromConnection(
   conn: GmailConnection,
-  maxResults: number
+  maxResults: number,
+  opts?: { sinceDays?: number }
 ): Promise<ParsedEmail[]> {
   const gmail = await getGmailClient(conn.venue_id, conn.id)
   if (!gmail) return []
@@ -721,7 +723,12 @@ async function fetchNewEmailsFromConnection(
   try {
     let messageIds: string[] = []
 
-    if (conn.last_history_id) {
+    // Backfill mode: ignore history_id and pull the whole window. Used
+    // when a venue onboards mid-flight and needs their existing inbox
+    // imported, not just deltas.
+    if (opts?.sinceDays && opts.sinceDays > 0) {
+      messageIds = await fetchMessageIdsByList(gmail, maxResults, { sinceDays: opts.sinceDays })
+    } else if (conn.last_history_id) {
       // Incremental sync via history API
       try {
         const historyResponse = await gmail.users.history.list({
@@ -803,7 +810,8 @@ async function fetchNewEmailsFromConnection(
  */
 async function fetchNewEmailsLegacy(
   venueId: string,
-  maxResults: number
+  maxResults: number,
+  opts?: { sinceDays?: number }
 ): Promise<ParsedEmail[]> {
   const gmail = await getGmailClient(venueId)
   if (!gmail) return []
@@ -814,7 +822,9 @@ async function fetchNewEmailsLegacy(
   try {
     let messageIds: string[] = []
 
-    if (syncState?.last_history_id) {
+    if (opts?.sinceDays && opts.sinceDays > 0) {
+      messageIds = await fetchMessageIdsByList(gmail, maxResults, { sinceDays: opts.sinceDays })
+    } else if (syncState?.last_history_id) {
       try {
         const historyResponse = await gmail.users.history.list({
           userId: 'me',
@@ -902,18 +912,44 @@ async function fetchNewEmailsLegacy(
  */
 async function fetchMessageIdsByList(
   gmail: ReturnType<typeof google.gmail>,
-  maxResults: number
+  maxResults: number,
+  opts?: { sinceDays?: number }
 ): Promise<string[]> {
-  const listResponse = await gmail.users.messages.list({
-    userId: 'me',
-    maxResults,
-    labelIds: ['INBOX'],
-    q: '-category:promotions -category:social',
-  })
+  // Base query: strip Gmail's auto-categorised promos/social (the usual
+  // suspects the classifier would filter out anyway). When sinceDays is
+  // set we also add `newer_than:Nd` so backfill pulls the full window
+  // instead of whatever the last 50 messages happen to be.
+  const parts = ['-category:promotions', '-category:social']
+  if (opts?.sinceDays && opts.sinceDays > 0) {
+    parts.push(`newer_than:${Math.floor(opts.sinceDays)}d`)
+  }
+  const q = parts.join(' ')
 
-  return (listResponse.data.messages ?? [])
-    .map((m: { id?: string }) => m.id)
-    .filter((id: string | undefined): id is string => !!id)
+  // Paginate through the list API so we can actually pull weeks of mail
+  // for a backfill — Gmail caps per-page at 500.
+  const ids: string[] = []
+  let pageToken: string | undefined = undefined
+  const perPage = Math.min(500, Math.max(1, maxResults))
+  while (ids.length < maxResults) {
+    const remaining = maxResults - ids.length
+    const pageSize = Math.min(perPage, remaining)
+    const listResponse: { data: { messages?: Array<{ id?: string }>; nextPageToken?: string } } =
+      await gmail.users.messages.list({
+        userId: 'me',
+        maxResults: pageSize,
+        labelIds: ['INBOX'],
+        q,
+        ...(pageToken ? { pageToken } : {}),
+      })
+    const batch: string[] = (listResponse.data.messages ?? [])
+      .map((m) => m.id)
+      .filter((id): id is string => !!id)
+    ids.push(...batch)
+    const next: string | undefined = listResponse.data.nextPageToken
+    if (!next || batch.length === 0) break
+    pageToken = next
+  }
+  return ids
 }
 
 // ---------------------------------------------------------------------------

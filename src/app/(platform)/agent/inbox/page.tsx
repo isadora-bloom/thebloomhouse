@@ -26,6 +26,7 @@ import {
   AlertTriangle,
   PenLine,
   Trash2,
+  Save,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -511,32 +512,31 @@ function ReplyForm({
 
 function DraftApprovalCard({
   draft,
-  onApprove,
-  onReject,
+  onSave,
+  onSaveAndSend,
+  onDelete,
 }: {
   draft: { id: string; draft_body: string; subject: string }
-  onApprove: (draftId: string) => Promise<void>
-  onReject: (draftId: string) => Promise<void>
+  onSave: (draftId: string, body: string) => Promise<void>
+  onSaveAndSend: (draftId: string, body: string) => Promise<void>
+  onDelete: (draftId: string) => Promise<void>
 }) {
+  // Local copy so edits are free-form and only committed on Save / Save & Send.
+  const [body, setBody] = useState(draft.draft_body)
   const [processing, setProcessing] = useState(false)
-  const [action, setAction] = useState<'approve' | 'reject' | null>(null)
+  const [action, setAction] = useState<'save' | 'send' | 'delete' | null>(null)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
+  const dirty = body !== draft.draft_body
 
-  const handleApprove = async () => {
+  const runAction = async (
+    kind: 'save' | 'send' | 'delete',
+    fn: () => Promise<void>
+  ) => {
     setProcessing(true)
-    setAction('approve')
+    setAction(kind)
     try {
-      await onApprove(draft.id)
-    } finally {
-      setProcessing(false)
-      setAction(null)
-    }
-  }
-
-  const handleReject = async () => {
-    setProcessing(true)
-    setAction('reject')
-    try {
-      await onReject(draft.id)
+      await fn()
+      if (kind === 'save') setSavedAt(Date.now())
     } finally {
       setProcessing(false)
       setAction(null)
@@ -545,39 +545,71 @@ function DraftApprovalCard({
 
   return (
     <div className="rounded-xl p-4 bg-amber-50 border-2 border-amber-300 ml-8">
-      <div className="flex items-center gap-2 mb-3">
-        <Sparkles className="w-4 h-4 text-amber-600" />
-        <span className="text-sm font-semibold text-amber-800">
-          AI Draft — Pending Your Approval
-        </span>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-amber-600" />
+          <span className="text-sm font-semibold text-amber-800">
+            AI Draft — Edit, save, or send
+          </span>
+        </div>
+        {dirty && !savedAt && (
+          <span className="text-xs text-amber-700">Unsaved changes</span>
+        )}
+        {savedAt && !dirty && (
+          <span className="text-xs text-emerald-700">Saved</span>
+        )}
       </div>
-      <div className="text-sm text-amber-800 whitespace-pre-wrap leading-relaxed mb-4 bg-white/60 rounded-lg p-3 border border-amber-200">
-        {draft.draft_body}
-      </div>
-      <div className="flex items-center gap-2">
+      <textarea
+        value={body}
+        onChange={(e) => {
+          setBody(e.target.value)
+          if (savedAt) setSavedAt(null)
+        }}
+        rows={Math.max(6, Math.min(20, body.split('\n').length + 1))}
+        className="w-full text-sm text-amber-900 leading-relaxed mb-4 bg-white rounded-lg p-3 border border-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-400 font-sans"
+      />
+      <div className="flex flex-wrap items-center gap-2">
         <button
-          onClick={handleApprove}
-          disabled={processing}
-          className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={() => runAction('save', () => onSave(draft.id, body))}
+          disabled={processing || !dirty}
+          title="Save edits without sending. Comes back later for review."
+          className="flex items-center gap-2 px-4 py-2 bg-white hover:bg-amber-100 text-amber-800 text-sm font-medium rounded-lg border border-amber-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {action === 'approve' ? (
+          {action === 'save' ? (
             <Loader2 className="w-4 h-4 animate-spin" />
           ) : (
-            <CheckCircle className="w-4 h-4" />
+            <Save className="w-4 h-4" />
           )}
-          Approve & Send
+          Save
         </button>
         <button
-          onClick={handleReject}
+          onClick={() => runAction('send', () => onSaveAndSend(draft.id, body))}
           disabled={processing}
-          className="flex items-center gap-2 px-4 py-2 bg-red-50 hover:bg-red-100 text-red-700 text-sm font-medium rounded-lg border border-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Save current edits and send the reply right now."
+          className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {action === 'reject' ? (
+          {action === 'send' ? (
             <Loader2 className="w-4 h-4 animate-spin" />
           ) : (
-            <XCircle className="w-4 h-4" />
+            <Send className="w-4 h-4" />
           )}
-          Reject
+          Save & Send
+        </button>
+        <button
+          onClick={() => {
+            if (!window.confirm('Delete this draft? This cannot be undone.')) return
+            runAction('delete', () => onDelete(draft.id))
+          }}
+          disabled={processing}
+          title="Remove this draft entirely."
+          className="flex items-center gap-2 px-4 py-2 bg-red-50 hover:bg-red-100 text-red-700 text-sm font-medium rounded-lg border border-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ml-auto"
+        >
+          {action === 'delete' ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Trash2 className="w-4 h-4" />
+          )}
+          Delete
         </button>
       </div>
     </div>
@@ -660,8 +692,9 @@ function ThreadView({
   currentUserName: userName,
   onBack,
   onReply,
-  onApproveDraft,
-  onRejectDraft,
+  onSaveDraft,
+  onSaveAndSendDraft,
+  onDeleteDraft,
   onConfirmSigning,
   onDismissSigning,
 }: {
@@ -673,8 +706,9 @@ function ThreadView({
   currentUserName: string
   onBack: () => void
   onReply: () => void
-  onApproveDraft: (draftId: string) => Promise<void>
-  onRejectDraft: (draftId: string) => Promise<void>
+  onSaveDraft: (draftId: string, body: string) => Promise<void>
+  onSaveAndSendDraft: (draftId: string, body: string) => Promise<void>
+  onDeleteDraft: (draftId: string) => Promise<void>
   onConfirmSigning: () => Promise<void>
   onDismissSigning: () => Promise<void>
 }) {
@@ -759,8 +793,9 @@ function ThreadView({
         {draft && (
           <DraftApprovalCard
             draft={draft}
-            onApprove={onApproveDraft}
-            onReject={onRejectDraft}
+            onSave={onSaveDraft}
+            onSaveAndSend={onSaveAndSendDraft}
+            onDelete={onDeleteDraft}
           />
         )}
       </div>
@@ -1161,10 +1196,16 @@ export default function InboxPage() {
   )
 
   // ---- Sync emails ----
-  const handleSync = async () => {
+  // Normal sync (no args) pulls deltas since the last history_id — a few
+  // minutes' worth. Pass days > 0 to force a backfill that ignores
+  // history_id and pulls newer_than:Nd via Gmail search. Backfill is the
+  // right mode on first onboarding or after a wipe when the kanban needs
+  // to catch up with weeks of inbox.
+  const handleSync = async (days?: number) => {
     setSyncing(true)
     try {
-      const res = await fetch('/api/agent/sync', { method: 'POST' })
+      const qs = days && days > 0 ? `?days=${days}` : ''
+      const res = await fetch(`/api/agent/sync${qs}`, { method: 'POST' })
       if (!res.ok) throw new Error('Sync failed')
       await fetchInteractions()
     } catch (err) {
@@ -1173,6 +1214,17 @@ export default function InboxPage() {
     } finally {
       setSyncing(false)
     }
+  }
+  const handleBackfillSync = async () => {
+    const raw = window.prompt(
+      'Backfill how many days of inbox?\n' +
+        'Pulls every inbox message from the last N days through the pipeline. ' +
+        'Default 30. Max 365.',
+      '30'
+    )
+    if (raw === null) return
+    const days = Math.max(1, Math.min(365, Number(raw) || 30))
+    await handleSync(days)
   }
 
   // ---- Backfill senders ----
@@ -1505,12 +1557,22 @@ export default function InboxPage() {
             Compose
           </button>
           <button
-            onClick={handleSync}
+            onClick={() => handleSync()}
             disabled={syncing}
+            title="Pull new emails since the last sync (incremental)"
             className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
             {syncing ? 'Syncing...' : 'Sync'}
+          </button>
+          <button
+            onClick={handleBackfillSync}
+            disabled={syncing}
+            title="Import the last N days of inbox in one pass (first-time onboarding, post-wipe, or catch-up)"
+            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Pulling…' : 'Backfill'}
           </button>
           <button
             onClick={handleBackfillSenders}
@@ -1775,10 +1837,31 @@ export default function InboxPage() {
                       }
                       setSigningPrompt(null)
                     }}
-                    onApproveDraft={async (draftId: string) => {
+                    onSaveDraft={async (draftId: string, body: string) => {
+                      // Save edits only. Keep status='pending' so the card
+                      // stays in place and the coordinator can return to it.
                       await supabase
                         .from('drafts')
-                        .update({ status: 'approved', approved_at: new Date().toISOString() })
+                        .update({ draft_body: body, status: 'pending' })
+                        .eq('id', draftId)
+                      await supabase.from('draft_feedback').insert({
+                        venue_id: selectedInteraction?.venue_id,
+                        draft_id: draftId,
+                        action: 'edited',
+                      })
+                      setThreadDraft((prev) =>
+                        prev && prev.id === draftId ? { ...prev, draft_body: body } : prev
+                      )
+                    }}
+                    onSaveAndSendDraft={async (draftId: string, body: string) => {
+                      // Persist current edits, mark approved, fire send.
+                      await supabase
+                        .from('drafts')
+                        .update({
+                          draft_body: body,
+                          status: 'approved',
+                          approved_at: new Date().toISOString(),
+                        })
                         .eq('id', draftId)
                       await supabase.from('draft_feedback').insert({
                         venue_id: selectedInteraction?.venue_id,
@@ -1794,16 +1877,15 @@ export default function InboxPage() {
                       } catch { /* email send is best-effort */ }
                       setThreadDraft(null)
                     }}
-                    onRejectDraft={async (draftId: string) => {
-                      await supabase
-                        .from('drafts')
-                        .update({ status: 'rejected' })
-                        .eq('id', draftId)
+                    onDeleteDraft={async (draftId: string) => {
+                      // Hard delete. Log the feedback event first so
+                      // training data survives.
                       await supabase.from('draft_feedback').insert({
                         venue_id: selectedInteraction?.venue_id,
                         draft_id: draftId,
-                        action: 'rejected',
+                        action: 'deleted',
                       })
+                      await supabase.from('drafts').delete().eq('id', draftId)
                       setThreadDraft(null)
                     }}
                   />
