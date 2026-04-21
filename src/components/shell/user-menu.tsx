@@ -19,11 +19,21 @@ interface UserMenuProps {
   compact?: boolean
 }
 
+// Keys must match user_profiles.role values. The legacy short names
+// (owner/admin/manager/viewer) are kept as aliases so older seed rows or
+// demo fixtures still render with a sensible badge.
 const ROLE_BADGES: Record<string, { label: string; className: string }> = {
-  owner: { label: 'Owner', className: 'bg-gold-100 text-gold-700' },
-  admin: { label: 'Admin', className: 'bg-sage-100 text-sage-700' },
-  manager: { label: 'Manager', className: 'bg-teal-100 text-teal-700' },
-  viewer: { label: 'Viewer', className: 'bg-gray-100 text-gray-600' },
+  super_admin:   { label: 'Super Admin',  className: 'bg-gold-100 text-gold-700' },
+  org_admin:     { label: 'Org Admin',    className: 'bg-sage-100 text-sage-700' },
+  venue_manager: { label: 'Manager',      className: 'bg-teal-100 text-teal-700' },
+  coordinator:   { label: 'Coordinator',  className: 'bg-teal-100 text-teal-700' },
+  readonly:      { label: 'Read-only',    className: 'bg-gray-100 text-gray-600' },
+  couple:        { label: 'Couple',       className: 'bg-rose-100 text-rose-700' },
+  // Legacy aliases
+  owner:         { label: 'Owner',        className: 'bg-gold-100 text-gold-700' },
+  admin:         { label: 'Admin',        className: 'bg-sage-100 text-sage-700' },
+  manager:       { label: 'Manager',      className: 'bg-teal-100 text-teal-700' },
+  viewer:        { label: 'Viewer',       className: 'bg-gray-100 text-gray-600' },
 }
 
 export function UserMenu({ compact = false }: UserMenuProps) {
@@ -117,7 +127,10 @@ export function UserMenu({ compact = false }: UserMenuProps) {
     )
   }
 
-  const roleBadge = ROLE_BADGES[user.role] ?? ROLE_BADGES.viewer
+  // If the role isn't in the map (missing profile row, unknown value),
+  // surface that honestly instead of silently showing "Viewer" — we hit
+  // this when an auth user has no user_profiles row yet.
+  const roleBadge = ROLE_BADGES[user.role] ?? { label: 'No role', className: 'bg-red-100 text-red-700' }
 
   return (
     <div ref={ref} className="relative">
