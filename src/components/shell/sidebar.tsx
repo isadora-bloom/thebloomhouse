@@ -24,7 +24,7 @@ import {
   // System
   Building, ShieldCheck, Menu, X,
   // Misc
-  ListOrdered, HelpCircle, Users, SlidersHorizontal, Workflow,
+  ListOrdered, HelpCircle, Users, SlidersHorizontal, Workflow, MailX,
   // Config pages
   Wine, HardHat, Bus, CheckSquare,
   UtensilsCrossed, Armchair, Flower2, HeartHandshake,
@@ -93,6 +93,7 @@ const VENUE_SECTIONS: NavSection[] = [
       { label: 'Knowledge Gaps', href: '/agent/knowledge-gaps', icon: HelpCircle },
       { label: 'Relationships', href: '/agent/relationships', icon: UsersRound },
       { label: 'Client Codes', href: '/agent/codes', icon: ListOrdered },
+      { label: 'Inbox Filters', href: '/settings/inbox-filters', icon: MailX },
     ],
   },
   {

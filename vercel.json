@@ -43,6 +43,10 @@
     {
       "path": "/api/cron?job=economic_indicators",
       "schedule": "0 3 * * 3"
+    },
+    {
+      "path": "/api/cron?job=inbox_filter_learning",
+      "schedule": "0 9 * * *"
     }
   ]
 }

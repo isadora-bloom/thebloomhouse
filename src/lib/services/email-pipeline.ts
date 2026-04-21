@@ -21,6 +21,7 @@ import { detectContractSigning } from '@/lib/services/extraction'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
+import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,6 +36,9 @@ interface IncomingEmail {
   body: string
   date: string
   connectionId?: string
+  /** Gmail label ids for this message (e.g. INBOX, CATEGORY_PROMOTIONS, UNREAD).
+   *  Used by venue_email_filters rules of pattern_type='gmail_label'. */
+  labels?: string[]
 }
 
 interface PipelineResult {
@@ -54,33 +58,51 @@ interface ProcessAllResult {
 }
 
 // ---------------------------------------------------------------------------
-// Auto-ignore patterns (saves AI classification cost)
+// Auto-ignore — universal patterns + per-venue rules
 // ---------------------------------------------------------------------------
+//
+// Universal patterns catch the "no human on the other end" addresses that no
+// venue ever wants to hear from. Per-venue rules (see inbox-filters service
+// and venue_email_filters table) handle everything else — bulk senders a
+// particular venue wants ignored, vendor domains to classify-but-not-draft,
+// Gmail category labels, etc.
+//
+// The universal list stays small and safe. If a venue wants to add their own
+// sender patterns, those go in venue_email_filters.
 
-const AUTO_IGNORE_SENDERS = [
-  'sage@hawthornemanor.com',
-  'notifications@calendly.com',
-]
-
-const AUTO_IGNORE_PATTERNS = [
+const UNIVERSAL_IGNORE_PATTERNS = [
   'no-reply@',
   'noreply@',
   'mailer-daemon@',
   'postmaster@',
-  'notifications@',
   'donotreply@',
+  'bounce@',
+  'bounces@',
+  'return@',
+  'delivery-failure@',
 ]
 
-function shouldAutoIgnore(fromEmail: string): boolean {
+function matchesUniversalIgnore(fromEmail: string): boolean {
   const lower = fromEmail.toLowerCase()
-
-  if (AUTO_IGNORE_SENDERS.includes(lower)) return true
-
-  for (const pattern of AUTO_IGNORE_PATTERNS) {
+  for (const pattern of UNIVERSAL_IGNORE_PATTERNS) {
     if (lower.includes(pattern)) return true
   }
-
   return false
+}
+
+/**
+ * Look up this venue's own Sage email address so Sage never processes her own
+ * mail (loop protection). Works across venues — no hard-coded addresses.
+ */
+async function venueSageEmail(venueId: string): Promise<string | null> {
+  const supabase = createServiceClient()
+  const { data } = await supabase
+    .from('venue_ai_config')
+    .select('ai_email')
+    .eq('venue_id', venueId)
+    .maybeSingle()
+  const email = (data as { ai_email?: string | null } | null)?.ai_email
+  return email ? email.toLowerCase().trim() : null
 }
 
 // ---------------------------------------------------------------------------
@@ -207,10 +229,27 @@ export async function processIncomingEmail(
   const fromEmail = extractEmailAddress(email.from)
   const fromName = extractName(email.from)
 
-  // Step 1: Auto-ignore
-  if (shouldAutoIgnore(fromEmail)) {
+  // Step 1a: Universal auto-ignore — no-reply / bounces / postmasters.
+  if (matchesUniversalIgnore(fromEmail)) {
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
+
+  // Step 1b: Self-loop protection — never process mail that came from this
+  // venue's own Sage address (e.g. Sage CC'd on a thread, or an autoresponder
+  // echoing our send). Per-venue lookup, no hard-coded addresses.
+  const sageSelf = await venueSageEmail(venueId)
+  if (sageSelf && fromEmail === sageSelf) {
+    return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
+  }
+
+  // Step 1c: Per-venue filter rules (venue_email_filters).
+  //   action='ignore'   → bail before classifier (saves tokens).
+  //   action='no_draft' → classify + persist interaction, but don't draft.
+  const filterHit = await matchFilter(venueId, fromEmail, email.labels ?? [])
+  if (filterHit?.action === 'ignore') {
+    return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
+  }
+  const skipDraft = filterHit?.action === 'no_draft'
 
   // Check if already processed
   const alreadyProcessed = await isEmailProcessed(venueId, email.messageId)
@@ -403,6 +442,18 @@ export async function processIncomingEmail(
 
   const emailClassification = classification.classification
 
+  // Per-venue no_draft filters short-circuit here. Interaction + contact/
+  // wedding are already persisted (intel layer still sees it); we just skip
+  // handing off to the brains so Sage doesn't reply.
+  if (skipDraft) {
+    return {
+      interactionId,
+      draftId: null,
+      classification: emailClassification,
+      autoSent: false,
+    }
+  }
+
   if (emailClassification === 'new_inquiry' || emailClassification === 'inquiry_reply') {
     try {
       const taskType = emailClassification === 'inquiry_reply' ? 'inquiry_reply' : 'new_inquiry'
@@ -555,6 +606,10 @@ export async function processIncomingEmail(
  * pipeline. Returns a summary of what happened.
  */
 export async function processAllNewEmails(venueId: string): Promise<ProcessAllResult> {
+  // Fresh filter snapshot per cron tick — picks up any rules the venue
+  // added/removed since last run without waiting for the 1-minute TTL.
+  clearFilterCache(venueId)
+
   const emails = await fetchNewEmails(venueId)
 
   const summary: ProcessAllResult = {
@@ -577,6 +632,7 @@ export async function processAllNewEmails(venueId: string): Promise<ProcessAllRe
         body: email.body,
         date: email.date,
         connectionId: email.connectionId,
+        labels: email.labels,
       })
 
       summary.results.push(result)

@@ -891,6 +891,14 @@ async function fetchNewEmailsLegacy(
 
 /**
  * Fetch message IDs using the list API (used for initial sync or history fallback).
+ *
+ * Excludes Gmail's auto-categorised Promotions + Social buckets at fetch time.
+ * Gmail's categoriser is very good — this alone drops 30–60% of noise before
+ * it ever reaches our classifier, saving tokens and reducing false-positive
+ * inquiries from newsletter blasts / LinkedIn notifications.
+ *
+ * Forums + Updates stay in; inquiry form submissions from Zola/Knot often
+ * land in Updates.
  */
 async function fetchMessageIdsByList(
   gmail: ReturnType<typeof google.gmail>,
@@ -900,6 +908,7 @@ async function fetchMessageIdsByList(
     userId: 'me',
     maxResults,
     labelIds: ['INBOX'],
+    q: '-category:promotions -category:social',
   })
 
   return (listResponse.data.messages ?? [])

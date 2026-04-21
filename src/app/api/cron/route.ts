@@ -16,6 +16,7 @@ import { applyDailyDecay } from '@/lib/services/heat-mapping'
 import { processAllNewEmails, flushPendingAutoSends } from '@/lib/services/email-pipeline'
 import { runAllVenueIntelligence } from '@/lib/services/intelligence-engine'
 import { createNotification } from '@/lib/services/admin-notifications'
+import { learnFiltersForAllVenues } from '@/lib/services/inbox-filters'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -37,6 +38,7 @@ const VALID_JOBS = [
   'attribution_refresh',
   'post_event_feedback_check',
   'outcome_measurement',
+  'inbox_filter_learning',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -91,25 +93,50 @@ async function runJob(job: JobName): Promise<unknown> {
 
     case 'outcome_measurement':
       return measureOutcomesAllVenues()
+
+    case 'inbox_filter_learning':
+      return learnFiltersForAllVenues()
   }
 }
 
 /**
  * Poll emails for all venues with Gmail connected.
+ *
+ * Gmail tokens live in two places:
+ *   - venue_config.gmail_tokens (legacy single-inbox flow)
+ *   - gmail_connections (multi-Gmail, current flow — sync_enabled + status='active')
+ *
+ * Union venue ids from both so a venue that only exists in gmail_connections
+ * isn't silently skipped when the legacy column is null.
  */
 async function pollEmailsAllVenues(): Promise<Record<string, number>> {
   const supabase = createServiceClient()
 
-  const { data: venues } = await supabase
+  const venueIds = new Set<string>()
+
+  const { data: legacyRows } = await supabase
     .from('venue_config')
     .select('venue_id')
     .not('gmail_tokens', 'is', null)
 
-  if (!venues || venues.length === 0) return {}
+  for (const row of legacyRows ?? []) {
+    if (row.venue_id) venueIds.add(row.venue_id as string)
+  }
+
+  const { data: connectionRows } = await supabase
+    .from('gmail_connections')
+    .select('venue_id')
+    .eq('sync_enabled', true)
+    .eq('status', 'active')
+
+  for (const row of connectionRows ?? []) {
+    if (row.venue_id) venueIds.add(row.venue_id as string)
+  }
+
+  if (venueIds.size === 0) return {}
 
   const results: Record<string, number> = {}
-  for (const v of venues) {
-    const id = v.venue_id as string
+  for (const id of venueIds) {
     try {
       const result = await processAllNewEmails(id)
       // Flush any pending auto-sends whose 5-minute delay has elapsed
