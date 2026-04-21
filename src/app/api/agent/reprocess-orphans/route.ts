@@ -2,28 +2,7 @@ import { NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { classifyEmail } from '@/lib/services/router-brain'
-
-// Accepts "2026-06-14", "June 14, 2026", "6/14/26" etc. Returns an ISO
-// date string (YYYY-MM-DD) or null if we can't parse.
-function parseEventDate(raw: unknown): string | null {
-  if (!raw) return null
-  const s = String(raw).trim()
-  if (!s) return null
-  const d = new Date(s)
-  if (Number.isNaN(d.getTime())) return null
-  return d.toISOString().slice(0, 10)
-}
-
-// Accepts a number or a string like "150" / "~150 guests". Returns an
-// integer or null.
-function parseGuestCount(raw: unknown): number | null {
-  if (typeof raw === 'number' && Number.isFinite(raw)) return Math.round(raw)
-  if (typeof raw === 'string') {
-    const m = raw.match(/\d+/)
-    if (m) return parseInt(m[0], 10)
-  }
-  return null
-}
+import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 
 // ---------------------------------------------------------------------------
 // POST /api/agent/reprocess-orphans
@@ -148,7 +127,8 @@ export async function POST(req: Request) {
 
     // 3. Create a weddings row in status='inquiry' and link the person.
     const detectedSource = extracted.source ?? 'direct'
-    const parsedEventDate = parseEventDate(extracted.eventDate)
+    const parsedEventDateObj = parseFuzzyDate(extracted.eventDate)
+    const parsedEventDate = parsedEventDateObj?.iso ?? null
     const parsedGuestCount = parseGuestCount(extracted.guestCount)
     const { data: newWedding, error: weddingError } = await supabase
       .from('weddings')
@@ -158,6 +138,7 @@ export async function POST(req: Request) {
         source: detectedSource,
         inquiry_date: (row.timestamp as string) ?? new Date().toISOString(),
         wedding_date: parsedEventDate,
+        wedding_date_precision: parsedEventDateObj?.precision ?? null,
         guest_count_estimate: parsedGuestCount,
         heat_score: 0,
         temperature_tier: 'cool',
@@ -228,6 +209,9 @@ export async function POST(req: Request) {
         classification: cls,
         confidence: classification.confidence,
         extractedData: extracted,
+        parsedEventDate: parsedEventDateObj
+          ? { iso: parsedEventDateObj.iso, precision: parsedEventDateObj.precision, raw: parsedEventDateObj.raw }
+          : null,
         via: 'reprocess-orphans',
       },
     })

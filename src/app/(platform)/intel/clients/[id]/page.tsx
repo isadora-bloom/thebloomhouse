@@ -58,6 +58,7 @@ interface WeddingDetail {
   source: string | null
   source_detail: string | null
   wedding_date: string | null
+  wedding_date_precision: 'day' | 'month' | 'season' | 'year' | null
   guest_count_estimate: number | null
   booking_value: number | null
   assigned_consultant_id: string | null
@@ -176,6 +177,11 @@ interface ExtractionRow {
     confidence?: number
     subject?: string
     via?: string
+    parsedEventDate?: {
+      iso: string
+      precision: 'day' | 'month' | 'season' | 'year'
+      raw: string
+    } | null
     extractedData?: {
       senderName?: string
       partnerName?: string
@@ -270,6 +276,32 @@ function fmtDate(d: string | null): string {
     day: 'numeric',
     year: 'numeric',
   })
+}
+
+// Render a date honoring its precision: day -> "Jun 14, 2026",
+// month -> "June 2026", season -> "Fall 2026", year -> "2026".
+// Keeps us from pretending a fuzzy "Fall 2026" is precisely Oct 1.
+function fmtDateWithPrecision(
+  d: string | null,
+  precision: 'day' | 'month' | 'season' | 'year' | null | undefined
+): string {
+  if (!d) return '--'
+  if (!precision || precision === 'day') return fmtDate(d)
+  const dt = new Date(d)
+  const year = dt.getUTCFullYear()
+  const month = dt.getUTCMonth()
+  if (precision === 'year') return String(year)
+  if (precision === 'month') {
+    return dt.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  }
+  // Season: map month back to label. We store month 3=Spring, 6=Summer,
+  // 9=Fall, 0=Winter per the fuzzy parser.
+  const seasonLabel =
+    month === 3 ? 'Spring' :
+    month === 6 ? 'Summer' :
+    month === 9 ? 'Fall' :
+    month === 0 ? 'Winter' : 'Season'
+  return `${seasonLabel} ${year}`
 }
 
 function fmtDatetime(d: string): string {
@@ -1091,7 +1123,7 @@ export default function ClientProfilePage() {
                 <Calendar className="w-4 h-4 text-sage-400" />
                 <span className="text-xs text-sage-500">Wedding Date</span>
               </div>
-              <p className="text-sm font-semibold text-sage-900">{fmtDate(wedding.wedding_date)}</p>
+              <p className="text-sm font-semibold text-sage-900">{fmtDateWithPrecision(wedding.wedding_date, wedding.wedding_date_precision)}</p>
             </div>
             <div className="bg-surface border border-border rounded-xl p-4 shadow-sm">
               <div className="flex items-center gap-2 mb-1">

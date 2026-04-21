@@ -22,27 +22,7 @@ import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
 import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
-
-// Accepts ISO-ish / natural-language dates from the classifier. Returns a
-// YYYY-MM-DD string or null. We persist null rather than guess if we can't
-// parse — a wrong wedding_date is louder than a missing one.
-function parseEventDate(raw: unknown): string | null {
-  if (!raw) return null
-  const s = String(raw).trim()
-  if (!s) return null
-  const d = new Date(s)
-  if (Number.isNaN(d.getTime())) return null
-  return d.toISOString().slice(0, 10)
-}
-
-function parseGuestCount(raw: unknown): number | null {
-  if (typeof raw === 'number' && Number.isFinite(raw)) return Math.round(raw)
-  if (typeof raw === 'string') {
-    const m = raw.match(/\d+/)
-    if (m) return parseInt(m[0], 10)
-  }
-  return null
-}
+import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -377,7 +357,8 @@ export async function processIncomingEmail(
   // Step 5: If new inquiry, create wedding record and engagement event
   const extracted = classification.extractedData
   const detectedSource = extracted.source ?? 'direct'
-  const parsedEventDate = parseEventDate(extracted.eventDate)
+  const parsedEventDateObj = parseFuzzyDate(extracted.eventDate)
+  const parsedEventDate = parsedEventDateObj?.iso ?? null
   const parsedGuestCount = parseGuestCount(extracted.guestCount)
 
   if (
@@ -393,6 +374,7 @@ export async function processIncomingEmail(
         source: detectedSource,
         inquiry_date: new Date().toISOString(),
         wedding_date: parsedEventDate,
+        wedding_date_precision: parsedEventDateObj?.precision ?? null,
         guest_count_estimate: parsedGuestCount,
         heat_score: 0,
         temperature_tier: 'cool',
@@ -452,6 +434,7 @@ export async function processIncomingEmail(
     const patch: Record<string, unknown> = {}
     if (existingWedding && !existingWedding.wedding_date && parsedEventDate) {
       patch.wedding_date = parsedEventDate
+      patch.wedding_date_precision = parsedEventDateObj?.precision ?? null
     }
     if (existingWedding && !existingWedding.guest_count_estimate && parsedGuestCount) {
       patch.guest_count_estimate = parsedGuestCount
@@ -474,6 +457,11 @@ export async function processIncomingEmail(
       classification: classification.classification,
       confidence: classification.confidence,
       extractedData: extracted,
+      // Parsed date precision so the AI Insights UI can render "Fall 2026"
+      // rather than "2026-10-01" when the classifier only gave us a season.
+      parsedEventDate: parsedEventDateObj
+        ? { iso: parsedEventDateObj.iso, precision: parsedEventDateObj.precision, raw: parsedEventDateObj.raw }
+        : null,
       via: 'live-pipeline',
       subject: email.subject,
     },
