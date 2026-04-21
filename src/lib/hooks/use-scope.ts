@@ -51,18 +51,25 @@ function writeScopeToCookie(scope: Scope) {
   document.cookie = `bloom_scope=${encodeURIComponent(JSON.stringify(scope))}; path=/; max-age=${60 * 60 * 24 * 365}`
 }
 
+function clearScopeCookie() {
+  if (typeof document === 'undefined') return
+  document.cookie = 'bloom_scope=; path=/; max-age=0'
+}
+
 /**
  * Read the current scope.
  *
- * Resolution order:
- * 1. Demo mode cookie → DEMO_SCOPE (Hawthorne Manor)
- * 2. bloom_scope cookie → parsed scope
- * 3. Authenticated user, no cookie → resolved from user_profiles (async),
- *    returns EMPTY_SCOPE with loading:true until resolved
- * 4. Unauthenticated, no cookie → EMPTY_SCOPE with loading:false
+ * Resolution order on mount:
+ * 1. Demo mode cookie → DEMO_SCOPE (Hawthorne Manor), no validation
+ * 2. bloom_scope cookie → seeded as initial value, then validated against
+ *    the authed user's org. If the cookie's venue doesn't belong to the
+ *    user's org, it is discarded and re-resolved from user_profiles.
+ * 3. No cookie → resolved from user_profiles (async).
+ * 4. Unauthenticated → stale cookie cleared, EMPTY_SCOPE returned.
  *
- * Returns the Scope shape directly so existing call sites work unchanged,
- * with an extra `loading` flag for pages that want to show a spinner.
+ * Why: a year-long cookie was previously trusted forever, so a user who
+ * had a demo session (Hawthorne) would keep seeing demo data even after
+ * logging into a real account.
  */
 export function useScope(): Scope & { loading: boolean } {
   const initial = useMemo<Scope | null>(() => {
@@ -71,11 +78,16 @@ export function useScope(): Scope & { loading: boolean } {
   }, [])
 
   const [scope, setScope] = useState<Scope | null>(initial)
-  const [loading, setLoading] = useState<boolean>(initial === null)
+  // Always validate on mount unless we're in demo mode (terminal).
+  const [loading, setLoading] = useState<boolean>(!isDemoMode())
 
   useEffect(() => {
-    if (scope !== null) return
+    if (isDemoMode()) {
+      setLoading(false)
+      return
+    }
     let cancelled = false
+    const cookieScope = readScopeFromCookie()
 
     async function resolve() {
       try {
@@ -85,6 +97,11 @@ export function useScope(): Scope & { loading: boolean } {
         } = await supabase.auth.getUser()
         if (cancelled) return
         if (!user) {
+          // Unauthed: drop any stale scope from a previous logged-in session.
+          if (cookieScope) {
+            clearScopeCookie()
+            setScope(null)
+          }
           setLoading(false)
           return
         }
@@ -95,6 +112,23 @@ export function useScope(): Scope & { loading: boolean } {
           .eq('id', user.id)
           .maybeSingle()
         if (cancelled) return
+
+        // If a cookie exists, only keep it when its venue is inside the
+        // user's org. This catches demo→real transitions and venue
+        // deletions without forcing every page to revalidate on its own.
+        if (cookieScope?.venueId && profile?.org_id) {
+          const { data: cookieVenue } = await supabase
+            .from('venues')
+            .select('org_id')
+            .eq('id', cookieScope.venueId)
+            .maybeSingle()
+          if (cancelled) return
+          if (cookieVenue?.org_id === profile.org_id) {
+            setLoading(false)
+            return
+          }
+          // Stale — fall through to re-resolve, then overwrite cookie.
+        }
 
         // Resolve venue: prefer profile.venue_id, then fall back to first
         // venue in org for org-level admins (mirrors server auth-helpers).
@@ -113,6 +147,12 @@ export function useScope(): Scope & { loading: boolean } {
           }
         }
         if (!resolvedVenueId) {
+          // Profile exists but no venue access. Clear any stale cookie so
+          // we don't keep pointing at a venue they can't see.
+          if (cookieScope) {
+            clearScopeCookie()
+            setScope(null)
+          }
           setLoading(false)
           return
         }
@@ -151,7 +191,10 @@ export function useScope(): Scope & { loading: boolean } {
     return () => {
       cancelled = true
     }
-  }, [scope])
+    // Intentionally runs only on mount — revalidation happens once per
+    // page load, not on every scope mutation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return {
     ...(scope ?? EMPTY_SCOPE),
