@@ -1286,6 +1286,39 @@ export default function InboxPage() {
     }
   }
 
+  // ---- Backfill unknown couple names ----
+  // Patches partner1 people rows that still have null first_name/last_name
+  // (typical of Knot/WeddingWire forwards where the sender's real name was
+  // only in the email body). Pulls senderName from the saved
+  // intelligence_extractions.metadata for the wedding and writes it onto
+  // the person row so the pipeline kanban stops rendering "Unknown".
+  const [backfillingUnknown, setBackfillingUnknown] = useState(false)
+  const [backfillUnknownStatus, setBackfillUnknownStatus] = useState<string | null>(null)
+  const handleBackfillUnknown = async () => {
+    setBackfillingUnknown(true)
+    setBackfillUnknownStatus('Looking up nameless couples…')
+    try {
+      const res = await fetch('/api/agent/backfill-unknown-couples', { method: 'POST' })
+      if (!res.ok) throw new Error(`Backfill failed (${res.status})`)
+      const data = (await res.json()) as {
+        scanned: number
+        patched: number
+        noExtraction?: number
+        noSender?: number
+      }
+      setBackfillUnknownStatus(
+        `Scanned ${data.scanned} unnamed couples, patched ${data.patched}.`
+      )
+      await fetchInteractions()
+    } catch (err) {
+      console.error('Failed to backfill unknown couples:', err)
+      setBackfillUnknownStatus('Backfill failed. Check console.')
+    } finally {
+      setBackfillingUnknown(false)
+      setTimeout(() => setBackfillUnknownStatus(null), 8000)
+    }
+  }
+
   // ---- Filtering ----
   const filteredInteractions = interactions.filter((i) => {
     // Tab filter
@@ -1379,6 +1412,15 @@ export default function InboxPage() {
             {reprocessing ? 'Classifying…' : 'Build pipeline'}
           </button>
           <button
+            onClick={handleBackfillUnknown}
+            disabled={backfillingUnknown}
+            title="Patch pipeline cards showing 'Unknown' by pulling the sender name out of saved AI extractions"
+            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Sparkles className={`w-4 h-4 ${backfillingUnknown ? 'animate-pulse' : ''}`} />
+            {backfillingUnknown ? 'Naming…' : 'Name couples'}
+          </button>
+          <button
             onClick={handleCleanupGhosts}
             disabled={cleaning}
             title="Delete inquiry-stage weddings with no linked people or interactions (ghosts from the original broken pipeline run)"
@@ -1392,6 +1434,11 @@ export default function InboxPage() {
       {cleanStatus && (
         <div className="text-sm text-sage-700 bg-sage-50 border border-sage-200 rounded px-3 py-2">
           {cleanStatus}
+        </div>
+      )}
+      {backfillUnknownStatus && (
+        <div className="text-sm text-sage-700 bg-sage-50 border border-sage-200 rounded px-3 py-2">
+          {backfillUnknownStatus}
         </div>
       )}
       {backfillStatus && (

@@ -46,6 +46,20 @@ export async function POST(req: Request) {
 
   const supabase = createServiceClient()
 
+  // Pull the venue's own Gmail connection addresses. Any interaction whose
+  // from_email matches these is the venue/Sage itself — their own outbound
+  // showing up in the thread — and must NEVER be promoted to an inquiry.
+  // This is what creates the "Sage at Rixey Manor" ghost on the pipeline.
+  const { data: connectionsData } = await supabase
+    .from('gmail_connections')
+    .select('email_address')
+    .eq('venue_id', venueId)
+  const selfEmails = new Set(
+    ((connectionsData ?? []) as Array<{ email_address: string }>)
+      .map((c) => (c.email_address || '').toLowerCase().trim())
+      .filter(Boolean)
+  )
+
   // Candidates: inbound emails in this venue with a person_id but no wedding_id.
   const { data: candidates, error: candidatesError } = await supabase
     .from('interactions')
@@ -72,6 +86,16 @@ export async function POST(req: Request) {
 
   for (const row of candidates) {
     const personId = row.person_id as string
+
+    // 0. Self-filter: if the sender is one of the venue's own Gmail
+    //    connections, this is Sage/the coordinator replying in-thread, not a
+    //    couple inquiring. Skip silently — we never want a pipeline entry
+    //    with the venue itself as the "couple".
+    const fromEmailLower = ((row.from_email as string) || '').toLowerCase().trim()
+    if (fromEmailLower && selfEmails.has(fromEmailLower)) {
+      skipped++
+      continue
+    }
 
     // 1. If the person is already attached to a wedding, just stamp the
     //    interaction and move on. Avoids a classifier call.
@@ -154,10 +178,24 @@ export async function POST(req: Request) {
 
     const weddingId = newWedding.id as string
 
-    // Link the person to the wedding.
+    // Link the person to the wedding. Also backfill first/last name when
+    // missing — for Knot/WeddingWire forwards the from_name is the network
+    // ("The Knot"), not the couple, so the people row was created nameless.
+    // The classifier pulled the actual sender out of the body into
+    // extractedData.senderName; use that to give the pipeline kanban a
+    // real label instead of "Unknown".
+    const personUpdate: Record<string, unknown> = { wedding_id: weddingId }
+    if (!person?.first_name && !person?.last_name && extracted.senderName) {
+      const [sFirst, ...sRest] = extracted.senderName.trim().split(/\s+/)
+      const sLast = sRest.join(' ') || null
+      if (sFirst) {
+        personUpdate.first_name = sFirst
+        personUpdate.last_name = sLast
+      }
+    }
     await supabase
       .from('people')
-      .update({ wedding_id: weddingId })
+      .update(personUpdate)
       .eq('id', personId)
 
     // Stamp this interaction.

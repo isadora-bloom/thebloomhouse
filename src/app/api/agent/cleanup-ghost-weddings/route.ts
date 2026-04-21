@@ -10,14 +10,18 @@ import { createServiceClient } from '@/lib/supabase/service'
 // still in status='inquiry'. These show up on the pipeline kanban as empty
 // cards with no partner name, no email — pure noise.
 //
-// A wedding is "ghost" iff:
-//   - venue_id matches the caller's scope
-//   - status = 'inquiry'   (never advanced)
-//   - no rows in people where wedding_id = this.id
-//   - no rows in interactions where wedding_id = this.id
+// A wedding is "ghost" iff ANY of:
+//   (A) inquiry-stage, no linked people, no linked interactions (original
+//       definition — rows the broken pipeline created and abandoned), OR
+//   (B) inquiry-stage AND its linked partner1 email matches one of the
+//       venue's own gmail_connections.email_address entries. This is the
+//       "Sage at Rixey Manor" bug — an outbound email from the coordinator
+//       got misclassified as an inbound inquiry and promoted to a pipeline
+//       card with the venue itself as the couple. Never valid.
 //
-// Safe by construction: any wedding the user has actually touched will have
-// at least one interaction stamped to it, or a partner linked via people.
+// Safe by construction: in (A) there is nothing to lose; in (B) the
+// "couple" is literally the venue's own address, which cannot be a real
+// lead.
 // ---------------------------------------------------------------------------
 
 export async function POST() {
@@ -49,10 +53,10 @@ export async function POST() {
 
   const weddingIds = weddings.map((w) => w.id as string)
 
-  // Which of these have any people?
+  // Which of these have any people? (and what emails are on them)
   const { data: peopleRows } = await supabase
     .from('people')
-    .select('wedding_id')
+    .select('wedding_id, email, role')
     .in('wedding_id', weddingIds)
 
   // Which of these have any interactions?
@@ -68,12 +72,57 @@ export async function POST() {
     (interactionRows ?? []).map((r) => r.wedding_id as string).filter(Boolean)
   )
 
-  const ghosts = weddingIds.filter(
+  // Load the venue's own Gmail connection addresses for rule (B).
+  const { data: connectionsData } = await supabase
+    .from('gmail_connections')
+    .select('email_address')
+    .eq('venue_id', venueId)
+  const selfEmails = new Set(
+    ((connectionsData ?? []) as Array<{ email_address: string }>)
+      .map((c) => (c.email_address || '').toLowerCase().trim())
+      .filter(Boolean)
+  )
+
+  // Rule (B): weddings whose partner1 person has an email that belongs to
+  // the venue itself. These should never have been inquiries.
+  const selfWeddingIds = new Set<string>()
+  if (selfEmails.size > 0) {
+    for (const p of peopleRows ?? []) {
+      const email = ((p.email as string) || '').toLowerCase().trim()
+      if (email && selfEmails.has(email)) {
+        selfWeddingIds.add(p.wedding_id as string)
+      }
+    }
+  }
+
+  // Rule (A): empty weddings.
+  const emptyWeddings = weddingIds.filter(
     (id) => !withPeople.has(id) && !withInteractions.has(id)
   )
 
+  const ghosts = Array.from(new Set([...emptyWeddings, ...selfWeddingIds]))
+
   if (ghosts.length === 0) {
     return NextResponse.json({ scanned: weddingIds.length, deleted: 0 })
+  }
+
+  // For self-weddings (rule B), there are real rows attached — the
+  // coordinator's own outbound message and a bogus "partner1" person
+  // holding the venue's own email. Unwind those first so the delete
+  // doesn't leave dangling FKs or re-orphan legit interactions.
+  if (selfWeddingIds.size > 0) {
+    const selfIds = Array.from(selfWeddingIds)
+    // Delete the bogus venue-as-partner person rows.
+    await supabase
+      .from('people')
+      .delete()
+      .in('wedding_id', selfIds)
+    // Clear wedding_id on interactions so they revert to orphaned state
+    // (direction=outbound from the venue, not tied to any lead).
+    await supabase
+      .from('interactions')
+      .update({ wedding_id: null })
+      .in('wedding_id', selfIds)
   }
 
   // Clean ancillary rows that FK to weddings with ON DELETE SET NULL/CASCADE,
@@ -96,5 +145,7 @@ export async function POST() {
   return NextResponse.json({
     scanned: weddingIds.length,
     deleted: count ?? ghosts.length,
+    empty: emptyWeddings.length,
+    self: selfWeddingIds.size,
   })
 }
