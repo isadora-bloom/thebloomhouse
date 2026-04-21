@@ -112,7 +112,7 @@ async function venueSageEmail(venueId: string): Promise<string | null> {
 /**
  * Extract a clean email address from "Name <email@example.com>" format.
  */
-function extractEmailAddress(from: string): string {
+export function extractEmailAddress(from: string): string {
   if (from.includes('<') && from.includes('>')) {
     const match = from.match(/<([^>]+)>/)
     return match ? match[1].toLowerCase() : from.toLowerCase()
@@ -123,7 +123,7 @@ function extractEmailAddress(from: string): string {
 /**
  * Extract a display name from "Name <email@example.com>" format.
  */
-function extractName(from: string): string | null {
+export function extractName(from: string): string | null {
   if (from.includes('<')) {
     const name = from.split('<')[0].trim().replace(/["']/g, '')
     return name || null
@@ -151,7 +151,7 @@ async function isEmailProcessed(venueId: string, gmailMessageId: string): Promis
  * Find an existing contact by email or create a new person + contact.
  * Returns { personId, weddingId, isNew }.
  */
-async function findOrCreateContact(
+export async function findOrCreateContact(
   venueId: string,
   email: string,
   name: string | null

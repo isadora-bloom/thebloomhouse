@@ -1136,6 +1136,45 @@ export default function InboxPage() {
     }
   }
 
+  // ---- Backfill senders ----
+  // Re-fetches Gmail headers for historical rows whose person_id / from_email
+  // are still null (legacy of the findOrCreateContact bug). Paged: keeps
+  // calling the endpoint until `remaining` drops to 0 or we stall.
+  const [backfilling, setBackfilling] = useState(false)
+  const [backfillStatus, setBackfillStatus] = useState<string | null>(null)
+  const handleBackfillSenders = async () => {
+    setBackfilling(true)
+    setBackfillStatus('Recovering senders…')
+    try {
+      let totalUpdated = 0
+      let lastRemaining = Infinity
+      for (let i = 0; i < 50; i++) {
+        const res = await fetch('/api/agent/backfill-senders?limit=50', { method: 'POST' })
+        if (!res.ok) throw new Error(`Backfill failed (${res.status})`)
+        const data = (await res.json()) as {
+          processed: number
+          updated: number
+          failed: number
+          missing: number
+          remaining: number
+        }
+        totalUpdated += data.updated
+        setBackfillStatus(`Recovered ${totalUpdated} senders, ${data.remaining} remaining…`)
+        if (data.processed === 0 || data.remaining === 0) break
+        if (data.remaining >= lastRemaining) break // safety: not making progress
+        lastRemaining = data.remaining
+      }
+      await fetchInteractions()
+      setBackfillStatus(`Recovered ${totalUpdated} senders.`)
+    } catch (err) {
+      console.error('Failed to backfill senders:', err)
+      setBackfillStatus('Backfill failed. Check Gmail connection and try again.')
+    } finally {
+      setBackfilling(false)
+      setTimeout(() => setBackfillStatus(null), 5000)
+    }
+  }
+
   // ---- Filtering ----
   const filteredInteractions = interactions.filter((i) => {
     // Tab filter
@@ -1210,8 +1249,22 @@ export default function InboxPage() {
             <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
             {syncing ? 'Syncing...' : 'Sync'}
           </button>
+          <button
+            onClick={handleBackfillSenders}
+            disabled={backfilling}
+            title="Recover sender names on historical emails by re-fetching Gmail headers"
+            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={`w-4 h-4 ${backfilling ? 'animate-spin' : ''}`} />
+            {backfilling ? 'Recovering…' : 'Recover senders'}
+          </button>
         </div>
       </div>
+      {backfillStatus && (
+        <div className="bg-sage-50 border border-sage-200 rounded-lg px-4 py-2 text-sm text-sage-700">
+          {backfillStatus}
+        </div>
+      )}
 
       {/* ---- Inline insight banner ---- */}
       <InlineInsightBanner category="lead_conversion,response_time" />
