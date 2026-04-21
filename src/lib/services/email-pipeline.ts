@@ -106,6 +106,31 @@ async function venueSageEmail(venueId: string): Promise<string | null> {
   return email ? email.toLowerCase().trim() : null
 }
 
+/**
+ * Load every address this venue owns — the Sage relay plus every linked
+ * Gmail connection. Used to classify direction (from-match → outbound)
+ * and as a self-loop guard so the venue can never appear as its own lead.
+ *
+ * A single source of truth: any place in the pipeline that asks "is this
+ * our own email?" should call this, not hardcode addresses or check
+ * one config field.
+ */
+export async function venueOwnEmails(venueId: string): Promise<Set<string>> {
+  const supabase = createServiceClient()
+  const own = new Set<string>()
+  const sage = await venueSageEmail(venueId)
+  if (sage) own.add(sage)
+  const { data: conns } = await supabase
+    .from('gmail_connections')
+    .select('email_address')
+    .eq('venue_id', venueId)
+  for (const c of (conns ?? []) as Array<{ email_address: string }>) {
+    const e = (c.email_address || '').toLowerCase().trim()
+    if (e) own.add(e)
+  }
+  return own
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -158,6 +183,16 @@ export async function findOrCreateContact(
   name: string | null
 ): Promise<{ personId: string | null; weddingId: string | null; isNew: boolean }> {
   const supabase = createServiceClient()
+
+  // 0. Defense in depth: never create (or return) a person for one of the
+  // venue's own addresses. The primary guard is in processIncomingEmail
+  // self-loop check, but any direct caller of this helper must be safe
+  // too — otherwise the venue itself becomes a lead.
+  const ownEmails = await venueOwnEmails(venueId)
+  const emailLower = email.toLowerCase().trim()
+  if (ownEmails.has(emailLower)) {
+    return { personId: null, weddingId: null, isNew: false }
+  }
 
   // 1. Direct match on people.email within this venue.
   const { data: byEmail } = await supabase
@@ -263,11 +298,31 @@ export async function processIncomingEmail(
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
 
-  // Step 1b: Self-loop protection — never process mail that came from this
-  // venue's own Sage address (e.g. Sage CC'd on a thread, or an autoresponder
-  // echoing our send). Per-venue lookup, no hard-coded addresses.
-  const sageSelf = await venueSageEmail(venueId)
-  if (sageSelf && fromEmail === sageSelf) {
+  // Step 1b: Self-loop protection — when the sender is one of THIS venue's
+  // own addresses (Sage relay or any linked gmail_connection), this is our
+  // own outbound mail that Gmail returned alongside inbound in the same
+  // thread. Record it as an outbound interaction so the thread stays
+  // continuous, but short-circuit: no classification, no contact creation,
+  // no wedding, no draft. Without this, sage@venue.com ends up as a
+  // "couple" on the pipeline kanban.
+  const ownEmails = await venueOwnEmails(venueId)
+  if (ownEmails.has(fromEmail)) {
+    // Still persist so the inbox thread view is complete, but as outbound.
+    const outboundPayload: Record<string, unknown> = {
+      venue_id: venueId,
+      type: 'email',
+      direction: 'outbound',
+      subject: email.subject,
+      body_preview: email.body.slice(0, 300),
+      full_body: email.body,
+      from_email: fromEmail,
+      from_name: fromName,
+      gmail_message_id: email.messageId,
+      gmail_thread_id: email.threadId,
+      timestamp: email.date,
+    }
+    if (email.connectionId) outboundPayload.gmail_connection_id = email.connectionId
+    await supabase.from('interactions').insert(outboundPayload)
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
 

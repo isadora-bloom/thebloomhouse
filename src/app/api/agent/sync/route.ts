@@ -1,14 +1,25 @@
 import { NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { fetchNewEmails } from '@/lib/services/gmail'
-import { createServiceClient } from '@/lib/supabase/service'
+import { processIncomingEmail } from '@/lib/services/email-pipeline'
 
 // ---------------------------------------------------------------------------
-// POST — Trigger an email sync for the authenticated venue
+// POST /api/agent/sync
 //
-// Pulls new emails from Gmail via the history API (or list API for
-// initial sync). Stores them in the interactions table and updates
-// email_sync_state.
+// Triggers an email sync for the authenticated venue. Pulls new messages
+// from every linked Gmail connection and routes each one through the
+// shared pipeline (processIncomingEmail) so classification, contact
+// resolution, wedding creation, direction detection, and draft
+// generation all happen in one place.
+//
+// Why this matters: the previous version did a naked insert with
+// `direction: 'inbound'` for every message and a wrong column name
+// (`body_full` vs the schema's `full_body`). That skipped the classifier
+// entirely, forced a second "Build pipeline" pass via reprocess-orphans,
+// and stamped every outbound sent-mail (Gmail returns sent messages in
+// threads too) as an inbound inquiry — which is how sage@rixeymanor.com
+// ended up on the pipeline kanban as its own "couple". Routing through
+// the pipeline fixes all of that at the source.
 // ---------------------------------------------------------------------------
 
 export async function POST() {
@@ -19,46 +30,54 @@ export async function POST() {
 
   try {
     const venueId = auth.venueId
+    if (!venueId) {
+      return NextResponse.json({ error: 'No venue in scope' }, { status: 400 })
+    }
 
-    // Fetch new emails from Gmail
     const newEmails = await fetchNewEmails(venueId)
 
-    // Store each new email as an interaction (skip if messageId already exists)
-    const supabase = createServiceClient()
-    let synced = 0
+    let processed = 0
+    let outbound = 0
+    let inquiries = 0
+    let ignored = 0
+    let errors = 0
 
     for (const email of newEmails) {
-      // Check if this message already exists
-      const { data: existing } = await supabase
-        .from('interactions')
-        .select('id')
-        .eq('venue_id', venueId)
-        .eq('gmail_message_id', email.messageId)
-        .maybeSingle()
-
-      if (existing) continue
-
-      const { error } = await supabase.from('interactions').insert({
-        venue_id: venueId,
-        gmail_message_id: email.messageId,
-        gmail_thread_id: email.threadId,
-        from_email: email.from,
-        to_email: email.to,
-        subject: email.subject,
-        body_preview: email.body.slice(0, 500),
-        body_full: email.body,
-        direction: 'inbound',
-        timestamp: email.date ? new Date(email.date).toISOString() : new Date().toISOString(),
-        is_read: false,
-      })
-
-      if (!error) synced++
+      try {
+        const result = await processIncomingEmail(venueId, {
+          messageId: email.messageId,
+          threadId: email.threadId,
+          from: email.from,
+          to: email.to,
+          subject: email.subject,
+          body: email.body,
+          date: email.date,
+          labels: email.labels,
+          connectionId: email.connectionId,
+        })
+        processed++
+        if (result.classification === 'new_inquiry' || result.classification === 'inquiry_reply') {
+          inquiries++
+        } else if (result.classification === 'ignore' || result.classification === 'skipped') {
+          // Could be self-outbound (recorded outbound) or a filter match —
+          // either way not a pipeline entry.
+          if (result.interactionId === null) outbound++
+          else ignored++
+        }
+      } catch (err) {
+        errors++
+        console.error('[api/agent/sync] processIncomingEmail error:', err)
+      }
     }
 
     return NextResponse.json({
       success: true,
       fetched: newEmails.length,
-      synced,
+      processed,
+      inquiries,
+      outbound,
+      ignored,
+      errors,
     })
   } catch (err) {
     console.error('[api/agent/sync] POST error:', err)
