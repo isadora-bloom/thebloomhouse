@@ -23,6 +23,27 @@ import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consul
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
 import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
 
+// Accepts ISO-ish / natural-language dates from the classifier. Returns a
+// YYYY-MM-DD string or null. We persist null rather than guess if we can't
+// parse — a wrong wedding_date is louder than a missing one.
+function parseEventDate(raw: unknown): string | null {
+  if (!raw) return null
+  const s = String(raw).trim()
+  if (!s) return null
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString().slice(0, 10)
+}
+
+function parseGuestCount(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return Math.round(raw)
+  if (typeof raw === 'string') {
+    const m = raw.match(/\d+/)
+    if (m) return parseInt(m[0], 10)
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -354,7 +375,10 @@ export async function processIncomingEmail(
   const interactionId = interaction.id as string
 
   // Step 5: If new inquiry, create wedding record and engagement event
-  const detectedSource = classification.extractedData.source ?? 'direct'
+  const extracted = classification.extractedData
+  const detectedSource = extracted.source ?? 'direct'
+  const parsedEventDate = parseEventDate(extracted.eventDate)
+  const parsedGuestCount = parseGuestCount(extracted.guestCount)
 
   if (
     isNewContact &&
@@ -368,6 +392,8 @@ export async function processIncomingEmail(
         status: 'inquiry',
         source: detectedSource,
         inquiry_date: new Date().toISOString(),
+        wedding_date: parsedEventDate,
+        guest_count_estimate: parsedGuestCount,
         heat_score: 0,
         temperature_tier: 'cool',
       })
@@ -385,6 +411,21 @@ export async function processIncomingEmail(
           .eq('id', personId)
       }
 
+      // Second partner: if classifier extracted a name, seed partner2 so
+      // the detail/kanban has a couple label. Best-effort — skip silently
+      // if a partner2 already exists (race on concurrent emails).
+      if (extracted.partnerName) {
+        const [p2First, ...p2Rest] = extracted.partnerName.trim().split(/\s+/)
+        const p2Last = p2Rest.join(' ') || null
+        await supabase.from('people').insert({
+          venue_id: venueId,
+          wedding_id: weddingId,
+          role: 'partner2',
+          first_name: p2First || null,
+          last_name: p2Last,
+        })
+      }
+
       // Update interaction with wedding_id
       await supabase
         .from('interactions')
@@ -400,7 +441,43 @@ export async function processIncomingEmail(
         metadata: { source: detectedSource, subject: email.subject },
       })
     }
+  } else if (weddingId && parsedEventDate) {
+    // Existing wedding — backfill any extracted date / guest count that
+    // wasn't already known. Never overwrite a manually-entered value.
+    const { data: existingWedding } = await supabase
+      .from('weddings')
+      .select('wedding_date, guest_count_estimate')
+      .eq('id', weddingId)
+      .single()
+    const patch: Record<string, unknown> = {}
+    if (existingWedding && !existingWedding.wedding_date && parsedEventDate) {
+      patch.wedding_date = parsedEventDate
+    }
+    if (existingWedding && !existingWedding.guest_count_estimate && parsedGuestCount) {
+      patch.guest_count_estimate = parsedGuestCount
+    }
+    if (Object.keys(patch).length > 0) {
+      await supabase.from('weddings').update(patch).eq('id', weddingId)
+    }
   }
+
+  // Persist the full classifier blob for every email. This is the
+  // source-of-truth for the /intel/clients/[id] AI-insights section and
+  // the feed the intel layer learns from (urgency, sentiment, questions).
+  await supabase.from('intelligence_extractions').insert({
+    venue_id: venueId,
+    wedding_id: weddingId,
+    interaction_id: interactionId,
+    extraction_type: 'inquiry_classification',
+    confidence: classification.confidence / 100,
+    metadata: {
+      classification: classification.classification,
+      confidence: classification.confidence,
+      extractedData: extracted,
+      via: 'live-pipeline',
+      subject: email.subject,
+    },
+  })
 
   // Step 5b: Contract signing detection (notification only)
   // Scans the email body for phrases indicating the couple has signed/returned

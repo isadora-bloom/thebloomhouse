@@ -25,6 +25,7 @@ import {
   FileSignature,
   AlertTriangle,
   PenLine,
+  Trash2,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -1223,6 +1224,30 @@ export default function InboxPage() {
     }
   }
 
+  // ---- Cleanup ghost weddings ----
+  // Deletes inquiry-stage weddings that have no linked people and no
+  // interactions (legacy of the original broken pipeline run). Renders
+  // the pipeline kanban back to signal-only.
+  const [cleaning, setCleaning] = useState(false)
+  const [cleanStatus, setCleanStatus] = useState<string | null>(null)
+  const handleCleanupGhosts = async () => {
+    setCleaning(true)
+    setCleanStatus('Scanning for ghost weddings…')
+    try {
+      const res = await fetch('/api/agent/cleanup-ghost-weddings', { method: 'POST' })
+      if (!res.ok) throw new Error(`Cleanup failed (${res.status})`)
+      const data = (await res.json()) as { scanned: number; deleted: number }
+      setCleanStatus(`Scanned ${data.scanned} weddings, deleted ${data.deleted} ghosts.`)
+      await fetchInteractions()
+    } catch (err) {
+      console.error('Failed to cleanup ghosts:', err)
+      setCleanStatus('Cleanup failed. Check console.')
+    } finally {
+      setCleaning(false)
+      setTimeout(() => setCleanStatus(null), 8000)
+    }
+  }
+
   // ---- Filtering ----
   const filteredInteractions = interactions.filter((i) => {
     // Tab filter
@@ -1315,8 +1340,22 @@ export default function InboxPage() {
             <Sparkles className={`w-4 h-4 ${reprocessing ? 'animate-pulse' : ''}`} />
             {reprocessing ? 'Classifying…' : 'Build pipeline'}
           </button>
+          <button
+            onClick={handleCleanupGhosts}
+            disabled={cleaning}
+            title="Delete inquiry-stage weddings with no linked people or interactions (ghosts from the original broken pipeline run)"
+            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Trash2 className={`w-4 h-4 ${cleaning ? 'animate-pulse' : ''}`} />
+            {cleaning ? 'Cleaning…' : 'Clean ghosts'}
+          </button>
         </div>
       </div>
+      {cleanStatus && (
+        <div className="text-sm text-sage-700 bg-sage-50 border border-sage-200 rounded px-3 py-2">
+          {cleanStatus}
+        </div>
+      )}
       {backfillStatus && (
         <div className="bg-sage-50 border border-sage-200 rounded-lg px-4 py-2 text-sm text-sage-700">
           {backfillStatus}

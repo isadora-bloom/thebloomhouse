@@ -40,6 +40,10 @@ import {
   ChevronDown,
   ChevronUp,
   History,
+  Sparkles,
+  HelpCircle,
+  TrendingDown,
+  Minus,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -157,6 +161,32 @@ interface PlanningNoteRow {
   source_message: string | null
   status: string
   created_at: string
+}
+
+// Row from intelligence_extractions for rows of type 'inquiry_classification'.
+// metadata holds { classification, confidence, extractedData, via, subject }.
+interface ExtractionRow {
+  id: string
+  extraction_type: string
+  confidence: number | null
+  created_at: string
+  interaction_id: string | null
+  metadata: {
+    classification?: string
+    confidence?: number
+    subject?: string
+    via?: string
+    extractedData?: {
+      senderName?: string
+      partnerName?: string
+      eventDate?: string
+      guestCount?: number | string
+      source?: string
+      questions?: string[]
+      urgencyLevel?: 'low' | 'medium' | 'high'
+      sentiment?: 'positive' | 'neutral' | 'negative'
+    }
+  } | null
 }
 
 // ---------------------------------------------------------------------------
@@ -401,6 +431,177 @@ function JourneyMilestone({
 // Main
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// AI Insights panel
+//
+// Aggregates every inquiry_classification extraction for this wedding into
+// a single view: the most-recent parse (date, guest count, partner name,
+// urgency, sentiment, source) up top, then a rolled-up set of every
+// question the couple has asked across all emails, then a per-email feed
+// so the user can see how the AI read each message.
+//
+// This is the only place the classifier's extractedData currently surfaces
+// after 065. All data is persisted; this is the first surface. More to come
+// (pipeline card badges, inbox quick-view, intel digest).
+// ---------------------------------------------------------------------------
+
+function sentimentPill(s?: string) {
+  switch (s) {
+    case 'positive':
+      return { icon: <TrendingUp className="w-3 h-3" />, bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Positive' }
+    case 'negative':
+      return { icon: <TrendingDown className="w-3 h-3" />, bg: 'bg-rose-50', text: 'text-rose-700', label: 'Negative' }
+    default:
+      return { icon: <Minus className="w-3 h-3" />, bg: 'bg-sage-50', text: 'text-sage-700', label: 'Neutral' }
+  }
+}
+
+function urgencyPill(u?: string) {
+  switch (u) {
+    case 'high':
+      return { bg: 'bg-rose-100', text: 'text-rose-700', label: 'High urgency' }
+    case 'medium':
+      return { bg: 'bg-amber-100', text: 'text-amber-700', label: 'Medium urgency' }
+    default:
+      return { bg: 'bg-sage-100', text: 'text-sage-700', label: 'Low urgency' }
+  }
+}
+
+function AIInsightsPanel({ extractions }: { extractions: ExtractionRow[] }) {
+  const inquiryExtractions = extractions.filter(
+    (e) => e.extraction_type === 'inquiry_classification'
+  )
+
+  if (inquiryExtractions.length === 0) {
+    return (
+      <div className="bg-surface border border-border rounded-xl shadow-sm">
+        <div className="px-6 py-4 border-b border-border flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-sage-500" />
+          <h2 className="font-heading text-base font-semibold text-sage-900">AI Insights</h2>
+        </div>
+        <div className="p-8 text-center">
+          <Bot className="w-8 h-8 text-sage-300 mx-auto mb-2" />
+          <p className="text-sm text-sage-500">
+            No AI classifications yet. New emails will populate this panel automatically.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // Most recent extraction drives the header chips.
+  const latest = inquiryExtractions[0]
+  const latestData = latest.metadata?.extractedData ?? {}
+
+  // Roll up every question asked across every email, dedup case-insensitively.
+  const allQuestions = new Map<string, string>() // key -> original
+  for (const e of inquiryExtractions) {
+    const qs = e.metadata?.extractedData?.questions ?? []
+    for (const q of qs) {
+      const key = q.trim().toLowerCase()
+      if (key && !allQuestions.has(key)) allQuestions.set(key, q.trim())
+    }
+  }
+  const questions = Array.from(allQuestions.values())
+
+  const sentiment = sentimentPill(latestData.sentiment)
+  const urgency = urgencyPill(latestData.urgencyLevel)
+
+  return (
+    <div className="bg-surface border border-border rounded-xl shadow-sm">
+      <div className="px-6 py-4 border-b border-border flex items-center gap-2">
+        <Sparkles className="w-4 h-4 text-sage-500" />
+        <h2 className="font-heading text-base font-semibold text-sage-900">AI Insights</h2>
+        <span className="text-xs text-sage-500 ml-2">
+          {inquiryExtractions.length} classification{inquiryExtractions.length === 1 ? '' : 's'} on file
+        </span>
+      </div>
+
+      {/* Top-level signals from the most recent email */}
+      <div className="px-6 py-4 border-b border-border grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+        <div>
+          <div className="text-sage-500 mb-0.5">Partner name</div>
+          <div className="text-sage-900 font-medium truncate">{latestData.partnerName || '—'}</div>
+        </div>
+        <div>
+          <div className="text-sage-500 mb-0.5">Event date</div>
+          <div className="text-sage-900 font-medium">{latestData.eventDate || '—'}</div>
+        </div>
+        <div>
+          <div className="text-sage-500 mb-0.5">Guest count</div>
+          <div className="text-sage-900 font-medium">{latestData.guestCount ?? '—'}</div>
+        </div>
+        <div>
+          <div className="text-sage-500 mb-0.5">Source</div>
+          <div className="text-sage-900 font-medium truncate">{latestData.source || '—'}</div>
+        </div>
+      </div>
+
+      <div className="px-6 py-3 border-b border-border flex items-center gap-2 flex-wrap">
+        <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium', sentiment.bg, sentiment.text)}>
+          {sentiment.icon}
+          {sentiment.label}
+        </span>
+        <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium', urgency.bg, urgency.text)}>
+          {urgency.label}
+        </span>
+        {typeof latest.metadata?.confidence === 'number' && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-sage-100 text-sage-700">
+            {latest.metadata.confidence}% confident
+          </span>
+        )}
+        {latest.metadata?.classification && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-sage-50 text-sage-700 border border-sage-200">
+            {latest.metadata.classification}
+          </span>
+        )}
+      </div>
+
+      {/* Rolled-up questions across all emails */}
+      {questions.length > 0 && (
+        <div className="px-6 py-4 border-b border-border">
+          <div className="flex items-center gap-2 mb-2">
+            <HelpCircle className="w-3.5 h-3.5 text-sage-500" />
+            <div className="text-xs font-semibold text-sage-700 uppercase tracking-wide">
+              What they&apos;ve asked ({questions.length})
+            </div>
+          </div>
+          <ul className="space-y-1.5">
+            {questions.map((q, i) => (
+              <li key={i} className="text-sm text-sage-800 leading-snug pl-2 border-l-2 border-sage-200">
+                {q}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Per-email feed */}
+      <div className="max-h-64 overflow-y-auto">
+        {inquiryExtractions.map((e) => {
+          const d = e.metadata?.extractedData ?? {}
+          return (
+            <div key={e.id} className="px-6 py-2.5 border-b border-border last:border-b-0 text-xs text-sage-700 flex items-center gap-3">
+              <span className="text-sage-400 shrink-0 w-24 truncate">
+                {new Date(e.created_at).toLocaleDateString()}
+              </span>
+              <span className="text-sage-900 font-medium truncate flex-1">
+                {e.metadata?.subject || e.metadata?.classification || 'classification'}
+              </span>
+              {d.urgencyLevel && (
+                <span className="text-sage-500 shrink-0">{d.urgencyLevel}</span>
+              )}
+              {typeof e.metadata?.confidence === 'number' && (
+                <span className="text-sage-400 shrink-0 w-10 text-right">{e.metadata.confidence}%</span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export default function ClientProfilePage() {
   const router = useRouter()
   const params = useParams()
@@ -417,6 +618,7 @@ export default function ClientProfilePage() {
   const [tours, setTours] = useState<TourRow[]>([])
   const [activityLog, setActivityLog] = useState<ActivityLogRow[]>([])
   const [planningNotes, setPlanningNotes] = useState<PlanningNoteRow[]>([])
+  const [extractions, setExtractions] = useState<ExtractionRow[]>([])
   const [clientCode, setClientCode] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -427,7 +629,7 @@ export default function ClientProfilePage() {
     const supabase = createClient()
 
     try {
-      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes, codeRes, notesRes, feedbackRes, toursRes, activityRes] = await Promise.all([
+      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes, codeRes, notesRes, feedbackRes, toursRes, activityRes, extractionsRes] = await Promise.all([
         supabase
           .from('weddings')
           .select('*')
@@ -497,6 +699,13 @@ export default function ClientProfilePage() {
           .eq('wedding_id', weddingId)
           .order('created_at', { ascending: false })
           .limit(50),
+        supabase
+          .from('intelligence_extractions')
+          .select('id, extraction_type, confidence, created_at, interaction_id, metadata')
+          .eq('venue_id', VENUE_ID)
+          .eq('wedding_id', weddingId)
+          .order('created_at', { ascending: false })
+          .limit(100),
       ])
 
       if (weddingRes.error) throw weddingRes.error
@@ -512,6 +721,7 @@ export default function ClientProfilePage() {
       setClientCode((codeRes.data as { code?: string } | null)?.code ?? null)
       setTours((toursRes.data ?? []) as TourRow[])
       setActivityLog((activityRes.data ?? []) as ActivityLogRow[])
+      setExtractions((extractionsRes.data ?? []) as ExtractionRow[])
 
       // Fetch draft feedback using actual draft IDs
       if (fetchedDrafts.length > 0) {
@@ -1053,6 +1263,9 @@ export default function ClientProfilePage() {
               </div>
             )}
           </div>
+
+          {/* AI Insights — surfaced classifier output */}
+          <AIInsightsPanel extractions={extractions} />
 
           {/* Interaction Timeline */}
           <div className="bg-surface border border-border rounded-xl shadow-sm">

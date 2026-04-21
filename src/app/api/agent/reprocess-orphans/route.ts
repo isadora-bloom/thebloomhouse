@@ -3,6 +3,28 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { classifyEmail } from '@/lib/services/router-brain'
 
+// Accepts "2026-06-14", "June 14, 2026", "6/14/26" etc. Returns an ISO
+// date string (YYYY-MM-DD) or null if we can't parse.
+function parseEventDate(raw: unknown): string | null {
+  if (!raw) return null
+  const s = String(raw).trim()
+  if (!s) return null
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString().slice(0, 10)
+}
+
+// Accepts a number or a string like "150" / "~150 guests". Returns an
+// integer or null.
+function parseGuestCount(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return Math.round(raw)
+  if (typeof raw === 'string') {
+    const m = raw.match(/\d+/)
+    if (m) return parseInt(m[0], 10)
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/agent/reprocess-orphans
 //
@@ -105,13 +127,24 @@ export async function POST(req: Request) {
 
     const cls = classification.classification
     const isInquiry = cls === 'new_inquiry' || cls === 'inquiry_reply'
-    if (!isInquiry || classification.confidence < 50) {
+    const extracted = classification.extractedData ?? {}
+    // Tightened guard: must be an inquiry at high confidence AND the
+    // classifier must have pulled at least one wedding-shaped signal
+    // (event date, guest count, or named partner). Marketing blasts and
+    // vendor solicitations almost never trigger all three at once.
+    const hasWeddingSignal =
+      Boolean(extracted.eventDate) ||
+      Boolean(extracted.guestCount) ||
+      Boolean(extracted.partnerName)
+    if (!isInquiry || classification.confidence < 70 || !hasWeddingSignal) {
       skipped++
       continue
     }
 
     // 3. Create a weddings row in status='inquiry' and link the person.
-    const detectedSource = classification.extractedData?.source ?? 'direct'
+    const detectedSource = extracted.source ?? 'direct'
+    const parsedEventDate = parseEventDate(extracted.eventDate)
+    const parsedGuestCount = parseGuestCount(extracted.guestCount)
     const { data: newWedding, error: weddingError } = await supabase
       .from('weddings')
       .insert({
@@ -119,6 +152,8 @@ export async function POST(req: Request) {
         status: 'inquiry',
         source: detectedSource,
         inquiry_date: (row.timestamp as string) ?? new Date().toISOString(),
+        wedding_date: parsedEventDate,
+        guest_count_estimate: parsedGuestCount,
         heat_score: 0,
         temperature_tier: 'cool',
       })
@@ -153,6 +188,44 @@ export async function POST(req: Request) {
       .eq('venue_id', venueId)
       .eq('person_id', personId)
       .is('wedding_id', null)
+
+    // Second partner: if the classifier extracted a name, seed a partner2
+    // people row so the detail page has a couple label to render. Skip if
+    // one already exists on this wedding.
+    if (extracted.partnerName) {
+      const { data: existingPartner2 } = await supabase
+        .from('people')
+        .select('id')
+        .eq('wedding_id', weddingId)
+        .eq('role', 'partner2')
+        .maybeSingle()
+      if (!existingPartner2) {
+        const [p2First, ...p2Rest] = extracted.partnerName.trim().split(/\s+/)
+        const p2Last = p2Rest.join(' ') || null
+        await supabase.from('people').insert({
+          venue_id: venueId,
+          wedding_id: weddingId,
+          role: 'partner2',
+          first_name: p2First || null,
+          last_name: p2Last,
+        })
+      }
+    }
+
+    // Persist the full classifier blob for the intel layer + client page.
+    await supabase.from('intelligence_extractions').insert({
+      venue_id: venueId,
+      wedding_id: weddingId,
+      interaction_id: row.id as string,
+      extraction_type: 'inquiry_classification',
+      confidence: classification.confidence / 100,
+      metadata: {
+        classification: cls,
+        confidence: classification.confidence,
+        extractedData: extracted,
+        via: 'reprocess-orphans',
+      },
+    })
 
     created++
   }
