@@ -291,8 +291,10 @@ export default function SeatingConfigPage() {
       if (data) {
         const flags = (data.feature_flags ?? {}) as Record<string, unknown>
         const sc = (flags.seating_config ?? {}) as Record<string, unknown>
-        const loaded: PageState = {
+        const loaded: PageState & Record<string, unknown> = {
           floor_plan_url: (flags.floor_plan_url as string | null) ?? null,
+          floor_plan_venue_width_ft: (flags.floor_plan_venue_width_ft as number | null) ?? null,
+          floor_plan_venue_depth_ft: (flags.floor_plan_venue_depth_ft as number | null) ?? null,
           seating: {
             venue_spaces: (sc.venue_spaces as string[]) ?? [],
             preset_tables: (sc.preset_tables as PresetTable[]) ?? [],
@@ -390,6 +392,8 @@ export default function SeatingConfigPage() {
 
       const flags = (current?.feature_flags ?? {}) as Record<string, unknown>
       flags.floor_plan_url = state.floor_plan_url
+      flags.floor_plan_venue_width_ft = (state as unknown as Record<string, unknown>).floor_plan_venue_width_ft || null
+      flags.floor_plan_venue_depth_ft = (state as unknown as Record<string, unknown>).floor_plan_venue_depth_ft || null
       flags.seating_config = {
         venue_spaces: state.seating.venue_spaces,
         preset_tables: state.seating.preset_tables,
@@ -549,6 +553,39 @@ export default function SeatingConfigPage() {
               className="hidden"
             />
           </ConfigSection>
+
+          {/* Floor Plan Scale */}
+          {state.floor_plan_url && (
+            <ConfigSection title="Floor Plan Scale" icon={FileText}>
+              <p className="text-sm text-sage-600 mb-3">
+                Enter the real-world width of the venue space shown in your floor plan. This lets the table map calculate accurate sizes.
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-sage-700 mb-1">Venue width in feet</label>
+                  <input
+                    type="number" min={1} max={500} step={1}
+                    value={(state as unknown as Record<string, unknown>).floor_plan_venue_width_ft as number || ''}
+                    onChange={e => setState(prev => ({ ...prev, floor_plan_venue_width_ft: parseFloat(e.target.value) || null } as PageState))}
+                    placeholder="e.g. 80"
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                  />
+                  <p className="text-xs text-sage-500 mt-1">The total width of the space in the image</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-sage-700 mb-1">Venue depth in feet</label>
+                  <input
+                    type="number" min={1} max={500} step={1}
+                    value={(state as unknown as Record<string, unknown>).floor_plan_venue_depth_ft as number || ''}
+                    onChange={e => setState(prev => ({ ...prev, floor_plan_venue_depth_ft: parseFloat(e.target.value) || null } as PageState))}
+                    placeholder="e.g. 45"
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                  />
+                  <p className="text-xs text-sage-500 mt-1">The total depth of the space in the image</p>
+                </div>
+              </div>
+            </ConfigSection>
+          )}
 
           {/* Venue Spaces */}
           <ConfigSection title="Venue Spaces" icon={MapPin}>

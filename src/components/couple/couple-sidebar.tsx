@@ -48,6 +48,7 @@ export function buildCoupleSidebarSections(base: string): NavSection[] {
         { label: 'Guest List', href: `${base}/guests`, icon: Users },
         { label: 'RSVP Settings', href: `${base}/rsvp-settings`, icon: ClipboardCheck },
         { label: 'Seating', href: `${base}/seating`, icon: Armchair },
+        { label: 'Table Map', href: `${base}/table-map`, icon: Table2 },
         { label: 'Tables', href: `${base}/tables`, icon: Table2 },
         { label: 'Wedding Party', href: `${base}/party`, icon: UsersRound },
         { label: 'Allergies', href: `${base}/allergies`, icon: ShieldAlert },
