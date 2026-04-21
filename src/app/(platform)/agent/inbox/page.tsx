@@ -1342,11 +1342,26 @@ export default function InboxPage() {
   const [repairing, setRepairing] = useState(false)
   const [repairStatus, setRepairStatus] = useState<string | null>(null)
   const handleRepairPipeline = async () => {
+    // Suggest any extra self-domains derived from the venue's own config
+    // (Sage email + any linked Gmail connection). If none exist yet the
+    // prompt comes up blank — the backend still auto-detects from
+    // gmail_connections when the venue has linked Gmail. No hardcoded
+    // venue names here: this has to work for every customer.
+    let suggested = ''
+    try {
+      const hintRes = await fetch('/api/agent/self-domains', { method: 'GET' })
+      if (hintRes.ok) {
+        const hint = (await hintRes.json()) as { domains?: string[] }
+        suggested = (hint.domains ?? []).join(', ')
+      }
+    } catch {
+      // non-fatal — fall back to empty default
+    }
     const raw = window.prompt(
-      'Venue email domains to treat as the venue itself (comma-separated).\n' +
-        'Example: rixeymanor.com\n' +
-        'Leave blank to use only Gmail connections.',
-      'rixeymanor.com'
+      'Extra email domains to treat as the venue itself (comma-separated).\n' +
+        'Leave blank if your Gmail connection is already linked — we pull ' +
+        'domains from there automatically.',
+      suggested
     )
     if (raw === null) return
     const selfDomains = raw.trim()
