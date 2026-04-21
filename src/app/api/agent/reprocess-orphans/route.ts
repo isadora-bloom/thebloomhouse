@@ -128,15 +128,20 @@ export async function POST(req: Request) {
     const cls = classification.classification
     const isInquiry = cls === 'new_inquiry' || cls === 'inquiry_reply'
     const extracted = classification.extractedData ?? {}
-    // Tightened guard: must be an inquiry at high confidence AND the
-    // classifier must have pulled at least one wedding-shaped signal
-    // (event date, guest count, or named partner). Marketing blasts and
-    // vendor solicitations almost never trigger all three at once.
-    const hasWeddingSignal =
-      Boolean(extracted.eventDate) ||
-      Boolean(extracted.guestCount) ||
-      Boolean(extracted.partnerName)
-    if (!isInquiry || classification.confidence < 70 || !hasWeddingSignal) {
+    // Guard: classification must be inquiry-family at reasonable confidence.
+    // We do NOT require a wedding signal (eventDate/guestCount/partnerName)
+    // because forwarded-format emails (The Knot Pro Network, WeddingWire)
+    // wrap the real message in preamble/boilerplate the classifier often
+    // can't parse extractedData from. False positives are caught by a
+    // cheap marketing-body keyword check instead.
+    const body = ((row.full_body as string) || '').toLowerCase()
+    const looksMarketing =
+      body.includes('unsubscribe') ||
+      body.includes('view in browser') ||
+      body.includes('update your preferences') ||
+      body.includes('promotional offer') ||
+      body.includes('you are receiving this')
+    if (!isInquiry || classification.confidence < 65 || looksMarketing) {
       skipped++
       continue
     }
