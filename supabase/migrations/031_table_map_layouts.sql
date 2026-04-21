@@ -13,13 +13,13 @@ ALTER TABLE table_map_layouts ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "couples_read_own_table_map" ON table_map_layouts
   FOR SELECT USING (
-    wedding_id IN (SELECT wedding_id FROM wedding_people WHERE user_id = auth.uid())
+    wedding_id IN (SELECT wedding_id FROM people WHERE email = (SELECT email FROM auth.users WHERE id = auth.uid()))
   );
 CREATE POLICY "couples_write_own_table_map" ON table_map_layouts
   FOR INSERT WITH CHECK (
-    wedding_id IN (SELECT wedding_id FROM wedding_people WHERE user_id = auth.uid())
+    wedding_id IN (SELECT wedding_id FROM people WHERE email = (SELECT email FROM auth.users WHERE id = auth.uid()))
   );
 CREATE POLICY "couples_update_own_table_map" ON table_map_layouts
   FOR UPDATE USING (
-    wedding_id IN (SELECT wedding_id FROM wedding_people WHERE user_id = auth.uid())
+    wedding_id IN (SELECT wedding_id FROM people WHERE email = (SELECT email FROM auth.users WHERE id = auth.uid()))
   );

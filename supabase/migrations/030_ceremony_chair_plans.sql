@@ -14,14 +14,14 @@ ALTER TABLE ceremony_chair_plans ENABLE ROW LEVEL SECURITY;
 -- Couples can read/write their own plan
 CREATE POLICY "couples_read_own_ceremony_plan" ON ceremony_chair_plans
   FOR SELECT USING (
-    wedding_id IN (SELECT wedding_id FROM wedding_people WHERE user_id = auth.uid())
+    wedding_id IN (SELECT wedding_id FROM people WHERE email = (SELECT email FROM auth.users WHERE id = auth.uid()))
   );
 CREATE POLICY "couples_write_own_ceremony_plan" ON ceremony_chair_plans
   FOR INSERT WITH CHECK (
-    wedding_id IN (SELECT wedding_id FROM wedding_people WHERE user_id = auth.uid())
+    wedding_id IN (SELECT wedding_id FROM people WHERE email = (SELECT email FROM auth.users WHERE id = auth.uid()))
   );
 CREATE POLICY "couples_update_own_ceremony_plan" ON ceremony_chair_plans
   FOR UPDATE USING (
-    wedding_id IN (SELECT wedding_id FROM wedding_people WHERE user_id = auth.uid())
+    wedding_id IN (SELECT wedding_id FROM people WHERE email = (SELECT email FROM auth.users WHERE id = auth.uid()))
   );
 -- Service role bypasses RLS for admin access
