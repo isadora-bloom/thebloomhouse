@@ -58,6 +58,7 @@ export function buildCoupleSidebarSections(base: string): NavSection[] {
       title: 'Day-of',
       items: [
         { label: 'Ceremony', href: `${base}/ceremony`, icon: BookOpen },
+        { label: 'Ceremony Chairs', href: `${base}/ceremony-chairs`, icon: Armchair },
         { label: 'Rehearsal', href: `${base}/rehearsal`, icon: UtensilsCrossed },
         { label: 'Bar', href: `${base}/bar`, icon: Wine },
         { label: 'Decor', href: `${base}/decor`, icon: Flower2 },

@@ -187,7 +187,7 @@ interface EventFeedbackVendorRow {
 // Tab definitions
 // ---------------------------------------------------------------------------
 
-type TabKey = 'overview' | 'planning-notes' | 'vendors' | 'guests' | 'timeline' | 'budget' | 'communications' | 'internal-notes' | 'feedback'
+type TabKey = 'overview' | 'planning-notes' | 'vendors' | 'guests' | 'timeline' | 'budget' | 'ceremony-chairs' | 'communications' | 'internal-notes' | 'feedback'
 
 const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: 'overview', label: 'Overview', icon: Activity },
@@ -196,6 +196,7 @@ const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?
   { key: 'guests', label: 'Guests', icon: Users },
   { key: 'timeline', label: 'Timeline', icon: Clock },
   { key: 'budget', label: 'Budget', icon: DollarSign },
+  { key: 'ceremony-chairs', label: 'Ceremony Chairs', icon: ListChecks },
   { key: 'communications', label: 'Communications', icon: MessageCircle },
   { key: 'internal-notes', label: 'Internal Notes', icon: Lock },
   { key: 'feedback', label: 'Feedback', icon: ClipboardCheck },
@@ -677,6 +678,56 @@ function TimelineTab({ items }: { items: TimelineItemRow[] }) {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function CeremonyChairsTab({ weddingId }: { weddingId: string }) {
+  const supabase = createClient()
+  const [rows, setRows] = useState<{ left: number; right: number; label: string }[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    supabase.from('ceremony_chair_plans').select('plan').eq('wedding_id', weddingId).maybeSingle()
+      .then(({ data }) => { if (data?.plan?.rows) setRows(data.plan.rows); setLoading(false) })
+  }, [weddingId])
+
+  if (loading) return <p className="text-muted-foreground text-sm py-4">Loading...</p>
+  if (rows.length === 0) return <p className="text-muted-foreground text-sm py-4">No ceremony chair plan created yet.</p>
+
+  const total = rows.reduce((s, r) => s + (r.left || 0) + (r.right || 0), 0)
+  const maxSide = Math.max(...rows.map(r => Math.max(r.left || 0, r.right || 0)), 1)
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-4">
+        <p className="text-sm font-medium">{total} chairs across {rows.length} rows</p>
+      </div>
+      <div className="bg-muted/30 rounded-lg p-4 space-y-1 overflow-x-auto">
+        <div className="text-center mb-3">
+          <span className="text-xs bg-muted px-3 py-1 rounded font-medium">Altar</span>
+        </div>
+        {rows.map((row, idx) => (
+          <div key={idx} className="flex items-center justify-center gap-1">
+            <span className="text-xs text-muted-foreground w-7 text-right tabular-nums">R{idx + 1}</span>
+            <div className="flex justify-end gap-px" style={{ width: `${maxSide * 1.1}rem` }}>
+              {Array.from({ length: row.left || 0 }).map((_, i) => (
+                <span key={i} className="w-3.5 h-3.5 flex items-center justify-center text-[10px] font-bold">X</span>
+              ))}
+            </div>
+            <span className="text-[10px] font-bold w-5 text-center tabular-nums">{row.left}</span>
+            <div className="w-8 border-l border-r border-dashed border-muted-foreground/30 mx-0.5" />
+            <span className="text-[10px] font-bold w-5 text-center tabular-nums">{row.right}</span>
+            <div className="flex justify-start gap-px" style={{ width: `${maxSide * 1.1}rem` }}>
+              {Array.from({ length: row.right || 0 }).map((_, i) => (
+                <span key={i} className="w-3.5 h-3.5 flex items-center justify-center text-[10px] font-bold">X</span>
+              ))}
+            </div>
+            <span className="text-[10px] text-muted-foreground ml-1 tabular-nums">={(row.left||0)+(row.right||0)}</span>
+            {row.label && <span className="text-[10px] text-muted-foreground ml-1">{row.label}</span>}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -2065,6 +2116,9 @@ export default function WeddingProfilePage() {
         )}
         {activeTab === 'budget' && (
           <BudgetTab items={budgetItems} />
+        )}
+        {activeTab === 'ceremony-chairs' && (
+          <CeremonyChairsTab weddingId={weddingId} />
         )}
         {activeTab === 'communications' && (
           <CommunicationsTab messages={messages} sageConversations={sageConversations} />
