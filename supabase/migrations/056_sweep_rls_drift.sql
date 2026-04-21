@@ -71,10 +71,45 @@
 -- ============================================
 
 -- ============================================
+-- STEP 0: Ensure public.is_super_admin() exists.
+-- Every super_admin policy below calls this SECURITY DEFINER function
+-- instead of doing an inline `EXISTS (SELECT 1 FROM user_profiles...)`.
+-- The inline form recurses infinitely when evaluated on user_profiles
+-- itself, cascading 500 errors to every table whose RLS subqueries
+-- user_profiles. Wrapping the lookup in a SECURITY DEFINER function
+-- bypasses RLS for the inner check and breaks the recursion cleanly.
+-- We define it here (not just in 057) so 056 is self-contained and
+-- re-running it from a cold database leaves the DB in a sane state.
+-- ============================================
+CREATE OR REPLACE FUNCTION public.is_super_admin()
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $func$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM public.user_profiles
+    WHERE id = auth.uid() AND role = 'super_admin'
+  );
+END;
+$func$;
+
+GRANT EXECUTE ON FUNCTION public.is_super_admin() TO authenticated, anon;
+
+-- ============================================
 -- STEP 1: Drop ALL existing policies on every scoped table.
 -- Captures unknown leftover policies that were added via the Supabase SQL
 -- editor and never committed to git.
 -- ============================================
+-- interactions and drafts are excluded from this sweep because their
+-- canonical policies live in migration 055. If we dropped them here and
+-- skipped the CREATE loop below (they're in the exclusion list at STEP 3),
+-- re-running 056 would leave both tables with zero policies, which is
+-- deny-all for authenticated users. That bit us once on 2026-04-21 — the
+-- inbox went empty because running 055 then 056 wiped the interactions
+-- policies that 055 had just installed.
 DO $$
 DECLARE pol record;
 BEGIN
@@ -82,6 +117,7 @@ BEGIN
     SELECT DISTINCT p.tablename, p.policyname
     FROM pg_policies p
     WHERE p.schemaname = 'public'
+      AND p.tablename NOT IN ('interactions', 'drafts')
       AND p.tablename IN (
         SELECT DISTINCT c.table_name
         FROM information_schema.columns c
@@ -172,8 +208,8 @@ BEGIN
 
     EXECUTE format($p$CREATE POLICY "super_admin_all" ON public.%I
       FOR ALL TO authenticated
-      USING (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'))
-      WITH CHECK (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'))$p$, t.table_name);
+      USING (public.is_super_admin())
+      WITH CHECK (public.is_super_admin())$p$, t.table_name);
   END LOOP;
 END $$;
 
@@ -232,8 +268,8 @@ BEGIN
 
     EXECUTE format($p$CREATE POLICY "super_admin_all" ON public.%I
       FOR ALL TO authenticated
-      USING (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'))
-      WITH CHECK (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'))$p$, t.table_name);
+      USING (public.is_super_admin())
+      WITH CHECK (public.is_super_admin())$p$, t.table_name);
   END LOOP;
 END $$;
 
@@ -277,8 +313,8 @@ BEGIN
 
     EXECUTE format($p$CREATE POLICY "super_admin_all" ON public.%I
       FOR ALL TO authenticated
-      USING (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'))
-      WITH CHECK (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'))$p$, t.table_name);
+      USING (public.is_super_admin())
+      WITH CHECK (public.is_super_admin())$p$, t.table_name);
   END LOOP;
 END $$;
 
@@ -299,8 +335,8 @@ CREATE POLICY "user_profiles_update_own" ON public.user_profiles
 
 CREATE POLICY "user_profiles_super_admin_all" ON public.user_profiles
   FOR ALL TO authenticated
-  USING (EXISTS (SELECT 1 FROM public.user_profiles up2 WHERE up2.id = auth.uid() AND up2.role = 'super_admin'))
-  WITH CHECK (EXISTS (SELECT 1 FROM public.user_profiles up2 WHERE up2.id = auth.uid() AND up2.role = 'super_admin'));
+  USING (public.is_super_admin())
+  WITH CHECK (public.is_super_admin());
 
 -- ============================================
 -- STEP 7: Special case - venues
@@ -316,8 +352,8 @@ CREATE POLICY "venues_select_own" ON public.venues
 
 CREATE POLICY "venues_super_admin_all" ON public.venues
   FOR ALL TO authenticated
-  USING (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'))
-  WITH CHECK (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'));
+  USING (public.is_super_admin())
+  WITH CHECK (public.is_super_admin());
 
 -- ============================================
 -- STEP 8: Special case - organisations
@@ -329,8 +365,8 @@ CREATE POLICY "organisations_select_own" ON public.organisations
 
 CREATE POLICY "organisations_super_admin_all" ON public.organisations
   FOR ALL TO authenticated
-  USING (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'))
-  WITH CHECK (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'));
+  USING (public.is_super_admin())
+  WITH CHECK (public.is_super_admin());
 
 -- ============================================
 -- STEP 9: Special case - weddings
@@ -357,8 +393,8 @@ CREATE POLICY "weddings_delete_venue" ON public.weddings
 
 CREATE POLICY "weddings_super_admin_all" ON public.weddings
   FOR ALL TO authenticated
-  USING (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'))
-  WITH CHECK (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'));
+  USING (public.is_super_admin())
+  WITH CHECK (public.is_super_admin());
 
 -- ============================================
 -- STEP 10: Special case - venue_group_members
@@ -399,8 +435,8 @@ CREATE POLICY "venue_group_members_delete" ON public.venue_group_members
 
 CREATE POLICY "venue_group_members_super_admin_all" ON public.venue_group_members
   FOR ALL TO authenticated
-  USING (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'))
-  WITH CHECK (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'));
+  USING (public.is_super_admin())
+  WITH CHECK (public.is_super_admin());
 
 -- ============================================
 -- STEP 11: Special case - api_costs
@@ -416,8 +452,8 @@ CREATE POLICY "api_costs_select_venue" ON public.api_costs
 
 CREATE POLICY "api_costs_super_admin_all" ON public.api_costs
   FOR ALL TO authenticated
-  USING (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'))
-  WITH CHECK (EXISTS (SELECT 1 FROM public.user_profiles WHERE id = auth.uid() AND role = 'super_admin'));
+  USING (public.is_super_admin())
+  WITH CHECK (public.is_super_admin());
 
 -- ============================================
 -- STEP 12: Special case - team_invitations

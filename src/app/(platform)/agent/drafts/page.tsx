@@ -322,6 +322,7 @@ function RejectModal({
 function DraftCard({
   draft,
   onApprove,
+  onApproveAndSend,
   onEdit,
   onReject,
   isProcessing,
@@ -329,6 +330,7 @@ function DraftCard({
 }: {
   draft: Draft
   onApprove: (id: string) => void
+  onApproveAndSend: (id: string) => void
   onEdit: (draft: Draft) => void
   onReject: (draft: Draft) => void
   isProcessing: boolean
@@ -338,6 +340,7 @@ function DraftCard({
   const brain = brainBadge(draft.brain_used)
   const status = statusBadge(draft.status)
   const isPending = draft.status === 'pending'
+  const [expanded, setExpanded] = useState(false)
 
   return (
     <div className="bg-surface border border-border rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow">
@@ -366,9 +369,17 @@ function DraftCard({
 
       {/* Draft body */}
       <div className="bg-warm-white border border-border rounded-lg p-4 mb-4">
-        <p className="text-sm text-sage-700 whitespace-pre-wrap leading-relaxed line-clamp-6">
+        <p className={`text-sm text-sage-700 whitespace-pre-wrap leading-relaxed ${expanded ? '' : 'line-clamp-6'}`}>
           {draft.draft_body}
         </p>
+        {draft.draft_body && draft.draft_body.length > 300 && (
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="mt-2 text-xs font-medium text-sage-600 hover:text-sage-900 underline-offset-2 hover:underline"
+          >
+            {expanded ? 'Show less' : 'Show full email'}
+          </button>
+        )}
       </div>
 
       {/* Badges */}
@@ -420,11 +431,12 @@ function DraftCard({
 
       {/* Action buttons */}
       {isPending && (
-        <div className="flex items-center gap-2 pt-2 border-t border-border">
+        <div className="flex items-center gap-2 pt-2 border-t border-border flex-wrap">
           <button
             onClick={() => onApprove(draft.id)}
             disabled={isProcessing}
-            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Mark approved. Won't send until you click Send from the Approved tab."
           >
             <CheckCircle className="w-4 h-4" />
             Approve
@@ -433,9 +445,19 @@ function DraftCard({
             onClick={() => onEdit(draft)}
             disabled={isProcessing}
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-sage-700 border border-sage-300 rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Edit the draft, then mark approved (no send)."
           >
             <Pencil className="w-4 h-4" />
             Edit & Approve
+          </button>
+          <button
+            onClick={() => onApproveAndSend(draft.id)}
+            disabled={isProcessing}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Approve and send immediately."
+          >
+            <Send className="w-4 h-4" />
+            Approve & Send
           </button>
           <button
             onClick={() => onReject(draft)}
@@ -563,12 +585,11 @@ export default function ApprovalQueuePage() {
     fetchDrafts(activeTab)
   }, [fetchDrafts, activeTab])
 
-  // ---- Approve & Send draft ----
+  // ---- Approve only (queue, do not send) ----
   const handleApprove = async (id: string) => {
     setProcessingId(id)
     try {
       const draftRow = drafts.find((d) => d.id === id)
-      // Step 1: Mark as approved
       const { error: updateError } = await supabase
         .from('drafts')
         .update({
@@ -579,14 +600,44 @@ export default function ApprovalQueuePage() {
 
       if (updateError) throw updateError
 
-      // Step 2: Log feedback
       await supabase.from('draft_feedback').insert({
         venue_id: draftRow?.venue_id,
         draft_id: id,
         action: 'approved',
       })
 
-      // Step 3: Send the email via the API (triggers gmail.sendEmail)
+      // No send — draft sits in the Approved tab until someone sends it.
+      setDrafts((prev) => prev.filter((d) => d.id !== id))
+    } catch (err) {
+      console.error('Failed to approve draft:', err)
+      setError('Failed to approve draft')
+    } finally {
+      setProcessingId(null)
+    }
+  }
+
+  // ---- Approve + send immediately ----
+  const handleApproveAndSend = async (id: string) => {
+    setProcessingId(id)
+    try {
+      const draftRow = drafts.find((d) => d.id === id)
+      const { error: updateError } = await supabase
+        .from('drafts')
+        .update({
+          status: 'approved',
+          approved_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+
+      if (updateError) throw updateError
+
+      await supabase.from('draft_feedback').insert({
+        venue_id: draftRow?.venue_id,
+        draft_id: id,
+        action: 'approved',
+      })
+
+      // Send the email via the API (triggers gmail.sendEmail)
       try {
         await fetch('/api/agent/drafts', {
           method: 'PATCH',
@@ -598,11 +649,10 @@ export default function ApprovalQueuePage() {
         console.warn('Email send attempted but may have failed:', sendErr)
       }
 
-      // Remove from local state
       setDrafts((prev) => prev.filter((d) => d.id !== id))
     } catch (err) {
-      console.error('Failed to approve draft:', err)
-      setError('Failed to approve draft')
+      console.error('Failed to approve & send draft:', err)
+      setError('Failed to approve & send draft')
     } finally {
       setProcessingId(null)
     }
@@ -634,17 +684,8 @@ export default function ApprovalQueuePage() {
         edited_body: editedBody,
       })
 
-      // Send the email via the API (triggers gmail.sendEmail)
-      try {
-        await fetch('/api/agent/drafts', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ draftId: id }),
-        })
-      } catch (sendErr) {
-        console.warn('Email send attempted but may have failed:', sendErr)
-      }
-
+      // No send — user can Approve & Send from the Approved tab if they
+      // want to dispatch the edited version.
       setDrafts((prev) => prev.filter((d) => d.id !== id))
     } catch (err) {
       console.error('Failed to edit/approve draft:', err)
@@ -873,6 +914,7 @@ export default function ApprovalQueuePage() {
               key={draft.id}
               draft={draft}
               onApprove={handleApprove}
+              onApproveAndSend={handleApproveAndSend}
               onEdit={setEditingDraft}
               onReject={setRejectingDraft}
               isProcessing={processingId === draft.id}
