@@ -1286,6 +1286,52 @@ export default function InboxPage() {
     }
   }
 
+  // ---- Wipe all pipeline data (danger) ----
+  // Deletes every wedding, person, interaction, extraction, draft, and
+  // engagement event for the current venue. Keeps gmail_connections,
+  // venue settings, AI config. Use for fresh onboardings when demo/seed
+  // pollution needs to go. Requires typing WIPE to confirm.
+  const [wiping, setWiping] = useState(false)
+  const [wipeStatus, setWipeStatus] = useState<string | null>(null)
+  const handleWipePipeline = async () => {
+    const confirmText = window.prompt(
+      'This deletes ALL weddings, people, interactions, drafts, and AI extractions for this venue.\n' +
+        'Gmail connection and venue settings are preserved.\n\n' +
+        'Type WIPE to confirm.'
+    )
+    if (confirmText !== 'WIPE') {
+      setWipeStatus('Cancelled.')
+      setTimeout(() => setWipeStatus(null), 4000)
+      return
+    }
+    setWiping(true)
+    setWipeStatus('Wiping pipeline data…')
+    try {
+      const res = await fetch('/api/agent/wipe-pipeline-data?confirm=YES', {
+        method: 'POST',
+      })
+      if (!res.ok) throw new Error(`Wipe failed (${res.status})`)
+      const data = (await res.json()) as {
+        deleted: Record<string, number>
+        errors?: Record<string, string>
+      }
+      const summary = Object.entries(data.deleted)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(', ')
+      setWipeStatus(
+        `Wiped. ${summary}${data.errors ? ' — with errors, see console' : ''}`
+      )
+      if (data.errors) console.warn('Wipe errors:', data.errors)
+      await fetchInteractions()
+    } catch (err) {
+      console.error('Wipe failed:', err)
+      setWipeStatus('Wipe failed. Check console.')
+    } finally {
+      setWiping(false)
+      setTimeout(() => setWipeStatus(null), 15000)
+    }
+  }
+
   // ---- Repair pipeline (one-shot reconciliation) ----
   // Walks weddings → interactions → people, links nameless leads to the
   // right wedding, patches first/last from from_name when the people row
@@ -1488,6 +1534,15 @@ export default function InboxPage() {
             {backfillingUnknown ? 'Naming…' : 'Name couples'}
           </button>
           <button
+            onClick={handleWipePipeline}
+            disabled={wiping}
+            title="DANGER: delete all weddings, people, interactions, drafts, and AI extractions for this venue. Keeps Gmail connection."
+            className="flex items-center gap-2 px-4 py-2.5 text-red-700 border border-red-300 text-sm font-medium rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Trash2 className={`w-4 h-4 ${wiping ? 'animate-pulse' : ''}`} />
+            {wiping ? 'Wiping…' : 'Wipe pipeline'}
+          </button>
+          <button
             onClick={handleCleanupGhosts}
             disabled={cleaning}
             title="Delete inquiry-stage weddings with no linked people or interactions (ghosts from the original broken pipeline run)"
@@ -1511,6 +1566,11 @@ export default function InboxPage() {
       {repairStatus && (
         <div className="text-sm text-sage-800 bg-sage-100 border border-sage-300 rounded px-3 py-2">
           {repairStatus}
+        </div>
+      )}
+      {wipeStatus && (
+        <div className="text-sm text-red-800 bg-red-50 border border-red-300 rounded px-3 py-2">
+          {wipeStatus}
         </div>
       )}
       {backfillStatus && (
