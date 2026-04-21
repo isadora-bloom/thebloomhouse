@@ -8,7 +8,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Stage, Layer, Image as KonvaImage, Circle, Rect, Text, Group } from 'react-konva'
 import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
-import { ZoomIn, ZoomOut, Maximize, RotateCw, Download, Crop, Save, Check } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { ZoomIn, ZoomOut, Maximize, RotateCw, Download, Scissors, Save, Check } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -121,6 +122,11 @@ export default function TableMapPage() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
+  // Crop export state
+  const [cropMode, setCropMode] = useState(false)
+  const [cropStart, setCropStart] = useState<{ x: number; y: number } | null>(null)
+  const [cropRect, setCropRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
+
   // Load venue config + floor plan
   useEffect(() => {
     if (!venueId) return
@@ -201,6 +207,33 @@ export default function TableMapPage() {
     a.click()
   }
 
+  const exportCrop = (rect: { x: number; y: number; width: number; height: number }) => {
+    if (!stageRef.current) return
+    const uri = (stageRef.current as unknown as { toDataURL: (o: Record<string, number>) => string })
+      .toDataURL({ x: rect.x, y: rect.y, width: rect.width, height: rect.height, pixelRatio: 4 })
+    const a = document.createElement('a'); a.download = 'table-map-crop.png'; a.href = uri; a.click()
+    setCropMode(false); setCropRect(null); setCropStart(null)
+  }
+
+  const handleCropMouseDown = () => {
+    if (!cropMode || !stageRef.current) return
+    const pointer = (stageRef.current as unknown as { getPointerPosition: () => { x: number; y: number } }).getPointerPosition()
+    setCropStart(pointer); setCropRect(null)
+  }
+  const handleCropMouseMove = () => {
+    if (!cropMode || !cropStart || !stageRef.current) return
+    const pointer = (stageRef.current as unknown as { getPointerPosition: () => { x: number; y: number } }).getPointerPosition()
+    setCropRect({
+      x: Math.min(cropStart.x, pointer.x), y: Math.min(cropStart.y, pointer.y),
+      width: Math.abs(pointer.x - cropStart.x), height: Math.abs(pointer.y - cropStart.y),
+    })
+  }
+  const handleCropMouseUp = () => {
+    if (!cropMode || !cropRect) return
+    if (cropRect.width > 10 && cropRect.height > 10) exportCrop(cropRect)
+    else { setCropRect(null); setCropStart(null) }
+  }
+
   const moveElement = (id: string, x: number, y: number) => {
     setElements(prev => prev.map(el => el.id === id ? { ...el, x, y } : el))
   }
@@ -257,10 +290,25 @@ export default function TableMapPage() {
         <button onClick={exportPng} className="ml-auto inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border hover:bg-muted/50 transition">
           <Download className="w-3.5 h-3.5" /> Export PNG
         </button>
+        <button onClick={() => { setCropMode(m => !m); setCropRect(null); setCropStart(null) }}
+          className={cn('inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition',
+            cropMode ? 'bg-primary/10 border-primary text-primary' : 'hover:bg-muted/50')}>
+          <Scissors className="w-3.5 h-3.5" /> {cropMode ? 'Cancel' : 'Crop & Export'}
+        </button>
       </div>
 
       {/* Canvas */}
-      <div ref={containerRef} className="border rounded-xl overflow-hidden bg-muted/20 cursor-grab active:cursor-grabbing select-none">
+      <div ref={containerRef} className={cn('border rounded-xl overflow-hidden bg-muted/20 select-none relative',
+        cropMode ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing')}>
+        {cropMode && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-foreground/70 text-background text-xs px-4 py-2 rounded-full pointer-events-none z-10">
+            Click and drag to select area
+          </div>
+        )}
+        {cropMode && cropRect && (
+          <div className="absolute border-2 border-dashed border-white pointer-events-none z-10"
+            style={{ left: cropRect.x, top: cropRect.y, width: cropRect.width, height: cropRect.height }} />
+        )}
         <Stage
           ref={stageRef as React.RefObject<never>}
           width={stageW}
@@ -269,12 +317,15 @@ export default function TableMapPage() {
           scaleY={currentZoom}
           x={pos.x}
           y={pos.y}
-          draggable
+          draggable={!cropMode}
           onWheel={handleWheel}
+          onMouseDown={handleCropMouseDown}
+          onMouseMove={handleCropMouseMove}
+          onMouseUp={handleCropMouseUp}
           onDragEnd={(e: { target: { x: () => number; y: () => number } }) => {
             setPos({ x: e.target.x(), y: e.target.y() })
           }}
-          onClick={() => setSelectedId(null)}
+          onClick={() => !cropMode && setSelectedId(null)}
         >
           <Layer>
             <Group

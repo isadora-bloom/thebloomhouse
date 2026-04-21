@@ -28,6 +28,7 @@ import {
   MoreHorizontal,
   Utensils,
   AlertTriangle,
+  Printer,
   Settings,
   BarChart3,
   List,
@@ -726,6 +727,39 @@ export default function GuestListPage() {
     fetchGuests()
   }
 
+  // ---- Print Full Guest List ----
+  function printGuestList() {
+    const rows = filteredGuests.map(g => `
+      <tr>
+        <td style="padding:4px 8px;white-space:nowrap">${g.first_name} ${g.last_name || ''}</td>
+        <td style="padding:4px 8px">${g.rsvp_status === 'attending' ? 'Attending' : g.rsvp_status === 'declined' ? 'Declined' : 'Pending'}</td>
+        <td style="padding:4px 8px;font-size:11px">${g.phone || ''}</td>
+        <td style="padding:4px 8px;font-size:11px">${g.email || ''}</td>
+        <td style="padding:4px 8px">${g.dietary_restrictions || ''}</td>
+        <td style="padding:4px 8px">${g.meal_choice || ''}</td>
+        <td style="padding:4px 8px">${g.table_assignment || ''}</td>
+        <td style="padding:4px 8px">${g.has_plus_one ? g.plus_one_name || 'Yes' : ''}</td>
+        <td style="padding:4px 8px;font-size:11px">${g.notes || ''}</td>
+      </tr>`).join('')
+    const attending = guests.filter(g => g.rsvp_status === 'attending').length
+    const declined = guests.filter(g => g.rsvp_status === 'declined').length
+    const html = `<!DOCTYPE html><html><head><title>Guest List</title>
+      <style>body{font-family:sans-serif;padding:20px;font-size:12px}
+      h1{font-size:18px;margin-bottom:4px}
+      .stats{color:#666;font-size:13px;margin-bottom:16px}
+      table{width:100%;border-collapse:collapse}
+      th{text-align:left;padding:4px 8px;font-size:10px;color:#666;border-bottom:2px solid #333;text-transform:uppercase}
+      td{border-bottom:1px solid #eee}
+      @media print{button{display:none}@page{size:landscape;margin:1cm}}</style></head>
+      <body>
+      <h1>Guest List</h1>
+      <p class="stats">${guests.length} total | ${attending} attending | ${declined} declined | ${guests.length - attending - declined} pending</p>
+      <table><thead><tr><th>Name</th><th>RSVP</th><th>Phone</th><th>Email</th><th>Dietary</th><th>Meal</th><th>Table</th><th>Plus One</th><th>Notes</th></tr></thead>
+      <tbody>${rows}</tbody></table></body></html>`
+    const w = window.open('', '_blank')
+    if (w) { w.document.write(html); w.document.close(); w.print() }
+  }
+
   // ---- CSV Export ----
   function exportCsv() {
     const columns = [
@@ -901,6 +935,13 @@ export default function GuestListPage() {
             className="p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50"
           >
             <Settings className="w-4 h-4" />
+          </button>
+          <button
+            onClick={printGuestList}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50"
+          >
+            <Printer className="w-3.5 h-3.5" />
+            Print
           </button>
           <button
             onClick={exportCsv}

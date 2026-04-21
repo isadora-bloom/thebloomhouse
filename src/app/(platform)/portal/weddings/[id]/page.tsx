@@ -380,8 +380,45 @@ function OverviewTab({
   ].sort((a, b) => b.localeCompare(a))
   const lastActivity = allTimestamps[0] ?? wedding.updated_at
 
+  // Escalation detection: scan recent messages for urgent keywords
+  const ESCALATION_KEYWORDS = [
+    'urgent', 'emergency', 'asap', 'immediately', 'concerned', 'worried',
+    'unhappy', 'frustrated', 'disappointed', 'cancel', 'refund', 'complaint',
+    'unacceptable', 'terrible', 'furious', 'angry', 'awful', 'horrible',
+    'worst', 'never', 'lawyer', 'legal', 'sue', 'demand',
+  ]
+  const sevenDaysAgo = new Date()
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+  const recentCoupleMessages = messages.filter(m =>
+    m.sender_role === 'couple' && new Date(m.created_at) >= sevenDaysAgo
+  )
+  const escalationMessages = recentCoupleMessages.filter(m =>
+    ESCALATION_KEYWORDS.some(kw => m.content.toLowerCase().includes(kw))
+  )
+
   return (
     <div className="space-y-6">
+      {/* Escalation alert */}
+      {escalationMessages.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-red-800">
+                {escalationMessages.length} message{escalationMessages.length > 1 ? 's' : ''} flagged in the last 7 days
+              </p>
+              <div className="mt-2 space-y-1">
+                {escalationMessages.slice(0, 3).map(m => (
+                  <p key={m.id} className="text-xs text-red-700 line-clamp-1">
+                    {new Date(m.created_at).toLocaleDateString()}: &ldquo;{m.content.slice(0, 120)}&rdquo;
+                  </p>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Key metrics grid */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <div className="bg-warm-white rounded-xl p-4 border border-sage-100">
