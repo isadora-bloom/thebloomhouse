@@ -1286,6 +1286,64 @@ export default function InboxPage() {
     }
   }
 
+  // ---- Repair pipeline (one-shot reconciliation) ----
+  // Walks weddings → interactions → people, links nameless leads to the
+  // right wedding, patches first/last from from_name when the people row
+  // was created nameless (Knot forwards etc.), and flags self-domain
+  // inbound emails so they can be cleaned. Runs repair, then cleanup,
+  // back-to-back. Use when the pipeline kanban is showing "Unknown" or
+  // self-venue cards.
+  const [repairing, setRepairing] = useState(false)
+  const [repairStatus, setRepairStatus] = useState<string | null>(null)
+  const handleRepairPipeline = async () => {
+    const raw = window.prompt(
+      'Venue email domains to treat as the venue itself (comma-separated).\n' +
+        'Example: rixeymanor.com\n' +
+        'Leave blank to use only Gmail connections.',
+      'rixeymanor.com'
+    )
+    if (raw === null) return
+    const selfDomains = raw.trim()
+    setRepairing(true)
+    setRepairStatus('Repairing wedding ↔ people links…')
+    try {
+      const qs = selfDomains ? `?selfDomains=${encodeURIComponent(selfDomains)}` : ''
+      const repairRes = await fetch(`/api/agent/repair-wedding-people${qs}`, {
+        method: 'POST',
+      })
+      if (!repairRes.ok) throw new Error(`Repair failed (${repairRes.status})`)
+      const repair = (await repairRes.json()) as {
+        scanned: number
+        linked: number
+        named: number
+        selfGhosts: number
+      }
+      setRepairStatus(
+        `Repaired: ${repair.linked} linked, ${repair.named} named, ${repair.selfGhosts} self-ghosts — running cleanup…`
+      )
+      const cleanRes = await fetch(`/api/agent/cleanup-ghost-weddings${qs}`, {
+        method: 'POST',
+      })
+      if (!cleanRes.ok) throw new Error(`Cleanup failed (${cleanRes.status})`)
+      const clean = (await cleanRes.json()) as {
+        scanned: number
+        deleted: number
+        empty?: number
+        self?: number
+      }
+      setRepairStatus(
+        `Repaired ${repair.linked} / named ${repair.named}. Cleanup: deleted ${clean.deleted} (${clean.empty ?? 0} empty + ${clean.self ?? 0} self).`
+      )
+      await fetchInteractions()
+    } catch (err) {
+      console.error('Pipeline repair failed:', err)
+      setRepairStatus('Repair failed. Check console.')
+    } finally {
+      setRepairing(false)
+      setTimeout(() => setRepairStatus(null), 12000)
+    }
+  }
+
   // ---- Backfill unknown couple names ----
   // Patches partner1 people rows that still have null first_name/last_name
   // (typical of Knot/WeddingWire forwards where the sender's real name was
@@ -1412,6 +1470,15 @@ export default function InboxPage() {
             {reprocessing ? 'Classifying…' : 'Build pipeline'}
           </button>
           <button
+            onClick={handleRepairPipeline}
+            disabled={repairing}
+            title="One-shot: link weddings ↔ people, backfill names from email headers, delete self-venue and empty ghosts"
+            className="flex items-center gap-2 px-4 py-2.5 text-white bg-sage-700 hover:bg-sage-800 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Sparkles className={`w-4 h-4 ${repairing ? 'animate-pulse' : ''}`} />
+            {repairing ? 'Repairing…' : 'Repair pipeline'}
+          </button>
+          <button
             onClick={handleBackfillUnknown}
             disabled={backfillingUnknown}
             title="Patch pipeline cards showing 'Unknown' by pulling the sender name out of saved AI extractions"
@@ -1439,6 +1506,11 @@ export default function InboxPage() {
       {backfillUnknownStatus && (
         <div className="text-sm text-sage-700 bg-sage-50 border border-sage-200 rounded px-3 py-2">
           {backfillUnknownStatus}
+        </div>
+      )}
+      {repairStatus && (
+        <div className="text-sm text-sage-800 bg-sage-100 border border-sage-300 rounded px-3 py-2">
+          {repairStatus}
         </div>
       )}
       {backfillStatus && (

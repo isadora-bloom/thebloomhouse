@@ -24,7 +24,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 // lead.
 // ---------------------------------------------------------------------------
 
-export async function POST() {
+export async function POST(req: Request) {
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -34,6 +34,15 @@ export async function POST() {
   if (!venueId) {
     return NextResponse.json({ error: 'No venue in scope' }, { status: 400 })
   }
+
+  // Optional: ?selfDomains=rixeymanor.com,other.com — fallback when the
+  // venue hasn't linked a Gmail connection yet (so gmail_connections is
+  // empty and rule B would otherwise catch nothing).
+  const url = new URL(req.url)
+  const paramDomains = (url.searchParams.get('selfDomains') ?? '')
+    .split(',')
+    .map((s) => s.toLowerCase().trim())
+    .filter(Boolean)
 
   const supabase = createServiceClient()
 
@@ -84,15 +93,58 @@ export async function POST() {
   )
 
   // Rule (B): weddings whose partner1 person has an email that belongs to
-  // the venue itself. These should never have been inquiries.
+  // the venue itself. These should never have been inquiries. We match by
+  // exact email (gmail_connections) OR by domain (selfDomains query param)
+  // so this works even before the venue has linked Gmail.
+  const selfDomains = new Set(paramDomains)
   const selfWeddingIds = new Set<string>()
-  if (selfEmails.size > 0) {
+  if (selfEmails.size > 0 || selfDomains.size > 0) {
     for (const p of peopleRows ?? []) {
       const email = ((p.email as string) || '').toLowerCase().trim()
-      if (email && selfEmails.has(email)) {
+      if (!email) continue
+      if (selfEmails.has(email)) {
         selfWeddingIds.add(p.wedding_id as string)
+        continue
+      }
+      const atIdx = email.lastIndexOf('@')
+      if (atIdx !== -1) {
+        const domain = email.slice(atIdx + 1)
+        if (selfDomains.has(domain)) {
+          selfWeddingIds.add(p.wedding_id as string)
+        }
       }
     }
+  }
+
+  // Rule (B'): weddings where NO partner1 person exists at all, but the
+  // only attached interactions are from a self domain/email. Those are
+  // also self-ghosts — the "couple" was literally Rixey's outbound.
+  const { data: selfInterRows } = await supabase
+    .from('interactions')
+    .select('wedding_id, from_email, direction')
+    .in('wedding_id', weddingIds)
+    .eq('direction', 'inbound')
+
+  const matchesSelf = (fromEmail: string): boolean => {
+    const e = (fromEmail || '').toLowerCase().trim()
+    if (!e) return false
+    if (selfEmails.has(e)) return true
+    const atIdx = e.lastIndexOf('@')
+    if (atIdx === -1) return false
+    return selfDomains.has(e.slice(atIdx + 1))
+  }
+
+  // For each wedding, check if every inbound interaction is self.
+  const interByWedding = new Map<string, string[]>()
+  for (const r of selfInterRows ?? []) {
+    const wid = r.wedding_id as string
+    if (!wid) continue
+    if (!interByWedding.has(wid)) interByWedding.set(wid, [])
+    interByWedding.get(wid)!.push((r.from_email as string) ?? '')
+  }
+  for (const [wid, emails] of interByWedding.entries()) {
+    if (emails.length === 0) continue
+    if (emails.every((e) => matchesSelf(e))) selfWeddingIds.add(wid)
   }
 
   // Rule (A): empty weddings.
