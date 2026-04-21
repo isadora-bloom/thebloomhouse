@@ -517,33 +517,25 @@ function AIInsightsPanel({ extractions }: { extractions: ExtractionRow[] }) {
         </span>
       </div>
 
-      {/* Top-level signals from the most recent email */}
-      <div className="px-6 py-4 border-b border-border grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-        <div>
-          <div className="text-sage-500 mb-0.5">Partner name</div>
-          <div className="text-sage-900 font-medium truncate">{latestData.partnerName || '—'}</div>
-        </div>
-        <div>
-          <div className="text-sage-500 mb-0.5">Event date</div>
-          <div className="text-sage-900 font-medium">{latestData.eventDate || '—'}</div>
-        </div>
-        <div>
-          <div className="text-sage-500 mb-0.5">Guest count</div>
-          <div className="text-sage-900 font-medium">{latestData.guestCount ?? '—'}</div>
-        </div>
-        <div>
-          <div className="text-sage-500 mb-0.5">Source</div>
-          <div className="text-sage-900 font-medium truncate">{latestData.source || '—'}</div>
-        </div>
-      </div>
-
+      {/*
+        Header chips deliberately exclude partnerName / eventDate / guestCount
+        / source because those already render in the Contacts + Contact Info
+        Cards + header badges above. Only show classifier-native signals that
+        have no other surface on this page: sentiment, email urgency,
+        confidence, classification. "Email urgency" is NOT the heat score —
+        heat is lead-quality probability (engagement points over time),
+        urgency is per-email "needs fast reply."
+      */}
       <div className="px-6 py-3 border-b border-border flex items-center gap-2 flex-wrap">
         <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium', sentiment.bg, sentiment.text)}>
           {sentiment.icon}
           {sentiment.label}
         </span>
-        <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium', urgency.bg, urgency.text)}>
-          {urgency.label}
+        <span
+          className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium', urgency.bg, urgency.text)}
+          title="Per-email response-time pressure from the classifier. Separate from Heat Score, which scores lead-quality probability."
+        >
+          {urgency.label.replace('urgency', 'email urgency')}
         </span>
         {typeof latest.metadata?.confidence === 'number' && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-sage-100 text-sage-700">
