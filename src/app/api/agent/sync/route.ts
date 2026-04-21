@@ -3,6 +3,11 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { fetchNewEmails } from '@/lib/services/gmail'
 import { processIncomingEmail } from '@/lib/services/email-pipeline'
 
+// Vercel serverless cap — 300s is the max for Pro, 10s is the default
+// hobby limit. This route fans out Gmail fetches × classifier calls, so
+// give it the whole budget and chunk at the caller level.
+export const maxDuration = 300
+
 // ---------------------------------------------------------------------------
 // POST /api/agent/sync
 //
@@ -35,16 +40,20 @@ export async function POST(req: Request) {
     }
 
     // Optional ?days=N triggers a backfill: ignore last_history_id and
-    // pull newer_than:Nd via Gmail search. maxResults scales so a 30-day
-    // pull can actually pull 30 days of mail, not 50 messages.
+    // pull newer_than:Nd via Gmail search. Cap per-call at a chunk we can
+    // plausibly process inside the 300s window (classifier is ~1-2s per
+    // message). The UI loops until `done` is true.
     const url = new URL(req.url)
     const daysParam = Number(url.searchParams.get('days') ?? '')
     const days = Number.isFinite(daysParam) && daysParam > 0
       ? Math.min(365, Math.floor(daysParam))
       : undefined
-    const maxResults = days ? 500 : 50
+    const chunkParam = Number(url.searchParams.get('chunk') ?? '')
+    const chunk = Number.isFinite(chunkParam) && chunkParam > 0
+      ? Math.min(200, Math.floor(chunkParam))
+      : days ? 50 : 50 // 50 per call is ~60-90s of classifier work
 
-    const newEmails = await fetchNewEmails(venueId, maxResults, days ? { sinceDays: days } : undefined)
+    const newEmails = await fetchNewEmails(venueId, chunk, days ? { sinceDays: days } : undefined)
 
     let processed = 0
     let outbound = 0
@@ -52,7 +61,13 @@ export async function POST(req: Request) {
     let ignored = 0
     let errors = 0
 
+    // Soft time budget — bail out before Vercel pulls the plug so the UI
+    // can show progress and the user can click again to continue.
+    const startedAt = Date.now()
+    const budgetMs = 270_000 // 4.5 min, leaving 30s headroom under maxDuration
+
     for (const email of newEmails) {
+      if (Date.now() - startedAt > budgetMs) break
       try {
         const result = await processIncomingEmail(venueId, {
           messageId: email.messageId,
@@ -69,8 +84,6 @@ export async function POST(req: Request) {
         if (result.classification === 'new_inquiry' || result.classification === 'inquiry_reply') {
           inquiries++
         } else if (result.classification === 'ignore' || result.classification === 'skipped') {
-          // Could be self-outbound (recorded outbound) or a filter match —
-          // either way not a pipeline entry.
           if (result.interactionId === null) outbound++
           else ignored++
         }
@@ -80,6 +93,11 @@ export async function POST(req: Request) {
       }
     }
 
+    // done=true means this call got through every email Gmail returned
+    // (either we processed them all, or Gmail had no more to give us).
+    // If fetched === chunk, there's likely more — keep looping at the UI.
+    const done = newEmails.length < chunk || processed === newEmails.length
+
     return NextResponse.json({
       success: true,
       fetched: newEmails.length,
@@ -88,6 +106,7 @@ export async function POST(req: Request) {
       outbound,
       ignored,
       errors,
+      done,
     })
   } catch (err) {
     console.error('[api/agent/sync] POST error:', err)

@@ -825,6 +825,7 @@ export default function InboxPage() {
   const [interactions, setInteractions] = useState<Interaction[]>([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
+  const [syncStatus, setSyncStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<FilterTab>('all')
   const [searchQuery, setSearchQuery] = useState('')
@@ -1201,16 +1202,54 @@ export default function InboxPage() {
   // history_id and pulls newer_than:Nd via Gmail search. Backfill is the
   // right mode on first onboarding or after a wipe when the kanban needs
   // to catch up with weeks of inbox.
+  // Sync runs in chunks server-side (see /api/agent/sync — classifier is
+  // ~1-2s per message so we cap each call well under Vercel's 300s ceiling).
+  // The server returns `done`; when false we loop from the client so a
+  // multi-week backfill never hits a 504. Normal (no-days) sync is
+  // incremental via history_id and almost always finishes in one call.
   const handleSync = async (days?: number) => {
     setSyncing(true)
+    setSyncStatus(days ? `Backfilling ${days} days…` : 'Syncing…')
     try {
-      const qs = days && days > 0 ? `?days=${days}` : ''
-      const res = await fetch(`/api/agent/sync${qs}`, { method: 'POST' })
-      if (!res.ok) throw new Error('Sync failed')
+      let totalFetched = 0
+      let totalProcessed = 0
+      let totalInquiries = 0
+      const qsBase = days && days > 0 ? `days=${days}&` : ''
+      // Hard stop at 50 chunks so a runaway loop can't spin forever.
+      for (let i = 0; i < 50; i++) {
+        const res = await fetch(`/api/agent/sync?${qsBase}chunk=50`, { method: 'POST' })
+        if (!res.ok) throw new Error(`Sync failed (${res.status})`)
+        const data = (await res.json()) as {
+          success: boolean
+          fetched: number
+          processed: number
+          inquiries: number
+          outbound: number
+          ignored: number
+          errors: number
+          done: boolean
+        }
+        totalFetched += data.fetched
+        totalProcessed += data.processed
+        totalInquiries += data.inquiries
+        setSyncStatus(
+          `Processed ${totalProcessed} emails (${totalInquiries} inquiries)${data.done ? '' : '…'}`
+        )
+        if (data.done) break
+        // Brief yield so React can paint the status update.
+        await new Promise((r) => setTimeout(r, 50))
+      }
       await fetchInteractions()
+      setSyncStatus(
+        totalFetched === 0
+          ? 'No new emails.'
+          : `Done — ${totalProcessed} processed, ${totalInquiries} inquiries.`
+      )
+      setTimeout(() => setSyncStatus(null), 6000)
     } catch (err) {
       console.error('Failed to sync emails:', err)
       setError('Email sync failed. Check Gmail connection.')
+      setSyncStatus(null)
     } finally {
       setSyncing(false)
     }
@@ -1218,8 +1257,8 @@ export default function InboxPage() {
   const handleBackfillSync = async () => {
     const raw = window.prompt(
       'Backfill how many days of inbox?\n' +
-        'Pulls every inbox message from the last N days through the pipeline. ' +
-        'Default 30. Max 365.',
+        'Pulls every inbox message from the last N days through the pipeline ' +
+        'in 50-message chunks (loops client-side until done). Default 30. Max 365.',
       '30'
     )
     if (raw === null) return
@@ -1653,6 +1692,11 @@ export default function InboxPage() {
       {backfillStatus && (
         <div className="bg-sage-50 border border-sage-200 rounded-lg px-4 py-2 text-sm text-sage-700">
           {backfillStatus}
+        </div>
+      )}
+      {syncStatus && (
+        <div className="bg-sage-50 border border-sage-200 rounded-lg px-4 py-2 text-sm text-sage-700">
+          {syncStatus}
         </div>
       )}
       {reprocessStatus && (
