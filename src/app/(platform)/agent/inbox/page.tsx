@@ -1305,6 +1305,39 @@ export default function InboxPage() {
     }
   }
 
+  // ---- Dedupe interactions ----
+  // Multi-connection venues (sage@ + info@ + hello@) used to receive each
+  // inbound email once per account, with a different Gmail id each time,
+  // which slipped past the id-based isEmailProcessed check. The sync path
+  // now dedups by content fingerprint; this endpoint cleans up the
+  // historical triplicates.
+  const handleDedupeInteractions = async () => {
+    if (!window.confirm('Find and merge duplicate inbox rows (same sender + subject + minute)?')) return
+    setBackfilling(true)
+    setBackfillStatus('Deduping inbox…')
+    try {
+      const res = await fetch('/api/agent/dedupe-interactions', { method: 'POST' })
+      if (!res.ok) throw new Error(`Dedupe failed (${res.status})`)
+      const data = (await res.json()) as {
+        scanned: number
+        duplicatesFound: number
+        deletedInteractions: number
+        repointedDrafts: number
+      }
+      await fetchInteractions()
+      setBackfillStatus(
+        `Scanned ${data.scanned}, removed ${data.deletedInteractions} duplicates` +
+          (data.repointedDrafts ? ` (kept ${data.repointedDrafts} drafts).` : '.')
+      )
+    } catch (err) {
+      console.error('Failed to dedupe interactions:', err)
+      setBackfillStatus('Dedupe failed.')
+    } finally {
+      setBackfilling(false)
+      setTimeout(() => setBackfillStatus(null), 6000)
+    }
+  }
+
   // ---- Reprocess orphans into the pipeline ----
   // For every inbound email with a person_id but no wedding_id, run the
   // router brain to decide if it's an inquiry and, if so, create the
@@ -1621,6 +1654,15 @@ export default function InboxPage() {
           >
             <RefreshCw className={`w-4 h-4 ${backfilling ? 'animate-spin' : ''}`} />
             {backfilling ? 'Recovering…' : 'Recover senders'}
+          </button>
+          <button
+            onClick={handleDedupeInteractions}
+            disabled={backfilling}
+            title="Merge duplicate inbox rows created when multiple Gmail connections received the same message"
+            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={`w-4 h-4 ${backfilling ? 'animate-spin' : ''}`} />
+            Dedupe
           </button>
           <button
             onClick={handleReprocessOrphans}

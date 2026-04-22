@@ -23,6 +23,7 @@ import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consul
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
 import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
+import { detectFormRelay, type FormRelayLead } from '@/lib/services/form-relay-parsers'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -158,9 +159,23 @@ export function extractName(from: string): string | null {
 }
 
 /**
- * Check if an email has already been processed (by gmail_message_id).
+ * Check if an email has already been processed.
+ *
+ * Two-layer dedup:
+ *  1) gmail_message_id exact match — catches the re-sync case where the
+ *     same account returns the same message again.
+ *  2) Content fingerprint (venue + from + subject + timestamp±60s) —
+ *     catches the multi-connection case where a venue has several linked
+ *     Gmail accounts (sage@, info@, hello@) and an email addressed to
+ *     all of them lands once per account with a different Gmail API id.
+ *     Without this guard, multi-account venues end up with triplicate
+ *     inbox entries and duplicate pipeline cards.
  */
-async function isEmailProcessed(venueId: string, gmailMessageId: string): Promise<boolean> {
+async function isEmailProcessed(
+  venueId: string,
+  gmailMessageId: string,
+  fingerprint?: { fromEmail: string; subject: string; timestamp: string }
+): Promise<boolean> {
   const supabase = createServiceClient()
 
   const { data } = await supabase
@@ -169,8 +184,28 @@ async function isEmailProcessed(venueId: string, gmailMessageId: string): Promis
     .eq('venue_id', venueId)
     .eq('gmail_message_id', gmailMessageId)
     .limit(1)
+  if ((data?.length ?? 0) > 0) return true
 
-  return (data?.length ?? 0) > 0
+  if (!fingerprint) return false
+
+  // Content-level dedup. Timestamp compare is ±60s to absorb the small
+  // drift between when each connected account received the same message.
+  const t = new Date(fingerprint.timestamp).getTime()
+  if (Number.isNaN(t)) return false
+  const lo = new Date(t - 60_000).toISOString()
+  const hi = new Date(t + 60_000).toISOString()
+
+  const { data: fp } = await supabase
+    .from('interactions')
+    .select('id')
+    .eq('venue_id', venueId)
+    .eq('from_email', fingerprint.fromEmail)
+    .eq('subject', fingerprint.subject)
+    .gte('timestamp', lo)
+    .lte('timestamp', hi)
+    .limit(1)
+
+  return (fp?.length ?? 0) > 0
 }
 
 /**
@@ -268,6 +303,47 @@ export async function findOrCreateContact(
   return { personId: newPerson.id, weddingId: null, isNew: true }
 }
 
+/**
+ * Build a synthetic ClassificationResult from a form-relay parse. The
+ * parsers already give us the authoritative fields (we read them directly
+ * from the form body), so we skip the LLM and hand those straight to the
+ * rest of the pipeline. source maps to the shape router-brain uses so
+ * downstream wedding.source / intelligence_extractions stay consistent.
+ */
+function synthClassificationFromFormLead(lead: FormRelayLead): ClassificationResult {
+  // guestCount field may be "101 - 150" / "85" / "100–150" — take the first
+  // integer we can find so downstream parseGuestCount-style logic has a
+  // usable value. The fuzzy parser does the rest.
+  let guestCount: number | undefined
+  if (lead.guestCount) {
+    const m = lead.guestCount.match(/\d+/)
+    if (m) guestCount = parseInt(m[0], 10)
+  }
+
+  const sourceMap: Record<FormRelayLead['source'], string> = {
+    the_knot: 'the_knot',
+    wedding_wire: 'weddingwire',
+    here_comes_the_guide: 'here_comes_the_guide',
+    zola: 'zola',
+    venue_calculator: 'website',
+  }
+
+  return {
+    classification: 'new_inquiry',
+    confidence: 95,
+    extractedData: {
+      senderName: lead.leadName ?? undefined,
+      partnerName: lead.partnerName ?? undefined,
+      eventDate: lead.eventDate ?? undefined,
+      guestCount,
+      source: sourceMap[lead.source],
+      questions: [],
+      urgencyLevel: 'medium',
+      sentiment: 'positive',
+    },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Exported: processIncomingEmail
 // ---------------------------------------------------------------------------
@@ -290,13 +366,29 @@ export async function processIncomingEmail(
   email: IncomingEmail
 ): Promise<PipelineResult> {
   const supabase = createServiceClient()
-  const fromEmail = extractEmailAddress(email.from)
-  const fromName = extractName(email.from)
+  const rawFromEmail = extractEmailAddress(email.from)
+  const rawFromName = extractName(email.from)
 
   // Step 1a: Universal auto-ignore — no-reply / bounces / postmasters.
-  if (matchesUniversalIgnore(fromEmail)) {
+  if (matchesUniversalIgnore(rawFromEmail)) {
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
+
+  // Step 1a.5: Form-relay detection. Platforms (The Knot, WeddingWire,
+  // Here Comes The Guide, Zola) and the venue's own pricing calculator
+  // mask the real prospect behind a relay / automation address. Run the
+  // parsers BEFORE the self-loop guard: a calculator email's From is by
+  // definition a venue-owned address, and without this step it would be
+  // short-circuited as outbound and the prospect would vanish. When a
+  // parser fires, we swap in the real lead's identity for the rest of
+  // the pipeline and remember the original relay for logging.
+  const ownEmails = await venueOwnEmails(venueId)
+  const formLead = detectFormRelay(
+    { from: email.from, to: email.to, subject: email.subject, body: email.body },
+    ownEmails
+  )
+  const fromEmail = formLead?.leadEmail ?? rawFromEmail
+  const fromName = formLead?.leadName ?? rawFromName
 
   // Step 1b: Self-loop protection — when the sender is one of THIS venue's
   // own addresses (Sage relay or any linked gmail_connection), this is our
@@ -304,9 +396,21 @@ export async function processIncomingEmail(
   // thread. Record it as an outbound interaction so the thread stays
   // continuous, but short-circuit: no classification, no contact creation,
   // no wedding, no draft. Without this, sage@venue.com ends up as a
-  // "couple" on the pipeline kanban.
-  const ownEmails = await venueOwnEmails(venueId)
-  if (ownEmails.has(fromEmail)) {
+  // "couple" on the pipeline kanban. Skipped for form-relay matches —
+  // those intentionally have a venue-owned From.
+  if (!formLead && ownEmails.has(rawFromEmail)) {
+    // Dedup: if we've already recorded this outbound (either this exact
+    // Gmail-id or the same from/subject/time from a sibling connection),
+    // skip the insert. Without this, a 3-connection venue gets 3 copies
+    // of every sent email the venue sees in its own threads.
+    const alreadySeen = await isEmailProcessed(venueId, email.messageId, {
+      fromEmail: rawFromEmail,
+      subject: email.subject,
+      timestamp: email.date,
+    })
+    if (alreadySeen) {
+      return { interactionId: null, draftId: null, classification: 'skipped', autoSent: false }
+    }
     // Still persist so the inbox thread view is complete, but as outbound.
     const outboundPayload: Record<string, unknown> = {
       venue_id: venueId,
@@ -335,23 +439,36 @@ export async function processIncomingEmail(
   }
   const skipDraft = filterHit?.action === 'no_draft'
 
-  // Check if already processed
-  const alreadyProcessed = await isEmailProcessed(venueId, email.messageId)
+  // Check if already processed — by Gmail id AND by content fingerprint
+  // so multi-connection venues don't triple-insert the same inbound email.
+  const alreadyProcessed = await isEmailProcessed(venueId, email.messageId, {
+    fromEmail,
+    subject: email.subject,
+    timestamp: email.date,
+  })
   if (alreadyProcessed) {
     return { interactionId: null, draftId: null, classification: 'skipped', autoSent: false }
   }
 
-  // Step 2: Classify with router brain
+  // Step 2: Classify with router brain. Form-relay matches skip the LLM
+  // classifier — we already know what these are (a prospect filling a web
+  // form is a new inquiry by definition) and we already have structured
+  // fields. Saves tokens and avoids the classifier mis-bucketing a
+  // marketplace email as "vendor" or "other".
   let classification: ClassificationResult
-  try {
-    classification = await classifyEmail(venueId, {
-      from: fromEmail,
-      subject: email.subject,
-      body: email.body,
-    })
-  } catch (err) {
-    console.error('[pipeline] Classification failed:', err)
-    return { interactionId: null, draftId: null, classification: 'error', autoSent: false }
+  if (formLead) {
+    classification = synthClassificationFromFormLead(formLead)
+  } else {
+    try {
+      classification = await classifyEmail(venueId, {
+        from: fromEmail,
+        subject: email.subject,
+        body: email.body,
+      })
+    } catch (err) {
+      console.error('[pipeline] Classification failed:', err)
+      return { interactionId: null, draftId: null, classification: 'error', autoSent: false }
+    }
   }
 
   // Step 3: Find or create contact (skip for spam/ignore)
