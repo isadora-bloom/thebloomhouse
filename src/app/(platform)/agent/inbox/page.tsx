@@ -1197,36 +1197,34 @@ export default function InboxPage() {
   )
 
   // ---- Sync emails ----
-  // Normal sync (no args) pulls deltas since the last history_id — a few
-  // minutes' worth. Pass days > 0 to force a backfill that ignores
-  // history_id and pulls newer_than:Nd via Gmail search. Backfill is the
-  // right mode on first onboarding or after a wipe when the kanban needs
-  // to catch up with weeks of inbox.
-  // Sync runs in chunks server-side (see /api/agent/sync — classifier is
-  // ~1-2s per message so we cap each call well under Vercel's 300s ceiling).
-  // The server returns `done`; when false we loop from the client so a
-  // multi-week backfill never hits a 504. Normal (no-days) sync is
-  // incremental via history_id and almost always finishes in one call.
-  const handleSync = async (days?: number) => {
+  // Single button. If the venue has never synced (no interactions yet),
+  // we do a 90-day backfill so the kanban fills up on first click;
+  // otherwise we pull deltas since the last history_id. Either way the
+  // server returns `done=false` when more chunks are queued, and we loop
+  // here until it's true so a multi-week backfill never hits a 504.
+  // All the historical "repair" buttons (dedupe, reprocess-orphans,
+  // cleanup-ghosts, repair-wedding-people, backfill-senders, etc.) are
+  // legacy reconciliation tools. They shouldn't live in the operator UI.
+  // The underlying endpoints stay on disk for manual curl use, but the
+  // correct answer for new venues is a clean sync with the current
+  // pipeline — not a chain of patch buttons.
+  const handleSync = async () => {
     setSyncing(true)
-    setSyncStatus(days ? `Backfilling ${days} days…` : 'Syncing…')
+    const firstSync = interactions.length === 0
+    const daysParam = firstSync ? 'days=90&' : ''
+    setSyncStatus(firstSync ? 'First sync — pulling last 90 days…' : 'Syncing…')
     try {
       let totalFetched = 0
       let totalProcessed = 0
       let totalInquiries = 0
-      const qsBase = days && days > 0 ? `days=${days}&` : ''
       // Hard stop at 50 chunks so a runaway loop can't spin forever.
       for (let i = 0; i < 50; i++) {
-        const res = await fetch(`/api/agent/sync?${qsBase}chunk=50`, { method: 'POST' })
+        const res = await fetch(`/api/agent/sync?${daysParam}chunk=50`, { method: 'POST' })
         if (!res.ok) throw new Error(`Sync failed (${res.status})`)
         const data = (await res.json()) as {
-          success: boolean
           fetched: number
           processed: number
           inquiries: number
-          outbound: number
-          ignored: number
-          errors: number
           done: boolean
         }
         totalFetched += data.fetched
@@ -1252,345 +1250,6 @@ export default function InboxPage() {
       setSyncStatus(null)
     } finally {
       setSyncing(false)
-    }
-  }
-  const handleBackfillSync = async () => {
-    const raw = window.prompt(
-      'Backfill how many days of inbox?\n' +
-        'Pulls every inbox message from the last N days through the pipeline ' +
-        'in 50-message chunks (loops client-side until done). Default 30. Max 365.',
-      '30'
-    )
-    if (raw === null) return
-    const days = Math.max(1, Math.min(365, Number(raw) || 30))
-    await handleSync(days)
-  }
-
-  // ---- Backfill senders ----
-  // Re-fetches Gmail headers for historical rows whose person_id / from_email
-  // are still null (legacy of the findOrCreateContact bug). Paged: keeps
-  // calling the endpoint until `remaining` drops to 0 or we stall.
-  const [backfilling, setBackfilling] = useState(false)
-  const [backfillStatus, setBackfillStatus] = useState<string | null>(null)
-  const handleBackfillSenders = async () => {
-    setBackfilling(true)
-    setBackfillStatus('Recovering senders…')
-    try {
-      let totalUpdated = 0
-      let lastRemaining = Infinity
-      for (let i = 0; i < 50; i++) {
-        const res = await fetch('/api/agent/backfill-senders?limit=50', { method: 'POST' })
-        if (!res.ok) throw new Error(`Backfill failed (${res.status})`)
-        const data = (await res.json()) as {
-          processed: number
-          updated: number
-          failed: number
-          missing: number
-          remaining: number
-        }
-        totalUpdated += data.updated
-        setBackfillStatus(`Recovered ${totalUpdated} senders, ${data.remaining} remaining…`)
-        if (data.processed === 0 || data.remaining === 0) break
-        if (data.remaining >= lastRemaining) break // safety: not making progress
-        lastRemaining = data.remaining
-      }
-      await fetchInteractions()
-      setBackfillStatus(`Recovered ${totalUpdated} senders.`)
-    } catch (err) {
-      console.error('Failed to backfill senders:', err)
-      setBackfillStatus('Backfill failed. Check Gmail connection and try again.')
-    } finally {
-      setBackfilling(false)
-      setTimeout(() => setBackfillStatus(null), 5000)
-    }
-  }
-
-  // ---- Reprocess form-relay leads ----
-  // Walks historical inbound emails through the new form-relay parsers
-  // (Knot / WeddingWire / HCTG / Zola / venue calculator) and rewires
-  // them onto the real prospect instead of the relay address. Follow up
-  // with "Cleanup ghost weddings" to drop the leftover relay-as-lead rows.
-  const handleReprocessFormRelays = async () => {
-    setBackfilling(true)
-    setBackfillStatus('Reprocessing form-relay inboxes…')
-    try {
-      const res = await fetch('/api/agent/reprocess-form-relays', { method: 'POST' })
-      if (!res.ok) throw new Error(`Reprocess failed (${res.status})`)
-      const data = (await res.json()) as {
-        scanned: number
-        matched: number
-        rewired: number
-        createdPeople: number
-        createdWeddings: number
-      }
-      await fetchInteractions()
-      setBackfillStatus(
-        `Scanned ${data.scanned}, matched ${data.matched}, ` +
-          `rewired ${data.rewired} (new couples: ${data.createdWeddings}).`
-      )
-    } catch (err) {
-      console.error('Failed to reprocess form relays:', err)
-      setBackfillStatus('Reprocess failed.')
-    } finally {
-      setBackfilling(false)
-      setTimeout(() => setBackfillStatus(null), 8000)
-    }
-  }
-
-  // ---- Dedupe interactions ----
-  // Multi-connection venues (sage@ + info@ + hello@) used to receive each
-  // inbound email once per account, with a different Gmail id each time,
-  // which slipped past the id-based isEmailProcessed check. The sync path
-  // now dedups by content fingerprint; this endpoint cleans up the
-  // historical triplicates.
-  const handleDedupeInteractions = async () => {
-    if (!window.confirm('Find and merge duplicate inbox rows (same sender + subject + minute)?')) return
-    setBackfilling(true)
-    setBackfillStatus('Deduping inbox…')
-    try {
-      const res = await fetch('/api/agent/dedupe-interactions', { method: 'POST' })
-      if (!res.ok) throw new Error(`Dedupe failed (${res.status})`)
-      const data = (await res.json()) as {
-        scanned: number
-        duplicatesFound: number
-        deletedInteractions: number
-        repointedDrafts: number
-      }
-      await fetchInteractions()
-      setBackfillStatus(
-        `Scanned ${data.scanned}, removed ${data.deletedInteractions} duplicates` +
-          (data.repointedDrafts ? ` (kept ${data.repointedDrafts} drafts).` : '.')
-      )
-    } catch (err) {
-      console.error('Failed to dedupe interactions:', err)
-      setBackfillStatus('Dedupe failed.')
-    } finally {
-      setBackfilling(false)
-      setTimeout(() => setBackfillStatus(null), 6000)
-    }
-  }
-
-  // ---- Reprocess orphans into the pipeline ----
-  // For every inbound email with a person_id but no wedding_id, run the
-  // router brain to decide if it's an inquiry and, if so, create the
-  // weddings row + link the person. Pairs with the sender backfill:
-  // run that first so person_id is populated.
-  const [reprocessing, setReprocessing] = useState(false)
-  const [reprocessStatus, setReprocessStatus] = useState<string | null>(null)
-  const handleReprocessOrphans = async () => {
-    setReprocessing(true)
-    setReprocessStatus('Classifying orphan emails…')
-    try {
-      let totalCreated = 0
-      let totalLinked = 0
-      let totalSkipped = 0
-      let lastRemaining = Infinity
-      for (let i = 0; i < 100; i++) {
-        const res = await fetch('/api/agent/reprocess-orphans?limit=25', { method: 'POST' })
-        if (!res.ok) throw new Error(`Reprocess failed (${res.status})`)
-        const data = (await res.json()) as {
-          processed: number
-          linked: number
-          created: number
-          skipped: number
-          remaining: number
-        }
-        totalCreated += data.created
-        totalLinked += data.linked
-        totalSkipped += data.skipped
-        setReprocessStatus(
-          `Created ${totalCreated} inquiries, linked ${totalLinked} to existing weddings, ${data.remaining} orphan emails remaining…`
-        )
-        if (data.processed === 0 || data.remaining === 0) break
-        if (data.remaining >= lastRemaining) break
-        lastRemaining = data.remaining
-      }
-      await fetchInteractions()
-      setReprocessStatus(
-        `Done. ${totalCreated} new inquiries, ${totalLinked} linked, ${totalSkipped} skipped. Check /agent/pipeline.`
-      )
-    } catch (err) {
-      console.error('Failed to reprocess orphans:', err)
-      setReprocessStatus('Reprocess failed. Check console and try again.')
-    } finally {
-      setReprocessing(false)
-      setTimeout(() => setReprocessStatus(null), 10000)
-    }
-  }
-
-  // ---- Cleanup ghost weddings ----
-  // Deletes inquiry-stage weddings that have no linked people and no
-  // interactions (legacy of the original broken pipeline run). Renders
-  // the pipeline kanban back to signal-only.
-  const [cleaning, setCleaning] = useState(false)
-  const [cleanStatus, setCleanStatus] = useState<string | null>(null)
-  const handleCleanupGhosts = async () => {
-    setCleaning(true)
-    setCleanStatus('Scanning for ghost weddings…')
-    try {
-      const res = await fetch('/api/agent/cleanup-ghost-weddings', { method: 'POST' })
-      if (!res.ok) throw new Error(`Cleanup failed (${res.status})`)
-      const data = (await res.json()) as { scanned: number; deleted: number }
-      setCleanStatus(`Scanned ${data.scanned} weddings, deleted ${data.deleted} ghosts.`)
-      await fetchInteractions()
-    } catch (err) {
-      console.error('Failed to cleanup ghosts:', err)
-      setCleanStatus('Cleanup failed. Check console.')
-    } finally {
-      setCleaning(false)
-      setTimeout(() => setCleanStatus(null), 8000)
-    }
-  }
-
-  // ---- Wipe all pipeline data (danger) ----
-  // Deletes every wedding, person, interaction, extraction, draft, and
-  // engagement event for the current venue. Keeps gmail_connections,
-  // venue settings, AI config. Use for fresh onboardings when demo/seed
-  // pollution needs to go. Requires typing WIPE to confirm.
-  const [wiping, setWiping] = useState(false)
-  const [wipeStatus, setWipeStatus] = useState<string | null>(null)
-  const handleWipePipeline = async () => {
-    const confirmText = window.prompt(
-      'This deletes ALL weddings, people, interactions, drafts, and AI extractions for this venue.\n' +
-        'Gmail connection and venue settings are preserved.\n\n' +
-        'Type WIPE to confirm.'
-    )
-    if (confirmText !== 'WIPE') {
-      setWipeStatus('Cancelled.')
-      setTimeout(() => setWipeStatus(null), 4000)
-      return
-    }
-    setWiping(true)
-    setWipeStatus('Wiping pipeline data…')
-    try {
-      const res = await fetch('/api/agent/wipe-pipeline-data?confirm=YES', {
-        method: 'POST',
-      })
-      if (!res.ok) throw new Error(`Wipe failed (${res.status})`)
-      const data = (await res.json()) as {
-        deleted: Record<string, number>
-        errors?: Record<string, string>
-      }
-      const summary = Object.entries(data.deleted)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join(', ')
-      setWipeStatus(
-        `Wiped. ${summary}${data.errors ? ' — with errors, see console' : ''}`
-      )
-      if (data.errors) console.warn('Wipe errors:', data.errors)
-      await fetchInteractions()
-    } catch (err) {
-      console.error('Wipe failed:', err)
-      setWipeStatus('Wipe failed. Check console.')
-    } finally {
-      setWiping(false)
-      setTimeout(() => setWipeStatus(null), 15000)
-    }
-  }
-
-  // ---- Repair pipeline (one-shot reconciliation) ----
-  // Walks weddings → interactions → people, links nameless leads to the
-  // right wedding, patches first/last from from_name when the people row
-  // was created nameless (Knot forwards etc.), and flags self-domain
-  // inbound emails so they can be cleaned. Runs repair, then cleanup,
-  // back-to-back. Use when the pipeline kanban is showing "Unknown" or
-  // self-venue cards.
-  const [repairing, setRepairing] = useState(false)
-  const [repairStatus, setRepairStatus] = useState<string | null>(null)
-  const handleRepairPipeline = async () => {
-    // Suggest any extra self-domains derived from the venue's own config
-    // (Sage email + any linked Gmail connection). If none exist yet the
-    // prompt comes up blank — the backend still auto-detects from
-    // gmail_connections when the venue has linked Gmail. No hardcoded
-    // venue names here: this has to work for every customer.
-    let suggested = ''
-    try {
-      const hintRes = await fetch('/api/agent/self-domains', { method: 'GET' })
-      if (hintRes.ok) {
-        const hint = (await hintRes.json()) as { domains?: string[] }
-        suggested = (hint.domains ?? []).join(', ')
-      }
-    } catch {
-      // non-fatal — fall back to empty default
-    }
-    const raw = window.prompt(
-      'Extra email domains to treat as the venue itself (comma-separated).\n' +
-        'Leave blank if your Gmail connection is already linked — we pull ' +
-        'domains from there automatically.',
-      suggested
-    )
-    if (raw === null) return
-    const selfDomains = raw.trim()
-    setRepairing(true)
-    setRepairStatus('Repairing wedding ↔ people links…')
-    try {
-      const qs = selfDomains ? `?selfDomains=${encodeURIComponent(selfDomains)}` : ''
-      const repairRes = await fetch(`/api/agent/repair-wedding-people${qs}`, {
-        method: 'POST',
-      })
-      if (!repairRes.ok) throw new Error(`Repair failed (${repairRes.status})`)
-      const repair = (await repairRes.json()) as {
-        scanned: number
-        linked: number
-        named: number
-        selfGhosts: number
-      }
-      setRepairStatus(
-        `Repaired: ${repair.linked} linked, ${repair.named} named, ${repair.selfGhosts} self-ghosts — running cleanup…`
-      )
-      const cleanRes = await fetch(`/api/agent/cleanup-ghost-weddings${qs}`, {
-        method: 'POST',
-      })
-      if (!cleanRes.ok) throw new Error(`Cleanup failed (${cleanRes.status})`)
-      const clean = (await cleanRes.json()) as {
-        scanned: number
-        deleted: number
-        empty?: number
-        self?: number
-      }
-      setRepairStatus(
-        `Repaired ${repair.linked} / named ${repair.named}. Cleanup: deleted ${clean.deleted} (${clean.empty ?? 0} empty + ${clean.self ?? 0} self).`
-      )
-      await fetchInteractions()
-    } catch (err) {
-      console.error('Pipeline repair failed:', err)
-      setRepairStatus('Repair failed. Check console.')
-    } finally {
-      setRepairing(false)
-      setTimeout(() => setRepairStatus(null), 12000)
-    }
-  }
-
-  // ---- Backfill unknown couple names ----
-  // Patches partner1 people rows that still have null first_name/last_name
-  // (typical of Knot/WeddingWire forwards where the sender's real name was
-  // only in the email body). Pulls senderName from the saved
-  // intelligence_extractions.metadata for the wedding and writes it onto
-  // the person row so the pipeline kanban stops rendering "Unknown".
-  const [backfillingUnknown, setBackfillingUnknown] = useState(false)
-  const [backfillUnknownStatus, setBackfillUnknownStatus] = useState<string | null>(null)
-  const handleBackfillUnknown = async () => {
-    setBackfillingUnknown(true)
-    setBackfillUnknownStatus('Looking up nameless couples…')
-    try {
-      const res = await fetch('/api/agent/backfill-unknown-couples', { method: 'POST' })
-      if (!res.ok) throw new Error(`Backfill failed (${res.status})`)
-      const data = (await res.json()) as {
-        scanned: number
-        patched: number
-        noExtraction?: number
-        noSender?: number
-      }
-      setBackfillUnknownStatus(
-        `Scanned ${data.scanned} unnamed couples, patched ${data.patched}.`
-      )
-      await fetchInteractions()
-    } catch (err) {
-      console.error('Failed to backfill unknown couples:', err)
-      setBackfillUnknownStatus('Backfill failed. Check console.')
-    } finally {
-      setBackfillingUnknown(false)
-      setTimeout(() => setBackfillUnknownStatus(null), 8000)
     }
   }
 
@@ -1661,130 +1320,19 @@ export default function InboxPage() {
             Compose
           </button>
           <button
-            onClick={() => handleSync()}
+            onClick={handleSync}
             disabled={syncing}
-            title="Pull new emails since the last sync (incremental)"
+            title="Pull new emails from Gmail. First sync backfills the last 90 days automatically."
             className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
             {syncing ? 'Syncing...' : 'Sync'}
           </button>
-          <button
-            onClick={handleBackfillSync}
-            disabled={syncing}
-            title="Import the last N days of inbox in one pass (first-time onboarding, post-wipe, or catch-up)"
-            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Pulling…' : 'Backfill'}
-          </button>
-          <button
-            onClick={handleBackfillSenders}
-            disabled={backfilling}
-            title="Recover sender names on historical emails by re-fetching Gmail headers"
-            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <RefreshCw className={`w-4 h-4 ${backfilling ? 'animate-spin' : ''}`} />
-            {backfilling ? 'Recovering…' : 'Recover senders'}
-          </button>
-          <button
-            onClick={handleDedupeInteractions}
-            disabled={backfilling}
-            title="Merge duplicate inbox rows created when multiple Gmail connections received the same message"
-            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <RefreshCw className={`w-4 h-4 ${backfilling ? 'animate-spin' : ''}`} />
-            Dedupe
-          </button>
-          <button
-            onClick={handleReprocessFormRelays}
-            disabled={backfilling}
-            title="Re-run The Knot / WeddingWire / Zola / calculator parsers on historical emails and rewire them to the real prospect"
-            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Sparkles className={`w-4 h-4 ${backfilling ? 'animate-pulse' : ''}`} />
-            Unwrap forms
-          </button>
-          <button
-            onClick={handleReprocessOrphans}
-            disabled={reprocessing}
-            title="Run AI classification on orphan emails and create pipeline entries for new inquiries"
-            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Sparkles className={`w-4 h-4 ${reprocessing ? 'animate-pulse' : ''}`} />
-            {reprocessing ? 'Classifying…' : 'Build pipeline'}
-          </button>
-          <button
-            onClick={handleRepairPipeline}
-            disabled={repairing}
-            title="One-shot: link weddings ↔ people, backfill names from email headers, delete self-venue and empty ghosts"
-            className="flex items-center gap-2 px-4 py-2.5 text-white bg-sage-700 hover:bg-sage-800 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Sparkles className={`w-4 h-4 ${repairing ? 'animate-pulse' : ''}`} />
-            {repairing ? 'Repairing…' : 'Repair pipeline'}
-          </button>
-          <button
-            onClick={handleBackfillUnknown}
-            disabled={backfillingUnknown}
-            title="Patch pipeline cards showing 'Unknown' by pulling the sender name out of saved AI extractions"
-            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Sparkles className={`w-4 h-4 ${backfillingUnknown ? 'animate-pulse' : ''}`} />
-            {backfillingUnknown ? 'Naming…' : 'Name couples'}
-          </button>
-          <button
-            onClick={handleWipePipeline}
-            disabled={wiping}
-            title="DANGER: delete all weddings, people, interactions, drafts, and AI extractions for this venue. Keeps Gmail connection."
-            className="flex items-center gap-2 px-4 py-2.5 text-red-700 border border-red-300 text-sm font-medium rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Trash2 className={`w-4 h-4 ${wiping ? 'animate-pulse' : ''}`} />
-            {wiping ? 'Wiping…' : 'Wipe pipeline'}
-          </button>
-          <button
-            onClick={handleCleanupGhosts}
-            disabled={cleaning}
-            title="Delete inquiry-stage weddings with no linked people or interactions (ghosts from the original broken pipeline run)"
-            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Trash2 className={`w-4 h-4 ${cleaning ? 'animate-pulse' : ''}`} />
-            {cleaning ? 'Cleaning…' : 'Clean ghosts'}
-          </button>
         </div>
       </div>
-      {cleanStatus && (
-        <div className="text-sm text-sage-700 bg-sage-50 border border-sage-200 rounded px-3 py-2">
-          {cleanStatus}
-        </div>
-      )}
-      {backfillUnknownStatus && (
-        <div className="text-sm text-sage-700 bg-sage-50 border border-sage-200 rounded px-3 py-2">
-          {backfillUnknownStatus}
-        </div>
-      )}
-      {repairStatus && (
-        <div className="text-sm text-sage-800 bg-sage-100 border border-sage-300 rounded px-3 py-2">
-          {repairStatus}
-        </div>
-      )}
-      {wipeStatus && (
-        <div className="text-sm text-red-800 bg-red-50 border border-red-300 rounded px-3 py-2">
-          {wipeStatus}
-        </div>
-      )}
-      {backfillStatus && (
-        <div className="bg-sage-50 border border-sage-200 rounded-lg px-4 py-2 text-sm text-sage-700">
-          {backfillStatus}
-        </div>
-      )}
       {syncStatus && (
         <div className="bg-sage-50 border border-sage-200 rounded-lg px-4 py-2 text-sm text-sage-700">
           {syncStatus}
-        </div>
-      )}
-      {reprocessStatus && (
-        <div className="bg-teal-50 border border-teal-200 rounded-lg px-4 py-2 text-sm text-teal-700">
-          {reprocessStatus}
         </div>
       )}
 
