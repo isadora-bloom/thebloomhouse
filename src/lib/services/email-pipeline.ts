@@ -388,7 +388,11 @@ export async function processIncomingEmail(
     ownEmails
   )
   const fromEmail = formLead?.leadEmail ?? rawFromEmail
-  const fromName = formLead?.leadName ?? rawFromName
+  // When a form relay fires, the raw From display name is the platform /
+  // venue name (e.g. "Rixey Manor", "Zola Vendor Communication"), not the
+  // prospect. Falling back to that would stamp the venue's own name onto
+  // the new lead. Use the parsed lead name or nothing.
+  const fromName = formLead ? formLead.leadName ?? null : rawFromName
 
   // Step 1b: Self-loop protection — when the sender is one of THIS venue's
   // own addresses (Sage relay or any linked gmail_connection), this is our

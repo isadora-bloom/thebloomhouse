@@ -1305,6 +1305,38 @@ export default function InboxPage() {
     }
   }
 
+  // ---- Reprocess form-relay leads ----
+  // Walks historical inbound emails through the new form-relay parsers
+  // (Knot / WeddingWire / HCTG / Zola / venue calculator) and rewires
+  // them onto the real prospect instead of the relay address. Follow up
+  // with "Cleanup ghost weddings" to drop the leftover relay-as-lead rows.
+  const handleReprocessFormRelays = async () => {
+    setBackfilling(true)
+    setBackfillStatus('Reprocessing form-relay inboxes…')
+    try {
+      const res = await fetch('/api/agent/reprocess-form-relays', { method: 'POST' })
+      if (!res.ok) throw new Error(`Reprocess failed (${res.status})`)
+      const data = (await res.json()) as {
+        scanned: number
+        matched: number
+        rewired: number
+        createdPeople: number
+        createdWeddings: number
+      }
+      await fetchInteractions()
+      setBackfillStatus(
+        `Scanned ${data.scanned}, matched ${data.matched}, ` +
+          `rewired ${data.rewired} (new couples: ${data.createdWeddings}).`
+      )
+    } catch (err) {
+      console.error('Failed to reprocess form relays:', err)
+      setBackfillStatus('Reprocess failed.')
+    } finally {
+      setBackfilling(false)
+      setTimeout(() => setBackfillStatus(null), 8000)
+    }
+  }
+
   // ---- Dedupe interactions ----
   // Multi-connection venues (sage@ + info@ + hello@) used to receive each
   // inbound email once per account, with a different Gmail id each time,
@@ -1663,6 +1695,15 @@ export default function InboxPage() {
           >
             <RefreshCw className={`w-4 h-4 ${backfilling ? 'animate-spin' : ''}`} />
             Dedupe
+          </button>
+          <button
+            onClick={handleReprocessFormRelays}
+            disabled={backfilling}
+            title="Re-run The Knot / WeddingWire / Zola / calculator parsers on historical emails and rewire them to the real prospect"
+            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Sparkles className={`w-4 h-4 ${backfilling ? 'animate-pulse' : ''}`} />
+            Unwrap forms
           </button>
           <button
             onClick={handleReprocessOrphans}

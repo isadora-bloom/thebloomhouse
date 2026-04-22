@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { InsightRow } from './insight-card'
+import { usePlanTier } from '@/lib/hooks/use-plan-tier'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -49,8 +50,18 @@ const PRIORITY_ACCENT: Record<string, { border: string; bg: string; dot: string 
 export function InlineInsightBanner({ category, className }: InlineInsightBannerProps) {
   const [insight, setInsight] = useState<InsightRow | null>(null)
   const [dismissed, setDismissed] = useState(false)
+  // Insights live behind the Intelligence tier server-side (requirePlan in
+  // /api/intel/insights). Gate the banner by the same check client-side so
+  // Starter venues don't repeatedly hit a 403 — visible as scary-looking
+  // network errors on pages like the Agent Inbox where the banner is
+  // embedded by default. When plan_tier is still loading, hold off.
+  const { meetsMinimum, loading: planLoading } = usePlanTier()
+  const hasIntel = meetsMinimum('intelligence')
 
   useEffect(() => {
+    if (planLoading) return
+    if (!hasIntel) return
+
     async function fetchInsight() {
       try {
         // Fetch the single highest-priority insight for this category
@@ -70,9 +81,9 @@ export function InlineInsightBanner({ category, className }: InlineInsightBanner
       }
     }
     fetchInsight()
-  }, [category])
+  }, [category, hasIntel, planLoading])
 
-  if (!insight || dismissed) return null
+  if (!hasIntel || !insight || dismissed) return null
 
   const accent = PRIORITY_ACCENT[insight.priority] ?? PRIORITY_ACCENT.medium
   const Icon = TYPE_ICON[insight.insight_type] ?? Lightbulb
