@@ -16,7 +16,12 @@ export default async function PlatformLayout({
   if (!scope) redirect('/setup')
 
   return (
-    <VenueScopeProvider venueId={scope.venueId} orgId={scope.orgId}>
+    <VenueScopeProvider
+      venueId={scope.venueId}
+      orgId={scope.orgId}
+      venueName={scope.venueName}
+      orgName={scope.orgName}
+    >
       <div className="min-h-screen bg-warm-white">
         <PlatformShell>{children}</PlatformShell>
       </div>

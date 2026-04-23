@@ -19,8 +19,19 @@ export interface Notification {
 
 // ---------------------------------------------------------------------------
 // createNotification — fire-and-forget with deduplication
-// Checks for duplicate (same type + wedding_id) within last 5 minutes
 // ---------------------------------------------------------------------------
+
+/**
+ * Notification types that must dedup PER WEDDING FOREVER, not on the
+ * default 5-minute window. A re-email containing the same booking-signal
+ * phrase tomorrow should NOT re-fire if the coordinator already saw the
+ * prompt — they're resolving it on their own cadence. Read/dismissal
+ * state is tracked on the row itself; deletion is the escape hatch if
+ * they want to re-trigger.
+ */
+const FOREVER_DEDUP_TYPES = new Set<string>([
+  'booking_confirmation_prompt',
+])
 
 export async function createNotification(options: {
   venueId: string
@@ -32,16 +43,26 @@ export async function createNotification(options: {
   try {
     const supabase = createServiceClient()
 
-    // Deduplicate: check for same type + wedding_id in last 5 minutes
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+    const foreverDedup = FOREVER_DEDUP_TYPES.has(options.type)
 
+    // Dedup strategy:
+    //  - FOREVER_DEDUP_TYPES dedup on (venue_id, wedding_id, type) with
+    //    no time window. Weddingless notifs in this set fall back to
+    //    (venue_id, type) since we have no wedding discriminator.
+    //  - Everything else dedups on a 5-minute window so accidental
+    //    double-fires don't spam but coordinator notifications can
+    //    recur day-to-day.
     let dupeQuery = supabase
       .from('admin_notifications')
       .select('id')
       .eq('venue_id', options.venueId)
       .eq('type', options.type)
-      .gte('created_at', fiveMinutesAgo)
       .limit(1)
+
+    if (!foreverDedup) {
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+      dupeQuery = dupeQuery.gte('created_at', fiveMinutesAgo)
+    }
 
     if (options.weddingId) {
       dupeQuery = dupeQuery.eq('wedding_id', options.weddingId)

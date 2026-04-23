@@ -25,19 +25,49 @@ import { createServiceClient } from '@/lib/supabase/service'
 
 const DEMO_VENUE_ID = '22222222-2222-2222-2222-222222222201'
 const DEMO_ORG_ID = '11111111-1111-1111-1111-111111111111'
+const DEMO_VENUE_NAME = 'Hawthorne Manor'
+const DEMO_ORG_NAME = 'The Crestwood Collection'
 
 export interface PlatformScope {
   venueId: string
   orgId: string | null
   isDemo: boolean
+  venueName: string | null
+  orgName: string | null
+}
+
+/**
+ * Fetch venue + org names for the scope SSR-side. Kept as a tight helper
+ * so resolvePlatformScope stays readable. Service-role client bypasses RLS
+ * since this feeds the trusted layout, not user output.
+ */
+async function fetchNames(venueId: string, orgId: string | null): Promise<{ venueName: string | null; orgName: string | null }> {
+  const service = createServiceClient()
+  const [vRes, oRes] = await Promise.all([
+    service.from('venues').select('name').eq('id', venueId).maybeSingle(),
+    orgId
+      ? service.from('organisations').select('name').eq('id', orgId).maybeSingle()
+      : Promise.resolve({ data: null }),
+  ])
+  return {
+    venueName: (vRes.data?.name as string | undefined) ?? null,
+    orgName: (oRes.data?.name as string | undefined) ?? null,
+  }
 }
 
 export async function resolvePlatformScope(): Promise<PlatformScope | null> {
   const cookieStore = await cookies()
 
-  // 1. Demo mode — no auth, no validation, Hawthorne.
+  // 1. Demo mode — no auth, no validation, Hawthorne. Names inline so
+  // we avoid a DB roundtrip on every demo page.
   if (cookieStore.get('bloom_demo')?.value === 'true') {
-    return { venueId: DEMO_VENUE_ID, orgId: DEMO_ORG_ID, isDemo: true }
+    return {
+      venueId: DEMO_VENUE_ID,
+      orgId: DEMO_ORG_ID,
+      isDemo: true,
+      venueName: DEMO_VENUE_NAME,
+      orgName: DEMO_ORG_NAME,
+    }
   }
 
   const supabase = await createServerSupabaseClient()
@@ -62,7 +92,8 @@ export async function resolvePlatformScope(): Promise<PlatformScope | null> {
       .eq('id', cookieVenue)
       .maybeSingle()
     if (v && v.org_id === profileOrgId) {
-      return { venueId: v.id as string, orgId: profileOrgId, isDemo: false }
+      const names = await fetchNames(v.id as string, profileOrgId)
+      return { venueId: v.id as string, orgId: profileOrgId, isDemo: false, ...names }
     }
     // Stale or cross-org cookie — ignore and fall through.
   }
@@ -70,7 +101,8 @@ export async function resolvePlatformScope(): Promise<PlatformScope | null> {
   // 3. Profile venue.
   const profileVenue = (profile?.venue_id as string | null) ?? null
   if (profileVenue) {
-    return { venueId: profileVenue, orgId: profileOrgId, isDemo: false }
+    const names = await fetchNames(profileVenue, profileOrgId)
+    return { venueId: profileVenue, orgId: profileOrgId, isDemo: false, ...names }
   }
 
   // 4. Admin fallback — first venue in org.
@@ -84,7 +116,8 @@ export async function resolvePlatformScope(): Promise<PlatformScope | null> {
       .limit(1)
       .maybeSingle()
     if (firstVenue?.id) {
-      return { venueId: firstVenue.id as string, orgId: profileOrgId, isDemo: false }
+      const names = await fetchNames(firstVenue.id as string, profileOrgId)
+      return { venueId: firstVenue.id as string, orgId: profileOrgId, isDemo: false, ...names }
     }
   }
 

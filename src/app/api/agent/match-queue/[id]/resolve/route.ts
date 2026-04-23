@@ -30,11 +30,23 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const supabase = createServiceClient()
   const { data: row } = await supabase
     .from('client_match_queue')
-    .select('id, venue_id, person_a_id, person_b_id, signals, tier, confidence')
+    .select('id, venue_id, person_a_id, person_b_id, signal_a_id, signal_b_id, signals, tier, confidence')
     .eq('id', id)
     .single()
   if (!row || row.venue_id !== auth.venueId) {
     return NextResponse.json({ error: 'Queue row not found' }, { status: 404 })
+  }
+
+  // Signal-pair rows (F1) don't have a person target — merging doesn't
+  // apply. dismiss / snooze / wait_for_signal still work since they only
+  // flip status. Reject merge explicitly so the UI shows a helpful
+  // message rather than 500ing on a null FK.
+  const isSignalPair = !row.person_a_id
+  if (action === 'merge' && isSignalPair) {
+    return NextResponse.json(
+      { error: 'Cannot merge signal-pair rows — no person target. Dismiss or wait for a real inquiry to arrive.' },
+      { status: 400 }
+    )
   }
 
   if (action === 'merge') {

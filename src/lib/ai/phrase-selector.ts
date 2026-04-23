@@ -61,22 +61,26 @@ export async function selectPhrase(options: SelectPhraseOptions): Promise<string
     return ''
   }
 
-  // Check what's been used with this contact recently (across ALL venues)
+  // Check what's been used with this contact recently (across ALL venues).
+  // Column names match migration 005: phrase_category + phrase_text + used_at.
+  // Drifting from the schema here silently errors into the catch and kills
+  // cross-venue rotation — voice-dna/route.ts already uses the right names.
   let usedPhrases = new Set<string>()
   try {
     const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('phrase_usage')
-      .select('phrase_used')
+      .select('phrase_text')
       .eq('contact_email', contactEmail.toLowerCase())
-      .eq('phrase_key', category)
+      .eq('phrase_category', category)
       .gte('used_at', cutoff)
-
-    if (data) {
-      usedPhrases = new Set(data.map((r) => r.phrase_used))
+    if (error) {
+      console.warn('[phrase-selector] phrase_usage read failed:', error.message)
+    } else if (data) {
+      usedPhrases = new Set(data.map((r) => r.phrase_text as string))
     }
-  } catch {
-    // Table doesn't exist yet or query failed — continue without tracking
+  } catch (err) {
+    console.warn('[phrase-selector] phrase_usage read threw:', (err as Error).message)
   }
 
   // Filter to unused options
@@ -90,16 +94,19 @@ export async function selectPhrase(options: SelectPhraseOptions): Promise<string
   // Select randomly from available
   let selected = available[Math.floor(Math.random() * available.length)]
 
-  // Record usage (if table exists)
+  // Record usage. Column names match migration 005.
   try {
-    await supabase.from('phrase_usage').insert({
+    const { error } = await supabase.from('phrase_usage').insert({
       contact_email: contactEmail.toLowerCase(),
-      phrase_key: category,
-      phrase_used: selected,
+      phrase_category: category,
+      phrase_text: selected,
       venue_id: venueId,
     })
-  } catch {
-    // Don't fail the email if tracking fails
+    if (error) {
+      console.warn('[phrase-selector] phrase_usage insert failed:', error.message)
+    }
+  } catch (err) {
+    console.warn('[phrase-selector] phrase_usage insert threw:', (err as Error).message)
   }
 
   // Substitute template variables if provided

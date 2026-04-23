@@ -18,6 +18,10 @@ import { createContext, useContext, type ReactNode } from 'react'
 export interface VenueScope {
   venueId: string
   orgId: string | null
+  /** Venue name resolved server-side — avoids SSR/CSR hydration mismatch in ScopeIndicator. */
+  venueName: string | null
+  /** Org name resolved server-side — for company-scope display. */
+  orgName: string | null
 }
 
 const VenueScopeContext = createContext<VenueScope | null>(null)
@@ -25,14 +29,18 @@ const VenueScopeContext = createContext<VenueScope | null>(null)
 export function VenueScopeProvider({
   venueId,
   orgId,
+  venueName,
+  orgName,
   children,
 }: {
   venueId: string
   orgId: string | null
+  venueName?: string | null
+  orgName?: string | null
   children: ReactNode
 }) {
   return (
-    <VenueScopeContext.Provider value={{ venueId, orgId }}>
+    <VenueScopeContext.Provider value={{ venueId, orgId, venueName: venueName ?? null, orgName: orgName ?? null }}>
       {children}
     </VenueScopeContext.Provider>
   )

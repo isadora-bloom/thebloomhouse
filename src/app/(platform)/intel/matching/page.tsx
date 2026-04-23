@@ -72,6 +72,19 @@ interface TangentialSignalRow {
   source_context: string | null
   signal_date: string | null
   matched_person_id: string | null
+  extracted_identity: Record<string, unknown> | null
+}
+
+interface SignalQueueItem {
+  id: string
+  signal_a_id: string
+  signal_b_id: string
+  match_type: string
+  confidence: number
+  status: string
+  created_at: string
+  signals: MatchSignal[] | null
+  tier: MatchTier | null
 }
 
 interface MatchPair {
@@ -79,6 +92,12 @@ interface MatchPair {
   personA: { name: string; emails: string[]; phones: string[] }
   personB: { name: string; emails: string[]; phones: string[] }
   tangentialCount: number
+}
+
+interface SignalPair {
+  queueItem: SignalQueueItem
+  sideA: { label: string; platform: string; date: string | null; context: string | null }
+  sideB: { label: string; platform: string; date: string | null; context: string | null }
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +187,8 @@ function MatchCardSkeleton() {
 function MatchingPageInner() {
   const VENUE_ID = useVenueId()
   const [queue, setQueue] = useState<MatchQueueItem[]>([])
+  const [signalQueue, setSignalQueue] = useState<SignalQueueItem[]>([])
+  const [signalsById, setSignalsById] = useState<Map<string, TangentialSignalRow>>(new Map())
   const [people, setPeople] = useState<PersonRow[]>([])
   const [contacts, setContacts] = useState<ContactRow[]>([])
   const [tangentialByPerson, setTangentialByPerson] = useState<
@@ -182,18 +203,25 @@ function MatchingPageInner() {
   const fetchData = useCallback(async () => {
     const supabase = getSupabase()
     try {
-      const [queueRes, peopleRes, contactRes, aiRes] = await Promise.all([
+      const [queueRes, signalPairRes, peopleRes, contactRes, aiRes] = await Promise.all([
+        // Person↔person rows — the canonical dedup UI.
         supabase
           .from('client_match_queue')
           .select(
             'id, person_a_id, person_b_id, match_type, confidence, status, created_at, signals, tier'
           )
           .in('status', ['pending', 'snoozed'])
-          // Person↔person rows only. Signal↔signal rows (F1) have null
-          // person_a_id and need a different resolver since they can't be
-          // "merged" until linked to a person. A follow-up adds a second
-          // pane on this page for signal-pair rows.
           .not('person_a_id', 'is', null)
+          .order('confidence', { ascending: false }),
+        // Signal↔signal rows (F1) — shown in a second pane. These can't
+        // be merged (no person target) but can be dismissed.
+        supabase
+          .from('client_match_queue')
+          .select(
+            'id, signal_a_id, signal_b_id, match_type, confidence, status, created_at, signals, tier'
+          )
+          .in('status', ['pending', 'snoozed'])
+          .not('signal_a_id', 'is', null)
           .order('confidence', { ascending: false }),
         supabase.from('people').select('id, first_name, last_name, wedding_id'),
         supabase.from('contacts').select('id, person_id, type, value'),
@@ -204,34 +232,63 @@ function MatchingPageInner() {
           .maybeSingle(),
       ])
       if (queueRes.error) throw queueRes.error
+      if (signalPairRes.error) throw signalPairRes.error
       if (peopleRes.error) throw peopleRes.error
       if (contactRes.error) throw contactRes.error
 
       const queueRows = (queueRes.data ?? []) as MatchQueueItem[]
+      const signalQueueRows = (signalPairRes.data ?? []) as SignalQueueItem[]
+
       const personIds = new Set<string>()
       for (const q of queueRows) {
         if (q.person_a_id) personIds.add(q.person_a_id)
         if (q.person_b_id) personIds.add(q.person_b_id)
       }
 
-      // Fetch tangential signals linked to any person in the queue
-      let tangentialMap = new Map<string, TangentialSignalRow[]>()
-      if (personIds.size > 0) {
-        const { data: signalsData, error: signalsErr } = await supabase
+      // Collect signal IDs referenced by signal-pair rows, so we can
+      // resolve their tangential_signals payloads in one query.
+      const referencedSignalIds = new Set<string>()
+      for (const sq of signalQueueRows) {
+        if (sq.signal_a_id) referencedSignalIds.add(sq.signal_a_id)
+        if (sq.signal_b_id) referencedSignalIds.add(sq.signal_b_id)
+      }
+
+      // Fetch tangential signals — both linked-to-a-person (for the
+      // context panel on person rows) AND those referenced by a signal
+      // pair (for the signal-pair pane). One query covers both.
+      const signalFetchIds = new Set<string>(referencedSignalIds)
+      const tangentialMap = new Map<string, TangentialSignalRow[]>()
+      const signalByIdMap = new Map<string, TangentialSignalRow>()
+      if (personIds.size > 0 || signalFetchIds.size > 0) {
+        let query = supabase
           .from('tangential_signals')
-          .select('id, signal_type, source_context, signal_date, matched_person_id')
-          .in('matched_person_id', Array.from(personIds))
+          .select('id, signal_type, source_context, signal_date, matched_person_id, extracted_identity')
+        if (personIds.size > 0 && signalFetchIds.size > 0) {
+          // Either in matched_person_id list OR in signal id list.
+          query = query.or(
+            `matched_person_id.in.(${Array.from(personIds).join(',')}),id.in.(${Array.from(signalFetchIds).join(',')})`
+          )
+        } else if (personIds.size > 0) {
+          query = query.in('matched_person_id', Array.from(personIds))
+        } else {
+          query = query.in('id', Array.from(signalFetchIds))
+        }
+        const { data: signalsData, error: signalsErr } = await query
         if (!signalsErr && signalsData) {
           for (const s of signalsData as TangentialSignalRow[]) {
-            if (!s.matched_person_id) continue
-            const list = tangentialMap.get(s.matched_person_id) ?? []
-            list.push(s)
-            tangentialMap.set(s.matched_person_id, list)
+            signalByIdMap.set(s.id, s)
+            if (s.matched_person_id) {
+              const list = tangentialMap.get(s.matched_person_id) ?? []
+              list.push(s)
+              tangentialMap.set(s.matched_person_id, list)
+            }
           }
         }
       }
 
       setQueue(queueRows)
+      setSignalQueue(signalQueueRows)
+      setSignalsById(signalByIdMap)
       setPeople((peopleRes.data ?? []) as PersonRow[])
       setContacts((contactRes.data ?? []) as ContactRow[])
       setTangentialByPerson(tangentialMap)
@@ -295,6 +352,33 @@ function MatchingPageInner() {
     })
   }, [queue, people, contacts, tangentialByPerson])
 
+  // Build signal pairs — F1 queues. Each side resolves a tangential_signal
+  // row so the UI can show "who" (name/handle) and "where" (platform).
+  const signalPairs: SignalPair[] = useMemo(() => {
+    const describe = (sig: TangentialSignalRow | undefined) => {
+      if (!sig) return { label: 'Unknown signal', platform: 'unknown', date: null, context: null }
+      const eid = (sig.extracted_identity ?? {}) as Record<string, unknown>
+      const first = (eid.first_name as string | undefined) ?? ''
+      const last = (eid.last_name as string | undefined) ?? ''
+      const username = (eid.username as string | undefined) ?? (eid.handle as string | undefined) ?? ''
+      const platformRaw = (eid.platform as string | undefined) ?? sig.signal_type.replace(/_.+$/, '')
+      const name = [first, last].filter(Boolean).join(' ').trim()
+      const handle = username ? `@${username.replace(/^@/, '')}` : ''
+      const label = name || handle || 'Unnamed signal'
+      return {
+        label,
+        platform: platformRaw,
+        date: sig.signal_date,
+        context: sig.source_context,
+      }
+    }
+    return signalQueue.map((sq) => ({
+      queueItem: sq,
+      sideA: describe(signalsById.get(sq.signal_a_id)),
+      sideB: describe(signalsById.get(sq.signal_b_id)),
+    }))
+  }, [signalQueue, signalsById])
+
   // Stats
   const pendingCount = queue.filter((q) => q.status === 'pending').length
   const snoozedCount = queue.filter((q) => q.status === 'snoozed').length
@@ -344,6 +428,18 @@ function MatchingPageInner() {
     try {
       const ok = await callResolve(id, 'dismiss')
       if (ok) setQueue((prev) => prev.filter((q) => q.id !== id))
+    } finally {
+      setProcessing(null)
+    }
+  }
+
+  // Signal-pair dismiss — same endpoint, updates the signalQueue state
+  // (different list from the person-pair queue).
+  const handleDismissSignalPair = async (id: string) => {
+    setProcessing(id)
+    try {
+      const ok = await callResolve(id, 'dismiss')
+      if (ok) setSignalQueue((prev) => prev.filter((q) => q.id !== id))
     } finally {
       setProcessing(null)
     }
@@ -634,6 +730,79 @@ function MatchingPageInner() {
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Signal-pair pane (F1). Two tangential signals that look like the
+          same person, BEFORE any inquiry has linked them to a real
+          person. Coordinators can dismiss to silence. A later real
+          inquiry will auto-promote both signals via enqueueIdentityMatches. */}
+      {signalPairs.length > 0 && (
+        <div className="space-y-4 pt-6 border-t border-border">
+          <div>
+            <h2 className="font-heading text-xl font-semibold text-sage-900 mb-1">
+              Signal suggestions
+            </h2>
+            <p className="text-sm text-sage-600">
+              Two cross-channel signals ({aiName} thinks these might be the same person). No person record exists yet — these resolve automatically when a matching inquiry arrives. Dismiss any that are clearly different people.
+            </p>
+          </div>
+          <div className="space-y-3">
+            {signalPairs.map((pair) => {
+              const q = pair.queueItem
+              const isProcessing = processing === q.id
+              const tierConf = tierStyle(q.tier)
+              return (
+                <div
+                  key={q.id}
+                  className="bg-surface border border-border rounded-xl p-5 shadow-sm"
+                >
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border ${tierConf.classes}`}>
+                        <Sparkles className="w-3 h-3" />
+                        {tierConf.label}
+                      </span>
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold ${confidenceColor(q.confidence)}`}>
+                        {Math.round((q.confidence ?? 0) * 100)}% match
+                      </span>
+                      <span className="text-[11px] text-sage-500">
+                        {q.match_type.replaceAll('_', ' ')}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handleDismissSignalPair(q.id)}
+                      disabled={isProcessing}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-sage-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                      title="Dismiss — these aren't the same person"
+                    >
+                      <XIcon className="w-3.5 h-3.5" />
+                      Dismiss
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {[pair.sideA, pair.sideB].map((side, idx) => (
+                      <div key={idx} className="bg-sage-50/50 border border-sage-100 rounded-lg p-3">
+                        <p className="text-sm font-semibold text-sage-900">{side.label}</p>
+                        <p className="text-xs text-sage-600 capitalize mt-0.5">
+                          {side.platform.replaceAll('_', ' ')}
+                          {side.date ? ` · ${new Date(side.date).toLocaleDateString()}` : ''}
+                        </p>
+                        {side.context && (
+                          <p className="text-xs text-sage-500 mt-1.5 line-clamp-2">{side.context}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {q.signals && q.signals.length > 0 && (
+                    <div className="mt-3 text-xs text-sage-600">
+                      <span className="font-medium">Why:</span> {q.signals.map((s) => s.detail).join('; ')}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>
