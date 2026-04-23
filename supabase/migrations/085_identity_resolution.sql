@@ -55,6 +55,12 @@ ALTER TABLE public.client_match_queue
   ADD COLUMN IF NOT EXISTS tier text NOT NULL DEFAULT 'medium'
     CHECK (tier IN ('high', 'medium', 'low'));
 
+-- Drop the legacy match_type CHECK (migration 009 restricted it to
+-- email|phone|name). Phase 8 stores the rich signal vocabulary in
+-- signals jsonb; match_type becomes a descriptive free-text label so
+-- new rule types can be added in code without a migration.
+ALTER TABLE public.client_match_queue DROP CONSTRAINT IF EXISTS client_match_queue_match_type_check;
+
 COMMENT ON COLUMN public.client_match_queue.signals IS
   'Phase 8. Array of {type, detail, weight} objects recording which matching rules fired. Used by the UI to render "why we think these are the same person" and by auto-promotion to decide if a low_confidence row has accumulated enough signal to promote.';
 COMMENT ON COLUMN public.client_match_queue.tier IS
