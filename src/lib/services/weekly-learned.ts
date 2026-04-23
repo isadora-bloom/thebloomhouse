@@ -28,6 +28,7 @@ export type WeeklyLearnedBullet =
   | { kind: 'booking'; empty: true; text: string }
   | { kind: 'source'; text: string; empty?: false }
   | { kind: 'source'; empty: true; text: string }
+  | { kind: 'correlation'; text: string; empty?: false }
 
 export interface WeeklyLearned {
   aiName: string
@@ -247,14 +248,46 @@ export async function computeWeeklyLearned(
   const aiName =
     (aiConfig?.ai_name as string | undefined)?.trim() || 'Your AI assistant'
 
-  const [voice, booking, source] = await Promise.all([
+  const [voice, booking, source, correlation] = await Promise.all([
     buildVoiceBullet(venueId, aiName),
     buildBookingBullet(venueId),
     buildSourceBullet(venueId),
+    buildCorrelationBullet(venueId),
   ])
 
-  return {
-    aiName,
-    bullets: [voice, booking, source],
+  const bullets: WeeklyLearnedBullet[] = [voice, booking, source]
+  if (correlation) bullets.push(correlation)
+  return { aiName, bullets }
+}
+
+/**
+ * Phase 8 correlation bullet. Surfaces the strongest intelligence_insights
+ * row of type='correlation' when its confidence is >= 0.7 AND the
+ * underlying series has a lag (so the coordinator gets a forward-
+ * looking signal, not just "these move together"). No empty state —
+ * we omit the bullet entirely when no strong correlation exists
+ * rather than crowd the card with a null-result line.
+ */
+async function buildCorrelationBullet(venueId: string): Promise<WeeklyLearnedBullet | null> {
+  const supabase = createServiceClient()
+  const { data } = await supabase
+    .from('intelligence_insights')
+    .select('title, body, confidence, data_points, created_at')
+    .eq('venue_id', venueId)
+    .eq('insight_type', 'correlation')
+    .gte('confidence', 0.7)
+    .order('confidence', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (!data) return null
+  const dp = (data.data_points ?? {}) as { lag_days?: number }
+  const lag = Number(dp.lag_days ?? 0)
+  // Lean toward forward-looking phrasing when there's a lag.
+  if (lag > 0) {
+    return {
+      kind: 'correlation',
+      text: `${data.title} Expect a move in the trailing channel within ${lag} days.`,
+    }
   }
+  return { kind: 'correlation', text: (data.title as string) }
 }

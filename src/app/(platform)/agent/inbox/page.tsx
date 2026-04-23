@@ -5,6 +5,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
+import { PriorTouchesChip } from '@/components/agent/PriorTouchesChip'
 import {
   Mail,
   RefreshCw,
@@ -252,6 +253,13 @@ function EmailListItem({
         >
           {badge.label}
         </span>
+      </div>
+      {/* Phase 8 multi-touch history: hides itself if the person has no
+          prior touchpoints. On inquiry rows this surfaces "3 prior
+          touchpoints" (hot) or "1 prior touchpoint" (warm) with an
+          expandable list of each touch. */}
+      <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+        <PriorTouchesChip personId={interaction.person_id} />
       </div>
     </button>
   )

@@ -14,6 +14,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { getLatestIndicators, calculateDemandScore } from '@/lib/services/economics'
 import { detectTrendDeviations } from '@/lib/services/trends'
+import { getPriorTouches, narrateTouches } from '@/lib/services/prior-touches'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -212,9 +213,36 @@ export async function buildWeatherDisclaimer(
  *  - Top approved review phrases (for Sage to naturally weave in)
  *  - Any active anomaly alerts the couple might ask about
  */
-export async function buildSageIntelligenceContext(venueId: string): Promise<string> {
+export async function buildSageIntelligenceContext(
+  venueId: string,
+  personId?: string | null
+): Promise<string> {
   const supabase = createServiceClient()
   const sections: string[] = []
+
+  // --- Prior touchpoints (warmth signal) ---
+  // When we know which person this draft is for, look up prior signals so
+  // Sage can open warm instead of cold. Never throw — a failure here falls
+  // back to the existing (cold) path.
+  if (personId) {
+    try {
+      const summary = await getPriorTouches({ supabase, venueId, personId })
+      if (summary.warmth !== 'cold' && summary.touches.length > 0) {
+        const channels = new Set(summary.touches.map((t) => t.source))
+        const total = summary.touches.length
+        const lines = [
+          `PRIOR TOUCHPOINTS (warmth = ${summary.warmth}):`,
+          `- ${narrateTouches(summary)}`,
+          `- Total: ${total} prior signals across ${channels.size} channels.`,
+          '',
+          'Open this email acknowledging the relationship. Do not cold-open.',
+        ]
+        sections.push(lines.join('\n'))
+      }
+    } catch (err) {
+      console.warn('[sage-intel] Failed to fetch prior touches:', err)
+    }
+  }
 
   // --- Demand outlook ---
   try {

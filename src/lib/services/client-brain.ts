@@ -294,8 +294,26 @@ export async function generateClientDraft(
 
   // Intelligence enrichment: add venue intel context (trends, weather, demand, review language)
   // Wrapped in try/catch so enrichment failures never block draft generation.
+  // Resolve partner1 person_id on this wedding so prior-touchpoint warmth
+  // flows into the prompt for returning-client drafts.
+  let personId: string | null = null
   try {
-    const intelContext = await buildSageIntelligenceContext(venueId)
+    const supabase = createServiceClient()
+    const { data: partners } = await supabase
+      .from('people')
+      .select('id, role')
+      .eq('wedding_id', weddingId)
+      .in('role', ['partner1', 'partner2'])
+    if (partners && partners.length > 0) {
+      const partner1 = partners.find((p) => p.role === 'partner1')
+      personId = (partner1?.id ?? partners[0].id) as string
+    }
+  } catch {
+    // Warmth enrichment is optional — keep personId null on failure.
+  }
+
+  try {
+    const intelContext = await buildSageIntelligenceContext(venueId, personId)
     if (intelContext) {
       contextBlock += `\n\n${intelContext}`
     }

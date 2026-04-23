@@ -443,8 +443,27 @@ export async function generateInquiryDraft(
   contextBlock += availabilityContext
 
   // Step 6b: Add intelligence context (trends, weather, demand, review language)
+  // Resolve partner1 person_id from the contact email so prior-touchpoint
+  // warmth lookups can fire. Best-effort — failure falls back to cold.
+  let personId: string | null = null
   try {
-    const intelContext = await buildSageIntelligenceContext(venueId)
+    const supabase = createServiceClient()
+    const { data: personRows } = await supabase
+      .from('people')
+      .select('id, role')
+      .eq('venue_id', venueId)
+      .eq('email', contactEmail.toLowerCase())
+      .limit(5)
+    if (personRows && personRows.length > 0) {
+      const partner1 = personRows.find((p) => p.role === 'partner1')
+      personId = (partner1?.id ?? personRows[0].id) as string
+    }
+  } catch {
+    // Warmth enrichment is optional — keep personId null on failure.
+  }
+
+  try {
+    const intelContext = await buildSageIntelligenceContext(venueId, personId)
     if (intelContext) {
       contextBlock += `\n\n${intelContext}`
     }

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Sparkles, Calendar, Target } from 'lucide-react'
+import { Sparkles, Calendar, Target, GitCompare } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
 
 // ---------------------------------------------------------------------------
@@ -9,7 +9,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 // ---------------------------------------------------------------------------
 
 interface WeeklyLearnedBullet {
-  kind: 'voice' | 'booking' | 'source'
+  kind: 'voice' | 'booking' | 'source' | 'correlation'
   text: string
   empty?: boolean
 }
@@ -31,6 +31,8 @@ function iconFor(kind: WeeklyLearnedBullet['kind']) {
       return Calendar
     case 'source':
       return Target
+    case 'correlation':
+      return GitCompare
   }
 }
 
