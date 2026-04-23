@@ -765,6 +765,24 @@ export async function processIncomingEmail(
         points: 40,
         metadata: { source: detectedSource, subject: email.subject },
       })
+
+      // Phase 3 Task 35: record the first touchpoint in the multi-touch
+      // journey table. Best-effort — failure here must not break inquiry
+      // ingest. Subsequent replies don't add new touchpoints here; future
+      // work captures UTM-bearing links and website visits separately.
+      try {
+        await supabase.from('wedding_touchpoints').insert({
+          venue_id: venueId,
+          wedding_id: weddingId,
+          source: detectedSource,
+          medium: 'email',
+          touch_type: 'inquiry',
+          occurred_at: new Date().toISOString(),
+          metadata: { subject: email.subject, fromEmail },
+        })
+      } catch (err) {
+        console.warn('[pipeline] wedding_touchpoints insert failed:', err)
+      }
     }
   } else if (weddingId && parsedEventDate) {
     // Existing wedding — backfill any extracted date / guest count that

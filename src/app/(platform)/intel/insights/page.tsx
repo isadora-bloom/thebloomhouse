@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { InsightCard, type InsightRow } from '@/components/intel/insight-card'
+import { InsightOutcomesPanel } from '@/components/intel/insight-outcomes-panel'
 import {
   Lightbulb, Filter, Loader2, ChevronLeft, ChevronRight,
   Zap, Check, XCircle,
@@ -130,6 +131,9 @@ export default function InsightsPage() {
           Every pattern, anomaly, and recommendation the intelligence engine has detected — ranked by priority and impact. Act on high-value insights to improve your conversion rates, pricing, and operations.
         </p>
       </div>
+
+      {/* Phase 3 Task 36 — outcomes panel: what happened after the coordinator acted on insights */}
+      <InsightOutcomesPanel />
 
       {/* Stats row */}
       <div className="grid grid-cols-3 gap-4">

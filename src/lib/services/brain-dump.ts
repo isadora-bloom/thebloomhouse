@@ -306,16 +306,48 @@ export async function routeBrainDump(args: {
     }
   }
 
-  // Analytics: Phase 3 attribution importer doesn't exist yet. Park in
-  // needs_clarification so coordinator can reclassify or import manually.
+  // Analytics: route through the Phase 3 marketing-spend extractor. The
+  // extractor uses an LLM pass to pull (source, month, amount) rows from
+  // free text. If any rows parse we show them in a clarification prompt
+  // for coordinator confirmation (CSV-style preview flow — never
+  // auto-commit spend numbers).
   if (parsed.intent === 'analytics') {
+    const { extractSpendFromText } = await import('@/lib/services/marketing-spend')
+    const extract = await extractSpendFromText({ venueId, text: rawText })
+    if (extract.rows.length > 0) {
+      await createNotification({
+        venueId,
+        type: 'brain_dump_spend_confirm',
+        title: `Analytics detected — ${extract.rows.length} spend row${extract.rows.length === 1 ? '' : 's'} extracted`,
+        body: JSON.stringify({
+          entryId,
+          rows: extract.rows,
+          rawText,
+        }),
+      })
+      await supabase
+        .from('brain_dump_entries')
+        .update({
+          parse_status: 'needs_clarification',
+          clarification_question: `Extracted ${extract.rows.length} spend row${extract.rows.length === 1 ? '' : 's'}. Confirm to import into Sources intelligence.`,
+          parsed_at: new Date().toISOString(),
+          parse_result: { ...parsed, extractedSpendRows: extract.rows } as unknown as Record<string, unknown>,
+        })
+        .eq('id', entryId)
+      return {
+        routedTo: [],
+        needsClarification: true,
+        clarificationQuestion: `Confirm import of ${extract.rows.length} spend row(s).`,
+      }
+    }
+    // Nothing parseable — fall back to the generic clarification.
     await createNotification({
       venueId,
       type: 'brain_dump_needs_clarification',
-      title: 'Analytics upload detected — import pipeline not ready',
+      title: 'Analytics text — couldn\'t extract spend rows',
       body: JSON.stringify({
         entryId,
-        question: 'This looks like analytics data. The attribution importer ships in Phase 3 — for now, paste into /intel/sources manually.',
+        question: 'I classified this as analytics data but couldn\'t pull clean (source, month, amount) rows. Want to reclassify or import manually at /intel/sources?',
         rawText,
       }),
     })
@@ -323,7 +355,7 @@ export async function routeBrainDump(args: {
       .from('brain_dump_entries')
       .update({
         parse_status: 'needs_clarification',
-        clarification_question: 'Analytics importer not ready yet — re-classify or import manually.',
+        clarification_question: extract.errors.join('; ') || 'Could not extract spend rows.',
         parsed_at: new Date().toISOString(),
         parse_result: parsed as unknown as Record<string, unknown>,
       })
@@ -331,7 +363,7 @@ export async function routeBrainDump(args: {
     return {
       routedTo: [],
       needsClarification: true,
-      clarificationQuestion: 'Analytics importer not ready yet',
+      clarificationQuestion: 'Could not extract spend rows from text.',
     }
   }
 

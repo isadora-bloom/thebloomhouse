@@ -13,6 +13,7 @@ import {
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { VenueChip } from '@/components/intel/venue-chip'
+import { SpendImporter } from '@/components/intel/spend-importer'
 import {
   BarChart,
   Bar,
@@ -74,6 +75,7 @@ interface SourceRow {
   bookings: number
   revenue: number
   cost_per_inquiry: number
+  cost_per_tour: number
   cost_per_booking: number
   conversion_rate: number
   roi: number
@@ -363,6 +365,7 @@ export default function SourceAttributionPage() {
         bookings: data.bookings,
         revenue: data.revenue,
         cost_per_inquiry: data.inquiries > 0 ? data.spend / data.inquiries : 0,
+        cost_per_tour: data.tours > 0 ? data.spend / data.tours : 0,
         cost_per_booking: data.bookings > 0 ? data.spend / data.bookings : 0,
         conversion_rate: data.inquiries > 0 ? data.bookings / data.inquiries : 0,
         roi: data.spend > 0 ? (data.revenue - data.spend) / data.spend : 0,
@@ -512,6 +515,10 @@ export default function SourceAttributionPage() {
           </p>
         )}
       </div>
+
+      {/* ---- Spend importer — Phase 3 Task 33 ---- */}
+      <SpendImporter onImported={() => window.location.reload()} />
+
 
       {/* ---- Inline insight banner ---- */}
       <InlineInsightBanner category="source_attribution" />
@@ -684,7 +691,8 @@ export default function SourceAttributionPage() {
                     ['tours', 'Tours'],
                     ['bookings', 'Bookings'],
                     ['revenue', 'Revenue'],
-                    ['cost_per_inquiry', 'Cost / Inquiry'],
+                    ['cost_per_inquiry', 'Cost / Lead'],
+                    ['cost_per_tour', 'Cost / Tour'],
                     ['cost_per_booking', 'Cost / Booking'],
                     ['conversion_rate', 'Conv. Rate'],
                     ['roi', 'ROI'],
@@ -725,6 +733,7 @@ export default function SourceAttributionPage() {
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{row.bookings}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">{fmt$(row.revenue)}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmt$(row.cost_per_inquiry)}</td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">{row.tours > 0 ? fmt$(row.spend / row.tours) : '—'}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmt$(row.cost_per_booking)}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmtPct(row.conversion_rate)}</td>
                     <td className="px-4 py-3 tabular-nums">
