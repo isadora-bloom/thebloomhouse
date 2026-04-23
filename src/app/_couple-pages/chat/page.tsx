@@ -163,8 +163,11 @@ export default function SageChatPage() {
       const supabase = createClient()
 
       const [timelineRes, vendorRes, guestRes, budgetRes, weddingRes] = await Promise.all([
+        // Migration 076 removed the wedding_timeline singleton table. Use
+        // the normalised `timeline` table (per-event rows) for has-events
+        // detection.
         supabase
-          .from('wedding_timeline')
+          .from('timeline')
           .select('id', { count: 'exact', head: true })
           .eq('wedding_id', weddingId),
         supabase

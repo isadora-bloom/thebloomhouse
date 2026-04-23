@@ -15,6 +15,12 @@ export interface CoupleContext {
    * from here so white-label venues (Oakwood: "Ivy", etc.) render correctly.
    */
   aiName: string
+  /**
+   * Venue's display name from venue_config.business_name, falling back to
+   * venues.name. Consumed by couple-facing headers. Never undefined —
+   * defaults to an empty string when the venue lookup hasn't resolved yet.
+   */
+  venueName: string
   loading: boolean
   isDemo: boolean
 }
@@ -44,6 +50,7 @@ export function useCoupleContext(): CoupleContext {
   const [venueId, setVenueId] = useState<string | null>(initialDemo ? DEMO_VENUE_ID : null)
   const [weddingId, setWeddingId] = useState<string | null>(initialDemo ? DEMO_WEDDING_ID : null)
   const [aiName, setAiName] = useState<string>(DEFAULT_AI_NAME)
+  const [venueName, setVenueName] = useState<string>('')
   const [loading, setLoading] = useState(!initialDemo)
   const [isDemo, setIsDemo] = useState(initialDemo)
 
@@ -57,7 +64,7 @@ export function useCoupleContext(): CoupleContext {
       // Resolve venue from slug
       const { data: venue } = await supabase
         .from('venues')
-        .select('id')
+        .select('id, name')
         .eq('slug', slug)
         .maybeSingle()
 
@@ -66,17 +73,21 @@ export function useCoupleContext(): CoupleContext {
         return
       }
       setVenueId(venue.id)
+      // Start with the short name from venues; venue_config.business_name
+      // may override below for a more polished display label.
+      if (venue.name) setVenueName(venue.name as string)
 
-      // Resolve the per-venue AI assistant name. Never block on this —
-      // fall through to the default if the row is missing or the read
-      // fails. Every couple-facing "Ask X" string reads from here.
-      const { data: aiConfig } = await supabase
-        .from('venue_ai_config')
-        .select('ai_name')
-        .eq('venue_id', venue.id)
-        .maybeSingle()
+      // Resolve the per-venue AI assistant name + business_name display
+      // in a single batched read. Never block on either — fall through to
+      // defaults if the rows are missing.
+      const [{ data: aiConfig }, { data: cfg }] = await Promise.all([
+        supabase.from('venue_ai_config').select('ai_name').eq('venue_id', venue.id).maybeSingle(),
+        supabase.from('venue_config').select('business_name').eq('venue_id', venue.id).maybeSingle(),
+      ])
       const resolvedAiName = (aiConfig?.ai_name as string | null)?.trim()
       if (resolvedAiName) setAiName(resolvedAiName)
+      const resolvedBusinessName = (cfg?.business_name as string | null)?.trim()
+      if (resolvedBusinessName) setVenueName(resolvedBusinessName)
 
       // Resolve wedding from authenticated couple user
       const { data: { user } } = await supabase.auth.getUser()
@@ -112,5 +123,5 @@ export function useCoupleContext(): CoupleContext {
     }
   }, [isDemo, venueId, weddingId])
 
-  return { slug, venueId, weddingId, aiName, loading, isDemo }
+  return { slug, venueId, weddingId, aiName, venueName, loading, isDemo }
 }

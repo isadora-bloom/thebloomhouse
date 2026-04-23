@@ -23,6 +23,7 @@ import { generateInquiryDraft } from '@/lib/services/inquiry-brain'
 import { generateClientDraft } from '@/lib/services/client-brain'
 import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/gmail'
 import { detectBookingSignal } from '@/lib/services/extraction'
+import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
@@ -808,6 +809,22 @@ export async function processIncomingEmail(
       subject: email.subject,
     },
   })
+
+  // Step 5a.5: Knowledge-gap capture. Every question the classifier
+  // extracted gets recorded into knowledge_gaps so the /agent/knowledge-gaps
+  // page shows a real backlog over time. Venue-scoped; normalises/dedupes
+  // within the batch. Best-effort — never fails the pipeline.
+  try {
+    const qs = (extracted.questions as string[] | undefined) ?? []
+    if (qs.length > 0) {
+      await recordKnowledgeGaps({ venueId, questions: qs, weddingId })
+    }
+  } catch (err) {
+    await logPipelineError(venueId, 'knowledge_gaps_record', err, {
+      interactionId,
+      weddingId,
+    })
+  }
 
   // Step 5b: Booking-confirmation detection (coordinator prompt, never
   // auto-marks the date booked). Scans for contract / deposit / "we're

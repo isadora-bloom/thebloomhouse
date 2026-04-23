@@ -22,7 +22,7 @@ import {
   Building2, MapPin, UsersRound, Layers,
   BarChart3, GitMerge,
   // System
-  Building, ShieldCheck, Menu, X,
+  Building, ShieldCheck, Menu, X, Hotel, FileText,
   // Misc
   ListOrdered, HelpCircle, Users, SlidersHorizontal, Workflow, MailX,
   // Config pages
@@ -115,6 +115,9 @@ const VENUE_SECTIONS: NavSection[] = [
     fullOnly: true,
     items: [
       { label: 'Portal Sections', href: '/portal/section-settings', icon: SlidersHorizontal },
+      { label: 'What Makes Us Different', href: '/portal/venue-usps-config', icon: Sparkles },
+      { label: 'Accommodations', href: '/portal/accommodations-config', icon: Hotel },
+      { label: 'Downloads & Resources', href: '/portal/venue-assets-config', icon: FileText },
       { label: 'Wedding Details', href: '/portal/wedding-details-config', icon: Heart },
       { label: 'Checklist Templates', href: '/portal/checklist-config', icon: CheckSquare },
       { label: 'Bar & Beverages', href: '/portal/bar-config', icon: Wine },

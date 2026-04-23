@@ -39,7 +39,8 @@ interface TourRow {
   scheduled_at: string
   tour_type: string
   conducted_by: string | null
-  couple_name: string | null
+  // couple_name is derived from notes (legacy rows) or omitted. Not a DB column.
+  couple_name?: string | null
   source: string | null
   outcome: string
   competing_venues: string | null
@@ -121,6 +122,7 @@ export default function ToursPage() {
   const [formSource, setFormSource] = useState('website')
   const [formCompeting, setFormCompeting] = useState('')
   const [formNotes, setFormNotes] = useState('')
+  const [formAttendees, setFormAttendees] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
 
   const fetchData = useCallback(async () => {
@@ -284,14 +286,25 @@ export default function ToursPage() {
     setSaving(true)
     const supabase = getSupabase()
     try {
+      // Note: `couple_name` isn't a column on tours (couple identity lives
+      // on people via wedding_id). `competing_venues` is text[], so a
+      // comma-separated free-text input must be split before insert.
+      // `outcome='pending'` is admitted by migration 077.
+      const competingArr = formCompeting
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+      const noteWithCouple = [formCouple && `Couple: ${formCouple}`, formNotes]
+        .filter(Boolean)
+        .join('\n\n')
       const { error: err } = await supabase.from('tours').insert({
         scheduled_at: formDate || new Date().toISOString().slice(0, 10),
         tour_type: formType,
-        couple_name: formCouple || null,
         conducted_by: formConductor || null,
         source: formSource,
-        competing_venues: formCompeting || null,
-        notes: formNotes || null,
+        competing_venues: competingArr.length > 0 ? competingArr : null,
+        notes: noteWithCouple || null,
+        attendees: formAttendees,
         outcome: 'pending',
       })
       if (err) throw err
@@ -311,6 +324,7 @@ export default function ToursPage() {
       setFormSource('website')
       setFormCompeting('')
       setFormNotes('')
+      setFormAttendees([])
       setLoading(true)
       fetchData()
     } catch (err) {
@@ -528,8 +542,52 @@ export default function ToursPage() {
                 <input type="text" value={formCompeting} onChange={(e) => setFormCompeting(e.target.value)} placeholder="e.g. Mount Ida, Keswick" className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-warm-white text-sage-900 placeholder:text-sage-400" />
               </div>
               <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">Who attended</label>
+                <div className="flex flex-wrap gap-2">
+                  {['couple', 'partner1', 'partner2', 'parents', 'friends', 'planner', 'wedding_party', 'other'].map((role) => {
+                    const active = formAttendees.includes(role)
+                    return (
+                      <button
+                        key={role}
+                        type="button"
+                        onClick={() =>
+                          setFormAttendees((prev) =>
+                            prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role]
+                          )
+                        }
+                        className={`px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${
+                          active
+                            ? 'bg-sage-600 text-white border-sage-600'
+                            : 'bg-warm-white text-sage-700 border-sage-200 hover:bg-sage-50'
+                        }`}
+                      >
+                        {formatLabel(role)}
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="text-xs text-sage-500 mt-1">
+                  Phase 4 attendee-signal feeds off this. Capture who actually
+                  showed up, not who was invited.
+                </p>
+              </div>
+              <div>
                 <label className="block text-sm font-medium text-sage-700 mb-1">Notes (optional)</label>
                 <textarea value={formNotes} onChange={(e) => setFormNotes(e.target.value)} rows={2} className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-warm-white text-sage-900 resize-none" />
+              </div>
+              {/* Omi transcript placeholder — Phase 7. The field exists on
+                  tours.transcript (migration 075) and uploads will arrive via
+                  the Omi webhook when wearable integration ships. Disabled
+                  today so coordinators know it's coming without being able
+                  to submit broken data. */}
+              <div className="opacity-60 pointer-events-none bg-sage-50/50 border border-dashed border-sage-200 rounded-lg p-3">
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  Tour transcript
+                  <span className="ml-2 text-xs font-normal text-sage-500">Coming with Omi integration</span>
+                </label>
+                <p className="text-xs text-sage-500">
+                  Tour conversations will auto-transcribe and attach here once Omi Dev Kit 2 is wired.
+                </p>
               </div>
             </div>
             <div className="flex justify-end gap-3 mt-6">

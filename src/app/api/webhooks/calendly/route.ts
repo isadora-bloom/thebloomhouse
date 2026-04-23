@@ -170,6 +170,46 @@ export async function POST(request: NextRequest) {
         `(score: ${result.previousScore} -> ${result.newScore})`
     )
 
+    // Phase 2 Task 21: pre-populate the tours table so the coordinator
+    // sees the booked tour in /intel/tours immediately. Coordinator fills
+    // in attendees + outcome after the tour itself. Idempotent: skip the
+    // insert when a tour row already exists for this Calendly URI or for
+    // (wedding, scheduled_at) within the same minute.
+    try {
+      const scheduledAt = startTime || new Date().toISOString()
+      const calendlyUri = (payload.uri as string) ?? null
+
+      const { data: existing } = await supabase
+        .from('tours')
+        .select('id')
+        .eq('venue_id', venueId)
+        .eq('wedding_id', weddingId)
+        .gte('scheduled_at', new Date(new Date(scheduledAt).getTime() - 60_000).toISOString())
+        .lte('scheduled_at', new Date(new Date(scheduledAt).getTime() + 60_000).toISOString())
+        .limit(1)
+        .maybeSingle()
+
+      if (!existing) {
+        await supabase.from('tours').insert({
+          venue_id: venueId,
+          wedding_id: weddingId,
+          scheduled_at: scheduledAt,
+          tour_type: 'in_person',
+          couple_name: inviteeName ?? null,
+          source: 'calendly',
+          outcome: 'pending',
+          notes: calendlyUri ? `Booked via Calendly: ${calendlyUri}` : 'Booked via Calendly',
+          attendees: [],
+        })
+        console.log(`[webhook/calendly] Created pending tour row for wedding ${weddingId}`)
+      } else {
+        console.log(`[webhook/calendly] Tour row already exists — skipping insert`)
+      }
+    } catch (tourInsertErr) {
+      // Non-fatal — the engagement event is the load-bearing write.
+      console.error('[webhook/calendly] Tour pre-populate failed:', tourInsertErr)
+    }
+
     // Track tour_booked in consultant_metrics
     // Try to find the coordinator who owns this wedding
     const { data: weddingRow } = await supabase

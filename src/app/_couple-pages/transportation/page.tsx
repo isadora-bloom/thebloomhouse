@@ -210,10 +210,12 @@ export default function TransportationPage() {
         .select('feature_flags')
         .eq('venue_id', venueId)
         .maybeSingle(),
+      // Migration 076 consolidated wedding_timeline → weddings. ceremony_start
+      // and reception_end now live on the parent wedding row.
       supabase
-        .from('wedding_timeline')
+        .from('weddings')
         .select('ceremony_start, reception_end')
-        .eq('wedding_id', weddingId)
+        .eq('id', weddingId)
         .maybeSingle(),
     ])
 

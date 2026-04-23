@@ -11,7 +11,7 @@ import {
   Store, Star, BedDouble, Hotel, Car, HardHat,
   Heart, Package, ShoppingBag,
   Globe, Download, CalendarPlus, ClipboardList, FileSignature,
-  MessagesSquare, ChevronDown, X,
+  MessagesSquare, ChevronDown, X, CalendarRange,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -36,6 +36,7 @@ export function buildCoupleSidebarSections(base: string): NavSection[] {
     {
       title: 'Plan',
       items: [
+        { label: 'Availability', href: `${base}/availability`, icon: CalendarRange },
         { label: 'Checklist', href: `${base}/checklist`, icon: CheckSquare },
         { label: 'Timeline', href: `${base}/timeline`, icon: Clock },
         { label: 'Budget', href: `${base}/budget`, icon: DollarSign },
