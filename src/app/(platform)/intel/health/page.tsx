@@ -13,6 +13,7 @@ import {
 import { useScope, scopeVenueFilter } from '@/lib/hooks/use-scope'
 import { computeHealthBreakdown } from '@/lib/intel/health-score'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
+import { AvailabilityPatternsCard } from '@/components/intel/AvailabilityPatternsCard'
 import {
   LineChart,
   Line,
@@ -534,6 +535,9 @@ export default function HealthDashboardPage() {
               <DimensionCard icon={Target} label="Booking Rate" score={bookingRate} />
             )}
           </div>
+
+          {/* Availability patterns (Task 42) */}
+          <AvailabilityPatternsCard />
 
           {/* AI Insights */}
           {healthInsights.length > 0 && (

@@ -9,6 +9,7 @@ import {
   TrendingUp,
   ArrowUpDown,
   Megaphone,
+  Award,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
@@ -178,6 +179,222 @@ function TableSkeleton() {
         {Array.from({ length: 5 }).map((_, i) => (
           <div key={i} className="h-10 bg-sage-50 rounded" />
         ))}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Source Quality Scorecard — Phase 4 Task 39
+// ---------------------------------------------------------------------------
+
+interface QualityApiRow {
+  source: string
+  bookedCount: number
+  avgRevenue: number
+  avgEmailsExchanged: number
+  avgPortalActivity: number
+  avgReviewScore: number | null
+  referralCount: number
+  frictionRate: number
+  venueId: string
+  venueName: string
+}
+
+type QualitySortKey =
+  | 'source'
+  | 'bookedCount'
+  | 'avgRevenue'
+  | 'avgEmailsExchanged'
+  | 'avgPortalActivity'
+  | 'avgReviewScore'
+  | 'referralCount'
+  | 'frictionRate'
+
+interface ScorecardProps {
+  scope: ReturnType<typeof useScope>
+}
+
+function SourceQualityScorecard({ scope }: ScorecardProps) {
+  const [rows, setRows] = useState<QualityApiRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [sortKey, setSortKey] = useState<QualitySortKey>('bookedCount')
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
+
+  useEffect(() => {
+    if (scope.loading) return
+    let cancelled = false
+
+    async function load() {
+      try {
+        setLoading(true)
+        const params = new URLSearchParams()
+        if (scope.level === 'venue' && scope.venueId) {
+          params.set('venue_id', scope.venueId)
+        } else if (scope.level === 'group' && scope.groupId) {
+          params.set('group_id', scope.groupId)
+        } else if (scope.orgId) {
+          params.set('org_id', scope.orgId)
+        }
+        const res = await fetch(`/api/intel/source-quality?${params.toString()}`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const json = (await res.json()) as { rows?: QualityApiRow[] }
+        if (cancelled) return
+        setRows(json.rows ?? [])
+        setError(null)
+      } catch (err) {
+        if (cancelled) return
+        console.error('Failed to load source quality:', err)
+        setError('Failed to load source quality')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [scope.level, scope.venueId, scope.groupId, scope.orgId, scope.loading])
+
+  function handleSort(key: QualitySortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('desc')
+    }
+  }
+
+  const sortedRows = [...rows].sort((a, b) => {
+    const aVal = a[sortKey]
+    const bVal = b[sortKey]
+    if (typeof aVal === 'string' && typeof bVal === 'string') {
+      return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal)
+    }
+    const aNum = typeof aVal === 'number' ? aVal : aVal === null ? -1 : 0
+    const bNum = typeof bVal === 'number' ? bVal : bVal === null ? -1 : 0
+    return sortDir === 'asc' ? aNum - bNum : bNum - aNum
+  })
+
+  if (loading) {
+    return <TableSkeleton />
+  }
+
+  return (
+    <div className="bg-surface border border-border rounded-xl shadow-sm overflow-hidden">
+      <div className="px-6 py-4 border-b border-border">
+        <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2">
+          <Award className="w-5 h-5 text-sage-600" />
+          Source Quality
+        </h2>
+        <p className="text-xs text-sage-500 mt-1">
+          Quality-of-lead signals per source, measured from weddings that
+          actually booked. Higher review scores and lower friction rates
+          mean better-fit couples.
+        </p>
+      </div>
+
+      {error && (
+        <div className="px-6 py-4 bg-red-50 border-b border-red-200 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-sage-50/50">
+              {([
+                ['source', 'Source'],
+                ['bookedCount', 'Booked'],
+                ['avgRevenue', 'Avg Revenue'],
+                ['avgEmailsExchanged', 'Emails Exchanged'],
+                ['avgPortalActivity', 'Portal Activity'],
+                ['avgReviewScore', 'Review Score'],
+                ['referralCount', 'Referrals'],
+                ['frictionRate', 'Friction Rate'],
+              ] as [QualitySortKey, string][]).map(([key, label]) => (
+                <th
+                  key={key}
+                  className="px-4 py-3 text-left font-medium text-sage-600 cursor-pointer hover:text-sage-900 transition-colors select-none whitespace-nowrap"
+                  onClick={() => handleSort(key)}
+                >
+                  <span className="inline-flex items-center gap-1">
+                    {label}
+                    {sortKey === key && (
+                      <ArrowUpDown className="w-3 h-3 text-sage-400" />
+                    )}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {sortedRows.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="px-4 py-6 text-center text-sm text-sage-500">
+                  Not enough booked weddings yet to score source quality.
+                  Need at least 2 bookings per source.
+                </td>
+              </tr>
+            ) : (
+              sortedRows.map((row, i) => (
+                <tr
+                  key={`${row.venueId}-${row.source}-${i}`}
+                  className="hover:bg-sage-50/30 transition-colors"
+                >
+                  <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: getSourceColor(formatSource(row.source)) }}
+                      />
+                      {formatSource(row.source)}
+                      {scope.level !== 'venue' && (
+                        <VenueChip venueName={row.venueName} />
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-sage-700 tabular-nums">
+                    {row.bookedCount}
+                  </td>
+                  <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">
+                    {fmt$(row.avgRevenue)}
+                  </td>
+                  <td className="px-4 py-3 text-sage-700 tabular-nums">
+                    {row.avgEmailsExchanged.toFixed(1)}
+                  </td>
+                  <td className="px-4 py-3 text-sage-700 tabular-nums">
+                    {row.avgPortalActivity.toFixed(1)}
+                  </td>
+                  <td className="px-4 py-3 text-sage-700 tabular-nums">
+                    {row.avgReviewScore !== null
+                      ? row.avgReviewScore.toFixed(2)
+                      : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-sage-700 tabular-nums">
+                    {row.referralCount}
+                  </td>
+                  <td className="px-4 py-3 tabular-nums">
+                    <span
+                      className={`font-medium ${
+                        row.frictionRate === 0
+                          ? 'text-emerald-600'
+                          : row.frictionRate < 0.25
+                          ? 'text-sage-700'
+                          : 'text-red-600'
+                      }`}
+                    >
+                      {fmtPct(row.frictionRate)}
+                    </span>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   )
@@ -597,6 +814,9 @@ export default function SourceAttributionPage() {
       {!loading && sourceInsights.length > 0 && (
         <InsightPanel insights={sourceInsights} />
       )}
+
+      {/* ---- Source Quality Scorecard (Phase 4 Task 39) ---- */}
+      <SourceQualityScorecard scope={scope} />
 
       {/* ---- Cost per Booking Chart ---- */}
       {loading ? (

@@ -17,6 +17,8 @@ import { processAllNewEmails, flushPendingAutoSends } from '@/lib/services/email
 import { runAllVenueIntelligence } from '@/lib/services/intelligence-engine'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { learnFiltersForAllVenues } from '@/lib/services/inbox-filters'
+import { computeAllVenueHealth } from '@/lib/services/venue-health-compute'
+import { persistDropoffInsights } from '@/lib/services/quality-signals'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -39,6 +41,8 @@ const VALID_JOBS = [
   'post_event_feedback_check',
   'outcome_measurement',
   'inbox_filter_learning',
+  'venue_health_compute',
+  'quality_signals_refresh',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -96,7 +100,34 @@ async function runJob(job: JobName): Promise<unknown> {
 
     case 'inbox_filter_learning':
       return learnFiltersForAllVenues()
+
+    case 'venue_health_compute':
+      return computeAllVenueHealth()
+
+    case 'quality_signals_refresh':
+      // Two-email drop-offs per venue. We iterate active venues and
+      // fire-and-forget the insights upsert. Keep this cheap — runs
+      // weekly, not daily.
+      return refreshQualitySignalsAllVenues()
   }
+}
+
+async function refreshQualitySignalsAllVenues(): Promise<Record<string, number>> {
+  const supabase = createServiceClient()
+  const { data: venues } = await supabase
+    .from('venues')
+    .select('id')
+    .eq('status', 'active')
+  const out: Record<string, number> = {}
+  for (const v of venues ?? []) {
+    try {
+      out[v.id as string] = await persistDropoffInsights(v.id as string)
+    } catch (err) {
+      console.error(`[quality-signals] failed for ${v.id}:`, err)
+      out[v.id as string] = -1
+    }
+  }
+  return out
 }
 
 /**

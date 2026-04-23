@@ -47,6 +47,14 @@
     {
       "path": "/api/cron?job=inbox_filter_learning",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron?job=venue_health_compute",
+      "schedule": "0 4 * * 2"
+    },
+    {
+      "path": "/api/cron?job=quality_signals_refresh",
+      "schedule": "0 5 * * 2"
     }
   ]
 }

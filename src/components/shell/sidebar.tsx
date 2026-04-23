@@ -66,6 +66,7 @@ const ENTERPRISE_SECTIONS: NavSection[] = [
     subtitle: 'All venues',
     items: [
       { label: 'Overview', href: '/intel/portfolio', icon: Layers, daily: true },
+      { label: 'Benchmark', href: '/intel/benchmark', icon: BarChart3, daily: true },
       { label: 'Company', href: '/intel/company', icon: Building2 },
       { label: 'Team Performance', href: '/intel/team', icon: Users },
       { label: 'Regions', href: '/intel/regions', icon: MapPin },
