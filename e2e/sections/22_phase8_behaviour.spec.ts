@@ -292,6 +292,25 @@ test.describe('§22 Phase 8 behavioural integration', () => {
       for (const path of targets) {
         triedPath = path
         await page.goto(path, { waitUntil: 'networkidle' }).catch(() => null)
+        // networkidle returns as soon as network settles, which can fire
+        // BEFORE the client-side Supabase fetch finishes — the page shell
+        // renders without data and innerText is ~500 chars of chrome only.
+        // Wait for either a seeded name to appear OR for the page shell to
+        // have filled in its data block (data rows / insights list / kanban
+        // cards), whichever comes first. 4s cap keeps the test from hanging
+        // when the page genuinely has no rendered data.
+        await page
+          .waitForFunction(
+            (seedNames) => {
+              const txt = document.body.innerText
+              if (seedNames.some((n: string) => txt.includes(n))) return true
+              const hasRows = document.querySelectorAll('tbody tr, [role="row"]').length > 0
+              return hasRows && txt.length > 1500
+            },
+            pairs.map((p) => p.first),
+            { timeout: 4000 }
+          )
+          .catch(() => null)
         bodyForDiag = await page.locator('body').innerText().catch(() => '')
         const found = pairs.filter((p) => bodyForDiag.includes(p.first))
         triedDiag.push(`${path}: len=${bodyForDiag.length} seen=${found.length}`)
