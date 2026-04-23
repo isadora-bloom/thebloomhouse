@@ -29,6 +29,7 @@ export type WeeklyLearnedBullet =
   | { kind: 'source'; text: string; empty?: false }
   | { kind: 'source'; empty: true; text: string }
   | { kind: 'correlation'; text: string; empty?: false }
+  | { kind: 'multi_touch_journey'; text: string; empty?: false }
 
 export interface WeeklyLearned {
   aiName: string
@@ -248,15 +249,17 @@ export async function computeWeeklyLearned(
   const aiName =
     (aiConfig?.ai_name as string | undefined)?.trim() || 'Your AI assistant'
 
-  const [voice, booking, source, correlation] = await Promise.all([
+  const [voice, booking, source, correlation, multiTouch] = await Promise.all([
     buildVoiceBullet(venueId, aiName),
     buildBookingBullet(venueId),
     buildSourceBullet(venueId),
     buildCorrelationBullet(venueId),
+    buildMultiTouchJourneyBullet(venueId),
   ])
 
   const bullets: WeeklyLearnedBullet[] = [voice, booking, source]
   if (correlation) bullets.push(correlation)
+  if (multiTouch) bullets.push(multiTouch)
   return { aiName, bullets }
 }
 
@@ -290,4 +293,170 @@ async function buildCorrelationBullet(venueId: string): Promise<WeeklyLearnedBul
     }
   }
   return { kind: 'correlation', text: (data.title as string) }
+}
+
+/**
+ * Phase 8 F11. Multi-touch journey bullet — surfaces when a recent inquiry
+ * had tangential_signals attached BEFORE the inquiry landed. Three
+ * explicit templates, picked in priority order. No free-form LLM copy —
+ * the shape is deterministic so coordinators learn to recognize it.
+ *
+ * Template 1 (couple + multiple channels):
+ *   "(first_name) found you on (source); (N) prior touchpoints across
+ *    (platforms) over (D) days."
+ *
+ * Template 2 (couple + single earlier touch):
+ *   "(first_name) came via (source) — first appeared (D) days earlier
+ *    on (platform)."
+ *
+ * Template 3 (aggregate — N of K had prior history):
+ *   "(N) of this week's (K) new inquiries already had touchpoints with
+ *    the venue before writing in."
+ *
+ * Returns null when fewer than one inquiry this week had a prior
+ * signal. No empty-state text — we'd rather omit than add noise.
+ */
+async function buildMultiTouchJourneyBullet(
+  venueId: string
+): Promise<WeeklyLearnedBullet | null> {
+  const supabase = createServiceClient()
+  const sevenDaysAgo = daysAgoIso(7)
+
+  // 1. Pull this week's inquiries with their people.
+  const { data: weddings } = await supabase
+    .from('weddings')
+    .select(
+      'id, source, inquiry_date, people!people_wedding_id_fkey(id, first_name, role)'
+    )
+    .eq('venue_id', venueId)
+    .gte('inquiry_date', sevenDaysAgo)
+  if (!weddings || weddings.length === 0) return null
+
+  type WeddingRow = {
+    id: string
+    source: string | null
+    inquiry_date: string
+    people?: Array<{ id: string; first_name: string | null; role: string | null }>
+  }
+  const rows = weddings as unknown as WeddingRow[]
+
+  // 2. For each wedding's people, pull tangential_signals matched to them
+  // with signal_date BEFORE the inquiry_date. Those are the "prior
+  // history" touches.
+  const personIds = rows.flatMap((r) => (r.people ?? []).map((p) => p.id))
+  if (personIds.length === 0) return null
+
+  const { data: signals } = await supabase
+    .from('tangential_signals')
+    .select('id, matched_person_id, signal_type, signal_date, extracted_identity')
+    .in('matched_person_id', personIds)
+    .not('signal_date', 'is', null)
+
+  if (!signals || signals.length === 0) return null
+
+  type SignalRow = {
+    id: string
+    matched_person_id: string
+    signal_type: string
+    signal_date: string
+    extracted_identity: Record<string, unknown> | null
+  }
+  const signalRows = signals as SignalRow[]
+
+  // Build per-wedding journey summary.
+  const journeys: Array<{
+    weddingId: string
+    firstName: string
+    source: string | null
+    inquiryDate: Date
+    priorSignals: SignalRow[]
+    priorSpanDays: number
+    platforms: string[]
+  }> = []
+
+  for (const w of rows) {
+    const partner1 = (w.people ?? []).find((p) => p.role === 'partner1') ?? (w.people ?? [])[0]
+    const firstName = partner1?.first_name ?? 'A couple'
+    const peopleIds = new Set((w.people ?? []).map((p) => p.id))
+    const inquiryDate = new Date(w.inquiry_date)
+    const related = signalRows
+      .filter((s) => peopleIds.has(s.matched_person_id))
+      .filter((s) => new Date(s.signal_date).getTime() < inquiryDate.getTime())
+      .sort(
+        (a, b) => new Date(a.signal_date).getTime() - new Date(b.signal_date).getTime()
+      )
+    if (related.length === 0) continue
+
+    const earliest = new Date(related[0].signal_date).getTime()
+    const priorSpanDays = Math.max(
+      0,
+      Math.floor((inquiryDate.getTime() - earliest) / (1000 * 60 * 60 * 24))
+    )
+    const platforms = Array.from(
+      new Set(
+        related
+          .map((s) => {
+            const eid = s.extracted_identity ?? {}
+            return (
+              (eid.platform as string | undefined) ??
+              s.signal_type.replace(/_.+$/, '')
+            )
+          })
+          .filter(Boolean)
+      )
+    )
+    journeys.push({
+      weddingId: w.id,
+      firstName,
+      source: w.source,
+      inquiryDate,
+      priorSignals: related,
+      priorSpanDays,
+      platforms,
+    })
+  }
+
+  if (journeys.length === 0) return null
+
+  // Template 1 — one couple, multi-channel. Pick the couple with the most
+  // distinct platforms (most compelling story). Ties break on span length.
+  const multiChannel = journeys
+    .filter((j) => j.platforms.length >= 2 && j.priorSignals.length >= 2)
+    .sort((a, b) => {
+      if (b.platforms.length !== a.platforms.length) {
+        return b.platforms.length - a.platforms.length
+      }
+      return b.priorSpanDays - a.priorSpanDays
+    })[0]
+  if (multiChannel) {
+    const platformsStr = multiChannel.platforms.slice(0, 3).join(' + ')
+    const sourceLabel = multiChannel.source ?? 'a direct channel'
+    return {
+      kind: 'multi_touch_journey',
+      text: `${multiChannel.firstName} found you on ${sourceLabel}; ${multiChannel.priorSignals.length} prior touchpoints across ${platformsStr} over ${multiChannel.priorSpanDays} days.`,
+    }
+  }
+
+  // Template 2 — one couple, single earlier touch. Pick the longest span.
+  const singleTouch = journeys
+    .filter((j) => j.priorSignals.length >= 1 && j.priorSpanDays >= 1)
+    .sort((a, b) => b.priorSpanDays - a.priorSpanDays)[0]
+  if (singleTouch) {
+    const platform = singleTouch.platforms[0] ?? singleTouch.priorSignals[0].signal_type
+    const sourceLabel = singleTouch.source ?? 'a direct channel'
+    return {
+      kind: 'multi_touch_journey',
+      text: `${singleTouch.firstName} came via ${sourceLabel} — first appeared ${singleTouch.priorSpanDays} days earlier on ${platform}.`,
+    }
+  }
+
+  // Template 3 — aggregate. Only meaningful if multiple inquiries did this.
+  if (journeys.length >= 2 && rows.length >= 2) {
+    return {
+      kind: 'multi_touch_journey',
+      text: `${journeys.length} of this week's ${rows.length} new inquiries already had touchpoints with the venue before writing in.`,
+    }
+  }
+
+  return null
 }
