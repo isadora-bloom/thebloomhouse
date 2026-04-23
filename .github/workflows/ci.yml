@@ -1,0 +1,43 @@
+# Lightweight pre-deploy gate. Runs on every push to master AND every
+# pull request. Vercel runs `next build` on deploy which already catches
+# TypeScript errors, but this workflow adds pure-function unit tests
+# (normalize-source + booking-signal) that Vercel doesn't exercise.
+#
+# What this does NOT do:
+#  - Run the e2e Playwright suite (needs Supabase secrets + running
+#    dev server; lives as a manual gate).
+#  - Run scripts/e2e-data-flow-test.mjs (needs TEST_HARNESS_SECRET +
+#    live Supabase; also manual).
+#
+# Add those later if the failure cost grows.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+
+      - name: TypeScript
+        run: npx tsc --noEmit
+
+      - name: Unit tests — normalizeSource
+        run: npx tsx scripts/test-normalize-source.ts
+
+      - name: Unit tests — detectBookingSignal
+        run: npx tsx scripts/test-booking-signal.ts
+
+      - name: White-label check — no hardcoded 'Sage' in couple portal
+        run: node scripts/check-no-hardcoded-sage.mjs
