@@ -14,6 +14,7 @@ import {
   importPlatformActivity,
   type ImportSummary,
 } from '@/lib/services/brain-dump-imports'
+import { importIdentityCandidates } from '@/lib/services/tangential-signals-import'
 import { callAIVision, callAIJson } from '@/lib/ai/client'
 
 const FILE_CONTENT_CAP = 40_000 // chars embedded into the classifier prompt
@@ -55,10 +56,24 @@ async function readAttachedFileBase64(
 }
 
 interface VisionExtraction {
-  intent: 'reviews' | 'storefront_analytics' | 'contract' | 'other'
+  intent: 'reviews' | 'storefront_analytics' | 'identity_signals' | 'contract' | 'other'
   summary: string
   reviews?: Array<{ reviewer_name: string; rating: number; body: string; review_date?: string | null; source?: string }>
   analytics?: { source?: string; metric?: string; rows?: Array<{ label: string; value: number }> }
+  // Phase 8 — extracted identities from Instagram posts, tagged lists,
+  // follower feeds, comment sections, etc. Each candidate becomes a
+  // tangential_signal row that the matching engine cross-references
+  // against new inquiries.
+  identities?: Array<{
+    name?: string
+    first_name?: string
+    last_name?: string
+    username?: string
+    handle?: string
+    platform?: string
+    context?: string
+    signal_type?: string
+  }>
 }
 
 /**
@@ -72,21 +87,25 @@ async function extractFromImage(args: {
   mediaType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
   base64: string
 }): Promise<VisionExtraction | null> {
-  const systemPrompt = `You are analysing a screenshot a wedding venue coordinator dropped into a capture tool. The goal is to extract every numeric marketing metric so Bloom can track the top of the funnel (reach, awareness, engagement) alongside the booking funnel it already tracks.
+  const systemPrompt = `You are analysing a screenshot a wedding venue coordinator dropped into a capture tool. Extract everything Bloom can use to track the top of the funnel (reach, awareness, engagement) and to identify prospects across channels.
 
 Return JSON matching exactly:
 {
-  "intent": "reviews" | "storefront_analytics" | "contract" | "other",
+  "intent": "reviews" | "storefront_analytics" | "identity_signals" | "contract" | "other",
   "summary": "one sentence of what the screenshot shows",
   "reviews": [{"reviewer_name": "...", "rating": 1-5, "body": "full review text", "review_date": "YYYY-MM-DD or null", "source": "the_knot" | "wedding_wire" | "google" | "honeybook" | "instagram" | "facebook" | "other"}] or null,
-  "analytics": {"source": "the_knot" | "wedding_wire" | "google_analytics" | "google_business" | "instagram" | "facebook" | "pinterest" | "tiktok" | "website" | "honeybook" | "email" | "other", "metric": "unique_visitors" | "page_views" | "sessions" | "leads" | "inquiries" | "likes" | "followers" | "saves" | "engagement_rate" | "impressions" | "reach" | "clicks" | "ctr" | "spend" | "other", "rows": [{"label": "Oct", "value": 123}]} or null
+  "analytics": {"source": "the_knot" | "wedding_wire" | "google_analytics" | "google_business" | "instagram" | "facebook" | "pinterest" | "tiktok" | "website" | "honeybook" | "email" | "other", "metric": "unique_visitors" | "page_views" | "sessions" | "leads" | "inquiries" | "likes" | "followers" | "saves" | "engagement_rate" | "impressions" | "reach" | "clicks" | "ctr" | "spend" | "other", "rows": [{"label": "Oct", "value": 123}]} or null,
+  "identities": [{"name": "full name if visible", "first_name": "...", "last_name": "...", "username": "handle without @", "handle": "@handle or URL", "platform": "instagram | facebook | pinterest | tiktok | the_knot | wedding_wire | other", "context": "what they did — liked a post, commented, saved, tagged, followed, was featured", "signal_type": "instagram_engagement | instagram_follow | review | mention | analytics_entry | referral | other"}] or null
 }
 
 Rules:
 - reviews: a dashboard, page, or listing of testimonials. Extract every review visible with its full text. Do not summarise or dedupe.
-- storefront_analytics: a chart, table, or dashboard of any platform metric — The Knot visitors, WeddingWire leads, Instagram follower count over time, Pinterest saves, Google Analytics sessions, Facebook reach, email open rates, ad spend, etc. Extract every data point visible. Source = which platform the screenshot is from. Metric = what is being counted. Label = the x-axis tick (month, week, day, or category). Value = the number.
+- storefront_analytics: a chart, table, or dashboard of any platform metric. Extract every data point.
+- identity_signals: the screenshot shows individual people (not metrics) — Instagram post comments, follower lists, tagged-user lists, storefront lead lists with names, email lists, event attendance lists. Extract each distinct person visible. Set first_name / last_name when you can split a full name; set username for @handles. Do not invent identities. If a row is anonymous (like "Jen B." on WeddingWire) keep first_name="Jen" and last_name="B." so downstream matching can still use the initial.
 - contract: a PDF or image of a signed agreement. Do not extract; set summary and return.
-- other: anything else. Set summary and return.
+- other: anything else.
+
+The same screenshot can carry BOTH analytics AND identities (e.g. a storefront with a visible lead list). Set the primary intent, then populate whichever fields apply.
 
 Respond with JSON only.`
 
@@ -253,10 +272,30 @@ export async function POST(request: NextRequest) {
               review_date: r.review_date ?? null,
             })),
           })
+          // Every reviewer is also an identity signal — the coordinator
+          // may want to match a happy reviewer to a current inquiry, or
+          // surface a review that came from an existing client the
+          // system previously didn't link.
+          const identityCandidates = v.reviews.map((r) => ({
+            name: r.reviewer_name,
+            platform: r.source ?? 'other',
+            context: `Left a ${r.rating}-star review${r.review_date ? ` on ${r.review_date}` : ''}`,
+            signal_type: 'review',
+          }))
+          const identitySummary = await importIdentityCandidates({
+            supabase,
+            venueId: auth.venueId,
+            candidates: identityCandidates,
+            sourceEntryId: entry.id,
+            signalDate: v.reviews[0]?.review_date ?? null,
+          })
           await supabase.from('brain_dump_entries').update({
             parse_status: 'confirmed',
-            parse_result: { vision: v, summary },
-            routed_to: [{ table: 'reviews', action: `vision_import:${summary.inserted}`, id: null }],
+            parse_result: { vision: v, summary, identitySummary },
+            routed_to: [
+              { table: 'reviews', action: `vision_import:${summary.inserted}`, id: null },
+              { table: 'tangential_signals', action: `identity_signals:${identitySummary.written}`, id: null },
+            ],
             parsed_at: new Date().toISOString(),
             resolved_at: new Date().toISOString(),
           }).eq('id', entry.id)
@@ -270,15 +309,24 @@ export async function POST(request: NextRequest) {
         }
 
         if (v.intent === 'storefront_analytics' && v.analytics?.rows?.length) {
-          // Park as a needs_clarification preview — analytics imports
-          // always preview-and-confirm per the Phase 2.5 CSV rule, and
-          // storefront visitor counts require the coordinator to pick a
-          // period (monthly vs weekly) before it lands.
+          // Co-extract: storefront screenshots often show a lead list
+          // alongside the chart. Import identities if any are present, then
+          // park the analytics for preview-and-confirm.
+          let identitySummary: Awaited<ReturnType<typeof importIdentityCandidates>> | null = null
+          if (v.identities && v.identities.length > 0) {
+            identitySummary = await importIdentityCandidates({
+              supabase,
+              venueId: auth.venueId,
+              candidates: v.identities,
+              sourceEntryId: entry.id,
+              sourceContext: `Storefront: ${v.analytics.source ?? 'platform'}`,
+            })
+          }
           const q = `Screenshot parsed as ${v.analytics.source ?? 'platform'} ${v.analytics.metric ?? 'metrics'} with ${v.analytics.rows.length} data points. Confirm from the Notifications page.`
           await supabase.from('brain_dump_entries').update({
             parse_status: 'needs_clarification',
             clarification_question: q,
-            parse_result: { vision: v },
+            parse_result: { vision: v, identitySummary },
             parsed_at: new Date().toISOString(),
           }).eq('id', entry.id)
           return NextResponse.json({
@@ -287,6 +335,31 @@ export async function POST(request: NextRequest) {
             confidence: 75,
             needsClarification: true,
             clarificationQuestion: q,
+            identitySummary,
+          })
+        }
+
+        if (v.intent === 'identity_signals' && v.identities && v.identities.length > 0) {
+          const summary = await importIdentityCandidates({
+            supabase,
+            venueId: auth.venueId,
+            candidates: v.identities,
+            sourceEntryId: entry.id,
+            sourceContext: v.summary ?? null,
+          })
+          await supabase.from('brain_dump_entries').update({
+            parse_status: 'confirmed',
+            parse_result: { vision: v, summary },
+            routed_to: [{ table: 'tangential_signals', action: `identity_signals:${summary.written}`, id: null }],
+            parsed_at: new Date().toISOString(),
+            resolved_at: new Date().toISOString(),
+          }).eq('id', entry.id)
+          return NextResponse.json({
+            entryId: entry.id,
+            intent: 'identity_signals',
+            confidence: 80,
+            needsClarification: false,
+            identitySummary: summary,
           })
         }
 
