@@ -4,6 +4,7 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { detectCsvShape, parseCsvRows } from '@/lib/services/brain-dump-csv-shape'
 import { runCsvImport } from '@/app/api/brain-dump/route'
 import { importReviews } from '@/lib/services/brain-dump-imports'
+import { importStorefrontAnalytics } from '@/lib/services/storefront-analytics-import'
 
 /**
  * Resolve a pending brain-dump clarification.
@@ -87,10 +88,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ id, status: 'confirmed', importSummary: summary })
   }
 
-  // Case B: Vision reviews parked for confirm (rare — reviews path
-  // currently imports inline, but a future flow may gate behind preview).
+  // Case B: Vision output parked for confirm — reviews, storefront
+  // analytics, or other. Route each to the right importer.
   if (pr.vision && typeof pr.vision === 'object') {
-    const v = pr.vision as { intent?: string; reviews?: Array<{ reviewer_name: string; rating: number; body: string; review_date?: string | null; source?: string }> }
+    const v = pr.vision as {
+      intent?: string
+      reviews?: Array<{ reviewer_name: string; rating: number; body: string; review_date?: string | null; source?: string }>
+      analytics?: { source?: string; metric?: string; rows?: Array<{ label: string; value: number }> }
+    }
     if (v.intent === 'reviews' && v.reviews?.length) {
       const summary = await importReviews({
         supabase,
@@ -107,6 +112,26 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         parse_status: 'confirmed',
         clarification_answer: body.answer?.trim() ?? null,
         parse_result: { ...pr, summary, confirmed_at: new Date().toISOString() },
+        resolved_at: new Date().toISOString(),
+      }).eq('id', id)
+      return NextResponse.json({ id, status: 'confirmed', importSummary: summary })
+    }
+    if (v.intent === 'storefront_analytics' && v.analytics?.rows?.length) {
+      const summary = await importStorefrontAnalytics({
+        supabase,
+        venueId: auth.venueId,
+        input: {
+          source: v.analytics.source ?? 'other',
+          metric: v.analytics.metric ?? 'other',
+          rows: v.analytics.rows,
+          brainDumpEntryId: id,
+        },
+      })
+      await supabase.from('brain_dump_entries').update({
+        parse_status: 'confirmed',
+        clarification_answer: body.answer?.trim() ?? null,
+        parse_result: { ...pr, summary, confirmed_at: new Date().toISOString() },
+        routed_to: [{ table: 'engagement_events', action: `storefront_analytics:${summary.inserted}`, id: null }],
         resolved_at: new Date().toISOString(),
       }).eq('id', id)
       return NextResponse.json({ id, status: 'confirmed', importSummary: summary })

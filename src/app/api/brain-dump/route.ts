@@ -72,17 +72,19 @@ async function extractFromImage(args: {
   mediaType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
   base64: string
 }): Promise<VisionExtraction | null> {
-  const systemPrompt = `You are analysing a screenshot a wedding venue coordinator dropped into a capture tool. Return JSON matching exactly:
+  const systemPrompt = `You are analysing a screenshot a wedding venue coordinator dropped into a capture tool. The goal is to extract every numeric marketing metric so Bloom can track the top of the funnel (reach, awareness, engagement) alongside the booking funnel it already tracks.
+
+Return JSON matching exactly:
 {
   "intent": "reviews" | "storefront_analytics" | "contract" | "other",
   "summary": "one sentence of what the screenshot shows",
-  "reviews": [{"reviewer_name": "...", "rating": 1-5, "body": "full review text", "review_date": "YYYY-MM-DD or null", "source": "the_knot" | "wedding_wire" | "google" | "honeybook" | "other"}] or null,
-  "analytics": {"source": "the_knot" | "wedding_wire" | "google" | "other", "metric": "unique_visitors" | "leads" | "spend" | "other", "rows": [{"label": "Oct", "value": 123}]} or null
+  "reviews": [{"reviewer_name": "...", "rating": 1-5, "body": "full review text", "review_date": "YYYY-MM-DD or null", "source": "the_knot" | "wedding_wire" | "google" | "honeybook" | "instagram" | "facebook" | "other"}] or null,
+  "analytics": {"source": "the_knot" | "wedding_wire" | "google_analytics" | "google_business" | "instagram" | "facebook" | "pinterest" | "tiktok" | "website" | "honeybook" | "email" | "other", "metric": "unique_visitors" | "page_views" | "sessions" | "leads" | "inquiries" | "likes" | "followers" | "saves" | "engagement_rate" | "impressions" | "reach" | "clicks" | "ctr" | "spend" | "other", "rows": [{"label": "Oct", "value": 123}]} or null
 }
 
 Rules:
-- reviews: a dashboard, page, or listing of testimonials. Extract every review visible — do not summarise or dedupe. Body should be the full review text as shown.
-- storefront_analytics: a chart or table of traffic/leads/spend metrics. Extract every data point visible.
+- reviews: a dashboard, page, or listing of testimonials. Extract every review visible with its full text. Do not summarise or dedupe.
+- storefront_analytics: a chart, table, or dashboard of any platform metric — The Knot visitors, WeddingWire leads, Instagram follower count over time, Pinterest saves, Google Analytics sessions, Facebook reach, email open rates, ad spend, etc. Extract every data point visible. Source = which platform the screenshot is from. Metric = what is being counted. Label = the x-axis tick (month, week, day, or category). Value = the number.
 - contract: a PDF or image of a signed agreement. Do not extract; set summary and return.
 - other: anything else. Set summary and return.
 

@@ -156,6 +156,7 @@ const VENUE_SECTIONS: NavSection[] = [
       { label: 'Ask Anything', href: '/intel/nlq', icon: MessageSquareText },
       { label: 'Briefings', href: '/intel/briefings', icon: Newspaper },
       { label: 'Sources & ROI', href: '/intel/sources', icon: TrendingUp },
+      { label: 'Marketing Reach', href: '/intel/reach', icon: BarChart3, daily: true },
       { label: 'Trends', href: '/intel/trends', icon: Sparkles },
       { label: 'Reviews', href: '/intel/reviews', icon: Star },
       { label: 'Voice DNA', href: '/intel/voice-dna', icon: Sparkles },
