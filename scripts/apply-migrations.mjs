@@ -27,7 +27,18 @@
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync, readdirSync } from 'node:fs'
 import { execSync } from 'node:child_process'
+import { createInterface } from 'node:readline'
 import { join } from 'node:path'
+
+async function prompt(question) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close()
+      resolve(answer.trim().toLowerCase())
+    })
+  })
+}
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')
@@ -45,6 +56,7 @@ const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_
 
 const MIGRATIONS_DIR = 'supabase/migrations'
 const APPLY = process.argv.includes('--apply')
+const YES = process.argv.includes('--yes') // skip the confirmation prompt
 const SINCE = argValue('--since') // e.g. "080" to skip anything before
 const ONE_FILE = argValue('--file') // apply just one migration
 
@@ -215,6 +227,18 @@ for (const s of toApply) console.log(`  - ${s.file}`)
 if (!APPLY) {
   console.log('\nRun with --apply to execute them against the linked project.')
   process.exit(0)
+}
+
+// Confirmation prompt — prevents accidental apply after a --file typo
+// or a careless --apply. Skippable with --yes for CI / scripted runs.
+if (!YES) {
+  console.log('\nThe following SQL files will be APPLIED to the linked Supabase project:')
+  for (const s of toApply) console.log(`  ${s.file}`)
+  const answer = await prompt('\nProceed? (type "yes" to apply, anything else cancels): ')
+  if (answer !== 'yes') {
+    console.log('Cancelled.')
+    process.exit(0)
+  }
 }
 
 console.log('\nApplying in order via supabase db query --linked …')

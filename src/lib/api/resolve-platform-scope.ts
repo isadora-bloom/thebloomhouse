@@ -1,3 +1,4 @@
+import { cache } from 'react'
 import { cookies } from 'next/headers'
 import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
@@ -64,41 +65,51 @@ function parseScopeCookie(raw: string | undefined): { level: 'venue' | 'group' |
  * Fetch venue + org names for the scope SSR-side. Kept as a tight helper
  * so resolvePlatformScope stays readable. Service-role client bypasses RLS
  * since this feeds the trusted layout, not user output.
+ *
+ * Wrapped in React.cache so multiple server components in one render pass
+ * (layout + nested server components) reuse the same fetch. React.cache
+ * scopes memoization to a single request — no cross-request pollution.
  */
-async function fetchNames(venueId: string, orgId: string | null): Promise<{ venueName: string | null; orgName: string | null }> {
-  const service = createServiceClient()
-  const [vRes, oRes] = await Promise.all([
-    service.from('venues').select('name').eq('id', venueId).maybeSingle(),
-    orgId
-      ? service.from('organisations').select('name').eq('id', orgId).maybeSingle()
-      : Promise.resolve({ data: null }),
-  ])
-  return {
-    venueName: (vRes.data?.name as string | undefined) ?? null,
-    orgName: (oRes.data?.name as string | undefined) ?? null,
+const fetchNames = cache(
+  async (
+    venueId: string,
+    orgId: string | null
+  ): Promise<{ venueName: string | null; orgName: string | null }> => {
+    const service = createServiceClient()
+    const [vRes, oRes] = await Promise.all([
+      service.from('venues').select('name').eq('id', venueId).maybeSingle(),
+      orgId
+        ? service.from('organisations').select('name').eq('id', orgId).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ])
+    return {
+      venueName: (vRes.data?.name as string | undefined) ?? null,
+      orgName: (oRes.data?.name as string | undefined) ?? null,
+    }
   }
-}
+)
 
 /**
  * Resolve groupName if level === 'group' and groupId is present + belongs
- * to the user's org. Null otherwise.
+ * to the user's org. Null otherwise. Also React.cache-wrapped.
  */
-async function resolveGroupName(
-  groupId: string | null,
-  profileOrgId: string | null
-): Promise<string | null> {
-  if (!groupId || !profileOrgId) return null
-  const service = createServiceClient()
-  const { data } = await service
-    .from('venue_groups')
-    .select('name, org_id')
-    .eq('id', groupId)
-    .maybeSingle()
-  if (!data || data.org_id !== profileOrgId) return null
-  return (data.name as string | undefined) ?? null
-}
+const resolveGroupName = cache(
+  async (groupId: string | null, profileOrgId: string | null): Promise<string | null> => {
+    if (!groupId || !profileOrgId) return null
+    const service = createServiceClient()
+    const { data } = await service
+      .from('venue_groups')
+      .select('name, org_id')
+      .eq('id', groupId)
+      .maybeSingle()
+    if (!data || data.org_id !== profileOrgId) return null
+    return (data.name as string | undefined) ?? null
+  }
+)
 
-export async function resolvePlatformScope(): Promise<PlatformScope | null> {
+export const resolvePlatformScope = cache(_resolvePlatformScope)
+
+async function _resolvePlatformScope(): Promise<PlatformScope | null> {
   const cookieStore = await cookies()
   const scopeCookie = parseScopeCookie(cookieStore.get('bloom_scope')?.value)
 

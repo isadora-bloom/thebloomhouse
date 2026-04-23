@@ -23,11 +23,20 @@ export interface Notification {
 
 /**
  * Notification types that must dedup PER WEDDING FOREVER, not on the
- * default 5-minute window. A re-email containing the same booking-signal
- * phrase tomorrow should NOT re-fire if the coordinator already saw the
- * prompt — they're resolving it on their own cadence. Read/dismissal
- * state is tracked on the row itself; deletion is the escape hatch if
- * they want to re-trigger.
+ * default 5-minute window. Semantics:
+ *
+ *   - Mark-read does NOT unlock re-fire. These types are "discovery
+ *     events" — once the coordinator has been alerted to a possibility
+ *     (e.g., this wedding might have just booked), they own the
+ *     follow-up on their own cadence. Re-firing on every subsequent
+ *     strong-signal email would spam.
+ *   - DELETE of the notification row DOES unlock re-fire — treat that
+ *     as the coordinator explicitly asking to be re-alerted if this
+ *     happens again.
+ *   - No information is lost by not re-firing: the classifier-level
+ *     heat events (high_commitment_signal, tour_requested, etc.) still
+ *     fire per-email and appear on the wedding timeline. The prompt
+ *     is additive, not the sole signal.
  */
 const FOREVER_DEDUP_TYPES = new Set<string>([
   'booking_confirmation_prompt',

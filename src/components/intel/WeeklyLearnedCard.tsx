@@ -1,15 +1,20 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Sparkles, Calendar, Target, GitCompare, Route } from 'lucide-react'
+import { Sparkles, Calendar, Target, GitCompare, Route, CircleDot } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
 
 // ---------------------------------------------------------------------------
 // Types (mirror the API response)
 // ---------------------------------------------------------------------------
 
+/**
+ * Client-side shape mirrors WeeklyLearnedBullet from weekly-learned.ts.
+ * If the server adds a new kind without updating this union, iconFor's
+ * fallback keeps the card rendering (CircleDot icon) instead of throwing.
+ */
 interface WeeklyLearnedBullet {
-  kind: 'voice' | 'booking' | 'source' | 'correlation' | 'multi_touch_journey'
+  kind: 'voice' | 'booking' | 'source' | 'correlation' | 'multi_touch_journey' | string
   text: string
   empty?: boolean
 }
@@ -23,7 +28,7 @@ interface WeeklyLearnedResponse {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function iconFor(kind: WeeklyLearnedBullet['kind']) {
+function iconFor(kind: string) {
   switch (kind) {
     case 'voice':
       return Sparkles
@@ -35,6 +40,10 @@ function iconFor(kind: WeeklyLearnedBullet['kind']) {
       return GitCompare
     case 'multi_touch_journey':
       return Route
+    default:
+      // Unknown kind (server version ahead of client). Render a generic
+      // dot rather than throwing in JSX.
+      return CircleDot
   }
 }
 

@@ -2,11 +2,19 @@
  * PRIVATE admin test harness — invokes server-side service functions
  * for behavioural tests that can't run from a standalone Node script.
  *
- * Gated by CRON_SECRET (same shared secret Vercel cron uses). This
- * endpoint is NOT surfaced in any UI, has NO user-level auth, and is
- * only reachable by clients that know the secret. If CRON_SECRET is
- * unset in the environment, the endpoint returns 501 so it's inert
- * in any deployment that forgot to configure it.
+ * Gated by TEST_HARNESS_SECRET. Intentionally a SEPARATE secret from
+ * CRON_SECRET because CRON_SECRET must be set in prod (Vercel cron
+ * needs it), and sharing one secret would mean this destructive
+ * endpoint is enabled in prod by default. Prod deploys should leave
+ * TEST_HARNESS_SECRET unset — endpoint then returns 501 and is inert.
+ * Local dev / CI runs that need the harness set TEST_HARNESS_SECRET
+ * explicitly. If you're debugging a production issue and NEED to run
+ * this, set TEST_HARNESS_SECRET in Vercel, run the action, unset it.
+ *
+ * Backward compat: if TEST_HARNESS_SECRET is unset but CRON_SECRET is
+ * set AND NODE_ENV !== 'production', we fall back to CRON_SECRET so
+ * existing dev scripts keep working. In production this fallback is
+ * disabled — TEST_HARNESS_SECRET must be set explicitly.
  *
  * Supported actions:
  *   - process_incoming_email: runs the full email-pipeline ingest path
@@ -23,19 +31,35 @@
  *     a new person lands. Returns EnqueueResult.
  *   - record_engagement_event: fires a single engagement_event + heat
  *     recalc (for testing heat acceleration without the pipeline).
+ *   - check_auto_send_eligible: calls autonomous-sender eligibility
+ *     check (for testing thread-cap + daily-limit behaviour).
  *
  * Usage example (from the e2e test harness):
  *   POST /api/admin/test-harness
- *   Header: Authorization: Bearer <CRON_SECRET>
+ *   Header: Authorization: Bearer <TEST_HARNESS_SECRET>
  *   Body: { action: 'process_incoming_email', venueId, email: {...} }
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 
+function resolveSecret(): string | null {
+  const harnessSecret = process.env.TEST_HARNESS_SECRET
+  if (harnessSecret) return harnessSecret
+  // Non-prod fallback to CRON_SECRET so local dev / CI without the
+  // dedicated harness secret still works. Prod requires explicit set.
+  if (process.env.NODE_ENV !== 'production' && process.env.CRON_SECRET) {
+    return process.env.CRON_SECRET
+  }
+  return null
+}
+
 export async function POST(request: NextRequest) {
-  const expected = process.env.CRON_SECRET
+  const expected = resolveSecret()
   if (!expected) {
-    return NextResponse.json({ error: 'Admin test harness disabled (CRON_SECRET unset)' }, { status: 501 })
+    return NextResponse.json(
+      { error: 'Admin test harness disabled (TEST_HARNESS_SECRET unset)' },
+      { status: 501 }
+    )
   }
   const auth = request.headers.get('authorization')
   if (auth !== `Bearer ${expected}`) {
@@ -119,6 +143,18 @@ export async function POST(request: NextRequest) {
         venueId,
         newPersonId,
       })
+      return NextResponse.json({ ok: true, result })
+    }
+
+    if (action === 'check_auto_send_eligible') {
+      const { checkAutoSendEligible } = await import('@/lib/services/autonomous-sender')
+      const opts = payload.options as unknown as {
+        contextType: string
+        confidenceScore: number
+        source?: string
+        threadId?: string
+      }
+      const result = await checkAutoSendEligible(venueId, opts)
       return NextResponse.json({ ok: true, result })
     }
 
