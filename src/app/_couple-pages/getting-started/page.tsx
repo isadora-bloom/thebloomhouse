@@ -463,14 +463,14 @@ export default function GettingStartedPage() {
                       'font-semibold text-[15px] leading-tight',
                       done ? 'text-emerald-700' : 'text-gray-800'
                     )}>
-                      {card.title.replace('Sage', aiName)}
+                      {card.title.replaceAll('Sage', aiName)}
                     </h3>
                   </div>
                 </div>
 
                 {/* Description */}
                 <p className="text-sm text-gray-500 leading-relaxed mb-4">
-                  {card.description}
+                  {card.description.replaceAll('Sage', aiName)}
                 </p>
 
                 {/* Action Button */}
@@ -537,7 +537,7 @@ export default function GettingStartedPage() {
                       {i + 1}
                     </span>
                   </div>
-                  <span className="text-sm text-gray-600 leading-relaxed">{tip.replace('Sage', aiName)}</span>
+                  <span className="text-sm text-gray-600 leading-relaxed">{tip.replaceAll('Sage', aiName)}</span>
                 </li>
               ))}
             </ul>

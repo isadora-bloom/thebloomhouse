@@ -14,6 +14,15 @@
  *     synthetic email. Returns the PipelineResult.
  *   - generate_inquiry_draft: invokes inquiry-brain directly with the
  *     provided InquiryDraftOptions. Returns the DraftResult shape.
+ *   - compute_weekly_learned: invokes weekly-learned for the venue.
+ *   - apply_daily_decay: runs the heat-mapping decay + cooling warnings
+ *     + auto-mark-lost pass for the venue. Returns the DecaySummary.
+ *   - import_identity_candidates: writes tangential_signals via the
+ *     vision-extraction path (fires signal↔signal enqueue from F1).
+ *   - enqueue_identity_matches: runs the person↔person matcher after
+ *     a new person lands. Returns EnqueueResult.
+ *   - record_engagement_event: fires a single engagement_event + heat
+ *     recalc (for testing heat acceleration without the pipeline).
  *
  * Usage example (from the e2e test harness):
  *   POST /api/admin/test-harness
@@ -69,6 +78,61 @@ export async function POST(request: NextRequest) {
     if (action === 'compute_weekly_learned') {
       const { computeWeeklyLearned } = await import('@/lib/services/weekly-learned')
       const result = await computeWeeklyLearned(venueId)
+      return NextResponse.json({ ok: true, result })
+    }
+
+    if (action === 'apply_daily_decay') {
+      const { applyDailyDecay } = await import('@/lib/services/heat-mapping')
+      const result = await applyDailyDecay(venueId)
+      return NextResponse.json({ ok: true, result })
+    }
+
+    if (action === 'import_identity_candidates') {
+      const { importIdentityCandidates } = await import('@/lib/services/tangential-signals-import')
+      const { createServiceClient } = await import('@/lib/supabase/service')
+      const opts = payload.options as unknown as {
+        candidates: Parameters<typeof importIdentityCandidates>[0]['candidates']
+        sourceEntryId?: string | null
+        sourceContext?: string | null
+        signalDate?: string | null
+      }
+      const result = await importIdentityCandidates({
+        supabase: createServiceClient(),
+        venueId,
+        candidates: opts.candidates,
+        sourceEntryId: opts.sourceEntryId ?? null,
+        sourceContext: opts.sourceContext ?? null,
+        signalDate: opts.signalDate ?? null,
+      })
+      return NextResponse.json({ ok: true, result })
+    }
+
+    if (action === 'enqueue_identity_matches') {
+      const { enqueueIdentityMatches } = await import('@/lib/services/identity-enqueue')
+      const { createServiceClient } = await import('@/lib/supabase/service')
+      const newPersonId = (payload.options as { newPersonId?: string } | undefined)?.newPersonId
+      if (!newPersonId) {
+        return NextResponse.json({ error: 'options.newPersonId required' }, { status: 400 })
+      }
+      const result = await enqueueIdentityMatches({
+        supabase: createServiceClient(),
+        venueId,
+        newPersonId,
+      })
+      return NextResponse.json({ ok: true, result })
+    }
+
+    if (action === 'record_engagement_event') {
+      const { recordEngagementEvent } = await import('@/lib/services/heat-mapping')
+      const opts = payload.options as unknown as {
+        weddingId: string
+        eventType: string
+        metadata?: Record<string, unknown>
+      }
+      if (!opts?.weddingId || !opts?.eventType) {
+        return NextResponse.json({ error: 'options.weddingId and options.eventType required' }, { status: 400 })
+      }
+      const result = await recordEngagementEvent(venueId, opts.weddingId, opts.eventType, opts.metadata)
       return NextResponse.json({ ok: true, result })
     }
 
