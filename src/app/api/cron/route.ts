@@ -20,6 +20,7 @@ import { learnFiltersForAllVenues } from '@/lib/services/inbox-filters'
 import { computeAllVenueHealth } from '@/lib/services/venue-health-compute'
 import { persistDropoffInsights } from '@/lib/services/quality-signals'
 import { refreshAllCensusData } from '@/lib/services/census-ingest'
+import { computeCorrelationsAllVenues } from '@/lib/services/correlation-engine'
 import { mineTranscriptVoiceForAllVenues } from '@/lib/services/transcript-voice-learning'
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,7 @@ const VALID_JOBS = [
   'quality_signals_refresh',
   'census_refresh',
   'transcript_voice_mining',
+  'correlation_analysis',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -127,6 +129,14 @@ async function runJob(job: JobName): Promise<unknown> {
       // venues with fewer than MIN_ELIGIBLE_TOURS eligible tours. Runs
       // weekly; cheap when gated, modest when not.
       return mineTranscriptVoiceForAllVenues()
+
+    case 'correlation_analysis':
+      // Phase 8 Step 6. Pearson correlation with lag search across every
+      // pair of channels (inquiries, marketing_metric series, tangential
+      // signals per platform). Writes named insights into
+      // intelligence_insights where |r| >= 0.6 and both series have >= 20
+      // non-zero days. Pure stats — no AI call. Runs weekly.
+      return computeCorrelationsAllVenues(createServiceClient())
   }
 }
 
