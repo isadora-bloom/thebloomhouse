@@ -22,6 +22,12 @@ export interface VenueScope {
   venueName: string | null
   /** Org name resolved server-side — for company-scope display. */
   orgName: string | null
+  /** User-chosen scope level ('venue'|'group'|'company'). Resolved from bloom_scope cookie server-side. */
+  level: 'venue' | 'group' | 'company'
+  /** Group id when level='group', resolved server-side. */
+  groupId: string | null
+  /** Group name when level='group', resolved server-side. */
+  groupName: string | null
 }
 
 const VenueScopeContext = createContext<VenueScope | null>(null)
@@ -31,16 +37,32 @@ export function VenueScopeProvider({
   orgId,
   venueName,
   orgName,
+  level,
+  groupId,
+  groupName,
   children,
 }: {
   venueId: string
   orgId: string | null
   venueName?: string | null
   orgName?: string | null
+  level?: 'venue' | 'group' | 'company'
+  groupId?: string | null
+  groupName?: string | null
   children: ReactNode
 }) {
   return (
-    <VenueScopeContext.Provider value={{ venueId, orgId, venueName: venueName ?? null, orgName: orgName ?? null }}>
+    <VenueScopeContext.Provider
+      value={{
+        venueId,
+        orgId,
+        venueName: venueName ?? null,
+        orgName: orgName ?? null,
+        level: level ?? 'venue',
+        groupId: groupId ?? null,
+        groupName: groupName ?? null,
+      }}
+    >
       {children}
     </VenueScopeContext.Provider>
   )

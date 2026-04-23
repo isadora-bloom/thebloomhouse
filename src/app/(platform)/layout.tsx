@@ -21,6 +21,9 @@ export default async function PlatformLayout({
       orgId={scope.orgId}
       venueName={scope.venueName}
       orgName={scope.orgName}
+      level={scope.level}
+      groupId={scope.groupId}
+      groupName={scope.groupName}
     >
       <div className="min-h-screen bg-warm-white">
         <PlatformShell>{children}</PlatformShell>

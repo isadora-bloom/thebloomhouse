@@ -25,6 +25,11 @@
 -- CHECK but writers go through the same normalizer now) and to
 -- auto_send_rules.source (also unconstrained, but onboarding seeds it with
 -- 'theknot' which never matches incoming 'the_knot' — updated inline).
+--
+-- Probe directives for scripts/apply-migrations.mjs:
+-- @probe: insert_accepts weddings.source=zola
+-- @probe: insert_accepts weddings.source=venue_calculator
+-- @probe: insert_accepts weddings.source=direct
 
 BEGIN;
 

@@ -118,12 +118,19 @@ async function cleanup() {
   const { data: taggedWeddings } = await sb.from('weddings').select('id').eq('venue_id', v).ilike('notes', `%${TAG}%`)
   const wids = (taggedWeddings ?? []).map((w) => w.id)
   if (wids.length > 0) {
+    // admin_notifications BEFORE weddings — the FK is SET NULL on delete
+    // but we want to drop the notif rows entirely since they reference
+    // test-only weddings.
+    await sb.from('admin_notifications').delete().in('wedding_id', wids)
     await sb.from('interactions').delete().in('wedding_id', wids)
     await sb.from('drafts').delete().in('wedding_id', wids)
     await sb.from('tours').delete().in('wedding_id', wids)
     await sb.from('people').delete().in('wedding_id', wids)
     await sb.from('weddings').delete().in('id', wids)
   }
+  // Notifs whose wedding was already cleaned up in a prior run leave
+  // orphan rows with wedding_id=null + tagged title. Catch those too.
+  await sb.from('admin_notifications').delete().eq('venue_id', v).ilike('title', `%${TAG}%`)
   await sb.from('tangential_signals').delete().eq('venue_id', v).ilike('source_context', `%${TAG}%`)
   try {
     await sb.from('engagement_events').delete().eq('venue_id', v).ilike('metadata->>source_context', `%${TAG}%`)

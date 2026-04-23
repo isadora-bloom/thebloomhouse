@@ -24,23 +24,23 @@ export function ScopeIndicator() {
   const clientScope = useScope()
   const serverScope = useVenueScope()
 
-  // Group-level scope: comes from cookie only. Brief flicker on first
-  // paint while useScope resolves; same behaviour as pre-fix.
-  if (clientScope.level === 'group') {
+  // Prefer the server-resolved level for the initial paint (the cookie
+  // is read server-side in resolvePlatformScope). Fall back to the
+  // client hook only if the provider somehow doesn't carry it.
+  const level = serverScope.level ?? clientScope.level
+
+  if (level === 'group') {
     return (
       <Pill
         icon={Layers}
         label="Viewing group"
-        name={clientScope.groupName ?? 'Group'}
+        name={serverScope.groupName ?? clientScope.groupName ?? 'Group'}
         bg="bg-teal-50 border-teal-200 text-teal-900"
       />
     )
   }
 
-  // Company-level: the platform layout knows orgName server-side, so we
-  // prefer that — falls back to cookie companyName if the provider
-  // doesn't carry it.
-  if (clientScope.level === 'company') {
+  if (level === 'company') {
     return (
       <Pill
         icon={Building2}
@@ -51,9 +51,8 @@ export function ScopeIndicator() {
     )
   }
 
-  // Venue-level (common case). Prefer the SSR-resolved venueName so the
-  // first paint and the hydrated paint agree. Fall back to cookie-scope
-  // name only if the server couldn't look it up.
+  // Venue-level (common case). Server-resolved venueName avoids the
+  // SSR/CSR mismatch — cookie hook still present as a safety net.
   return (
     <Pill
       icon={MapPin}

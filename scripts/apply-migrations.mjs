@@ -1,12 +1,14 @@
 // Apply-migrations: reconcile local supabase/migrations/*.sql with the
 // actual schema state on prod, then apply any that are missing.
 //
-// Why not `supabase db push`: the local supabase_migrations.schema_migrations
-// tracking table on this project is empty (migrations have historically
-// been applied via the Supabase SQL editor, which doesn't update the
-// tracking table). `db push` would try to re-run every migration against
-// a DB that already has them, which fails noisily or silently corrupts
-// depending on IF-NOT-EXISTS guards.
+// Why not `supabase db push`: this project has three migration files
+// that share prefix numbers with other migrations (030_guest_tags,
+// 031_table_map_layouts, 032_vendor_portal_fields). The supabase CLI's
+// schema_migrations tracking table uses version (the prefix) as the
+// primary key, so it can only record ONE migration per version slot.
+// `db push` will therefore always list those three as pending even
+// though they're verified applied. This script probes actual table /
+// column existence instead of trusting the tracking table.
 //
 // Instead, this script:
 //   1. Parses each local migration for the tables + columns it is
@@ -64,12 +66,12 @@ function argValue(flag) {
 // ---------------------------------------------------------------------------
 function parseArtifacts(sql) {
   const artifacts = []
+
+  // Auto-parsed: CREATE TABLE + ADD COLUMN (the common case).
   const createTableRe = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?([a-z_][a-z0-9_]*)\s*\(/gi
   for (const m of sql.matchAll(createTableRe)) {
     artifacts.push({ kind: 'table', table: m[1] })
   }
-  // ALTER TABLE ... ADD COLUMN supports a comma-joined list in one
-  // statement; match each ADD COLUMN separately.
   const alterRe = /ALTER\s+TABLE\s+(?:public\.)?([a-z_][a-z0-9_]*)([\s\S]*?);/gi
   for (const m of sql.matchAll(alterRe)) {
     const table = m[1]
@@ -77,6 +79,34 @@ function parseArtifacts(sql) {
     const colRe = /ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\s/gi
     for (const c of body.matchAll(colRe)) {
       artifacts.push({ kind: 'column', table, column: c[1] })
+    }
+  }
+
+  // Explicit @probe directives for migrations that don't create tables
+  // / columns (CHECK widens, policy adds, function rewrites). Formats:
+  //   -- @probe: table foo_bar                 → check table exists
+  //   -- @probe: column foo_bar.col_name       → check column exists
+  //   -- @probe: insert_accepts weddings.source=zola
+  //       → INSERT a probe row into the table with col=value, assert
+  //         no constraint violation, roll back.
+  const probeRe = /--\s*@probe:\s*(.+)$/gmi
+  for (const m of sql.matchAll(probeRe)) {
+    const directive = m[1].trim()
+    const [kind, ...rest] = directive.split(/\s+/)
+    const spec = rest.join(' ')
+    if (kind === 'table') {
+      artifacts.push({ kind: 'table', table: spec })
+    } else if (kind === 'column') {
+      const [table, column] = spec.split('.')
+      if (table && column) artifacts.push({ kind: 'column', table, column })
+    } else if (kind === 'insert_accepts') {
+      // "weddings.source=zola"
+      const eq = spec.indexOf('=')
+      if (eq > 0) {
+        const [table, column] = spec.slice(0, eq).split('.')
+        const value = spec.slice(eq + 1)
+        if (table && column) artifacts.push({ kind: 'insert_accepts', table, column, value })
+      }
     }
   }
   return artifacts
@@ -92,11 +122,47 @@ async function probeArtifact(a) {
     if (error.code === 'PGRST205') return { ok: false, reason: 'table missing' }
     return { ok: true, reason: `probe noise: ${error.message.slice(0, 60)}` } // assume applied
   }
-  const { error } = await sb.from(a.table).select(a.column).limit(1)
-  if (!error) return { ok: true }
-  if (/column "?[^"]+"? does not exist/i.test(error.message)) return { ok: false, reason: 'column missing' }
-  if (error.code === 'PGRST205') return { ok: false, reason: 'table missing' }
-  return { ok: true, reason: `probe noise: ${error.message.slice(0, 60)}` }
+  if (a.kind === 'column') {
+    const { error } = await sb.from(a.table).select(a.column).limit(1)
+    if (!error) return { ok: true }
+    if (/column "?[^"]+"? does not exist/i.test(error.message)) return { ok: false, reason: 'column missing' }
+    if (error.code === 'PGRST205') return { ok: false, reason: 'table missing' }
+    return { ok: true, reason: `probe noise: ${error.message.slice(0, 60)}` }
+  }
+  if (a.kind === 'insert_accepts') {
+    // Try to INSERT a probe row with the specified (column, value).
+    // NOT NULL constraints on OTHER columns will usually require fill —
+    // for weddings we need venue_id + status. Accept either success or
+    // failure-not-due-to-check as "column accepts value".
+    // For generality we use a known demo venue_id as filler where
+    // venue_id is required.
+    const HAW = '22222222-2222-2222-2222-222222222201'
+    const payload = { [a.column]: a.value }
+    if (a.table === 'weddings') {
+      payload.venue_id = HAW
+      payload.status = 'inquiry'
+      payload.notes = '_apply_migrations_probe'
+    }
+    try {
+      const { data, error } = await sb.from(a.table).insert(payload).select('id').single()
+      if (error) {
+        const msg = error.message.toLowerCase()
+        // Only CHECK violations on the probed column prove "not applied".
+        if (msg.includes('check constraint') && msg.includes(a.column)) {
+          return { ok: false, reason: `insert rejected: ${error.message.slice(0, 80)}` }
+        }
+        // Other errors (NOT NULL on unrelated columns, RLS, etc.) don't
+        // tell us about the probed CHECK. Treat as inconclusive but
+        // lean "applied" so we don't loop re-applying by mistake.
+        return { ok: true, reason: `probe noise (${error.code}): ${error.message.slice(0, 60)}` }
+      }
+      if (data?.id) await sb.from(a.table).delete().eq('id', data.id)
+      return { ok: true }
+    } catch (err) {
+      return { ok: true, reason: `probe exception: ${err.message.slice(0, 60)}` }
+    }
+  }
+  return { ok: true, reason: `unknown kind: ${a.kind}` }
 }
 
 // ---------------------------------------------------------------------------

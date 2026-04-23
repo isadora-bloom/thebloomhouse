@@ -34,6 +34,30 @@ export interface PlatformScope {
   isDemo: boolean
   venueName: string | null
   orgName: string | null
+  /** Scope level chosen by the user — read from bloom_scope cookie. */
+  level: 'venue' | 'group' | 'company'
+  /** Group id, when level === 'group'. */
+  groupId: string | null
+  /** Group display name for ScopeIndicator — fetched inline for group scope. */
+  groupName: string | null
+}
+
+/**
+ * Parse the bloom_scope cookie safely. Returns level + groupId only;
+ * venueId + venueName we still resolve through the usual code paths so
+ * validation + fallbacks stay centralized.
+ */
+function parseScopeCookie(raw: string | undefined): { level: 'venue' | 'group' | 'company'; groupId: string | null } {
+  if (!raw) return { level: 'venue', groupId: null }
+  try {
+    const parsed = JSON.parse(raw) as { level?: string; groupId?: string }
+    if (parsed?.level === 'group' || parsed?.level === 'company') {
+      return { level: parsed.level, groupId: (parsed.groupId as string | undefined) ?? null }
+    }
+    return { level: 'venue', groupId: null }
+  } catch {
+    return { level: 'venue', groupId: null }
+  }
 }
 
 /**
@@ -55,8 +79,28 @@ async function fetchNames(venueId: string, orgId: string | null): Promise<{ venu
   }
 }
 
+/**
+ * Resolve groupName if level === 'group' and groupId is present + belongs
+ * to the user's org. Null otherwise.
+ */
+async function resolveGroupName(
+  groupId: string | null,
+  profileOrgId: string | null
+): Promise<string | null> {
+  if (!groupId || !profileOrgId) return null
+  const service = createServiceClient()
+  const { data } = await service
+    .from('venue_groups')
+    .select('name, org_id')
+    .eq('id', groupId)
+    .maybeSingle()
+  if (!data || data.org_id !== profileOrgId) return null
+  return (data.name as string | undefined) ?? null
+}
+
 export async function resolvePlatformScope(): Promise<PlatformScope | null> {
   const cookieStore = await cookies()
+  const scopeCookie = parseScopeCookie(cookieStore.get('bloom_scope')?.value)
 
   // 1. Demo mode — no auth, no validation, Hawthorne. Names inline so
   // we avoid a DB roundtrip on every demo page.
@@ -67,6 +111,9 @@ export async function resolvePlatformScope(): Promise<PlatformScope | null> {
       isDemo: true,
       venueName: DEMO_VENUE_NAME,
       orgName: DEMO_ORG_NAME,
+      level: scopeCookie.level,
+      groupId: scopeCookie.groupId,
+      groupName: null,
     }
   }
 
@@ -82,6 +129,18 @@ export async function resolvePlatformScope(): Promise<PlatformScope | null> {
     .maybeSingle()
 
   const profileOrgId = (profile?.org_id as string | null) ?? null
+  const groupName = await resolveGroupName(scopeCookie.groupId, profileOrgId)
+
+  const build = (venueId: string, names: { venueName: string | null; orgName: string | null }): PlatformScope => ({
+    venueId,
+    orgId: profileOrgId,
+    isDemo: false,
+    venueName: names.venueName,
+    orgName: names.orgName,
+    level: scopeCookie.level,
+    groupId: scopeCookie.groupId,
+    groupName,
+  })
 
   // 2. Cookie venue — validate it belongs to the user's org before trusting.
   const cookieVenue = cookieStore.get('bloom_venue')?.value
@@ -92,8 +151,7 @@ export async function resolvePlatformScope(): Promise<PlatformScope | null> {
       .eq('id', cookieVenue)
       .maybeSingle()
     if (v && v.org_id === profileOrgId) {
-      const names = await fetchNames(v.id as string, profileOrgId)
-      return { venueId: v.id as string, orgId: profileOrgId, isDemo: false, ...names }
+      return build(v.id as string, await fetchNames(v.id as string, profileOrgId))
     }
     // Stale or cross-org cookie — ignore and fall through.
   }
@@ -101,8 +159,7 @@ export async function resolvePlatformScope(): Promise<PlatformScope | null> {
   // 3. Profile venue.
   const profileVenue = (profile?.venue_id as string | null) ?? null
   if (profileVenue) {
-    const names = await fetchNames(profileVenue, profileOrgId)
-    return { venueId: profileVenue, orgId: profileOrgId, isDemo: false, ...names }
+    return build(profileVenue, await fetchNames(profileVenue, profileOrgId))
   }
 
   // 4. Admin fallback — first venue in org.
@@ -116,8 +173,7 @@ export async function resolvePlatformScope(): Promise<PlatformScope | null> {
       .limit(1)
       .maybeSingle()
     if (firstVenue?.id) {
-      const names = await fetchNames(firstVenue.id as string, profileOrgId)
-      return { venueId: firstVenue.id as string, orgId: profileOrgId, isDemo: false, ...names }
+      return build(firstVenue.id as string, await fetchNames(firstVenue.id as string, profileOrgId))
     }
   }
 
