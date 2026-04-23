@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import { VenueChip } from '@/components/intel/venue-chip'
+import { WeeklyLearnedCard } from '@/components/intel/WeeklyLearnedCard'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -644,6 +645,9 @@ export default function IntelligenceDashboardPage() {
           </>
         )}
       </div>
+
+      {/* ---- What the AI learned this week ---- */}
+      {scope.level === 'venue' && <WeeklyLearnedCard />}
 
       {/* ---- AI Insights ---- */}
       {!loading && dashboardInsights.length > 0 && (

@@ -156,6 +156,7 @@ const VENUE_SECTIONS: NavSection[] = [
       { label: 'Sources & ROI', href: '/intel/sources', icon: TrendingUp },
       { label: 'Trends', href: '/intel/trends', icon: Sparkles },
       { label: 'Reviews', href: '/intel/reviews', icon: Star },
+      { label: 'Voice DNA', href: '/intel/voice-dna', icon: Sparkles },
       { label: 'Tours', href: '/intel/tours', icon: MapPinIcon },
       { label: 'Lost Deals', href: '/intel/lost-deals', icon: XCircle },
       { label: 'Campaigns', href: '/intel/campaigns', icon: Megaphone },
