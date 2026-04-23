@@ -11,8 +11,11 @@ import {
   User,
   AlertCircle,
   Clock,
+  HelpCircle,
+  Sparkles,
 } from 'lucide-react'
 import { UpgradeGate } from '@/components/ui/upgrade-gate'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -29,6 +32,14 @@ function getSupabase() {
 // Types
 // ---------------------------------------------------------------------------
 
+interface MatchSignal {
+  type: string
+  detail: string
+  weight: number
+}
+
+type MatchTier = 'high' | 'medium' | 'low'
+
 interface MatchQueueItem {
   id: string
   person_a_id: string
@@ -37,6 +48,8 @@ interface MatchQueueItem {
   confidence: number
   status: string
   created_at: string
+  signals: MatchSignal[] | null
+  tier: MatchTier | null
 }
 
 interface PersonRow {
@@ -53,10 +66,19 @@ interface ContactRow {
   value: string
 }
 
+interface TangentialSignalRow {
+  id: string
+  signal_type: string
+  source_context: string | null
+  signal_date: string | null
+  matched_person_id: string | null
+}
+
 interface MatchPair {
   queueItem: MatchQueueItem
   personA: { name: string; emails: string[]; phones: string[] }
   personB: { name: string; emails: string[]; phones: string[] }
+  tangentialCount: number
 }
 
 // ---------------------------------------------------------------------------
@@ -93,6 +115,27 @@ function confidenceColor(c: number): string {
   return 'text-sage-700 bg-sage-50'
 }
 
+function tierStyle(tier: MatchTier | null): { classes: string; label: string } {
+  switch (tier) {
+    case 'high':
+      return {
+        classes: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        label: 'High confidence',
+      }
+    case 'low':
+      return {
+        classes: 'bg-sage-50 text-sage-600 border-sage-200',
+        label: 'Loose',
+      }
+    case 'medium':
+    default:
+      return {
+        classes: 'bg-amber-50 text-amber-700 border-amber-200',
+        label: 'Suggested',
+      }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Skeleton
 // ---------------------------------------------------------------------------
@@ -123,9 +166,14 @@ function MatchCardSkeleton() {
 // ---------------------------------------------------------------------------
 
 function MatchingPageInner() {
+  const VENUE_ID = useVenueId()
   const [queue, setQueue] = useState<MatchQueueItem[]>([])
   const [people, setPeople] = useState<PersonRow[]>([])
   const [contacts, setContacts] = useState<ContactRow[]>([])
+  const [tangentialByPerson, setTangentialByPerson] = useState<
+    Map<string, TangentialSignalRow[]>
+  >(new Map())
+  const [aiName, setAiName] = useState<string>('Sage')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [processing, setProcessing] = useState<string | null>(null)
@@ -134,21 +182,55 @@ function MatchingPageInner() {
   const fetchData = useCallback(async () => {
     const supabase = getSupabase()
     try {
-      const [queueRes, peopleRes, contactRes] = await Promise.all([
+      const [queueRes, peopleRes, contactRes, aiRes] = await Promise.all([
         supabase
           .from('client_match_queue')
-          .select('*')
+          .select(
+            'id, person_a_id, person_b_id, match_type, confidence, status, created_at, signals, tier'
+          )
           .in('status', ['pending', 'snoozed'])
           .order('confidence', { ascending: false }),
         supabase.from('people').select('id, first_name, last_name, wedding_id'),
         supabase.from('contacts').select('id, person_id, type, value'),
+        supabase
+          .from('venue_ai_config')
+          .select('ai_name')
+          .eq('venue_id', VENUE_ID)
+          .maybeSingle(),
       ])
       if (queueRes.error) throw queueRes.error
       if (peopleRes.error) throw peopleRes.error
       if (contactRes.error) throw contactRes.error
-      setQueue((queueRes.data ?? []) as MatchQueueItem[])
+
+      const queueRows = (queueRes.data ?? []) as MatchQueueItem[]
+      const personIds = new Set<string>()
+      for (const q of queueRows) {
+        if (q.person_a_id) personIds.add(q.person_a_id)
+        if (q.person_b_id) personIds.add(q.person_b_id)
+      }
+
+      // Fetch tangential signals linked to any person in the queue
+      let tangentialMap = new Map<string, TangentialSignalRow[]>()
+      if (personIds.size > 0) {
+        const { data: signalsData, error: signalsErr } = await supabase
+          .from('tangential_signals')
+          .select('id, signal_type, source_context, signal_date, matched_person_id')
+          .in('matched_person_id', Array.from(personIds))
+        if (!signalsErr && signalsData) {
+          for (const s of signalsData as TangentialSignalRow[]) {
+            if (!s.matched_person_id) continue
+            const list = tangentialMap.get(s.matched_person_id) ?? []
+            list.push(s)
+            tangentialMap.set(s.matched_person_id, list)
+          }
+        }
+      }
+
+      setQueue(queueRows)
       setPeople((peopleRes.data ?? []) as PersonRow[])
       setContacts((contactRes.data ?? []) as ContactRow[])
+      setTangentialByPerson(tangentialMap)
+      if (aiRes.data?.ai_name) setAiName(aiRes.data.ai_name as string)
       setError(null)
     } catch (err) {
       console.error('Failed to fetch match data:', err)
@@ -156,7 +238,7 @@ function MatchingPageInner() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [VENUE_ID])
 
   useEffect(() => {
     fetchData()
@@ -187,6 +269,10 @@ function MatchingPageInner() {
       const emailsA = cA.filter((c) => c.type === 'email').map((c) => c.value)
       const emailsB = cB.filter((c) => c.type === 'email').map((c) => c.value)
 
+      const tangentialA = tangentialByPerson.get(q.person_a_id) ?? []
+      const tangentialB = tangentialByPerson.get(q.person_b_id) ?? []
+      const tangentialCount = tangentialA.length + tangentialB.length
+
       return {
         queueItem: q,
         personA: {
@@ -199,9 +285,10 @@ function MatchingPageInner() {
           emails: emailsB,
           phones: cB.filter((c) => c.type === 'phone').map((c) => c.value),
         },
+        tangentialCount,
       }
     })
-  }, [queue, people, contacts])
+  }, [queue, people, contacts, tangentialByPerson])
 
   // Stats
   const pendingCount = queue.filter((q) => q.status === 'pending').length
@@ -213,15 +300,35 @@ function MatchingPageInner() {
     showSnoozed ? p.queueItem.status === 'snoozed' : p.queueItem.status === 'pending'
   )
 
-  // Actions
+  // ----- Actions: all go through the Phase 8 resolve endpoint ---------------
+
+  const callResolve = useCallback(
+    async (
+      id: string,
+      action: 'merge' | 'dismiss' | 'snooze' | 'unsnooze' | 'wait_for_signal'
+    ): Promise<boolean> => {
+      const res = await fetch(`/api/agent/match-queue/${id}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        console.error(`Resolve ${action} failed:`, res.status, text)
+        setError(`Could not ${action.replace('_', ' ')} this match. Try again.`)
+        return false
+      }
+      setError(null)
+      return true
+    },
+    []
+  )
+
   const handleMerge = async (id: string) => {
     setProcessing(id)
-    const supabase = getSupabase()
     try {
-      await supabase.from('client_match_queue').update({ status: 'merged' }).eq('id', id)
-      setQueue((prev) => prev.filter((q) => q.id !== id))
-    } catch (err) {
-      console.error('Failed to merge:', err)
+      const ok = await callResolve(id, 'merge')
+      if (ok) setQueue((prev) => prev.filter((q) => q.id !== id))
     } finally {
       setProcessing(null)
     }
@@ -229,12 +336,9 @@ function MatchingPageInner() {
 
   const handleDismiss = async (id: string) => {
     setProcessing(id)
-    const supabase = getSupabase()
     try {
-      await supabase.from('client_match_queue').update({ status: 'dismissed' }).eq('id', id)
-      setQueue((prev) => prev.filter((q) => q.id !== id))
-    } catch (err) {
-      console.error('Failed to dismiss:', err)
+      const ok = await callResolve(id, 'dismiss')
+      if (ok) setQueue((prev) => prev.filter((q) => q.id !== id))
     } finally {
       setProcessing(null)
     }
@@ -242,15 +346,13 @@ function MatchingPageInner() {
 
   const handleSnooze = async (id: string) => {
     setProcessing(id)
-    const supabase = getSupabase()
     try {
-      await supabase.from('client_match_queue').update({ status: 'snoozed' }).eq('id', id)
-      // Keep the row but move it out of the pending view by updating its status
-      setQueue((prev) =>
-        prev.map((q) => (q.id === id ? { ...q, status: 'snoozed' } : q))
-      )
-    } catch (err) {
-      console.error('Failed to snooze:', err)
+      const ok = await callResolve(id, 'snooze')
+      if (ok) {
+        setQueue((prev) =>
+          prev.map((q) => (q.id === id ? { ...q, status: 'snoozed' } : q))
+        )
+      }
     } finally {
       setProcessing(null)
     }
@@ -258,14 +360,27 @@ function MatchingPageInner() {
 
   const handleUnsnooze = async (id: string) => {
     setProcessing(id)
-    const supabase = getSupabase()
     try {
-      await supabase.from('client_match_queue').update({ status: 'pending' }).eq('id', id)
-      setQueue((prev) =>
-        prev.map((q) => (q.id === id ? { ...q, status: 'pending' } : q))
-      )
-    } catch (err) {
-      console.error('Failed to unsnooze:', err)
+      const ok = await callResolve(id, 'unsnooze')
+      if (ok) {
+        setQueue((prev) =>
+          prev.map((q) => (q.id === id ? { ...q, status: 'pending' } : q))
+        )
+      }
+    } finally {
+      setProcessing(null)
+    }
+  }
+
+  const handleWaitForSignal = async (id: string) => {
+    setProcessing(id)
+    try {
+      const ok = await callResolve(id, 'wait_for_signal')
+      if (ok) {
+        setQueue((prev) =>
+          prev.map((q) => (q.id === id ? { ...q, status: 'snoozed' } : q))
+        )
+      }
     } finally {
       setProcessing(null)
     }
@@ -279,7 +394,7 @@ function MatchingPageInner() {
           Client Deduplication
         </h1>
         <p className="text-sage-600">
-          Find and resolve duplicate records — couples who inquired from multiple sources or with slightly different names. Merge duplicates to keep your pipeline clean and your data accurate.
+          Find and resolve duplicate records. {aiName} flags couples who inquired from multiple sources or with slightly different names. Merge duplicates to keep your pipeline clean and your data accurate.
         </p>
       </div>
 
@@ -359,6 +474,9 @@ function MatchingPageInner() {
             const TypeIcon = matchTypeIcon(q.match_type)
             const isProcessing = processing === q.id
             const isSnoozed = q.status === 'snoozed'
+            const tier = q.tier ?? 'medium'
+            const tierInfo = tierStyle(tier)
+            const signals = Array.isArray(q.signals) ? q.signals : []
             return (
               <div
                 key={q.id}
@@ -366,27 +484,57 @@ function MatchingPageInner() {
                   isSnoozed ? 'opacity-60' : ''
                 }`}
               >
+                {/* Auto-merged ribbon for high-tier */}
+                {tier === 'high' && !isSnoozed && (
+                  <div className="flex items-center gap-1.5 mb-3 text-xs text-emerald-700">
+                    <Sparkles className="w-3 h-3" />
+                    <span className="font-medium uppercase tracking-wider">
+                      Auto-merge candidate
+                    </span>
+                  </div>
+                )}
                 {isSnoozed && (
                   <div className="flex items-center gap-1.5 mb-3 text-xs text-sage-500">
                     <Clock className="w-3 h-3" />
-                    <span className="font-medium uppercase tracking-wider">Snoozed — Review later</span>
+                    <span className="font-medium uppercase tracking-wider">
+                      Snoozed. Review later.
+                    </span>
                   </div>
                 )}
                 {/* Match info */}
                 <div className="flex items-center gap-2 mb-4 flex-wrap">
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider border ${matchTypeBadge(q.match_type)}`}>
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider border ${matchTypeBadge(q.match_type)}`}
+                  >
                     <TypeIcon className="w-2.5 h-2.5" />
                     {q.match_type} match
                   </span>
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${confidenceColor(q.confidence)}`}>
+                  <span
+                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider border ${tierInfo.classes}`}
+                  >
+                    {tierInfo.label}
+                  </span>
+                  <span
+                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${confidenceColor(q.confidence)}`}
+                  >
                     {(q.confidence * 100).toFixed(0)}% confidence
                   </span>
+                  {pair.tangentialCount > 0 && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium text-sage-700 bg-sage-50 border border-sage-200">
+                      <Sparkles className="w-3 h-3" />
+                      {pair.tangentialCount} prior touchpoint
+                      {pair.tangentialCount === 1 ? '' : 's'} before this inquiry
+                    </span>
+                  )}
                 </div>
 
                 {/* Side-by-side comparison */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                   {[pair.personA, pair.personB].map((person, idx) => (
-                    <div key={idx} className="bg-warm-white border border-sage-100 rounded-lg p-4">
+                    <div
+                      key={idx}
+                      className="bg-warm-white border border-sage-100 rounded-lg p-4"
+                    >
                       <p className="font-heading text-sm font-semibold text-sage-900 mb-2">
                         {person.name}
                       </p>
@@ -409,6 +557,26 @@ function MatchingPageInner() {
                   ))}
                 </div>
 
+                {/* Signals: why Bloom thinks these match */}
+                {signals.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-sage-500 mb-2">
+                      Why {aiName} suggested this match
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {signals.map((s, i) => (
+                        <span
+                          key={i}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-sage-700 bg-sage-50 border border-sage-100"
+                          title={`${s.type} · weight ${s.weight?.toFixed?.(2) ?? s.weight}`}
+                        >
+                          {s.detail}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Actions */}
                 <div className="flex items-center gap-3 flex-wrap">
                   <button
@@ -427,6 +595,17 @@ function MatchingPageInner() {
                     <XIcon className="w-3.5 h-3.5" />
                     Dismiss
                   </button>
+                  {!isSnoozed && (
+                    <button
+                      onClick={() => handleWaitForSignal(q.id)}
+                      disabled={isProcessing}
+                      className="flex items-center gap-1.5 px-4 py-2 border border-sage-200 text-sage-600 hover:bg-sage-50 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                      title="Hold this pair until a stronger signal arrives"
+                    >
+                      <HelpCircle className="w-3.5 h-3.5" />
+                      Wait for more signal
+                    </button>
+                  )}
                   {isSnoozed ? (
                     <button
                       onClick={() => handleUnsnooze(q.id)}

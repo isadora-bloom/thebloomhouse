@@ -356,6 +356,30 @@ export async function findOrCreateContact(
     is_primary: true,
   })
 
+  // 5. Phase 8 identity resolution — run the matcher against the new
+  // person. A high-confidence match auto-merges; medium/low lands in
+  // client_match_queue for triage; matching tangential_signals get
+  // linked. Fire-and-forget: a matching failure must never break ingest.
+  let survivorId = newPerson.id
+  try {
+    const { enqueueIdentityMatches } = await import('@/lib/services/identity-enqueue')
+    const result = await enqueueIdentityMatches({ supabase, venueId, newPersonId: newPerson.id })
+    if (result.autoMergedIntoPersonId && result.autoMergedIntoPersonId !== newPerson.id) {
+      survivorId = result.autoMergedIntoPersonId
+    }
+  } catch (err) {
+    console.error('[pipeline] enqueueIdentityMatches failed:', err instanceof Error ? err.message : err)
+  }
+
+  if (survivorId !== newPerson.id) {
+    const { data: survivor } = await supabase
+      .from('people')
+      .select('wedding_id')
+      .eq('id', survivorId)
+      .single()
+    return { personId: survivorId, weddingId: (survivor?.wedding_id as string | null) ?? null, isNew: false }
+  }
+
   return { personId: newPerson.id, weddingId: null, isNew: true }
 }
 
