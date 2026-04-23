@@ -118,22 +118,161 @@ export async function importIdentityCandidates(args: {
       else match_status = 'low_confidence_match'
     }
 
-    const { error } = await supabase.from('tangential_signals').insert({
-      venue_id: venueId,
-      signal_type: allowedSignalType(cand.signal_type),
-      extracted_identity: extracted,
-      source_context: cand.context ?? sourceContext ?? null,
-      signal_date: signalDate ?? null,
-      match_status,
-      matched_person_id,
-      confidence_score,
-      source_entry_id: sourceEntryId ?? null,
-    })
-    if (error) continue
+    const { data: inserted, error } = await supabase
+      .from('tangential_signals')
+      .insert({
+        venue_id: venueId,
+        signal_type: allowedSignalType(cand.signal_type),
+        extracted_identity: extracted,
+        source_context: cand.context ?? sourceContext ?? null,
+        signal_date: signalDate ?? null,
+        match_status,
+        matched_person_id,
+        confidence_score,
+        source_entry_id: sourceEntryId ?? null,
+      })
+      .select('id')
+      .single()
+    if (error || !inserted) continue
     out.written++
     if (matched_person_id) out.matched++
-    else out.unmatched++
+    else {
+      out.unmatched++
+      // F1: signal↔signal queueing. If the new signal stayed unmatched,
+      // compare it against other unmatched signals for this venue and
+      // enqueue pairs that look like the same person. Lets coordinators
+      // resolve two cross-channel signals (e.g. Knot view + Instagram
+      // follow) before any inquiry email ever arrives.
+      try {
+        await enqueueSignalPairs(
+          supabase,
+          venueId,
+          inserted.id as string,
+          { first, last, username }
+        )
+      } catch (err) {
+        console.warn('[tangential-signals-import] signal-pair enqueue failed:', err)
+      }
+    }
   }
 
   return out
+}
+
+/**
+ * Compare a just-created tangential signal against other unmatched signals
+ * for the venue. Any that look like the same person (exact username
+ * match, full-name match, or first-name + shared signal_type within 30d)
+ * are inserted into client_match_queue with the appropriate tier. Same
+ * queue as person↔person matches — one resolver UI.
+ */
+async function enqueueSignalPairs(
+  supabase: SupabaseClient,
+  venueId: string,
+  newSignalId: string,
+  keys: { first: string; last: string; username: string }
+): Promise<void> {
+  if (!keys.first && !keys.username) return
+
+  const firstLower = keys.first.toLowerCase().trim()
+  const lastLower = keys.last.toLowerCase().trim()
+  const usernameLower = keys.username.toLowerCase().trim()
+
+  const { data: others } = await supabase
+    .from('tangential_signals')
+    .select('id, extracted_identity, signal_type, signal_date')
+    .eq('venue_id', venueId)
+    .eq('match_status', 'unmatched')
+    .neq('id', newSignalId)
+  if (!others || others.length === 0) return
+
+  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000
+  const now = Date.now()
+
+  type PairMatch = {
+    signalId: string
+    tier: 'high' | 'medium' | 'low'
+    confidence: number
+    signals: Array<{ type: string; detail: string; weight: number }>
+  }
+  const matches: PairMatch[] = []
+
+  for (const other of others) {
+    const eid = (other.extracted_identity ?? {}) as Record<string, unknown>
+    const oFirst = String(eid.first_name ?? '').toLowerCase().trim()
+    const oLast = String(eid.last_name ?? '').toLowerCase().trim()
+    const oUsername = String(eid.username ?? eid.handle ?? '').replace(/^@/, '').toLowerCase().trim()
+    const oDate = other.signal_date ? new Date(other.signal_date as string).getTime() : 0
+    const withinWindow = oDate > 0 && Math.abs(now - oDate) <= thirtyDaysMs
+
+    if (usernameLower && oUsername && usernameLower === oUsername) {
+      matches.push({
+        signalId: other.id as string,
+        tier: 'high',
+        confidence: 0.92,
+        signals: [
+          { type: 'username_exact', detail: `Both signals use @${usernameLower}`, weight: 0.92 },
+        ],
+      })
+      continue
+    }
+    if (firstLower && lastLower && oFirst && oLast && firstLower === oFirst && oLast === lastLower) {
+      matches.push({
+        signalId: other.id as string,
+        tier: 'medium',
+        confidence: 0.7,
+        signals: [
+          { type: 'full_name_match', detail: `Both signals mention ${firstLower} ${lastLower}`, weight: 0.7 },
+        ],
+      })
+      continue
+    }
+    if (
+      firstLower &&
+      oFirst &&
+      firstLower === oFirst &&
+      withinWindow &&
+      (other.signal_type as string) !== ''
+    ) {
+      matches.push({
+        signalId: other.id as string,
+        tier: 'low',
+        confidence: 0.35,
+        signals: [
+          {
+            type: 'first_name_window',
+            detail: `Same first name (${firstLower}) on two channels within 30d`,
+            weight: 0.35,
+          },
+        ],
+      })
+    }
+  }
+
+  if (matches.length === 0) return
+
+  // Dedupe existing rows so re-imports don't stack queue rows.
+  for (const m of matches) {
+    const { data: existing } = await supabase
+      .from('client_match_queue')
+      .select('id')
+      .eq('venue_id', venueId)
+      .or(
+        `and(signal_a_id.eq.${newSignalId},signal_b_id.eq.${m.signalId}),and(signal_a_id.eq.${m.signalId},signal_b_id.eq.${newSignalId})`
+      )
+      .in('status', ['pending', 'snoozed'])
+      .limit(1)
+    if (existing && existing.length > 0) continue
+
+    await supabase.from('client_match_queue').insert({
+      venue_id: venueId,
+      signal_a_id: newSignalId,
+      signal_b_id: m.signalId,
+      match_type: m.signals[0]?.type ?? 'signal_pair',
+      confidence: m.confidence,
+      signals: m.signals,
+      tier: m.tier,
+      status: 'pending',
+    })
+  }
 }

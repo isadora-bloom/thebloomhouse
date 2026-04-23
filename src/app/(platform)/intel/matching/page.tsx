@@ -189,6 +189,11 @@ function MatchingPageInner() {
             'id, person_a_id, person_b_id, match_type, confidence, status, created_at, signals, tier'
           )
           .in('status', ['pending', 'snoozed'])
+          // Person↔person rows only. Signal↔signal rows (F1) have null
+          // person_a_id and need a different resolver since they can't be
+          // "merged" until linked to a person. A follow-up adds a second
+          // pane on this page for signal-pair rows.
+          .not('person_a_id', 'is', null)
           .order('confidence', { ascending: false }),
         supabase.from('people').select('id, first_name, last_name, wedding_id'),
         supabase.from('contacts').select('id, person_id, type, value'),
