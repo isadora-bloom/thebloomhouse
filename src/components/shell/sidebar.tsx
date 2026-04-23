@@ -17,7 +17,7 @@ import {
   LayoutDashboard, TrendingUp, Newspaper, Star,
   MessageSquareText, XCircle, CalendarRange, LineChart,
   Megaphone, Share2, MapPinIcon, UserCheck, Activity,
-  Lightbulb,
+  Lightbulb, AlertTriangle,
   // Enterprise / Multi-venue
   Building2, MapPin, UsersRound, Layers,
   BarChart3, GitMerge,
@@ -150,6 +150,7 @@ const VENUE_SECTIONS: NavSection[] = [
     items: [
       { label: 'Dashboard', href: '/intel/dashboard', icon: LayoutDashboard, daily: true },
       { label: 'Insights', href: '/intel/insights', icon: Lightbulb, daily: true },
+      { label: 'Anomalies', href: '/intel/anomalies', icon: AlertTriangle, daily: true },
       { label: 'Market Pulse', href: '/intel/market-pulse', icon: Activity, daily: true },
       { label: 'Ask Anything', href: '/intel/nlq', icon: MessageSquareText },
       { label: 'Briefings', href: '/intel/briefings', icon: Newspaper },

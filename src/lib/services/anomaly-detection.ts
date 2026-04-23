@@ -476,6 +476,228 @@ export async function runAnomalyDetection(
 }
 
 // ---------------------------------------------------------------------------
+// Availability anomaly detection
+// ---------------------------------------------------------------------------
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+]
+
+interface MonthBucket {
+  year: number
+  month: number // 0-indexed
+  bookedSlots: number
+  totalSlots: number
+  saturdayBooked: number
+  saturdayTotal: number
+  nonSatBooked: number
+  nonSatTotal: number
+  earliestDate: Date
+}
+
+/**
+ * Detect seasonal availability anomalies: months with unusually high demand,
+ * or months where Saturdays are filling fast while weekdays remain wide open.
+ *
+ * Reads venue_availability for the next 12 months. Uses static templates for
+ * ai_explanation (no AI call). Idempotent via causes->>'source'='availability'
+ * + causes->>'month' lookup. No-ops cleanly if the venue has no availability
+ * rows yet (the data may simply not have been touched by the coordinator).
+ */
+export async function detectAvailabilityAnomalies(
+  venueId: string
+): Promise<AnomalyAlert[]> {
+  const supabase = createServiceClient()
+  const createdAlerts: AnomalyAlert[] = []
+
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const end = new Date(start)
+  end.setMonth(end.getMonth() + 12)
+
+  const startIso = start.toISOString().slice(0, 10)
+  const endIso = end.toISOString().slice(0, 10)
+
+  const { data: rows, error } = await supabase
+    .from('venue_availability')
+    .select('date, status, max_events, booked_count')
+    .eq('venue_id', venueId)
+    .gte('date', startIso)
+    .lt('date', endIso)
+
+  if (error) {
+    console.error(`[anomaly] Error querying venue_availability:`, error.message)
+    return []
+  }
+  if (!rows || rows.length === 0) {
+    // Nothing to analyse. Stay quiet, don't throw.
+    return []
+  }
+
+  // Group rows by calendar month, tallying booked vs capacity per month and
+  // separately for Saturdays vs non-Saturdays.
+  const buckets = new Map<string, MonthBucket>()
+  for (const r of rows) {
+    const date = new Date(r.date as string)
+    if (isNaN(date.getTime())) continue
+
+    const year = date.getUTCFullYear()
+    const month = date.getUTCMonth()
+    const key = `${year}-${String(month + 1).padStart(2, '0')}`
+
+    const max = Math.max(1, Number(r.max_events) || 1)
+    const booked = Math.min(max, Math.max(0, Number(r.booked_count) || 0))
+    const isSaturday = date.getUTCDay() === 6
+
+    let b = buckets.get(key)
+    if (!b) {
+      b = {
+        year,
+        month,
+        bookedSlots: 0,
+        totalSlots: 0,
+        saturdayBooked: 0,
+        saturdayTotal: 0,
+        nonSatBooked: 0,
+        nonSatTotal: 0,
+        earliestDate: date,
+      }
+      buckets.set(key, b)
+    }
+    b.bookedSlots += booked
+    b.totalSlots += max
+    if (isSaturday) {
+      b.saturdayBooked += booked
+      b.saturdayTotal += max
+    } else {
+      b.nonSatBooked += booked
+      b.nonSatTotal += max
+    }
+    if (date < b.earliestDate) b.earliestDate = date
+  }
+
+  const msPerDay = 24 * 60 * 60 * 1000
+
+  for (const [key, b] of buckets.entries()) {
+    if (b.totalSlots <= 0) continue
+
+    const monthName = MONTH_NAMES[b.month]
+    const fillRate = b.bookedSlots / b.totalSlots
+    const daysOut = Math.round((b.earliestDate.getTime() - now.getTime()) / msPerDay)
+
+    // Rule A: overall fill > 80% with the month still more than 60 days out.
+    const isHighDemand = fillRate > 0.80 && daysOut > 60
+
+    // Rule B: Saturdays > 90% filled AND non-Saturdays < 30%.
+    const satFill = b.saturdayTotal > 0 ? b.saturdayBooked / b.saturdayTotal : 0
+    const nonSatFill = b.nonSatTotal > 0 ? b.nonSatBooked / b.nonSatTotal : 0
+    const isSaturdayDemand =
+      b.saturdayTotal > 0 &&
+      b.nonSatTotal > 0 &&
+      satFill > 0.90 &&
+      nonSatFill < 0.30
+
+    // Prefer the more specific Saturday signal over the general one when both
+    // trip, so the venue sees one actionable alert, not two.
+    let alertType: string | null = null
+    let explanation: string | null = null
+    if (isSaturdayDemand) {
+      alertType = 'availability_saturday_demand'
+      explanation = `Saturdays in ${monthName} are filling fast; weekdays still wide open.`
+    } else if (isHighDemand) {
+      alertType = 'availability_high_demand'
+      explanation =
+        `Unusually high demand for ${monthName} dates. ` +
+        `Currently ${b.bookedSlots}/${b.totalSlots} slots filled.`
+    }
+
+    if (!alertType || !explanation) continue
+
+    // Idempotent upsert: look for an existing row with the same source+month.
+    const { data: existing, error: existingErr } = await supabase
+      .from('anomaly_alerts')
+      .select('id, acknowledged')
+      .eq('venue_id', venueId)
+      .eq('alert_type', alertType)
+      .filter('causes->>source', 'eq', 'availability')
+      .filter('causes->>month', 'eq', key)
+      .limit(1)
+
+    if (existingErr) {
+      console.error(`[anomaly] Error checking availability alert:`, existingErr.message)
+      continue
+    }
+
+    const causes = [
+      {
+        source: 'availability',
+        month: key,
+        monthName,
+        fillRate: Number(fillRate.toFixed(3)),
+        saturdayFillRate: Number(satFill.toFixed(3)),
+        nonSaturdayFillRate: Number(nonSatFill.toFixed(3)),
+        bookedSlots: b.bookedSlots,
+        totalSlots: b.totalSlots,
+        action: isSaturdayDemand
+          ? `Promote weekday weddings in ${monthName} or consider a Friday/Sunday incentive.`
+          : `Review pricing and inventory for ${monthName} before the remaining dates sell out.`,
+      },
+    ]
+
+    const severity: Severity = isSaturdayDemand || fillRate > 0.90 ? 'warning' : 'info'
+
+    if (existing && existing.length > 0) {
+      const { data: updated, error: updateErr } = await supabase
+        .from('anomaly_alerts')
+        .update({
+          current_value: b.bookedSlots,
+          baseline_value: b.totalSlots,
+          change_percent: fillRate,
+          severity,
+          ai_explanation: explanation,
+          causes,
+        })
+        .eq('id', existing[0].id)
+        .select()
+        .single()
+
+      if (updateErr) {
+        console.error(`[anomaly] Failed to update availability alert:`, updateErr.message)
+        continue
+      }
+      if (updated) createdAlerts.push(updated as AnomalyAlert)
+      continue
+    }
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from('anomaly_alerts')
+      .insert({
+        venue_id: venueId,
+        alert_type: alertType,
+        metric_name: 'availability_fill_rate',
+        current_value: b.bookedSlots,
+        baseline_value: b.totalSlots,
+        change_percent: fillRate,
+        severity,
+        ai_explanation: explanation,
+        causes,
+        acknowledged: false,
+      })
+      .select()
+      .single()
+
+    if (insertErr) {
+      console.error(`[anomaly] Failed to insert availability alert:`, insertErr.message)
+      continue
+    }
+    if (inserted) createdAlerts.push(inserted as AnomalyAlert)
+  }
+
+  return createdAlerts
+}
+
+// ---------------------------------------------------------------------------
 // Run for all venues
 // ---------------------------------------------------------------------------
 
@@ -500,7 +722,19 @@ export async function runAllVenueAnomalies(): Promise<Record<string, AnomalyAler
 
   for (const venue of venues) {
     const id = venue.id as string
-    results[id] = await runAnomalyDetection(id)
+    const metricAlerts = await runAnomalyDetection(id)
+
+    // Availability anomalies are additive: they live in the same table so
+    // they surface alongside metric anomalies on the dashboard + /intel/anomalies.
+    // Guarded so a single venue's failure can't nuke the whole cron run.
+    let availabilityAlerts: AnomalyAlert[] = []
+    try {
+      availabilityAlerts = await detectAvailabilityAnomalies(id)
+    } catch (err) {
+      console.error(`[anomaly] Availability detection failed for venue ${id}:`, err)
+    }
+
+    results[id] = [...metricAlerts, ...availabilityAlerts]
   }
 
   return results

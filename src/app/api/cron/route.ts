@@ -19,6 +19,7 @@ import { createNotification } from '@/lib/services/admin-notifications'
 import { learnFiltersForAllVenues } from '@/lib/services/inbox-filters'
 import { computeAllVenueHealth } from '@/lib/services/venue-health-compute'
 import { persistDropoffInsights } from '@/lib/services/quality-signals'
+import { refreshAllCensusData } from '@/lib/services/census-ingest'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -43,6 +44,7 @@ const VALID_JOBS = [
   'inbox_filter_learning',
   'venue_health_compute',
   'quality_signals_refresh',
+  'census_refresh',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -109,6 +111,12 @@ async function runJob(job: JobName): Promise<unknown> {
       // fire-and-forget the insights upsert. Keep this cheap — runs
       // weekly, not daily.
       return refreshQualitySignalsAllVenues()
+
+    case 'census_refresh':
+      // Monthly pull of Census ACS5 demographics. Rolls county data up
+      // to state + national rows in market_intelligence. Never throws —
+      // per-state failures are logged inside the service.
+      return refreshAllCensusData()
   }
 }
 

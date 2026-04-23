@@ -21,6 +21,7 @@ import {
   AlertTriangle,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
+import { MeOrMarketCard } from '@/components/intel/MeOrMarketCard'
 import {
   BarChart,
   Bar,
@@ -2205,6 +2206,9 @@ export default function MarketPulsePage() {
       {!loading && insights.length > 0 && (
         <InsightPanel insights={insights} title="Market Insights" />
       )}
+
+      {/* ---- Me or Market diagnosis (Phase 6 Task 55) ---- */}
+      <MeOrMarketCard />
 
       {/* ---- Row 1: Demand Pulse + Seasonal Context ---- */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

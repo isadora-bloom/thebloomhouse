@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
+import { DraftContextPanel } from '@/components/agent/DraftContextPanel'
 import {
   FileCheck,
   CheckCircle,
@@ -366,6 +367,13 @@ function DraftCard({
           {timeAgo(draft.created_at)}
         </span>
       </div>
+
+      {/* External signal context (what Sage/AI considered) */}
+      {draft.venue_id && (
+        <div className="mb-4">
+          <DraftContextPanel venueId={draft.venue_id} />
+        </div>
+      )}
 
       {/* Draft body */}
       <div className="bg-warm-white border border-border rounded-lg p-4 mb-4">
