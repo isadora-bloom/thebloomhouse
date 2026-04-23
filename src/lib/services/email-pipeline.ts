@@ -30,6 +30,7 @@ import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-di
 import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { detectFormRelay, type FormRelayLead } from '@/lib/services/form-relay-parsers'
+import { normalizeSource } from '@/lib/services/normalize-source'
 
 // ---------------------------------------------------------------------------
 // Structured error logging
@@ -400,14 +401,6 @@ function synthClassificationFromFormLead(lead: FormRelayLead): ClassificationRes
     if (m) guestCount = parseInt(m[0], 10)
   }
 
-  const sourceMap: Record<FormRelayLead['source'], string> = {
-    the_knot: 'the_knot',
-    wedding_wire: 'weddingwire',
-    here_comes_the_guide: 'here_comes_the_guide',
-    zola: 'zola',
-    venue_calculator: 'website',
-  }
-
   return {
     classification: 'new_inquiry',
     confidence: 95,
@@ -416,7 +409,7 @@ function synthClassificationFromFormLead(lead: FormRelayLead): ClassificationRes
       partnerName: lead.partnerName ?? undefined,
       eventDate: lead.eventDate ?? undefined,
       guestCount,
-      source: sourceMap[lead.source],
+      source: normalizeSource(lead.source),
       questions: [],
       urgencyLevel: 'medium',
       sentiment: 'positive',
@@ -718,7 +711,7 @@ export async function processIncomingEmail(
 
   // Step 5: If new inquiry, create wedding record and engagement event
   const extracted = classification.extractedData
-  const detectedSource = extracted.source ?? 'direct'
+  const detectedSource = normalizeSource(extracted.source ?? 'direct')
   const parsedEventDateObj = parseFuzzyDate(extracted.eventDate)
   const parsedEventDate = parsedEventDateObj?.iso ?? null
   const parsedGuestCount = parseGuestCount(extracted.guestCount)

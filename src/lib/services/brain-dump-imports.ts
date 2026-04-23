@@ -27,6 +27,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ShapeDetection } from '@/lib/services/brain-dump-csv-shape'
 import { rowToRecord } from '@/lib/services/brain-dump-csv-shape'
+import { normalizeSource } from '@/lib/services/normalize-source'
 
 export interface ImportSummary {
   inserted: number
@@ -142,7 +143,7 @@ export async function importLeads(args: {
         .insert({
           venue_id: venueId,
           status: 'inquiry',
-          source: r.source?.toLowerCase().replace(/\s+/g, '_').slice(0, 30) ?? 'csv_import',
+          source: normalizeSource(r.source ?? 'csv_import'),
           wedding_date: date?.iso ?? null,
           wedding_date_precision: date?.precision ?? null,
           guest_count_estimate: parseGuestCount(r.guests),

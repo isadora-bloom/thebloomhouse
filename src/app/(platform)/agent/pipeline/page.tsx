@@ -84,6 +84,7 @@ function sourceBadge(source: string | null): { bg: string; text: string; label: 
   switch (source) {
     case 'the_knot':
       return { bg: 'bg-rose-50', text: 'text-rose-700', label: 'The Knot' }
+    case 'wedding_wire':
     case 'weddingwire':
       return { bg: 'bg-purple-50', text: 'text-purple-700', label: 'WeddingWire' }
     case 'google':

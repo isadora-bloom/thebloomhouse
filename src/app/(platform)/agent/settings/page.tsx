@@ -63,7 +63,7 @@ type TabKey = 'auto-send' | 'gmail' | 'follow-ups'
 const SOURCES = [
   { value: 'all', label: 'All Sources' },
   { value: 'the_knot', label: 'The Knot' },
-  { value: 'weddingwire', label: 'WeddingWire' },
+  { value: 'wedding_wire', label: 'WeddingWire' },
   { value: 'zola', label: 'Zola' },
   { value: 'google', label: 'Google' },
   { value: 'instagram', label: 'Instagram' },

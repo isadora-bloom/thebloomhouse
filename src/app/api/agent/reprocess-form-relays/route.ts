@@ -7,6 +7,7 @@ import {
 } from '@/lib/services/form-relay-parsers'
 import { venueOwnEmails, findOrCreateContact } from '@/lib/services/email-pipeline'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
+import { normalizeSource } from '@/lib/services/normalize-source'
 
 export const maxDuration = 300
 
@@ -112,19 +113,12 @@ export async function POST() {
       const parsedGuests = parseGuestCount(
         lead.guestCount ? extractFirstNumber(lead.guestCount) : undefined
       )
-      const sourceMap: Record<FormRelayLead['source'], string> = {
-        the_knot: 'the_knot',
-        wedding_wire: 'weddingwire',
-        here_comes_the_guide: 'here_comes_the_guide',
-        zola: 'zola',
-        venue_calculator: 'website',
-      }
       const { data: newWedding } = await supabase
         .from('weddings')
         .insert({
           venue_id: venueId,
           status: 'inquiry',
-          source: sourceMap[lead.source],
+          source: normalizeSource(lead.source),
           inquiry_date: row.timestamp ?? new Date().toISOString(),
           wedding_date: parsedDate?.iso ?? null,
           wedding_date_precision: parsedDate?.precision ?? null,

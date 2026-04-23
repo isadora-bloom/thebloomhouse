@@ -65,6 +65,7 @@ function shuffle<T>(arr: T[]): T[] {
 
 const SOURCE_LABELS: Record<string, string> = {
   the_knot: 'The Knot',
+  wedding_wire: 'WeddingWire',
   weddingwire: 'WeddingWire',
   google: 'Google',
   instagram: 'Instagram',

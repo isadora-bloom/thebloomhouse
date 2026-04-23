@@ -16,7 +16,7 @@
 export interface SampleInquiry {
   subject: string
   body: string
-  source: 'the_knot' | 'weddingwire' | 'google' | 'instagram' | 'website' | 'referral'
+  source: 'the_knot' | 'wedding_wire' | 'google' | 'instagram' | 'website' | 'referral'
   draft: string
 }
 
@@ -52,7 +52,7 @@ export const SAMPLE_INQUIRIES: SampleInquiry[] = [
   {
     subject: 'Pricing question',
     body: 'Hello, how much is the venue rental for a Saturday in October? We have about 120 guests.',
-    source: 'weddingwire',
+    source: 'wedding_wire',
     draft: `Hello! Thanks so much for reaching out.\n\nOctober is one of our most popular months — the foliage is absolutely stunning. For a Saturday in October with 120 guests, our venue rental is $9,500. This includes exclusive use of the property from 10am through midnight, the ceremony garden, reception hall, bridal suite, and our dedicated setup team.\n\nI'd recommend booking a tour soon, as October dates tend to go quickly! We have a few Saturdays still open for 2027.\n\nLet me know if you'd like to come see the space!\n\nBest,\nSage`,
   },
   {
@@ -94,7 +94,7 @@ export const SAMPLE_INQUIRIES: SampleInquiry[] = [
   {
     subject: 'Large wedding question',
     body: 'We are planning a big celebration - 250+ guests. Can your venue handle that? What are the options for a large group?',
-    source: 'weddingwire',
+    source: 'wedding_wire',
     draft: `What a celebration that's going to be! We love big, joyful weddings.\n\nOur property can accommodate up to 300 guests with a combined indoor/outdoor layout. For groups over 200, most couples use both the reception hall and our covered pavilion, which creates a wonderful flow between spaces.\n\nFor the ceremony, our main garden site seats 300 comfortably with room to spare.\n\nA few things to note for larger groups: we recommend tent rental for the cocktail hour area, and we have a preferred list of caterers experienced with 250+ person events.\n\nI'd love to walk you through the layout in person — would you be available for a tour soon?\n\nWarmly,\nSage`,
   },
   {
@@ -124,7 +124,7 @@ export const SAMPLE_INQUIRIES: SampleInquiry[] = [
   {
     subject: 'Vendor restrictions',
     body: 'Are we required to use specific vendors or can we bring our own? We already have a photographer booked.',
-    source: 'weddingwire',
+    source: 'wedding_wire',
     draft: `You have full freedom here! We have no required vendors — bring your own photographer, DJ, florist, caterer, and bar service. Your photographer is absolutely welcome.\n\nWe do maintain a preferred vendor list of professionals we've worked with and trust, which can be helpful if you're still looking for certain vendors. But it's purely a recommendation, never a requirement.\n\nThe only thing we ask is that caterers and bartenders carry proper insurance, which is standard.\n\nWould you like a copy of our preferred vendor list for any services you're still looking to fill?\n\nBest,\nSage`,
   },
   {
@@ -154,7 +154,7 @@ export const SAMPLE_INQUIRIES: SampleInquiry[] = [
   {
     subject: 'Noise restrictions?',
     body: 'What time does music need to end? We want a big dance party!',
-    source: 'weddingwire',
+    source: 'wedding_wire',
     draft: `We love a good dance party!\n\nHere are the details: amplified music can go until 11pm, and the venue is yours until midnight for wrap-up and farewells. We're in a rural setting, so the sound carries well without complaints — your DJ can bring the energy.\n\nA few couples have also done a "silent disco" after 11pm to keep the party going, which is always a huge hit.\n\nDuring the reception, there are no decibel restrictions — bring the bass! We just ask that outdoor speakers point away from the neighboring property.\n\nDoes that work for your party plans?\n\nBest,\nSage`,
   },
   {

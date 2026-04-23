@@ -10,6 +10,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import type { DataType, ColumnMapping } from './data-detection'
+import { normalizeSource } from './normalize-source'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -160,7 +161,7 @@ export async function importClientList(
       const weddingDate = parseDate(row.wedding_date || '')
       const guestCount = parseNumber(row.guest_count_estimate || '')
       const bookingValue = parseNumber(row.booking_value || '')
-      const source = row.source || null
+      const source = row.source ? normalizeSource(row.source) : null
       const notes = row.notes || null
 
       if (!firstName && !email) {
@@ -708,7 +709,7 @@ export async function importHistoricalWeddings(
           wedding_date: weddingDate,
           guest_count_estimate: guestCount,
           booking_value: bookingValue,
-          source: row.source || null,
+          source: row.source ? normalizeSource(row.source) : null,
           notes: row.notes || null,
         })
         .select('id')

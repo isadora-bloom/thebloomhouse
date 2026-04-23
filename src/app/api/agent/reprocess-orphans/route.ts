@@ -3,6 +3,7 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { classifyEmail } from '@/lib/services/router-brain'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
+import { normalizeSource } from '@/lib/services/normalize-source'
 
 // ---------------------------------------------------------------------------
 // POST /api/agent/reprocess-orphans
@@ -150,7 +151,7 @@ export async function POST(req: Request) {
     }
 
     // 3. Create a weddings row in status='inquiry' and link the person.
-    const detectedSource = extracted.source ?? 'direct'
+    const detectedSource = normalizeSource(extracted.source ?? 'direct')
     const parsedEventDateObj = parseFuzzyDate(extracted.eventDate)
     const parsedEventDate = parsedEventDateObj?.iso ?? null
     const parsedGuestCount = parseGuestCount(extracted.guestCount)

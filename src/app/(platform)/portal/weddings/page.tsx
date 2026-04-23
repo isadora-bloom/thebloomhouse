@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
 import { VenueChip } from '@/components/intel/venue-chip'
+import { normalizeSource } from '@/lib/services/normalize-source'
 import {
   Heart,
   Calendar,
@@ -427,7 +428,7 @@ function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; 
 
 const SOURCE_OPTIONS = [
   { value: 'the_knot', label: 'The Knot' },
-  { value: 'weddingwire', label: 'Wedding Wire' },
+  { value: 'wedding_wire', label: 'Wedding Wire' },
   { value: 'google', label: 'Google' },
   { value: 'instagram', label: 'Instagram' },
   { value: 'referral', label: 'Referral' },
@@ -525,7 +526,7 @@ function NewBookingModal({
           status: 'booked',
           wedding_date: form.weddingDate || null,
           guest_count_estimate: form.guestCount ? parseInt(form.guestCount) : null,
-          source: form.source || null,
+          source: form.source ? normalizeSource(form.source) : null,
           booking_value: form.estimatedValue ? parseFloat(form.estimatedValue) : null,
           notes: form.notes || null,
           event_code: code,
@@ -545,7 +546,7 @@ function NewBookingModal({
               status: 'booked',
               wedding_date: form.weddingDate || null,
               guest_count_estimate: form.guestCount ? parseInt(form.guestCount) : null,
-              source: form.source || null,
+              source: form.source ? normalizeSource(form.source) : null,
               booking_value: form.estimatedValue ? parseFloat(form.estimatedValue) : null,
               notes: form.notes || null,
               event_code: retryCode,

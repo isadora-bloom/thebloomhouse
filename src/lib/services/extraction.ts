@@ -141,10 +141,12 @@ const BUDGET_PATTERNS = [
   /budget\s*(?:is|of|around|about)?\s*\$?[\d,]+/gi,
 ]
 
+// Keys MUST match canonical values in normalize-source.ts so extracted
+// sources flow through to weddings.source without a second translation.
 const LEAD_SOURCES: Record<string, string[]> = {
   the_knot: ['the knot', 'theknot'],
   zola: ['zola'],
-  weddingwire: ['weddingwire', 'wedding wire'],
+  wedding_wire: ['weddingwire', 'wedding wire'],
   google: ['google', 'google search'],
   instagram: ['instagram', 'insta'],
   facebook: ['facebook'],

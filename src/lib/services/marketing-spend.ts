@@ -183,7 +183,7 @@ export async function extractSpendFromText(args: {
 
 Rules:
 - One row per (source, month) pair.
-- "source" should be a lowercase single-word platform identifier (the_knot, weddingwire, instagram, google_ads, facebook, tiktok, zola, etc). Infer from context.
+- "source" should be a lowercase snake_case platform identifier (the_knot, wedding_wire, instagram, google_ads, facebook, tiktok, zola, etc). Infer from context.
 - "month" must be YYYY-MM-01 format — the first of the spend month.
 - "amount" in USD (or whatever the user's currency is) — strip currency symbols.
 - If the text doesn't contain parseable spend data, return { "rows": [] }.

@@ -186,7 +186,7 @@ const CLASSIFICATION_SYSTEM_PROMPT = `You are an email classification engine for
    - partnerName: If they mention a partner/fiance name
    - eventDate: Any mentioned wedding date (return as ISO string YYYY-MM-DD if specific, or descriptive like "Fall 2026" if vague)
    - guestCount: Estimated guest count if mentioned
-   - source: If identifiable (the_knot, weddingwire, google, instagram, referral, website, zola, other)
+   - source: If identifiable (the_knot, wedding_wire, google, instagram, referral, website, zola, other)
    - questions: Array of specific questions they're asking (extract each distinct question)
    - urgencyLevel: "low" (general browsing), "medium" (actively planning, has a date), "high" (date is soon, needs quick response, or explicitly says urgent)
    - sentiment: "positive" (excited, enthusiastic), "neutral" (informational), "negative" (frustrated, concerned)

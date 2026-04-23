@@ -110,7 +110,7 @@ function sourceIcon(source: string, kind: PriorTouch['kind']) {
   const s = source.toLowerCase()
   if (s.includes('instagram') || s.includes('facebook') || s.includes('tiktok')) return AtSign
   if (s.includes('website') || s.includes('web')) return Globe
-  if (s.includes('knot') || s.includes('weddingwire') || s.includes('zola')) return LinkIcon
+  if (s.includes('knot') || s.includes('wedding_wire') || s.includes('weddingwire') || s.includes('zola')) return LinkIcon
   if (s.includes('review') || s.includes('google') || s.includes('yelp')) return Star
   if (kind === 'tour') return Calendar
   if (kind === 'interaction' || s === 'email') return Mail

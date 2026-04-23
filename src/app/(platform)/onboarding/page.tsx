@@ -62,11 +62,14 @@ interface VenueBasics {
   ad_platforms: string[]
 }
 
+// Canonical source values — match src/lib/services/normalize-source.ts
+// and the weddings.source CHECK in migration 086. Onboarding seeds
+// auto_send_rules.source with these so incoming inquiries find a rule.
 const AD_PLATFORM_OPTIONS: { value: string; label: string; source: string }[] = [
-  { value: 'theknot',     label: 'The Knot',     source: 'theknot' },
-  { value: 'weddingwire', label: 'WeddingWire',  source: 'weddingwire' },
+  { value: 'the_knot',    label: 'The Knot',     source: 'the_knot' },
+  { value: 'wedding_wire', label: 'WeddingWire',  source: 'wedding_wire' },
   { value: 'zola',        label: 'Zola',         source: 'zola' },
-  { value: 'website',     label: 'Our website',  source: 'direct' },
+  { value: 'website',     label: 'Our website',  source: 'website' },
   { value: 'direct',      label: 'Direct email', source: 'direct' },
 ]
 

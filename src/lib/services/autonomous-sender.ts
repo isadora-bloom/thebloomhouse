@@ -17,6 +17,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { normalizeSource } from '@/lib/services/normalize-source'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -56,16 +57,21 @@ interface AutoSendStats {
 // Source detection
 // ---------------------------------------------------------------------------
 
+// Emit canonical source keys from normalize-source.ts so auto_send_rules
+// matching aligns with wedding.source, brain-dump imports, and the
+// onboarding seed. Pre-normalization these regexes emitted 'theknot' and
+// 'calculator' which never matched the rules seeded for 'the_knot' /
+// 'venue_calculator'.
 const SOURCE_PATTERNS: Record<string, RegExp[]> = {
-  theknot: [/@member\.theknot\.com$/i, /@theknot\.com$/i],
+  the_knot: [/@member\.theknot\.com$/i, /@theknot\.com$/i],
   zola: [/@zola\.com$/i],
-  weddingwire: [/@weddingwire\.com$/i],
-  calculator: [/contact@interactivecalculator\.com/i],
+  wedding_wire: [/@weddingwire\.com$/i],
+  venue_calculator: [/contact@interactivecalculator\.com/i],
 }
 
 /**
  * Detect the source platform from an email address.
- * Returns the platform name or 'direct' for unknown senders.
+ * Returns a canonical source key or 'direct' for unknown senders.
  */
 function detectSource(email: string): string {
   const lower = email.toLowerCase()
@@ -164,13 +170,17 @@ export async function checkAutoSendEligible(
   venueId: string,
   draft: AutoSendCheck
 ): Promise<AutoSendResult> {
-  const source = draft.source ?? 'direct'
+  const rawSource = draft.source ?? 'direct'
   const detectedSource = typeof draft.source === 'string'
     ? detectSource(draft.source)
     : 'direct'
 
-  // Use the detected source for rule matching if draft.source looks like an email
-  const ruleSource = draft.source?.includes('@') ? detectedSource : source
+  // If draft.source is an email address, use regex detection; otherwise
+  // normalize whatever string the caller passed so rule matching never
+  // fails on alias drift (theknot vs the_knot, wedding_wire vs weddingwire).
+  const ruleSource = draft.source?.includes('@')
+    ? detectedSource
+    : normalizeSource(rawSource)
 
   // Check 1: Get matching rule
   const rule = await getMatchingRule(venueId, draft.contextType, ruleSource)

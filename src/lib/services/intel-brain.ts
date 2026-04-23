@@ -133,7 +133,7 @@ You understand the following data:
 
 WEDDINGS (booking pipeline):
 - Statuses: inquiry → tour_scheduled → tour_completed → proposal_sent → booked → completed. Can also be "lost" or "cancelled".
-- Sources: the_knot, weddingwire, google, instagram, referral, website, walk_in, other
+- Sources: the_knot, wedding_wire, here_comes_the_guide, zola, honeybook, google, google_ads, google_business, instagram, facebook, pinterest, tiktok, venue_calculator, website, direct, referral, walk_in, csv_import, vendor_referral, other
 - Each wedding has: booking_value, guest_count_estimate, heat_score (lead temperature), temperature_tier
 - Key dates: inquiry_date, wedding_date, booked_at, lost_at
 

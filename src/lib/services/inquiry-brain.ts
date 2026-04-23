@@ -49,7 +49,7 @@ export interface InquiryDraftOptions {
    * 'direct'). Surfaced to the model so first-touch replies can acknowledge
    * the specific discovery channel (The Knot, WeddingWire, HCTG, Zola, the
    * venue's own website) rather than answering every couple identically.
-   * Values: 'the_knot' | 'weddingwire' | 'here_comes_the_guide' | 'zola'
+   * Values: 'the_knot' | 'wedding_wire' | 'here_comes_the_guide' | 'zola'
    *       | 'website' | 'direct' | (legacy) any other free-form string
    */
   source?: string
@@ -397,16 +397,17 @@ export async function generateInquiryDraft(
   if (source) {
     const sourceLabel =
       source === 'the_knot' ? 'The Knot'
-      : source === 'weddingwire' ? 'WeddingWire'
+      : source === 'wedding_wire' || source === 'weddingwire' ? 'WeddingWire'
       : source === 'here_comes_the_guide' ? 'Here Comes The Guide'
       : source === 'zola' ? 'Zola'
       : source === 'website' ? "the venue's website pricing calculator"
+      : source === 'venue_calculator' ? "the venue's pricing calculator"
       : source === 'direct' ? 'a direct email (not a form relay)'
       : source
     contextBlock += `\n- Inquiry source: ${sourceLabel}`
 
     const sourceGuidance =
-      source === 'the_knot' || source === 'weddingwire' || source === 'here_comes_the_guide' || source === 'zola'
+      source === 'the_knot' || source === 'wedding_wire' || source === 'weddingwire' || source === 'here_comes_the_guide' || source === 'zola'
         ? `This is a marketplace relay — the couple filled out a short form on ${sourceLabel} and we only see the structured fields, not a personal note. Do NOT respond as if they sent a detailed message; acknowledge the channel lightly if it fits naturally, answer what the fields reveal, and invite them to share more.`
         : source === 'website'
           ? `This came through the venue's own pricing calculator, so the couple has already seen public pricing and engaged enough to hand over contact details. Treat them as warmer than a cold inquiry and reference the calculator context only if it feels natural.`
