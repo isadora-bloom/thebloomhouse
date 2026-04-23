@@ -28,6 +28,12 @@
 
 BEGIN;
 
+-- 0. Drop the old narrow CHECK BEFORE normalizing. The UPDATEs below move
+-- rows from one allowed value to another (e.g. 'weddingwire' -> 'wedding_wire')
+-- which the old CHECK would reject mid-flight. The new CHECK is added after
+-- all data is canonical.
+ALTER TABLE weddings DROP CONSTRAINT IF EXISTS weddings_source_check;
+
 -- 1. Normalize existing weddings.source data.
 UPDATE weddings SET source = 'the_knot'
   WHERE lower(source) IN ('theknot', 'the knot', 'the-knot', 'knot', 'the_knot_com');
@@ -80,9 +86,7 @@ UPDATE weddings SET source = 'other'
       'walk_in', 'csv_import', 'vendor_referral', 'other'
     );
 
--- 3. Drop the old narrow CHECK and add the canonical one.
-ALTER TABLE weddings DROP CONSTRAINT IF EXISTS weddings_source_check;
-
+-- 3. Add the canonical CHECK now that every row matches the new enum.
 ALTER TABLE weddings ADD CONSTRAINT weddings_source_check CHECK (
   source IS NULL OR source IN (
     'the_knot', 'wedding_wire', 'here_comes_the_guide', 'zola', 'honeybook',
