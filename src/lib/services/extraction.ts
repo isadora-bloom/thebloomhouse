@@ -49,56 +49,13 @@ export interface ExtractedSignals {
 }
 
 // ---------------------------------------------------------------------------
-// Contract signing detection — quick regex scan for pipeline automation
+// Contract signing detection — re-exported from booking-signal.ts (F8).
+// Kept here as a re-export so existing imports keep compiling; new callers
+// should import directly from '@/lib/services/booking-signal'.
 // ---------------------------------------------------------------------------
 
-const SIGNING_PATTERNS: RegExp[] = [
-  // Contract language
-  /signed the contract/i,
-  /contract is signed/i,
-  /sent the signed/i,
-  /signed and returned/i,
-  /we'?ve signed/i,
-  /just signed/i,
-  /attached.*signed/i,
-  /signed.*attached/i,
-  // Deposit / retainer language
-  /deposit (?:has been |was |is )?(?:paid|received|sent|processed|wired)/i,
-  /retainer (?:has been |was |is )?(?:paid|received|sent|processed)/i,
-  /paid the (?:deposit|retainer)/i,
-  // Commitment language — kept tight to avoid spurious matches on
-  // enthusiastic inquiry-stage emails ("we're so excited about your venue").
-  /we(?:'re| are) (?:officially )?booked/i,
-  /booking (?:is )?confirmed/i,
-  /we(?:'re| are) official(?:ly)?(?:\b|,|\.|$)/i,
-]
-
-/**
- * Scan email body for indicators that the couple has committed to booking.
- *
- * Returns the matched phrase (for audit + future learning) plus the boolean.
- * Fires for contract signing OR deposit/retainer references OR explicit
- * commitment language. Calendly tour confirmations never reach this path —
- * they are short-circuited before the classifier via venue_email_filters
- * action='ignore' (migration 069 + trigger in migration 072).
- */
-export function detectBookingSignal(emailBody: string): { matched: boolean; phrase: string | null } {
-  if (!emailBody) return { matched: false, phrase: null }
-  for (const pattern of SIGNING_PATTERNS) {
-    const match = emailBody.match(pattern)
-    if (match) return { matched: true, phrase: match[0] }
-  }
-  return { matched: false, phrase: null }
-}
-
-/**
- * Back-compat: keep the old boolean signature so existing callers still
- * compile. New code should prefer detectBookingSignal for the matched
- * phrase.
- */
-export function detectContractSigning(emailBody: string): boolean {
-  return detectBookingSignal(emailBody).matched
-}
+export { detectBookingSignal, detectContractSigning } from './booking-signal'
+export type { BookingSignalResult } from './booking-signal'
 
 // ---------------------------------------------------------------------------
 // Urgency keyword sets

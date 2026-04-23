@@ -22,7 +22,7 @@ import {
 import { generateInquiryDraft } from '@/lib/services/inquiry-brain'
 import { generateClientDraft } from '@/lib/services/client-brain'
 import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/gmail'
-import { detectBookingSignal } from '@/lib/services/extraction'
+import { detectBookingSignal } from '@/lib/services/booking-signal'
 import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
