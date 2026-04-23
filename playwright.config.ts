@@ -21,7 +21,12 @@ if (fs.existsSync(envPath)) {
 }
 
 const USE_LOCAL = process.env.E2E_USE_LOCAL !== 'false'
-const BASE_URL = USE_LOCAL ? 'http://localhost:3000' : (process.env.E2E_BASE_URL || 'http://localhost:3000')
+// Local port is 3100 by default to avoid collisions with other Next dev
+// servers on 3000 (e.g. the Presshouse workspace). Override with E2E_PORT.
+const LOCAL_PORT = Number(process.env.E2E_PORT ?? 3100)
+const BASE_URL = USE_LOCAL
+  ? `http://localhost:${LOCAL_PORT}`
+  : (process.env.E2E_BASE_URL || `http://localhost:${LOCAL_PORT}`)
 
 export default defineConfig({
   testDir: './e2e',
@@ -65,8 +70,8 @@ export default defineConfig({
     ? {
         // Force webpack (no Turbopack) — Turbopack has a reproducible crash on
         // Windows during CSS compiles that kills dev mid-run. See BUG-DEV-01.
-        command: 'npx next dev --webpack',
-        url: 'http://localhost:3000/welcome',
+        command: `npx next dev --webpack -p ${LOCAL_PORT}`,
+        url: `http://localhost:${LOCAL_PORT}/welcome`,
         reuseExistingServer: true,
         timeout: 180_000,
         stdout: 'ignore',

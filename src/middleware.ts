@@ -82,16 +82,10 @@ export async function middleware(request: NextRequest) {
   }
 
   // -----------------------------------------------------------------------
-  // Demo mode: if bloom_demo cookie is set, skip auth checks
-  // This lets people browse the full platform without signing in
-  // -----------------------------------------------------------------------
-  const isDemo = request.cookies.get('bloom_demo')?.value === 'true'
-  if (isDemo) {
-    return response
-  }
-
-  // -----------------------------------------------------------------------
-  // 1. Create Supabase client that reads/writes cookies on the response
+  // Build the Supabase client up front. We need to check auth whether or
+  // not we're about to honour the demo cookie, because the demo + auth
+  // collision is the primary data-bleed vector and we want to resolve it
+  // at the earliest point.
   // -----------------------------------------------------------------------
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -121,6 +115,40 @@ export async function middleware(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser()
+
+  // -----------------------------------------------------------------------
+  // Demo mode vs auth session: the collision
+  //
+  // If bloom_demo=true and NO auth session: this is a legit anonymous demo
+  // visitor. Skip auth checks, let them browse.
+  //
+  // If bloom_demo=true and AN auth session exists: this is the 24-hour
+  // bleed vector. The /demo entry route at /app/demo/page.tsx now signs
+  // the user out before setting demo cookies, but existing sessions (from
+  // before this fix shipped, or from a race where a tab re-authed after
+  // demo entry) may still carry both cookies. When they do, the browser's
+  // Supabase client attaches the auth token to every query, RLS returns
+  // the user's real venue data, and the demo cookie pins a foreign scope
+  // on top. Result: real data leaks into demo views, demo data is invisible.
+  //
+  // Resolution: auth wins. Clear the demo cookies and fall through to the
+  // authenticated flow below. The user sees their real venue cleanly.
+  // -----------------------------------------------------------------------
+  const isDemo = request.cookies.get('bloom_demo')?.value === 'true'
+  if (isDemo && !user) {
+    return response
+  }
+  if (isDemo && user) {
+    const clear = { path: '/', maxAge: 0 } as const
+    response.cookies.set('bloom_demo', '', clear)
+    response.cookies.set('bloom_scope', '', clear)
+    response.cookies.set('bloom_venue', '', clear)
+    // Also clear from the in-flight request so downstream server components
+    // in this same request don't observe the stale demo cookie.
+    request.cookies.delete('bloom_demo')
+    request.cookies.delete('bloom_scope')
+    request.cookies.delete('bloom_venue')
+  }
 
   // -----------------------------------------------------------------------
   // 2. Handle subdomain routing (production couple portal)

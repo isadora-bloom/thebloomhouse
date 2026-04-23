@@ -2,11 +2,29 @@
 
 import { useRouter } from 'next/navigation'
 import { Flower2, LayoutDashboard, Heart, ArrowRight } from 'lucide-react'
+import { createClient } from '@/lib/supabase/client'
 
 export default function DemoEntryPage() {
   const router = useRouter()
 
-  function launchDemo(destination: string) {
+  async function launchDemo(destination: string) {
+    // Sign out any existing authenticated session FIRST. Without this, a
+    // coordinator who was logged into a real venue and clicks "Launch Demo"
+    // would browse with their auth cookies still attached. Every Supabase
+    // query would run under their authenticated RLS (returning their own
+    // venue's data) while the demo scope cookie pointed at Crestwood. Result:
+    // real venue data bleeds into the demo and the demo_anon_select policy
+    // from migration 064 never fires because the user is authenticated, not
+    // anonymous. The demo is an anonymous preview; enforce that at entry.
+    try {
+      const supabase = createClient()
+      await supabase.auth.signOut()
+    } catch {
+      // Non-fatal. If sign-out fails (already signed out, network blip) the
+      // user still gets the demo cookies below and the middleware fallback
+      // in `src/middleware.ts` will clear the demo cookies if an auth
+      // session is somehow still present on the next request.
+    }
     // Set demo cookie (1 day expiry)
     document.cookie = 'bloom_demo=true; path=/; max-age=86400'
     // Pin bloom_venue to Hawthorne for venue-specific pages (useVenueId fallback).
