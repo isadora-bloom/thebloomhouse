@@ -24,7 +24,7 @@ import {
   // System
   Building, ShieldCheck, Menu, X, Hotel, FileText,
   // Misc
-  ListOrdered, HelpCircle, Users, SlidersHorizontal, Workflow, MailX,
+  ListOrdered, HelpCircle, Users, SlidersHorizontal, Workflow, MailX, Inbox,
   // Config pages
   Wine, HardHat, Bus, CheckSquare,
   UtensilsCrossed, Armchair, Flower2, HeartHandshake,
@@ -94,6 +94,7 @@ const VENUE_SECTIONS: NavSection[] = [
       { label: 'Knowledge Gaps', href: '/agent/knowledge-gaps', icon: HelpCircle },
       { label: 'Relationships', href: '/agent/relationships', icon: UsersRound },
       { label: 'Client Codes', href: '/agent/codes', icon: ListOrdered },
+      { label: 'Omi Inbox', href: '/agent/omi-inbox', icon: Inbox },
       { label: 'Inbox Filters', href: '/settings/inbox-filters', icon: MailX },
     ],
   },
@@ -266,6 +267,7 @@ export function Sidebar({ isDemo = false }: { isDemo?: boolean }) {
   const [navMode, setNavMode] = useState<'daily' | 'full'>('daily')
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const [insightCount, setInsightCount] = useState<number>(0)
+  const [omiOrphanCount, setOmiOrphanCount] = useState<number>(0)
 
   useEffect(() => {
     setNavMode(getNavModeCookie())
@@ -342,6 +344,15 @@ export function Sidebar({ isDemo = false }: { isDemo?: boolean }) {
         .then(({ count: insightsCount }) => {
           setInsightCount(insightsCount ?? 0)
         })
+
+      // Fetch pending Omi orphans count for sidebar badge
+      supabase
+        .from('tour_transcript_orphans')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending')
+        .then(({ count: orphanCount }) => {
+          setOmiOrphanCount(orphanCount ?? 0)
+        })
     })
   }, [])
 
@@ -369,6 +380,17 @@ export function Sidebar({ isDemo = false }: { isDemo?: boolean }) {
       for (const item of section.items) {
         if (item.href === '/intel/insights') {
           item.badge = String(insightCount)
+        }
+      }
+    }
+  }
+
+  // Inject dynamic badge for Omi Inbox nav item
+  if (omiOrphanCount > 0) {
+    for (const section of allSections) {
+      for (const item of section.items) {
+        if (item.href === '/agent/omi-inbox') {
+          item.badge = String(omiOrphanCount)
         }
       }
     }

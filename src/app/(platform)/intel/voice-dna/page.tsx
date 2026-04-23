@@ -35,6 +35,7 @@ interface PhraseRow {
   sentiment_score: number | null
   frequency: number
   usageCount: number
+  sourceType?: 'review' | 'transcript' | 'manual'
 }
 
 interface VoiceDnaData {
@@ -494,11 +495,32 @@ export default function VoiceDnaPage() {
               {activePhrases.map((row, i) => (
                 <div key={`${row.phrase}-${i}`} className="p-4 flex flex-col md:flex-row md:items-center gap-3">
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm italic text-sage-900 leading-relaxed mb-1">
-                      &ldquo;{row.phrase}&rdquo;
-                    </p>
+                    <div className="flex items-start gap-2 mb-1">
+                      <p className="text-sm italic text-sage-900 leading-relaxed flex-1">
+                        &ldquo;{row.phrase}&rdquo;
+                      </p>
+                      {row.sourceType === 'transcript' && (
+                        <span
+                          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border border-teal-200 bg-teal-50 text-teal-700 text-[10px] font-medium uppercase tracking-wide"
+                          title="Mined from a tour transcript (booked couple with a 5-star review)"
+                        >
+                          <Mic className="w-2.5 h-2.5" />
+                          from tours
+                        </span>
+                      )}
+                      {row.sourceType === 'manual' && (
+                        <span
+                          className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full border border-sage-200 bg-sage-50 text-sage-700 text-[10px] font-medium uppercase tracking-wide"
+                          title="Added manually"
+                        >
+                          manual
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[11px] text-sage-500">
-                      Mentioned {row.frequency}x in reviews. Used in {row.usageCount} draft{row.usageCount === 1 ? '' : 's'}.
+                      Mentioned {row.frequency}x in{' '}
+                      {row.sourceType === 'transcript' ? 'tours' : 'reviews'}. Used in{' '}
+                      {row.usageCount} draft{row.usageCount === 1 ? '' : 's'}.
                     </p>
                   </div>
                   <div className="md:w-40 shrink-0">

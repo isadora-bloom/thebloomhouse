@@ -20,6 +20,7 @@ import { learnFiltersForAllVenues } from '@/lib/services/inbox-filters'
 import { computeAllVenueHealth } from '@/lib/services/venue-health-compute'
 import { persistDropoffInsights } from '@/lib/services/quality-signals'
 import { refreshAllCensusData } from '@/lib/services/census-ingest'
+import { mineTranscriptVoiceForAllVenues } from '@/lib/services/transcript-voice-learning'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -45,6 +46,7 @@ const VALID_JOBS = [
   'venue_health_compute',
   'quality_signals_refresh',
   'census_refresh',
+  'transcript_voice_mining',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -117,6 +119,14 @@ async function runJob(job: JobName): Promise<unknown> {
       // to state + national rows in market_intelligence. Never throws —
       // per-state failures are logged inside the service.
       return refreshAllCensusData()
+
+    case 'transcript_voice_mining':
+      // Phase 7 Task 64. Mine vocabulary from tour transcripts of couples
+      // who booked AND left a 5-star review. Per-venue data-gated — the
+      // service returns { dataGated: true } and skips AI entirely for
+      // venues with fewer than MIN_ELIGIBLE_TOURS eligible tours. Runs
+      // weekly; cheap when gated, modest when not.
+      return mineTranscriptVoiceForAllVenues()
   }
 }
 

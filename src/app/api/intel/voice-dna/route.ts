@@ -25,6 +25,7 @@ interface ReviewPhraseOut {
   sentiment_score: number | null
   frequency: number
   usageCount: number
+  sourceType: 'review' | 'transcript' | 'manual'
 }
 
 interface PhrasesByTheme {
@@ -161,7 +162,7 @@ export async function GET(req: NextRequest) {
       .maybeSingle(),
     service
       .from('review_language')
-      .select('phrase, theme, sentiment_score, frequency, approved_for_sage, approved_for_marketing, created_at')
+      .select('phrase, theme, sentiment_score, frequency, approved_for_sage, approved_for_marketing, source_type, created_at')
       .eq('venue_id', venueId)
       .order('frequency', { ascending: false }),
     service
@@ -228,11 +229,15 @@ export async function GET(req: NextRequest) {
   for (const row of phrases) {
     const theme = (row.theme as string | null) ?? 'other'
     const phrase = row.phrase as string
+    const rawSource = (row.source_type as string | null | undefined) ?? 'review'
+    const sourceType: ReviewPhraseOut['sourceType'] =
+      rawSource === 'transcript' || rawSource === 'manual' ? rawSource : 'review'
     const entry: ReviewPhraseOut = {
       phrase,
       sentiment_score: (row.sentiment_score as number | null) ?? null,
       frequency: (row.frequency as number | null) ?? 1,
       usageCount: usageByPhrase.get(phrase.toLowerCase()) ?? 0,
+      sourceType,
     }
     if (row.approved_for_sage) {
       if (!sageByTheme[theme]) sageByTheme[theme] = []

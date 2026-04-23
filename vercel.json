@@ -59,6 +59,10 @@
     {
       "path": "/api/cron?job=census_refresh",
       "schedule": "0 3 1 * *"
+    },
+    {
+      "path": "/api/cron?job=transcript_voice_mining",
+      "schedule": "0 6 * * 2"
     }
   ]
 }

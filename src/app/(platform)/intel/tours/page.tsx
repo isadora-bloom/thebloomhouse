@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useScope } from '@/lib/hooks/use-scope'
 import {
@@ -13,6 +13,13 @@ import {
   Video,
   Phone,
   Users,
+  ChevronDown,
+  ChevronRight,
+  Sparkles,
+  MessageSquare,
+  Heart,
+  Calendar,
+  FileText,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
@@ -32,6 +39,15 @@ function getSupabase() {
 // Types
 // ---------------------------------------------------------------------------
 
+interface TranscriptExtractedShape {
+  attendee_types?: string[]
+  key_questions?: Array<{ question: string; category: string }>
+  emotional_signals?: Array<{ signal: string; evidence: string }>
+  specific_interests?: string[]
+  booked_date_mentions?: string[]
+  summary?: string
+}
+
 interface TourRow {
   id: string
   venue_id: string
@@ -46,6 +62,9 @@ interface TourRow {
   competing_venues: string | null
   notes: string | null
   created_at: string
+  transcript: string | null
+  transcript_extracted: TranscriptExtractedShape | null
+  tour_brief_generated_at: string | null
   venue?: { name: string | null } | null
   conductor?: { first_name: string | null; last_name: string | null } | null
 }
@@ -113,6 +132,23 @@ export default function ToursPage() {
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<TourFilter>('all')
   const [showModal, setShowModal] = useState(false)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [extractingId, setExtractingId] = useState<string | null>(null)
+  const [extractError, setExtractError] = useState<string | null>(null)
+  const [briefingId, setBriefingId] = useState<string | null>(null)
+  const [briefError, setBriefError] = useState<string | null>(null)
+  const [briefs, setBriefs] = useState<
+    Record<
+      string,
+      {
+        aiName: string
+        venueName: string
+        brief: string
+        suggestedFollowUpDraft: string | null
+        confidence: 'high' | 'medium' | 'low'
+      }
+    >
+  >({})
 
   // Form state
   const [formDate, setFormDate] = useState('')
@@ -334,6 +370,90 @@ export default function ToursPage() {
     }
   }
 
+  async function handleExtractTranscript(tourId: string) {
+    setExtractingId(tourId)
+    setExtractError(null)
+    try {
+      const res = await fetch('/api/agent/tour-transcript-extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tourId }),
+      })
+      const json = (await res.json().catch(() => ({}))) as {
+        extraction?: TranscriptExtractedShape | null
+        error?: string
+      }
+      if (!res.ok) {
+        throw new Error(json.error || `Extraction failed (${res.status})`)
+      }
+      if (!json.extraction) {
+        setExtractError('No transcript content to extract.')
+        return
+      }
+      // Patch the local row so the panel renders the new extraction
+      // without a full refetch.
+      setTours((prev) =>
+        prev.map((t) =>
+          t.id === tourId
+            ? { ...t, transcript_extracted: json.extraction ?? null }
+            : t
+        )
+      )
+    } catch (err) {
+      console.error('[tours] extract failed:', err)
+      setExtractError(
+        err instanceof Error ? err.message : 'Extraction failed'
+      )
+    } finally {
+      setExtractingId(null)
+    }
+  }
+
+  async function handleGenerateBrief(tourId: string) {
+    setBriefingId(tourId)
+    setBriefError(null)
+    try {
+      const res = await fetch('/api/agent/post-tour-brief', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tourId }),
+      })
+      const json = (await res.json().catch(() => ({}))) as {
+        brief?: {
+          aiName: string
+          venueName: string
+          brief: string
+          suggestedFollowUpDraft: string | null
+          confidence: 'high' | 'medium' | 'low'
+        } | null
+        error?: string
+      }
+      if (!res.ok) {
+        throw new Error(json.error || `Brief failed (${res.status})`)
+      }
+      if (!json.brief) {
+        setBriefError('Brief could not be generated. Run the transcript extraction first.')
+        return
+      }
+      setBriefs((prev) => ({ ...prev, [tourId]: json.brief! }))
+      // Stamp the local row so the "Generate" button disappears until refetch.
+      setTours((prev) =>
+        prev.map((t) =>
+          t.id === tourId
+            ? { ...t, tour_brief_generated_at: new Date().toISOString() }
+            : t
+        )
+      )
+    } catch (err) {
+      console.error('[tours] brief failed:', err)
+      setBriefError(
+        err instanceof Error ? err.message : 'Brief generation failed'
+      )
+    } finally {
+      setBriefingId(null)
+    }
+  }
+
   const filters: { key: TourFilter; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'upcoming', label: 'Upcoming' },
@@ -461,35 +581,95 @@ export default function ToursPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border bg-warm-white">
+                    <th className="px-3 py-3 w-8"></th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Couple</th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Date</th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Venue</th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Type</th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Conducted By</th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Outcome</th>
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Intel</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {filtered.map((t) => {
                     const TypeIcon = tourTypeIcon(t.tour_type)
+                    const hasTranscript = !!(t.transcript && t.transcript.trim().length > 0)
+                    const hasExtraction = !!t.transcript_extracted
+                    const isExpanded = expandedId === t.id
                     return (
-                      <tr key={t.id} className="hover:bg-sage-50/50 transition-colors">
-                        <td className="px-5 py-4 font-medium text-sage-900">{t.couple_name || '—'}</td>
-                        <td className="px-5 py-4 text-sage-700">{new Date(t.scheduled_at).toLocaleDateString()}</td>
-                        <td className="px-5 py-4 text-sage-600">{t.venue?.name || '—'}</td>
-                        <td className="px-5 py-4 text-sage-700">
-                          <span className="inline-flex items-center gap-1">
-                            <TypeIcon className="w-3 h-3" />
-                            {formatLabel(t.tour_type)}
-                          </span>
-                        </td>
-                        <td className="px-5 py-4 text-sage-600">{conductorName(t)}</td>
-                        <td className="px-5 py-4">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${outcomeBadge(t.outcome)}`}>
-                            {formatLabel(t.outcome)}
-                          </span>
-                        </td>
-                      </tr>
+                      <Fragment key={t.id}>
+                        <tr
+                          className="hover:bg-sage-50/50 transition-colors cursor-pointer"
+                          onClick={() =>
+                            setExpandedId((prev) => (prev === t.id ? null : t.id))
+                          }
+                        >
+                          <td className="px-3 py-4 text-sage-400">
+                            {hasTranscript ? (
+                              isExpanded ? (
+                                <ChevronDown className="w-4 h-4" />
+                              ) : (
+                                <ChevronRight className="w-4 h-4" />
+                              )
+                            ) : null}
+                          </td>
+                          <td className="px-5 py-4 font-medium text-sage-900">{t.couple_name || '—'}</td>
+                          <td className="px-5 py-4 text-sage-700">{new Date(t.scheduled_at).toLocaleDateString()}</td>
+                          <td className="px-5 py-4 text-sage-600">{t.venue?.name || '—'}</td>
+                          <td className="px-5 py-4 text-sage-700">
+                            <span className="inline-flex items-center gap-1">
+                              <TypeIcon className="w-3 h-3" />
+                              {formatLabel(t.tour_type)}
+                            </span>
+                          </td>
+                          <td className="px-5 py-4 text-sage-600">{conductorName(t)}</td>
+                          <td className="px-5 py-4">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${outcomeBadge(t.outcome)}`}>
+                              {formatLabel(t.outcome)}
+                            </span>
+                          </td>
+                          <td className="px-5 py-4 text-xs">
+                            {hasExtraction ? (
+                              <span className="inline-flex items-center gap-1 text-sage-600">
+                                <Sparkles className="w-3 h-3" />
+                                Extracted
+                              </span>
+                            ) : hasTranscript ? (
+                              <span className="inline-flex items-center gap-1 text-sage-500">
+                                <FileText className="w-3 h-3" />
+                                Transcript
+                              </span>
+                            ) : (
+                              <span className="text-sage-400">—</span>
+                            )}
+                          </td>
+                        </tr>
+                        {isExpanded && hasTranscript && (
+                          <tr className="bg-sage-50/30">
+                            <td colSpan={8} className="px-6 py-5">
+                              <TourIntelligencePanel
+                                tour={t}
+                                onExtract={() => handleExtractTranscript(t.id)}
+                                extracting={extractingId === t.id}
+                                error={
+                                  extractingId === null && extractError && expandedId === t.id
+                                    ? extractError
+                                    : null
+                                }
+                                onGenerateBrief={() => handleGenerateBrief(t.id)}
+                                briefing={briefingId === t.id}
+                                brief={briefs[t.id] ?? null}
+                                briefError={
+                                  briefingId === null && briefError && expandedId === t.id
+                                    ? briefError
+                                    : null
+                                }
+                              />
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     )
                   })}
                 </tbody>
@@ -599,6 +779,461 @@ export default function ToursPage() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Tour Intelligence Panel. Phase 7 Task 62.
+//
+// Surfaces the AI-extracted intelligence from a tour's Omi transcript.
+// When the tour has a transcript but no extracted JSON yet, shows a single
+// "Extract intelligence" button. When extraction exists, renders the full
+// structured breakdown as sections.
+// ---------------------------------------------------------------------------
+
+interface TourIntelligencePanelProps {
+  tour: TourRow
+  onExtract: () => void
+  extracting: boolean
+  error: string | null
+  onGenerateBrief: () => void
+  briefing: boolean
+  brief: {
+    aiName: string
+    venueName: string
+    brief: string
+    suggestedFollowUpDraft: string | null
+    confidence: 'high' | 'medium' | 'low'
+  } | null
+  briefError: string | null
+}
+
+function TourIntelligencePanel({
+  tour,
+  onExtract,
+  extracting,
+  error,
+  onGenerateBrief,
+  briefing,
+  brief,
+  briefError,
+}: TourIntelligencePanelProps) {
+  const extracted = tour.transcript_extracted
+
+  if (!extracted) {
+    return (
+      <div className="rounded-lg border border-sage-200 bg-warm-white p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-sage-900 font-medium">
+              <FileText className="w-4 h-4 text-sage-500" />
+              Tour transcript available
+            </div>
+            <p className="text-xs text-sage-600 mt-1">
+              Run the AI extractor to pull out attendees, questions, emotional
+              signals, interests, and mentioned dates.
+            </p>
+            {tour.transcript && (
+              <p className="text-xs text-sage-500 mt-2">
+                Transcript length: {tour.transcript.length.toLocaleString()} chars
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onExtract()
+            }}
+            disabled={extracting}
+            className="shrink-0 inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md bg-sage-600 hover:bg-sage-700 text-white transition-colors disabled:opacity-50"
+          >
+            <Sparkles className="w-3 h-3" />
+            {extracting ? 'Extracting...' : 'Extract intelligence'}
+          </button>
+        </div>
+        {error && (
+          <p className="mt-3 text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">
+            {error}
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  const attendees = extracted.attendee_types ?? []
+  const questions = extracted.key_questions ?? []
+  const signals = extracted.emotional_signals ?? []
+  const interests = extracted.specific_interests ?? []
+  const dates = extracted.booked_date_mentions ?? []
+  const summary = extracted.summary ?? ''
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Sparkles className="w-4 h-4 text-sage-500" />
+        <h3 className="font-heading text-sm font-semibold text-sage-900">
+          AI-extracted tour intelligence
+        </h3>
+      </div>
+
+      {summary && (
+        <div className="rounded-lg border border-sage-200 bg-warm-white p-4">
+          <div className="text-xs font-medium uppercase tracking-wider text-sage-500 mb-1">
+            Summary
+          </div>
+          <p className="text-sm text-sage-800 leading-relaxed">{summary}</p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {attendees.length > 0 && (
+          <div className="rounded-lg border border-sage-200 bg-warm-white p-4">
+            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-sage-500 mb-2">
+              <Users className="w-3 h-3" /> Attendees present
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {attendees.map((a) => (
+                <span
+                  key={a}
+                  className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-sage-50 text-sage-700 border-sage-200"
+                >
+                  {formatLabel(a)}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {dates.length > 0 && (
+          <div className="rounded-lg border border-sage-200 bg-warm-white p-4">
+            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-sage-500 mb-2">
+              <Calendar className="w-3 h-3" /> Dates mentioned
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {dates.map((d, i) => (
+                <span
+                  key={`${d}-${i}`}
+                  className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-teal-50 text-teal-700 border-teal-200"
+                >
+                  {d}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {questions.length > 0 && (
+        <div className="rounded-lg border border-sage-200 bg-warm-white p-4">
+          <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-sage-500 mb-2">
+            <MessageSquare className="w-3 h-3" /> Key questions
+          </div>
+          <ul className="space-y-2">
+            {questions.map((q, i) => (
+              <li
+                key={`${q.question}-${i}`}
+                className="flex items-start gap-2 text-sm text-sage-800"
+              >
+                <span className="inline-flex items-center shrink-0 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider font-semibold bg-gold-50 text-gold-700 border border-gold-200">
+                  {q.category}
+                </span>
+                <span className="flex-1">{q.question}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {signals.length > 0 && (
+        <div className="rounded-lg border border-sage-200 bg-warm-white p-4">
+          <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-sage-500 mb-2">
+            <Heart className="w-3 h-3" /> Emotional signals
+          </div>
+          <ul className="space-y-2">
+            {signals.map((s, i) => (
+              <li key={`${s.signal}-${i}`} className="text-sm">
+                <div className="font-medium text-sage-900">
+                  {formatLabel(s.signal)}
+                </div>
+                {s.evidence && (
+                  <div className="text-xs text-sage-600 italic mt-0.5">
+                    &ldquo;{s.evidence}&rdquo;
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {interests.length > 0 && (
+        <div className="rounded-lg border border-sage-200 bg-warm-white p-4">
+          <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-sage-500 mb-2">
+            <Target className="w-3 h-3" /> Specific interests
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {interests.map((i, idx) => (
+              <span
+                key={`${i}-${idx}`}
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-emerald-50 text-emerald-700 border-emerald-200"
+              >
+                {i}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Post-tour Sage brief section (Phase 7 Task 63) */}
+      <PostTourBriefSection
+        tour={tour}
+        onGenerateBrief={onGenerateBrief}
+        briefing={briefing}
+        brief={brief}
+        briefError={briefError}
+      />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// PostTourBriefSection (Phase 7 Task 63)
+// Below the extracted-intelligence section. Shows a "Generate post-tour
+// brief" CTA when the transcript has been extracted but no brief exists,
+// and renders the venue-voice markdown brief + suggested draft card once
+// generated.
+// ---------------------------------------------------------------------------
+
+interface PostTourBriefSectionProps {
+  tour: TourRow
+  onGenerateBrief: () => void
+  briefing: boolean
+  brief: {
+    aiName: string
+    venueName: string
+    brief: string
+    suggestedFollowUpDraft: string | null
+    confidence: 'high' | 'medium' | 'low'
+  } | null
+  briefError: string | null
+}
+
+function PostTourBriefSection({
+  tour,
+  onGenerateBrief,
+  briefing,
+  brief,
+  briefError,
+}: PostTourBriefSectionProps) {
+  const hasExtraction = !!tour.transcript_extracted
+  const hasBriefStamp = !!tour.tour_brief_generated_at
+
+  // If there's no extraction yet, nothing to brief on.
+  if (!hasExtraction) return null
+
+  // Already generated and we have the content locally: render it.
+  if (brief) {
+    return (
+      <div className="rounded-lg border border-sage-300 bg-white p-5 space-y-4 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-gold-500" />
+            <h3 className="font-heading text-sm font-semibold text-sage-900">
+              Post-tour brief from {brief.aiName}
+            </h3>
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-semibold bg-sage-50 text-sage-700 border border-sage-200">
+              {brief.confidence} confidence
+            </span>
+          </div>
+        </div>
+        <BriefMarkdown text={brief.brief} />
+
+        {brief.suggestedFollowUpDraft ? (
+          <div className="rounded-md border border-gold-200 bg-gold-50/40 p-4 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs font-medium uppercase tracking-wider text-sage-500">
+                Suggested follow-up draft
+              </div>
+              <a
+                href="/agent/drafts"
+                onClick={(e) => e.stopPropagation()}
+                className="text-xs font-medium text-sage-700 hover:text-sage-900 underline"
+              >
+                Review in Drafts
+              </a>
+            </div>
+            <p className="text-sm text-sage-800 whitespace-pre-wrap leading-relaxed">
+              {brief.suggestedFollowUpDraft}
+            </p>
+            <p className="text-[11px] text-sage-500 italic">
+              Saved to Drafts as pending. Approve, edit, or reject from there.
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-sage-500 italic">
+            {brief.aiName} didn&rsquo;t have enough signal to compose a follow-up
+            draft. Try adding more detail to the transcript.
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  // Brief already generated in a past session but not re-fetched:
+  // show a hint + let the coordinator re-run if they want a fresh one.
+  if (hasBriefStamp) {
+    return (
+      <div className="rounded-lg border border-sage-200 bg-warm-white p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-sage-900 font-medium">
+              <Sparkles className="w-4 h-4 text-gold-500" />
+              Post-tour brief already generated
+            </div>
+            <p className="text-xs text-sage-600 mt-1">
+              A brief was composed on{' '}
+              {new Date(tour.tour_brief_generated_at!).toLocaleString()}. Check
+              the drafts queue for the follow-up email, or regenerate below.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onGenerateBrief()
+            }}
+            disabled={briefing}
+            className="shrink-0 inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md border border-sage-300 bg-warm-white hover:bg-sage-50 text-sage-700 transition-colors disabled:opacity-50"
+          >
+            <Sparkles className="w-3 h-3" />
+            {briefing ? 'Regenerating...' : 'Regenerate brief'}
+          </button>
+        </div>
+        {briefError && (
+          <p className="mt-3 text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">
+            {briefError}
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  // Never generated: show the primary CTA.
+  return (
+    <div className="rounded-lg border border-gold-200 bg-gold-50/30 p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-sage-900 font-medium">
+            <Sparkles className="w-4 h-4 text-gold-500" />
+            Generate post-tour brief
+          </div>
+          <p className="text-xs text-sage-600 mt-1">
+            Compose a coordinator brief in your venue&rsquo;s voice and draft a
+            personalised follow-up email anchored on what the couple actually
+            cared about.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onGenerateBrief()
+          }}
+          disabled={briefing}
+          className="shrink-0 inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md bg-gold-500 hover:bg-gold-600 text-white transition-colors disabled:opacity-50"
+        >
+          <Sparkles className="w-3 h-3" />
+          {briefing ? 'Generating...' : 'Generate post-tour brief'}
+        </button>
+      </div>
+      {briefError && (
+        <p className="mt-3 text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">
+          {briefError}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// BriefMarkdown: lightweight markdown renderer for H3/paragraph/bullets.
+// The brief prompt constrains output to these primitives so we can avoid
+// shipping a full markdown library just for this surface.
+// ---------------------------------------------------------------------------
+
+function BriefMarkdown({ text }: { text: string }) {
+  const lines = text.split(/\r?\n/)
+  type Block =
+    | { type: 'h3'; text: string }
+    | { type: 'p'; text: string }
+    | { type: 'ul'; items: string[] }
+  const blocks: Block[] = []
+  let paragraph: string[] = []
+  let bullets: string[] = []
+
+  const flushParagraph = () => {
+    if (paragraph.length > 0) {
+      blocks.push({ type: 'p', text: paragraph.join(' ').trim() })
+      paragraph = []
+    }
+  }
+  const flushBullets = () => {
+    if (bullets.length > 0) {
+      blocks.push({ type: 'ul', items: bullets })
+      bullets = []
+    }
+  }
+
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (line.startsWith('### ')) {
+      flushParagraph()
+      flushBullets()
+      blocks.push({ type: 'h3', text: line.slice(4).trim() })
+    } else if (/^[-*]\s+/.test(line)) {
+      flushParagraph()
+      bullets.push(line.replace(/^[-*]\s+/, '').trim())
+    } else if (line.length === 0) {
+      flushParagraph()
+      flushBullets()
+    } else {
+      flushBullets()
+      paragraph.push(line)
+    }
+  }
+  flushParagraph()
+  flushBullets()
+
+  return (
+    <div className="space-y-3 text-sm text-sage-800 leading-relaxed">
+      {blocks.map((block, i) => {
+        if (block.type === 'h3') {
+          return (
+            <h4
+              key={i}
+              className="font-heading text-sm font-semibold text-sage-900 mt-2"
+            >
+              {block.text}
+            </h4>
+          )
+        }
+        if (block.type === 'ul') {
+          return (
+            <ul key={i} className="list-disc pl-5 space-y-1">
+              {block.items.map((item, idx) => (
+                <li key={idx}>{item}</li>
+              ))}
+            </ul>
+          )
+        }
+        return (
+          <p key={i} className="text-sage-800">
+            {block.text}
+          </p>
+        )
+      })}
     </div>
   )
 }
