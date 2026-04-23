@@ -43,6 +43,16 @@ export interface ClassificationResult {
     questions: string[]
     urgencyLevel: 'low' | 'medium' | 'high'
     sentiment: 'positive' | 'neutral' | 'negative'
+    // Heat signals — the classifier is already reading the body, so it
+    // emits structured booleans here and the email-pipeline translates
+    // them into engagement_events. Avoids regex duplication in
+    // heat-mapping or the pipeline for the same phrases.
+    mentionsTourRequest?: boolean
+    mentionsFamilyAttending?: boolean
+    /** 'none' (browsing), 'considering' (gathering info), 'decided' (strong intent — "we want to book"). */
+    commitmentLevel?: 'none' | 'considering' | 'decided'
+    /** 0-1 estimate of how specific the email is (named date + guest count + venue specifics = higher). */
+    specificityScore?: number
   }
 }
 
@@ -190,6 +200,10 @@ const CLASSIFICATION_SYSTEM_PROMPT = `You are an email classification engine for
    - questions: Array of specific questions they're asking (extract each distinct question)
    - urgencyLevel: "low" (general browsing), "medium" (actively planning, has a date), "high" (date is soon, needs quick response, or explicitly says urgent)
    - sentiment: "positive" (excited, enthusiastic), "neutral" (informational), "negative" (frustrated, concerned)
+   - mentionsTourRequest: true if the sender explicitly asks to book / schedule / come see / tour the venue
+   - mentionsFamilyAttending: true if parents, family, or wedding party are explicitly mentioned as involved/attending
+   - commitmentLevel: "none" (just curious, browsing), "considering" (actively comparing / gathering info / asked pricing), "decided" (clear intent to book — "we want to book", "we're ready to move forward", date set and pushing to lock in)
+   - specificityScore: 0.0 to 1.0, how specific this email is. 0.0 for "do you host weddings?". 0.5 for "we're thinking summer 2026 for around 120 guests". 1.0 for "we want July 18 2026 for 140 guests, plated dinner, we'd like to tour next Saturday at 2pm". Higher = more signal the couple has done their homework.
 
 3. **Confidence** — How confident are you in the classification? (0-100)
    - 90-100: Very clear classification
@@ -214,7 +228,11 @@ Return JSON matching this exact structure:
     "source": string | null,
     "questions": string[],
     "urgencyLevel": "low" | "medium" | "high",
-    "sentiment": "positive" | "neutral" | "negative"
+    "sentiment": "positive" | "neutral" | "negative",
+    "mentionsTourRequest": boolean,
+    "mentionsFamilyAttending": boolean,
+    "commitmentLevel": "none" | "considering" | "decided",
+    "specificityScore": number
   }
 }`
 

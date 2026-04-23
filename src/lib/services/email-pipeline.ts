@@ -31,6 +31,7 @@ import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { detectFormRelay, type FormRelayLead } from '@/lib/services/form-relay-parsers'
 import { normalizeSource } from '@/lib/services/normalize-source'
+import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
 
 // ---------------------------------------------------------------------------
 // Structured error logging
@@ -844,6 +845,58 @@ export async function processIncomingEmail(
       subject: email.subject,
     },
   })
+
+  // F6: classifier-derived heat signals. The router-brain already reads
+  // the body, so we use its structured output instead of re-regexing for
+  // tour requests, commitment phrases, or family mentions. Each fires as
+  // an engagement_event with its own event_type so /agent/heat and the
+  // intel attribution pages can see which signals actually moved the
+  // score on booked weddings. Only runs for wedding-bearing productive
+  // emails (new_inquiry / inquiry_reply); vendor / spam / internal skip.
+  if (
+    weddingId &&
+    (classification.classification === 'new_inquiry' ||
+      classification.classification === 'inquiry_reply')
+  ) {
+    const sharedMeta = { interaction_id: interactionId, subject: email.subject }
+    const heatEvents: Array<{ eventType: string; metadata: Record<string, unknown> }> = []
+
+    if (extracted.mentionsTourRequest) {
+      heatEvents.push({ eventType: 'tour_requested', metadata: sharedMeta })
+    }
+    if (extracted.commitmentLevel === 'decided') {
+      heatEvents.push({
+        eventType: 'high_commitment_signal',
+        metadata: { ...sharedMeta, commitmentLevel: extracted.commitmentLevel },
+      })
+    }
+    if (extracted.mentionsFamilyAttending) {
+      heatEvents.push({ eventType: 'family_mentioned', metadata: sharedMeta })
+    }
+    if (
+      typeof extracted.specificityScore === 'number' &&
+      extracted.specificityScore >= 0.7
+    ) {
+      heatEvents.push({
+        eventType: 'high_specificity',
+        metadata: { ...sharedMeta, specificityScore: extracted.specificityScore },
+      })
+    }
+
+    if (heatEvents.length > 0) {
+      try {
+        await recordEngagementEventsBatch(venueId, weddingId, heatEvents)
+      } catch (err) {
+        // Heat signals are additive — never let a batch insert failure
+        // break the pipeline. Log and continue.
+        await logPipelineError(venueId, 'heat_signal_record', err, {
+          interactionId,
+          weddingId,
+          events: heatEvents.map((e) => e.eventType),
+        })
+      }
+    }
+  }
 
   // Step 5a.5: Knowledge-gap capture. Every question the classifier
   // extracted gets recorded into knowledge_gaps so the /agent/knowledge-gaps

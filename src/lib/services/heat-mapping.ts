@@ -36,6 +36,14 @@ const DEFAULT_POINTS: Record<string, number> = {
   email_clicked: 5,
   email_reply_received: 15,
   email_sent: 0,
+  // Classifier-derived heat signals (F6). Fire alongside the regular
+  // reply event so an ordinary reply with strong signals scores more
+  // than a flat "thanks" reply. Points stay small so a flurry of
+  // signal-bearing replies can't saturate score on their own.
+  tour_requested: 15,
+  high_commitment_signal: 10,
+  family_mentioned: 5,
+  high_specificity: 5,
   tour_scheduled: 20,
   tour_completed: 25,
   tour_rescheduled: 5,
@@ -211,6 +219,44 @@ export async function recordEngagementEvent(
   })
 
   // Recalculate and return
+  return recalculateHeatScore(venueId, weddingId)
+}
+
+/**
+ * Record a batch of engagement events for a wedding and recalculate the
+ * heat score exactly once at the end.
+ *
+ * Use this when a single incoming email fires multiple classifier-derived
+ * heat signals (tour_requested + high_commitment_signal + family_mentioned
+ * on the same email) — firing recordEngagementEvent four times would
+ * re-read every prior engagement_event row three unnecessary times.
+ * Returns the final HeatScoreResult after all events land.
+ *
+ * Silently skips events with unknown event_type (no points config).
+ */
+export async function recordEngagementEventsBatch(
+  venueId: string,
+  weddingId: string,
+  events: Array<{ eventType: string; metadata?: Record<string, unknown> }>
+): Promise<HeatScoreResult> {
+  if (events.length === 0) {
+    // Still return a current-state result so callers don't have to branch.
+    return recalculateHeatScore(venueId, weddingId)
+  }
+
+  const supabase = createServiceClient()
+  const rows = await Promise.all(
+    events.map(async (e) => ({
+      venue_id: venueId,
+      wedding_id: weddingId,
+      event_type: e.eventType,
+      points: await getPointsForEvent(venueId, e.eventType),
+      metadata: e.metadata ?? {},
+    }))
+  )
+
+  await supabase.from('engagement_events').insert(rows)
+
   return recalculateHeatScore(venueId, weddingId)
 }
 
