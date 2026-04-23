@@ -12,6 +12,7 @@ import {
 import { useScope } from '@/lib/hooks/use-scope'
 import { MarketContextCard } from '@/components/intel/market-context-card'
 import { InsightFeed } from '@/components/intel/insight-feed'
+import { BrainDumpQueue } from '@/components/portal/brain-dump-queue'
 
 interface Stats {
   activeInquiries: number
@@ -357,6 +358,9 @@ export default function DashboardPage() {
           </div>
         ))}
       </div>
+
+      {/* Brain-dump queue — Task 29. Hidden when empty. */}
+      <BrainDumpQueue />
 
       {/* Market Intelligence — immediate value from external data */}
       <MarketContextCard />

@@ -167,7 +167,7 @@ async function loadWeddingContext(weddingId: string): Promise<string> {
 
   const { data: wedding } = await supabase
     .from('weddings')
-    .select('wedding_date, guest_count_estimate, status, source, booking_value, notes')
+    .select('wedding_date, guest_count_estimate, status, source, booking_value, notes, sage_context_notes')
     .eq('id', weddingId)
     .single()
 
@@ -178,6 +178,31 @@ async function loadWeddingContext(weddingId: string): Promise<string> {
   if (wedding.guest_count_estimate) parts.push(`Guest count: ${wedding.guest_count_estimate}`)
   if (wedding.status) parts.push(`Status: ${wedding.status}`)
   if (wedding.notes) parts.push(`Notes: ${(wedding.notes as string).slice(0, 500)}`)
+
+  // Coordinator observations from the brain-dump feature (Phase 2.5 Task
+  // 28). Last 14 days, newest first. These are the unspoken signals the
+  // coordinator would have mentioned on a call — weather anxiety, seating
+  // stress, family dynamics. Sage should acknowledge them without naming
+  // the coordinator as the source.
+  const rawNotes = wedding.sage_context_notes as Array<{
+    body?: string
+    added_at?: string
+    source?: string
+  }> | null
+  if (Array.isArray(rawNotes) && rawNotes.length > 0) {
+    const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000
+    const recent = rawNotes
+      .filter((n) => {
+        const t = n.added_at ? new Date(n.added_at).getTime() : 0
+        return t >= cutoff && typeof n.body === 'string' && n.body.trim().length > 0
+      })
+      .slice(-5)
+      .reverse()
+    if (recent.length > 0) {
+      const body = recent.map((n) => `- ${(n.body as string).trim()}`).join('\n')
+      parts.push(`Coordinator notes (recent, confidential — do not quote verbatim):\n${body}`)
+    }
+  }
 
   // Check how close the wedding is
   if (wedding.wedding_date) {

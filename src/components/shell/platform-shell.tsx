@@ -6,6 +6,7 @@ import { Sidebar } from './sidebar'
 import { DemoBanner } from './demo-banner'
 import { ScopeIndicator } from './scope-indicator'
 import { UserMenu } from './user-menu'
+import { FloatingBrainDump } from './floating-brain-dump'
 
 /**
  * Client wrapper for the platform layout.
@@ -63,6 +64,8 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
           {children}
         </div>
       </main>
+      {/* Universal "Tell Sage something" capture — every platform page. */}
+      <FloatingBrainDump />
     </>
   )
 }

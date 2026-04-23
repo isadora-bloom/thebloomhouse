@@ -597,10 +597,12 @@ export async function generateFollowUp(
     templateVars,
   })
 
-  // Get wedding context for personalization
+  // Get wedding context for personalization. Includes brain-dump context
+  // notes (Task 28) so Sage's follow-ups reference what the coordinator
+  // has observed since the last email.
   const { data: wedding } = await supabase
     .from('weddings')
-    .select('wedding_date, guest_count_estimate, source, status')
+    .select('wedding_date, guest_count_estimate, source, status, sage_context_notes')
     .eq('id', weddingId)
     .single()
 
@@ -627,6 +629,29 @@ export async function generateFollowUp(
     if (wedding.wedding_date) contextBlock += `\n- Wedding date: ${wedding.wedding_date}`
     if (wedding.guest_count_estimate) contextBlock += `\n- Guest count: ${wedding.guest_count_estimate}`
     if (wedding.source) contextBlock += `\n- Source: ${wedding.source}`
+
+    // Coordinator brain-dump notes (last 14 days). Acknowledge without
+    // quoting — these are back-channel observations, not talking points.
+    const notes = wedding.sage_context_notes as Array<{
+      body?: string
+      added_at?: string
+    }> | null
+    if (Array.isArray(notes) && notes.length > 0) {
+      const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000
+      const recent = notes
+        .filter((n) => {
+          const t = n.added_at ? new Date(n.added_at).getTime() : 0
+          return t >= cutoff && typeof n.body === 'string' && n.body.trim().length > 0
+        })
+        .slice(-3)
+        .reverse()
+      if (recent.length > 0) {
+        contextBlock += `\n\nCoordinator notes (confidential — reflect in tone, don't quote):`
+        for (const n of recent) {
+          contextBlock += `\n- ${(n.body as string).trim()}`
+        }
+      }
+    }
   }
 
   if (lastInteraction) {
