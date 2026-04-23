@@ -15,6 +15,15 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { createNotification } from '@/lib/services/admin-notifications'
+
+// Graduated cooling-warning milestones before auto-lost. Each stage fires
+// at most once per wedding — dedup is by admin_notifications (venue_id,
+// wedding_id, type), not a column on weddings, so no schema change. Mark-
+// read leaves the row in place (still deduped); deleting the notification
+// row is the escape hatch to re-fire a warning.
+const COOLING_WARNING_DAYS = [14, 21, 27] as const
+const DEFAULT_LOST_AUTO_MARK_DAYS = 30
 
 // ---------------------------------------------------------------------------
 // Default point values (used when no venue-specific config exists)
@@ -305,67 +314,200 @@ export async function recalculateHeatScore(
 // ---------------------------------------------------------------------------
 
 /**
- * Apply daily decay to all active wedding heat scores for a venue.
+ * Summary returned from applyDailyDecay so the cron caller and the
+ * /api/agent/heat handler can surface meaningful counts.
+ */
+export interface DecaySummary {
+  decayedCount: number
+  warningsFired: number
+  autoLostCount: number
+}
+
+/**
+ * Apply daily decay + graduated cooling warnings + auto-mark-lost in a
+ * single pass over all active inquiries for a venue.
  *
- * Decay rate: multiply by 0.98 daily, so scores gradually cool if no new
- * engagement. Only applies to weddings with status='inquiry' and heat_score > 0.
+ * Three pieces of lifecycle logic collapse into this one service so there's
+ * one cron, one read of each wedding, and no drift between decay (days
+ * since last engagement) and auto-lost (days since last engagement). Prior
+ * sketches had separate "decay" and "lost sweep" cron paths that read
+ * different timestamps and could disagree by a day.
+ *
+ * Per wedding:
+ *   1. Decay heat score by 0.98 (existing behaviour).
+ *   2. Compute silentDays = now - last inbound interaction (or inquiry_date
+ *      if no interactions yet). This is the "days since we last heard from
+ *      them" number that drives 3 + 4.
+ *   3. Fire graduated cooling-warning notifications at 14 / 21 / 27 days.
+ *      Each stage fires at most once per wedding — dedup is by admin_
+ *      notifications (venue_id, wedding_id, type), so notifications are
+ *      skipped on subsequent days. Coordinators can clear the notification
+ *      row to re-trigger a warning if they want.
+ *   4. When silentDays reaches venue_config.lost_auto_mark_days (default
+ *      30, venue-configurable to 0 for disabled), call markAsLost with
+ *      reason='auto: no response after N days'. This writes the lost_deals
+ *      row, the engagement_event, the score snapshot — same lifecycle as a
+ *      manual mark-lost.
  *
  * Designed to be called by a daily cron job (e.g. 6:00 AM).
  */
-export async function applyDailyDecay(venueId: string): Promise<number> {
+export async function applyDailyDecay(venueId: string): Promise<DecaySummary> {
   const supabase = createServiceClient()
   const decayMultiplier = 0.98
+  const now = new Date()
+  const nowIso = now.toISOString()
 
-  // Get all active inquiries with a positive heat score
+  // Read per-venue auto-lost threshold. 0 disables auto-lost entirely;
+  // negative/null falls back to the default. Graduated warnings still
+  // fire regardless of this setting — coordinators can suppress them by
+  // marking notifications read.
+  const { data: cfg } = await supabase
+    .from('venue_config')
+    .select('lost_auto_mark_days')
+    .eq('venue_id', venueId)
+    .maybeSingle()
+  const lostAutoMarkDays =
+    cfg && typeof cfg.lost_auto_mark_days === 'number' && cfg.lost_auto_mark_days >= 0
+      ? (cfg.lost_auto_mark_days as number)
+      : DEFAULT_LOST_AUTO_MARK_DAYS
+
+  // Pull every active inquiry once. inquiry_date is the floor for
+  // silentDays when no inbound interaction exists yet. heat_score filters
+  // out already-frozen rows for the decay branch but not for warnings /
+  // auto-lost — a frozen wedding at score 0 with no response for 30 days
+  // still needs to transition to status='lost'.
   const { data: weddings } = await supabase
     .from('weddings')
-    .select('id, heat_score, temperature_tier')
+    .select('id, heat_score, temperature_tier, inquiry_date, status')
     .eq('venue_id', venueId)
     .eq('status', 'inquiry')
-    .gt('heat_score', 0)
 
-  if (!weddings || weddings.length === 0) return 0
+  if (!weddings || weddings.length === 0) {
+    return { decayedCount: 0, warningsFired: 0, autoLostCount: 0 }
+  }
+
+  // Pre-fetch the latest inbound interaction timestamp per wedding in one
+  // query instead of N queries inside the loop. Same with prior warning
+  // notifications. Both use inner object maps keyed by wedding_id.
+  const weddingIds = weddings.map((w) => w.id as string)
+
+  const { data: lastInbounds } = await supabase
+    .from('interactions')
+    .select('wedding_id, timestamp')
+    .in('wedding_id', weddingIds)
+    .eq('direction', 'inbound')
+    .order('timestamp', { ascending: false })
+  const latestByWedding = new Map<string, string>()
+  for (const row of lastInbounds ?? []) {
+    const wId = row.wedding_id as string
+    if (!latestByWedding.has(wId)) {
+      latestByWedding.set(wId, row.timestamp as string)
+    }
+  }
+
+  const warningTypes = COOLING_WARNING_DAYS.map((d) => `cooling_warning_${d}d`)
+  const { data: priorWarnings } = await supabase
+    .from('admin_notifications')
+    .select('wedding_id, type')
+    .eq('venue_id', venueId)
+    .in('type', warningTypes)
+    .in('wedding_id', weddingIds)
+  const firedByWedding = new Map<string, Set<string>>()
+  for (const row of priorWarnings ?? []) {
+    const wId = row.wedding_id as string
+    if (!firedByWedding.has(wId)) firedByWedding.set(wId, new Set())
+    firedByWedding.get(wId)!.add(row.type as string)
+  }
 
   let decayedCount = 0
+  let warningsFired = 0
+  let autoLostCount = 0
 
   for (const wedding of weddings) {
-    const oldScore = wedding.heat_score as number
-    const newScore = Math.max(0, Math.round(oldScore * decayMultiplier))
+    const weddingId = wedding.id as string
+    const oldScore = (wedding.heat_score as number) ?? 0
+    const oldTier = (wedding.temperature_tier as string) ?? 'cool'
 
-    // Skip if score didn't actually change (already at 0 or 1)
-    if (newScore === oldScore) continue
+    // Silence floor: last inbound, else inquiry_date.
+    const lastActivity = latestByWedding.get(weddingId) ?? (wedding.inquiry_date as string | null)
+    const silentDays = lastActivity
+      ? Math.floor((now.getTime() - new Date(lastActivity).getTime()) / (1000 * 60 * 60 * 24))
+      : 0
 
-    const newTier = getTier(newScore)
+    // --- Branch 1: heat decay ---
+    if (oldScore > 0) {
+      const newScore = Math.max(0, Math.round(oldScore * decayMultiplier))
+      if (newScore !== oldScore) {
+        const newTier = getTier(newScore)
 
-    await supabase
-      .from('weddings')
-      .update({
-        heat_score: newScore,
-        temperature_tier: newTier,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', wedding.id)
+        await supabase
+          .from('weddings')
+          .update({
+            heat_score: newScore,
+            temperature_tier: newTier,
+            updated_at: nowIso,
+          })
+          .eq('id', weddingId)
 
-    // Only log history if temperature tier changed
-    const oldTier = wedding.temperature_tier as string
-    if (newTier !== oldTier) {
-      await supabase.from('lead_score_history').insert({
-        venue_id: venueId,
-        wedding_id: wedding.id,
-        score: newScore,
-        temperature_tier: newTier,
-        calculated_at: new Date().toISOString(),
-      })
+        if (newTier !== oldTier) {
+          await supabase.from('lead_score_history').insert({
+            venue_id: venueId,
+            wedding_id: weddingId,
+            score: newScore,
+            temperature_tier: newTier,
+            calculated_at: nowIso,
+          })
+        }
+
+        decayedCount++
+      }
     }
 
-    decayedCount++
+    // --- Branch 2: graduated cooling warnings ---
+    // Fire the highest un-fired stage the wedding has crossed. Earlier
+    // stages that were skipped (e.g. a wedding created silent-from-day-0
+    // or cron was down during the 14d window) fire together with the
+    // current one so coordinators still see the full progression.
+    const fired = firedByWedding.get(weddingId) ?? new Set<string>()
+    for (const stage of COOLING_WARNING_DAYS) {
+      const type = `cooling_warning_${stage}d`
+      if (silentDays >= stage && !fired.has(type)) {
+        await createNotification({
+          venueId,
+          weddingId,
+          type,
+          title: `Couple cooling — ${stage} days silent`,
+          body: `No inbound response in ${silentDays} days. ${
+            stage === 14
+              ? 'Consider a gentle check-in.'
+              : stage === 21
+              ? 'This lead is slipping — a follow-up now may save it.'
+              : 'Last chance before auto-lost. Send a final outreach or mark lost intentionally.'
+          }`,
+        })
+        fired.add(type)
+        warningsFired++
+      }
+    }
+
+    // --- Branch 3: auto-mark-lost ---
+    // Setting lost_auto_mark_days=0 disables this branch entirely.
+    if (lostAutoMarkDays > 0 && silentDays >= lostAutoMarkDays) {
+      try {
+        await markAsLost(weddingId, `auto: no response after ${silentDays} days`)
+        autoLostCount++
+      } catch (err) {
+        console.error(`[heat-mapping] auto-mark-lost failed for ${weddingId}:`, err)
+      }
+    }
   }
 
   console.log(
-    `[heat-mapping] Applied daily decay to ${decayedCount} weddings for venue ${venueId}`
+    `[heat-mapping] venue=${venueId} decayed=${decayedCount} ` +
+      `warnings=${warningsFired} auto_lost=${autoLostCount}`
   )
 
-  return decayedCount
+  return { decayedCount, warningsFired, autoLostCount }
 }
 
 // ---------------------------------------------------------------------------

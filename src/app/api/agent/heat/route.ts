@@ -84,9 +84,14 @@ export async function PATCH() {
   }
 
   try {
-    const decayedCount = await applyDailyDecay(auth.venueId)
+    const summary = await applyDailyDecay(auth.venueId)
 
-    return NextResponse.json({ success: true, decayedCount })
+    return NextResponse.json({
+      success: true,
+      decayedCount: summary.decayedCount,
+      warningsFired: summary.warningsFired,
+      autoLostCount: summary.autoLostCount,
+    })
   } catch (err) {
     console.error('[api/agent/heat] PATCH error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

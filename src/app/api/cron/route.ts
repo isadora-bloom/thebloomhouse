@@ -210,9 +210,13 @@ async function pollEmailsAllVenues(): Promise<Record<string, number>> {
 }
 
 /**
- * Apply heat score decay to all venues.
+ * Apply heat score decay, graduated cooling warnings, and auto-mark-lost
+ * to all venues in a single pass. applyDailyDecay now owns all three,
+ * so one cron call covers lifecycle.
  */
-async function applyDecayAllVenues(): Promise<Record<string, number>> {
+async function applyDecayAllVenues(): Promise<
+  Record<string, { decayed: number; warnings: number; autoLost: number }>
+> {
   const supabase = createServiceClient()
 
   const { data: venues } = await supabase
@@ -222,15 +226,19 @@ async function applyDecayAllVenues(): Promise<Record<string, number>> {
 
   if (!venues || venues.length === 0) return {}
 
-  const results: Record<string, number> = {}
+  const results: Record<string, { decayed: number; warnings: number; autoLost: number }> = {}
   for (const v of venues) {
     const id = v.id as string
     try {
-      const affected = await applyDailyDecay(id)
-      results[id] = affected
+      const summary = await applyDailyDecay(id)
+      results[id] = {
+        decayed: summary.decayedCount,
+        warnings: summary.warningsFired,
+        autoLost: summary.autoLostCount,
+      }
     } catch (err) {
       console.error(`[cron] Heat decay failed for venue ${id}:`, err)
-      results[id] = 0
+      results[id] = { decayed: 0, warnings: 0, autoLost: 0 }
     }
   }
   return results
