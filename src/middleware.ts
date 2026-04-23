@@ -41,16 +41,30 @@ export async function middleware(request: NextRequest) {
     const rewriteUrl = request.nextUrl.clone()
     rewriteUrl.pathname = realPath
 
+    // Couple portal is per-wedding so scope pins to Hawthorne. Platform routes
+    // (everything else) get company-level scope so the intelligence layer
+    // aggregates across all 4 Crestwood venues. bloom_venue stays pinned to
+    // Hawthorne as a fallback for useVenueId on venue-specific pages.
+    const isCouplePortal = realPath.startsWith('/couple/')
+    const demoScope = isCouplePortal
+      ? {
+          level: 'venue',
+          venueId: '22222222-2222-2222-2222-222222222201',
+          orgId: '11111111-1111-1111-1111-111111111111',
+          venueName: 'Hawthorne Manor',
+          companyName: 'The Crestwood Collection',
+        }
+      : {
+          level: 'company',
+          orgId: '11111111-1111-1111-1111-111111111111',
+          companyName: 'The Crestwood Collection',
+        }
+
     // Set cookies on the REQUEST so server components can read them during SSR
     const demoCookies = {
       bloom_demo: 'true',
       bloom_venue: '22222222-2222-2222-2222-222222222201',
-      bloom_scope: JSON.stringify({
-        level: 'venue',
-        venueId: '22222222-2222-2222-2222-222222222201',
-        venueName: 'Hawthorne Manor',
-        companyName: 'The Crestwood Collection',
-      }),
+      bloom_scope: JSON.stringify(demoScope),
     }
     for (const [name, value] of Object.entries(demoCookies)) {
       request.cookies.set(name, value)

@@ -4,10 +4,12 @@ import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { MessageCircle, X, Send, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 
 export function FloatingSage({ venueSlug }: { venueSlug: string }) {
   const pathname = usePathname()
   const router = useRouter()
+  const { aiName } = useCoupleContext()
   const [open, setOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
@@ -35,7 +37,7 @@ export function FloatingSage({ venueSlug }: { venueSlug: string }) {
           open ? 'rotate-0' : 'animate-subtle-bounce'
         )}
         style={{ backgroundColor: 'var(--couple-accent, #A6894A)' }}
-        title="Ask Sage"
+        title={`Ask ${aiName}`}
       >
         {open ? (
           <X className="w-5 h-5 text-white" />
@@ -52,7 +54,7 @@ export function FloatingSage({ venueSlug }: { venueSlug: string }) {
             style={{ backgroundColor: 'var(--couple-accent, #A6894A)' }}
           >
             <p className="font-semibold text-sm" style={{ fontFamily: 'var(--couple-font-heading)' }}>
-              Ask Sage anything
+              Ask {aiName} anything
             </p>
             <p className="text-xs opacity-80 mt-0.5">Your AI planning assistant</p>
           </div>

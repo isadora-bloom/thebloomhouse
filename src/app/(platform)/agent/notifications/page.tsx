@@ -60,6 +60,19 @@ interface PendingAutoSendDetails {
   source: string
 }
 
+interface BookingConfirmDetails {
+  weddingId: string
+  interactionId: string | null
+  coupleLabel: string
+  weddingDate: string | null
+  weddingDatePrecision: 'day' | 'month' | 'season' | 'year' | null
+  currentBooked: number
+  maxEvents: number
+  matchedPhrase: string | null
+  fromEmail: string
+  subject: string
+}
+
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSetting[] = [
   {
     key: 'new_inquiry',
@@ -253,6 +266,207 @@ function PendingAutoSendCard({
 }
 
 // ---------------------------------------------------------------------------
+// Booking Confirmation Card
+//
+// Renders a "Looks like [date] may have been booked" prompt with a confirm
+// or dismiss action. The body field on the notification is a JSON blob
+// written by email-pipeline.ts when detectBookingSignal fires. The confirm
+// path POSTs to /api/agent/confirm-booking; the DB triggers stamp
+// booked_at and sync venue_availability.booked_count.
+// ---------------------------------------------------------------------------
+
+function formatWeddingDate(iso: string, precision: string | null): string {
+  // iso is YYYY-MM-DD (wedding_date column). Construct in local tz.
+  const [y, m, d] = iso.split('-').map(Number)
+  const date = new Date(y, (m ?? 1) - 1, d ?? 1)
+  if (precision === 'year') {
+    return date.toLocaleDateString('en-US', { year: 'numeric' })
+  }
+  if (precision === 'month' || precision === 'season') {
+    return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  }
+  return date.toLocaleDateString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+  })
+}
+
+function BookingConfirmCard({
+  notification,
+  onResolved,
+}: {
+  notification: RecentNotification
+  onResolved: (notificationId: string) => void
+}) {
+  const [working, setWorking] = useState<'confirm' | 'dismiss' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState<'confirmed' | 'dismissed' | null>(null)
+
+  let details: BookingConfirmDetails | null = null
+  try {
+    if (notification.body) {
+      details = JSON.parse(notification.body) as BookingConfirmDetails
+    }
+  } catch {
+    // Body might be a legacy free-text string from the previous
+    // contract_signing_detected flow — render a simple fallback.
+  }
+
+  async function act(confirmed: boolean) {
+    setWorking(confirmed ? 'confirm' : 'dismiss')
+    setError(null)
+    try {
+      const res = await fetch('/api/agent/confirm-booking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notificationId: notification.id,
+          weddingId: details?.weddingId ?? null,
+          confirmed,
+        }),
+      })
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}))
+        throw new Error(payload.error || `HTTP ${res.status}`)
+      }
+      setDone(confirmed ? 'confirmed' : 'dismissed')
+      onResolved(notification.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed')
+    } finally {
+      setWorking(null)
+    }
+  }
+
+  if (done === 'confirmed') {
+    return (
+      <div className="px-5 py-4 flex items-center gap-3 bg-emerald-50/60">
+        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+        <div className="flex-1">
+          <p className="text-sm font-medium text-emerald-900">
+            Marked as booked
+          </p>
+          <p className="text-xs text-emerald-700">
+            {details?.coupleLabel ?? 'Wedding'} is now in the Booked stage.
+            Availability calendar updated.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (done === 'dismissed') {
+    return (
+      <div className="px-5 py-4 flex items-center gap-3 bg-sage-50/60">
+        <XCircle className="w-5 h-5 text-sage-500 shrink-0" />
+        <div className="flex-1">
+          <p className="text-sm font-medium text-sage-800">Prompt dismissed</p>
+          <p className="text-xs text-sage-600">
+            Wedding status unchanged.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // Fallback render for legacy/unknown body shapes.
+  if (!details) {
+    return (
+      <div className="px-5 py-4 flex items-start gap-3 bg-amber-50/60">
+        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-amber-900">{notification.title}</p>
+          {notification.body && (
+            <p className="text-xs text-amber-700 mt-0.5">{notification.body}</p>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  const dateLabel = details.weddingDate
+    ? formatWeddingDate(details.weddingDate, details.weddingDatePrecision)
+    : null
+
+  // Slot math — how many slots remain AFTER confirming this booking.
+  // Per Task 13 spec: "Do you want to mark one slot on [Date] as booked?
+  // [X of Y] slots would then remain available."
+  const slotsAfter = Math.max(0, details.maxEvents - details.currentBooked - 1)
+  const multiWedding = details.maxEvents > 1
+  const overCap = details.currentBooked >= details.maxEvents
+
+  return (
+    <div className="px-5 py-4 flex items-start gap-3 bg-amber-50/50">
+      <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+        <Calendar className="w-5 h-5 text-amber-700" />
+      </div>
+      <div className="flex-1 min-w-0 space-y-1">
+        <p className="text-sm font-medium text-amber-900">
+          {dateLabel
+            ? `Looks like ${dateLabel} may have been booked by ${details.coupleLabel}`
+            : `Possible booking from ${details.coupleLabel}`}
+        </p>
+        {details.matchedPhrase && (
+          <p className="text-xs text-amber-700 italic truncate">
+            “{details.matchedPhrase}” in {details.subject || 'the latest email'}
+          </p>
+        )}
+        {dateLabel && multiWedding && !overCap && (
+          <p className="text-xs text-amber-800">
+            Marking this slot as booked would leave <strong>{slotsAfter}</strong> of{' '}
+            <strong>{details.maxEvents}</strong> slots available on this date.
+          </p>
+        )}
+        {dateLabel && multiWedding && overCap && (
+          <p className="text-xs text-rose-700">
+            This date is already fully booked ({details.currentBooked} of{' '}
+            {details.maxEvents}). Confirming would exceed capacity.
+          </p>
+        )}
+        {dateLabel && !multiWedding && (
+          <p className="text-xs text-amber-800">
+            Confirming will mark this date as booked on the availability calendar.
+          </p>
+        )}
+        {!dateLabel && (
+          <p className="text-xs text-amber-700">
+            No wedding date on file yet. Confirming will move this couple to the
+            Booked stage without updating the calendar.
+          </p>
+        )}
+        {error && (
+          <p className="text-xs text-rose-700 mt-1">{error}</p>
+        )}
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <button
+          type="button"
+          onClick={() => act(false)}
+          disabled={working !== null}
+          className="px-3 py-1.5 text-xs font-medium text-sage-700 hover:bg-sage-100 rounded-lg disabled:opacity-50"
+        >
+          {working === 'dismiss' ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : 'Dismiss'}
+        </button>
+        <button
+          type="button"
+          onClick={() => act(true)}
+          disabled={working !== null}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium rounded-lg disabled:opacity-50"
+        >
+          {working === 'confirm' ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <CheckCircle2 className="w-3.5 h-3.5" />
+          )}
+          Mark as booked
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Skeleton
 // ---------------------------------------------------------------------------
 
@@ -293,6 +507,7 @@ export default function NotificationsPage() {
   const [settings, setSettings] = useState<NotificationSetting[]>(DEFAULT_NOTIFICATION_SETTINGS)
   const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([])
   const [pendingAutoSends, setPendingAutoSends] = useState<RecentNotification[]>([])
+  const [bookingPrompts, setBookingPrompts] = useState<RecentNotification[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -370,14 +585,23 @@ export default function NotificationsPage() {
         return { ...row, venue_name: venueName }
       })
 
-      // Separate pending auto-sends from regular notifications
+      // Separate pending auto-sends + booking-confirmation prompts out of
+      // the regular feed — each has a dedicated action card. Resolved rows
+      // (read=true) fall through to the Recent Notifications feed for the
+      // audit trail.
       const pending = mappedNotifs.filter(
         (n) => n.type === 'auto_send_pending' && !n.read
       )
+      const booking = mappedNotifs.filter(
+        (n) => n.type === 'booking_confirmation_prompt' && !n.read
+      )
       const regular = mappedNotifs.filter(
-        (n) => n.type !== 'auto_send_pending' || n.read
+        (n) =>
+          (n.type !== 'auto_send_pending' && n.type !== 'booking_confirmation_prompt') ||
+          n.read
       )
       setPendingAutoSends(pending)
+      setBookingPrompts(booking)
       setRecentNotifications(regular)
       setError(null)
     } catch (err) {
@@ -635,6 +859,27 @@ export default function NotificationsPage() {
                 </div>
               )
             })}
+          </div>
+        </div>
+      )}
+
+      {/* ---- Booking-confirmation prompts ---- */}
+      {bookingPrompts.length > 0 && (
+        <div>
+          <h2 className="font-heading text-lg font-semibold text-sage-900 mb-3 flex items-center gap-2">
+            <Calendar className="w-5 h-5 text-amber-500" />
+            Confirm Bookings
+          </h2>
+          <div className="bg-surface border border-amber-200 rounded-xl shadow-sm overflow-hidden divide-y divide-amber-100">
+            {bookingPrompts.map((notif) => (
+              <BookingConfirmCard
+                key={notif.id}
+                notification={notif}
+                onResolved={(id) =>
+                  setBookingPrompts((prev) => prev.filter((n) => n.id !== id))
+                }
+              />
+            ))}
           </div>
         </div>
       )}

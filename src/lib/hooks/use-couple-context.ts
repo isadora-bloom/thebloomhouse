@@ -8,6 +8,13 @@ export interface CoupleContext {
   slug: string         // URL slug (venue identifier)
   venueId: string | null
   weddingId: string | null
+  /**
+   * Per-venue AI assistant name from venue_ai_config.ai_name. Falls back to
+   * 'Sage' so UI that reads this is never undefined. Every user-visible
+   * "Ask Sage" / "Chat with Sage" string in the couple portal must read
+   * from here so white-label venues (Oakwood: "Ivy", etc.) render correctly.
+   */
+  aiName: string
   loading: boolean
   isDemo: boolean
 }
@@ -15,6 +22,7 @@ export interface CoupleContext {
 const DEMO_VENUE_ID = '22222222-2222-2222-2222-222222222201'
 const DEMO_WEDDING_ID = 'ab000000-0000-0000-0000-000000000001'
 const DEMO_SLUG = 'hawthorne-manor'
+const DEFAULT_AI_NAME = 'Sage'
 
 /**
  * Synchronously detect demo mode from the document cookie.
@@ -35,6 +43,7 @@ export function useCoupleContext(): CoupleContext {
   const initialDemo = detectDemoSync()
   const [venueId, setVenueId] = useState<string | null>(initialDemo ? DEMO_VENUE_ID : null)
   const [weddingId, setWeddingId] = useState<string | null>(initialDemo ? DEMO_WEDDING_ID : null)
+  const [aiName, setAiName] = useState<string>(DEFAULT_AI_NAME)
   const [loading, setLoading] = useState(!initialDemo)
   const [isDemo, setIsDemo] = useState(initialDemo)
 
@@ -57,6 +66,17 @@ export function useCoupleContext(): CoupleContext {
         return
       }
       setVenueId(venue.id)
+
+      // Resolve the per-venue AI assistant name. Never block on this —
+      // fall through to the default if the row is missing or the read
+      // fails. Every couple-facing "Ask X" string reads from here.
+      const { data: aiConfig } = await supabase
+        .from('venue_ai_config')
+        .select('ai_name')
+        .eq('venue_id', venue.id)
+        .maybeSingle()
+      const resolvedAiName = (aiConfig?.ai_name as string | null)?.trim()
+      if (resolvedAiName) setAiName(resolvedAiName)
 
       // Resolve wedding from authenticated couple user
       const { data: { user } } = await supabase.auth.getUser()
@@ -92,5 +112,5 @@ export function useCoupleContext(): CoupleContext {
     }
   }, [isDemo, venueId, weddingId])
 
-  return { slug, venueId, weddingId, loading, isDemo }
+  return { slug, venueId, weddingId, aiName, loading, isDemo }
 }

@@ -134,7 +134,7 @@ function dayKey(dateStr: string): string {
 }
 
 export default function SageChatPage() {
-  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
+  const { venueId, weddingId, aiName, loading: contextLoading } = useCoupleContext()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
@@ -557,7 +557,7 @@ export default function SageChatPage() {
             className="text-xl font-semibold"
             style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
           >
-            Chat with Sage
+            Chat with {aiName}
           </h1>
           <p className="text-sm text-gray-500">
             Your AI wedding concierge — ask about anything!
@@ -599,7 +599,7 @@ export default function SageChatPage() {
               className="text-lg font-semibold mb-2"
               style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
             >
-              Hi there! I am Sage.
+              Hi there! I am {aiName}.
             </h3>
             <p className="text-gray-500 max-w-md mx-auto text-sm">
               I know all about your venue and can help with planning questions, logistics,
@@ -736,7 +736,7 @@ export default function SageChatPage() {
                       {msg.confidence_score < 70 ? (
                         <span className="inline-flex items-center gap-1 text-xs text-amber-600">
                           <AlertCircle className="w-3 h-3" />
-                          Sage is checking with your coordinator...
+                          {aiName} is checking with your coordinator...
                         </span>
                       ) : (
                         <span className="text-xs text-gray-300">
@@ -778,7 +778,7 @@ export default function SageChatPage() {
                 <div className="ml-11 mt-2 flex items-start gap-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 max-w-[80%] sm:max-w-[70%]">
                   <FileText className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
                   <p className="text-xs text-blue-700">
-                    Sage can analyze your uploaded contracts. Go to{' '}
+                    {aiName} can analyze your uploaded contracts. Go to{' '}
                     <span className="font-semibold">Contracts</span> to upload and review yours.
                   </p>
                 </div>
@@ -789,7 +789,7 @@ export default function SageChatPage() {
                 <div className="mr-11 mt-2 ml-auto flex items-start gap-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 max-w-[80%] sm:max-w-[70%]">
                   <FileText className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
                   <p className="text-xs text-blue-700">
-                    Sage can analyze your uploaded contracts. Go to{' '}
+                    {aiName} can analyze your uploaded contracts. Go to{' '}
                     <span className="font-semibold">Contracts</span> to upload and review yours.
                   </p>
                 </div>
@@ -812,7 +812,7 @@ export default function SageChatPage() {
             <div className="bg-white border border-gray-100 rounded-2xl rounded-bl-md px-4 py-3 shadow-sm">
               <div className="flex items-center gap-2">
                 <Brain className="w-4 h-4 text-gray-400 animate-pulse" />
-                <span className="text-sm text-gray-500 font-medium">Sage is thinking</span>
+                <span className="text-sm text-gray-500 font-medium">{aiName} is thinking</span>
                 <span className="flex gap-1">
                   <span
                     className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce"
@@ -900,7 +900,7 @@ export default function SageChatPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={attachedFile ? 'Add a message about this file...' : 'Ask Sage anything...'}
+            placeholder={attachedFile ? 'Add a message about this file...' : `Ask ${aiName} anything...`}
             rows={1}
             className="flex-1 resize-none rounded-xl border border-gray-200 px-4 py-3 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:border-transparent"
             style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
@@ -920,7 +920,7 @@ export default function SageChatPage() {
           </button>
         </div>
         <p className="text-xs text-gray-400 mt-2 text-center">
-          Sage is an AI assistant and may not always be perfect. Your coordinator reviews flagged
+          {aiName} is an AI assistant and may not always be perfect. Your coordinator reviews flagged
           answers.
         </p>
       </div>

@@ -57,12 +57,12 @@ export async function POST(request: NextRequest) {
     const [aiConfigResult, venueConfigResult, uspsResult] = await Promise.all([
       supabase
         .from('venue_ai_config')
-        .select('ai_name, ai_emoji, warmth_level, formality_level, playfulness_level, brevity_level, enthusiasm_level, uses_contractions, uses_exclamation_points, emoji_level, phrase_style, vibe, signature_expressions, signature_greeting')
+        .select('ai_name, ai_emoji, warmth_level, formality_level, playfulness_level, brevity_level, enthusiasm_level, uses_contractions, uses_exclamation_points, emoji_level, phrase_style, vibe, signature_expressions, signature_greeting, tour_booking_links')
         .eq('venue_id', venue.id)
         .single(),
       supabase
         .from('venue_config')
-        .select('website_url, phone_number, tour_booking_url, primary_color')
+        .select('primary_color, coordinator_phone')
         .eq('venue_id', venue.id)
         .single(),
       supabase
@@ -114,9 +114,13 @@ ${aiConfig?.uses_exclamation_points !== false ? '- Use exclamation points sparin
 ${uspsSection}
 ## VENUE BASICS
 - Name: ${venue.name}
-${venueConfig?.website_url ? `- Website: ${venueConfig.website_url}` : ''}
-${venueConfig?.phone_number ? `- Phone: ${venueConfig.phone_number}` : ''}
-${venueConfig?.tour_booking_url ? `- Book a tour: ${venueConfig.tour_booking_url}` : ''}
+${venueConfig?.coordinator_phone ? `- Phone: ${venueConfig.coordinator_phone}` : ''}
+${(() => {
+  const links = (aiConfig as { tour_booking_links?: Array<{ url?: string; is_default?: boolean }> } | null)?.tour_booking_links
+  const list = Array.isArray(links) ? links : []
+  const defaultLink = list.find((l) => l.is_default)?.url ?? list[0]?.url ?? null
+  return defaultLink ? `- Book a tour: ${defaultLink}` : ''
+})()}
 
 ## WHAT YOU CANNOT DO
 - You do NOT have access to specific pricing, availability, or detailed policies

@@ -70,6 +70,16 @@ const AUTO_IGNORE_SUBJECTS: string[] = [
   'do-not-reply',
   'noreply',
   'no-reply',
+  // Scheduling / booking-tool confirmations (Calendly, Acuity, HoneyBook,
+  // Dubsado). Belt-and-braces with the venue_email_filters seed in
+  // migration 069 — if a platform variant ever strips List-Unsubscribe,
+  // subject-based ignore keeps `startTime` out of wedding_date.
+  'your tour is confirmed',
+  'new event scheduled:',
+  'event scheduled with',
+  'has been scheduled',
+  'calendar invite:',
+  'invitation: ',
 ]
 
 const AUTO_IGNORE_BODY_PATTERNS: string[] = [
@@ -114,6 +124,46 @@ export function shouldAutoIgnore(subject: string, body: string): boolean {
   if (spamCheck.isSpam) return true
 
   return false
+}
+
+// ---------------------------------------------------------------------------
+// Machine-generated mail detection (RFC headers)
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect machine-generated bulk/list/auto-submitted mail from its RFC-2822
+ * headers. Pure header-based — does not look at subject or body, so callers
+ * that want to keep real inquiries forwarded through platforms (The Knot,
+ * Zola) must short-circuit this check when a form-relay parser already fired.
+ *
+ * Signals:
+ *   - List-Unsubscribe present                → bulk list mail
+ *   - List-Id present                         → mailing list
+ *   - Precedence: bulk | list | junk          → mass mail
+ *   - Auto-Submitted: anything other than 'no'→ auto-generated (RFC 3834)
+ *
+ * Returns the reason string (for logging) or null if the mail looks human.
+ */
+export function isMachineGenerated(headers?: Record<string, string>): string | null {
+  if (!headers) return null
+  const h = headers
+
+  if (h['list-unsubscribe']) return 'list-unsubscribe header'
+  if (h['list-id']) return 'list-id header'
+
+  const precedence = (h['precedence'] || '').toLowerCase().trim()
+  if (precedence === 'bulk' || precedence === 'list' || precedence === 'junk') {
+    return `precedence: ${precedence}`
+  }
+
+  const autoSubmitted = (h['auto-submitted'] || '').toLowerCase().trim()
+  // RFC 3834: "no" means a human authored the reply. Anything else
+  // (auto-generated, auto-replied, ...) is machine.
+  if (autoSubmitted && autoSubmitted !== 'no') {
+    return `auto-submitted: ${autoSubmitted}`
+  }
+
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -173,18 +223,36 @@ Return JSON matching this exact structure:
  *
  * Understands wedding venue context: couples inquiring, booked clients,
  * vendors, platform forwarded emails, etc.
+ *
+ * When `context` is passed the classifier is given thread history signals
+ * so it can distinguish "first time this sender appears" from "reply inside
+ * an ongoing conversation". Without these signals the LLM was re-labelling
+ * every thread reply as new_inquiry and the pipeline was minting duplicate
+ * weddings on every round-trip.
  */
 export async function classifyEmail(
   venueId: string,
-  email: { from: string; subject: string; body: string }
+  email: { from: string; subject: string; body: string },
+  context?: {
+    /** Count of prior interactions (in or out) on the same thread_id for this venue. */
+    priorInteractionCount?: number
+    /** True if the venue has previously sent an outbound message on this thread. */
+    threadHasPriorOutbound?: boolean
+    /** Count of prior interactions from this exact sender address across all threads. */
+    priorInteractionsFromSender?: number
+  }
 ): Promise<ClassificationResult> {
+  const contextBlock = context
+    ? `\n\nTHREAD CONTEXT:\n- Prior messages in this thread for this venue: ${context.priorInteractionCount ?? 0}\n- Venue has previously sent outbound on this thread: ${context.threadHasPriorOutbound ? 'yes' : 'no'}\n- Prior messages from this sender across all threads: ${context.priorInteractionsFromSender ?? 0}\n\nIf prior interactions > 0 OR prior outbound on thread = yes, this is almost\ncertainly NOT a new_inquiry — prefer inquiry_reply or client_message.`
+    : ''
+
   const userPrompt = `Classify this email:
 
 FROM: ${email.from}
 SUBJECT: ${email.subject}
 
 BODY:
-${email.body.slice(0, 3000)}`
+${email.body.slice(0, 3000)}${contextBlock}`
 
   const result = await callAIJson<ClassificationResult>({
     systemPrompt: CLASSIFICATION_SYSTEM_PROMPT,

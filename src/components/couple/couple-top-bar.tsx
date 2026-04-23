@@ -36,7 +36,7 @@ export function CoupleTopBar({
   clientCode,
 }: CoupleTopBarProps) {
   const pathname = usePathname()
-  const { weddingId } = useCoupleContext()
+  const { weddingId, aiName } = useCoupleContext()
   const sageHref = `${base}/chat`
   const dashHref = base
 
@@ -105,7 +105,7 @@ export function CoupleTopBar({
             style={{ backgroundColor: 'var(--couple-accent, #A6894A)' }}
           >
             <MessageCircle className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Ask Sage</span>
+            <span className="hidden sm:inline">Ask {aiName}</span>
           </Link>
 
           {/* 2. Dashboard */}

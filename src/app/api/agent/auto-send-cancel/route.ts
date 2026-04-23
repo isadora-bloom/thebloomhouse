@@ -28,6 +28,48 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
+    // Conditional cancel: only transition if the draft is still in
+    // auto_send_pending. Once the flush cron has claimed it
+    // ('auto_send_sending'), Gmail may already have the message — we
+    // must not race-write 'rejected' over a successful send. Returning
+    // zero rows here tells the caller they clicked too late.
+    const { data: cancelled, error: cancelErr } = await supabase
+      .from('drafts')
+      .update({
+        status: 'rejected',
+        feedback_notes: 'cancelled_auto_send',
+        approved_at: new Date().toISOString(),
+      })
+      .eq('id', draftId)
+      .eq('status', 'auto_send_pending')
+      .select('id')
+
+    if (cancelErr) {
+      return NextResponse.json(
+        { error: cancelErr.message },
+        { status: 500 }
+      )
+    }
+
+    if (!cancelled || cancelled.length === 0) {
+      // Either already sent, already rejected, or claimed mid-send.
+      // Still mark the notification as read so the coordinator stops
+      // seeing the cancel prompt.
+      await supabase
+        .from('admin_notifications')
+        .update({
+          read: true,
+          read_at: new Date().toISOString(),
+        })
+        .eq('id', notificationId)
+
+      return NextResponse.json({
+        success: true,
+        cancelled: false,
+        reason: 'Draft was already sent or no longer pending',
+      })
+    }
+
     // Mark the notification as read (cancelled)
     await supabase
       .from('admin_notifications')
@@ -36,16 +78,6 @@ export async function POST(request: NextRequest) {
         read_at: new Date().toISOString(),
       })
       .eq('id', notificationId)
-
-    // Mark the draft as rejected with cancellation reason
-    await supabase
-      .from('drafts')
-      .update({
-        status: 'rejected',
-        feedback_notes: 'cancelled_auto_send',
-        approved_at: new Date().toISOString(),
-      })
-      .eq('id', draftId)
 
     // Create a feedback record for the learning loop
     const { data: draft } = await supabase

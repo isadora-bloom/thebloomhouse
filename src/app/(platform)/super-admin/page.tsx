@@ -246,13 +246,22 @@ export default function SuperAdminPage() {
             {venues.length} venue{venues.length !== 1 ? 's' : ''} across {orgs.length} organisation{orgs.length !== 1 ? 's' : ''}
           </p>
         </div>
-        <a
-          href="/onboarding"
-          className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          Add Venue
-        </a>
+        <div className="flex items-center gap-2 shrink-0">
+          <a
+            href="/super-admin/pipeline-health"
+            className="flex items-center gap-2 bg-sage-100 hover:bg-sage-200 text-sage-700 font-medium rounded-lg px-4 py-2.5 transition-colors text-sm"
+          >
+            <BarChart3 className="w-4 h-4" />
+            Pipeline Health
+          </a>
+          <a
+            href="/onboarding"
+            className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
+          >
+            <Plus className="w-4 h-4" />
+            Add Venue
+          </a>
+        </div>
       </div>
 
       {/* Summary Cards */}

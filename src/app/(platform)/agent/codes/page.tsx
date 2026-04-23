@@ -416,7 +416,7 @@ export default function ClientCodesPage() {
             <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-sage-400" />
             <input
               type="text"
-              placeholder="Enter code (e.g., RM-2026-CHEN)"
+              placeholder="Enter code (e.g., XX-0042)"
               value={lookupCode}
               onChange={(e) => setLookupCode(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleLookup()}

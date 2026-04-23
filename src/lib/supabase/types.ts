@@ -30,10 +30,11 @@ export interface Venue {
 export interface VenueConfig {
   id: string
   venue_id: string
-  website_url: string | null
-  phone_number: string | null
-  tour_booking_url: string | null
-  pricing_calculator_url: string | null
+  // NOTE: tour_booking_url / pricing_calculator_url / website_url /
+  // phone_number were declared here but never existed in the DB. Tour
+  // links now live on venue_ai_config.tour_booking_links (migration 074).
+  // website_url / phone_number on venue_config are carry-forwards — the
+  // real venue phone is venue_config.coordinator_phone.
   gmail_credentials: Record<string, unknown> | null
   created_at: string
   updated_at: string

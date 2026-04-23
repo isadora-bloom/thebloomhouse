@@ -79,6 +79,7 @@ export async function POST(req: Request) {
           date: email.date,
           labels: email.labels,
           connectionId: email.connectionId,
+          headers: email.headers,
         })
         processed++
         if (result.classification === 'new_inquiry' || result.classification === 'inquiry_reply') {

@@ -82,6 +82,14 @@ export async function createTestVenue(
     slug?: string
     planTier?: 'starter' | 'intelligence' | 'enterprise'
     status?: 'active' | 'trial' | 'suspended' | 'churned'
+    /**
+     * White-label assistant name for the couple portal + outbound drafts.
+     * Required by the v4 Task 9 Oakwood zero-Rixey acceptance test — lets
+     * a single call seed a venue with `aiName: 'Ivy'` etc. Defaults to 'Sage'.
+     */
+    aiName?: string
+    /** 2-char client-code prefix (e.g. 'OE' for Oakwood Estate). */
+    venuePrefix?: string
   }
 ): Promise<{ venueId: string; slug: string }> {
   const name = opts.name ?? `E2E Venue [e2e:${ctx.testId}]`
@@ -104,6 +112,7 @@ export async function createTestVenue(
   const { error: cfgErr } = await admin().from('venue_config').insert({
     venue_id: data.id,
     business_name: name,
+    venue_prefix: opts.venuePrefix ?? null,
   })
   if (cfgErr && !/duplicate/i.test(cfgErr.message)) {
     // Not fatal — some environments have triggers creating it already
@@ -113,7 +122,7 @@ export async function createTestVenue(
   // Seed minimal venue_ai_config too
   const { error: aiErr } = await admin().from('venue_ai_config').insert({
     venue_id: data.id,
-    ai_name: 'Sage',
+    ai_name: opts.aiName ?? 'Sage',
   })
   if (aiErr && !/duplicate/i.test(aiErr.message)) {
     console.warn('venue_ai_config insert warning:', aiErr.message)

@@ -295,9 +295,14 @@ function parseZola(from: string, body: string): FormRelayLead | null {
 
 const CALCULATOR_BODY_KEYWORDS = [
   'estimated total',
-  'your rixey manor estimate', // harmless to keep; pattern-based match below catches any venue
   "here's a summary of what you put together",
   'retainer on booking',
+]
+
+// "Your <any venue> estimate" — generic match so every venue's calculator
+// passes without needing a per-venue keyword in the literal list above.
+const CALCULATOR_BODY_PATTERNS: RegExp[] = [
+  /your [a-z][a-z0-9' &-]{2,40} estimate/i,
 ]
 
 const CALCULATOR_SUBJECT_KEYWORDS = [
@@ -312,6 +317,7 @@ function looksLikeCalculator(subject: string, body: string): boolean {
   const b = (body || '').toLowerCase()
   if (CALCULATOR_SUBJECT_KEYWORDS.some((k) => s.includes(k))) return true
   if (CALCULATOR_BODY_KEYWORDS.some((k) => b.includes(k))) return true
+  if (CALCULATOR_BODY_PATTERNS.some((r) => r.test(body))) return true
   // Generic shape: body contains "Season" + "Guests" + a dollar total.
   const hasSeason = /\bseason\b/i.test(body)
   const hasGuests = /\bguests?\b/i.test(body)
@@ -383,6 +389,103 @@ function parseVenueCalculator(
 }
 
 // ---------------------------------------------------------------------------
+// Shape-heuristic fallback
+// ---------------------------------------------------------------------------
+//
+// Protects against platform domain/format changes. When none of the named
+// parsers match but the body shows the tell-tale labelled-field shape of a
+// wedding-venue contact form — "Personal email:", "Wedding date:",
+// "Guest count:", "Estimated guest count:" etc. — treat it as an unknown
+// form relay and unpack what we can. Conservative: requires TWO or more
+// labelled fields AND a discoverable email. A one-off mention of
+// "Wedding date" in prose won't trigger it.
+//
+// The source is tagged `venue_calculator` because that's the most likely
+// shape (bespoke venue website form) and it's the only source we don't
+// hard-link to a platform in intelligence_extractions.
+
+const SHAPE_LABELS = [
+  'personal email',
+  'contact email',
+  'email address',
+  'wedding date',
+  'event date',
+  'preferred date',
+  'guest count',
+  'number of guests',
+  'estimated guest count',
+  'estimated guests',
+  'budget',
+  'venue type',
+  "partner's name",
+  'partner name',
+  'fiance',
+]
+
+function parseShapeHeuristic(
+  from: string,
+  body: string,
+  venueOwn: Set<string>
+): FormRelayLead | null {
+  if (!body) return null
+  const lower = body.toLowerCase()
+
+  // Count labelled fields actually present in the body.
+  let labelHits = 0
+  for (const label of SHAPE_LABELS) {
+    // Word-boundary to avoid "wedding date" matching inside an arbitrary sentence.
+    const re = new RegExp(`(^|[\\n\\s])${label}\\s*[:：]`, 'i')
+    if (re.test(lower)) labelHits++
+    if (labelHits >= 2) break
+  }
+  if (labelHits < 2) return null
+
+  // Prefer a labelled personal email; fall back to the first body email
+  // that is NOT a venue-owned address and NOT a known relay domain.
+  const personalEmail =
+    fieldAfter(body, 'personal email') ||
+    fieldAfter(body, 'contact email') ||
+    fieldAfter(body, 'email address') ||
+    fieldAfter(body, 'email')
+
+  const bodyEmails = findAllEmails(body)
+  const relayDomains = /@(member\.)?theknot\.com|@weddingwire\.com|@herecomestheguide\.com|@zola\.com/i
+
+  const fromAddr = extractEmailAddress(from)
+  const candidate =
+    (personalEmail && /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(personalEmail)
+      ? personalEmail.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0].toLowerCase()
+      : null) ||
+    bodyEmails.find((e) => !venueOwn.has(e) && !relayDomains.test(e) && e !== fromAddr) ||
+    null
+  if (!candidate) return null
+
+  const leadName =
+    fieldAfter(body, 'name') ||
+    fieldAfter(body, 'first name') ||
+    extractDisplayName(from)
+
+  return {
+    source: 'venue_calculator',
+    leadEmail: candidate,
+    leadName: leadName ?? null,
+    partnerName: fieldAfter(body, "partner's name") || fieldAfter(body, 'partner name') || null,
+    eventDate:
+      fieldAfter(body, 'wedding date') ||
+      fieldAfter(body, 'event date') ||
+      fieldAfter(body, 'preferred date'),
+    guestCount:
+      fieldAfter(body, 'estimated guest count') ||
+      fieldAfter(body, 'guest count') ||
+      fieldAfter(body, 'number of guests'),
+    budget: fieldAfter(body, 'budget'),
+    note: fieldAfter(body, 'note') || fieldAfter(body, 'message') || null,
+    replyToEmail: candidate,
+    matchedRelayFrom: fromAddr,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -391,8 +494,18 @@ function parseVenueCalculator(
  *
  * Order matters: platform parsers (Knot, WeddingWire, Zola) run first
  * because their From headers are unambiguous. The venue-calculator parser
- * runs last because it opts-in based on venueOwnEmails and body shape,
- * and we only want it to fire when no platform matched.
+ * runs next because it opts-in based on venueOwnEmails. The shape-heuristic
+ * fallback runs last as a safety net for platforms that change domain /
+ * format or for bespoke contact forms we've never seen before.
+ *
+ * INTENTIONALLY EXCLUDED: calendly.com, acuityscheduling.com, honeybook.com,
+ * dubsado.com. These are scheduling / booking tools, NOT inquiry-relay
+ * platforms. Their emails are confirmations of already-scheduled events
+ * (the webhook — not the email — is the source of truth). Adding a
+ * Calendly parser here would wrongly treat the tour confirmation as a new
+ * inquiry and its `startTime` would land in `weddings.wedding_date`.
+ * These domains are seeded into `venue_email_filters` (migration 069)
+ * with action=ignore/no_draft so they short-circuit before classification.
  */
 export function detectFormRelay(
   email: { from: string; to: string; subject: string; body: string },
@@ -403,6 +516,7 @@ export function detectFormRelay(
     parseWeddingWire(email.from, email.body) ||
     parseHereComesTheGuide(email.from, email.body) ||
     parseZola(email.from, email.body) ||
-    parseVenueCalculator(email.from, email.to, email.subject, email.body, venueOwn)
+    parseVenueCalculator(email.from, email.to, email.subject, email.body, venueOwn) ||
+    parseShapeHeuristic(email.from, email.body, venueOwn)
   )
 }

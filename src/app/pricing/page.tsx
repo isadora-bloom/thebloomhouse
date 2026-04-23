@@ -238,7 +238,7 @@ function PricingPageInner() {
         {/* Footer note */}
         <div className="text-center mt-12 text-sm text-sage-500">
           Questions about Enterprise or need a custom plan?{' '}
-          <a href="mailto:hello@thebloomhouse.com" className="text-sage-700 underline">
+          <a href="mailto:hello@thebloomhouse.ai" className="text-sage-700 underline">
             Contact us
           </a>
           .

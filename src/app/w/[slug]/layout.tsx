@@ -17,7 +17,7 @@ export default function WeddingWebsiteLayout({
         <p className="text-[11px] text-gray-300 tracking-wide">
           Powered by{' '}
           <a
-            href="https://thebloomhouse.com"
+            href="https://thebloomhouse.ai"
             target="_blank"
             rel="noopener noreferrer"
             className="hover:text-gray-400 transition-colors"

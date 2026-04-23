@@ -44,6 +44,15 @@ export interface InquiryDraftOptions {
     guestCount?: number
   }
   taskType?: string
+  /**
+   * Inquiry source (detected by the form-relay parsers or defaulted to
+   * 'direct'). Surfaced to the model so first-touch replies can acknowledge
+   * the specific discovery channel (The Knot, WeddingWire, HCTG, Zola, the
+   * venue's own website) rather than answering every couple identically.
+   * Values: 'the_knot' | 'weddingwire' | 'here_comes_the_guide' | 'zola'
+   *       | 'website' | 'direct' | (legacy) any other free-form string
+   */
+  source?: string
 }
 
 export interface FollowUpOptions {
@@ -197,14 +206,28 @@ async function checkDateAvailability(
   const fridayStr = friday.toISOString().split('T')[0]
   const sundayStr = sunday.toISOString().split('T')[0]
 
-  const { data: bookedDates } = await supabase
-    .from('booked_dates')
-    .select('date')
+  // venue_availability is the source of truth for date status.
+  // A date counts as unavailable when: status in ('booked','blocked') OR
+  // booked_count has reached max_events (cap hit). Coordinator-held dates
+  // ('hold') also block Sage from promising availability — see Task 12.
+  const { data: availRows } = await supabase
+    .from('venue_availability')
+    .select('date, status, booked_count, max_events')
     .eq('venue_id', venueId)
     .gte('date', fridayStr)
     .lte('date', sundayStr)
 
-  const isBooked = (bookedDates ?? []).some((d) => d.date === dateOnly)
+  const isDateUnavailable = (row: { status: string; booked_count: number; max_events: number }) =>
+    row.status === 'booked' ||
+    row.status === 'blocked' ||
+    row.status === 'hold' ||
+    row.booked_count >= row.max_events
+
+  const isBooked = (availRows ?? []).some(
+    (d) => d.date === dateOnly && isDateUnavailable(d as {
+      status: string; booked_count: number; max_events: number
+    })
+  )
 
   if (!isBooked) {
     return { available: true, alternatives: [] }
@@ -216,14 +239,20 @@ async function checkDateAvailability(
   const searchEnd = new Date(targetDate)
   searchEnd.setDate(searchEnd.getDate() + 14)
 
-  const { data: nearbyBooked } = await supabase
-    .from('booked_dates')
-    .select('date')
+  const { data: nearbyBlocked } = await supabase
+    .from('venue_availability')
+    .select('date, status, booked_count, max_events')
     .eq('venue_id', venueId)
     .gte('date', searchStart.toISOString().split('T')[0])
     .lte('date', searchEnd.toISOString().split('T')[0])
 
-  const bookedSet = new Set((nearbyBooked ?? []).map((d) => d.date as string))
+  const bookedSet = new Set(
+    (nearbyBlocked ?? [])
+      .filter((d) =>
+        isDateUnavailable(d as { status: string; booked_count: number; max_events: number })
+      )
+      .map((d) => d.date as string)
+  )
 
   // Suggest nearby Saturdays that aren't booked
   const alternatives: string[] = []
@@ -290,6 +319,7 @@ export async function generateInquiryDraft(
     inquiry,
     extractedData,
     taskType = 'new_inquiry',
+    source,
   } = options
 
   // Step 1: Load personality data and build Layer 1 + 2 prompt
@@ -358,6 +388,36 @@ export async function generateInquiryDraft(
   if (extractedData.eventDate) contextBlock += `\n- Event date: ${extractedData.eventDate}`
   if (extractedData.guestCount) contextBlock += `\n- Guest count: ${extractedData.guestCount}`
   if (season !== 'unknown') contextBlock += `\n- Season: ${season}`
+
+  // Source-specific personalisation. Form relays strip context from the
+  // lead — the couple's original message on The Knot isn't in the email we
+  // receive, so we shouldn't pretend it was a direct note. Each channel
+  // gets a short guidance line so first-touch replies feel channel-aware
+  // without parroting a template ("Thanks for reaching out via...").
+  if (source) {
+    const sourceLabel =
+      source === 'the_knot' ? 'The Knot'
+      : source === 'weddingwire' ? 'WeddingWire'
+      : source === 'here_comes_the_guide' ? 'Here Comes The Guide'
+      : source === 'zola' ? 'Zola'
+      : source === 'website' ? "the venue's website pricing calculator"
+      : source === 'direct' ? 'a direct email (not a form relay)'
+      : source
+    contextBlock += `\n- Inquiry source: ${sourceLabel}`
+
+    const sourceGuidance =
+      source === 'the_knot' || source === 'weddingwire' || source === 'here_comes_the_guide' || source === 'zola'
+        ? `This is a marketplace relay — the couple filled out a short form on ${sourceLabel} and we only see the structured fields, not a personal note. Do NOT respond as if they sent a detailed message; acknowledge the channel lightly if it fits naturally, answer what the fields reveal, and invite them to share more.`
+        : source === 'website'
+          ? `This came through the venue's own pricing calculator, so the couple has already seen public pricing and engaged enough to hand over contact details. Treat them as warmer than a cold inquiry and reference the calculator context only if it feels natural.`
+          : source === 'direct'
+            ? `This is a direct email, not a form relay. The couple wrote to us personally — respond to what they actually said in the body above.`
+            : null
+
+    if (sourceGuidance) {
+      contextBlock += `\n\n## SOURCE GUIDANCE:\n${sourceGuidance}`
+    }
+  }
 
   if (greeting) {
     contextBlock += `\n\n## SELECTED GREETING (use this as your AI introduction):\n"${greeting}"`

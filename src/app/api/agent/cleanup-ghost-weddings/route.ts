@@ -178,9 +178,10 @@ export async function POST(req: Request) {
   }
 
   // Clean ancillary rows that FK to weddings with ON DELETE SET NULL/CASCADE,
-  // but some helper tables (engagement_events, booked_dates, drafts) may
-  // still hold references. Delete the ones we know about explicitly so the
-  // pipeline kanban and analytics stay clean.
+  // but some helper tables (engagement_events, venue_availability, drafts)
+  // may still hold references. Delete the ones we know about explicitly so
+  // the pipeline kanban and analytics stay clean. venue_availability rows
+  // are recomputed by the trigger on weddings when the ghost is deleted.
   await supabase.from('engagement_events').delete().in('wedding_id', ghosts)
   await supabase.from('drafts').delete().in('wedding_id', ghosts)
   await supabase.from('intelligence_extractions').delete().in('wedding_id', ghosts)

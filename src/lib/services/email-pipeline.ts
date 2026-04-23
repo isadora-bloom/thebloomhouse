@@ -13,17 +13,59 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { classifyEmail, type ClassificationResult } from '@/lib/services/router-brain'
+import {
+  classifyEmail,
+  shouldAutoIgnore,
+  isMachineGenerated,
+  type ClassificationResult,
+} from '@/lib/services/router-brain'
 import { generateInquiryDraft } from '@/lib/services/inquiry-brain'
 import { generateClientDraft } from '@/lib/services/client-brain'
 import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/gmail'
-import { detectContractSigning } from '@/lib/services/extraction'
+import { detectBookingSignal } from '@/lib/services/extraction'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
 import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { detectFormRelay, type FormRelayLead } from '@/lib/services/form-relay-parsers'
+
+// ---------------------------------------------------------------------------
+// Structured error logging
+// ---------------------------------------------------------------------------
+
+/**
+ * Fire-and-forget write to the error_logs table plus a console line. Used
+ * in place of bare console.error at pipeline-stage boundaries so the Agent
+ * → Errors page has a structured trail (venue_id, stage, context) instead
+ * of relying on Vercel function logs.
+ *
+ * Never throws: if the insert fails, the original error is still logged to
+ * console so the real pipeline never gets masked by a telemetry failure.
+ */
+async function logPipelineError(
+  venueId: string | null,
+  stage: string,
+  err: unknown,
+  context: Record<string, unknown> = {}
+): Promise<void> {
+  const message = err instanceof Error ? err.message : String(err)
+  const stack = err instanceof Error ? err.stack : undefined
+  // Local log first — keeps existing Vercel / dev behaviour.
+  console.error(`[pipeline] ${stage}:`, message, context)
+  try {
+    const supabase = createServiceClient()
+    await supabase.from('error_logs').insert({
+      venue_id: venueId,
+      error_type: `pipeline:${stage}`,
+      message: message.slice(0, 2000),
+      stack_trace: stack?.slice(0, 4000) ?? null,
+      context,
+    })
+  } catch (insertErr) {
+    console.error('[pipeline] logPipelineError insert failed:', insertErr)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,6 +83,12 @@ interface IncomingEmail {
   /** Gmail label ids for this message (e.g. INBOX, CATEGORY_PROMOTIONS, UNREAD).
    *  Used by venue_email_filters rules of pattern_type='gmail_label'. */
   labels?: string[]
+  /** RFC-2822 headers captured at fetch time (lowercase-keyed). Used by
+   *  isMachineGenerated() to silence bulk-list / auto-submitted mail that
+   *  the universal sender-regex can't catch (HoneyBook notifications,
+   *  Zola vendor broadcasts, Cvent, Calendly, billing, etc.). May be
+   *  undefined for legacy callers — treat missing as "no signal". */
+  headers?: Record<string, string>
 }
 
 interface PipelineResult {
@@ -215,7 +263,14 @@ async function isEmailProcessed(
 export async function findOrCreateContact(
   venueId: string,
   email: string,
-  name: string | null
+  name: string | null,
+  /**
+   * Optional pre-computed ownEmails set. When processIncomingEmail already
+   * loaded it upstream, pass it in to skip a second round-trip to
+   * gmail_connections. Callers outside the pipeline (scripts, repair
+   * endpoints) can omit it and the helper loads its own.
+   */
+  ownEmailsHint?: Set<string>
 ): Promise<{ personId: string | null; weddingId: string | null; isNew: boolean }> {
   const supabase = createServiceClient()
 
@@ -223,7 +278,7 @@ export async function findOrCreateContact(
   // venue's own addresses. The primary guard is in processIncomingEmail
   // self-loop check, but any direct caller of this helper must be safe
   // too — otherwise the venue itself becomes a lead.
-  const ownEmails = await venueOwnEmails(venueId)
+  const ownEmails = ownEmailsHint ?? (await venueOwnEmails(venueId))
   const emailLower = email.toLowerCase().trim()
   if (ownEmails.has(emailLower)) {
     return { personId: null, weddingId: null, isNew: false }
@@ -374,6 +429,18 @@ export async function processIncomingEmail(
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
 
+  // Step 1a.1: Early per-venue ignore rules on the RAW From. A coordinator
+  // rule like "ignore @theknot.com" must fire before the form-relay parser
+  // would otherwise rewrite From to the lead's personal email. Without
+  // this, a venue that opts out of a marketplace wholesale still has every
+  // inquiry from that marketplace flow through as a cold lead. Runs only
+  // for action='ignore' at this stage — no_draft is handled post-rewrite
+  // below so learned rules on the lead's own domain still work.
+  const earlyFilterHit = await matchFilter(venueId, rawFromEmail, email.labels ?? [])
+  if (earlyFilterHit?.action === 'ignore') {
+    return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
+  }
+
   // Step 1a.5: Form-relay detection. Platforms (The Knot, WeddingWire,
   // Here Comes The Guide, Zola) and the venue's own pricing calculator
   // mask the real prospect behind a relay / automation address. Run the
@@ -393,6 +460,28 @@ export async function processIncomingEmail(
   // prospect. Falling back to that would stamp the venue's own name onto
   // the new lead. Use the parsed lead name or nothing.
   const fromName = formLead ? formLead.leadName ?? null : rawFromName
+
+  // Step 1a.6: Content-based auto-ignore and machine-mail detection.
+  // Runs only when no form-relay fired — Knot/Zola forwards legitimately
+  // contain "view in browser" / List-Unsubscribe headers and we still
+  // want those to flow through as inquiries.
+  //
+  //   - shouldAutoIgnore: subject/body patterns for out-of-office,
+  //     "do not reply", automated responses, unsubscribe-flavoured
+  //     newsletters. Was written but never wired until 2026-04-22.
+  //   - isMachineGenerated: RFC-2822 header check for List-Unsubscribe,
+  //     List-Id, Precedence: bulk/list/junk, Auto-Submitted. Catches
+  //     HoneyBook, Cvent, Calendly, Stripe billing, Zola vendor
+  //     broadcasts without needing one parser per SaaS.
+  if (!formLead && shouldAutoIgnore(email.subject, email.body)) {
+    return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
+  }
+  if (!formLead) {
+    const machineReason = isMachineGenerated(email.headers)
+    if (machineReason) {
+      return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
+    }
+  }
 
   // Step 1b: Self-loop protection — when the sender is one of THIS venue's
   // own addresses (Sage relay or any linked gmail_connection), this is our
@@ -434,14 +523,21 @@ export async function processIncomingEmail(
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
 
-  // Step 1c: Per-venue filter rules (venue_email_filters).
+  // Step 1c: Per-venue filter rules (venue_email_filters) on the rewritten
+  // fromEmail. The early pass above already caught ignore-rules against the
+  // raw relay domain; this second pass catches rules written against the
+  // lead's own address or domain (e.g. a learned no_draft on a repeat
+  // vendor personal account). ignore here is still honoured for symmetry.
+  //
   //   action='ignore'   → bail before classifier (saves tokens).
   //   action='no_draft' → classify + persist interaction, but don't draft.
   const filterHit = await matchFilter(venueId, fromEmail, email.labels ?? [])
   if (filterHit?.action === 'ignore') {
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
-  const skipDraft = filterHit?.action === 'no_draft'
+  // Either filter can trigger no_draft; skipDraft is the union.
+  const skipDraft =
+    filterHit?.action === 'no_draft' || earlyFilterHit?.action === 'no_draft'
 
   // Check if already processed — by Gmail id AND by content fingerprint
   // so multi-connection venues don't triple-insert the same inbound email.
@@ -454,6 +550,50 @@ export async function processIncomingEmail(
     return { interactionId: null, draftId: null, classification: 'skipped', autoSent: false }
   }
 
+  // Step 1d: Thread-history signals (Gap 2 + Gap 6).
+  //
+  // Boomerang problem: venue sends an outbound campaign/outreach to an
+  // external list. A recipient replies. The reply's From is a cold
+  // external address (not in ownEmails), so the self-loop guard doesn't
+  // fire. With no prior context the LLM classifies it as new_inquiry,
+  // findOrCreateContact mints a new person, and the wedding creation
+  // gate below creates a brand-new "couple" — polluting the pipeline.
+  //
+  // Fix: measure the thread before classifying.
+  //   - threadHasPriorOutbound: if the venue has sent on this thread
+  //     before, this is a reply to us, not a cold lead. Gates wedding
+  //     creation below AND is passed to the classifier as a hint.
+  //   - priorInteractionCount / priorInteractionsFromSender: more
+  //     context for the classifier so it stops re-labelling every
+  //     thread reply as new_inquiry blind.
+  let threadHasPriorOutbound = false
+  let priorInteractionCount = 0
+  let priorInteractionsFromSender = 0
+  if (email.threadId) {
+    const { count: outboundCount } = await supabase
+      .from('interactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('venue_id', venueId)
+      .eq('gmail_thread_id', email.threadId)
+      .eq('direction', 'outbound')
+    threadHasPriorOutbound = (outboundCount ?? 0) > 0
+
+    const { count: totalCount } = await supabase
+      .from('interactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('venue_id', venueId)
+      .eq('gmail_thread_id', email.threadId)
+    priorInteractionCount = totalCount ?? 0
+  }
+  {
+    const { count: senderCount } = await supabase
+      .from('interactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('venue_id', venueId)
+      .eq('from_email', fromEmail)
+    priorInteractionsFromSender = senderCount ?? 0
+  }
+
   // Step 2: Classify with router brain. Form-relay matches skip the LLM
   // classifier — we already know what these are (a prospect filling a web
   // form is a new inquiry by definition) and we already have structured
@@ -464,13 +604,26 @@ export async function processIncomingEmail(
     classification = synthClassificationFromFormLead(formLead)
   } else {
     try {
-      classification = await classifyEmail(venueId, {
-        from: fromEmail,
-        subject: email.subject,
-        body: email.body,
-      })
+      classification = await classifyEmail(
+        venueId,
+        {
+          from: fromEmail,
+          subject: email.subject,
+          body: email.body,
+        },
+        {
+          priorInteractionCount,
+          threadHasPriorOutbound,
+          priorInteractionsFromSender,
+        }
+      )
     } catch (err) {
-      console.error('[pipeline] Classification failed:', err)
+      await logPipelineError(venueId, 'classify', err, {
+        messageId: email.messageId,
+        threadId: email.threadId,
+        fromEmail,
+        subject: email.subject?.slice(0, 200),
+      })
       return { interactionId: null, draftId: null, classification: 'error', autoSent: false }
     }
   }
@@ -482,7 +635,7 @@ export async function processIncomingEmail(
 
   if (classification.classification !== 'spam') {
     try {
-      const contact = await findOrCreateContact(venueId, fromEmail, fromName)
+      const contact = await findOrCreateContact(venueId, fromEmail, fromName, ownEmails)
       personId = contact.personId
       isNewContact = contact.isNew
 
@@ -491,7 +644,10 @@ export async function processIncomingEmail(
         weddingId = contact.weddingId
       }
     } catch (err) {
-      console.error('[pipeline] Contact lookup failed:', err)
+      await logPipelineError(venueId, 'contact_lookup', err, {
+        messageId: email.messageId,
+        fromEmail,
+      })
     }
   }
 
@@ -524,7 +680,12 @@ export async function processIncomingEmail(
     .single()
 
   if (interactionError) {
-    console.error('[pipeline] Failed to create interaction:', interactionError.message)
+    await logPipelineError(venueId, 'insert_interaction', interactionError, {
+      messageId: email.messageId,
+      threadId: email.threadId,
+      fromEmail,
+      classification: classification.classification,
+    })
     return { interactionId: null, draftId: null, classification: classification.classification, autoSent: false }
   }
 
@@ -540,7 +701,12 @@ export async function processIncomingEmail(
   if (
     isNewContact &&
     !weddingId &&
-    classification.classification === 'new_inquiry'
+    classification.classification === 'new_inquiry' &&
+    // Boomerang guard (Gap 2): if the venue already sent outbound on this
+    // thread, the incoming is a reply to our campaign/outreach — never a
+    // cold new_inquiry, even if the classifier ranked it that way on body
+    // cues alone. Without this gate, campaign replies become ghost couples.
+    !threadHasPriorOutbound
   ) {
     const { data: newWedding } = await supabase
       .from('weddings')
@@ -643,35 +809,48 @@ export async function processIncomingEmail(
     },
   })
 
-  // Step 5b: Contract signing detection (notification only)
-  // Scans the email body for phrases indicating the couple has signed/returned
-  // a contract. If the wedding is in a pre-contract stage, flag the interaction
-  // and insert an admin notification so the coordinator can confirm and move
-  // the wedding to the Contracted stage.
+  // Step 5b: Booking-confirmation detection (coordinator prompt, never
+  // auto-marks the date booked). Scans for contract / deposit / "we're
+  // official" language. If the wedding is in a pre-booking stage and has a
+  // wedding_date, surface a structured notification with the slot math so
+  // the coordinator can confirm or dismiss. Calendly/HoneyBook mail can't
+  // reach this path — venue_email_filters short-circuits them before the
+  // classifier (migration 069 + trigger in 072).
   try {
-    if (weddingId && detectContractSigning(email.body)) {
+    const signal = weddingId ? detectBookingSignal(email.body) : { matched: false, phrase: null }
+    if (weddingId && signal.matched) {
       const { data: weddingRow } = await supabase
         .from('weddings')
-        .select('status')
+        .select('status, wedding_date, wedding_date_precision')
         .eq('id', weddingId)
         .single()
 
       const currentStatus = weddingRow?.status as string | undefined
+      const weddingDate = weddingRow?.wedding_date as string | null
+      const weddingDatePrecision = weddingRow?.wedding_date_precision as string | null
+
       if (
         currentStatus &&
         ['tour_completed', 'proposal_sent'].includes(currentStatus)
       ) {
-        // Flag the interaction via intelligence_extractions
+        // Flag the interaction via intelligence_extractions — the audit
+        // trail feeds future learning (which phrases correlate with real
+        // bookings vs false positives).
         await supabase.from('intelligence_extractions').insert({
           venue_id: venueId,
           wedding_id: weddingId,
           interaction_id: interactionId,
-          extraction_type: 'contract_signing_detected',
-          value: { source: 'regex', from: fromEmail, subject: email.subject },
+          extraction_type: 'booking_signal_detected',
+          value: {
+            source: 'regex',
+            from: fromEmail,
+            subject: email.subject,
+            matched_phrase: signal.phrase,
+          },
           confidence: 0.8,
         })
 
-        // Build couple name for the notification body
+        // Build couple name for the card header.
         let coupleLabel = fromName || fromEmail
         try {
           const { data: peopleRows } = await supabase
@@ -694,17 +873,65 @@ export async function processIncomingEmail(
           /* best-effort */
         }
 
+        // Slot math — how many weddings are already booked on this date
+        // at this venue, and what's the cap. Coordinator card renders
+        // "X of Y slots would remain after confirming". Falls back to 1
+        // when nothing explicit is configured.
+        let currentBooked = 0
+        let maxEvents = 1
+        if (weddingDate) {
+          const [{ data: availRow }, { data: cfgRow }] = await Promise.all([
+            supabase
+              .from('venue_availability')
+              .select('booked_count, max_events')
+              .eq('venue_id', venueId)
+              .eq('date', weddingDate)
+              .maybeSingle(),
+            supabase
+              .from('venue_config')
+              .select('max_events_per_day')
+              .eq('venue_id', venueId)
+              .maybeSingle(),
+          ])
+          if (availRow) {
+            currentBooked = (availRow.booked_count as number | null) ?? 0
+            maxEvents = (availRow.max_events as number | null) ?? 1
+          } else {
+            maxEvents = (cfgRow?.max_events_per_day as number | null) ?? 1
+          }
+        }
+
+        // Structured body — the card parses this. Keep the shape stable;
+        // the confirm API and the UI card read the same fields.
+        const body = JSON.stringify({
+          weddingId,
+          interactionId,
+          coupleLabel,
+          weddingDate,
+          weddingDatePrecision,
+          currentBooked,
+          maxEvents,
+          matchedPhrase: signal.phrase,
+          fromEmail,
+          subject: email.subject,
+        })
+
         await createNotification({
           venueId,
           weddingId,
-          type: 'contract_signing_detected',
-          title: 'Possible contract signing detected',
-          body: `Email from ${coupleLabel} mentions signing. Review and confirm.`,
+          type: 'booking_confirmation_prompt',
+          title: weddingDate
+            ? `Looks like ${coupleLabel} may have booked`
+            : `Possible booking from ${coupleLabel}`,
+          body,
         })
       }
     }
   } catch (err) {
-    console.error('[pipeline] Contract signing detection failed:', err)
+    await logPipelineError(venueId, 'booking_signal_detect', err, {
+      interactionId,
+      weddingId,
+    })
   }
 
   // Step 6: Route to appropriate brain for draft generation
@@ -744,13 +971,21 @@ export async function processIncomingEmail(
           guestCount: classification.extractedData.guestCount,
         },
         taskType,
+        // Surface the detected source (form-relay parser output or 'direct')
+        // so first-touch replies can acknowledge the discovery channel
+        // instead of treating every inquiry identically.
+        source: detectedSource,
       })
 
       draftBody = inquiryResult.draft
       confidenceScore = inquiryResult.confidence
       brainUsed = 'inquiry'
     } catch (err) {
-      console.error('[pipeline] Inquiry brain failed:', err)
+      await logPipelineError(venueId, 'inquiry_brain', err, {
+        interactionId,
+        fromEmail,
+        classification: emailClassification,
+      })
     }
   } else if (emailClassification === 'client_message') {
     if (weddingId) {
@@ -771,7 +1006,11 @@ export async function processIncomingEmail(
         confidenceScore = clientResult.confidence
         brainUsed = 'client'
       } catch (err) {
-        console.error('[pipeline] Client brain failed:', err)
+        await logPipelineError(venueId, 'client_brain', err, {
+          interactionId,
+          weddingId,
+          fromEmail,
+        })
       }
     }
   }
@@ -820,44 +1059,66 @@ export async function processIncomingEmail(
           contextType,
           confidenceScore: confidenceScore ?? 0,
           source: detectedSource,
+          threadId: email.threadId,
         })
 
         if (eligibility.eligible) {
           // Mark draft as pending auto-send (not sent yet)
           const sendAt = new Date(Date.now() + 5 * 60 * 1000).toISOString()
 
-          await supabase
+          // Use .select() so Supabase returns the row on success and an
+          // error on failure. Before migration 067, the drafts.status
+          // CHECK rejected 'auto_send_pending' silently — the update
+          // "succeeded" with zero rows affected and auto-send never
+          // actually fired. Guard with an explicit error check so any
+          // future CHECK drift fails loudly instead of going dark.
+          const { error: autoSendUpdateErr } = await supabase
             .from('drafts')
             .update({
               status: 'auto_send_pending',
               auto_sent: false,
               auto_send_source: detectedSource,
+              auto_send_attempts: 0,
             })
             .eq('id', draftId)
+            .select('id')
+            .single()
 
-          // Create a cancellable notification
-          await createNotification({
-            venueId,
-            weddingId: weddingId ?? undefined,
-            type: 'auto_send_pending',
-            title: `Auto-sending to ${fromName || fromEmail} in 5 minutes`,
-            body: JSON.stringify({
+          if (autoSendUpdateErr) {
+            await logPipelineError(venueId, 'autosend_stage_transition', autoSendUpdateErr, {
               draftId,
-              toEmail: fromEmail,
-              toName: fromName,
-              subject: draftSubject,
-              threadId: email.threadId,
-              sendAt,
-              confidenceScore,
-              source: detectedSource,
-            }),
-          })
+              interactionId,
+            })
+            // Do not create a notification or mark autoSent — the draft
+            // stays in 'pending' for manual approval.
+          } else {
+            // Create a cancellable notification
+            await createNotification({
+              venueId,
+              weddingId: weddingId ?? undefined,
+              type: 'auto_send_pending',
+              title: `Auto-sending to ${fromName || fromEmail} in 5 minutes`,
+              body: JSON.stringify({
+                draftId,
+                toEmail: fromEmail,
+                toName: fromName,
+                subject: draftSubject,
+                threadId: email.threadId,
+                sendAt,
+                confidenceScore,
+                source: detectedSource,
+              }),
+            })
 
-          // Mark as auto-sent for the pipeline result (pending)
-          autoSent = true
+            // Mark as auto-sent for the pipeline result (pending)
+            autoSent = true
+          }
         }
       } catch (err) {
-        console.error('[pipeline] Auto-send check failed:', err)
+        await logPipelineError(venueId, 'autosend_check', err, {
+          draftId,
+          interactionId,
+        })
       }
     }
   }
@@ -920,7 +1181,10 @@ export async function processAllNewEmails(venueId: string): Promise<ProcessAllRe
         if (result.autoSent) summary.autoSent++
       }
     } catch (err) {
-      console.error('[pipeline] Error processing email:', err)
+      await logPipelineError(venueId, 'process_email_unhandled', err, {
+        messageId: email.messageId,
+        threadId: email.threadId,
+      })
       summary.errors++
       summary.results.push({
         interactionId: null,
@@ -945,11 +1209,47 @@ export async function processAllNewEmails(venueId: string): Promise<ProcessAllRe
 // ---------------------------------------------------------------------------
 
 /**
+ * Maximum send attempts before a draft is moved to auto_send_failed. Three
+ * is chosen because our two known failure modes — transient Gmail 5xx and
+ * expired refresh-token after manual re-auth — either resolve within one
+ * retry or never resolve at all. Beyond three, spinning further risks
+ * double-sending on partial-failure corner cases.
+ */
+const AUTO_SEND_MAX_ATTEMPTS = 3
+
+/**
  * Check for pending auto-send notifications that have passed their 5-minute
  * delay window. For each one that hasn't been cancelled, actually send the
  * email via Gmail and update the draft status.
  *
  * Called by the cron email_poll job after processing new emails.
+ *
+ * Retry-loop guard (was: infinite retry, possible double-send).
+ *
+ * The previous version left a notification `read=false` whenever anything
+ * went wrong — sendEmail returning null, JSON.parse throwing on a
+ * malformed body, or the post-send DB update hiccuping after Gmail had
+ * already accepted the message. Next cron tick would retry the same
+ * notification, which at best wasted tokens and at worst sent the same
+ * reply twice to the couple.
+ *
+ * Replacement flow per notification:
+ *   1. Parse body defensively. Malformed → mark notif read, skip.
+ *   2. Skip if sendAt hasn't elapsed.
+ *   3. Atomic claim: transition status 'auto_send_pending' →
+ *      'auto_send_sending' with a WHERE on the current status. If zero
+ *      rows returned, some other tick beat us to it — skip without
+ *      touching anything. This is the double-send guard.
+ *   4. Call Gmail. Success (non-null messageId): status='sent',
+ *      auto_sent=true, notif read. Failure (null or exception):
+ *      increment auto_send_attempts, store last_error. If attempts
+ *      reach the max, set status='auto_send_failed' and create a
+ *      coordinator alert. Otherwise return status to 'auto_send_pending'
+ *      for the next cron tick to pick up.
+ *
+ * sendEmail itself catches internally and returns null on any Gmail
+ * error, so we treat null identically to a caught exception — both
+ * are "this attempt failed".
  */
 export async function flushPendingAutoSends(venueId: string): Promise<number> {
   const supabase = createServiceClient()
@@ -967,29 +1267,55 @@ export async function flushPendingAutoSends(venueId: string): Promise<number> {
   if (!pendingNotifs || pendingNotifs.length === 0) return 0
 
   for (const notif of pendingNotifs) {
+    // Step 1: Defensive JSON parse. Malformed body (schema drift, old
+    // notifications from a previous pipeline version) is not a retry
+    // condition — mark it read and move on.
+    let details: {
+      draftId: string
+      toEmail: string
+      subject: string
+      threadId?: string
+      sendAt: string
+    }
     try {
-      // Parse the notification body for draft details
-      const details = JSON.parse(notif.body as string) as {
-        draftId: string
-        toEmail: string
-        subject: string
-        threadId?: string
-        sendAt: string
-      }
+      details = JSON.parse(notif.body as string)
+    } catch (parseErr) {
+      await logPipelineError(venueId, 'autosend_flush_malformed', parseErr, {
+        notificationId: notif.id,
+      })
+      await supabase
+        .from('admin_notifications')
+        .update({ read: true, read_at: new Date().toISOString() })
+        .eq('id', notif.id)
+      continue
+    }
 
-      // Check if the delay has passed
-      const sendAt = new Date(details.sendAt).getTime()
-      if (Date.now() < sendAt) continue // Not yet time
+    // Step 2: Delay gate. Leave the notification unread so the next tick
+    // re-evaluates it — this is the expected not-yet-time path.
+    const sendAtMs = new Date(details.sendAt).getTime()
+    if (!Number.isFinite(sendAtMs) || Date.now() < sendAtMs) continue
 
-      // Verify the draft is still in auto_send_pending status (not cancelled)
-      const { data: draft } = await supabase
+    try {
+      // Step 3: Atomic claim. Only one flush tick can flip
+      // auto_send_pending → auto_send_sending for a given draft.
+      // Concurrent ticks see zero rows and skip — double-send guard.
+      const { data: claimed, error: claimErr } = await supabase
         .from('drafts')
-        .select('id, status, draft_body, venue_id')
+        .update({ status: 'auto_send_sending' })
         .eq('id', details.draftId)
-        .single()
+        .eq('status', 'auto_send_pending')
+        .select('id, draft_body, auto_send_attempts')
 
-      if (!draft || draft.status !== 'auto_send_pending') {
-        // Draft was cancelled or already handled — mark notification as read
+      if (claimErr) {
+        await logPipelineError(venueId, 'autosend_claim', claimErr, {
+          notificationId: notif.id,
+          draftId: details.draftId,
+        })
+        continue // leave notif unread; transient DB errors retry next tick
+      }
+      if (!claimed || claimed.length === 0) {
+        // Draft was cancelled, already sent, or claimed by a sibling
+        // tick. Mark notif read so we stop considering it.
         await supabase
           .from('admin_notifications')
           .update({ read: true, read_at: new Date().toISOString() })
@@ -997,37 +1323,109 @@ export async function flushPendingAutoSends(venueId: string): Promise<number> {
         continue
       }
 
-      // Send the email — enforce AI disclosure at the send boundary
-      const disclosureCtx = await fetchDisclosureContext(venueId)
-      const sentMessageId = await sendEmail(
-        venueId,
-        details.toEmail,
-        details.subject,
-        appendAIDisclosure(draft.draft_body as string, disclosureCtx),
-        details.threadId
-      )
+      const draft = claimed[0] as { id: string; draft_body: string; auto_send_attempts: number }
+      const currentAttempts = draft.auto_send_attempts ?? 0
+
+      // Step 4: Send. sendEmail catches internally and returns null on
+      // any Gmail-side failure, so null === failed attempt here.
+      let sentMessageId: string | null = null
+      let sendError: unknown = null
+      try {
+        const disclosureCtx = await fetchDisclosureContext(venueId)
+        sentMessageId = await sendEmail(
+          venueId,
+          details.toEmail,
+          details.subject,
+          appendAIDisclosure(draft.draft_body, disclosureCtx),
+          details.threadId
+        )
+      } catch (err) {
+        sendError = err
+      }
 
       if (sentMessageId) {
-        // Mark draft as sent
+        // Success path: commit the sent state and close the notification.
+        // sent_at is the enforcement timestamp for the 24h thread cap
+        // (autonomous-sender.getRecentThreadAutoSendCount queries it).
+        const nowIso = new Date().toISOString()
         await supabase
           .from('drafts')
           .update({
             status: 'sent',
             auto_sent: true,
-            approved_at: new Date().toISOString(),
+            approved_at: nowIso,
+            sent_at: nowIso,
           })
-          .eq('id', details.draftId)
+          .eq('id', draft.id)
 
-        // Mark notification as read
         await supabase
           .from('admin_notifications')
           .update({ read: true, read_at: new Date().toISOString() })
           .eq('id', notif.id)
 
         sentCount++
+        continue
       }
+
+      // Failure path: bump attempts, decide retry vs. give-up.
+      const nextAttempts = currentAttempts + 1
+      const reachedMax = nextAttempts >= AUTO_SEND_MAX_ATTEMPTS
+      const lastError = sendError
+        ? sendError instanceof Error
+          ? sendError.message
+          : String(sendError)
+        : 'sendEmail returned null'
+
+      await supabase
+        .from('drafts')
+        .update({
+          status: reachedMax ? 'auto_send_failed' : 'auto_send_pending',
+          auto_send_attempts: nextAttempts,
+          auto_send_last_error: lastError.slice(0, 500),
+        })
+        .eq('id', draft.id)
+
+      await logPipelineError(venueId, 'autosend_send_failed', sendError ?? new Error(lastError), {
+        draftId: draft.id,
+        notificationId: notif.id,
+        attempts: nextAttempts,
+        maxAttempts: AUTO_SEND_MAX_ATTEMPTS,
+      })
+
+      if (reachedMax) {
+        // Retries exhausted — close this notification and raise a
+        // coordinator-facing one so they know to handle the draft
+        // manually.
+        await supabase
+          .from('admin_notifications')
+          .update({ read: true, read_at: new Date().toISOString() })
+          .eq('id', notif.id)
+
+        await createNotification({
+          venueId,
+          type: 'auto_send_failed',
+          title: `Auto-send failed after ${AUTO_SEND_MAX_ATTEMPTS} attempts`,
+          body: JSON.stringify({
+            draftId: draft.id,
+            toEmail: details.toEmail,
+            subject: details.subject,
+            lastError: lastError.slice(0, 500),
+          }),
+        })
+      }
+      // Else: we left status='auto_send_pending' and the notification
+      // unread. Next cron tick will retry. sendAt is in the past so
+      // it'll fire immediately.
     } catch (err) {
-      console.error('[pipeline] Failed to flush pending auto-send:', err)
+      // Catch-all for anything above that slipped past the specific
+      // handlers (e.g. notification update failing). Do not mark notif
+      // read — if we landed here we don't know whether the email went
+      // out, and leaving it unread means the claim guard + attempts
+      // counter still protect against double-send on the next tick.
+      await logPipelineError(venueId, 'autosend_flush', err, {
+        notificationId: notif.id,
+        draftId: details.draftId,
+      })
     }
   }
 
@@ -1280,10 +1678,11 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
     throw new Error(`Failed to send email for draft ${draftId}`)
   }
 
-  // Update draft status
+  // Update draft status. sent_at is written on the coordinator-approved path
+  // too so outbound activity timing is consistent across auto-send + manual.
   await supabase
     .from('drafts')
-    .update({ status: 'sent' })
+    .update({ status: 'sent', sent_at: new Date().toISOString() })
     .eq('id', draftId)
 
   // Create outbound interaction record

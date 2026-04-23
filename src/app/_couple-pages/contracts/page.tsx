@@ -149,12 +149,14 @@ function ContractCard({
   onDelete,
   onAskSage,
   isAnalyzing,
+  aiName,
 }: {
   contract: Contract
   onAnalyze: (id: string, imageBase64?: string, mediaType?: string) => void
   onDelete: (id: string) => void
   onAskSage: (contractId: string) => void
   isAnalyzing: boolean
+  aiName: string
 }) {
   const [expanded, setExpanded] = useState(false)
   const [showAsk, setShowAsk] = useState(false)
@@ -335,10 +337,10 @@ function ContractCard({
                   onClick={() => onAskSage(contract.id)}
                   className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg text-white transition-opacity hover:opacity-90"
                   style={{ backgroundColor: 'var(--couple-primary)' }}
-                  title="Open Sage chat with this contract loaded"
+                  title={`Open ${aiName} chat with this contract loaded`}
                 >
                   <Sparkles className="w-3 h-3" />
-                  Ask Sage
+                  Ask {aiName}
                 </button>
               </>
             )}
@@ -450,7 +452,7 @@ function ContractCard({
 // ---------------------------------------------------------------------------
 
 export default function ContractsPage() {
-  const { slug, venueId, weddingId, loading: contextLoading } = useCoupleContext()
+  const { slug, venueId, weddingId, aiName, loading: contextLoading } = useCoupleContext()
   const router = useRouter()
   const [contracts, setContracts] = useState<Contract[]>([])
   const [vendors, setVendors] = useState<BookedVendor[]>([])
@@ -867,6 +869,7 @@ export default function ContractsPage() {
               onDelete={handleDelete}
               onAskSage={handleAskSage}
               isAnalyzing={analyzingId === contract.id}
+              aiName={aiName}
             />
           ))}
         </div>

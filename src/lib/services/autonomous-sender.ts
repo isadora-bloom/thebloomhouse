@@ -26,6 +26,13 @@ interface AutoSendCheck {
   contextType: string
   confidenceScore: number
   source?: string
+  /**
+   * Gmail thread ID for per-thread rolling-24h cap enforcement. Optional so
+   * tests and synthetic paths without a thread ID still type-check — the
+   * thread cap gate skips when absent. In the live pipeline this is always
+   * provided via email-pipeline.ts.
+   */
+  threadId?: string
 }
 
 interface AutoSendResult {
@@ -80,6 +87,7 @@ interface AutoSendRule {
   enabled: boolean
   confidenceThreshold: number
   dailyLimit: number
+  threadCap24h: number
   source: string
 }
 
@@ -98,7 +106,7 @@ async function getMatchingRule(
   // Try source-specific rule first
   const { data: sourceRule } = await supabase
     .from('auto_send_rules')
-    .select('enabled, confidence_threshold, daily_limit, source')
+    .select('enabled, confidence_threshold, daily_limit, thread_cap_24h, source')
     .eq('venue_id', venueId)
     .eq('context', context)
     .eq('source', source)
@@ -109,6 +117,7 @@ async function getMatchingRule(
       enabled: sourceRule[0].enabled as boolean,
       confidenceThreshold: sourceRule[0].confidence_threshold as number,
       dailyLimit: sourceRule[0].daily_limit as number,
+      threadCap24h: (sourceRule[0].thread_cap_24h as number) ?? 3,
       source: sourceRule[0].source as string,
     }
   }
@@ -116,7 +125,7 @@ async function getMatchingRule(
   // Fall back to 'all' rule for this context
   const { data: allRule } = await supabase
     .from('auto_send_rules')
-    .select('enabled, confidence_threshold, daily_limit, source')
+    .select('enabled, confidence_threshold, daily_limit, thread_cap_24h, source')
     .eq('venue_id', venueId)
     .eq('context', context)
     .eq('source', 'all')
@@ -127,6 +136,7 @@ async function getMatchingRule(
       enabled: allRule[0].enabled as boolean,
       confidenceThreshold: allRule[0].confidence_threshold as number,
       dailyLimit: allRule[0].daily_limit as number,
+      threadCap24h: (allRule[0].thread_cap_24h as number) ?? 3,
       source: allRule[0].source as string,
     }
   }
@@ -187,7 +197,22 @@ export async function checkAutoSendEligible(
     }
   }
 
-  // Check 3: Daily limit
+  // Check 3: Per-thread rolling-24h cap. Belt-and-braces against
+  // auto-responder loops — venue-wide `daily_limit` can hide a runaway
+  // single thread. Skipped when threadId is absent (tests / synthetic
+  // paths). Ordered BEFORE the daily cap so the deny reason is specific
+  // when both would deny.
+  if (draft.threadId) {
+    const threadCount = await getRecentThreadAutoSendCount(venueId, draft.threadId)
+    if (threadCount >= rule.threadCap24h) {
+      return {
+        eligible: false,
+        reason: `Thread cap reached: ${threadCount}/${rule.threadCap24h} auto-sends on thread in last 24h`,
+      }
+    }
+  }
+
+  // Check 4: Daily limit (venue-wide, per-context, calendar-day)
   const todayCount = await getTodayAutoSendCount(venueId, draft.contextType)
   if (todayCount >= rule.dailyLimit) {
     return {
@@ -286,6 +311,55 @@ export async function getAutoSendStats(
 // ---------------------------------------------------------------------------
 // Exported: getTodayAutoSendCount
 // ---------------------------------------------------------------------------
+
+/**
+ * Count auto-sent drafts on a Gmail thread within the last rolling 24h.
+ * Used by the eligibility check to enforce `auto_send_rules.thread_cap_24h`.
+ *
+ * Must query `sent_at` (actual send), not `created_at` — a draft generated
+ * but never sent must not count against the cap. Must filter `auto_sent=true`
+ * — coordinator manual sends never count, so a coordinator can always
+ * intervene on a hot thread without burning the cap.
+ */
+export async function getRecentThreadAutoSendCount(
+  venueId: string,
+  threadId: string
+): Promise<number> {
+  const supabase = createServiceClient()
+
+  const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+
+  // Two-step join via interaction_id (Supabase-JS doesn't support arbitrary
+  // joins in a single query). First find interactions on this thread, then
+  // count qualifying auto-sent drafts.
+  const { data: threadInteractions, error: intErr } = await supabase
+    .from('interactions')
+    .select('id')
+    .eq('venue_id', venueId)
+    .eq('gmail_thread_id', threadId)
+
+  if (intErr) {
+    console.error('[auto-sender] Failed to fetch thread interactions:', intErr.message)
+    return 0
+  }
+  const interactionIds = (threadInteractions ?? []).map((r) => r.id as string)
+  if (interactionIds.length === 0) return 0
+
+  const { data, error } = await supabase
+    .from('drafts')
+    .select('id')
+    .eq('venue_id', venueId)
+    .eq('auto_sent', true)
+    .in('interaction_id', interactionIds)
+    .gte('sent_at', windowStart)
+
+  if (error) {
+    console.error('[auto-sender] Failed to count thread auto-sends:', error.message)
+    return 0
+  }
+
+  return data?.length ?? 0
+}
 
 /**
  * Count auto-sent drafts today for a given context (inquiry or client).

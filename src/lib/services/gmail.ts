@@ -65,6 +65,39 @@ export interface ParsedEmail {
   labels: string[]
   /** Which gmail_connection this email came from */
   connectionId?: string
+  /**
+   * Select RFC-2822 headers that identify machine-generated bulk mail. Kept
+   * lowercase-keyed. Only the headers the pipeline actually uses are carried:
+   *   - list-unsubscribe      → bulk/list mail
+   *   - list-id               → mailing list identifier
+   *   - precedence            → 'bulk' | 'list' | 'junk' signals
+   *   - auto-submitted        → 'auto-generated' / 'auto-replied' (RFC 3834)
+   *   - return-path           → for bounce-adjacent detection
+   * Consumers should treat a missing key as "absent" (no header).
+   */
+  headers?: Record<string, string>
+}
+
+/** Headers we capture from Gmail messages. Kept small and explicit. */
+const CAPTURED_HEADERS = [
+  'list-unsubscribe',
+  'list-id',
+  'precedence',
+  'auto-submitted',
+  'return-path',
+] as const
+
+function pickCapturedHeaders(
+  headers: Array<{ name: string; value: string }>
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const h of headers) {
+    const key = (h.name || '').toLowerCase()
+    if ((CAPTURED_HEADERS as readonly string[]).includes(key) && h.value) {
+      out[key] = h.value
+    }
+  }
+  return out
 }
 
 export interface GmailConnection {
@@ -785,6 +818,7 @@ async function fetchNewEmailsFromConnection(
           date: getHeader(headers, 'Date'),
           labels: (msg.labelIds ?? []) as string[],
           connectionId: conn.id,
+          headers: pickCapturedHeaders(headers),
         })
       } catch (msgErr) {
         console.error(`[gmail] Failed to fetch message ${messageId}:`, msgErr)
@@ -878,6 +912,7 @@ async function fetchNewEmailsLegacy(
           body: parseEmailBody(msg.payload as Record<string, unknown>),
           date: getHeader(headers, 'Date'),
           labels: (msg.labelIds ?? []) as string[],
+          headers: pickCapturedHeaders(headers),
         })
       } catch (msgErr) {
         console.error(`[gmail] Failed to fetch message ${messageId}:`, msgErr)

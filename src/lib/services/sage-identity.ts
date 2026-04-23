@@ -44,27 +44,43 @@ export const SAGE_OPENER_SHAPES: { value: SageOpenerShape; label: string; descri
     value: 'direct',
     label: 'Direct',
     description: 'Lead with identity, then get to the point. Short.',
-    example: 'Sage here — Rixey Manor\'s AI concierge. Saw your note about a November wedding...',
+    example: '{aiName} here — {venueName}\'s AI concierge. Saw your note about a November wedding...',
   },
   {
     value: 'warm-story',
     label: 'Warm',
     description: 'Open with warmth, then identify. Feels personal.',
-    example: 'Hello Jenna — thanks for reaching out. I\'m Sage, the AI assistant on the Rixey team...',
+    example: 'Hello Jenna — thanks for reaching out. I\'m {aiName}, the AI assistant on the {venueName} team...',
   },
   {
     value: 'question-first',
     label: 'Question-first',
     description: 'Acknowledge, ask back, then identify. Starts a dialogue.',
-    example: 'Jenna, hi. Before I say anything else: tell me more about the vibe you\'re going for. I\'m Sage, Rixey\'s AI concierge...',
+    example: 'Jenna, hi. Before I say anything else: tell me more about the vibe you\'re going for. I\'m {aiName}, {venueName}\'s AI concierge...',
   },
   {
     value: 'practical',
     label: 'Practical',
     description: 'Quick answer first, identity in parens, then details.',
-    example: 'Jenna — I\'m Sage (Rixey\'s AI assistant). Quick answer first, details below...',
+    example: 'Jenna — I\'m {aiName} ({venueName}\'s AI assistant). Quick answer first, details below...',
   },
 ]
+
+/**
+ * Render an opener-shape example with the venue's own ai_name + venue_name
+ * substituted in. Use this in any admin-facing picker UI so Oakwood admins
+ * see their own venue, not a hardcoded reference to another customer.
+ */
+export function renderOpenerExample(
+  template: string,
+  opts: { aiName?: string | null; venueName?: string | null }
+): string {
+  const aiName = (opts.aiName && opts.aiName.trim()) || SAGE_DEFAULTS.ai_name
+  const venueName = (opts.venueName && opts.venueName.trim()) || 'your venue'
+  return template
+    .replace(/\{aiName\}/g, aiName)
+    .replace(/\{venueName\}/g, venueName)
+}
 
 // ─── Defaults (used when venue_config row is missing / stub) ────────────────
 export const SAGE_DEFAULTS = {

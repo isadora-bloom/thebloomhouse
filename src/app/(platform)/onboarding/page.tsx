@@ -44,6 +44,50 @@ interface VenueBasics {
   capacity: string
   base_price: string
   timezone: string
+  /**
+   * v4 Task 8 configurables captured at onboarding time:
+   *   - `ai_name`: per-venue AI assistant name (writes venue_ai_config.ai_name).
+   *     Falls back to 'Sage' server-side if blank.
+   *   - `venue_prefix`: 2-3 letter client-code prefix (writes
+   *     venue_config.venue_prefix). Auto-derived from business_name on first
+   *     render; admin can override.
+   *   - `max_events_per_day`: venue-level default. Temporary home in
+   *     venue_config until venue_availability lands (Phase 2 Task 10).
+   *   - `ad_platforms`: which inquiry sources the venue expects. Seeds
+   *     auto_send_rules (disabled) so admin can flip sources on later.
+   */
+  ai_name: string
+  venue_prefix: string
+  max_events_per_day: string
+  ad_platforms: string[]
+}
+
+const AD_PLATFORM_OPTIONS: { value: string; label: string; source: string }[] = [
+  { value: 'theknot',     label: 'The Knot',     source: 'theknot' },
+  { value: 'weddingwire', label: 'WeddingWire',  source: 'weddingwire' },
+  { value: 'zola',        label: 'Zola',         source: 'zola' },
+  { value: 'website',     label: 'Our website',  source: 'direct' },
+  { value: 'direct',      label: 'Direct email', source: 'direct' },
+]
+
+/**
+ * Auto-derive a client-code prefix from a venue name.
+ * "Hawthorne Manor" → "HM", "The Bloom House" → "BH" (drops "The"),
+ * "Rosewood" → "RW" (first + last consonant fallback).
+ */
+function derivePrefix(businessName: string): string {
+  if (!businessName) return ''
+  const words = businessName
+    .replace(/[^a-zA-Z\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 0 && !['the', 'a', 'an', 'of', 'at'].includes(w.toLowerCase()))
+  if (words.length === 0) return ''
+  if (words.length >= 2) {
+    return (words[0][0] + words[1][0]).toUpperCase()
+  }
+  const w = words[0]
+  if (w.length >= 2) return (w[0] + w[w.length - 1]).toUpperCase()
+  return w[0].toUpperCase()
 }
 
 interface AIPersonality {
@@ -291,7 +335,14 @@ export default function OnboardingPage() {
     capacity: '',
     base_price: '',
     timezone: 'America/New_York',
+    ai_name: '',
+    venue_prefix: '',
+    max_events_per_day: '',
+    ad_platforms: [],
   })
+  // Remember whether the admin typed their own prefix. If they haven't,
+  // keep auto-deriving from business_name as they type.
+  const [prefixEdited, setPrefixEdited] = useState(false)
 
   // Step 2: Gmail connection state
   const [gmailConnected, setGmailConnected] = useState(false)
@@ -337,16 +388,18 @@ export default function OnboardingPage() {
 
       const { data: config } = await supabase
         .from('venue_config')
-        .select('business_name, capacity, base_price, timezone')
+        .select('business_name, capacity, base_price, timezone, venue_prefix, max_events_per_day')
         .eq('venue_id', VENUE_ID!)
         .maybeSingle()
 
       if (cancelled) return
 
       if (venue || config) {
+        const loadedName = config?.business_name || venue?.name || ''
+        const loadedPrefix = (config?.venue_prefix as string | null) || ''
         setBasics((prev) => ({
           ...prev,
-          business_name: config?.business_name || venue?.name || prev.business_name,
+          business_name: loadedName || prev.business_name,
           address: (venue as Record<string, unknown>)?.address_line1 as string || prev.address,
           city: venue?.city || prev.city,
           state: venue?.state || prev.state,
@@ -354,13 +407,16 @@ export default function OnboardingPage() {
           capacity: config?.capacity?.toString() || prev.capacity,
           base_price: config?.base_price?.toString() || prev.base_price,
           timezone: config?.timezone || venue?.timezone || prev.timezone,
+          venue_prefix: loadedPrefix || derivePrefix(loadedName) || prev.venue_prefix,
+          max_events_per_day: (config?.max_events_per_day as number | null)?.toString() || prev.max_events_per_day,
         }))
+        if (loadedPrefix) setPrefixEdited(true)
       }
 
-      // Load AI personality
+      // Load AI personality + ai_name
       const { data: aiConfig } = await supabase
         .from('venue_ai_config')
-        .select('warmth_level, formality_level, playfulness_level, brevity_level, enthusiasm_level')
+        .select('warmth_level, formality_level, playfulness_level, brevity_level, enthusiasm_level, ai_name')
         .eq('venue_id', VENUE_ID!)
         .maybeSingle()
 
@@ -373,6 +429,28 @@ export default function OnboardingPage() {
           brevity_level: aiConfig.brevity_level ?? 6,
           enthusiasm_level: aiConfig.enthusiasm_level ?? 6,
         })
+        const loadedAiName = (aiConfig.ai_name as string | null) ?? ''
+        if (loadedAiName) {
+          setBasics((prev) => ({ ...prev, ai_name: loadedAiName }))
+        }
+      }
+
+      // Load existing ad platform seeds from auto_send_rules
+      const { data: existingRules } = await supabase
+        .from('auto_send_rules')
+        .select('source')
+        .eq('venue_id', VENUE_ID!)
+        .eq('context', 'inquiry')
+      if (cancelled) return
+      if (existingRules && existingRules.length > 0) {
+        const sources = new Set(existingRules.map((r) => r.source as string))
+        const selected: string[] = []
+        for (const opt of AD_PLATFORM_OPTIONS) {
+          if (sources.has(opt.source) && !selected.includes(opt.value)) selected.push(opt.value)
+        }
+        if (selected.length > 0) {
+          setBasics((prev) => ({ ...prev, ad_platforms: selected }))
+        }
       }
 
       // Load existing FAQs from knowledge_base
@@ -458,6 +536,11 @@ export default function OnboardingPage() {
             .eq('id', venueId)
           if (venueError) throw venueError
 
+          const prefix = (prefixEdited ? basics.venue_prefix : derivePrefix(basics.business_name))
+            .toUpperCase()
+            .replace(/[^A-Z0-9]/g, '')
+            .slice(0, 4)
+
           const { error: configError } = await supabase
             .from('venue_config')
             .upsert({
@@ -466,9 +549,50 @@ export default function OnboardingPage() {
               timezone: basics.timezone,
               capacity: basics.capacity ? parseInt(basics.capacity) : null,
               base_price: basics.base_price ? parseFloat(basics.base_price) : null,
+              venue_prefix: prefix || null,
+              max_events_per_day: basics.max_events_per_day ? parseInt(basics.max_events_per_day) : null,
               updated_at: new Date().toISOString(),
             }, { onConflict: 'venue_id' })
           if (configError) throw configError
+
+          // Persist the AI assistant name alongside basics so the couple
+          // portal and router-brain see the white-label name from day one.
+          // Falls back to 'Sage' only if admin leaves it blank.
+          const aiName = basics.ai_name.trim() || 'Sage'
+          const { error: aiNameError } = await supabase
+            .from('venue_ai_config')
+            .upsert({
+              venue_id: venueId,
+              ai_name: aiName,
+              updated_at: new Date().toISOString(),
+            }, { onConflict: 'venue_id' })
+          if (aiNameError) throw aiNameError
+
+          // Seed auto_send_rules (disabled by default) for each ad platform
+          // the venue selected. Admin flips them on later from /settings.
+          // Using upsert so re-running onboarding doesn't duplicate rows.
+          if (basics.ad_platforms.length > 0) {
+            const sources = Array.from(new Set(
+              basics.ad_platforms
+                .map((v) => AD_PLATFORM_OPTIONS.find((o) => o.value === v)?.source)
+                .filter((s): s is string => !!s)
+            ))
+            const rows = sources.map((source) => ({
+              venue_id: venueId,
+              context: 'inquiry' as const,
+              source,
+              enabled: false,
+              confidence_threshold: 0.85,
+              daily_limit: 5,
+            }))
+            const { error: rulesError } = await supabase
+              .from('auto_send_rules')
+              .upsert(rows, { onConflict: 'venue_id,context,source' })
+            if (rulesError) {
+              // Non-fatal — admin can still configure auto-send later.
+              console.error('Failed to seed auto_send_rules:', rulesError)
+            }
+          }
           break
         }
         case 1: {
@@ -549,7 +673,7 @@ export default function OnboardingPage() {
 
     setSaving(false)
     return true
-  }, [currentStep, basics, personality, faqs, supabase, VENUE_ID])
+  }, [currentStep, basics, personality, faqs, prefixEdited, supabase, VENUE_ID])
 
   // ---- Navigation ----
   async function handleNext() {
@@ -867,6 +991,107 @@ export default function OnboardingPage() {
                         <option key={tz} value={tz}>{tz.replace(/_/g, ' ')}</option>
                       ))}
                     </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Assistant & operations — v4 Task 8 configurables */}
+              <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-5">
+                <div>
+                  <h2 className="font-heading text-lg font-semibold text-sage-900">Your AI assistant</h2>
+                  <p className="text-sage-500 text-xs mt-0.5">
+                    This is the name your couples and inquiries will see on emails and in the couple portal.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  <div>
+                    <label className="block text-sm font-medium text-sage-700 mb-1">Assistant Name</label>
+                    <input
+                      type="text"
+                      value={basics.ai_name}
+                      onChange={(e) => setBasics({ ...basics, ai_name: e.target.value })}
+                      placeholder="Sage"
+                      className={inputClasses}
+                      maxLength={40}
+                    />
+                    <p className="text-xs text-sage-400 mt-1">
+                      Leave blank to use the default (Sage). White-label venues might pick Ivy, Rose, etc.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-sage-700 mb-1">Client Code Prefix</label>
+                    <input
+                      type="text"
+                      value={basics.venue_prefix || derivePrefix(basics.business_name)}
+                      onChange={(e) => {
+                        setPrefixEdited(true)
+                        setBasics({
+                          ...basics,
+                          venue_prefix: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4),
+                        })
+                      }}
+                      placeholder={derivePrefix(basics.business_name) || 'XX'}
+                      className={inputClasses}
+                      maxLength={4}
+                    />
+                    <p className="text-xs text-sage-400 mt-1">
+                      Shown on couple dashboards as a reference code, e.g.{' '}
+                      <span className="font-mono">
+                        {(basics.venue_prefix || derivePrefix(basics.business_name) || 'XX')}-0042
+                      </span>.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-sage-700 mb-1">Max Events Per Day</label>
+                    <input
+                      type="number"
+                      value={basics.max_events_per_day}
+                      onChange={(e) => setBasics({ ...basics, max_events_per_day: e.target.value })}
+                      placeholder="1"
+                      className={inputClasses}
+                      min={1}
+                      max={10}
+                    />
+                    <p className="text-xs text-sage-400 mt-1">
+                      How many simultaneous events you can host. Most single-site venues answer 1.
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-sage-700 mb-2">Where do inquiries come from?</label>
+                  <p className="text-xs text-sage-400 mb-3">
+                    Select every platform you get leads from. We&apos;ll set up auto-send rules (disabled by default) for each one so you can flip them on later.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {AD_PLATFORM_OPTIONS.map((opt) => {
+                      const checked = basics.ad_platforms.includes(opt.value)
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => {
+                            setBasics({
+                              ...basics,
+                              ad_platforms: checked
+                                ? basics.ad_platforms.filter((v) => v !== opt.value)
+                                : [...basics.ad_platforms, opt.value],
+                            })
+                          }}
+                          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors ${
+                            checked
+                              ? 'bg-sage-500 text-white border-sage-500'
+                              : 'bg-warm-white text-sage-700 border-border hover:border-sage-300'
+                          }`}
+                        >
+                          {checked && <Check className="w-3.5 h-3.5" />}
+                          {opt.label}
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
               </div>
@@ -1269,6 +1494,37 @@ export default function OnboardingPage() {
                     <p className="font-medium text-sage-900 text-sm">Over time, Bloom learns from your corrections</p>
                     <p className="text-sage-500 text-xs mt-0.5">Every edit teaches the AI to write more like you. It gets better with every response.</p>
                   </div>
+                </div>
+              </div>
+
+              {/* Recommended next steps — configurables not gated at Go Live */}
+              <div className="bg-warm-white border border-border rounded-xl p-6 space-y-3">
+                <div>
+                  <p className="font-medium text-sage-900 text-sm">Recommended next steps</p>
+                  <p className="text-sage-500 text-xs mt-0.5">You can launch without these, but most venues do them in the first week.</p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <a
+                    href="/settings/team-invitations"
+                    className="flex flex-col gap-1 rounded-lg border border-border bg-surface px-3 py-2.5 hover:border-sage-300 transition-colors"
+                  >
+                    <span className="text-sm font-medium text-sage-900">Invite your team</span>
+                    <span className="text-xs text-sage-500">Coordinators can review drafts alongside you.</span>
+                  </a>
+                  <a
+                    href="/settings/calendly"
+                    className="flex flex-col gap-1 rounded-lg border border-border bg-surface px-3 py-2.5 hover:border-sage-300 transition-colors"
+                  >
+                    <span className="text-sm font-medium text-sage-900">Connect Calendly</span>
+                    <span className="text-xs text-sage-500">Tours auto-log to the Intelligence tour pipeline.</span>
+                  </a>
+                  <a
+                    href="/settings/brand"
+                    className="flex flex-col gap-1 rounded-lg border border-border bg-surface px-3 py-2.5 hover:border-sage-300 transition-colors"
+                  >
+                    <span className="text-sm font-medium text-sage-900">Upload logo &amp; colours</span>
+                    <span className="text-xs text-sage-500">White-label the couple portal for your venue.</span>
+                  </a>
                 </div>
               </div>
             </div>

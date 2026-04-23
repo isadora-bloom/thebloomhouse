@@ -49,7 +49,7 @@ export function UserMenu({ compact = false }: UserMenuProps) {
       if (isDemo) {
         setUser({
           name: 'Demo User',
-          email: 'demo@thebloomhouse.com',
+          email: 'demo@thebloomhouse.ai',
           initials: 'DU',
           avatarUrl: null,
           role: 'owner',

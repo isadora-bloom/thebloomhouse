@@ -920,11 +920,15 @@ async function detectSeasonalOpportunities(
 
     if (error || !weddings || weddings.length < 6) return []
 
-    // Get booked dates (includes holds)
+    // Get booked/held dates for the capacity analysis. After migration 073
+    // booked_dates was renamed to venue_availability and block_type split
+    // into the 5-value `status` enum. Count any row where the date is
+    // actually consumed — booked or on hold.
     const { data: bookedDates } = await supabase
-      .from('booked_dates')
-      .select('date, block_type')
+      .from('venue_availability')
+      .select('date, status')
       .eq('venue_id', venueId)
+      .in('status', ['booked', 'hold'])
 
     // Get venue capacity info
     const { data: config } = await supabase

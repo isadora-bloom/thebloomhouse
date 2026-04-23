@@ -23,7 +23,7 @@ interface CoupleUserMenuProps {
 export function CoupleUserMenu({
   name = 'Chloe & Ryan',
   initials = 'CR',
-  email = 'demo@thebloomhouse.com',
+  email = 'demo@thebloomhouse.ai',
 }: CoupleUserMenuProps) {
   const router = useRouter()
   const [open, setOpen] = useState(false)

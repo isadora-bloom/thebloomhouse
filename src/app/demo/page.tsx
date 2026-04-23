@@ -9,14 +9,30 @@ export default function DemoEntryPage() {
   function launchDemo(destination: string) {
     // Set demo cookie (1 day expiry)
     document.cookie = 'bloom_demo=true; path=/; max-age=86400'
-    // Set demo venue cookie so scope selector picks up the right venue
+    // Pin bloom_venue to Hawthorne for venue-specific pages (useVenueId fallback).
+    // Scope-aware pages (intel dashboard, portfolio, briefings, company view)
+    // read bloom_scope instead and roll up across all venues.
     document.cookie = `bloom_venue=22222222-2222-2222-2222-222222222201; path=/; max-age=86400`
-    document.cookie = `bloom_scope=${encodeURIComponent(JSON.stringify({
-      level: 'venue',
-      venueId: '22222222-2222-2222-2222-222222222201',
-      venueName: 'Hawthorne Manor',
-      companyName: 'The Crestwood Collection',
-    }))}; path=/; max-age=86400`
+
+    // Couple portal is per-wedding, so pin scope to Hawthorne.
+    // Platform gets company-level scope so the intelligence layer shows the
+    // full Crestwood Collection rollup (4 venues aggregated). Users can drill
+    // into a specific venue via the scope selector in the sidebar.
+    const isCouplePortal = destination.startsWith('/couple/')
+    const scope = isCouplePortal
+      ? {
+          level: 'venue',
+          venueId: '22222222-2222-2222-2222-222222222201',
+          orgId: '11111111-1111-1111-1111-111111111111',
+          venueName: 'Hawthorne Manor',
+          companyName: 'The Crestwood Collection',
+        }
+      : {
+          level: 'company',
+          orgId: '11111111-1111-1111-1111-111111111111',
+          companyName: 'The Crestwood Collection',
+        }
+    document.cookie = `bloom_scope=${encodeURIComponent(JSON.stringify(scope))}; path=/; max-age=86400`
     router.push(destination)
   }
 

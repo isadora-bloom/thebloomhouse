@@ -87,7 +87,7 @@ function getIcon(iconName: string): React.ElementType {
 // Default Resources (fallback when none configured)
 // ---------------------------------------------------------------------------
 
-function getDefaultResources(slug: string, venueId: string): VenueResource[] {
+function getDefaultResources(slug: string, venueId: string, aiName: string): VenueResource[] {
   return [
     {
       id: 'default-vendors',
@@ -114,7 +114,7 @@ function getDefaultResources(slug: string, venueId: string): VenueResource[] {
     {
       id: 'default-chat',
       venue_id: venueId,
-      title: 'Chat with Sage',
+      title: `Chat with ${aiName}`,
       subtitle: 'Your AI wedding concierge is here to help',
       url: `/couple/${slug}/chat`,
       icon: 'sparkles',
@@ -187,7 +187,7 @@ function ResourceCard({
 // ---------------------------------------------------------------------------
 
 export default function ResourcesPage() {
-  const { venueId, loading: contextLoading } = useCoupleContext()
+  const { venueId, aiName, loading: contextLoading } = useCoupleContext()
   const [resources, setResources] = useState<VenueResource[]>([])
   const [loading, setLoading] = useState(true)
   const [usingDefaults, setUsingDefaults] = useState(false)
@@ -229,13 +229,13 @@ export default function ResourcesPage() {
         } else {
           // Use defaults
           const slug = getSlug()
-          setResources(getDefaultResources(slug, venueId!))
+          setResources(getDefaultResources(slug, venueId!, aiName))
           setUsingDefaults(true)
         }
       } catch (err) {
         console.error('Failed to load resources:', err)
         const slug = getSlug()
-        setResources(getDefaultResources(slug, venueId!))
+        setResources(getDefaultResources(slug, venueId!, aiName))
         setUsingDefaults(true)
       } finally {
         setLoading(false)

@@ -215,6 +215,23 @@ function SetupPageInner() {
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '')
 
+      // Derive a 2-char client-code prefix from the venue name. The
+      // auto_generate_client_code() trigger (migration 068) can do this
+      // on the fly, but setting it here means the coordinator's /agent/codes
+      // page has the right prefix from the moment of signup, and we avoid
+      // relying on trigger-side fallback logic for the common case.
+      const prefixWords = venueName
+        .trim()
+        .replace(/[^A-Za-z0-9 ]/g, '')
+        .split(/\s+/)
+        .filter(Boolean)
+      const venuePrefix =
+        prefixWords.length >= 2
+          ? (prefixWords[0][0] + prefixWords[prefixWords.length - 1][0]).toUpperCase()
+          : prefixWords.length === 1 && prefixWords[0].length >= 2
+            ? prefixWords[0].slice(0, 2).toUpperCase()
+            : 'VN'
+
       // Map price range to approximate base_price for venue_config
       const priceMap: Record<PriceRange, number> = {
         budget: 3000,
@@ -252,6 +269,7 @@ function SetupPageInner() {
         timezone: 'America/New_York',
         capacity: venueCapacity ? parseInt(venueCapacity) : null,
         base_price: priceMap[venuePriceRange],
+        venue_prefix: venuePrefix,
         onboarding_completed: false,
       })
 

@@ -8,9 +8,11 @@
  *  - If RESEND_API_KEY is set, sends via Resend.
  *  - If missing, logs a warning and falls back to console.log so local/dev
  *    still works without credentials.
- *  - Default `from` is "The Bloom House <hello@thebloomhouse.com>" and can be
+ *  - Default `from` is "The Bloom House <hello@thebloomhouse.ai>" and can be
  *    overridden globally via EMAIL_FROM env var, or per-call via the `from`
- *    arg.
+ *    arg. Note: the brand domain is thebloomhouse.AI, not .com. An earlier
+ *    draft had .com hardcoded, which would have caused Resend to reject
+ *    sends silently (unverified domain) the moment RESEND_API_KEY was set.
  *  - Always returns { ok, error? } — never throws.
  *
  * Note: this is a transactional sender. Venue-authenticated Gmail flows
@@ -33,7 +35,7 @@ export interface SendEmailResult {
   error?: string
 }
 
-const DEFAULT_FROM = 'The Bloom House <hello@thebloomhouse.com>'
+const DEFAULT_FROM = 'The Bloom House <hello@thebloomhouse.ai>'
 
 function resolveFrom(from?: string): string {
   return from || process.env.EMAIL_FROM || DEFAULT_FROM

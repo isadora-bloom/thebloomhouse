@@ -36,6 +36,13 @@ export interface PersonalityConfig {
   signature_closer?: string | null
   tour_booking_link?: string
   pricing_calculator_link?: string
+  /**
+   * Per-venue tour booking URLs (migration 074). Replaces the single
+   * tour_booking_link. When present and non-empty, Sage uses the default
+   * entry for generic "book a tour" references; multiple entries appear
+   * as a labelled list in the prompt header.
+   */
+  tour_booking_links?: Array<{ label: string; url: string; is_default?: boolean }>
   // Sage identity (migration 059). Optional here because this type is also
   // used before those columns were added; resolveSageIdentity() fills in
   // defaults when these come back null/undefined.
@@ -81,6 +88,45 @@ export interface PersonalityData {
   faqs?: Array<{ question: string; answer: string; category: string }>
   voice_preferences?: VoicePreferences
   review_vocabulary?: ReviewVocabulary
+}
+
+// ---------------------------------------------------------------------------
+// Prompt helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Render the tour-booking links block for the prompt header.
+ *
+ * Three cases:
+ *   1. No links at all → single `[NOT SET]` line (unchanged from legacy).
+ *   2. Exactly one link → a single labelled line with the URL so Sage has
+ *      one obvious CTA.
+ *   3. Multiple links → a bullet list with labels + URLs, and the default
+ *      called out at the top so Sage knows which one to use for generic
+ *      "book a tour" references.
+ */
+function renderTourBookingBlock(
+  links: Array<{ label: string; url: string; is_default?: boolean }>,
+  defaultUrl: string
+): string {
+  if (links.length === 0) {
+    return `**Tour Booking Link:** ${defaultUrl || '[NOT SET]'}`
+  }
+  if (links.length === 1) {
+    const only = links[0]
+    return `**Tour Booking Link:** ${only.url}${only.label && only.label !== 'Book a tour' ? ` (${only.label})` : ''}`
+  }
+  // Multi-link: put the default first and call it out.
+  const ordered = [...links].sort((a, b) => {
+    if (a.is_default && !b.is_default) return -1
+    if (!a.is_default && b.is_default) return 1
+    return 0
+  })
+  const lines = ordered.map((l, i) => {
+    const isDefault = i === 0 && l.is_default
+    return `  - ${l.label || 'Book a tour'}: ${l.url}${isDefault ? ' (default)' : ''}`
+  })
+  return `**Tour Booking Links:**\n${lines.join('\n')}\nUse the default link for generic tour requests; mention alternatives only when the couple asks about a specific tour type.`
 }
 
 // ---------------------------------------------------------------------------
@@ -210,8 +256,18 @@ export function buildPersonalityPrompt(data: PersonalityData): string {
     ? 'Use exclamation points naturally to convey warmth!'
     : 'Convey warmth through word choice, not punctuation'
 
-  // Tour booking link (lives on venue_ai_config, not venue_config)
-  const tourLink = config.tour_booking_link ?? ''
+  // Tour booking links. Prefer the new multi-link array (migration 074);
+  // fall back to the legacy single-string column for venues still on the
+  // old shape. The default entry is what Sage uses for generic "book a
+  // tour" references; any additional entries render as a labelled list.
+  const tourLinksArray = Array.isArray(config.tour_booking_links)
+    ? config.tour_booking_links.filter((l) => l && typeof l.url === 'string' && l.url.trim() !== '')
+    : []
+  const defaultTourLink =
+    tourLinksArray.find((l) => l.is_default)?.url ??
+    tourLinksArray[0]?.url ??
+    config.tour_booking_link ??
+    ''
 
   // Pricing calculator link (lives on venue_ai_config, not venue_config)
   const pricingLink = config.pricing_calculator_link ?? ''
@@ -293,7 +349,7 @@ You work alongside **${ownerName}** (${ownerTitle}) to ensure every couple gets 
 **Phone:** ${phone}
 **Owner/Contact:** ${ownerName} (${ownerTitle})
 
-**Tour Booking Link:** ${tourLink || '[NOT SET]'}
+${renderTourBookingBlock(tourLinksArray, defaultTourLink)}
 **Pricing Calculator Link:** ${pricingLink || '[NOT SET]'}
 `
 

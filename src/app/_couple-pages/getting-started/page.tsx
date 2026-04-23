@@ -237,7 +237,7 @@ function ProgressRing({ completed, total }: { completed: number; total: number }
 // ---------------------------------------------------------------------------
 
 export default function GettingStartedPage() {
-  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
+  const { venueId, weddingId, aiName, loading: contextLoading } = useCoupleContext()
   const [progress, setProgress] = useState<OnboardingProgress | null>(null)
   const [wedding, setWedding] = useState<WeddingInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -463,7 +463,7 @@ export default function GettingStartedPage() {
                       'font-semibold text-[15px] leading-tight',
                       done ? 'text-emerald-700' : 'text-gray-800'
                     )}>
-                      {card.title}
+                      {card.title.replace('Sage', aiName)}
                     </h3>
                   </div>
                 </div>
@@ -537,7 +537,7 @@ export default function GettingStartedPage() {
                       {i + 1}
                     </span>
                   </div>
-                  <span className="text-sm text-gray-600 leading-relaxed">{tip}</span>
+                  <span className="text-sm text-gray-600 leading-relaxed">{tip.replace('Sage', aiName)}</span>
                 </li>
               ))}
             </ul>
@@ -565,7 +565,7 @@ export default function GettingStartedPage() {
       {/* ------------------------------------------------------------------ */}
       <div className="text-center pb-4">
         <p className="text-sm text-gray-400 mb-3">
-          Questions? Your venue coordinator and Sage are always here to help.
+          Questions? Your venue coordinator and {aiName} are always here to help.
         </p>
         <a
           href={`/couple/${coupleSlug}/chat`}
@@ -573,7 +573,7 @@ export default function GettingStartedPage() {
           style={{ color: 'var(--couple-primary, #7D8471)' }}
         >
           <MessageCircle className="w-4 h-4" />
-          Chat with Sage
+          Chat with {aiName}
         </a>
       </div>
     </div>

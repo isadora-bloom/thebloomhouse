@@ -73,7 +73,13 @@ function clearScopeCookie() {
  */
 export function useScope(): Scope & { loading: boolean } {
   const initial = useMemo<Scope | null>(() => {
-    if (isDemoMode()) return DEMO_SCOPE
+    if (isDemoMode()) {
+      // Respect the bloom_scope cookie if it's set (demo entry can choose
+      // company-level for platform or venue-level for couple portal). Fall
+      // back to the Hawthorne venue scope for older demo sessions that never
+      // wrote the cookie.
+      return readScopeFromCookie() ?? DEMO_SCOPE
+    }
     return readScopeFromCookie()
   }, [])
 

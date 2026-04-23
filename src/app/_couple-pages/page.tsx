@@ -212,7 +212,7 @@ function timeAgo(dateStr: string): string {
 const ALERT_PRIORITY: AlertId[] = ['photo', 'budget', 'contracts', 'vendors', 'guests', 'checklist']
 
 export default function CoupleDashboard() {
-  const { slug, weddingId, loading: contextLoading } = useCoupleContext()
+  const { slug, weddingId, aiName, loading: contextLoading } = useCoupleContext()
   const SLUG = slug
   const WEDDING_ID = weddingId
   const [data, setData] = useState<DashboardData | null>(null)
@@ -932,7 +932,7 @@ export default function CoupleDashboard() {
         </div>
       </div>
 
-      {/* Sage Chat Prompt */}
+      {/* AI Chat Prompt */}
       <Link href="/chat" className="block group">
         <div
           className="rounded-xl p-6 transition-shadow hover:shadow-md border-2"
@@ -950,10 +950,10 @@ export default function CoupleDashboard() {
                 className="text-lg font-semibold text-white mb-1"
                 style={{ fontFamily: 'var(--couple-font-heading)' }}
               >
-                Ask Sage anything about your wedding
+                Ask {aiName} anything about your wedding
               </h3>
               <p className="text-white/80 text-sm">
-                Venue details, day-of logistics, vendor recommendations, or just brainstorming ideas — Sage is here to help.
+                Venue details, day-of logistics, vendor recommendations, or just brainstorming ideas — {aiName} is here to help.
               </p>
             </div>
             <ArrowRight className="w-5 h-5 text-white/80 group-hover:translate-x-1 transition-transform shrink-0" />

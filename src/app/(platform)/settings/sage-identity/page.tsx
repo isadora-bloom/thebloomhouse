@@ -19,7 +19,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useScope } from '@/lib/hooks/use-scope'
-import { Save, Sparkles, Check } from 'lucide-react'
+import { Save, Sparkles, Check, Link as LinkIcon, Plus, Trash2, Star } from 'lucide-react'
 import {
   SAGE_ROLE_OPTIONS,
   SAGE_PURPOSE_OPTIONS,
@@ -27,6 +27,7 @@ import {
   SAGE_DEFAULTS,
   resolveSageIdentity,
   renderIntroPreview,
+  renderOpenerExample,
 } from '@/lib/services/sage-identity'
 import type { SageRole, SageOpenerShape } from '@/lib/supabase/types'
 
@@ -35,12 +36,19 @@ const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
+interface TourLink {
+  label: string
+  url: string
+  is_default: boolean
+}
+
 interface SageIdentityForm {
   ai_name: string
   ai_role: SageRole
   ai_purposes: string[]
   ai_custom_purpose: string
   ai_opener_shape: SageOpenerShape
+  tour_booking_links: TourLink[]
 }
 
 const EMPTY_FORM: SageIdentityForm = {
@@ -49,6 +57,7 @@ const EMPTY_FORM: SageIdentityForm = {
   ai_purposes: SAGE_DEFAULTS.ai_purposes,
   ai_custom_purpose: '',
   ai_opener_shape: SAGE_DEFAULTS.ai_opener_shape,
+  tour_booking_links: [],
 }
 
 export default function SageIdentityPage() {
@@ -70,7 +79,7 @@ export default function SageIdentityPage() {
         const [{ data: cfg, error: cfgErr }, { data: venue }] = await Promise.all([
           supabase
             .from('venue_ai_config')
-            .select('ai_name, ai_role, ai_purposes, ai_custom_purpose, ai_opener_shape')
+            .select('ai_name, ai_role, ai_purposes, ai_custom_purpose, ai_opener_shape, tour_booking_links')
             .eq('venue_id', venueId)
             .maybeSingle(),
           supabase.from('venues').select('name').eq('id', venueId).maybeSingle(),
@@ -79,12 +88,25 @@ export default function SageIdentityPage() {
         if (cfgErr) throw cfgErr
 
         setVenueName(venue?.name ?? 'the venue')
+        const rawLinks = (cfg as { tour_booking_links?: unknown } | null)?.tour_booking_links
+        const parsedLinks: TourLink[] = Array.isArray(rawLinks)
+          ? rawLinks
+              .filter((l): l is { label?: unknown; url?: unknown; is_default?: unknown } =>
+                l !== null && typeof l === 'object'
+              )
+              .map((l) => ({
+                label: typeof l.label === 'string' ? l.label : '',
+                url: typeof l.url === 'string' ? l.url : '',
+                is_default: l.is_default === true,
+              }))
+          : []
         setForm({
           ai_name: cfg?.ai_name ?? SAGE_DEFAULTS.ai_name,
           ai_role: (cfg?.ai_role ?? SAGE_DEFAULTS.ai_role) as SageRole,
           ai_purposes: cfg?.ai_purposes?.length ? cfg.ai_purposes : SAGE_DEFAULTS.ai_purposes,
           ai_custom_purpose: cfg?.ai_custom_purpose ?? '',
           ai_opener_shape: (cfg?.ai_opener_shape ?? SAGE_DEFAULTS.ai_opener_shape) as SageOpenerShape,
+          tour_booking_links: parsedLinks,
         })
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load')
@@ -125,6 +147,30 @@ export default function SageIdentityPage() {
     setError(null)
     setSaved(false)
     try {
+      // Normalise the tour-link array before save: drop entries with no
+      // URL, trim whitespace, and enforce the "exactly one default"
+      // invariant. If the admin left no default selected, the first
+      // entry becomes the default automatically.
+      const cleanLinks = form.tour_booking_links
+        .map((l) => ({
+          label: l.label.trim() || 'Book a tour',
+          url: l.url.trim(),
+          is_default: l.is_default,
+        }))
+        .filter((l) => l.url.length > 0)
+      if (cleanLinks.length > 0 && !cleanLinks.some((l) => l.is_default)) {
+        cleanLinks[0].is_default = true
+      } else if (cleanLinks.filter((l) => l.is_default).length > 1) {
+        // More than one default — keep the first, unset the rest.
+        let seen = false
+        for (const l of cleanLinks) {
+          if (l.is_default) {
+            if (seen) l.is_default = false
+            else seen = true
+          }
+        }
+      }
+
       const { error: upErr } = await supabase
         .from('venue_ai_config')
         .update({
@@ -133,6 +179,7 @@ export default function SageIdentityPage() {
           ai_purposes: form.ai_purposes,
           ai_custom_purpose: form.ai_custom_purpose.trim() || null,
           ai_opener_shape: form.ai_opener_shape,
+          tour_booking_links: cleanLinks,
         })
         .eq('venue_id', venueId)
       if (upErr) throw upErr
@@ -273,7 +320,9 @@ export default function SageIdentityPage() {
                 {s.label}
               </div>
               <div className="text-xs text-sage-500 mt-0.5">{s.description}</div>
-              <div className="text-xs text-sage-400 italic mt-1">{s.example}</div>
+              <div className="text-xs text-sage-400 italic mt-1">
+                {renderOpenerExample(s.example, { aiName: form.ai_name, venueName })}
+              </div>
             </button>
           ))}
         </div>
@@ -289,6 +338,125 @@ export default function SageIdentityPage() {
           This is an example — the actual opener is generated fresh per couple,
           using these settings as constraints rather than a template.
         </p>
+      </section>
+
+      {/* Tour booking links — per-venue Calendly (or equivalent) URLs.
+          The default link is what {form.ai_name} uses when a couple says
+          "book a tour" without asking about a specific tour type. Add
+          additional rows for weekday vs. weekend, or private tour vs.
+          group tour — {form.ai_name} will mention them when the couple's
+          intent is specific. */}
+      <section className="space-y-2">
+        <div className="flex items-center gap-2">
+          <LinkIcon className="w-4 h-4 text-sage-600" />
+          <label className="block text-sm font-medium text-sage-800">
+            Tour booking links
+          </label>
+        </div>
+        <p className="text-xs text-sage-500">
+          Paste the Calendly (or equivalent) URL couples use to book a tour with
+          you. Add more than one if you have different tour types — mark the
+          one Sage should offer by default.
+        </p>
+        {form.tour_booking_links.length === 0 && (
+          <p className="text-xs text-sage-500 italic py-2">
+            No tour links yet. Couples will be asked to email for a tour until
+            you add one.
+          </p>
+        )}
+        <div className="space-y-2">
+          {form.tour_booking_links.map((link, idx) => (
+            <div
+              key={idx}
+              className="flex flex-col sm:flex-row gap-2 bg-warm-white border border-border rounded-lg px-3 py-2.5"
+            >
+              <input
+                type="text"
+                value={link.label}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setForm((f) => ({
+                    ...f,
+                    tour_booking_links: f.tour_booking_links.map((l, i) =>
+                      i === idx ? { ...l, label: v } : l
+                    ),
+                  }))
+                }}
+                placeholder="Label (e.g. Weekday tours)"
+                className="flex-1 min-w-0 px-2 py-1.5 border border-sage-200 rounded text-sm"
+              />
+              <input
+                type="url"
+                value={link.url}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setForm((f) => ({
+                    ...f,
+                    tour_booking_links: f.tour_booking_links.map((l, i) =>
+                      i === idx ? { ...l, url: v } : l
+                    ),
+                  }))
+                }}
+                placeholder="https://calendly.com/venue/..."
+                className="flex-[2] min-w-0 px-2 py-1.5 border border-sage-200 rounded text-sm font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setForm((f) => ({
+                    ...f,
+                    tour_booking_links: f.tour_booking_links.map((l, i) => ({
+                      ...l,
+                      is_default: i === idx,
+                    })),
+                  }))
+                }}
+                className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs font-medium transition-colors ${
+                  link.is_default
+                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                    : 'text-sage-600 hover:bg-sage-100 border border-transparent'
+                }`}
+                title={link.is_default ? 'Default — Sage uses this link for generic tour requests' : 'Set as default'}
+              >
+                <Star className={`w-3 h-3 ${link.is_default ? 'fill-current' : ''}`} />
+                {link.is_default ? 'Default' : 'Make default'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setForm((f) => ({
+                    ...f,
+                    tour_booking_links: f.tour_booking_links.filter((_, i) => i !== idx),
+                  }))
+                }}
+                className="flex items-center gap-1 px-2 py-1.5 text-rose-600 hover:bg-rose-50 rounded text-xs"
+                title="Remove this link"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setForm((f) => ({
+              ...f,
+              tour_booking_links: [
+                ...f.tour_booking_links,
+                {
+                  label: '',
+                  url: '',
+                  is_default: f.tour_booking_links.length === 0,
+                },
+              ],
+            }))
+          }}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-sage-700 border border-sage-200 rounded-lg hover:bg-sage-50"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          Add a tour link
+        </button>
       </section>
 
       {/* Save */}

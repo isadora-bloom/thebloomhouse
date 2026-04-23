@@ -156,9 +156,13 @@ async function fetchSerpAPITrends(
  * Returns the count of rows upserted.
  */
 export async function fetchTrendsForVenue(venueId: string): Promise<number> {
-  const apiKey = process.env.SERPAPI_KEY
+  // Reads SERPAPI_API_KEY (the name used in Vercel + .env.local). An
+  // earlier draft of this file read SERPAPI_KEY, which silently disabled
+  // trend ingestion in production for everyone because the real env var
+  // was set under the _API_KEY suffix — warn-and-skip path hid it.
+  const apiKey = process.env.SERPAPI_API_KEY
   if (!apiKey) {
-    console.warn('[trends] SERPAPI_KEY not configured — skipping trend fetch')
+    console.warn('[trends] SERPAPI_API_KEY not configured — skipping trend fetch')
     return 0
   }
 
@@ -224,9 +228,9 @@ export async function fetchTrendsForVenue(venueId: string): Promise<number> {
  * Returns a map of venueId -> count of rows upserted.
  */
 export async function fetchAllVenueTrends(): Promise<Record<string, number>> {
-  const apiKey = process.env.SERPAPI_KEY
+  const apiKey = process.env.SERPAPI_API_KEY
   if (!apiKey) {
-    console.warn('[trends] SERPAPI_KEY not configured — skipping all venue trend fetch')
+    console.warn('[trends] SERPAPI_API_KEY not configured — skipping all venue trend fetch')
     return {}
   }
 
