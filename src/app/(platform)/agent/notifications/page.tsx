@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
+import { BrainDumpClarifications } from '@/components/agent/brain-dump-clarifications'
 import {
   Bell,
   Mail,
@@ -862,6 +863,9 @@ export default function NotificationsPage() {
           </div>
         </div>
       )}
+
+      {/* ---- Brain-dump clarifications ---- */}
+      <BrainDumpClarifications />
 
       {/* ---- Booking-confirmation prompts ---- */}
       {bookingPrompts.length > 0 && (

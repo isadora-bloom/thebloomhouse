@@ -38,6 +38,7 @@ export type BrainDumpIntent =
   | 'analytics'
   | 'staff_observation'
   | 'operational_note'
+  | 'knowledge_base_import'
   | 'ambiguous'
 
 export interface BrainDumpParseResult {
@@ -58,6 +59,11 @@ export interface BrainDumpParseResult {
   }
   // staff_observation specifics
   staffName?: string
+  // knowledge_base_import specifics — populated when the classifier sees
+  // FAQ-shaped CSV content (Question/Answer columns or similar).
+  knowledgeBase?: {
+    rows: Array<{ question: string; answer: string; category?: string }>
+  }
   // Clarification prompt when ambiguous
   clarificationQuestion?: string
 }
@@ -104,12 +110,13 @@ export async function classifyBrainDump(args: {
 
 Output JSON matching this exact shape:
 {
-  "intent": "client_note" | "availability" | "analytics" | "staff_observation" | "operational_note" | "ambiguous",
+  "intent": "client_note" | "availability" | "analytics" | "staff_observation" | "operational_note" | "knowledge_base_import" | "ambiguous",
   "confidence": 0-100,
   "clientMatch": { "weddingId": string | null, "coupleLabel": string | null, "ambiguousCandidates": [{"weddingId": "...", "label": "..."}] } | null,
   "note": string | null,
   "availability": { "date": "YYYY-MM-DD", "action": "cancel" | "block" | "hold" | "release" } | null,
   "staffName": string | null,
+  "knowledgeBase": { "rows": [{"question": "...", "answer": "...", "category": "..."}] } | null,
   "clarificationQuestion": string | null
 }
 
@@ -119,6 +126,7 @@ Intent rules:
 - analytics: the observation looks like ad-platform data (impressions, clicks, spend, inquiries by source).
 - staff_observation: explicit praise or critique of a named team member.
 - operational_note: about the venue itself (AC, grounds, equipment) — not a couple, not a staff member.
+- knowledge_base_import: the input contains FAQ-style Question/Answer pairs intended to seed the venue's Sage knowledge base. Typical signals: an attached CSV with Question and Answer columns, a list of "Q: ... A: ..." pairs, or a policies document. Extract each Q/A pair into knowledgeBase.rows. category should be a short lowercase bucket like "pricing", "capacity", "vendors", "decor", "logistics" derived from the question. Only use this intent when the pairs are clearly additive reference content, not a specific couple's message.
 - ambiguous: confidence < 75 OR multiple entities match OR you can't tell what to do. Populate clarificationQuestion with a SINGLE specific question.
 
 COUPLES at this venue (JSON): ${JSON.stringify(coupleIndex.slice(0, 200))}
@@ -126,6 +134,7 @@ COUPLES at this venue (JSON): ${JSON.stringify(coupleIndex.slice(0, 200))}
 Rules:
 - Never invent a weddingId. If you can't find one in the list, set clientMatch.weddingId to null and set intent="ambiguous".
 - If the text is super short or vague, prefer ambiguous.
+- For knowledge_base_import, return every Q/A pair you see — do not summarise or dedupe.
 - Confidence reflects your certainty about the intent, not the accuracy of extracted data.`
 
   const userPrompt = `Observation: """${rawText}"""
@@ -284,6 +293,55 @@ export async function routeBrainDump(args: {
       id: null,
       action: `staff_observation:${match?.id ?? 'unresolved'}`,
     })
+  }
+
+  // Knowledge base import: additive, low-risk. Insert each Q/A row
+  // directly into knowledge_base so Sage picks them up on the next draft.
+  // No confirmation prompt — adding reference content is the additive side
+  // of the destructive/additive rule.
+  if (parsed.intent === 'knowledge_base_import' && parsed.knowledgeBase?.rows?.length) {
+    const rows = parsed.knowledgeBase.rows
+      .filter((r) => r.question?.trim() && r.answer?.trim())
+      .map((r) => ({
+        venue_id: venueId,
+        question: r.question.trim(),
+        answer: r.answer.trim(),
+        category: (r.category ?? 'general').trim().toLowerCase().replace(/\s+/g, '_').slice(0, 40),
+        priority: 50,
+        is_active: true,
+        source: 'csv',
+      }))
+
+    if (rows.length > 0) {
+      // Dedupe against existing (venue_id, question) pairs so re-uploading
+      // the same CSV doesn't multiply rows. knowledge_base has no unique
+      // constraint, so we query first.
+      const { data: existing } = await supabase
+        .from('knowledge_base')
+        .select('question')
+        .eq('venue_id', venueId)
+        .in('question', rows.map((r) => r.question))
+      const existingSet = new Set((existing ?? []).map((r) => (r.question as string)))
+      const toInsert = rows.filter((r) => !existingSet.has(r.question))
+
+      if (toInsert.length > 0) {
+        const { error } = await supabase.from('knowledge_base').insert(toInsert)
+        if (!error) {
+          routedTo.push({
+            table: 'knowledge_base',
+            id: null,
+            action: `insert:${toInsert.length}`,
+          })
+        }
+      }
+      if (existingSet.size > 0) {
+        routedTo.push({
+          table: 'knowledge_base',
+          id: null,
+          action: `deduped:${existingSet.size}`,
+        })
+      }
+    }
   }
 
   // Operational note: route to knowledge_gaps as a venue-level entry.
