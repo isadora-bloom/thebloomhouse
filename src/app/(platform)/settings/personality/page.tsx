@@ -2,12 +2,12 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
+import { useScope } from '@/lib/hooks/use-scope'
 import {
   Bot, Save, Sliders, MessageSquare, Sparkles, Mic, Send,
   Zap, Heart, SmilePlus, X,
 } from 'lucide-react'
 
-// TODO: Wire venue selector — for now we load the first venue_ai_config row
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -116,20 +116,28 @@ const selectClasses =
 // ---------------------------------------------------------------------------
 
 export default function PersonalityPage() {
+  const { venueId, loading: scopeLoading } = useScope()
   const [config, setConfig] = useState<AIConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [newExpression, setNewExpression] = useState('')
 
-  // Load AI config
+  // Load venue-specific AI config. Previously did `.limit(1).single()`
+  // with no filter, which loaded whichever venue_ai_config row Postgres
+  // returned first — fine for a single-venue org, wrong for anyone else.
   useEffect(() => {
+    if (scopeLoading) return
+    if (!venueId) {
+      setLoading(false)
+      return
+    }
     async function load() {
       const { data, error } = await supabase
         .from('venue_ai_config')
         .select('*')
-        .limit(1)
-        .single()
+        .eq('venue_id', venueId)
+        .maybeSingle()
 
       if (error) {
         console.error('Failed to load AI config:', error)
@@ -143,7 +151,7 @@ export default function PersonalityPage() {
       setLoading(false)
     }
     load()
-  }, [])
+  }, [venueId, scopeLoading])
 
   // Save handler
   const handleSave = useCallback(async () => {
