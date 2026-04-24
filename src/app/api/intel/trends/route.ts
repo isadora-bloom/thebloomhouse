@@ -5,6 +5,7 @@ import {
   fetchTrendsForVenue,
 } from '@/lib/services/trends'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { resolveScopeVenueIds } from '@/lib/api/resolve-platform-scope'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 // ---------------------------------------------------------------------------
@@ -21,9 +22,15 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const venueIds = await resolveScopeVenueIds()
+    if (venueIds.length === 0) return NextResponse.json({ trends: [], deviations: [] })
+
     const supabase = await createServerSupabaseClient()
 
-    // Last 8 weeks of trend data
+    // Last 8 weeks of trend data across every venue in scope. At
+    // venue-level this is just the caller's venue; at company-level
+    // we fold every venue's search_trends into one series so the
+    // aggregate view doesn't silently drop the other venues' data.
     const eightWeeksAgo = new Date(Date.now() - 8 * 7 * 24 * 60 * 60 * 1000)
       .toISOString()
       .split('T')[0]
@@ -31,7 +38,7 @@ export async function GET(request: NextRequest) {
     const { data: trends, error } = await supabase
       .from('search_trends')
       .select('*')
-      .eq('venue_id', auth.venueId)
+      .in('venue_id', venueIds)
       .gte('week', eightWeeksAgo)
       .order('week', { ascending: false })
 
@@ -39,7 +46,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    const deviations = await detectTrendDeviations(auth.venueId)
+    // Deviation detector is per-venue by design. At company/group
+    // scope, fan out and concat — each deviation carries a venue_id
+    // so the client can label it appropriately.
+    const deviationsBatches = await Promise.all(
+      venueIds.map((vid) => detectTrendDeviations(vid))
+    )
+    const deviations = deviationsBatches.flat()
 
     return NextResponse.json({ trends: trends ?? [], deviations })
   } catch (err) {

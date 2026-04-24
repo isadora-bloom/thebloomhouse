@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import {
   BarChart3,
@@ -234,7 +234,7 @@ function StatCard({
 // ---------------------------------------------------------------------------
 
 export default function AgentAnalyticsPage() {
-  const VENUE_ID = useVenueId()
+  const scope = useScope()
   const [period, setPeriod] = useState<Period>('this_month')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -256,11 +256,43 @@ export default function AgentAnalyticsPage() {
     const { start, end } = getPeriodRange(period)
 
     try {
+      // Resolve scope → venueIds. At venue level this is [scope.venueId];
+      // at group/company level it expands so totals actually sum across
+      // the user's venues instead of silently showing one venue's slice.
+      let venueIds: string[] | null = null
+      if (scope.level === 'venue' && scope.venueId) {
+        venueIds = [scope.venueId]
+      } else if (scope.level === 'group' && scope.groupId) {
+        const { data } = await supabase
+          .from('venue_group_members')
+          .select('venue_id')
+          .eq('group_id', scope.groupId)
+        venueIds = (data ?? []).map((r) => r.venue_id as string)
+      } else if (scope.orgId) {
+        const { data: orgVenues } = await supabase
+          .from('venues')
+          .select('id')
+          .eq('org_id', scope.orgId)
+        venueIds = (orgVenues ?? []).map((v) => v.id as string)
+      }
+      if (!venueIds || venueIds.length === 0) {
+        setEmailVolume([])
+        setDraftPerformance([])
+        setTierDist([])
+        setTotalInbound(0)
+        setTotalOutbound(0)
+        setAutoSentCount(0)
+        setManualCount(0)
+        setAvgResponseHours(0)
+        setLoading(false)
+        return
+      }
+
       // 1. Email volume
       const { data: interactions } = await supabase
         .from('interactions')
         .select('direction, timestamp')
-        .eq('venue_id', VENUE_ID)
+        .in('venue_id', venueIds)
         .eq('type', 'email')
         .gte('timestamp', start)
         .lt('timestamp', end)
@@ -300,7 +332,7 @@ export default function AgentAnalyticsPage() {
       const { data: drafts } = await supabase
         .from('drafts')
         .select('status, auto_sent')
-        .eq('venue_id', VENUE_ID)
+        .in('venue_id', venueIds)
         .gte('created_at', start)
         .lt('created_at', end)
 
@@ -327,7 +359,7 @@ export default function AgentAnalyticsPage() {
       const { data: heatData } = await supabase
         .from('weddings')
         .select('temperature_tier')
-        .eq('venue_id', VENUE_ID)
+        .in('venue_id', venueIds)
         .not('temperature_tier', 'is', null)
 
       const tierMap: Record<string, number> = {}
@@ -346,7 +378,7 @@ export default function AgentAnalyticsPage() {
       await supabase
         .from('api_costs')
         .select('cost, created_at')
-        .eq('venue_id', VENUE_ID)
+        .in('venue_id', venueIds)
         .gte('created_at', start)
         .lt('created_at', end)
         .order('created_at', { ascending: true })
@@ -362,11 +394,12 @@ export default function AgentAnalyticsPage() {
     } finally {
       setLoading(false)
     }
-  }, [period])
+  }, [period, scope.level, scope.venueId, scope.groupId, scope.orgId, supabase])
 
   useEffect(() => {
+    if (scope.loading) return
     fetchAnalytics()
-  }, [fetchAnalytics])
+  }, [fetchAnalytics, scope.loading])
 
   const totalDrafts = draftPerformance.reduce((sum, d) => sum + d.count, 0)
 

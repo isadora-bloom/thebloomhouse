@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { resolveScopeVenueIds } from '@/lib/api/resolve-platform-scope'
 import { createServiceClient } from '@/lib/supabase/service'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
@@ -25,12 +26,21 @@ export async function GET(req: NextRequest) {
   const priority = sp.get('priority')
   const status = sp.get('status') // 'active' (default) = new+seen, or specific status
 
+  const venueIds = await resolveScopeVenueIds()
+  if (venueIds.length === 0) {
+    return NextResponse.json({
+      insights: [],
+      total: 0,
+      stats: { new_count: 0, acted_on_this_month: 0, dismissed_this_month: 0 },
+    })
+  }
+
   const supabase = createServiceClient()
 
   let query = supabase
     .from('intelligence_insights')
     .select('*', { count: 'exact' })
-    .eq('venue_id', auth.venueId)
+    .in('venue_id', venueIds)
 
   // Status filter — default shows active (new + seen), not expired
   if (status === 'acted_on') {
@@ -74,19 +84,19 @@ export async function GET(req: NextRequest) {
     supabase
       .from('intelligence_insights')
       .select('id', { count: 'exact', head: true })
-      .eq('venue_id', auth.venueId)
+      .in('venue_id', venueIds)
       .eq('status', 'new')
       .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`),
     supabase
       .from('intelligence_insights')
       .select('id', { count: 'exact', head: true })
-      .eq('venue_id', auth.venueId)
+      .in('venue_id', venueIds)
       .eq('status', 'acted_on')
       .gte('acted_on_at', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()),
     supabase
       .from('intelligence_insights')
       .select('id', { count: 'exact', head: true })
-      .eq('venue_id', auth.venueId)
+      .in('venue_id', venueIds)
       .eq('status', 'dismissed')
       .gte('dismissed_at', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()),
   ])

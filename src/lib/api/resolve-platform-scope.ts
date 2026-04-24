@@ -109,6 +109,52 @@ const resolveGroupName = cache(
 
 export const resolvePlatformScope = cache(_resolvePlatformScope)
 
+/**
+ * Expand a scope into the list of venue_ids it covers. API routes use
+ * this to turn a single `.eq('venue_id', ...)` hardcode into a scope-
+ * aware `.in('venue_id', ids)` filter, so company-level users actually
+ * get aggregate numbers instead of "the first venue".
+ *
+ *   venue  → [scope.venueId]
+ *   group  → venues that are members of the chosen group (same org only)
+ *   company → every venue in the user's org
+ *
+ * Returns [] when the resolution fails (no venues in org, stale group,
+ * etc.) so callers can short-circuit to an empty-result response instead
+ * of falling back to "all rows" via RLS.
+ */
+export const resolveScopeVenueIds = cache(async (): Promise<string[]> => {
+  const scope = await resolvePlatformScope()
+  if (!scope) return []
+  const service = createServiceClient()
+
+  if (scope.level === 'venue') return [scope.venueId]
+
+  if (scope.level === 'group' && scope.groupId && scope.orgId) {
+    const { data: group } = await service
+      .from('venue_groups')
+      .select('org_id')
+      .eq('id', scope.groupId)
+      .maybeSingle()
+    if (!group || group.org_id !== scope.orgId) return [scope.venueId]
+    const { data } = await service
+      .from('venue_group_members')
+      .select('venue_id')
+      .eq('group_id', scope.groupId)
+    return (data ?? []).map((r) => r.venue_id as string)
+  }
+
+  if (scope.level === 'company' && scope.orgId) {
+    const { data } = await service
+      .from('venues')
+      .select('id')
+      .eq('org_id', scope.orgId)
+    return (data ?? []).map((v) => v.id as string)
+  }
+
+  return [scope.venueId]
+})
+
 async function _resolvePlatformScope(): Promise<PlatformScope | null> {
   const cookieStore = await cookies()
   const scopeCookie = parseScopeCookie(cookieStore.get('bloom_scope')?.value)
