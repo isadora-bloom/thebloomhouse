@@ -709,7 +709,7 @@ export async function getGmailClient(venueId: string, connectionId?: string) {
 export async function fetchNewEmails(
   venueId: string,
   maxResults = 50,
-  opts?: { sinceDays?: number }
+  opts?: { sinceDays?: number; extraQuery?: string; includeAllLabels?: boolean }
 ): Promise<ParsedEmail[]> {
   const connections = await getConnections(venueId)
 
@@ -746,7 +746,7 @@ export async function fetchNewEmails(
 async function fetchNewEmailsFromConnection(
   conn: GmailConnection,
   maxResults: number,
-  opts?: { sinceDays?: number }
+  opts?: { sinceDays?: number; extraQuery?: string; includeAllLabels?: boolean }
 ): Promise<ParsedEmail[]> {
   const gmail = await getGmailClient(conn.venue_id, conn.id)
   if (!gmail) return []
@@ -759,8 +759,11 @@ async function fetchNewEmailsFromConnection(
     // Backfill mode: ignore history_id and pull the whole window. Used
     // when a venue onboards mid-flight and needs their existing inbox
     // imported, not just deltas.
-    if (opts?.sinceDays && opts.sinceDays > 0) {
-      messageIds = await fetchMessageIdsByList(gmail, maxResults, { sinceDays: opts.sinceDays })
+    // When opts.extraQuery is set, force the list path — the history API
+    // can't filter by Gmail search syntax.
+    const forceListPath = (opts?.sinceDays && opts.sinceDays > 0) || Boolean(opts?.extraQuery)
+    if (forceListPath) {
+      messageIds = await fetchMessageIdsByList(gmail, maxResults, opts)
     } else if (conn.last_history_id) {
       // Incremental sync via history API
       try {
@@ -787,13 +790,13 @@ async function fetchNewEmailsFromConnection(
         const errObj = historyErr as { code?: number }
         if (errObj.code === 404) {
           console.warn(`[gmail] History ID expired for connection ${conn.id} — falling back to list`)
-          messageIds = await fetchMessageIdsByList(gmail, maxResults)
+          messageIds = await fetchMessageIdsByList(gmail, maxResults, opts)
         } else {
           throw historyErr
         }
       }
     } else {
-      messageIds = await fetchMessageIdsByList(gmail, maxResults)
+      messageIds = await fetchMessageIdsByList(gmail, maxResults, opts)
     }
 
     // Fetch full message details
@@ -845,7 +848,7 @@ async function fetchNewEmailsFromConnection(
 async function fetchNewEmailsLegacy(
   venueId: string,
   maxResults: number,
-  opts?: { sinceDays?: number }
+  opts?: { sinceDays?: number; extraQuery?: string; includeAllLabels?: boolean }
 ): Promise<ParsedEmail[]> {
   const gmail = await getGmailClient(venueId)
   if (!gmail) return []
@@ -856,8 +859,9 @@ async function fetchNewEmailsLegacy(
   try {
     let messageIds: string[] = []
 
-    if (opts?.sinceDays && opts.sinceDays > 0) {
-      messageIds = await fetchMessageIdsByList(gmail, maxResults, { sinceDays: opts.sinceDays })
+    const forceListPathLegacy = (opts?.sinceDays && opts.sinceDays > 0) || Boolean(opts?.extraQuery)
+    if (forceListPathLegacy) {
+      messageIds = await fetchMessageIdsByList(gmail, maxResults, opts)
     } else if (syncState?.last_history_id) {
       try {
         const historyResponse = await gmail.users.history.list({
@@ -883,13 +887,13 @@ async function fetchNewEmailsLegacy(
         const errObj = historyErr as { code?: number }
         if (errObj.code === 404) {
           console.warn(`[gmail] History ID expired for venue ${venueId} — falling back to list`)
-          messageIds = await fetchMessageIdsByList(gmail, maxResults)
+          messageIds = await fetchMessageIdsByList(gmail, maxResults, opts)
         } else {
           throw historyErr
         }
       }
     } else {
-      messageIds = await fetchMessageIdsByList(gmail, maxResults)
+      messageIds = await fetchMessageIdsByList(gmail, maxResults, opts)
     }
 
     for (const messageId of messageIds.slice(0, maxResults)) {
@@ -948,34 +952,41 @@ async function fetchNewEmailsLegacy(
 async function fetchMessageIdsByList(
   gmail: ReturnType<typeof google.gmail>,
   maxResults: number,
-  opts?: { sinceDays?: number }
+  opts?: { sinceDays?: number; extraQuery?: string; includeAllLabels?: boolean }
 ): Promise<string[]> {
   // Base query: strip Gmail's auto-categorised promos/social (the usual
   // suspects the classifier would filter out anyway). When sinceDays is
   // set we also add `newer_than:Nd` so backfill pulls the full window
-  // instead of whatever the last 50 messages happen to be.
+  // instead of whatever the last 50 messages happen to be. extraQuery
+  // lets a caller add additional Gmail search terms (e.g.
+  // `from:(calendly.com OR honeybook.com)` for scheduling-tool backfill).
   const parts = ['-category:promotions', '-category:social']
   if (opts?.sinceDays && opts.sinceDays > 0) {
     parts.push(`newer_than:${Math.floor(opts.sinceDays)}d`)
   }
+  if (opts?.extraQuery) parts.push(opts.extraQuery)
   const q = parts.join(' ')
 
   // Paginate through the list API so we can actually pull weeks of mail
-  // for a backfill — Gmail caps per-page at 500.
+  // for a backfill — Gmail caps per-page at 500. Default restricts to
+  // INBOX — but scheduling-tool emails (Calendly in Gmail's Updates tab,
+  // or auto-archived by user filters) often sit outside INBOX. Callers
+  // that want to reach those pass includeAllLabels: true.
   const ids: string[] = []
   let pageToken: string | undefined = undefined
   const perPage = Math.min(500, Math.max(1, maxResults))
   while (ids.length < maxResults) {
     const remaining = maxResults - ids.length
     const pageSize = Math.min(perPage, remaining)
+    const listArgs: Record<string, unknown> = {
+      userId: 'me',
+      maxResults: pageSize,
+      q,
+      ...(pageToken ? { pageToken } : {}),
+    }
+    if (!opts?.includeAllLabels) listArgs.labelIds = ['INBOX']
     const listResponse: { data: { messages?: Array<{ id?: string }>; nextPageToken?: string } } =
-      await gmail.users.messages.list({
-        userId: 'me',
-        maxResults: pageSize,
-        labelIds: ['INBOX'],
-        q,
-        ...(pageToken ? { pageToken } : {}),
-      })
+      await gmail.users.messages.list(listArgs)
     const batch: string[] = (listResponse.data.messages ?? [])
       .map((m) => m.id)
       .filter((id): id is string => !!id)

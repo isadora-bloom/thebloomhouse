@@ -23,6 +23,12 @@ import { generateInquiryDraft } from '@/lib/services/inquiry-brain'
 import { generateClientDraft } from '@/lib/services/client-brain'
 import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/gmail'
 import { detectBookingSignal } from '@/lib/services/booking-signal'
+import {
+  detectSchedulingEvent,
+  eventKindToEngagementType,
+  eventKindToStatus,
+  type SchedulingEvent,
+} from '@/lib/services/scheduling-tool-parsers'
 import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
 import { applySignalInference } from '@/lib/services/signal-inference'
 import { createNotification } from '@/lib/services/admin-notifications'
@@ -475,29 +481,46 @@ export async function processIncomingEmail(
     { from: email.from, to: email.to, subject: email.subject, body: email.body },
     ownEmails
   )
-  const fromEmail = formLead?.leadEmail ?? rawFromEmail
-  // When a form relay fires, the raw From display name is the platform /
-  // venue name (e.g. "Rixey Manor", "Zola Vendor Communication"), not the
-  // prospect. Falling back to that would stamp the venue's own name onto
-  // the new lead. Use the parsed lead name or nothing.
-  const fromName = formLead ? formLead.leadName ?? null : rawFromName
+
+  // Step 1a.55: Scheduling-tool detection (Calendly, Acuity, HoneyBook,
+  // Dubsado). These are confirmations / contract / payment notifications
+  // for an EXISTING lead, not a new inquiry. The email from header is the
+  // tool's own address but the real invitee is inside the body. Swap in
+  // the invitee's email for contact resolution so the confirmation lands
+  // on the right wedding, then fire the matching engagement event after
+  // persistence. White-label — detectSchedulingEvent keys on tool domains,
+  // not venue-specific rules.
+  const schedulingEvent: SchedulingEvent | null = detectSchedulingEvent({
+    from: email.from,
+    subject: email.subject,
+    body: email.body,
+  })
+
+  const fromEmail = formLead?.leadEmail ?? schedulingEvent?.inviteeEmail ?? rawFromEmail
+  // When a form relay or scheduling tool fires, the raw From display
+  // name is the platform / venue / tool name (e.g. "Rixey Manor", "Zola
+  // Vendor Communication", "Calendly"), not the prospect. Falling back
+  // to that would stamp the tool's own name onto the new lead. Use the
+  // parsed name or nothing.
+  const fromName = formLead?.leadName ?? schedulingEvent?.inviteeName ?? (formLead || schedulingEvent ? null : rawFromName)
 
   // Step 1a.6: Content-based auto-ignore and machine-mail detection.
-  // Runs only when no form-relay fired — Knot/Zola forwards legitimately
-  // contain "view in browser" / List-Unsubscribe headers and we still
-  // want those to flow through as inquiries.
+  // Runs only when no form-relay or scheduling-event fired — these
+  // legitimately contain "view in browser" / List-Unsubscribe headers
+  // and we still want them to flow through.
   //
   //   - shouldAutoIgnore: subject/body patterns for out-of-office,
   //     "do not reply", automated responses, unsubscribe-flavoured
-  //     newsletters. Was written but never wired until 2026-04-22.
+  //     newsletters.
   //   - isMachineGenerated: RFC-2822 header check for List-Unsubscribe,
-  //     List-Id, Precedence: bulk/list/junk, Auto-Submitted. Catches
-  //     HoneyBook, Cvent, Calendly, Stripe billing, Zola vendor
-  //     broadcasts without needing one parser per SaaS.
-  if (!formLead && shouldAutoIgnore(email.subject, email.body)) {
+  //     List-Id, Precedence: bulk/list/junk, Auto-Submitted. Calendly
+  //     would otherwise be caught here — but we've identified the
+  //     specific event type, so let it through.
+  const bypassNoiseGuards = Boolean(formLead || schedulingEvent)
+  if (!bypassNoiseGuards && shouldAutoIgnore(email.subject, email.body)) {
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
-  if (!formLead) {
+  if (!bypassNoiseGuards) {
     const machineReason = isMachineGenerated(email.headers)
     if (machineReason) {
       return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
@@ -559,11 +582,13 @@ export async function processIncomingEmail(
   // Either filter can trigger no_draft; skipDraft is the union. The
   // onboarding backfill path sets opts.skipDraft so 90-day historical
   // imports classify + score + persist without drafting a reply to
-  // every old email.
+  // every old email. Scheduling-tool emails (Calendly etc.) always
+  // skip draft — we never want Sage to reply to a Calendly confirmation.
   const skipDraft =
     opts?.skipDraft === true ||
     filterHit?.action === 'no_draft' ||
-    earlyFilterHit?.action === 'no_draft'
+    earlyFilterHit?.action === 'no_draft' ||
+    Boolean(schedulingEvent)
 
   // Check if already processed — by Gmail id AND by content fingerprint
   // so multi-connection venues don't triple-insert the same inbound email.
@@ -920,6 +945,55 @@ export async function processIncomingEmail(
           events: heatEvents.map((e) => e.eventType),
         })
       }
+    }
+  }
+
+  // Step 6a.5: Scheduling-tool event. If this email is a Calendly / Acuity
+  // / HoneyBook / Dubsado confirmation / contract / payment, fire the
+  // matching engagement event + advance status. We've already rerouted
+  // contact resolution to the invitee above, so weddingId (if set) is
+  // the RIGHT wedding — not a ghost for the tool's sender address.
+  if (schedulingEvent && weddingId) {
+    try {
+      const eventType = eventKindToEngagementType(schedulingEvent.kind)
+      await recordEngagementEventsBatch(venueId, weddingId, [{
+        eventType,
+        metadata: {
+          interaction_id: interactionId,
+          source: schedulingEvent.source,
+          scheduling_kind: schedulingEvent.kind,
+          event_datetime: schedulingEvent.eventDatetime,
+        },
+      }], email.date)
+
+      // Status advance ladder:
+      //   inquiry → tour_scheduled → proposal_sent → booked
+      // Never downgrade. Never overwrite terminal (lost/cancelled).
+      const targetStatus = eventKindToStatus(schedulingEvent.kind)
+      if (targetStatus) {
+        const STATUS_RANK: Record<string, number> = {
+          inquiry: 0, tour_scheduled: 1, tour_completed: 2, proposal_sent: 3, booked: 4,
+          completed: 5, lost: 99, cancelled: 99,
+        }
+        const { data: currentRow } = await supabase
+          .from('weddings')
+          .select('status')
+          .eq('id', weddingId)
+          .maybeSingle()
+        const current = (currentRow?.status as string | undefined) ?? 'inquiry'
+        const currentRank = STATUS_RANK[current] ?? 0
+        const targetRank = STATUS_RANK[targetStatus] ?? 0
+        if (currentRank < 99 && targetRank > currentRank) {
+          await supabase.from('weddings').update({ status: targetStatus }).eq('id', weddingId)
+        }
+      }
+    } catch (err) {
+      await logPipelineError(venueId, 'scheduling_tool_event', err, {
+        interactionId,
+        weddingId,
+        schedulingSource: schedulingEvent.source,
+        kind: schedulingEvent.kind,
+      })
     }
   }
 
