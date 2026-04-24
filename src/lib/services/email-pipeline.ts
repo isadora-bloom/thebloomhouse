@@ -59,7 +59,23 @@ async function logPipelineError(
   err: unknown,
   context: Record<string, unknown> = {}
 ): Promise<void> {
-  const message = err instanceof Error ? err.message : String(err)
+  // Supabase PostgrestErrors aren't `instanceof Error` — they're plain
+  // objects with { message, code, details, hint }. Stringifying them
+  // naively produces "[object Object]". Serialize known shapes + fall
+  // back to JSON so the error log actually contains diagnostic info.
+  let message: string
+  if (err instanceof Error) {
+    message = err.message
+  } else if (err && typeof err === 'object') {
+    const pg = err as { message?: string; code?: string; details?: string; hint?: string }
+    if (pg.message) {
+      message = `${pg.message}${pg.code ? ` [${pg.code}]` : ''}${pg.details ? ` — ${pg.details}` : ''}${pg.hint ? ` (hint: ${pg.hint})` : ''}`
+    } else {
+      try { message = JSON.stringify(err) } catch { message = String(err) }
+    }
+  } else {
+    message = String(err)
+  }
   const stack = err instanceof Error ? err.stack : undefined
   // Local log first — keeps existing Vercel / dev behaviour.
   console.error(`[pipeline] ${stage}:`, message, context)
@@ -481,6 +497,26 @@ export async function processIncomingEmail(
   const supabase = createServiceClient()
   const rawFromEmail = extractEmailAddress(email.from)
   const rawFromName = extractName(email.from)
+
+  // Normalise the email's Date header to ISO so Postgres can accept it
+  // as timestamptz. Gmail returns RFC 2822 format on some senders
+  // ("Fri, 24 Apr 2026 18:36:05 +0000 (UTC)") which Postgres rejects
+  // with 22007. Calendly / Acuity emails in particular use this shape.
+  // new Date() handles RFC 2822 + ISO 8601 + a handful of other forms;
+  // toISOString() gives us what timestamptz wants.
+  let emailDate: string
+  try {
+    const parsed = new Date(email.date)
+    if (Number.isNaN(parsed.getTime())) throw new Error('unparseable')
+    emailDate = parsed.toISOString()
+  } catch {
+    emailDate = new Date().toISOString()
+  }
+  // Replace in the incoming email object so ALL downstream uses
+  // (interactions.timestamp, engagement_events.occurred_at, etc.) see
+  // the normalised value. Keeping the original on the object meant
+  // every INSERT touching email.date could fail the same way.
+  email = { ...email, date: emailDate }
 
   // Step 1a.0: Scheduling-tool pre-check. Calendly / Acuity / HoneyBook /
   // Dubsado emails come from notifications@calendly.com and friends —
