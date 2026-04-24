@@ -211,33 +211,47 @@ export function assessConfidence(response: string, kbMatch: boolean): number {
 async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
   const supabase = createServiceClient()
 
-  const [aiConfigResult, venueResult, venueConfigResult, uspsResult, seasonalResult] =
-    await Promise.all([
-      supabase
-        .from('venue_ai_config')
-        .select('*')
-        .eq('venue_id', venueId)
-        .single(),
-      supabase
-        .from('venues')
-        .select('name')
-        .eq('id', venueId)
-        .maybeSingle(),
-      supabase
-        .from('venue_config')
-        .select('coordinator_phone, coordinator_email, business_name')
-        .eq('venue_id', venueId)
-        .maybeSingle(),
-      supabase
-        .from('venue_usps')
-        .select('usp_text')
-        .eq('venue_id', venueId)
-        .order('sort_order', { ascending: true }),
-      supabase
-        .from('venue_seasonal_content')
-        .select('season, imagery, phrases')
-        .eq('venue_id', venueId),
-    ])
+  const [
+    aiConfigResult,
+    venueResult,
+    venueConfigResult,
+    uspsResult,
+    seasonalResult,
+    voicePrefsResult,
+  ] = await Promise.all([
+    supabase
+      .from('venue_ai_config')
+      .select('*')
+      .eq('venue_id', venueId)
+      .single(),
+    supabase
+      .from('venues')
+      .select('name')
+      .eq('id', venueId)
+      .maybeSingle(),
+    supabase
+      .from('venue_config')
+      .select('coordinator_phone, coordinator_email, business_name')
+      .eq('venue_id', venueId)
+      .maybeSingle(),
+    supabase
+      .from('venue_usps')
+      .select('usp_text')
+      .eq('venue_id', venueId)
+      .order('sort_order', { ascending: true }),
+    supabase
+      .from('venue_seasonal_content')
+      .select('season, imagery, phrases')
+      .eq('venue_id', venueId),
+    // Voice training outputs (banned/approved phrases + dimension scores).
+    // Inquiry-brain has always loaded these; portal-brain silently skipped
+    // them until now, so coordinators' voice training never reached the
+    // couple-facing Sage and personality drifted across the two paths.
+    supabase
+      .from('voice_preferences')
+      .select('preference_type, content, score')
+      .eq('venue_id', venueId),
+  ])
 
   const config = (aiConfigResult.data as Record<string, unknown>) ?? {}
   const venue = venueResult.data ?? {}
@@ -266,6 +280,21 @@ async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
     }
   }
 
+  // Parse voice_preferences the same way inquiry-brain does so
+  // buildPersonalityPrompt receives a matching shape and produces
+  // consistent voice guidance across inquiry-, client-, and portal-Sage.
+  const bannedPhrases: string[] = []
+  const approvedPhrases: string[] = []
+  const dimensions: Record<string, number> = {}
+  for (const pref of voicePrefsResult.data ?? []) {
+    const type = pref.preference_type as string
+    const content = pref.content as string
+    const score = (pref.score as number) ?? 0
+    if (type === 'banned_phrase') bannedPhrases.push(content)
+    else if (type === 'approved_phrase') approvedPhrases.push(content)
+    else if (type === 'dimension') dimensions[content] = score
+  }
+
   return {
     config: config as PersonalityData['config'],
     venue: venue as PersonalityData['venue'],
@@ -273,6 +302,10 @@ async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
     usps,
     seasonal,
     signoff: (config.signoff as string) ?? '',
+    voice_preferences:
+      bannedPhrases.length > 0 || approvedPhrases.length > 0 || Object.keys(dimensions).length > 0
+        ? { banned_phrases: bannedPhrases, approved_phrases: approvedPhrases, dimensions }
+        : undefined,
   }
 }
 
