@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
-import { Settings, LogOut } from 'lucide-react'
+import { Settings, LogOut, Sparkles } from 'lucide-react'
 
 interface UserData {
   name: string
@@ -34,6 +34,32 @@ const ROLE_BADGES: Record<string, { label: string; className: string }> = {
   admin:         { label: 'Admin',        className: 'bg-sage-100 text-sage-700' },
   manager:       { label: 'Manager',      className: 'bg-teal-100 text-teal-700' },
   viewer:        { label: 'Viewer',       className: 'bg-gray-100 text-gray-600' },
+}
+
+// Toggle for the Phase 2B mode-nav feature flag (cookie bloom_nav_v2).
+// Sits between Settings and Sign Out so Isadora can flip without
+// touching DevTools. Reloads the page so the new shell renders.
+function NavV2Toggle({ onDone }: { onDone: () => void }) {
+  const [on, setOn] = useState(false)
+  useEffect(() => {
+    setOn(document.cookie.split('; ').some((c) => c === 'bloom_nav_v2=true'))
+  }, [])
+  function flip() {
+    const next = !on
+    document.cookie = `bloom_nav_v2=${next ? 'true' : ''}; path=/; max-age=${next ? 60 * 60 * 24 * 365 : 0}`
+    onDone()
+    // Full reload so PlatformShell re-evaluates the cookie.
+    window.location.reload()
+  }
+  return (
+    <button
+      onClick={flip}
+      className="flex items-center gap-2.5 w-full px-4 py-2 text-sm text-sage-600 hover:bg-sage-50 hover:text-sage-800 transition-colors"
+    >
+      <Sparkles className="w-4 h-4" />
+      {on ? 'Back to classic nav' : 'Try new nav (beta)'}
+    </button>
+  )
 }
 
 export function UserMenu({ compact = false }: UserMenuProps) {
@@ -193,6 +219,8 @@ export function UserMenu({ compact = false }: UserMenuProps) {
               <Settings className="w-4 h-4" />
               Settings
             </Link>
+
+            <NavV2Toggle onDone={() => setOpen(false)} />
 
             <button
               onClick={handleSignOut}
