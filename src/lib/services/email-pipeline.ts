@@ -922,6 +922,27 @@ export async function processIncomingEmail(
     }
   }
 
+  // Step 6b: Signal inference on the full thread. The classifier is
+  // conservative and misses plain-worded tour confirmations, HoneyBook
+  // notifications, and contract/payment language — especially when
+  // emails come from CRM relays that don't read like natural couple
+  // email. applySignalInference runs deterministic regex patterns over
+  // every interaction on this wedding and fires any matching events +
+  // advances status (inquiry → tour_scheduled → proposal_sent → booked).
+  // Idempotent via metadata.source markers so re-running doesn't
+  // duplicate events. Best-effort — never block the pipeline on failure.
+  if (weddingId) {
+    try {
+      const { applySignalInference } = await import('@/lib/services/signal-inference')
+      await applySignalInference(venueId, weddingId)
+    } catch (err) {
+      await logPipelineError(venueId, 'signal_inference', err, {
+        interactionId,
+        weddingId,
+      })
+    }
+  }
+
   // Step 5a.5: Knowledge-gap capture. Every question the classifier
   // extracted gets recorded into knowledge_gaps so the /agent/knowledge-gaps
   // page shows a real backlog over time. Venue-scoped; normalises/dedupes

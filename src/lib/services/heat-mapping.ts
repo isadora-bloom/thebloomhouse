@@ -44,6 +44,10 @@ const DEFAULT_POINTS: Record<string, number> = {
   high_commitment_signal: 10,
   family_mentioned: 5,
   high_specificity: 5,
+  // Sustained engagement: 5+ inbound emails on a thread. Fires once per
+  // wedding from signal-inference.ts. Small points because engagement
+  // count is already partially captured via email_reply_received per-reply.
+  sustained_engagement: 5,
   tour_scheduled: 20,
   tour_completed: 25,
   tour_rescheduled: 5,
