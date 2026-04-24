@@ -372,6 +372,23 @@ export default function OnboardingPage() {
   const [testDraftLoading, setTestDraftLoading] = useState(false)
   const [testDraftError, setTestDraftError] = useState<string | null>(null)
 
+  // Step 6 (Go Live): optional 90-day historical backfill. Classifies,
+  // extracts, and scores the last 90 days of email so a new venue's
+  // analytics and pipeline aren't empty on day one. Draft generation
+  // is skipped (mode=parse_only) so Sage doesn't try to reply to old
+  // emails. Heat events stamp occurred_at with the real email date so
+  // decay is honest instead of collapsing history into "today".
+  const [backfillRunning, setBackfillRunning] = useState(false)
+  const [backfillDone, setBackfillDone] = useState(false)
+  const [backfillError, setBackfillError] = useState<string | null>(null)
+  const [backfillStats, setBackfillStats] = useState({
+    processed: 0,
+    inquiries: 0,
+    outbound: 0,
+    ignored: 0,
+    errors: 0,
+  })
+
   const supabase = createClient()
 
   // ---- Load existing data on mount ----
@@ -817,6 +834,41 @@ export default function OnboardingPage() {
     }
 
     setTestDraftLoading(false)
+  }
+
+  async function runHistoricalBackfill() {
+    setBackfillRunning(true)
+    setBackfillError(null)
+    setBackfillDone(false)
+    setBackfillStats({ processed: 0, inquiries: 0, outbound: 0, ignored: 0, errors: 0 })
+
+    const totals = { processed: 0, inquiries: 0, outbound: 0, ignored: 0, errors: 0 }
+    const maxIterations = 20 // 20 × 50 = up to 1000 emails, a hard stop
+
+    try {
+      for (let i = 0; i < maxIterations; i++) {
+        const res = await fetch('/api/agent/sync?days=90&mode=parse_only&chunk=50', {
+          method: 'POST',
+        })
+        if (!res.ok) {
+          setBackfillError(`Backfill failed (${res.status}).`)
+          setBackfillRunning(false)
+          return
+        }
+        const data = await res.json()
+        totals.processed += data.processed ?? 0
+        totals.inquiries += data.inquiries ?? 0
+        totals.outbound += data.outbound ?? 0
+        totals.ignored += data.ignored ?? 0
+        totals.errors += data.errors ?? 0
+        setBackfillStats({ ...totals })
+        if (data.done) break
+      }
+      setBackfillDone(true)
+    } catch {
+      setBackfillError('Could not reach the sync service. Please try again.')
+    }
+    setBackfillRunning(false)
   }
 
   // Auto-generate test draft when entering step 5
@@ -1498,6 +1550,48 @@ export default function OnboardingPage() {
                     <p className="text-sage-500 text-xs mt-0.5">Every edit teaches the AI to write more like you. It gets better with every response.</p>
                   </div>
                 </div>
+              </div>
+
+              {/* Optional: 90-day historical backfill. Parse-only so
+                   Sage doesn't reply to year-old emails. Heat events
+                   stamp occurred_at with the real email date so decay
+                   is honest across imported history. */}
+              <div className="bg-surface border border-border rounded-xl p-6 space-y-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="font-medium text-sage-900 text-sm">Import your last 90 days of email</p>
+                    <p className="text-sage-500 text-xs mt-0.5">
+                      Classifies, scores, and builds the engagement timeline for every past inquiry — no auto-replies sent. Safe to skip and run later from Settings.
+                    </p>
+                  </div>
+                  {!backfillDone && (
+                    <button
+                      onClick={runHistoricalBackfill}
+                      disabled={backfillRunning}
+                      className="shrink-0 px-4 py-2 rounded-lg bg-sage-600 text-white text-xs font-medium hover:bg-sage-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {backfillRunning ? 'Importing…' : 'Import 90 days'}
+                    </button>
+                  )}
+                  {backfillDone && (
+                    <span className="shrink-0 inline-flex items-center gap-1 text-xs font-medium text-sage-700">
+                      <Check className="w-3.5 h-3.5" /> Imported
+                    </span>
+                  )}
+                </div>
+                {(backfillRunning || backfillDone) && (
+                  <div className="text-xs text-sage-500 flex gap-4 flex-wrap">
+                    <span>Processed: <strong className="text-sage-800">{backfillStats.processed}</strong></span>
+                    <span>Inquiries: <strong className="text-sage-800">{backfillStats.inquiries}</strong></span>
+                    <span>Ignored: <strong className="text-sage-800">{backfillStats.ignored}</strong></span>
+                    {backfillStats.errors > 0 && (
+                      <span className="text-red-600">Errors: <strong>{backfillStats.errors}</strong></span>
+                    )}
+                  </div>
+                )}
+                {backfillError && (
+                  <p className="text-xs text-red-600">{backfillError}</p>
+                )}
               </div>
 
               {/* Recommended next steps — configurables not gated at Go Live */}

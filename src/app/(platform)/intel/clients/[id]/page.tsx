@@ -98,6 +98,7 @@ interface EngagementEventRow {
   event_type: string
   points: number
   metadata: Record<string, unknown> | null
+  occurred_at: string
   created_at: string
 }
 
@@ -675,9 +676,9 @@ export default function ClientProfilePage() {
           .limit(50),
         supabase
           .from('engagement_events')
-          .select('id, event_type, points, metadata, created_at')
+          .select('id, event_type, points, metadata, occurred_at, created_at')
           .eq('wedding_id', weddingId)
-          .order('created_at', { ascending: false })
+          .order('occurred_at', { ascending: false })
           .limit(30),
         supabase
           .from('lead_score_history')
@@ -1468,7 +1469,7 @@ export default function ClientProfilePage() {
                   <div key={e.id} className="flex items-center justify-between py-1.5 border-b border-sage-50 last:border-0">
                     <div>
                       <p className="text-xs font-medium text-sage-800">{eventTypeLabel(e.event_type)}</p>
-                      <p className="text-[10px] text-sage-400">{fmtDatetime(e.created_at)}</p>
+                      <p className="text-[10px] text-sage-400">{fmtDatetime(e.occurred_at ?? e.created_at)}</p>
                     </div>
                     <span className={cn(
                       'text-xs font-bold',

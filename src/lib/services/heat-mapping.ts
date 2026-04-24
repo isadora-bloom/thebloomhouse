@@ -202,21 +202,24 @@ export async function recordEngagementEvent(
   venueId: string,
   weddingId: string,
   eventType: string,
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  occurredAt?: string
 ): Promise<HeatScoreResult> {
   const supabase = createServiceClient()
 
   // Get points for this event type
   const points = await getPointsForEvent(venueId, eventType)
 
-  // Insert engagement event
-  await supabase.from('engagement_events').insert({
+  const row: Record<string, unknown> = {
     venue_id: venueId,
     wedding_id: weddingId,
     event_type: eventType,
     points,
     metadata: metadata ?? {},
-  })
+  }
+  if (occurredAt) row.occurred_at = occurredAt
+
+  await supabase.from('engagement_events').insert(row)
 
   // Recalculate and return
   return recalculateHeatScore(venueId, weddingId)
@@ -237,7 +240,8 @@ export async function recordEngagementEvent(
 export async function recordEngagementEventsBatch(
   venueId: string,
   weddingId: string,
-  events: Array<{ eventType: string; metadata?: Record<string, unknown> }>
+  events: Array<{ eventType: string; metadata?: Record<string, unknown>; occurredAt?: string }>,
+  occurredAt?: string
 ): Promise<HeatScoreResult> {
   if (events.length === 0) {
     // Still return a current-state result so callers don't have to branch.
@@ -246,13 +250,18 @@ export async function recordEngagementEventsBatch(
 
   const supabase = createServiceClient()
   const rows = await Promise.all(
-    events.map(async (e) => ({
-      venue_id: venueId,
-      wedding_id: weddingId,
-      event_type: e.eventType,
-      points: await getPointsForEvent(venueId, e.eventType),
-      metadata: e.metadata ?? {},
-    }))
+    events.map(async (e) => {
+      const row: Record<string, unknown> = {
+        venue_id: venueId,
+        wedding_id: weddingId,
+        event_type: e.eventType,
+        points: await getPointsForEvent(venueId, e.eventType),
+        metadata: e.metadata ?? {},
+      }
+      const eventOccurredAt = e.occurredAt ?? occurredAt
+      if (eventOccurredAt) row.occurred_at = eventOccurredAt
+      return row
+    })
   )
 
   await supabase.from('engagement_events').insert(rows)
@@ -288,13 +297,17 @@ export async function recalculateHeatScore(
 
   const previousScore = (wedding?.heat_score as number) ?? 0
 
-  // Fetch all engagement events for this wedding
+  // Fetch all engagement events for this wedding. Decay keys off
+  // occurred_at (the real event timestamp — email date, tour date),
+  // not created_at (row insert time), so historical backfill from
+  // onboarding ages correctly instead of counting everything as
+  // "today". Fallback to created_at for any legacy rows pre-089.
   const { data: events } = await supabase
     .from('engagement_events')
-    .select('points, created_at')
+    .select('points, occurred_at, created_at')
     .eq('venue_id', venueId)
     .eq('wedding_id', weddingId)
-    .order('created_at', { ascending: false })
+    .order('occurred_at', { ascending: false })
 
   if (!events || events.length === 0) {
     return {
@@ -315,7 +328,8 @@ export async function recalculateHeatScore(
 
   for (const event of events) {
     const eventPoints = event.points as number
-    const eventDate = new Date(event.created_at as string).getTime()
+    const tsSource = (event.occurred_at ?? event.created_at) as string
+    const eventDate = new Date(tsSource).getTime()
     const daysAgo = Math.max(0, (now - eventDate) / dayMs)
 
     // Apply decay: points * (0.98 ^ daysAgo)
@@ -678,12 +692,14 @@ export async function getHotLeads(
     else if (p.role === 'partner2') entry.partner2 = name
   }
 
-  // Get most recent engagement event per wedding for action suggestions
+  // Get most recent engagement event per wedding for action suggestions.
+  // Order by occurred_at (real event time) so backfilled history doesn't
+  // look "fresh" just because it was inserted today.
   const { data: recentEvents } = await supabase
     .from('engagement_events')
-    .select('wedding_id, event_type, created_at')
+    .select('wedding_id, event_type, occurred_at')
     .in('wedding_id', weddingIds)
-    .order('created_at', { ascending: false })
+    .order('occurred_at', { ascending: false })
 
   const latestEventMap = new Map<string, string>()
   for (const e of recentEvents ?? []) {
@@ -757,18 +773,20 @@ export async function getLeadsGoingCold(
     }
   }
 
-  // Get last engagement event dates per wedding
+  // Get last engagement event dates per wedding. Uses occurred_at so
+  // "days since last engagement" reflects the real email date, not
+  // the row insert — important for backfilled history.
   const { data: lastEvents } = await supabase
     .from('engagement_events')
-    .select('wedding_id, created_at')
+    .select('wedding_id, occurred_at')
     .in('wedding_id', weddingIds)
-    .order('created_at', { ascending: false })
+    .order('occurred_at', { ascending: false })
 
   const lastEngagementMap = new Map<string, string>()
   for (const e of lastEvents ?? []) {
     const wid = e.wedding_id as string
     if (!lastEngagementMap.has(wid)) {
-      lastEngagementMap.set(wid, e.created_at as string)
+      lastEngagementMap.set(wid, e.occurred_at as string)
     }
   }
 

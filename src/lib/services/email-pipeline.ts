@@ -437,7 +437,8 @@ function synthClassificationFromFormLead(lead: FormRelayLead): ClassificationRes
  */
 export async function processIncomingEmail(
   venueId: string,
-  email: IncomingEmail
+  email: IncomingEmail,
+  opts?: { skipDraft?: boolean }
 ): Promise<PipelineResult> {
   const supabase = createServiceClient()
   const rawFromEmail = extractEmailAddress(email.from)
@@ -554,9 +555,14 @@ export async function processIncomingEmail(
   if (filterHit?.action === 'ignore') {
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
-  // Either filter can trigger no_draft; skipDraft is the union.
+  // Either filter can trigger no_draft; skipDraft is the union. The
+  // onboarding backfill path sets opts.skipDraft so 90-day historical
+  // imports classify + score + persist without drafting a reply to
+  // every old email.
   const skipDraft =
-    filterHit?.action === 'no_draft' || earlyFilterHit?.action === 'no_draft'
+    opts?.skipDraft === true ||
+    filterHit?.action === 'no_draft' ||
+    earlyFilterHit?.action === 'no_draft'
 
   // Check if already processed — by Gmail id AND by content fingerprint
   // so multi-connection venues don't triple-insert the same inbound email.
@@ -784,12 +790,17 @@ export async function processIncomingEmail(
       // Use the wrapper so every new_inquiry immediately lands with
       // heat ~40 + tier='cool'.
       try {
-        await recordEngagementEventsBatch(venueId, weddingId, [
-          {
-            eventType: 'initial_inquiry',
-            metadata: { source: detectedSource, subject: email.subject },
-          },
-        ])
+        await recordEngagementEventsBatch(
+          venueId,
+          weddingId,
+          [
+            {
+              eventType: 'initial_inquiry',
+              metadata: { source: detectedSource, subject: email.subject },
+            },
+          ],
+          email.date
+        )
       } catch (err) {
         await logPipelineError(venueId, 'initial_inquiry_record', err, {
           weddingId,
@@ -898,7 +909,7 @@ export async function processIncomingEmail(
 
     if (heatEvents.length > 0) {
       try {
-        await recordEngagementEventsBatch(venueId, weddingId, heatEvents)
+        await recordEngagementEventsBatch(venueId, weddingId, heatEvents, email.date)
       } catch (err) {
         // Heat signals are additive — never let a batch insert failure
         // break the pipeline. Log and continue.

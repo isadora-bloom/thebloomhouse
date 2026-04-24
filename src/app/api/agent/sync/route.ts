@@ -53,6 +53,15 @@ export async function POST(req: Request) {
       ? Math.min(200, Math.floor(chunkParam))
       : days ? 50 : 50 // 50 per call is ~60-90s of classifier work
 
+    // mode=parse_only skips draft generation — used by the onboarding
+    // 90-day backfill so a new venue gets history in analytics and the
+    // engagement timeline without Sage trying to reply to year-old
+    // emails. Classification + contact resolution + wedding + heat
+    // events still run, so backfilled leads show on the pipeline
+    // immediately and their scores decay from the real email date.
+    const mode = url.searchParams.get('mode')
+    const parseOnly = mode === 'parse_only'
+
     const newEmails = await fetchNewEmails(venueId, chunk, days ? { sinceDays: days } : undefined)
 
     let processed = 0
@@ -69,18 +78,22 @@ export async function POST(req: Request) {
     for (const email of newEmails) {
       if (Date.now() - startedAt > budgetMs) break
       try {
-        const result = await processIncomingEmail(venueId, {
-          messageId: email.messageId,
-          threadId: email.threadId,
-          from: email.from,
-          to: email.to,
-          subject: email.subject,
-          body: email.body,
-          date: email.date,
-          labels: email.labels,
-          connectionId: email.connectionId,
-          headers: email.headers,
-        })
+        const result = await processIncomingEmail(
+          venueId,
+          {
+            messageId: email.messageId,
+            threadId: email.threadId,
+            from: email.from,
+            to: email.to,
+            subject: email.subject,
+            body: email.body,
+            date: email.date,
+            labels: email.labels,
+            connectionId: email.connectionId,
+            headers: email.headers,
+          },
+          parseOnly ? { skipDraft: true } : undefined
+        )
         processed++
         if (result.classification === 'new_inquiry' || result.classification === 'inquiry_reply') {
           inquiries++
