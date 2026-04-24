@@ -233,10 +233,13 @@ export default function MessagesPage() {
         venueIds = (orgVenues ?? []).map((v) => v.id as string)
       }
 
-      // Get all weddings in scope with people
+      // Get all weddings in scope with people. Inquiries aren't the
+      // target audience for portal messages — the coordinator chats
+      // with couples who have at least booked a tour (Weddings mode).
       let weddingsQuery = supabase
         .from('weddings')
         .select('id, venue_id, venues:venue_id ( name ), people (first_name, last_name, role)')
+        .in('status', ['tour_scheduled', 'tour_completed', 'proposal_sent', 'booked', 'completed'])
       if (venueIds && venueIds.length > 0) {
         weddingsQuery = weddingsQuery.in('venue_id', venueIds)
       }

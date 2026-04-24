@@ -88,7 +88,23 @@ interface Wedding {
   comm_pulse_count?: number
 }
 
-type StatusFilter = 'all' | 'booked' | 'completed' | 'inquiry' | 'lost'
+// Weddings portal list — the "real weddings" surface. Inquiries live
+// on /agent/leads (email funnel); this page is for couples who've at
+// least booked a tour. Anyone still in 'inquiry' status is excluded
+// from the base query below; the filter chips let a coordinator
+// narrow further (tour/proposal/booked/completed/lost).
+type StatusFilter = 'all' | 'tour_scheduled' | 'proposal_sent' | 'booked' | 'completed' | 'lost'
+
+// Status values allowed on this surface. 'inquiry' is intentionally
+// absent — if a coordinator wants inquiries, they go to Agent mode.
+const WEDDING_STATUSES = [
+  'tour_scheduled',
+  'tour_completed',
+  'proposal_sent',
+  'booked',
+  'completed',
+  'lost',
+] as const
 type SortKey = 'date' | 'status' | 'value'
 
 // ---------------------------------------------------------------------------
@@ -984,7 +1000,11 @@ export default function WeddingsPage() {
         query = query.in('venue_id', venueIds)
       }
 
-      if (statusFilter !== 'all') {
+      // Base filter: inquiries belong on /agent/leads, not here. This
+      // surface only shows weddings that have at least booked a tour.
+      if (statusFilter === 'all') {
+        query = query.in('status', WEDDING_STATUSES as unknown as string[])
+      } else {
         query = query.eq('status', statusFilter)
       }
 
@@ -1062,8 +1082,19 @@ export default function WeddingsPage() {
         return aDate.localeCompare(bDate)
       }
       case 'status': {
-        const order: Record<string, number> = { inquiry: 0, booked: 1, completed: 2, lost: 3 }
-        return (order[a.status] ?? 4) - (order[b.status] ?? 4)
+        // Progression order — touring → proposal → booked → completed → lost.
+        // 'inquiry' excluded (can't appear on this surface) but kept with
+        // rank 0 as a safety valve in case a lagging record slips through.
+        const order: Record<string, number> = {
+          inquiry: 0,
+          tour_scheduled: 1,
+          tour_completed: 2,
+          proposal_sent: 3,
+          booked: 4,
+          completed: 5,
+          lost: 6,
+        }
+        return (order[a.status] ?? 99) - (order[b.status] ?? 99)
       }
       case 'value':
         return (b.booking_value ?? 0) - (a.booking_value ?? 0)
@@ -1072,17 +1103,19 @@ export default function WeddingsPage() {
 
   const statusCounts = {
     all: weddings.length,
+    tour_scheduled: weddings.filter((w) => w.status === 'tour_scheduled' || w.status === 'tour_completed').length,
+    proposal_sent: weddings.filter((w) => w.status === 'proposal_sent').length,
     booked: weddings.filter((w) => w.status === 'booked').length,
     completed: weddings.filter((w) => w.status === 'completed').length,
-    inquiry: weddings.filter((w) => w.status === 'inquiry').length,
     lost: weddings.filter((w) => w.status === 'lost').length,
   }
 
   const statuses: { key: StatusFilter; label: string }[] = [
     { key: 'all', label: 'All' },
+    { key: 'tour_scheduled', label: 'Touring' },
+    { key: 'proposal_sent', label: 'Proposal' },
     { key: 'booked', label: 'Booked' },
     { key: 'completed', label: 'Completed' },
-    { key: 'inquiry', label: 'Inquiry' },
     { key: 'lost', label: 'Lost' },
   ]
 
