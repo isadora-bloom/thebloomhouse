@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -292,6 +293,7 @@ function SortHeader({
 // ---------------------------------------------------------------------------
 
 export default function LeadsPage() {
+  const router = useRouter()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
   const [leads, setLeads] = useState<Lead[]>([])
@@ -645,12 +647,13 @@ export default function LeadsPage() {
                   return (
                     <tr
                       key={lead.id}
-                      className="hover:bg-sage-50/50 transition-colors"
+                      onClick={() => router.push(`/intel/clients/${lead.id}`)}
+                      className="hover:bg-sage-50/50 cursor-pointer transition-colors"
                     >
                       {/* Couple */}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-medium text-sage-900">
+                          <span className="text-sm font-medium text-sage-900 hover:text-sage-700 underline-offset-2 hover:underline">
                             {coupleName(lead.partner1_name, lead.partner2_name)}
                           </span>
                           {lead.client_code && (

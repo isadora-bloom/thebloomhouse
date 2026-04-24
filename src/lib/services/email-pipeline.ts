@@ -187,6 +187,37 @@ export async function venueOwnEmails(venueId: string): Promise<Set<string>> {
     const e = (c.email_address || '').toLowerCase().trim()
     if (e) own.add(e)
   }
+  // Team member emails — user_profiles rows for this venue's team are
+  // not leads. Prior versions of this guard caught sage@venue.com and
+  // info@venue.com but missed team members with personal Gmails that
+  // email the venue inbox (CC'ing themselves on replies, forwarding,
+  // internal notes). Including them here prevents them being created
+  // as ghost "couple" rows.
+  const { data: team } = await supabase
+    .from('user_profiles')
+    .select('email')
+    .eq('venue_id', venueId)
+  for (const t of (team ?? []) as Array<{ email: string | null }>) {
+    const e = (t.email || '').toLowerCase().trim()
+    if (e) own.add(e)
+  }
+  // Venue's own calculator / form-relay senders recorded in
+  // venue_config.automation_emails. Any custom automation that sends
+  // from an external service (e.g. the Rixey pricing calculator at
+  // contact@interactivecalculator.com) lands here so the self-loop
+  // guard treats it like a venue-own address for direction purposes.
+  // The form-relay parser still runs first and extracts the real
+  // prospect — this guard only fires when no form-relay matched.
+  const { data: config } = await supabase
+    .from('venue_config')
+    .select('automation_emails')
+    .eq('venue_id', venueId)
+    .maybeSingle()
+  const autos = (config?.automation_emails as string[] | null) ?? []
+  for (const a of autos) {
+    const e = (a || '').toLowerCase().trim()
+    if (e) own.add(e)
+  }
   return own
 }
 
