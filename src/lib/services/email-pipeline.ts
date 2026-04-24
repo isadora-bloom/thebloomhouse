@@ -775,14 +775,27 @@ export async function processIncomingEmail(
         .update({ wedding_id: weddingId })
         .eq('id', interactionId)
 
-      // Create initial engagement event
-      await supabase.from('engagement_events').insert({
-        venue_id: venueId,
-        wedding_id: weddingId,
-        event_type: 'initial_inquiry',
-        points: 40,
-        metadata: { source: detectedSource, subject: email.subject },
-      })
+      // Create initial engagement event + trigger heat recalculation.
+      // Without the recalc, weddings.heat_score sat at 0 despite the
+      // +40 initial_inquiry event existing — leads page hid them behind
+      // `.gt('heat_score', 0)`. The F6 heat-signal batch call later
+      // would recalc ONLY if the classifier emitted signals; plain
+      // inquiries (no tour request, no commitment) never recalculated.
+      // Use the wrapper so every new_inquiry immediately lands with
+      // heat ~40 + tier='cool'.
+      try {
+        await recordEngagementEventsBatch(venueId, weddingId, [
+          {
+            eventType: 'initial_inquiry',
+            metadata: { source: detectedSource, subject: email.subject },
+          },
+        ])
+      } catch (err) {
+        await logPipelineError(venueId, 'initial_inquiry_record', err, {
+          weddingId,
+          interactionId,
+        })
+      }
 
       // Phase 3 Task 35: record the first touchpoint in the multi-touch
       // journey table. Best-effort — failure here must not break inquiry

@@ -1782,6 +1782,23 @@ They're how Bloom-powered venues expose themselves to the open web.
 
 ---
 
+# Verified findings from Respond-category fixes (2026-04-24)
+
+**Phase A — availability date-source consistency:** Investigated.
+`venue_availability` is the canonical writer (via migration 073's
+trigger `sync_venue_availability_for_date`). All five reader surfaces
+(coordinator, couple, Sage inquiry-brain, email-pipeline booking
+prompt, analytics services) read the same table with compatible
+"unavailable" semantics. **No fix needed.**
+
+**Correction to earlier audit claim:** I previously wrote "booked_dates
+has zero writers — table doesn't exist." Both statements were wrong.
+`booked_dates` was renamed to `venue_availability` in migration 073;
+the writer is a trigger on `weddings` that fires on status or
+wedding_date change. Updated the audit below to reflect this.
+
+---
+
 # Cross-cutting findings
 
 ## External data touchpoints — the complete list

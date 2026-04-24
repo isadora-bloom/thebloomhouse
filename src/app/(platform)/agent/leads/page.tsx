@@ -344,7 +344,14 @@ export default function LeadsPage() {
           client_codes!client_codes_wedding_id_fkey ( code )
         `)
         .in('status', ['inquiry', 'tour_scheduled', 'tour_completed', 'proposal_sent'])
-        .gt('heat_score', 0)
+      // NOTE: previously filtered `.gt('heat_score', 0)`. Removed because
+      // it was masking a real bug: inquiries whose initial_inquiry event
+      // never triggered recalculateHeatScore sat at 0 indefinitely, so
+      // whole swathes of active leads were invisible. Fixed upstream in
+      // email-pipeline (the initial_inquiry insert now runs through
+      // recordEngagementEventsBatch which recalculates). Showing zeros
+      // honestly means a coordinator sees "this lead hasn't engaged yet"
+      // instead of "this lead doesn't exist".
       if (venueIds && venueIds.length > 0) {
         query = query.in('venue_id', venueIds)
       }
