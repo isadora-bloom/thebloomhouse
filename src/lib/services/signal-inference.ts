@@ -143,19 +143,16 @@ export async function applySignalInference(
   }
   for (const e of (existingEvents ?? []) as Array<{ event_type: string; metadata: Record<string, unknown> | null }>) {
     const iid = (e.metadata?.interaction_id as string | undefined) ?? null
-    const src = (e.metadata?.source as string | undefined) ?? null
+    // Dedup by (event_type, interaction_id) for per-interaction events,
+    // and by event_type alone for fire-once-per-wedding events.
     if (e.event_type === 'tour_requested' && iid) seen.tour_requested.add(iid)
     if (e.event_type === 'tour_scheduled' && iid) seen.tour_scheduled.add(iid)
     if (e.event_type === 'contract_sent' && iid) seen.contract_sent.add(iid)
     if (e.event_type === 'contract_signed' && iid) seen.contract_signed.add(iid)
     if (e.event_type === 'email_reply_received' && iid) seen.reply_received.add(iid)
     if (e.event_type === 'high_specificity') seen.specificity_fired = true
-    if (e.event_type === 'sustained_engagement' && src === 'signal_inference_thread_depth') {
-      seen.sustained_fired = true
-    }
-    if (e.event_type === 'high_commitment_signal' && src === 'signal_inference_investment') {
-      seen.commitment_fired = true
-    }
+    if (e.event_type === 'sustained_engagement') seen.sustained_fired = true
+    if (e.event_type === 'high_commitment_signal') seen.commitment_fired = true
   }
 
   const interactions = ints as Array<{

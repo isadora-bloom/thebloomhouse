@@ -24,6 +24,7 @@ import { generateClientDraft } from '@/lib/services/client-brain'
 import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/gmail'
 import { detectBookingSignal } from '@/lib/services/booking-signal'
 import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
+import { applySignalInference } from '@/lib/services/signal-inference'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
@@ -933,7 +934,6 @@ export async function processIncomingEmail(
   // duplicate events. Best-effort — never block the pipeline on failure.
   if (weddingId) {
     try {
-      const { applySignalInference } = await import('@/lib/services/signal-inference')
       await applySignalInference(venueId, weddingId)
     } catch (err) {
       await logPipelineError(venueId, 'signal_inference', err, {

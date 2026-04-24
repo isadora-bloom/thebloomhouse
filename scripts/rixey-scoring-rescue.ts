@@ -37,7 +37,14 @@
 //   npx tsx scripts/rixey-scoring-rescue.ts --apply --all   # every real venue
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { recalculateHeatScore } from '../src/lib/services/heat-mapping'
+import { recalculateHeatScore, recordEngagementEventsBatch } from '../src/lib/services/heat-mapping'
+import {
+  TOUR_CONFIRMATION_PATTERNS,
+  TOUR_REQUEST_PATTERNS,
+  PROPOSAL_SENT_PATTERNS,
+  BOOKING_PATTERNS,
+  DATE_SPECIFICITY,
+} from '../src/lib/services/signal-inference'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')
@@ -62,83 +69,9 @@ const ALL = process.argv.includes('--all')
 const venueIdx = process.argv.indexOf('--venue')
 const CLI_VENUE = venueIdx >= 0 ? process.argv[venueIdx + 1] : null
 
-// Expanded tour-confirmation patterns (coordinator → couple).
-// Each regex proven false-positive-safe: "see you on" only matches
-// when followed by a weekday or a date pattern; "tour" patterns are
-// anchored with context words.
-const TOUR_CONFIRMATION_PATTERNS: RegExp[] = [
-  /your tour is confirmed/i,
-  /tour is (booked|confirmed|scheduled)/i,
-  /confirmed for (a |the )?tour/i,
-  /tour confirmation/i,
-  /(looking forward to|excited to) (meeting you|your tour|showing you around|seeing you)/i,
-  /see you (on|at) (monday|tuesday|wednesday|thursday|friday|saturday|sunday|\w+ \d|\d+[-/]\d+|the \d+)/i,
-  /we'll see you/i,
-  /(scheduled|set you up) for (a |your )?tour/i,
-  /(booked|reserved) (you |a )?tour/i,
-  /tour (set|scheduled) for/i,
-  /looking forward to (the|your) (tour|visit)/i,
-  /added (you|your tour) to (my|the) calendar/i,
-]
-
-// Tour-request patterns from inbound (couple → coordinator).
-const TOUR_REQUEST_PATTERNS: RegExp[] = [
-  /(would |we'd |i'd |love to |want to )?(tour|come (see|visit)|schedule a (tour|visit|viewing))/i,
-  /available (to|for a) (tour|visit)/i,
-  /can we (come |visit|tour|see)/i,
-  /set up a tour/i,
-  /book a (tour|visit|viewing)/i,
-  /tour (availability|dates|times|times?)/i,
-  /(when|what|times?|days?) (is|are) (the |your )?(tour|visits?) available/i,
-  /come and (see|visit|tour)/i,
-  /swing by/i,
-  /visit the venue/i,
-  /check out (your|the) venue/i,
-]
-
-// Booking-confirmed patterns. Tighter — want to minimise false positives
-// since status→booked is a big state change. Includes HoneyBook + Dubsado
-// + payment-platform language because those emails DO make it through the
-// filter (HoneyBook is no_draft, not ignore).
-const BOOKING_PATTERNS: RegExp[] = [
-  /contract (is |has been )?signed/i,
-  /(deposit|retainer) (has been |is )?paid/i,
-  /booking (is )?confirmed/i,
-  /officially booked/i,
-  /(we're|we are|we have|i have) booked/i,
-  /we'd like to book/i,
-  /locked (it |the date )?in/i,
-  /wire (sent|has been sent)/i,
-  /(signed|returned|countersigned) (the |your )?contract/i,
-  /(let's|lets) (make it|lock it|get it) official/i,
-  // HoneyBook / Dubsado / generic CRM notifications
-  /(contract|proposal) (was |has been )?(accepted|signed|countersigned)/i,
-  /proposal (accepted|signed|has been accepted)/i,
-  /project (has been )?booked/i,
-  /new booking (from|for)/i,
-  // Payment signals
-  /payment (received|processed|confirmed|completed)/i,
-  /invoice (paid|has been paid|was paid)/i,
-  /(received|processed) (a |your )?payment/i,
-  /\$\d[\d,]*(\.\d\d)? (received|paid|deposited|processed)/i,
-  /you('ve| have) been paid/i,
-]
-
-// Proposal/contract-sent — an intermediate state between tour and booked.
-// Coordinator has sent a contract. Lead is close. Advance status to
-// 'proposal_sent' and fire contract_sent event (+30).
-const PROPOSAL_SENT_PATTERNS: RegExp[] = [
-  /contract (has been |was |is being )?sent/i,
-  /proposal (has been |was )?sent/i,
-  /(sent|attached) (the |a |your )?(contract|proposal|agreement)/i,
-  /please find (the |your )?(contract|proposal|agreement)/i,
-  /invoice (has been |was )?sent/i,
-  /here('s| is) (the |your )?(contract|proposal|agreement)/i,
-]
-
-// Date-specificity: a proper date reference in email body.
-// ISO (YYYY-MM-DD), slash (M/D/YY or M/D/YYYY), or "Month Day Year".
-const DATE_SPECIFICITY = /(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}|(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(st|nd|rd|th)?,?\s+\d{4})/i
+// Patterns imported from src/lib/services/signal-inference.ts so this
+// script and the live email-pipeline path stay in lockstep. Add new
+// patterns there, not here.
 
 // ---------------------------------------------------------------------------
 // Core rescue for one venue
@@ -185,25 +118,32 @@ async function rescueVenue(venueId: string) {
   for (const e of (existingEvents ?? []) as any[]) {
     const wid = e.wedding_id as string
     const iid = e.metadata?.interaction_id as string | undefined
-    const src = e.metadata?.source as string | undefined
+    // Dedup by (event_type, interaction_id) for per-interaction events,
+    // and by event_type alone for fire-once-per-wedding events. Matches
+    // whatever marker was used (signal-inference vs. legacy rescue) so
+    // re-running either path stays idempotent.
     if (e.event_type === 'email_reply_received' && iid) seen.reply.add(`${wid}:${iid}`)
     if (e.event_type === 'tour_scheduled' && iid) seen.tour_scheduled.add(`${wid}:${iid}`)
     if (e.event_type === 'tour_requested' && iid) seen.tour_requested.add(`${wid}:${iid}`)
     if (e.event_type === 'contract_sent' && iid) seen.contract_sent.add(`${wid}:${iid}`)
     if (e.event_type === 'contract_signed' && iid) seen.contract_signed.add(`${wid}:${iid}`)
-    if (e.event_type === 'high_specificity' && src === 'scoring_rescue_date') seen.specificity.add(wid)
+    if (e.event_type === 'high_specificity') seen.specificity.add(wid)
     if (e.event_type === 'sustained_engagement') seen.sustained.add(wid)
-    if (e.event_type === 'high_commitment_signal' && src === 'scoring_rescue_investment') seen.commitment.add(wid)
+    if (e.event_type === 'high_commitment_signal') seen.commitment.add(wid)
   }
 
-  const newEvents: Array<{
-    venue_id: string
-    wedding_id: string
-    event_type: string
-    points: number
-    metadata: Record<string, unknown>
-    occurred_at: string
-  }> = []
+  // Events bundled per-wedding so we can route them through
+  // recordEngagementEventsBatch, which looks up venue-specific points via
+  // getPointsForEvent (falling back to DEFAULT_POINTS). Direct raw inserts
+  // would bypass heat_score_config overrides the venue set up.
+  const perWeddingEvents: Record<
+    string,
+    Array<{ eventType: string; metadata: Record<string, unknown>; occurredAt: string }>
+  > = {}
+  function push(wid: string, eventType: string, metadata: Record<string, unknown>, occurredAt: string) {
+    if (!perWeddingEvents[wid]) perWeddingEvents[wid] = []
+    perWeddingEvents[wid].push({ eventType, metadata, occurredAt })
+  }
 
   const statusTour = new Set<string>()
   const statusProposalSent = new Set<string>()
@@ -222,14 +162,9 @@ async function rescueVenue(venueId: string) {
     for (let idx = 1; idx < inbound.length; idx++) {
       const i = inbound[idx]
       if (seen.reply.has(`${wid}:${i.id}`)) continue
-      newEvents.push({
-        venue_id: venueId,
-        wedding_id: wid,
-        event_type: 'email_reply_received',
-        points: 15,
-        metadata: { interaction_id: i.id, source: 'scoring_rescue_reply' },
-        occurred_at: i.timestamp,
-      })
+      push(wid, 'email_reply_received',
+        { interaction_id: i.id, source: 'signal_inference_reply' },
+        i.timestamp)
     }
 
     // FIX 2 — tour confirmation (scan outbound)
@@ -237,16 +172,11 @@ async function rescueVenue(venueId: string) {
       if (seen.tour_scheduled.has(`${wid}:${i.id}`)) continue
       const hay = `${i.subject ?? ''}\n${i.full_body ?? i.body_preview ?? ''}`
       if (TOUR_CONFIRMATION_PATTERNS.some((r) => r.test(hay))) {
-        newEvents.push({
-          venue_id: venueId,
-          wedding_id: wid,
-          event_type: 'tour_scheduled',
-          points: 20,
-          metadata: { interaction_id: i.id, source: 'scoring_rescue_tour_confirm' },
-          occurred_at: i.timestamp,
-        })
+        push(wid, 'tour_scheduled',
+          { interaction_id: i.id, source: 'signal_inference_tour_confirm' },
+          i.timestamp)
         statusTour.add(wid)
-        break // one tour_scheduled event per wedding is enough
+        break
       }
     }
 
@@ -255,33 +185,21 @@ async function rescueVenue(venueId: string) {
       if (seen.tour_requested.has(`${wid}:${i.id}`)) continue
       const hay = `${i.subject ?? ''}\n${i.full_body ?? i.body_preview ?? ''}`
       if (TOUR_REQUEST_PATTERNS.some((r) => r.test(hay))) {
-        newEvents.push({
-          venue_id: venueId,
-          wedding_id: wid,
-          event_type: 'tour_requested',
-          points: 15,
-          metadata: { interaction_id: i.id, source: 'scoring_rescue_tour_request' },
-          occurred_at: i.timestamp,
-        })
+        push(wid, 'tour_requested',
+          { interaction_id: i.id, source: 'signal_inference_tour_request' },
+          i.timestamp)
         break
       }
     }
 
-    // FIX 4a — contract sent (proposal_sent status). Intermediate step
-    // between tour and booked — coordinator sent an offer. Scanned on
-    // outbound only since this is venue-initiated.
+    // FIX 4a — contract sent → proposal_sent status
     for (const i of outbound) {
       if (seen.contract_sent.has(`${wid}:${i.id}`)) continue
       const hay = `${i.subject ?? ''}\n${i.full_body ?? i.body_preview ?? ''}`
       if (PROPOSAL_SENT_PATTERNS.some((r) => r.test(hay))) {
-        newEvents.push({
-          venue_id: venueId,
-          wedding_id: wid,
-          event_type: 'contract_sent',
-          points: 30,
-          metadata: { interaction_id: i.id, source: 'scoring_rescue_proposal' },
-          occurred_at: i.timestamp,
-        })
+        push(wid, 'contract_sent',
+          { interaction_id: i.id, source: 'signal_inference_proposal' },
+          i.timestamp)
         statusProposalSent.add(wid)
         break
       }
@@ -292,14 +210,9 @@ async function rescueVenue(venueId: string) {
       if (seen.contract_signed.has(`${wid}:${i.id}`)) continue
       const hay = `${i.subject ?? ''}\n${i.full_body ?? i.body_preview ?? ''}`
       if (BOOKING_PATTERNS.some((r) => r.test(hay))) {
-        newEvents.push({
-          venue_id: venueId,
-          wedding_id: wid,
-          event_type: 'contract_signed',
-          points: 50,
-          metadata: { interaction_id: i.id, source: 'scoring_rescue_booking' },
-          occurred_at: i.timestamp,
-        })
+        push(wid, 'contract_signed',
+          { interaction_id: i.id, source: 'signal_inference_booking' },
+          i.timestamp)
         statusBooked.add(wid)
         break
       }
@@ -310,14 +223,9 @@ async function rescueVenue(venueId: string) {
       for (const i of inbound) {
         const hay = `${i.subject ?? ''}\n${i.full_body ?? i.body_preview ?? ''}`
         if (DATE_SPECIFICITY.test(hay)) {
-          newEvents.push({
-            venue_id: venueId,
-            wedding_id: wid,
-            event_type: 'high_specificity',
-            points: 5,
-            metadata: { interaction_id: i.id, source: 'scoring_rescue_date' },
-            occurred_at: i.timestamp,
-          })
+          push(wid, 'high_specificity',
+            { interaction_id: i.id, source: 'signal_inference_date' },
+            i.timestamp)
           break
         }
       }
@@ -326,41 +234,32 @@ async function rescueVenue(venueId: string) {
     // FIX 6 — thread depth (≥5 inbound messages)
     if (!seen.sustained.has(wid) && inbound.length >= 5) {
       const last = inbound[inbound.length - 1]
-      newEvents.push({
-        venue_id: venueId,
-        wedding_id: wid,
-        event_type: 'sustained_engagement',
-        points: Math.min(15, (inbound.length - 4) * 3),
-        metadata: {
-          inbound_count: inbound.length,
-          source: 'scoring_rescue_thread_depth',
-        },
-        occurred_at: last.timestamp,
-      })
+      push(wid, 'sustained_engagement',
+        { inbound_count: inbound.length, source: 'signal_inference_thread_depth' },
+        last.timestamp)
     }
 
     // FIX 7 — coordinator investment (≥3 outbound replies)
     if (!seen.commitment.has(wid) && outbound.length >= 3) {
       const last = outbound[outbound.length - 1]
-      newEvents.push({
-        venue_id: venueId,
-        wedding_id: wid,
-        event_type: 'high_commitment_signal',
-        points: 10,
-        metadata: {
-          outbound_count: outbound.length,
-          source: 'scoring_rescue_investment',
-        },
-        occurred_at: last.timestamp,
-      })
+      push(wid, 'high_commitment_signal',
+        { outbound_count: outbound.length, source: 'signal_inference_investment' },
+        last.timestamp)
     }
   }
 
   // Summarise
   const byType: Record<string, number> = {}
-  for (const e of newEvents) byType[e.event_type] = (byType[e.event_type] ?? 0) + 1
+  let totalEvents = 0
+  for (const evs of Object.values(perWeddingEvents)) {
+    for (const e of evs) {
+      byType[e.eventType] = (byType[e.eventType] ?? 0) + 1
+      totalEvents++
+    }
+  }
   console.log(`  weddings analysed: ${Object.keys(perWedding).length}`)
-  console.log(`  new events to insert: ${newEvents.length}`)
+  console.log(`  weddings with new events: ${Object.keys(perWeddingEvents).length}`)
+  console.log(`  new events to insert: ${totalEvents}`)
   for (const [t, n] of Object.entries(byType)) console.log(`    ${t.padEnd(26)} ${n}`)
   console.log(`  status → tour_scheduled: ${statusTour.size}`)
   console.log(`  status → proposal_sent:  ${statusProposalSent.size}`)
@@ -368,16 +267,18 @@ async function rescueVenue(venueId: string) {
 
   if (!APPLY) return
 
-  // Insert events in chunks
-  for (let i = 0; i < newEvents.length; i += 200) {
-    const chunk = newEvents.slice(i, i + 200)
-    const { error } = await sb.from('engagement_events').insert(chunk)
-    if (error) {
-      console.error('  insert error:', error.message)
-      return
+  // Route through recordEngagementEventsBatch so points come from
+  // heat_score_config (with DEFAULT_POINTS fallback), not hard-coded here.
+  // Batched per-wedding so the recalc-at-end inside recordEngagementEventsBatch
+  // runs once per wedding instead of per event.
+  for (const [wid, evs] of Object.entries(perWeddingEvents)) {
+    try {
+      await recordEngagementEventsBatch(venueId, wid, evs)
+    } catch (err) {
+      console.error(`  insert failed for wedding ${wid.slice(0, 8)}:`, (err as Error).message)
     }
   }
-  console.log(`  inserted ${newEvents.length} events.`)
+  console.log(`  inserted ${totalEvents} events across ${Object.keys(perWeddingEvents).length} weddings.`)
 
   // Status advances — apply highest-priority state FIRST so earlier
   // states don't stomp a more-progressed wedding.
