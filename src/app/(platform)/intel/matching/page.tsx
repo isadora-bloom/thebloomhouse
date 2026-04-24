@@ -203,6 +203,11 @@ function MatchingPageInner() {
   const fetchData = useCallback(async () => {
     const supabase = getSupabase()
     try {
+      // Every query explicitly filters by VENUE_ID. Relying on RLS alone
+      // caused a bleed: browser-client queries can read cross-venue rows
+      // when demo_anon_select RLS fires, so a user scoped to venue X
+      // would see counts / rows from venue Y. Explicit scoping matches
+      // what the user expects from the scope indicator.
       const [queueRes, signalPairRes, peopleRes, contactRes, aiRes] = await Promise.all([
         // Person↔person rows — the canonical dedup UI.
         supabase
@@ -210,6 +215,7 @@ function MatchingPageInner() {
           .select(
             'id, person_a_id, person_b_id, match_type, confidence, status, created_at, signals, tier'
           )
+          .eq('venue_id', VENUE_ID)
           .in('status', ['pending', 'snoozed'])
           .not('person_a_id', 'is', null)
           .order('confidence', { ascending: false }),
@@ -220,11 +226,18 @@ function MatchingPageInner() {
           .select(
             'id, signal_a_id, signal_b_id, match_type, confidence, status, created_at, signals, tier'
           )
+          .eq('venue_id', VENUE_ID)
           .in('status', ['pending', 'snoozed'])
           .not('signal_a_id', 'is', null)
           .order('confidence', { ascending: false }),
-        supabase.from('people').select('id, first_name, last_name, wedding_id'),
-        supabase.from('contacts').select('id, person_id, type, value'),
+        supabase
+          .from('people')
+          .select('id, first_name, last_name, wedding_id')
+          .eq('venue_id', VENUE_ID),
+        supabase
+          .from('contacts')
+          .select('id, person_id, type, value')
+          .eq('venue_id', VENUE_ID),
         supabase
           .from('venue_ai_config')
           .select('ai_name')
@@ -263,6 +276,7 @@ function MatchingPageInner() {
         let query = supabase
           .from('tangential_signals')
           .select('id, signal_type, source_context, signal_date, matched_person_id, extracted_identity')
+          .eq('venue_id', VENUE_ID)
         if (personIds.size > 0 && signalFetchIds.size > 0) {
           // Either in matched_person_id list OR in signal id list.
           query = query.or(

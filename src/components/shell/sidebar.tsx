@@ -336,24 +336,59 @@ export function Sidebar({ isDemo = false }: { isDemo?: boolean }) {
         }
       })
 
-      // Fetch new insight count for sidebar badge
-      supabase
+      // Fetch new insight count for sidebar badge. MUST filter by the
+      // currently-scoped venue so the number matches what /intel/insights
+      // actually renders. Without this, in demo mode the browser client
+      // hits demo_anon_select RLS and counts insights across all demo
+      // venues — a user scoped to Rixey saw Hawthorne's 8 insights even
+      // though Rixey had 0.
+      //
+      // Read venueId from bloom_scope cookie (same source the page uses).
+      // For group/company scope, we leave the single-venue filter off so
+      // the badge aggregates — same behaviour as portfolio-level pages.
+      let scopedVenueId: string | null = null
+      let scopeLevelForCount: string = 'venue'
+      try {
+        const raw = document.cookie
+          .split('; ')
+          .find((c) => c.startsWith('bloom_scope='))
+          ?.split('=')[1]
+        if (raw) {
+          const parsed = JSON.parse(decodeURIComponent(raw))
+          scopeLevelForCount = parsed.level || 'venue'
+          if (scopeLevelForCount === 'venue' && parsed.venueId) {
+            scopedVenueId = parsed.venueId
+          }
+        }
+      } catch {
+        /* fall back to no filter */
+      }
+
+      let insightQ = supabase
         .from('intelligence_insights')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'new')
         .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
-        .then(({ count: insightsCount }) => {
-          setInsightCount(insightsCount ?? 0)
-        })
+      if (scopedVenueId) {
+        insightQ = insightQ.eq('venue_id', scopedVenueId)
+      }
+      insightQ.then(({ count: insightsCount }) => {
+        setInsightCount(insightsCount ?? 0)
+      })
 
-      // Fetch pending Omi orphans count for sidebar badge
-      supabase
+      // Fetch pending Omi orphans count for sidebar badge. Same venue-scoping
+      // concern as insights — a user at Rixey shouldn't see Hawthorne's
+      // pending Omi orphans in their badge.
+      let orphanQ = supabase
         .from('tour_transcript_orphans')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'pending')
-        .then(({ count: orphanCount }) => {
-          setOmiOrphanCount(orphanCount ?? 0)
-        })
+      if (scopedVenueId) {
+        orphanQ = orphanQ.eq('venue_id', scopedVenueId)
+      }
+      orphanQ.then(({ count: orphanCount }) => {
+        setOmiOrphanCount(orphanCount ?? 0)
+      })
     })
   }, [])
 

@@ -15,6 +15,7 @@ import {
   ArrowRight,
 } from 'lucide-react'
 import { UpgradeGate } from '@/components/ui/upgrade-gate'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -121,6 +122,7 @@ function ClientRowSkeleton() {
 
 function ClientsPageInner() {
   const router = useRouter()
+  const VENUE_ID = useVenueId()
   const [weddings, setWeddings] = useState<WeddingRow[]>([])
   const [people, setPeople] = useState<PersonRow[]>([])
   const [contacts, setContacts] = useState<ContactRow[]>([])
@@ -133,10 +135,28 @@ function ClientsPageInner() {
   const fetchData = useCallback(async () => {
     const supabase = getSupabase()
     try {
+      // Scoped to current venue. Previous version had no filter — relied
+      // on RLS which permits cross-venue reads through demo_anon_select
+      // when a browser session has even a stale demo cookie. Showed a
+      // Rixey user Hawthorne's demo data in the mixed case.
+      //
+      // For multi-venue company/group views, /intel/portfolio +
+      // /intel/company are the cross-venue aggregates. This page stays
+      // single-venue for simplicity.
       const [weddingRes, personRes, contactRes] = await Promise.all([
-        supabase.from('weddings').select('id, venue_id, status, booking_value, wedding_date, source, created_at').order('created_at', { ascending: false }),
-        supabase.from('people').select('id, wedding_id, first_name, last_name, role, email, phone'),
-        supabase.from('contacts').select('id, person_id, type, value'),
+        supabase
+          .from('weddings')
+          .select('id, venue_id, status, booking_value, wedding_date, source, created_at')
+          .eq('venue_id', VENUE_ID)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('people')
+          .select('id, wedding_id, first_name, last_name, role, email, phone')
+          .eq('venue_id', VENUE_ID),
+        supabase
+          .from('contacts')
+          .select('id, person_id, type, value')
+          .eq('venue_id', VENUE_ID),
       ])
       if (weddingRes.error) throw weddingRes.error
       if (personRes.error) throw personRes.error
@@ -151,7 +171,7 @@ function ClientsPageInner() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [VENUE_ID])
 
   useEffect(() => {
     fetchData()
