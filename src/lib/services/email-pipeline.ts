@@ -482,8 +482,24 @@ export async function processIncomingEmail(
   const rawFromEmail = extractEmailAddress(email.from)
   const rawFromName = extractName(email.from)
 
+  // Step 1a.0: Scheduling-tool pre-check. Calendly / Acuity / HoneyBook /
+  // Dubsado emails come from notifications@calendly.com and friends —
+  // which matchesUniversalIgnore correctly flags as "no-reply/bounce" on
+  // the RAW from. Running detectSchedulingEvent first lets us fall
+  // through to the normal pipeline (where the parser below reroutes
+  // contact to the real invitee) instead of silently dropping the
+  // signal. detectSchedulingEvent is a pure function, ~microseconds —
+  // cheap to always run first.
+  const schedulingPreCheck = detectSchedulingEvent({
+    from: email.from,
+    subject: email.subject,
+    body: email.body,
+  })
+
   // Step 1a: Universal auto-ignore — no-reply / bounces / postmasters.
-  if (matchesUniversalIgnore(rawFromEmail)) {
+  // Bypassed when a scheduling tool matched above; those use no-reply
+  // addresses by design but carry meaningful event payload.
+  if (!schedulingPreCheck && matchesUniversalIgnore(rawFromEmail)) {
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
 
@@ -494,8 +510,12 @@ export async function processIncomingEmail(
   // inquiry from that marketplace flow through as a cold lead. Runs only
   // for action='ignore' at this stage — no_draft is handled post-rewrite
   // below so learned rules on the lead's own domain still work.
+  // Scheduling-tool senders bypass: the venue's venue_email_filters may
+  // still have a stale ignore rule on calendly.com (the default before
+  // 2026-04-24). We bypass it here because the scheduling-tool parser
+  // fired — meaning there's real booking signal to capture.
   const earlyFilterHit = await matchFilter(venueId, rawFromEmail, email.labels ?? [])
-  if (earlyFilterHit?.action === 'ignore') {
+  if (earlyFilterHit?.action === 'ignore' && !schedulingPreCheck) {
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
 
@@ -513,19 +533,10 @@ export async function processIncomingEmail(
     ownEmails
   )
 
-  // Step 1a.55: Scheduling-tool detection (Calendly, Acuity, HoneyBook,
-  // Dubsado). These are confirmations / contract / payment notifications
-  // for an EXISTING lead, not a new inquiry. The email from header is the
-  // tool's own address but the real invitee is inside the body. Swap in
-  // the invitee's email for contact resolution so the confirmation lands
-  // on the right wedding, then fire the matching engagement event after
-  // persistence. White-label — detectSchedulingEvent keys on tool domains,
-  // not venue-specific rules.
-  const schedulingEvent: SchedulingEvent | null = detectSchedulingEvent({
-    from: email.from,
-    subject: email.subject,
-    body: email.body,
-  })
+  // Step 1a.55: Scheduling-tool detection already ran at 1a.0 to bypass
+  // the universal-ignore short-circuit. Reuse the same result here so
+  // we don't double-parse the body.
+  const schedulingEvent: SchedulingEvent | null = schedulingPreCheck
 
   const fromEmail = formLead?.leadEmail ?? schedulingEvent?.inviteeEmail ?? rawFromEmail
   // When a form relay or scheduling tool fires, the raw From display
