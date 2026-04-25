@@ -201,12 +201,76 @@ async function getPointsForEvent(
 }
 
 // ---------------------------------------------------------------------------
+// Idempotency
+// ---------------------------------------------------------------------------
+
+/**
+ * Event types that should fire AT MOST ONCE per wedding regardless of
+ * how many emails / signals come in. Repeat firings used to compound
+ * (Knot inquiry + Calendly booking both fired initial_inquiry, then
+ * mergePeople consolidated → wedding ended up with 2× initial_inquiry,
+ * +80 base points, distorted heat). Listed here, dedup runs at insert.
+ */
+const ONE_PER_WEDDING_EVENTS = new Set([
+  'initial_inquiry',
+  'sustained_engagement',
+  'high_commitment_signal',
+  'high_specificity',
+  'family_mentioned',
+])
+
+/**
+ * Decide whether to skip inserting an event because it would duplicate
+ * one already on the wedding. Two rules:
+ *   1. ONE_PER_WEDDING_EVENTS: skip if ANY row of this event_type
+ *      already exists on the wedding.
+ *   2. Per-interaction events: skip if a row with the same
+ *      (event_type, occurred_at) already exists. Backfills running
+ *      twice would otherwise insert exact duplicates.
+ *
+ * Returns { skip: true, reason } when a duplicate is detected.
+ */
+async function shouldSkipDuplicate(
+  supabase: ReturnType<typeof createServiceClient>,
+  weddingId: string,
+  eventType: string,
+  occurredAt: string | null
+): Promise<{ skip: boolean; reason?: string }> {
+  if (ONE_PER_WEDDING_EVENTS.has(eventType)) {
+    const { data } = await supabase
+      .from('engagement_events')
+      .select('id')
+      .eq('wedding_id', weddingId)
+      .eq('event_type', eventType)
+      .limit(1)
+    if (data && data.length > 0) return { skip: true, reason: 'one-per-wedding' }
+    return { skip: false }
+  }
+  // Per-interaction events — exact (type, time) match means a re-run.
+  if (occurredAt) {
+    const { data } = await supabase
+      .from('engagement_events')
+      .select('id')
+      .eq('wedding_id', weddingId)
+      .eq('event_type', eventType)
+      .eq('occurred_at', occurredAt)
+      .limit(1)
+    if (data && data.length > 0) return { skip: true, reason: 'same (type, occurred_at)' }
+  }
+  return { skip: false }
+}
+
+// ---------------------------------------------------------------------------
 // Exported: recordEngagementEvent
 // ---------------------------------------------------------------------------
 
 /**
  * Record an engagement event for a wedding lead. Inserts the event,
  * recalculates the heat score, and updates the wedding record.
+ *
+ * Idempotent: skips insertion if the event would duplicate an existing
+ * one on this wedding (one-per-wedding event types, or same
+ * event_type+occurred_at). The caller never has to dedup.
  */
 export async function recordEngagementEvent(
   venueId: string,
@@ -217,9 +281,12 @@ export async function recordEngagementEvent(
 ): Promise<HeatScoreResult> {
   const supabase = createServiceClient()
 
-  // Get points for this event type
-  const points = await getPointsForEvent(venueId, eventType)
+  const dup = await shouldSkipDuplicate(supabase, weddingId, eventType, occurredAt ?? null)
+  if (dup.skip) {
+    return recalculateHeatScore(venueId, weddingId)
+  }
 
+  const points = await getPointsForEvent(venueId, eventType)
   const row: Record<string, unknown> = {
     venue_id: venueId,
     wedding_id: weddingId,
@@ -231,7 +298,6 @@ export async function recordEngagementEvent(
 
   await supabase.from('engagement_events').insert(row)
 
-  // Recalculate and return
   return recalculateHeatScore(venueId, weddingId)
 }
 
@@ -259,22 +325,52 @@ export async function recordEngagementEventsBatch(
   }
 
   const supabase = createServiceClient()
-  const rows = await Promise.all(
-    events.map(async (e) => {
-      const row: Record<string, unknown> = {
-        venue_id: venueId,
-        wedding_id: weddingId,
-        event_type: e.eventType,
-        points: await getPointsForEvent(venueId, e.eventType),
-        metadata: e.metadata ?? {},
-      }
-      const eventOccurredAt = e.occurredAt ?? occurredAt
-      if (eventOccurredAt) row.occurred_at = eventOccurredAt
-      return row
-    })
-  )
+  // Build candidate rows + filter out duplicates BEFORE the insert.
+  // Same dedup rules as recordEngagementEvent. Also dedup within the
+  // batch itself — caller could pass two of the same event type for
+  // the same wedding; only insert once.
+  const candidates: Array<{ row: Record<string, unknown>; eventType: string; occurredAt: string | null }> = []
+  for (const e of events) {
+    const points = await getPointsForEvent(venueId, e.eventType)
+    const eventOccurredAt = e.occurredAt ?? occurredAt ?? null
+    const row: Record<string, unknown> = {
+      venue_id: venueId,
+      wedding_id: weddingId,
+      event_type: e.eventType,
+      points,
+      metadata: e.metadata ?? {},
+    }
+    if (eventOccurredAt) row.occurred_at = eventOccurredAt
+    candidates.push({ row, eventType: e.eventType, occurredAt: eventOccurredAt })
+  }
 
-  await supabase.from('engagement_events').insert(rows)
+  // Within-batch dedup: drop later occurrences of one-per-wedding types
+  // and exact (type, time) collisions before hitting the DB.
+  const seenOnceTypes = new Set<string>()
+  const seenInteractionKeys = new Set<string>()
+  const filtered: typeof candidates = []
+  for (const c of candidates) {
+    if (ONE_PER_WEDDING_EVENTS.has(c.eventType)) {
+      if (seenOnceTypes.has(c.eventType)) continue
+      seenOnceTypes.add(c.eventType)
+    } else if (c.occurredAt) {
+      const key = `${c.eventType}@${c.occurredAt}`
+      if (seenInteractionKeys.has(key)) continue
+      seenInteractionKeys.add(key)
+    }
+    filtered.push(c)
+  }
+
+  // DB-level dedup: skip rows whose duplicate already exists.
+  const toInsert: Record<string, unknown>[] = []
+  for (const c of filtered) {
+    const dup = await shouldSkipDuplicate(supabase, weddingId, c.eventType, c.occurredAt)
+    if (!dup.skip) toInsert.push(c.row)
+  }
+
+  if (toInsert.length > 0) {
+    await supabase.from('engagement_events').insert(toInsert)
+  }
 
   return recalculateHeatScore(venueId, weddingId)
 }
