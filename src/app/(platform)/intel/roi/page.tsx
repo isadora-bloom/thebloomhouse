@@ -48,10 +48,13 @@ const EMPTY_METRICS: ROIMetrics = {
   totalDrafts: 0,
 }
 
-// Industry average: 18 hours to first response
-const INDUSTRY_AVG_RESPONSE_HOURS = 18
-// Industry average: 8 minutes to manually draft a response
-const MINUTES_PER_MANUAL_DRAFT = 8
+// Time we assume a coordinator spends typing one response from scratch.
+// Used as the multiplier for the "Hours Saved" card: drafts × MINUTES_PER_DRAFT.
+// This is an internal model assumption, not an industry-benchmarked
+// figure. We don't claim it on the UI as an industry average — the
+// label says "estimated time per response" so the number is honest about
+// what it represents.
+const ESTIMATED_MINUTES_PER_DRAFT = 8
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -256,8 +259,8 @@ export default function ROIDashboardPage() {
         .lte('created_at', lastMonthEnd.toISOString())
       const { count: draftsLastMonth } = await vf(draftsLastQ as never)
 
-      const hoursSaved = Math.round(((draftsThisMonth ?? 0) * MINUTES_PER_MANUAL_DRAFT) / 60 * 10) / 10
-      const hoursSavedLastMonth = Math.round(((draftsLastMonth ?? 0) * MINUTES_PER_MANUAL_DRAFT) / 60 * 10) / 10
+      const hoursSaved = Math.round(((draftsThisMonth ?? 0) * ESTIMATED_MINUTES_PER_DRAFT) / 60 * 10) / 10
+      const hoursSavedLastMonth = Math.round(((draftsLastMonth ?? 0) * ESTIMATED_MINUTES_PER_DRAFT) / 60 * 10) / 10
 
       // 5. Bookings this month vs last month + pipeline value
       const bookingsQ = supabase
@@ -347,13 +350,7 @@ export default function ROIDashboardPage() {
       icon: Clock,
       color: 'text-teal-600',
       bg: 'bg-teal-50',
-      trend:
-        metrics.avgResponseMinutes !== null ? (
-          <TrendBadge
-            direction="up"
-            label={`${Math.round(INDUSTRY_AVG_RESPONSE_HOURS * 60 / Math.max(metrics.avgResponseMinutes, 1))}x faster than industry avg (${INDUSTRY_AVG_RESPONSE_HOURS}h)`}
-          />
-        ) : null,
+      trend: null,
       note:
         metrics.avgResponseMinutes === null ? (
           <EmptyNote text="Needs inbound + outbound interactions to calculate." />
@@ -499,16 +496,17 @@ export default function ROIDashboardPage() {
             <Clock className="w-4 h-4 text-sage-400 mt-0.5 shrink-0" />
             <span>
               <strong className="text-sage-800">Avg First Response</strong> measures
-              the time between an inbound email and the first outbound reply for that
-              wedding. Industry average is {INDUSTRY_AVG_RESPONSE_HOURS} hours.
+              the time between an inbound email and the first outbound reply on
+              the same Gmail thread.
             </span>
           </li>
           <li className="flex items-start gap-3">
             <Timer className="w-4 h-4 text-sage-400 mt-0.5 shrink-0" />
             <span>
-              <strong className="text-sage-800">Hours Saved</strong> is based on{' '}
-              {MINUTES_PER_MANUAL_DRAFT} minutes per manually written response
-              (industry average), multiplied by the number of AI drafts generated.
+              <strong className="text-sage-800">Hours Saved</strong> assumes{' '}
+              {ESTIMATED_MINUTES_PER_DRAFT} minutes per response written from
+              scratch, multiplied by the number of AI drafts generated. This is
+              a model estimate, not an industry benchmark.
             </span>
           </li>
           <li className="flex items-start gap-3">

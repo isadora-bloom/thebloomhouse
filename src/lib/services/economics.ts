@@ -190,14 +190,31 @@ export async function getLatestIndicators(): Promise<Record<string, number>> {
 // Demand score calculation
 // ---------------------------------------------------------------------------
 
-// Historical averages (approximate baselines for normalization)
-const AVERAGES: Record<string, number> = {
+// Historical averages — long-term FRED baselines used to normalize each
+// indicator's current value into a "deviation from average" signal.
+// Exported so the dashboard + market-pulse pages can use the same
+// numbers; previously each surface had its own copy and any update to
+// one drifted the others.
+//
+// Sources (rough averages, last 30 years):
+//   consumer_sentiment       — UMCSENT mean ≈ 87, but recent decade
+//                              skews lower; using 70 as the normal floor
+//   personal_savings_rate    — PSAVERT 30y mean ≈ 7.5%
+//   consumer_confidence      — CONCCONF index ≈ 100 (1985 = 100 by def)
+//   housing_starts           — HOUST 1950–2020 mean ≈ 1.4M annualized
+//   disposable_income_real   — DSPIC96 inflation-adjusted recent average
+//
+// These are NATIONAL economic baselines, not venue-specific. Don't make
+// them per-venue config unless a venue explicitly opts into a custom
+// regional baseline (which we don't support yet).
+export const ECONOMIC_INDICATOR_AVERAGES: Record<string, number> = {
   consumer_sentiment: 70,
   personal_savings_rate: 7.5,
   consumer_confidence: 100,
   housing_starts: 1400,
   disposable_income_real: 15000,
 }
+const AVERAGES = ECONOMIC_INDICATOR_AVERAGES
 
 /**
  * Composite economic signals into a 0–100 demand score.

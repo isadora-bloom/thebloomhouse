@@ -315,15 +315,12 @@ function AlertCard({
 
 // ---------------------------------------------------------------------------
 // Demand score calculation (mirrors economics.ts)
+// Source the baselines from economics.ts so a change to one surface
+// can't silently drift the other. Local AVERAGES alias preserves the
+// existing call sites.
 // ---------------------------------------------------------------------------
 
-const AVERAGES: Record<string, number> = {
-  consumer_sentiment: 70,
-  personal_savings_rate: 7.5,
-  consumer_confidence: 100,
-  housing_starts: 1400,
-  disposable_income_real: 15000,
-}
+import { ECONOMIC_INDICATOR_AVERAGES as AVERAGES } from '@/lib/services/economics'
 
 function clampVal(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))

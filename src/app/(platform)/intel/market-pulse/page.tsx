@@ -278,15 +278,23 @@ function formatWeekLabel(week: string): string {
 // Outdoor event score: (ideal temp proximity + low precip) = 0-100
 // ---------------------------------------------------------------------------
 
-function computeOutdoorScore(avgTemp: number, totalPrecip: number): number {
-  // Ideal temp range: 65-78F
+function computeOutdoorScore(
+  avgTemp: number,
+  totalPrecip: number,
+  /** Per-venue "ideal" outdoor temp range. A beach venue in Florida is
+   *  comfortable at 80°F+; a mountain venue stays comfortable below 65.
+   *  Defaults work for the average US wedding venue but should pass
+   *  through from venue_config when available. */
+  idealMin = 65,
+  idealMax = 78
+): number {
   let tempScore: number
-  if (avgTemp >= 65 && avgTemp <= 78) {
+  if (avgTemp >= idealMin && avgTemp <= idealMax) {
     tempScore = 100
-  } else if (avgTemp < 65) {
-    tempScore = Math.max(0, 100 - (65 - avgTemp) * 3)
+  } else if (avgTemp < idealMin) {
+    tempScore = Math.max(0, 100 - (idealMin - avgTemp) * 3)
   } else {
-    tempScore = Math.max(0, 100 - (avgTemp - 78) * 4)
+    tempScore = Math.max(0, 100 - (avgTemp - idealMax) * 4)
   }
 
   // Precip penalty: 0 inches = full score, 4+ inches = 0
@@ -1830,6 +1838,10 @@ export default function MarketPulsePage() {
   const [weatherData, setWeatherData] = useState<WeatherRow[]>([])
   const [searchTrends, setSearchTrends] = useState<SearchTrend[]>([])
   const [confidenceHistory, setConfidenceHistory] = useState<{ date: string; value: number }[]>([])
+  // Venue's outdoor "ideal temp" config — used by computeOutdoorScore
+  // so a beach venue scores Aug differently from a mountain venue.
+  // Defaults match the 65/78 fallback when no row found.
+  const [outdoorTempRange, setOutdoorTempRange] = useState<{ min: number; max: number }>({ min: 65, max: 78 })
   const [error, setError] = useState<string | null>(null)
 
   // ---- Fetch all data ----
@@ -1845,6 +1857,23 @@ export default function MarketPulsePage() {
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
 
       const season = getCurrentSeason()
+
+      // Pull venue's outdoor temp config alongside everything else so the
+      // outdoor-score memo below uses the right ranges — beach vs mountain.
+      const venueConfigPromise = supabase
+        .from('venue_config')
+        .select('outdoor_ideal_temp_min, outdoor_ideal_temp_max')
+        .eq('venue_id', venueId)
+        .maybeSingle()
+        .then((res) => {
+          const row = res.data as { outdoor_ideal_temp_min?: number; outdoor_ideal_temp_max?: number } | null
+          if (row) {
+            setOutdoorTempRange({
+              min: row.outdoor_ideal_temp_min ?? 65,
+              max: row.outdoor_ideal_temp_max ?? 78,
+            })
+          }
+        })
 
       const [
         indicatorsRes,
@@ -1899,6 +1928,9 @@ export default function MarketPulsePage() {
           .gte('date', twoYearsAgo.toISOString().split('T')[0])
           .order('date', { ascending: true }),
       ])
+      // Wait for venue config in parallel — UI shouldn't render with
+      // wrong temp range and then flicker correct.
+      await venueConfigPromise
 
       // Process economic indicators — deduplicate, take latest per name
       const latestIndicators: Record<string, number> = {}
@@ -2047,10 +2079,10 @@ export default function MarketPulsePage() {
           month: getMonthName(monthIdx),
           avgTemp: Math.round(avgTemp * 10) / 10,
           totalPrecip: Math.round(totalPrecip * 10) / 10,
-          outdoorScore: computeOutdoorScore(avgTemp, totalPrecip),
+          outdoorScore: computeOutdoorScore(avgTemp, totalPrecip, outdoorTempRange.min, outdoorTempRange.max),
         }
       })
-  }, [weatherData])
+  }, [weatherData, outdoorTempRange.min, outdoorTempRange.max])
 
   // ---- Compute 3-year monthly climate rows (from migration 035 data) ----
   // Rows where year/month/outdoor_event_score are populated are monthly

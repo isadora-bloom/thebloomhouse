@@ -717,20 +717,28 @@ export default function EmailLearningPage() {
             ))}
           </div>
 
-          {/* Milestone markers */}
-          <div className="flex items-center gap-4 mt-4 pt-4 border-t border-sage-100">
-            {[
-              { label: 'Week 1', target: '~60%', desc: 'Getting to know you' },
-              { label: 'Week 2', target: '~78%', desc: 'Finding your rhythm' },
-              { label: 'Month 1', target: '~93%', desc: 'Sounding like you' },
-              { label: 'Month 2+', target: '97%+', desc: 'Your voice, perfected' },
-            ].map((m) => (
-              <div key={m.label} className="flex-1 text-center">
-                <p className="text-xs font-semibold text-sage-700">{m.target}</p>
-                <p className="text-[10px] text-sage-500">{m.label}</p>
-                <p className="text-[10px] text-sage-400">{m.desc}</p>
-              </div>
-            ))}
+          {/* Typical-trajectory markers — these are an aspirational
+              picture of what voice training tends to look like across
+              venues, not personalised projections. Labelled as such so
+              coordinators don't read them as their own numbers. */}
+          <div className="mt-4 pt-4 border-t border-sage-100">
+            <p className="text-[10px] uppercase tracking-wider text-sage-500 font-semibold mb-2">
+              Typical trajectory (not your venue&apos;s numbers)
+            </p>
+            <div className="flex items-center gap-4">
+              {[
+                { label: 'Week 1', target: '~60%', desc: 'Getting to know you' },
+                { label: 'Week 2', target: '~78%', desc: 'Finding your rhythm' },
+                { label: 'Month 1', target: '~93%', desc: 'Sounding like you' },
+                { label: 'Month 2+', target: '97%+', desc: 'Your voice, perfected' },
+              ].map((m) => (
+                <div key={m.label} className="flex-1 text-center">
+                  <p className="text-xs font-semibold text-sage-500">{m.target}</p>
+                  <p className="text-[10px] text-sage-500">{m.label}</p>
+                  <p className="text-[10px] text-sage-400">{m.desc}</p>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}

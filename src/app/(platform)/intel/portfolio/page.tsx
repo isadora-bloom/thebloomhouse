@@ -655,7 +655,13 @@ export default function PortfolioOverviewPage() {
               {/* Clickable card body */}
               <button
                 onClick={() => {
-                  document.cookie = `bloom_scope=${encodeURIComponent(JSON.stringify({ level: 'venue', venueId: vc.id, venueName: vc.name, companyName: 'The Crestwood Collection' }))}; path=/; max-age=${60 * 60 * 24 * 365}`
+                  // Carry the user's actual company name across the
+                  // scope switch — hardcoding "The Crestwood Collection"
+                  // here stamped the demo org name onto every real
+                  // venue's cookie. scope.companyName comes from
+                  // organisations.name resolved by useScope.
+                  const companyName = scope.companyName ?? null
+                  document.cookie = `bloom_scope=${encodeURIComponent(JSON.stringify({ level: 'venue', venueId: vc.id, venueName: vc.name, companyName, orgId: scope.orgId }))}; path=/; max-age=${60 * 60 * 24 * 365}`
                   document.cookie = `bloom_venue=${vc.id}; path=/; max-age=${60 * 60 * 24 * 365}`
                   router.push('/intel/dashboard')
                   window.location.reload()
