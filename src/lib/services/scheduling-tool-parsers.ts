@@ -68,6 +68,43 @@ export interface SchedulingEvent {
 
 const EMAIL_RE = /[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g
 
+/**
+ * Strip HTML to plain text before label matching. Calendly / Acuity /
+ * HoneyBook all send HTML-heavy bodies where labels are wrapped in
+ * <strong>, <td>, <div>. Without stripping, the label capture groups
+ * pick up "</strong>" or raw markup instead of the value. Handles:
+ *   - Remove <script> and <style> blocks (content too)
+ *   - Replace <br>, </p>, </div> with newlines (preserves the
+ *     "label / value on next line" pattern the regex relies on)
+ *   - Strip all remaining tags
+ *   - Decode the handful of entities Calendly uses (&amp; &lt; etc.)
+ *   - Collapse runs of blank lines
+ */
+function stripHtml(body: string): string {
+  if (!body.includes('<')) return body // plain text already
+  let s = body
+  // Remove script + style blocks entirely (content unsafe)
+  s = s.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, '')
+  // Block-level tags → newlines so "Label" and "Value" stay on separate lines
+  s = s.replace(/<\/(p|div|tr|td|li|h[1-6]|table|br)\s*\/?>/gi, '\n')
+  s = s.replace(/<br\s*\/?>/gi, '\n')
+  // Strip all remaining tags
+  s = s.replace(/<[^>]+>/g, '')
+  // Decode common entities
+  s = s
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+  // Collapse 3+ blank lines → 2 so the "Label\n\nValue" pattern is
+  // preserved but we don't get 20 blank lines between sections
+  s = s.replace(/\n{3,}/g, '\n\n')
+  return s
+}
+
 /** Extract the first plausible non-sender email from a body. `excludeDomains`
  *  are sender/tool domains we know aren't the invitee. */
 function firstExternalEmail(body: string, excludeDomains: string[]): string | null {
@@ -184,17 +221,31 @@ function extractDatetime(body: string): string | null {
 // after the label. extractLabelled's shape-2 regex handles both.
 function parseCalendly(from: string, subject: string, body: string): SchedulingEvent | null {
   const fromLower = from.toLowerCase()
-  if (!/calendly\.com|calendlymail\.com/.test(fromLower)) return null
+  // Detect Calendly by EITHER sender domain OR body signature. The
+  // sender check catches live ingestion. The body-signature fallback
+  // is needed for re-scanning stored interactions where the pipeline
+  // rewrote from_email to the invitee (so sender no longer shows as
+  // calendly.com). Signature = "A new event has been scheduled" in
+  // combination with "Invitee Email:" — unique to Calendly's format.
+  const hasSender = /calendly\.com|calendlymail\.com/.test(fromLower)
+  const hasCalendlyBody =
+    /A new event has been scheduled|Canceled:.*Calendly|Updated:.*Calendly|View event in Calendly/i.test(body) &&
+    /Invitee Email/i.test(body)
+  if (!hasSender && !hasCalendlyBody) return null
 
-  const inviteeEmail = extractLabelledEmail(body, ['invitee email', 'invitee', 'attendee', 'from'])
-    ?? firstExternalEmail(body, ['calendly.com', 'calendlymail.com'])
+  // Strip HTML once — Calendly bodies are always HTML and regex label
+  // matching picks up "</strong>" instead of the actual value otherwise.
+  const text = stripHtml(body)
+
+  const inviteeEmail = extractLabelledEmail(text, ['invitee email', 'invitee', 'attendee', 'from'])
+    ?? firstExternalEmail(text, ['calendly.com', 'calendlymail.com'])
   if (!inviteeEmail) return null
 
-  const inviteeName = extractLabelled(body, ['invitee', 'attendee', 'name'])
+  const inviteeName = extractLabelled(text, ['invitee', 'attendee', 'name'])
     ?.replace(/\s*\([^)]*@[^)]*\)\s*$/, '').trim() || null
 
   // Extras — Calendly form fields for the venue's inquiry questionnaire
-  const partnerName = extractLabelled(body, [
+  const partnerName = extractLabelled(text, [
     'partners first and last name',
     "partner's first and last name",
     "partner's first and last",
@@ -202,32 +253,32 @@ function parseCalendly(from: string, subject: string, body: string): SchedulingE
     'partner name',
     'partner 2 name',
   ])
-  const partnerEmail = extractLabelledEmail(body, [
+  const partnerEmail = extractLabelledEmail(text, [
     'partners email',
     "partner's email",
     'partner email',
     'partner 2 email',
   ])
-  const phone = extractLabelled(body, ['phone number', 'phone', 'mobile'])
-  const guestCount = extractLabelled(body, [
+  const phone = extractLabelled(text, ['phone number', 'phone', 'mobile'])
+  const guestCount = extractLabelled(text, [
     'do you have a number of invited guests in mind',
     'number of invited guests',
     'number of guests',
     'guest count',
     'guests',
   ])
-  const hearSource = extractLabelled(body, [
+  const hearSource = extractLabelled(text, [
     'where did you first hear about us',
     'where did you hear about us',
     'how did you hear about us',
     'source',
   ])
-  const packageInterest = extractLabelled(body, [
+  const packageInterest = extractLabelled(text, [
     'which package or packages are you interested in',
     'which package',
     'package',
   ])
-  const weddingDateHint = extractLabelled(body, [
+  const weddingDateHint = extractLabelled(text, [
     'do you have an approximate date in mind',
     'approximate date',
     'wedding date',
@@ -235,7 +286,7 @@ function parseCalendly(from: string, subject: string, body: string): SchedulingE
   ])
   // Additional Guests block — value is multi-line; grab every email that
   // follows the label and precedes the next known labelled section.
-  const guestsSection = body.match(/additional guests\s*[:：]?\s*\n([\s\S]*?)(?:\n\s*(?:event date|location|invitee time zone|questions|description)|\n\n\n|$)/i)
+  const guestsSection = text.match(/additional guests\s*[:：]?\s*\n([\s\S]*?)(?:\n\s*(?:event date|location|invitee time zone|questions|description)|\n\n\n|$)/i)
   const additionalGuestEmails = guestsSection
     ? (guestsSection[1].match(EMAIL_RE) ?? []).map((e) => e.toLowerCase())
     : []
@@ -250,7 +301,7 @@ function parseCalendly(from: string, subject: string, body: string): SchedulingE
     kind,
     inviteeEmail,
     inviteeName,
-    eventDatetime: extractLabelled(body, ['event date/time', 'event date', 'time', 'when']) ?? extractDatetime(body),
+    eventDatetime: extractLabelled(text, ['event date/time', 'event date', 'time', 'when']) ?? extractDatetime(text),
     matchedFrom: from,
     extras: {
       partnerName: partnerName ?? null,

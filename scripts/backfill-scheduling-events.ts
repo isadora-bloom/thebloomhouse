@@ -1,20 +1,28 @@
-// Backfill scheduling-tool events (Calendly, Acuity, HoneyBook, Dubsado)
-// on historical interactions that were ingested before
-// scheduling-tool-parsers.ts was wired into the live pipeline.
+// Post-hoc cleanup: walk every interaction whose body is a Calendly /
+// Acuity / HoneyBook / Dubsado notification and repair:
+//   1. Re-link orphaned interactions (wedding_id=null) by finding the
+//      invitee's person → wedding. Create a wedding if the invitee has
+//      no existing one (Calendly booking IS the new-wedding signal).
+//   2. Fire tour_scheduled / contract_sent / etc. events that the
+//      original ingest pipeline missed (before the
+//      scheduling-tool parser landed).
+//   3. Update person names when the Calendly Invitee label provides a
+//      cleaner full name than the existing salvage-from-email ("Taylorm
+//      Smith" → "Taylor Smith"; "Juliabrosenberger" → "Julia ...").
+//   4. Seed partner2 from Calendly extras.partnerName/partnerEmail when
+//      missing — most Calendly booking forms capture the second partner.
 //
-// For every interaction whose sender domain matches a scheduling tool,
-// reparse the body via detectSchedulingEvent, re-link the interaction to
-// the correct wedding (via invitee email → people → weddings), fire the
-// matching engagement_event, and advance status.
+// Detection now works against stored interactions even though
+// from_email was rewritten to the invitee at ingest time — the parser
+// recognises Calendly by body signature + sender domain.
 //
-// White-label: works on any venue. --all to rescue every non-demo venue.
-// Idempotent: dedupes by (wedding_id, interaction_id) on event type.
+// Idempotent: dedupes engagement events by (wedding_id, event_type,
+// interaction_id) metadata. Re-running is safe.
 //
 // Usage:
 //   npx tsx scripts/backfill-scheduling-events.ts                # dry-run Rixey
 //   npx tsx scripts/backfill-scheduling-events.ts --apply        # execute Rixey
 //   npx tsx scripts/backfill-scheduling-events.ts --apply --all  # every real venue
-//   npx tsx scripts/backfill-scheduling-events.ts --apply --venue <uuid>
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
 import {
@@ -24,6 +32,7 @@ import {
   type SchedulingEvent,
 } from '../src/lib/services/scheduling-tool-parsers'
 import { recordEngagementEventsBatch, recalculateHeatScore } from '../src/lib/services/heat-mapping'
+import { resolveIdentity } from '../src/lib/services/identity-resolution'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')
@@ -52,219 +61,364 @@ const STATUS_RANK: Record<string, number> = {
   completed: 5, lost: 99, cancelled: 99,
 }
 
-interface InteractionRow {
-  id: string
-  wedding_id: string | null
-  person_id: string | null
-  timestamp: string
-  subject: string | null
-  body_preview: string | null
-  full_body: string | null
-  from_email: string | null
-  from_name: string | null
-}
+const POSITIVE_KINDS = new Set([
+  'tour_scheduled', 'contract_sent', 'contract_signed', 'payment_received',
+])
 
-async function findWeddingForInvitee(venueId: string, inviteeEmail: string): Promise<string | null> {
-  // Strategy A: people.email + weddings.primary/partner1_person_id
-  const { data: person } = await sb
+async function findPerson(venueId: string, email: string): Promise<string | null> {
+  const { data } = await sb
     .from('people')
     .select('id')
     .eq('venue_id', venueId)
-    .ilike('email', inviteeEmail)
+    .ilike('email', email)
     .limit(1)
     .maybeSingle()
-  const personId = person?.id as string | undefined
-  if (!personId) return null
+  return (data?.id as string | undefined) ?? null
+}
 
-  // Prefer the most recent wedding that has this person as primary / partner
-  const { data: primaryWeddings } = await sb
+async function findWeddingForPerson(venueId: string, personId: string): Promise<string | null> {
+  const { data: a } = await sb
     .from('weddings')
-    .select('id, inquiry_date')
+    .select('id')
     .eq('venue_id', venueId)
     .or(`primary_person_id.eq.${personId},partner1_person_id.eq.${personId},partner2_person_id.eq.${personId}`)
     .order('inquiry_date', { ascending: false })
     .limit(1)
-  if (primaryWeddings && primaryWeddings.length > 0) return primaryWeddings[0].id as string
+  if (a && a.length > 0) return a[0].id as string
 
-  // Fallback: wedding_people junction table
-  const { data: junction } = await sb
-    .from('wedding_people')
-    .select('wedding_id')
-    .eq('person_id', personId)
-    .limit(1)
-  if (junction && junction.length > 0) return junction[0].wedding_id as string
+  const { data: b } = await sb.from('people').select('wedding_id').eq('id', personId).maybeSingle()
+  if ((b as any)?.wedding_id) return (b as any).wedding_id as string
 
-  // Final fallback: any interaction for this person with a wedding_id
-  const { data: pastInts } = await sb
+  const { data: c } = await sb
     .from('interactions')
     .select('wedding_id')
     .eq('venue_id', venueId)
     .eq('person_id', personId)
     .not('wedding_id', 'is', null)
-    .order('timestamp', { ascending: false })
     .limit(1)
-  if (pastInts && pastInts.length > 0) return (pastInts[0].wedding_id as string | null) ?? null
-
+  if (c && c.length > 0) return (c[0].wedding_id as string | null) ?? null
   return null
+}
+
+async function createWeddingForInvitee(
+  venueId: string,
+  event: SchedulingEvent,
+  inquiryDate: string
+): Promise<string | null> {
+  const targetStatus = eventKindToStatus(event.kind) ?? 'tour_scheduled'
+  const { data, error } = await sb
+    .from('weddings')
+    .insert({
+      venue_id: venueId,
+      status: targetStatus,
+      source: event.source,
+      inquiry_date: inquiryDate,
+      heat_score: 0,
+      temperature_tier: 'cool',
+    })
+    .select('id')
+    .single()
+  if (error) {
+    console.error(`    wedding create failed: ${error.message}`)
+    return null
+  }
+  return data?.id as string | null
+}
+
+async function ensurePerson(
+  venueId: string,
+  email: string,
+  name: string | null,
+  weddingId: string
+): Promise<string | null> {
+  const existing = await findPerson(venueId, email)
+  if (existing) {
+    // Update name if Calendly has a clean one and current is salvage-looking
+    if (name) {
+      const parts = name.trim().split(/\s+/)
+      const first = parts[0]
+      const last = parts.slice(1).join(' ') || null
+      const { data: cur } = await sb
+        .from('people')
+        .select('first_name, last_name, wedding_id')
+        .eq('id', existing)
+        .maybeSingle()
+      const curFirst = (cur?.first_name as string | null) ?? ''
+      const curLast = (cur?.last_name as string | null) ?? ''
+      // Overwrite salvage: single-token names, smushed no-space lowercase
+      // that got capitalized ("Juliabrosenberger"), or anything missing a
+      // last name. Never overwrite a two-token human-looking name.
+      const hasSpace = (curFirst + ' ' + curLast).trim().split(/\s+/).length >= 2
+      const isSmush = /^[A-Z][a-z]{6,}$/.test(curFirst) && !curLast
+      const shouldReplace = !hasSpace || isSmush
+      if (shouldReplace) {
+        await sb.from('people').update({ first_name: first, last_name: last, wedding_id: weddingId }).eq('id', existing)
+      } else if (!(cur as any)?.wedding_id) {
+        await sb.from('people').update({ wedding_id: weddingId }).eq('id', existing)
+      }
+    }
+    return existing
+  }
+  const parts = (name ?? email.split('@')[0]).trim().split(/\s+/)
+  const first = parts[0] || null
+  const last = parts.slice(1).join(' ') || null
+  const { data, error } = await sb
+    .from('people')
+    .insert({
+      venue_id: venueId,
+      wedding_id: weddingId,
+      role: 'partner1',
+      first_name: first,
+      last_name: last,
+      email,
+    })
+    .select('id')
+    .single()
+  if (error) {
+    console.error(`    person create failed: ${error.message}`)
+    return null
+  }
+  return data?.id as string | null
+}
+
+async function ensurePartner2(
+  venueId: string,
+  weddingId: string,
+  name: string,
+  email: string | null,
+  phone: string | null
+) {
+  // Skip if partner2 exists on this wedding
+  const { data } = await sb
+    .from('people')
+    .select('id')
+    .eq('wedding_id', weddingId)
+    .eq('role', 'partner2')
+    .limit(1)
+  if (data && data.length > 0) return
+  const parts = name.trim().split(/\s+/)
+  const first = parts[0] || null
+  const last = parts.slice(1).join(' ') || null
+  await sb.from('people').insert({
+    venue_id: venueId,
+    wedding_id: weddingId,
+    role: 'partner2',
+    first_name: first,
+    last_name: last,
+    email,
+    phone,
+  })
 }
 
 async function runVenue(venueId: string) {
   console.log(`\n=== Venue ${venueId.slice(0, 8)} — ${APPLY ? 'APPLY' : 'DRY RUN'} ===`)
 
-  // Pull candidate interactions whose sender OR body references a
-  // scheduling tool. Overmatches slightly; detectSchedulingEvent below
-  // filters authoritatively.
+  // Pull every interaction whose body is a scheduling-tool notification.
+  // Body signature match is authoritative; detectSchedulingEvent filters.
   const { data: candidates } = await sb
     .from('interactions')
     .select('id, wedding_id, person_id, timestamp, subject, body_preview, full_body, from_email, from_name')
     .eq('venue_id', venueId)
     .or(
-      'from_email.ilike.%calendly.com,from_email.ilike.%acuityscheduling.com,from_email.ilike.%honeybook.com,from_email.ilike.%dubsado.com,full_body.ilike.%calendly.com%,full_body.ilike.%acuityscheduling.com%'
+      'full_body.ilike.%Invitee Email%,full_body.ilike.%A new event has been scheduled%,full_body.ilike.%your scheduled event%,subject.ilike.New Event:%,subject.ilike.Canceled:%,subject.ilike.Updated:%'
     )
-  const candidateCount = candidates?.length ?? 0
-  console.log(`  candidate interactions: ${candidateCount}`)
-  if (candidateCount === 0) return
+  const total = candidates?.length ?? 0
+  console.log(`  candidate interactions: ${total}`)
+  if (total === 0) return
 
-  // Parse each — keep only ones where detectSchedulingEvent fires AND
-  // we can resolve an invitee → wedding mapping.
-  type Match = {
-    interaction: InteractionRow
-    event: SchedulingEvent
-    weddingId: string
-  }
-  const matches: Match[] = []
-  const unmatchedSamples: Array<{ reason: string; from: string; subject: string }> = []
+  type Plan =
+    | { kind: 'reuse'; interactionId: string; weddingId: string; event: SchedulingEvent; timestamp: string; createdPerson?: boolean }
+    | { kind: 'create_wedding'; interactionId: string; event: SchedulingEvent; timestamp: string }
+    | { kind: 'skip'; interactionId: string; reason: string }
 
-  for (const c of (candidates ?? []) as InteractionRow[]) {
-    const parsed = detectSchedulingEvent({
+  const plans: Plan[] = []
+  let parseFail = 0
+
+  for (const c of (candidates ?? []) as any[]) {
+    const event = detectSchedulingEvent({
       from: c.from_email ?? '',
       subject: c.subject ?? '',
       body: c.full_body ?? c.body_preview ?? '',
     })
-    if (!parsed) {
-      unmatchedSamples.push({
-        reason: 'no scheduling event pattern matched',
-        from: c.from_email ?? '',
-        subject: (c.subject ?? '').slice(0, 80),
-      })
+    if (!event) {
+      parseFail++
+      plans.push({ kind: 'skip', interactionId: c.id, reason: 'parser returned null' })
       continue
     }
-    const wid = await findWeddingForInvitee(venueId, parsed.inviteeEmail)
-    if (!wid) {
-      unmatchedSamples.push({
-        reason: `no wedding for invitee=${parsed.inviteeEmail}`,
-        from: c.from_email ?? '',
-        subject: (c.subject ?? '').slice(0, 80),
-      })
-      continue
+
+    // Strategy 1: direct email match (invitee email ⇒ existing person ⇒ wedding)
+    let resolvedWid: string | null = null
+    const personByEmail = await findPerson(venueId, event.inviteeEmail)
+    if (personByEmail) {
+      resolvedWid = await findWeddingForPerson(venueId, personByEmail)
     }
-    matches.push({ interaction: c, event: parsed, weddingId: wid })
-  }
 
-  console.log(`  matched: ${matches.length}`)
-  console.log(`  unmatched: ${candidateCount - matches.length}`)
+    // Strategy 2: identity resolution with rich signals (phone + partner
+    // + name). Catches couples who inquired via Knot/WeddingWire with
+    // one email and booked Calendly with another.
+    if (!resolvedWid) {
+      const extras = event.extras
+      const partnerParts = (extras?.partnerName ?? '').trim().split(/\s+/)
+      const inviteeParts = (event.inviteeName ?? '').trim().split(/\s+/)
+      try {
+        const matches = await resolveIdentity(sb as any, {
+          venueId,
+          email: event.inviteeEmail,
+          firstName: inviteeParts[0] || null,
+          lastName: inviteeParts.slice(1).join(' ') || null,
+          phone: extras?.phone ?? null,
+          partnerFirstName: partnerParts[0] || null,
+          partnerLastName: partnerParts.slice(1).join(' ') || null,
+          signalDate: c.timestamp,
+          excludePersonId: personByEmail ?? null,
+        })
+        // Historical backfill accepts medium-tier matches too. The
+        // full_name_within_window signal ("same first + same last
+        // within 30 days") typically catches the Knot-relay →
+        // Calendly-invitee multi-touch journey: same couple, different
+        // emails. Coordinators can unmerge later if wrong. Live path
+        // stays on high-tier only (email-pipeline.ts).
+        const best = matches.find((m) => m.tier === 'high')
+          ?? matches.find((m) => m.tier === 'medium' && m.signals.some((s) => s.type === 'full_name_within_window'))
+        if (best) {
+          resolvedWid = await findWeddingForPerson(venueId, best.personId)
+        }
+      } catch (err) {
+        // identity resolution is best-effort; fall through to create-new
+        console.error(`  identity resolve error:`, (err as Error).message)
+      }
+    }
 
-  // Breakdown by source + kind
-  const bySource: Record<string, Record<string, number>> = {}
-  for (const m of matches) {
-    if (!bySource[m.event.source]) bySource[m.event.source] = {}
-    bySource[m.event.source][m.event.kind] = (bySource[m.event.source][m.event.kind] ?? 0) + 1
-  }
-  for (const [src, kinds] of Object.entries(bySource)) {
-    console.log(`    ${src.padEnd(10)} ${JSON.stringify(kinds)}`)
-  }
-
-  if (unmatchedSamples.length > 0 && unmatchedSamples.length <= 10) {
-    console.log('  unmatched samples:')
-    for (const u of unmatchedSamples.slice(0, 10)) {
-      console.log(`    from=${u.from.slice(0, 40).padEnd(40)} subject="${u.subject}" — ${u.reason}`)
+    if (resolvedWid) {
+      plans.push({ kind: 'reuse', interactionId: c.id, weddingId: resolvedWid, event, timestamp: c.timestamp })
+    } else if (POSITIVE_KINDS.has(event.kind)) {
+      plans.push({ kind: 'create_wedding', interactionId: c.id, event, timestamp: c.timestamp })
+    } else {
+      plans.push({ kind: 'skip', interactionId: c.id, reason: `no wedding and kind=${event.kind}` })
     }
   }
+
+  const reuse = plans.filter((p): p is Extract<Plan, { kind: 'reuse' }> => p.kind === 'reuse')
+  const creates = plans.filter((p): p is Extract<Plan, { kind: 'create_wedding' }> => p.kind === 'create_wedding')
+  const skips = plans.filter((p): p is Extract<Plan, { kind: 'skip' }> => p.kind === 'skip')
+  console.log(`  parse-fail: ${parseFail}`)
+  console.log(`  reuse existing wedding: ${reuse.length}`)
+  console.log(`  create new wedding:     ${creates.length}`)
+  console.log(`  skip:                   ${skips.length}`)
+
+  const byKind: Record<string, number> = {}
+  for (const p of [...reuse, ...creates]) byKind[p.event.kind] = (byKind[p.event.kind] ?? 0) + 1
+  console.log(`  kind distribution:      ${JSON.stringify(byKind)}`)
 
   if (!APPLY) return
 
-  // Dedup guard — load existing events keyed by (wedding_id, interaction_id)
-  const weddingIds = Array.from(new Set(matches.map((m) => m.weddingId)))
-  const { data: existing } = await sb
-    .from('engagement_events')
-    .select('wedding_id, event_type, metadata')
-    .in('wedding_id', weddingIds)
-  const seen = new Set<string>()
-  for (const e of (existing ?? []) as any[]) {
-    const iid = e.metadata?.interaction_id as string | undefined
-    if (iid) seen.add(`${e.wedding_id}:${e.event_type}:${iid}`)
-  }
-
-  // Re-link interactions to the right wedding + fire events + advance status
-  let relinked = 0
-  let eventsFired = 0
-  let statusAdvanced = 0
+  // Execute plans
   const weddingsTouched = new Set<string>()
 
-  for (const m of matches) {
-    // Re-link interaction if it's on a different (or no) wedding
-    if (m.interaction.wedding_id !== m.weddingId) {
-      const { error } = await sb
-        .from('interactions')
-        .update({ wedding_id: m.weddingId })
-        .eq('id', m.interaction.id)
-      if (error) {
-        console.error(`  relink ${m.interaction.id.slice(0, 8)}:`, error.message)
-        continue
-      }
-      relinked++
+  // 1. Create new weddings first — then we can link their invitees
+  for (const p of creates) {
+    const wid = await createWeddingForInvitee(venueId, p.event, p.timestamp)
+    if (!wid) continue
+    // Ensure person → attach name from Calendly + link to wedding
+    await ensurePerson(venueId, p.event.inviteeEmail, p.event.inviteeName, wid)
+    // Link interaction
+    await sb.from('interactions').update({ wedding_id: wid }).eq('id', p.interactionId)
+    // Partner2 from extras
+    if (p.event.extras?.partnerName) {
+      await ensurePartner2(
+        venueId,
+        wid,
+        p.event.extras.partnerName,
+        p.event.extras.partnerEmail ?? null,
+        p.event.extras.phone ?? null
+      )
     }
-
-    // Fire engagement event if not already present
-    const eventType = eventKindToEngagementType(m.event.kind)
-    const dedupKey = `${m.weddingId}:${eventType}:${m.interaction.id}`
-    if (!seen.has(dedupKey)) {
-      try {
-        await recordEngagementEventsBatch(venueId, m.weddingId, [{
-          eventType,
-          metadata: {
-            interaction_id: m.interaction.id,
-            source: m.event.source,
-            scheduling_kind: m.event.kind,
-            event_datetime: m.event.eventDatetime,
-          },
-          occurredAt: m.interaction.timestamp,
-        }])
-        eventsFired++
-        seen.add(dedupKey)
-      } catch (err) {
-        console.error(`  event insert ${m.interaction.id.slice(0, 8)}:`, (err as Error).message)
-        continue
-      }
-    }
-    weddingsTouched.add(m.weddingId)
-
-    // Status advance — apply only if it's actually a forward move
-    const targetStatus = eventKindToStatus(m.event.kind)
-    if (targetStatus) {
-      const { data: w } = await sb.from('weddings').select('status').eq('id', m.weddingId).maybeSingle()
-      const current = (w?.status as string | undefined) ?? 'inquiry'
-      const currentRank = STATUS_RANK[current] ?? 0
-      const targetRank = STATUS_RANK[targetStatus] ?? 0
-      if (currentRank < 99 && targetRank > currentRank) {
-        const { error } = await sb.from('weddings').update({ status: targetStatus }).eq('id', m.weddingId)
-        if (!error) statusAdvanced++
-      }
-    }
+    // Fire initial_inquiry to give the wedding baseline heat parity with
+    // couples who entered via email
+    await recordEngagementEventsBatch(
+      venueId, wid,
+      [{ eventType: 'initial_inquiry', metadata: { source: p.event.source, via: 'scheduling_tool_backfill' } }],
+      p.timestamp
+    )
+    // Fire the scheduling event itself
+    await recordEngagementEventsBatch(
+      venueId, wid,
+      [{
+        eventType: eventKindToEngagementType(p.event.kind),
+        metadata: {
+          interaction_id: p.interactionId,
+          source: p.event.source,
+          scheduling_kind: p.event.kind,
+          event_datetime: p.event.eventDatetime,
+        },
+      }],
+      p.timestamp
+    )
+    weddingsTouched.add(wid)
   }
 
-  // Recalc heat for every touched wedding
+  // 2. Reuse existing weddings — link + fire event + (maybe) update status
+  for (const p of reuse) {
+    // Re-link interaction
+    await sb.from('interactions').update({ wedding_id: p.weddingId }).eq('id', p.interactionId)
+    // Update invitee's name if salvage-looking
+    const personId = await findPerson(venueId, p.event.inviteeEmail)
+    if (personId && p.event.inviteeName) {
+      await ensurePerson(venueId, p.event.inviteeEmail, p.event.inviteeName, p.weddingId)
+    }
+    // Partner2 from extras
+    if (p.event.extras?.partnerName) {
+      await ensurePartner2(
+        venueId,
+        p.weddingId,
+        p.event.extras.partnerName,
+        p.event.extras.partnerEmail ?? null,
+        p.event.extras.phone ?? null
+      )
+    }
+    // Fire the scheduling event (dedup via metadata handled in recordEngagementEventsBatch? No —
+    // we need to check ourselves before firing).
+    const { data: existing } = await sb
+      .from('engagement_events')
+      .select('id')
+      .eq('wedding_id', p.weddingId)
+      .eq('event_type', eventKindToEngagementType(p.event.kind))
+      .filter('metadata->>interaction_id', 'eq', p.interactionId)
+      .limit(1)
+    if (!existing || existing.length === 0) {
+      await recordEngagementEventsBatch(
+        venueId, p.weddingId,
+        [{
+          eventType: eventKindToEngagementType(p.event.kind),
+          metadata: {
+            interaction_id: p.interactionId,
+            source: p.event.source,
+            scheduling_kind: p.event.kind,
+            event_datetime: p.event.eventDatetime,
+          },
+        }],
+        p.timestamp
+      )
+    }
+    // Status advance if this event warrants it
+    const targetStatus = eventKindToStatus(p.event.kind)
+    if (targetStatus) {
+      const { data: w } = await sb.from('weddings').select('status').eq('id', p.weddingId).maybeSingle()
+      const curRank = STATUS_RANK[(w?.status as string) ?? 'inquiry'] ?? 0
+      const tgtRank = STATUS_RANK[targetStatus] ?? 0
+      if (curRank < 99 && tgtRank > curRank) {
+        await sb.from('weddings').update({ status: targetStatus }).eq('id', p.weddingId)
+      }
+    }
+    weddingsTouched.add(p.weddingId)
+  }
+
+  // Recalc every touched wedding
   for (const wid of weddingsTouched) {
-    try {
-      await recalculateHeatScore(venueId, wid)
-    } catch (err) {
+    try { await recalculateHeatScore(venueId, wid) } catch (err) {
       console.error(`  recalc ${wid.slice(0, 8)}:`, (err as Error).message)
     }
   }
-
-  console.log(`  relinked: ${relinked}`)
-  console.log(`  events fired: ${eventsFired}`)
-  console.log(`  status advanced: ${statusAdvanced}`)
   console.log(`  weddings touched: ${weddingsTouched.size}`)
 }
 
@@ -273,14 +427,10 @@ async function main() {
   if (ALL) {
     const { data: vs } = await sb.from('venues').select('id, is_demo').eq('is_demo', false)
     venueIds = (vs ?? []).map((v: any) => v.id)
-    console.log(`--all: backfilling scheduling events for ${venueIds.length} non-demo venue(s)`)
   }
   for (const vid of venueIds) {
     await runVenue(vid)
   }
 }
 
-main().catch((err) => {
-  console.error('Backfill failed:', err)
-  process.exit(1)
-})
+main().catch((err) => { console.error('Backfill failed:', err); process.exit(1) })

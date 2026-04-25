@@ -29,6 +29,7 @@ import {
   eventKindToStatus,
   type SchedulingEvent,
 } from '@/lib/services/scheduling-tool-parsers'
+import { resolveIdentity } from '@/lib/services/identity-resolution'
 import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
 import { applySignalInference } from '@/lib/services/signal-inference'
 import { createNotification } from '@/lib/services/admin-notifications'
@@ -327,7 +328,14 @@ export async function findOrCreateContact(
    * gmail_connections. Callers outside the pipeline (scripts, repair
    * endpoints) can omit it and the helper loads its own.
    */
-  ownEmailsHint?: Set<string>
+  ownEmailsHint?: Set<string>,
+  /**
+   * Optional extras captured by upstream parsers (Calendly invitee form,
+   * The Knot intake) that the person row should carry from birth.
+   * Persisting phone here lets identity-resolution match subsequent
+   * signals from the same couple via different email addresses.
+   */
+  extras?: { phone?: string | null }
 ): Promise<{ personId: string | null; weddingId: string | null; isNew: boolean }> {
   const supabase = createServiceClient()
 
@@ -386,15 +394,17 @@ export async function findOrCreateContact(
   const [firstName, ...rest] = (name ?? '').trim().split(/\s+/).filter(Boolean)
   const lastName = rest.join(' ') || null
 
+  const personInsert: Record<string, unknown> = {
+    venue_id: venueId,
+    role: 'partner1',
+    first_name: firstName || email.split('@')[0],
+    last_name: lastName,
+    email,
+  }
+  if (extras?.phone) personInsert.phone = extras.phone
   const { data: newPerson, error: personError } = await supabase
     .from('people')
-    .insert({
-      venue_id: venueId,
-      role: 'partner1',
-      first_name: firstName || email.split('@')[0],
-      last_name: lastName,
-      email,
-    })
+    .insert(personInsert)
     .select('id')
     .single()
 
@@ -764,7 +774,12 @@ export async function processIncomingEmail(
 
   if (classification.classification !== 'spam') {
     try {
-      const contact = await findOrCreateContact(venueId, fromEmail, fromName, ownEmails)
+      // Pass scheduling-event extras so the person row is born with phone
+      // attached. Future identity resolution can then match this couple by
+      // phone when they appear from a different email address (e.g. Knot
+      // relay vs Calendly invitee email).
+      const extras = schedulingEvent?.extras?.phone ? { phone: schedulingEvent.extras.phone } : undefined
+      const contact = await findOrCreateContact(venueId, fromEmail, fromName, ownEmails, extras)
       personId = contact.personId
       isNewContact = contact.isNew
 
@@ -1031,6 +1046,166 @@ export async function processIncomingEmail(
   // matching engagement event + advance status. We've already rerouted
   // contact resolution to the invitee above, so weddingId (if set) is
   // the RIGHT wedding — not a ghost for the tool's sender address.
+  //
+  // If weddingId is NULL and we have a scheduling event, FIRST try to
+  // resolve identity against rich signals from the scheduling event
+  // (partner name, phone, wedding date) before creating a new wedding.
+  // Couples often inquire via one email (Knot relay, partner's address)
+  // and book Calendly with a different email. Matching on phone or
+  // name+partner catches these cases without creating duplicates. This
+  // path extends to future ingest sources (Instagram DM extracts, Knot
+  // direct feed) — same engine, different caller.
+  const POSITIVE_KINDS = new Set(['tour_scheduled', 'contract_sent', 'contract_signed', 'payment_received'])
+  if (schedulingEvent && !weddingId) {
+    const extras = schedulingEvent.extras
+    const partnerParts = (extras?.partnerName ?? '').trim().split(/\s+/)
+    const inviteeParts = (schedulingEvent.inviteeName ?? '').trim().split(/\s+/)
+    try {
+      const matches = await resolveIdentity(supabase, {
+        venueId,
+        email: schedulingEvent.inviteeEmail,
+        firstName: inviteeParts[0] || null,
+        lastName: inviteeParts.slice(1).join(' ') || null,
+        phone: extras?.phone ?? null,
+        partnerFirstName: partnerParts[0] || null,
+        partnerLastName: partnerParts.slice(1).join(' ') || null,
+        signalDate: email.date,
+        excludePersonId: personId, // don't match the just-created ghost
+      })
+      const high = matches.find((m) => m.tier === 'high')
+      if (high) {
+        // Find the high-match person's wedding and link us there.
+        const { data: matchPerson } = await supabase
+          .from('people')
+          .select('id, wedding_id, first_name, last_name')
+          .eq('id', high.personId)
+          .maybeSingle()
+        const resolvedWid = (matchPerson?.wedding_id as string | null) ?? null
+        if (resolvedWid) {
+          weddingId = resolvedWid
+          // If we already created a ghost person for the Calendly invitee,
+          // merge it into the resolved person so interactions + drafts
+          // consolidate. Silently skip if personId already matches.
+          if (personId && personId !== high.personId) {
+            try {
+              const { mergePeople } = await import('@/lib/services/merge-people')
+              await mergePeople({
+                supabase, venueId,
+                keepPersonId: high.personId,
+                mergePersonId: personId,
+                tier: 'high',
+                signals: high.signals,
+                confidence: high.confidence,
+              })
+              personId = high.personId
+            } catch (err) {
+              console.error('[pipeline] merge after scheduling identity match failed:', err)
+            }
+          }
+          // Re-link interaction onto the resolved wedding/person
+          await supabase
+            .from('interactions')
+            .update({ wedding_id: weddingId, person_id: personId })
+            .eq('id', interactionId)
+        }
+      }
+    } catch (err) {
+      await logPipelineError(venueId, 'scheduling_identity_resolve', err, {
+        interactionId, inviteeEmail: schedulingEvent.inviteeEmail,
+      })
+    }
+  }
+
+  if (schedulingEvent && !weddingId && POSITIVE_KINDS.has(schedulingEvent.kind)) {
+    try {
+      const targetStatus = eventKindToStatus(schedulingEvent.kind) ?? 'tour_scheduled'
+      const { data: newWedding } = await supabase
+        .from('weddings')
+        .insert({
+          venue_id: venueId,
+          status: targetStatus,
+          source: schedulingEvent.source,
+          inquiry_date: email.date,
+          heat_score: 0,
+          temperature_tier: 'cool',
+        })
+        .select('id')
+        .single()
+      if (newWedding) {
+        weddingId = newWedding.id as string
+        // Link person + interaction
+        if (personId) {
+          await supabase.from('people').update({ wedding_id: weddingId, role: 'partner1' }).eq('id', personId)
+        }
+        await supabase.from('interactions').update({ wedding_id: weddingId }).eq('id', interactionId)
+        // Seed partner2 from the Calendly extras if present — most
+        // Calendly booking forms capture the second partner's name.
+        if (schedulingEvent.extras?.partnerName) {
+          const [p2First, ...rest] = schedulingEvent.extras.partnerName.trim().split(/\s+/)
+          if (p2First) {
+            await supabase.from('people').insert({
+              venue_id: venueId,
+              wedding_id: weddingId,
+              role: 'partner2',
+              first_name: p2First,
+              last_name: rest.join(' ') || null,
+              email: schedulingEvent.extras.partnerEmail ?? null,
+              phone: schedulingEvent.extras.phone ?? null,
+            })
+          }
+        }
+        // Seed the initial_inquiry event so baseline heat exists on
+        // par with weddings that entered via an email inquiry. Without
+        // this a Calendly-only couple sits at heat=0 until a reply arrives.
+        await recordEngagementEventsBatch(
+          venueId,
+          weddingId,
+          [{ eventType: 'initial_inquiry', metadata: { source: schedulingEvent.source, via: 'scheduling_tool' } }],
+          email.date
+        )
+      }
+    } catch (err) {
+      await logPipelineError(venueId, 'scheduling_tool_wedding_create', err, {
+        interactionId, fromEmail, inviteeName: schedulingEvent.inviteeName,
+      })
+    }
+  }
+
+  // Calendly-provided name hygiene: when the scheduling parser extracted
+  // a clean full name from the "Invitee:" label, prefer it over whatever
+  // findOrCreateContact stored. Email-local-part salvage produces names
+  // like "Taylorm Smith" (taylorm.smith0017@...) or "Juliabrosenberger"
+  // (juliabrosenberger@...) which look sloppy on the leads list. The
+  // Calendly Invitee label is authoritative and reliably clean.
+  if (schedulingEvent?.inviteeName && personId) {
+    const parts = schedulingEvent.inviteeName.trim().split(/\s+/)
+    if (parts.length >= 1 && parts[0].length > 0) {
+      const first = parts[0]
+      const last = parts.slice(1).join(' ') || null
+      // Only overwrite when the stored name looks like email-local
+      // salvage: lowercase bunched-together, no space, or a single
+      // capitalized smush. Never overwrite a name that already has
+      // two tokens (indicating it's been curated).
+      const { data: cur } = await supabase
+        .from('people')
+        .select('first_name, last_name')
+        .eq('id', personId)
+        .maybeSingle()
+      const curFirst = (cur?.first_name as string | null) ?? ''
+      const curLast = (cur?.last_name as string | null) ?? ''
+      const looksLikeSalvage =
+        !curLast || // no last name at all
+        /^[A-Za-z]+$/.test(curFirst + curLast) === false
+          ? !curLast
+          : curFirst.length > 6 // "Juliabrosenberger" etc. — real first names are rarely 7+ lower+cap smush
+      const shouldReplace = !curLast || looksLikeSalvage ||
+        (curFirst + curLast).toLowerCase() === (first + (last ?? '')).toLowerCase().replace(/\s+/g, '')
+      if (shouldReplace) {
+        await supabase.from('people').update({ first_name: first, last_name: last }).eq('id', personId)
+      }
+    }
+  }
+
   if (schedulingEvent && weddingId) {
     try {
       const eventType = eventKindToEngagementType(schedulingEvent.kind)

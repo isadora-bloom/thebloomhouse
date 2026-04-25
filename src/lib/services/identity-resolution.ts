@@ -298,6 +298,23 @@ function scorePair(
       })
     }
   }
+  // Full name match within the partner-window (30d default). Catches
+  // the common multi-touch journey: same couple inquired via Knot
+  // with a relay email, then booked Calendly with a personal gmail.
+  // Partner + date signals are rarely captured on both sides but a
+  // same-first + same-last inside a month is strong enough to queue.
+  // Not high-tier — surnames repeat, especially for common names.
+  if (
+    cFirst && pFirst && cFirst === pFirst &&
+    cLast && pLast && cLast === pLast &&
+    daysApart(candidateDate, person.created_at) <= config.name_plus_partner_days
+  ) {
+    signals.push({
+      type: 'full_name_within_window',
+      detail: `${cFirst} ${cLast} within ${config.name_plus_partner_days}d`,
+      weight: 0.6,
+    })
+  }
 
   const hasMediumSignal = signals.some((s) => s.weight >= 0.6)
   if (hasMediumSignal) {
