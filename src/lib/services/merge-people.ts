@@ -88,6 +88,33 @@ export async function mergePeople(args: MergePeopleArgs): Promise<MergePeopleRes
   // 3. Reassign children.
   const reassigned = await reassignChildren(supabase, venueId, keepPersonId, mergePersonId, merged.wedding_id as string | null, kept.wedding_id as string | null)
 
+  // 3a. Status promotion across the merge. The merge consolidates two
+  // weddings into the kept_wedding_id; without this step, if the
+  // merged wedding was further along the funnel (e.g. 'booked' from a
+  // Calendly final-walkthrough event) and the kept wedding was earlier
+  // (e.g. 'inquiry' from a Knot relay email), the more-progressed
+  // status was lost. Roll forward the higher status onto kept.
+  // Never downgrade. Never promote past terminal (lost / cancelled).
+  const keptWeddingId = kept.wedding_id as string | null
+  const mergedWeddingId = merged.wedding_id as string | null
+  if (keptWeddingId && mergedWeddingId && keptWeddingId !== mergedWeddingId) {
+    const STATUS_RANK: Record<string, number> = {
+      inquiry: 0, tour_scheduled: 1, tour_completed: 2, proposal_sent: 3, booked: 4,
+      completed: 5, lost: 99, cancelled: 99,
+    }
+    const [{ data: keptWed }, { data: mergedWed }] = await Promise.all([
+      supabase.from('weddings').select('status').eq('id', keptWeddingId).maybeSingle(),
+      supabase.from('weddings').select('status').eq('id', mergedWeddingId).maybeSingle(),
+    ])
+    const ks = (keptWed?.status as string | undefined) ?? 'inquiry'
+    const ms = (mergedWed?.status as string | undefined) ?? 'inquiry'
+    const kRank = STATUS_RANK[ks] ?? 0
+    const mRank = STATUS_RANK[ms] ?? 0
+    if (mRank > kRank && mRank < 99) {
+      await supabase.from('weddings').update({ status: ms }).eq('id', keptWeddingId)
+    }
+  }
+
   // 4. Backfill non-null fields from merged → kept if kept's is null.
   const keptRow = kept as Record<string, unknown>
   const mergedRow = merged as Record<string, unknown>

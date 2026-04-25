@@ -1152,11 +1152,34 @@ export async function processIncomingEmail(
         .single()
       if (newWedding) {
         weddingId = newWedding.id as string
-        // Link person + interaction
-        if (personId) {
+
+        // Ensure a partner1 person exists. findOrCreateContact may have
+        // returned null (spam classification skips contact lookup, or
+        // earlier branches that early-returned). A wedding with no
+        // people is invisible on the leads UI and breaks downstream
+        // matching, so synthesise one from the invitee email + name
+        // here so every Calendly-created wedding has a real lead row.
+        if (!personId && schedulingEvent.inviteeEmail) {
+          const [synthFirst, ...synthRest] = (schedulingEvent.inviteeName ?? schedulingEvent.inviteeEmail.split('@')[0]).trim().split(/\s+/)
+          const synthLast = synthRest.join(' ') || null
+          const { data: synth } = await supabase
+            .from('people')
+            .insert({
+              venue_id: venueId,
+              wedding_id: weddingId,
+              role: 'partner1',
+              first_name: synthFirst || null,
+              last_name: synthLast,
+              email: schedulingEvent.inviteeEmail,
+              phone: schedulingEvent.extras?.phone ?? null,
+            })
+            .select('id')
+            .single()
+          if (synth) personId = synth.id as string
+        } else if (personId) {
           await supabase.from('people').update({ wedding_id: weddingId, role: 'partner1' }).eq('id', personId)
         }
-        await supabase.from('interactions').update({ wedding_id: weddingId }).eq('id', interactionId)
+        await supabase.from('interactions').update({ wedding_id: weddingId, person_id: personId }).eq('id', interactionId)
         // Seed partner2 from the Calendly extras if present — most
         // Calendly booking forms capture the second partner's name.
         if (schedulingEvent.extras?.partnerName) {

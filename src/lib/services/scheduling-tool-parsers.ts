@@ -155,6 +155,61 @@ function escRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/**
+ * Normalize an invitee-style name string into a {primary, partner} pair.
+ * Calendly's Invitee field accepts free text from the couple, so we see
+ * a mix of formats:
+ *
+ *   "Allison Gleason"                    → primary: Allison Gleason
+ *   "Gleason, Allison"                   → primary: Allison Gleason (Last, First swap)
+ *   "John and Rachel Davis"              → primary: John Davis, partner: Rachel Davis
+ *   "Ellie and Bonnie"                   → primary: Ellie, partner: Bonnie
+ *   "Valerie Callaway & Christian Harper" → primary: Valerie Callaway, partner: Christian Harper
+ *   "Morgan and Grace Newport"           → primary: Morgan Newport, partner: Grace Newport
+ *   "John & Rachel"                       → primary: John, partner: Rachel
+ *   "N & A Boozy"                         → primary: N Boozy, partner: A Boozy (best-effort)
+ *
+ * When the partner is already known from a separate Calendly form field
+ * (extras.partnerName), the caller should prefer that. This helper is
+ * the fallback when the Invitee label itself contains both names.
+ */
+export function parseInviteeName(raw: string | null): { primary: string; partner: string | null } | null {
+  if (!raw) return null
+  let s = raw.trim()
+  // Strip "(email)" suffix if present
+  s = s.replace(/\s*\([^)]*@[^)]*\)\s*$/, '').trim()
+  if (!s) return null
+
+  // "Last, First" → "First Last". Detect by exactly one comma + two
+  // tokens. Ignore if the comma-form has 3+ tokens (could be a list).
+  if (/^[^,]+,\s+[^,]+$/.test(s)) {
+    const [last, first] = s.split(',').map((p) => p.trim())
+    if (last && first && !/\s/.test(last) && !/\s+and\s+|\s*&\s*/i.test(s)) {
+      return { primary: `${first} ${last}`.trim(), partner: null }
+    }
+  }
+
+  // Couple form: "X and Y [shared-last]" or "X & Y [shared-last]"
+  const coupleMatch = s.match(/^(.+?)\s+(?:and|&)\s+(.+)$/i)
+  if (coupleMatch) {
+    let firstHalf = coupleMatch[1].trim()
+    let secondHalf = coupleMatch[2].trim()
+
+    // Case A: second half has 2+ tokens — "Rachel Davis" — assume the
+    // last token is the shared surname. Apply it to first half if that
+    // doesn't already include a surname.
+    const secondTokens = secondHalf.split(/\s+/)
+    const firstTokens = firstHalf.split(/\s+/)
+    if (secondTokens.length >= 2 && firstTokens.length === 1) {
+      const sharedLast = secondTokens[secondTokens.length - 1]
+      firstHalf = `${firstHalf} ${sharedLast}`
+    }
+    return { primary: firstHalf, partner: secondHalf }
+  }
+
+  return { primary: s, partner: null }
+}
+
 function extractLabelled(body: string, labels: string[]): string | null {
   for (const raw of labels) {
     const l = escRe(raw)
@@ -242,9 +297,12 @@ function parseCalendly(from: string, subject: string, body: string): SchedulingE
   // calendly.com). Signature = "A new event has been scheduled" in
   // combination with "Invitee Email:" — unique to Calendly's format.
   const hasSender = /calendly\.com|calendlymail\.com/.test(fromLower)
-  const hasCalendlyBody =
-    /A new event has been scheduled|Canceled:.*Calendly|Updated:.*Calendly|View event in Calendly/i.test(body) &&
-    /Invitee Email/i.test(body)
+  // Body signature: the "Invitee Email" label is Calendly-specific
+  // (no other service uses that exact phrasing in their notifications).
+  // Catches all event types — New Event, Canceled, Updated, reminders —
+  // including stored interactions where from_email was rewritten to
+  // the invitee's address by the pipeline at ingest time.
+  const hasCalendlyBody = /Invitee Email/i.test(body)
   if (!hasSender && !hasCalendlyBody) return null
 
   // Strip HTML once — Calendly bodies are always HTML and regex label
@@ -255,8 +313,15 @@ function parseCalendly(from: string, subject: string, body: string): SchedulingE
     ?? firstExternalEmail(text, ['calendly.com', 'calendlymail.com'])
   if (!inviteeEmail) return null
 
-  const inviteeName = extractLabelled(text, ['invitee', 'attendee', 'name'])
+  const rawInvitee = extractLabelled(text, ['invitee', 'attendee', 'name'])
     ?.replace(/\s*\([^)]*@[^)]*\)\s*$/, '').trim() || null
+  const parsedName = parseInviteeName(rawInvitee)
+  const inviteeName = parsedName?.primary ?? null
+  // If the invitee label itself contained a partner ("John and Rachel
+  // Davis"), surface the partner half so callers can populate partner2.
+  // Falls through to the partner-name extracted from the Calendly form
+  // field below if the invitee label was just one name.
+  const partnerFromInvitee = parsedName?.partner ?? null
 
   // Extras — Calendly form fields for the venue's inquiry questionnaire
   const partnerName = extractLabelled(text, [
@@ -341,7 +406,7 @@ function parseCalendly(from: string, subject: string, body: string): SchedulingE
     eventTypeName: eventTypeName ?? null,
     matchedFrom: from,
     extras: {
-      partnerName: partnerName ?? null,
+      partnerName: partnerName ?? partnerFromInvitee ?? null,
       partnerEmail: partnerEmail ?? null,
       phone: phone ?? null,
       guestCount: guestCount ?? null,
