@@ -15,6 +15,7 @@ import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { SpendImporter } from '@/components/intel/spend-importer'
+import Link from 'next/link'
 import {
   BarChart,
   Bar,
@@ -732,27 +733,36 @@ export default function SourceAttributionPage() {
         )}
       </div>
 
-      {/* ---- Attribution model selector ---- */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <span className="text-sm font-medium text-sage-700">Attribution:</span>
-        {([
-          ['first_touch', 'First-touch', 'Credit the source that first introduced the couple.'],
-          ['last_touch', 'Last-touch', 'Credit the source of the most recent touch before booking.'],
-          ['linear', 'Linear', 'Split credit equally across every source the couple touched.'],
-        ] as [AttributionModel, string, string][]).map(([key, label, hint]) => (
-          <button
-            key={key}
-            onClick={() => setModel(key)}
-            title={hint}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${
-              model === key
-                ? 'bg-sage-700 text-white border-sage-700'
-                : 'bg-surface text-sage-700 border-border hover:bg-sage-50'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+      {/* ---- Attribution model selector + backtrace link ---- */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-sm font-medium text-sage-700">Attribution:</span>
+          {([
+            ['first_touch', 'First-touch', 'Credit the source that first introduced the couple.'],
+            ['last_touch', 'Last-touch', 'Credit the source of the most recent touch before booking.'],
+            ['linear', 'Linear', 'Split credit equally across every source the couple touched.'],
+          ] as [AttributionModel, string, string][]).map(([key, label, hint]) => (
+            <button
+              key={key}
+              onClick={() => setModel(key)}
+              title={hint}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${
+                model === key
+                  ? 'bg-sage-700 text-white border-sage-700'
+                  : 'bg-surface text-sage-700 border-border hover:bg-sage-50'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <Link
+          href="/settings/sources"
+          className="text-xs font-medium text-sage-600 hover:text-sage-900 underline-offset-2 hover:underline"
+          title="Find the real first-touch source for couples whose first source is a scheduling tool."
+        >
+          Re-attribute scheduling-tool bookings →
+        </Link>
       </div>
 
       {/* ---- Spend importer — Phase 3 Task 33 ---- */}

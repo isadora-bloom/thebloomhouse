@@ -22,6 +22,7 @@ import {
   Rocket,
   RefreshCw,
 } from 'lucide-react'
+import { SourceBacktracePanel } from '@/components/intel/source-backtrace-panel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1593,6 +1594,28 @@ export default function OnboardingPage() {
                   <p className="text-xs text-red-600">{backfillError}</p>
                 )}
               </div>
+
+              {/* Source re-attribution — only shown after the 90-day
+                  backfill has populated weddings + interactions. Calendly,
+                  Acuity, HoneyBook and Dubsado are scheduling tools, not
+                  acquisition channels — this panel finds the real first
+                  touch by searching Gmail for the couple's name. Skippable. */}
+              {backfillDone && (
+                <div className="bg-surface border border-border rounded-xl p-6 space-y-3">
+                  <div>
+                    <p className="font-medium text-sage-900 text-sm">
+                      Find the real first-touch source for your scheduling-tool bookings
+                    </p>
+                    <p className="text-sage-500 text-xs mt-0.5">
+                      Calendly / Acuity / HoneyBook never bring a lead in cold — they&apos;re
+                      where existing leads book a tour. We&apos;ll search your Gmail by couple
+                      name and propose the real source for each one. Safe to skip and run
+                      later from Settings.
+                    </p>
+                  </div>
+                  <SourceBacktracePanel compact />
+                </div>
+              )}
 
               {/* Recommended next steps — configurables not gated at Go Live */}
               <div className="bg-warm-white border border-border rounded-xl p-6 space-y-3">
