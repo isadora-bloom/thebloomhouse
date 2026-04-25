@@ -607,18 +607,54 @@ export function timeAwareTourKind(
   now: Date = new Date()
 ): SchedulingEventKind {
   if (baseKind !== 'tour_scheduled' || !eventDatetime) return baseKind
-  // Try to parse the datetime — Calendly format examples:
-  //   "11:30am - Friday, May 1, 2026 (Eastern Time - US & Canada)"
-  //   "Friday, May 1, 2026 11:30 AM"
-  //   "2026-05-01T15:30:00Z"
-  const cleaned = eventDatetime.replace(/\s*\([^)]+\)\s*$/, '').trim()
-  // Try direct parse first (handles ISO + many natural forms)
-  let t = new Date(cleaned).getTime()
-  if (Number.isNaN(t)) {
-    // Reorder "11:30am - Friday, May 1, 2026" → "Friday, May 1, 2026 11:30 AM"
-    const m = cleaned.match(/^(\d{1,2}:\d{2}\s*(?:am|pm)?)\s*[-–—]\s*(.+)$/i)
-    if (m) t = new Date(`${m[2]} ${m[1]}`).getTime()
-  }
-  if (Number.isNaN(t)) return baseKind
+  const t = parseCalendlyDatetime(eventDatetime)
+  if (t === null) return baseKind
   return t < now.getTime() ? 'tour_completed' : 'tour_scheduled'
+}
+
+/**
+ * Parse a Calendly Event Date/Time string to a unix ms timestamp.
+ * Calendly emits a few formats:
+ *   "11:30am - Friday, May 1, 2026 (Eastern Time - US & Canada)"
+ *   "06:00pm - Thu, Apr 30, 2026"
+ *   "02:30pm - Sun, Apr 19, 2026"
+ *   "Friday, May 1, 2026 11:30 AM"      ← natural form (rare)
+ *   "2026-05-01T15:30:00Z"               ← ISO (also rare)
+ *
+ * The first form is the most common and JS Date.parse can't handle it
+ * directly because:
+ *   - "11:30am" has no space before am/pm — Chrome/V8 won't parse
+ *   - The "TIME - DATE" ordering with a dash is non-standard
+ * Returns null when no parse strategy works.
+ */
+export function parseCalendlyDatetime(s: string): number | null {
+  const cleaned = s.replace(/\s*\([^)]+\)\s*$/, '').trim()
+  if (!cleaned) return null
+
+  // 1. Direct ISO + natural date attempt
+  let t = Date.parse(cleaned)
+  if (!Number.isNaN(t)) return t
+
+  // 2. "TIME - DATE" → reorder + normalize "11:30am" → "11:30 AM"
+  const m = cleaned.match(/^(\d{1,2}:\d{2}\s*(?:am|pm)?)\s*[-–—]\s*(.+)$/i)
+  if (m) {
+    const time = m[1].replace(/(\d)(am|pm)/i, '$1 $2').toUpperCase()
+    const date = m[2]
+    t = Date.parse(`${date} ${time}`)
+    if (!Number.isNaN(t)) return t
+    // Some browsers want "May 1, 2026 11:30 AM" specifically; try without
+    // the leading weekday
+    const dateNoWeek = date.replace(/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun),\s*/i, '')
+    t = Date.parse(`${dateNoWeek} ${time}`)
+    if (!Number.isNaN(t)) return t
+  }
+
+  // 3. Last resort: just try the date portion — even without time we
+  // can compare days. Better than missing past tours entirely.
+  const dateOnly = cleaned.replace(/^\d{1,2}:\d{2}\s*(?:am|pm)?\s*[-–—]\s*/i, '')
+    .replace(/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun),\s*/i, '')
+  t = Date.parse(dateOnly)
+  if (!Number.isNaN(t)) return t
+
+  return null
 }
