@@ -112,6 +112,22 @@ export async function mergePeople(args: MergePeopleArgs): Promise<MergePeopleRes
     const mRank = STATUS_RANK[ms] ?? 0
     if (mRank > kRank && mRank < 99) {
       await supabase.from('weddings').update({ status: ms }).eq('id', keptWeddingId)
+      // Status-change touchpoint — merge can promote a wedding from
+      // 'inquiry' (Knot side) to 'booked' (Calendly side). The funnel
+      // needs to know this couple booked, regardless of which wedding
+      // row carried the booking event historically.
+      try {
+        const { recordStatusChangeTouchpoint } = await import('@/lib/services/touchpoints')
+        // Pull the kept wedding's source for attribution context.
+        const { data: keptW } = await supabase.from('weddings').select('source').eq('id', keptWeddingId).maybeSingle()
+        await recordStatusChangeTouchpoint(venueId, keptWeddingId, ms, {
+          source: (keptW?.source as string | null) ?? null,
+          medium: 'merge',
+          metadata: { merged_from_person: mergePersonId },
+        })
+      } catch (err) {
+        console.warn('[merge-people] status-change touchpoint failed:', err)
+      }
     }
   }
 

@@ -181,7 +181,7 @@ export async function applySignalInference(
 
   const [{ data: wedding }, { data: ints }, { data: existingEvents }] =
     await Promise.all([
-      sb.from('weddings').select('status').eq('id', weddingId).maybeSingle(),
+      sb.from('weddings').select('status, source').eq('id', weddingId).maybeSingle(),
       sb
         .from('interactions')
         .select('id, direction, timestamp, subject, body_preview, full_body')
@@ -369,9 +369,43 @@ export async function applySignalInference(
   // Single batch write + single recalc
   if (events.length > 0) {
     await recordEngagementEventsBatch(venueId, weddingId, events)
+    // Mirror to wedding_touchpoints. The source is the wedding's first-
+    // touch source (this email arrived via the same channel that brought
+    // the inquiry — Knot relay, direct email, etc.). engagementToTouchType
+    // skips heat-internal signals (specificity, sustained engagement)
+    // automatically; only attribution-relevant funnel events land here.
+    try {
+      const { recordTouchpointsForEngagementEvents } = await import('@/lib/services/touchpoints')
+      const inferredSource = (wedding as { source?: string | null }).source ?? null
+      await recordTouchpointsForEngagementEvents(
+        venueId,
+        weddingId,
+        events.map((e) => ({
+          eventType: e.eventType,
+          source: inferredSource,
+          occurredAt: e.occurredAt,
+          metadata: e.metadata,
+        }))
+      )
+    } catch (err) {
+      console.warn('[signal-inference] touchpoint mirror failed:', err)
+    }
   }
   if (targetStatus && targetStatus !== currentStatus) {
     await sb.from('weddings').update({ status: targetStatus }).eq('id', weddingId)
+    // Status-change touchpoint — proposal_sent / contract_signed can be
+    // inferred from text patterns even when no scheduling event fires.
+    // Source = wedding's first-touch source (the inquiry channel).
+    try {
+      const { recordStatusChangeTouchpoint } = await import('@/lib/services/touchpoints')
+      const inferredSource = (wedding as { source?: string | null }).source ?? null
+      await recordStatusChangeTouchpoint(venueId, weddingId, targetStatus, {
+        source: inferredSource,
+        medium: 'signal_inference',
+      })
+    } catch (err) {
+      console.warn('[signal-inference] status-change touchpoint failed:', err)
+    }
   }
 
   return { newEvents: events.length, newStatus: targetStatus, fired }

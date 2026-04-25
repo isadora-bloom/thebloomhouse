@@ -928,22 +928,23 @@ export async function processIncomingEmail(
         })
       }
 
-      // Phase 3 Task 35: record the first touchpoint in the multi-touch
-      // journey table. Best-effort — failure here must not break inquiry
-      // ingest. Subsequent replies don't add new touchpoints here; future
-      // work captures UTM-bearing links and website visits separately.
+      // Multi-touch journey: record the inquiry as the first touchpoint.
+      // Routed through the centralized touchpoints service so dedup +
+      // schema choices stay in one place. occurred_at is the email's
+      // real timestamp (not now()), so journey ordering matches reality.
       try {
-        await supabase.from('wedding_touchpoints').insert({
-          venue_id: venueId,
-          wedding_id: weddingId,
+        const { recordTouchpoint } = await import('@/lib/services/touchpoints')
+        await recordTouchpoint({
+          venueId,
+          weddingId,
+          touchType: 'inquiry',
           source: detectedSource,
           medium: 'email',
-          touch_type: 'inquiry',
-          occurred_at: new Date().toISOString(),
-          metadata: { subject: email.subject, fromEmail },
+          occurredAt: email.date,
+          metadata: { subject: email.subject, fromEmail, interaction_id: interactionId },
         })
       } catch (err) {
-        console.warn('[pipeline] wedding_touchpoints insert failed:', err)
+        console.warn('[pipeline] inquiry touchpoint insert failed:', err)
       }
     }
   } else if (weddingId && parsedEventDate) {
@@ -1030,6 +1031,22 @@ export async function processIncomingEmail(
     if (heatEvents.length > 0) {
       try {
         await recordEngagementEventsBatch(venueId, weddingId, heatEvents, email.date)
+        // Mirror attribution-relevant events to wedding_touchpoints so
+        // /intel/sources can compute multi-touch journey + funnel.
+        // engagementToTouchType returns null for heat-internal signals
+        // (high_specificity / family_mentioned) — those don't appear in
+        // the funnel.
+        const { recordTouchpointsForEngagementEvents } = await import('@/lib/services/touchpoints')
+        await recordTouchpointsForEngagementEvents(
+          venueId,
+          weddingId,
+          heatEvents.map((e) => ({
+            eventType: e.eventType,
+            source: detectedSource,
+            occurredAt: email.date,
+            metadata: e.metadata,
+          }))
+        )
       } catch (err) {
         // Heat signals are additive — never let a batch insert failure
         // break the pipeline. Log and continue.
@@ -1261,6 +1278,27 @@ export async function processIncomingEmail(
         },
       }], email.date)
 
+      // Mirror to wedding_touchpoints. Source is the scheduling tool
+      // ('calendly' / 'acuity' / etc.), not the wedding's first-touch
+      // source — touchpoints record the channel of THIS touch, not the
+      // wedding's overall attribution. /intel/sources can decide how to
+      // weight that.
+      try {
+        const { recordTouchpointsForEngagementEvents } = await import('@/lib/services/touchpoints')
+        await recordTouchpointsForEngagementEvents(venueId, weddingId, [{
+          eventType,
+          source: schedulingEvent.source,
+          occurredAt: email.date,
+          metadata: {
+            interaction_id: interactionId,
+            scheduling_kind: schedulingEvent.kind,
+            event_datetime: schedulingEvent.eventDatetime,
+          },
+        }])
+      } catch (err) {
+        console.warn('[pipeline] scheduling-event touchpoint write failed:', err)
+      }
+
       // Status advance ladder:
       //   inquiry → tour_scheduled → proposal_sent → booked
       // Never downgrade. Never overwrite terminal (lost/cancelled).
@@ -1280,6 +1318,21 @@ export async function processIncomingEmail(
         const targetRank = STATUS_RANK[targetStatus] ?? 0
         if (currentRank < 99 && targetRank > currentRank) {
           await supabase.from('weddings').update({ status: targetStatus }).eq('id', weddingId)
+          // Status-change touchpoint safety net — final_walkthrough /
+          // planning_meeting events advance to 'booked' but don't fire
+          // a contract_signed engagement event. Without this, /intel/
+          // sources can't count a booking against this wedding's source.
+          try {
+            const { recordStatusChangeTouchpoint } = await import('@/lib/services/touchpoints')
+            await recordStatusChangeTouchpoint(venueId, weddingId, targetStatus, {
+              source: schedulingEvent.source,
+              occurredAt: email.date,
+              medium: 'email',
+              metadata: { interaction_id: interactionId, scheduling_kind: schedulingEvent.kind },
+            })
+          } catch (err) {
+            console.warn('[pipeline] status-change touchpoint failed:', err)
+          }
         }
       }
     } catch (err) {

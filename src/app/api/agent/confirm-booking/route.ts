@@ -121,6 +121,20 @@ export async function POST(request: NextRequest) {
           { status: 500 }
         )
       }
+      // Coordinator-confirmed booking — write a contract_signed
+      // touchpoint with the wedding's first-touch source so /intel/
+      // sources counts this in funnel conversion. Best-effort.
+      try {
+        const { recordStatusChangeTouchpoint } = await import('@/lib/services/touchpoints')
+        const { data: w } = await supabase.from('weddings').select('source').eq('id', targetWeddingId).maybeSingle()
+        await recordStatusChangeTouchpoint(auth.venueId, targetWeddingId, 'booked', {
+          source: (w?.source as string | null) ?? null,
+          medium: 'coordinator',
+          metadata: { confirmed_by: 'coordinator_ui' },
+        })
+      } catch (err) {
+        console.warn('[confirm-booking] touchpoint failed:', err)
+      }
     }
   }
 
