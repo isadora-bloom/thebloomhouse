@@ -29,6 +29,7 @@ import {
   detectSchedulingEvent,
   eventKindToEngagementType,
   eventKindToStatus,
+  timeAwareTourKind,
   type SchedulingEvent,
 } from '../src/lib/services/scheduling-tool-parsers'
 import { recordEngagementEventsBatch, recalculateHeatScore } from '../src/lib/services/heat-mapping'
@@ -62,7 +63,9 @@ const STATUS_RANK: Record<string, number> = {
 }
 
 const POSITIVE_KINDS = new Set([
-  'tour_scheduled', 'contract_sent', 'contract_signed', 'payment_received',
+  'tour_scheduled',
+  'contract_sent', 'contract_signed', 'payment_received',
+  'final_walkthrough', 'pre_wedding_event', 'planning_meeting',
 ])
 
 async function findPerson(venueId: string, email: string): Promise<string | null> {
@@ -235,7 +238,7 @@ async function runVenue(venueId: string) {
   let parseFail = 0
 
   for (const c of (candidates ?? []) as any[]) {
-    const event = detectSchedulingEvent({
+    let event = detectSchedulingEvent({
       from: c.from_email ?? '',
       subject: c.subject ?? '',
       body: c.full_body ?? c.body_preview ?? '',
@@ -245,6 +248,9 @@ async function runVenue(venueId: string) {
       plans.push({ kind: 'skip', interactionId: c.id, reason: 'parser returned null' })
       continue
     }
+    // Time-aware: tour booked but its date has already passed = completed
+    const adjusted = timeAwareTourKind(event.kind, event.eventDatetime)
+    if (adjusted !== event.kind) event = { ...event, kind: adjusted }
 
     // Strategy 1: direct email match (invitee email ⇒ existing person ⇒ wedding)
     let resolvedWid: string | null = null

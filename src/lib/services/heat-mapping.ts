@@ -50,6 +50,12 @@ const DEFAULT_POINTS: Record<string, number> = {
   sustained_engagement: 5,
   tour_scheduled: 20,
   tour_completed: 25,
+  // Already-booked Calendly event types — small additive bumps because
+  // a wedding at this stage is already at +50 from contract_signed; we
+  // don't want walkthroughs or planning calls to over-saturate heat.
+  final_walkthrough: 5,
+  pre_wedding_event: 3,
+  planning_meeting: 3,
   tour_rescheduled: 5,
   call_outbound: 5,
   call_answered: 10,

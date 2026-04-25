@@ -66,31 +66,97 @@ export const PROPOSAL_SENT_PATTERNS: RegExp[] = [
   /here('s| is) (the |your )?(contract|proposal|agreement)/i,
 ]
 
+// Booking-confirmed patterns. EVERY pattern needs explicit wedding /
+// date / contract / venue context — otherwise generic phrases like
+// "discount is already locked in" or "looking forward to it" trip the
+// rule and a venue's own outbound marketing copy advances couples to
+// 'booked' incorrectly. Lesson learned the hard way (Millaka, 2026-04-24).
 export const BOOKING_PATTERNS: RegExp[] = [
-  /contract (is |has been )?signed/i,
+  /(?:the |your |our )?contract (is |has been )?signed/i,
   /(deposit|retainer) (has been |is )?paid/i,
-  /booking (is )?confirmed/i,
-  /officially booked/i,
-  /(we're|we are|we have|i have) booked/i,
-  /we'd like to book/i,
-  /locked (it |the date )?in/i,
-  /wire (sent|has been sent)/i,
-  /(signed|returned|countersigned) (the |your )?contract/i,
-  /(let's|lets) (make it|lock it|get it) official/i,
-  // HoneyBook / Dubsado / generic CRM notifications
+  /(your |the )?booking (is )?confirmed/i,
+  /(officially|finally) booked (the (date|venue|wedding)|with you|with us)/i,
+  /(we're|we are|we have|i have) (officially )?booked (the (date|venue|wedding)|with)/i,
+  /(we'd|we would|we'll) like to book (the (date|venue|wedding)|with)/i,
+  /(?:wedding|date|contract|venue) (is |has been )?locked in/i,
+  /locked in (the |a |my |our )(wedding|date|contract|venue)/i,
+  /wire (sent|has been sent) for (the |your |our )(deposit|retainer|venue|wedding)/i,
+  /(signed|returned|countersigned) (the |your |our )(contract|agreement)/i,
+  /(let's|lets) (make it|lock it|get it) official.{0,30}(wedding|date|venue|book)/i,
+  // HoneyBook / Dubsado / generic CRM notifications — these are unambiguous
   /(contract|proposal) (was |has been )?(accepted|signed|countersigned)/i,
   /proposal (accepted|signed|has been accepted)/i,
   /project (has been )?booked/i,
   /new booking (from|for)/i,
-  // Payment signals
-  /payment (received|processed|confirmed|completed)/i,
-  /invoice (paid|has been paid|was paid)/i,
-  /(received|processed) (a |your )?payment/i,
-  /\$\d[\d,]*(\.\d\d)? (received|paid|deposited|processed)/i,
-  /you('ve| have) been paid/i,
+  // Payment signals — tightened to require event/wedding/venue context
+  /payment (received|processed|confirmed|completed) for (the |your |our )(deposit|retainer|venue|wedding|booking)/i,
+  /(deposit|retainer) (invoice|payment) (paid|has been paid|was paid)/i,
+  /(received|processed) (a |the |your )(deposit|retainer) payment/i,
+  /\$\d[\d,]*(\.\d\d)? (deposit|retainer)/i,
 ]
 
 export const DATE_SPECIFICITY = /(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}|(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(st|nd|rd|th)?,?\s+\d{4})/i
+
+/**
+ * Strip quoted reply chains from an email body before signal matching.
+ *
+ * Without this, booking-pattern regexes match against the venue's own
+ * outbound copy that's quoted at the bottom of the couple's reply. The
+ * Millaka case (2026-04-24): Sage sent "your 10% discount is locked in"
+ * to Milla, Milla replied, the reply's body contained Sage's quoted text,
+ * and BOOKING_PATTERNS matched "locked in" → wedding moved to 'booked'.
+ *
+ * Handles three quote styles:
+ *   1. "On {date}, {name} <{email}> wrote:" — Gmail / most clients
+ *   2. ">" prefixed lines — RFC plain-text reply quoting
+ *   3. <blockquote class="gmail_quote"> — Gmail HTML reply
+ *   4. "From: ... Sent: ... To: ..." — Outlook header block
+ *
+ * Returns the body with everything from the first quote marker onward
+ * removed. If no quote marker is found, returns the body unchanged.
+ */
+export function stripQuotedReply(body: string): string {
+  if (!body) return body
+  let cutoff = body.length
+
+  // Pattern 1: "On <date>, <name> wrote:" — case insensitive
+  const onWrote = body.search(/\bOn .{1,200}wrote:/i)
+  if (onWrote !== -1) cutoff = Math.min(cutoff, onWrote)
+
+  // Pattern 2: HTML blockquote (Gmail quoted reply)
+  const blockquote = body.search(/<blockquote[^>]*class=["']?gmail_quote/i)
+  if (blockquote !== -1) cutoff = Math.min(cutoff, blockquote)
+
+  // Pattern 3: Outlook header block — "From: ... To: ..." or "-----Original Message-----"
+  const original = body.search(/-----Original Message-----|^\s*From:\s+.+(\r?\n)\s*Sent:\s+.+/im)
+  if (original !== -1) cutoff = Math.min(cutoff, original)
+
+  // Pattern 4: ">" prefix block — find the FIRST line that starts with ">"
+  // followed by another quoted-or-prefix line. Single ">" lines in middle
+  // of prose are common (e.g. literal quote of an idea), so require at
+  // least two consecutive ">"-prefixed lines to count as a quote chain.
+  const lines = body.split(/\r?\n/)
+  let runStart = -1
+  let charIdx = 0
+  for (let i = 0; i < lines.length; i++) {
+    const isQuoted = /^\s*>/.test(lines[i])
+    if (isQuoted) {
+      if (runStart === -1) runStart = charIdx
+      // If we've seen 2+ consecutive quoted lines, treat from runStart on
+      // as quoted material.
+      const next = i + 1 < lines.length && /^\s*>/.test(lines[i + 1])
+      if (next) {
+        cutoff = Math.min(cutoff, runStart)
+        break
+      }
+    } else {
+      runStart = -1
+    }
+    charIdx += lines[i].length + 1 // +1 for newline
+  }
+
+  return body.slice(0, cutoff)
+}
 
 // ---------------------------------------------------------------------------
 // Main entrypoint — run inference on a wedding's full thread
@@ -189,7 +255,7 @@ export async function applySignalInference(
   // 2. Tour request (inbound)
   for (const i of inbound) {
     if (seen.tour_requested.has(i.id)) continue
-    const hay = `${i.subject ?? ''}\n${i.full_body ?? i.body_preview ?? ''}`
+    const hay = `${i.subject ?? ''}\n${stripQuotedReply(i.full_body ?? i.body_preview ?? '')}`
     if (TOUR_REQUEST_PATTERNS.some((r) => r.test(hay))) {
       events.push({
         eventType: 'tour_requested',
@@ -204,7 +270,7 @@ export async function applySignalInference(
   // 3. Tour confirmation (outbound → advances to tour_scheduled)
   for (const i of outbound) {
     if (seen.tour_scheduled.has(i.id)) continue
-    const hay = `${i.subject ?? ''}\n${i.full_body ?? i.body_preview ?? ''}`
+    const hay = `${i.subject ?? ''}\n${stripQuotedReply(i.full_body ?? i.body_preview ?? '')}`
     if (TOUR_CONFIRMATION_PATTERNS.some((r) => r.test(hay))) {
       events.push({
         eventType: 'tour_scheduled',
@@ -220,7 +286,7 @@ export async function applySignalInference(
   // 4. Proposal sent (outbound → advances to proposal_sent)
   for (const i of outbound) {
     if (seen.contract_sent.has(i.id)) continue
-    const hay = `${i.subject ?? ''}\n${i.full_body ?? i.body_preview ?? ''}`
+    const hay = `${i.subject ?? ''}\n${stripQuotedReply(i.full_body ?? i.body_preview ?? '')}`
     if (PROPOSAL_SENT_PATTERNS.some((r) => r.test(hay))) {
       events.push({
         eventType: 'contract_sent',
@@ -238,7 +304,7 @@ export async function applySignalInference(
   // 5. Booking confirmed (either direction → advances to booked)
   for (const i of interactions) {
     if (seen.contract_signed.has(i.id)) continue
-    const hay = `${i.subject ?? ''}\n${i.full_body ?? i.body_preview ?? ''}`
+    const hay = `${i.subject ?? ''}\n${stripQuotedReply(i.full_body ?? i.body_preview ?? '')}`
     if (BOOKING_PATTERNS.some((r) => r.test(hay))) {
       events.push({
         eventType: 'contract_signed',
@@ -254,7 +320,7 @@ export async function applySignalInference(
   // 6. Date specificity — one per wedding, fire once
   if (!seen.specificity_fired) {
     for (const i of inbound) {
-      const hay = `${i.subject ?? ''}\n${i.full_body ?? i.body_preview ?? ''}`
+      const hay = `${i.subject ?? ''}\n${stripQuotedReply(i.full_body ?? i.body_preview ?? '')}`
       if (DATE_SPECIFICITY.test(hay)) {
         events.push({
           eventType: 'high_specificity',

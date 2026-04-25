@@ -29,11 +29,20 @@ export type SchedulingToolSource = 'calendly' | 'acuity' | 'honeybook' | 'dubsad
 
 export type SchedulingEventKind =
   | 'tour_scheduled'
+  | 'tour_completed'      // tour event whose date is now in the past
   | 'tour_rescheduled'
   | 'tour_cancelled'
   | 'contract_sent'
   | 'contract_signed'
   | 'payment_received'
+  // The following kinds are for ALREADY-BOOKED couples — Calendly event
+  // types that only make sense after the contract is signed. Surfacing
+  // them as their own kinds prevents the pipeline from treating a final
+  // walkthrough as a "new tour booking" and downgrading a booked couple
+  // back to tour_scheduled.
+  | 'final_walkthrough'
+  | 'pre_wedding_event'   // drop-offs, rehearsals
+  | 'planning_meeting'    // onboarding, planning calls, post-booking consults
 
 export interface SchedulingEvent {
   source: SchedulingToolSource
@@ -44,6 +53,11 @@ export interface SchedulingEvent {
   inviteeName: string | null
   /** Event datetime as ISO-ish string if parseable. May be null. */
   eventDatetime: string | null
+  /** Calendly's "Event Type" name — e.g. "Rixey Manor Venue Tour",
+   *  "Final Walkthrough (6 - 3 weeks before wedding date)",
+   *  "1hr Planning Meeting on Zoom". Used by callers to decide what
+   *  status to apply (a final walkthrough means already-booked). */
+  eventTypeName: string | null
   /** The raw From header we matched on, for audit. */
   matchedFrom: string
   /** Bonus fields that Calendly forms often collect on top of the
@@ -291,10 +305,32 @@ function parseCalendly(from: string, subject: string, body: string): SchedulingE
     ? (guestsSection[1].match(EMAIL_RE) ?? []).map((e) => e.toLowerCase())
     : []
 
+  // Extract Calendly's "Event Type:" label — drives kind classification.
+  // Sample values from Rixey: "Rixey Manor Venue Tour",
+  // "Final Walkthrough (6 - 3 weeks before wedding date)",
+  // "1hr Planning Meeting on Zoom", "Pre-Tour Phone Call",
+  // "Pre-Wedding Drop Off", "Onboarding and Initial Planning".
+  const eventTypeName = extractLabelled(text, ['event type', 'event'])
+  const evt = (eventTypeName ?? subject ?? '').toLowerCase()
   const subjectLower = subject.toLowerCase()
+
   let kind: SchedulingEventKind = 'tour_scheduled'
-  if (/cancel/i.test(subjectLower)) kind = 'tour_cancelled'
-  else if (/resched|moved|updat/i.test(subjectLower)) kind = 'tour_rescheduled'
+  if (/cancel/i.test(subjectLower)) {
+    kind = 'tour_cancelled'
+  } else if (/resched|moved|updat/i.test(subjectLower)) {
+    kind = 'tour_rescheduled'
+  } else if (/final walkthrough|walk[- ]?through/i.test(evt)) {
+    // Final walkthrough = booked couple checking the venue 3-6 weeks
+    // pre-wedding. Never a new lead.
+    kind = 'final_walkthrough'
+  } else if (/pre[- ]?wedding|drop[- ]?off|rehearsal/i.test(evt)) {
+    kind = 'pre_wedding_event'
+  } else if (/planning|onboarding|consultation|initial planning/i.test(evt)) {
+    // Planning meetings (1hr Zoom, onboarding call) come AFTER booking.
+    kind = 'planning_meeting'
+  }
+  // else: default 'tour_scheduled' covers "Rixey Manor Venue Tour",
+  // "Pre-Tour Phone Call" — both still in the tour-funnel stage.
 
   return {
     source: 'calendly',
@@ -302,6 +338,7 @@ function parseCalendly(from: string, subject: string, body: string): SchedulingE
     inviteeEmail,
     inviteeName,
     eventDatetime: extractLabelled(text, ['event date/time', 'event date', 'time', 'when']) ?? extractDatetime(text),
+    eventTypeName: eventTypeName ?? null,
     matchedFrom: from,
     extras: {
       partnerName: partnerName ?? null,
@@ -340,6 +377,7 @@ function parseAcuity(from: string, subject: string, body: string): SchedulingEve
     inviteeEmail,
     inviteeName,
     eventDatetime: extractDatetime(body),
+    eventTypeName: extractLabelled(body, ['event type', 'event']) ?? null,
     matchedFrom: from,
   }
 }
@@ -371,6 +409,7 @@ function parseHoneyBook(from: string, subject: string, body: string): Scheduling
     inviteeEmail,
     inviteeName,
     eventDatetime: extractDatetime(body),
+    eventTypeName: extractLabelled(body, ['event type', 'event']) ?? null,
     matchedFrom: from,
   }
 }
@@ -398,6 +437,7 @@ function parseDubsado(from: string, subject: string, body: string): SchedulingEv
     inviteeEmail,
     inviteeName,
     eventDatetime: extractDatetime(body),
+    eventTypeName: extractLabelled(body, ['event type', 'event']) ?? null,
     matchedFrom: from,
   }
 }
@@ -458,22 +498,62 @@ export function detectSchedulingEvent(email: {
 export function eventKindToEngagementType(kind: SchedulingEventKind): string {
   switch (kind) {
     case 'tour_scheduled':     return 'tour_scheduled'
+    case 'tour_completed':     return 'tour_completed'
     case 'tour_rescheduled':   return 'tour_rescheduled'
     case 'tour_cancelled':     return 'tour_cancelled'
     case 'contract_sent':      return 'contract_sent'
     case 'contract_signed':    return 'contract_signed'
     case 'payment_received':   return 'contract_signed' // payment = booked, treat as signed
+    case 'final_walkthrough':  return 'final_walkthrough'
+    case 'pre_wedding_event':  return 'pre_wedding_event'
+    case 'planning_meeting':   return 'planning_meeting'
   }
 }
 
-/** Map a scheduling event kind → wedding status the wedding should advance to. */
+/** Map a scheduling event kind → wedding status the wedding should advance to.
+ *  Returns null when the event shouldn't change status (rescheduled, cancelled,
+ *  or events that imply already-booked which we let the rank guard handle). */
 export function eventKindToStatus(kind: SchedulingEventKind): string | null {
   switch (kind) {
     case 'tour_scheduled':     return 'tour_scheduled'
-    case 'tour_rescheduled':   return null // don't change status on reschedule
-    case 'tour_cancelled':     return null // coordinator reviews before marking lost
+    case 'tour_completed':     return 'tour_completed'
+    case 'tour_rescheduled':   return null
+    case 'tour_cancelled':     return null
     case 'contract_sent':      return 'proposal_sent'
     case 'contract_signed':    return 'booked'
     case 'payment_received':   return 'booked'
+    // Already-booked event types — only advance to 'booked' if the
+    // wedding isn't there yet. Rank guard at the call site prevents
+    // downgrade if the wedding is past 'booked' (e.g. 'completed').
+    case 'final_walkthrough':  return 'booked'
+    case 'pre_wedding_event':  return 'booked'
+    case 'planning_meeting':   return 'booked'
   }
+}
+
+/** Decide the status + kind for a tour event given the event datetime
+ *  and the current time. A tour whose datetime is in the past is a
+ *  completed tour, not a scheduled one. Returns the appropriate kind
+ *  to fire — caller substitutes the original tour_scheduled kind for
+ *  this when needed. */
+export function timeAwareTourKind(
+  baseKind: SchedulingEventKind,
+  eventDatetime: string | null,
+  now: Date = new Date()
+): SchedulingEventKind {
+  if (baseKind !== 'tour_scheduled' || !eventDatetime) return baseKind
+  // Try to parse the datetime — Calendly format examples:
+  //   "11:30am - Friday, May 1, 2026 (Eastern Time - US & Canada)"
+  //   "Friday, May 1, 2026 11:30 AM"
+  //   "2026-05-01T15:30:00Z"
+  const cleaned = eventDatetime.replace(/\s*\([^)]+\)\s*$/, '').trim()
+  // Try direct parse first (handles ISO + many natural forms)
+  let t = new Date(cleaned).getTime()
+  if (Number.isNaN(t)) {
+    // Reorder "11:30am - Friday, May 1, 2026" → "Friday, May 1, 2026 11:30 AM"
+    const m = cleaned.match(/^(\d{1,2}:\d{2}\s*(?:am|pm)?)\s*[-–—]\s*(.+)$/i)
+    if (m) t = new Date(`${m[2]} ${m[1]}`).getTime()
+  }
+  if (Number.isNaN(t)) return baseKind
+  return t < now.getTime() ? 'tour_completed' : 'tour_scheduled'
 }

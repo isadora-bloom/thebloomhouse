@@ -27,6 +27,7 @@ import {
   detectSchedulingEvent,
   eventKindToEngagementType,
   eventKindToStatus,
+  timeAwareTourKind,
   type SchedulingEvent,
 } from '@/lib/services/scheduling-tool-parsers'
 import { resolveIdentity } from '@/lib/services/identity-resolution'
@@ -582,7 +583,7 @@ export async function processIncomingEmail(
   // Step 1a.55: Scheduling-tool detection already ran at 1a.0 to bypass
   // the universal-ignore short-circuit. Reuse the same result here so
   // we don't double-parse the body.
-  const schedulingEvent: SchedulingEvent | null = schedulingPreCheck
+  let schedulingEvent: SchedulingEvent | null = schedulingPreCheck
 
   const fromEmail = formLead?.leadEmail ?? schedulingEvent?.inviteeEmail ?? rawFromEmail
   // When a form relay or scheduling tool fires, the raw From display
@@ -1055,7 +1056,25 @@ export async function processIncomingEmail(
   // name+partner catches these cases without creating duplicates. This
   // path extends to future ingest sources (Instagram DM extracts, Knot
   // direct feed) — same engine, different caller.
-  const POSITIVE_KINDS = new Set(['tour_scheduled', 'contract_sent', 'contract_signed', 'payment_received'])
+  // Resolve the *actual* kind given when the tour happens vs now. A
+  // "Rixey Manor Venue Tour" booked for last week is a completed tour;
+  // we mark it tour_completed instead of tour_scheduled so the leads
+  // surface reflects what already happened.
+  if (schedulingEvent) {
+    const adjustedKind = timeAwareTourKind(schedulingEvent.kind, schedulingEvent.eventDatetime)
+    if (adjustedKind !== schedulingEvent.kind) {
+      schedulingEvent = { ...schedulingEvent, kind: adjustedKind }
+    }
+  }
+  // Positive kinds that should create a wedding when none exists. Excludes
+  // tour_completed because a completed tour without prior wedding is too
+  // weak a signal — coordinator should be involved before we manifest a
+  // wedding from a single past event with no accompanying inquiry.
+  const POSITIVE_KINDS = new Set([
+    'tour_scheduled',
+    'contract_sent', 'contract_signed', 'payment_received',
+    'final_walkthrough', 'pre_wedding_event', 'planning_meeting',
+  ])
   if (schedulingEvent && !weddingId) {
     const extras = schedulingEvent.extras
     const partnerParts = (extras?.partnerName ?? '').trim().split(/\s+/)
