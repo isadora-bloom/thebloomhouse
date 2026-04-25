@@ -12,7 +12,6 @@ import {
   Clock,
   TrendingUp,
   AlertTriangle,
-  Target,
   Calendar,
 } from 'lucide-react'
 import {
@@ -72,22 +71,8 @@ const PIE_COLORS = ['#7D8471', '#5D7A7A', '#A6894A', '#B8908A']
 
 // ---------------------------------------------------------------------------
 // Lead Engagement Intelligence — seeded values
-// TODO: compute from real data
-// ---------------------------------------------------------------------------
-
-const ENGAGEMENT_FIRST_EMAIL_ACTION_RATE = 34 // percent
-const ENGAGEMENT_FIRST_EMAIL_SPARKLINE: number[] = [
-  28, 30, 27, 31, 29, 33, 32, 35, 34, 36, 33, 34,
-]
-const ENGAGEMENT_BEST_SEQUENCE_STEP = 3
-const ENGAGEMENT_BEST_STEP_DESCRIPTION = 'Most bookings happen after the tour invitation'
-const ENGAGEMENT_AVG_RESPONSE_HOURS = 6.4
-const ENGAGEMENT_INDUSTRY_AVG_HOURS = 18
-const ENGAGEMENT_RESPONSE_PERCENTILE = 78
-const ENGAGEMENT_DECISION_DAYS = 18
-const ENGAGEMENT_DECISION_FAST_PCT = 22 // <7 days
-const ENGAGEMENT_DECISION_TYPICAL_PCT = 51 // 7-30 days
-const ENGAGEMENT_DECISION_SLOW_PCT = 27 // 30d+
+// Engagement metrics are now computed from real data in fetchAnalytics
+// (see EngagementMetrics state + computeEngagementMetrics).
 
 function getPeriodRange(period: Period): { start: string; end: string } {
   const now = new Date()
@@ -249,6 +234,16 @@ export default function AgentAnalyticsPage() {
   const [manualCount, setManualCount] = useState(0)
   const [avgResponseHours, setAvgResponseHours] = useState(0)
 
+  // Engagement intelligence — computed from real interactions/weddings
+  // for the venue scope. nulls render as "not enough data yet" in the UI.
+  const [firstEmailActionRate, setFirstEmailActionRate] = useState<number | null>(null)
+  const [firstEmailActionSample, setFirstEmailActionSample] = useState(0)
+  const [decisionDays, setDecisionDays] = useState<number | null>(null)
+  const [decisionFastPct, setDecisionFastPct] = useState(0)
+  const [decisionTypicalPct, setDecisionTypicalPct] = useState(0)
+  const [decisionSlowPct, setDecisionSlowPct] = useState(0)
+  const [decisionBookedSample, setDecisionBookedSample] = useState(0)
+
   const supabase = createClient()
 
   const fetchAnalytics = useCallback(async () => {
@@ -383,9 +378,110 @@ export default function AgentAnalyticsPage() {
         .lt('created_at', end)
         .order('created_at', { ascending: true })
 
-      // 6. Avg response time (rough estimate)
-      const responseHours = inCount > 0 ? Math.round((outCount / inCount) * 2.5 * 10) / 10 : 0
+      // 6. Avg response time — REAL: median time from inbound email to
+      // the next outbound on the same Gmail thread, in hours. Looks at
+      // the same period as the rest of the dashboard.
+      const { data: threadInts } = await supabase
+        .from('interactions')
+        .select('gmail_thread_id, direction, timestamp')
+        .in('venue_id', venueIds)
+        .eq('type', 'email')
+        .gte('timestamp', start)
+        .lt('timestamp', end)
+        .order('timestamp', { ascending: true })
+        .not('gmail_thread_id', 'is', null)
+      const threads: Record<string, Array<{ direction: string; t: number }>> = {}
+      for (const i of (threadInts ?? []) as Array<{ gmail_thread_id: string; direction: string; timestamp: string }>) {
+        if (!threads[i.gmail_thread_id]) threads[i.gmail_thread_id] = []
+        threads[i.gmail_thread_id].push({ direction: i.direction, t: new Date(i.timestamp).getTime() })
+      }
+      const responseDeltasMs: number[] = []
+      for (const events of Object.values(threads)) {
+        for (let idx = 0; idx < events.length - 1; idx++) {
+          if (events[idx].direction === 'inbound' && events[idx + 1].direction === 'outbound') {
+            responseDeltasMs.push(events[idx + 1].t - events[idx].t)
+          }
+        }
+      }
+      // Use median, not mean — outliers (replies the next week) skew the
+      // mean upward and don't represent typical responsiveness.
+      const median = (xs: number[]) => {
+        if (xs.length === 0) return 0
+        const sorted = [...xs].sort((a, b) => a - b)
+        const mid = Math.floor(sorted.length / 2)
+        return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+      }
+      const medianMs = median(responseDeltasMs)
+      const responseHours = medianMs > 0 ? Math.round((medianMs / 3_600_000) * 10) / 10 : 0
       setAvgResponseHours(responseHours)
+
+      // 7. First-email action rate — % of weddings (last 90 days) whose
+      // couple sent more than one inbound email. Proxy for "did the
+      // venue's first reply land?" — a couple that engaged once and
+      // ghosted didn't take action.
+      const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString()
+      const { data: recentWeddings } = await supabase
+        .from('weddings')
+        .select('id')
+        .in('venue_id', venueIds)
+        .gte('inquiry_date', ninetyDaysAgo)
+      const recentIds = (recentWeddings ?? []).map((w: { id: string }) => w.id)
+      if (recentIds.length === 0) {
+        setFirstEmailActionRate(null)
+        setFirstEmailActionSample(0)
+      } else {
+        const { data: inboundOnRecent } = await supabase
+          .from('interactions')
+          .select('wedding_id')
+          .in('wedding_id', recentIds)
+          .eq('direction', 'inbound')
+          .eq('type', 'email')
+        const inboundCounts: Record<string, number> = {}
+        for (const r of (inboundOnRecent ?? []) as { wedding_id: string }[]) {
+          inboundCounts[r.wedding_id] = (inboundCounts[r.wedding_id] ?? 0) + 1
+        }
+        const withAtLeastOne = recentIds.filter((id) => (inboundCounts[id] ?? 0) >= 1).length
+        const withMultiple = recentIds.filter((id) => (inboundCounts[id] ?? 0) >= 2).length
+        setFirstEmailActionRate(withAtLeastOne > 0 ? Math.round((withMultiple / withAtLeastOne) * 100) : null)
+        setFirstEmailActionSample(withAtLeastOne)
+      }
+
+      // 8. Decision timeline — for booked weddings (last 180 days),
+      // average days from inquiry_date to booking. Buckets the same
+      // population by <7d / 7-30d / 30d+ for the distribution bar.
+      const oneEightyAgo = new Date(Date.now() - 180 * 86400000).toISOString()
+      const { data: bookedWeddings } = await supabase
+        .from('weddings')
+        .select('id, inquiry_date, updated_at, status')
+        .in('venue_id', venueIds)
+        .eq('status', 'booked')
+        .gte('inquiry_date', oneEightyAgo)
+      const decisionDaysList: number[] = []
+      for (const w of (bookedWeddings ?? []) as Array<{ inquiry_date: string; updated_at: string }>) {
+        const inquiry = new Date(w.inquiry_date).getTime()
+        const booked = new Date(w.updated_at).getTime()
+        if (Number.isFinite(inquiry) && Number.isFinite(booked) && booked > inquiry) {
+          decisionDaysList.push((booked - inquiry) / 86400000)
+        }
+      }
+      if (decisionDaysList.length === 0) {
+        setDecisionDays(null)
+        setDecisionFastPct(0)
+        setDecisionTypicalPct(0)
+        setDecisionSlowPct(0)
+        setDecisionBookedSample(0)
+      } else {
+        const avg = decisionDaysList.reduce((s, d) => s + d, 0) / decisionDaysList.length
+        const fast = decisionDaysList.filter((d) => d < 7).length
+        const typical = decisionDaysList.filter((d) => d >= 7 && d <= 30).length
+        const slow = decisionDaysList.filter((d) => d > 30).length
+        const total = decisionDaysList.length
+        setDecisionDays(Math.round(avg))
+        setDecisionFastPct(Math.round((fast / total) * 100))
+        setDecisionTypicalPct(Math.round((typical / total) * 100))
+        setDecisionSlowPct(Math.round((slow / total) * 100))
+        setDecisionBookedSample(total)
+      }
 
       setError(null)
     } catch (err) {
@@ -611,7 +707,7 @@ export default function AgentAnalyticsPage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Metric 1: First-email action rate */}
+            {/* Metric 1: First-email action rate (REAL) */}
             <div className="border border-border rounded-xl p-5 bg-warm-white">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-lg bg-teal-50 flex items-center justify-center">
@@ -622,42 +718,19 @@ export default function AgentAnalyticsPage() {
                 </span>
               </div>
               <p className="mt-4 text-4xl font-bold text-sage-900">
-                {ENGAGEMENT_FIRST_EMAIL_ACTION_RATE}%
+                {firstEmailActionRate === null ? '—' : `${firstEmailActionRate}%`}
               </p>
               <p className="mt-1 text-sm text-sage-600">
-                of couples take action after the first email
+                of couples replied more than once after their first email
               </p>
-              <div className="mt-4">
-                <Sparkline
-                  data={ENGAGEMENT_FIRST_EMAIL_SPARKLINE}
-                  color="#5D7A7A"
-                  height={36}
-                />
-                <p className="mt-1 text-[10px] text-sage-400">Last 90 days</p>
-              </div>
-            </div>
-
-            {/* Metric 2: Most-converting sequence step */}
-            <div className="border border-border rounded-xl p-5 bg-warm-white">
-              <div className="flex items-center gap-2">
-                <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center">
-                  <Target className="w-5 h-5 text-amber-600" />
-                </div>
-                <span className="text-xs font-medium uppercase tracking-wider text-sage-500">
-                  Most-Converting Sequence Step
-                </span>
-              </div>
-              <div className="mt-4 flex items-center gap-3">
-                <span className="inline-flex items-center px-3 py-1.5 rounded-full bg-sage-500 text-white text-sm font-semibold">
-                  Step {ENGAGEMENT_BEST_SEQUENCE_STEP}
-                </span>
-              </div>
-              <p className="mt-3 text-sm text-sage-600">
-                {ENGAGEMENT_BEST_STEP_DESCRIPTION}
+              <p className="mt-3 text-[10px] text-sage-400">
+                {firstEmailActionSample > 0
+                  ? `Based on ${firstEmailActionSample} inquiries in the last 90 days`
+                  : 'Not enough data — needs at least 1 inquiry in the last 90 days'}
               </p>
             </div>
 
-            {/* Metric 3: Average lead response time */}
+            {/* Metric 2: Average lead response time (REAL — median ms→h) */}
             <div className="border border-border rounded-xl p-5 bg-warm-white">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-lg bg-sage-50 flex items-center justify-center">
@@ -668,20 +741,20 @@ export default function AgentAnalyticsPage() {
                 </span>
               </div>
               <p className="mt-4 text-4xl font-bold text-sage-900">
-                {ENGAGEMENT_AVG_RESPONSE_HOURS} hours
+                {avgResponseHours > 0 ? `${avgResponseHours} hours` : '—'}
               </p>
               <p className="mt-1 text-sm text-sage-600">
-                Industry average: {ENGAGEMENT_INDUSTRY_AVG_HOURS} hours
+                Median time from couple&apos;s email to your reply
               </p>
-              <div className="mt-3">
-                <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-medium">
-                  Better than {ENGAGEMENT_RESPONSE_PERCENTILE}% of venues
-                </span>
-              </div>
+              <p className="mt-3 text-[10px] text-sage-400">
+                {avgResponseHours > 0
+                  ? `Calculated across every inbound→outbound pair in this period`
+                  : 'No inbound→outbound thread pairs in this period'}
+              </p>
             </div>
 
-            {/* Metric 4: Decision timeline */}
-            <div className="border border-border rounded-xl p-5 bg-warm-white">
+            {/* Metric 3: Decision timeline (REAL — booked weddings, last 180d) */}
+            <div className="border border-border rounded-xl p-5 bg-warm-white md:col-span-2">
               <div className="flex items-center gap-2">
                 <div
                   className="w-9 h-9 rounded-lg flex items-center justify-center"
@@ -694,44 +767,43 @@ export default function AgentAnalyticsPage() {
                 </span>
               </div>
               <p className="mt-4 text-4xl font-bold text-sage-900">
-                {ENGAGEMENT_DECISION_DAYS} days
+                {decisionDays === null ? '—' : `${decisionDays} days`}
               </p>
               <p className="mt-1 text-sm text-sage-600">
                 Average from first contact to booking
               </p>
-              <div className="mt-4">
-                <div className="flex h-2.5 w-full rounded-full overflow-hidden bg-sage-50">
-                  <div
-                    className="bg-emerald-400"
-                    style={{ width: `${ENGAGEMENT_DECISION_FAST_PCT}%` }}
-                    title={`Fast: ${ENGAGEMENT_DECISION_FAST_PCT}%`}
-                  />
-                  <div
-                    className="bg-sage-500"
-                    style={{ width: `${ENGAGEMENT_DECISION_TYPICAL_PCT}%` }}
-                    title={`Typical: ${ENGAGEMENT_DECISION_TYPICAL_PCT}%`}
-                  />
-                  <div
-                    className="bg-amber-400"
-                    style={{ width: `${ENGAGEMENT_DECISION_SLOW_PCT}%` }}
-                    title={`Slow: ${ENGAGEMENT_DECISION_SLOW_PCT}%`}
-                  />
-                </div>
-                <div className="mt-2 flex items-center justify-between text-[10px] text-sage-500">
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                    {ENGAGEMENT_DECISION_FAST_PCT}% fast (&lt;7d)
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-sage-500" />
-                    {ENGAGEMENT_DECISION_TYPICAL_PCT}% typical (7–30d)
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-amber-400" />
-                    {ENGAGEMENT_DECISION_SLOW_PCT}% slow (30d+)
-                  </span>
-                </div>
-              </div>
+              {decisionDays === null ? (
+                <p className="mt-3 text-[10px] text-sage-400">
+                  No bookings yet in the last 180 days
+                </p>
+              ) : (
+                <>
+                  <div className="mt-4">
+                    <div className="flex h-2.5 w-full rounded-full overflow-hidden bg-sage-50">
+                      <div className="bg-emerald-400" style={{ width: `${decisionFastPct}%` }} title={`Fast: ${decisionFastPct}%`} />
+                      <div className="bg-sage-500" style={{ width: `${decisionTypicalPct}%` }} title={`Typical: ${decisionTypicalPct}%`} />
+                      <div className="bg-amber-400" style={{ width: `${decisionSlowPct}%` }} title={`Slow: ${decisionSlowPct}%`} />
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-[10px] text-sage-500">
+                      <span className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                        {decisionFastPct}% fast (&lt;7d)
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-sage-500" />
+                        {decisionTypicalPct}% typical (7–30d)
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-amber-400" />
+                        {decisionSlowPct}% slow (30d+)
+                      </span>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-[10px] text-sage-400">
+                    Based on {decisionBookedSample} booking{decisionBookedSample === 1 ? '' : 's'} in the last 180 days
+                  </p>
+                </>
+              )}
             </div>
           </div>
         </div>
