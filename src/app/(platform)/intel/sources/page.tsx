@@ -29,24 +29,24 @@ import {
 } from 'recharts'
 
 // ---------------------------------------------------------------------------
-// Types (aligned to actual DB schema)
+// Types
 // ---------------------------------------------------------------------------
 
-interface SourceAttribution {
-  id: string
-  venue_id: string
-  source: string
+type AttributionModel = 'first_touch' | 'last_touch' | 'linear'
+
+interface FunnelApiRow {
+  source: string | null
   inquiries: number
-  tours: number
+  tours_booked: number
+  tours_conducted: number
+  proposals_sent: number
   bookings: number
   revenue: number
-  spend: number
-  cost_per_inquiry: number
-  cost_per_booking: number
-  conversion_rate: number
-  roi: number
-  calculated_at: string
-  venues?: { name: string | null } | null
+  inquiry_to_tour_rate: number
+  tour_to_booking_rate: number
+  inquiry_to_booking_rate: number
+  venueId: string
+  venueName: string
 }
 
 interface MarketingSpend {
@@ -58,13 +58,6 @@ interface MarketingSpend {
   venues?: { name: string | null } | null
 }
 
-interface WeddingRow {
-  venue_id: string
-  source: string | null
-  status: string | null
-  venues?: { name: string | null } | null
-}
-
 interface SourceRow {
   source_key: string
   source_name: string
@@ -72,7 +65,9 @@ interface SourceRow {
   venue_name: string | null
   spend: number
   inquiries: number
-  tours: number
+  tours_booked: number
+  tours_conducted: number
+  proposals_sent: number
   bookings: number
   revenue: number
   cost_per_inquiry: number
@@ -102,6 +97,11 @@ const SOURCE_LABELS: Record<string, string> = {
   facebook: 'Facebook',
   zola: 'Zola',
   phone: 'Phone',
+  calendly: 'Calendly',
+  acuity: 'Acuity',
+  honeybook: 'HoneyBook',
+  here_comes_the_guide: 'Here Comes The Guide',
+  venue_calculator: 'Venue Calculator',
   other: 'Other',
 }
 
@@ -137,19 +137,30 @@ function fmtPct(value: number): string {
   return `${(value * 100).toFixed(1)}%`
 }
 
+/** Linear attribution can produce fractional counts; show 1dp when not
+ *  a whole number, integer otherwise. */
+function fmtCount(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1)
+}
+
 const SOURCE_COLORS: Record<string, string> = {
-  'The Knot':       '#E8927C',
-  'Wedding Wire':   '#7EAAA0',
-  'Google':         '#A6894A',
-  'Instagram':      '#C084A0',
-  'Word of Mouth':  '#7D8471',
-  'Direct':         '#5D7A7A',
-  'Website':        '#8FA48D',
-  'Walk-in':        '#B29A6A',
-  'Facebook':       '#6A89B7',
-  'Zola':           '#9B8EC4',
-  'Phone':          '#C99B7A',
-  'Other':          '#9AA098',
+  'The Knot':             '#E8927C',
+  'Wedding Wire':         '#7EAAA0',
+  'Google':               '#A6894A',
+  'Instagram':            '#C084A0',
+  'Word of Mouth':        '#7D8471',
+  'Direct':               '#5D7A7A',
+  'Website':              '#8FA48D',
+  'Walk-in':              '#B29A6A',
+  'Facebook':             '#6A89B7',
+  'Zola':                 '#9B8EC4',
+  'Phone':                '#C99B7A',
+  'Calendly':             '#5C8DBC',
+  'Acuity':               '#7AA9B7',
+  'HoneyBook':            '#D4A24C',
+  'Here Comes The Guide': '#B287C2',
+  'Venue Calculator':     '#9D8B6E',
+  'Other':                '#9AA098',
 }
 
 function getSourceColor(source: string): string {
@@ -406,21 +417,36 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
 
 export default function SourceAttributionPage() {
   const scope = useScope()
-  const [attributions, setAttributions] = useState<SourceAttribution[]>([])
+  const [funnelRows, setFunnelRows] = useState<FunnelApiRow[]>([])
   const [spendData, setSpendData] = useState<MarketingSpend[]>([])
-  const [weddings, setWeddings] = useState<WeddingRow[]>([])
+  const [model, setModel] = useState<AttributionModel>('first_touch')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [sortKey, setSortKey] = useState<SortKey>('revenue')
+  const [sortKey, setSortKey] = useState<SortKey>('inquiries')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
   // ---- Fetch data ----
+  // Funnel rows come from the multi-touch attribution endpoint (reads
+  // wedding_touchpoints + applies the chosen model). Spend overlay
+  // still comes from marketing_spend directly so we can layer
+  // cost-per-X math on top without giving the API spend visibility.
   const fetchData = useCallback(async () => {
     if (scope.loading) return
     const supabase = getSupabase()
 
     try {
-      // Resolve scope → list of venue IDs (null = all venues / company)
+      // ---- Resolve scope params for the funnel API ----
+      const apiParams = new URLSearchParams()
+      apiParams.set('model', model)
+      if (scope.level === 'venue' && scope.venueId) {
+        apiParams.set('venue_id', scope.venueId)
+      } else if (scope.level === 'group' && scope.groupId) {
+        apiParams.set('group_id', scope.groupId)
+      } else if (scope.orgId) {
+        apiParams.set('org_id', scope.orgId)
+      }
+
+      // ---- Resolve venue IDs for the spend query (still browser-side)
       let venueIds: string[] | null = null
       if (scope.level === 'venue' && scope.venueId) {
         venueIds = [scope.venueId]
@@ -438,39 +464,25 @@ export default function SourceAttributionPage() {
         venueIds = (orgVenues ?? []).map((v) => v.id as string)
       }
 
-      // Build queries scoped appropriately
-      const attrQuery = supabase
-        .from('source_attribution')
-        .select('*, venues:venue_id(name)')
-        .order('calculated_at', { ascending: false })
       const spendQuery = supabase
         .from('marketing_spend')
         .select('*, venues:venue_id(name)')
         .order('month', { ascending: true })
-      const weddingQuery = supabase
-        .from('weddings')
-        .select('venue_id, source, status, venues:venue_id(name)')
-        .not('source', 'is', null)
-
       if (venueIds && venueIds.length > 0) {
-        attrQuery.in('venue_id', venueIds)
         spendQuery.in('venue_id', venueIds)
-        weddingQuery.in('venue_id', venueIds)
       }
 
-      const [attrRes, spendRes, wedRes] = await Promise.all([
-        attrQuery,
+      const [funnelRes, spendRes] = await Promise.all([
+        fetch(`/api/intel/sources/funnel?${apiParams.toString()}`),
         spendQuery,
-        weddingQuery,
       ])
 
-      if (attrRes.error) throw attrRes.error
+      if (!funnelRes.ok) throw new Error(`Funnel HTTP ${funnelRes.status}`)
+      const funnelJson = (await funnelRes.json()) as { rows?: FunnelApiRow[] }
       if (spendRes.error) throw spendRes.error
-      if (wedRes.error) throw wedRes.error
 
-      setAttributions((attrRes.data ?? []) as unknown as SourceAttribution[])
+      setFunnelRows(funnelJson.rows ?? [])
       setSpendData((spendRes.data ?? []) as unknown as MarketingSpend[])
-      setWeddings((wedRes.data ?? []) as unknown as WeddingRow[])
       setError(null)
     } catch (err) {
       console.error('Failed to fetch source attribution data:', err)
@@ -478,7 +490,7 @@ export default function SourceAttributionPage() {
     } finally {
       setLoading(false)
     }
-  }, [scope.level, scope.venueId, scope.groupId, scope.loading])
+  }, [scope.level, scope.venueId, scope.groupId, scope.orgId, scope.loading, model])
 
   useEffect(() => {
     setLoading(true)
@@ -486,15 +498,18 @@ export default function SourceAttributionPage() {
   }, [fetchData])
 
   // ---- Build aggregated source rows ----
-  // At venue scope: aggregate by source. At company/group scope: aggregate by
-  // source × venue so each row shows which venue the attribution is from.
-  // Primary: source_attribution (has spend + revenue). Fallback: weddings (leads + bookings).
+  // At venue scope: aggregate by source. At company/group scope:
+  // aggregate by source × venue so each row shows which venue the
+  // attribution is from. Funnel counts come from the API; spend is
+  // overlayed from marketing_spend. Cost-per-X is derived here.
   const sourceRows: SourceRow[] = (() => {
     const showByVenue = scope.level !== 'venue'
 
     interface Agg {
       inquiries: number
-      tours: number
+      tours_booked: number
+      tours_conducted: number
+      proposals_sent: number
       bookings: number
       revenue: number
       spend: number
@@ -518,7 +533,9 @@ export default function SourceAttributionPage() {
       if (existing) return existing
       const fresh: Agg = {
         inquiries: 0,
-        tours: 0,
+        tours_booked: 0,
+        tours_conducted: 0,
+        proposals_sent: 0,
         bookings: 0,
         revenue: 0,
         spend: 0,
@@ -530,43 +547,23 @@ export default function SourceAttributionPage() {
       return fresh
     }
 
-    // 1) Roll up from source_attribution
-    for (const a of attributions) {
-      const sourceKey = (a.source || 'unknown').toLowerCase()
-      const row = ensure(sourceKey, a.venue_id ?? null, a.venues?.name ?? null)
-      row.inquiries += Number(a.inquiries ?? 0)
-      row.tours += Number(a.tours ?? 0)
-      row.bookings += Number(a.bookings ?? 0)
-      row.revenue += Number(a.revenue ?? 0)
-      row.spend += Number(a.spend ?? 0)
+    // 1) Funnel counts from the attribution endpoint
+    for (const r of funnelRows) {
+      const sourceKey = (r.source ?? 'unknown').toLowerCase()
+      const row = ensure(sourceKey, r.venueId ?? null, r.venueName ?? null)
+      row.inquiries += Number(r.inquiries ?? 0)
+      row.tours_booked += Number(r.tours_booked ?? 0)
+      row.tours_conducted += Number(r.tours_conducted ?? 0)
+      row.proposals_sent += Number(r.proposals_sent ?? 0)
+      row.bookings += Number(r.bookings ?? 0)
+      row.revenue += Number(r.revenue ?? 0)
     }
 
-    // 2) Also roll up spend from marketing_spend (amount column)
+    // 2) Layer spend from marketing_spend (amount column)
     for (const s of spendData) {
       const sourceKey = (s.source || 'unknown').toLowerCase()
       const row = ensure(sourceKey, s.venue_id ?? null, s.venues?.name ?? null)
       row.spend += Number(s.amount ?? 0)
-    }
-
-    // 3) Fallback: if source_attribution is empty/sparse, compute leads + bookings
-    //    from weddings.source. Only ADD weddings counts for sources missing from
-    //    attribution (avoid double-counting). When keyed by venue, check per-venue.
-    const attributedKeys = new Set(
-      attributions.map((a) =>
-        makeKey((a.source || '').toLowerCase(), a.venue_id ?? null)
-      )
-    )
-    const BOOKED_STATUSES = new Set(['booked', 'completed', 'contracted'])
-    for (const w of weddings) {
-      if (!w.source) continue
-      const sourceKey = w.source.toLowerCase()
-      const venueId = w.venue_id ?? null
-      if (attributedKeys.has(makeKey(sourceKey, venueId))) continue // already covered
-      const row = ensure(sourceKey, venueId, w.venues?.name ?? null)
-      row.inquiries += 1
-      if (w.status && BOOKED_STATUSES.has(w.status.toLowerCase())) {
-        row.bookings += 1
-      }
     }
 
     const rows: SourceRow[] = []
@@ -578,11 +575,13 @@ export default function SourceAttributionPage() {
         venue_name: data.venue_name,
         spend: data.spend,
         inquiries: data.inquiries,
-        tours: data.tours,
+        tours_booked: data.tours_booked,
+        tours_conducted: data.tours_conducted,
+        proposals_sent: data.proposals_sent,
         bookings: data.bookings,
         revenue: data.revenue,
         cost_per_inquiry: data.inquiries > 0 ? data.spend / data.inquiries : 0,
-        cost_per_tour: data.tours > 0 ? data.spend / data.tours : 0,
+        cost_per_tour: data.tours_booked > 0 ? data.spend / data.tours_booked : 0,
         cost_per_booking: data.bookings > 0 ? data.spend / data.bookings : 0,
         conversion_rate: data.inquiries > 0 ? data.bookings / data.inquiries : 0,
         roi: data.spend > 0 ? (data.revenue - data.spend) / data.spend : 0,
@@ -731,6 +730,29 @@ export default function SourceAttributionPage() {
             Showing for {scope.venueName}
           </p>
         )}
+      </div>
+
+      {/* ---- Attribution model selector ---- */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-sm font-medium text-sage-700">Attribution:</span>
+        {([
+          ['first_touch', 'First-touch', 'Credit the source that first introduced the couple.'],
+          ['last_touch', 'Last-touch', 'Credit the source of the most recent touch before booking.'],
+          ['linear', 'Linear', 'Split credit equally across every source the couple touched.'],
+        ] as [AttributionModel, string, string][]).map(([key, label, hint]) => (
+          <button
+            key={key}
+            onClick={() => setModel(key)}
+            title={hint}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${
+              model === key
+                ? 'bg-sage-700 text-white border-sage-700'
+                : 'bg-surface text-sage-700 border-border hover:bg-sage-50'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* ---- Spend importer — Phase 3 Task 33 ---- */}
@@ -908,7 +930,9 @@ export default function SourceAttributionPage() {
                     ['source_name', 'Source'],
                     ['spend', 'Spend'],
                     ['inquiries', 'Inquiries'],
-                    ['tours', 'Tours'],
+                    ['tours_booked', 'Tours Booked'],
+                    ['tours_conducted', 'Tours Held'],
+                    ['proposals_sent', 'Proposals'],
                     ['bookings', 'Bookings'],
                     ['revenue', 'Revenue'],
                     ['cost_per_inquiry', 'Cost / Lead'],
@@ -948,12 +972,14 @@ export default function SourceAttributionPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmt$(row.spend)}</td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">{row.inquiries}</td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">{row.tours}</td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">{row.bookings}</td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">{fmtCount(row.inquiries)}</td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">{fmtCount(row.tours_booked)}</td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">{fmtCount(row.tours_conducted)}</td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">{fmtCount(row.proposals_sent)}</td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">{fmtCount(row.bookings)}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">{fmt$(row.revenue)}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmt$(row.cost_per_inquiry)}</td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">{row.tours > 0 ? fmt$(row.spend / row.tours) : '—'}</td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">{row.tours_booked > 0 ? fmt$(row.spend / row.tours_booked) : '—'}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmt$(row.cost_per_booking)}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmtPct(row.conversion_rate)}</td>
                     <td className="px-4 py-3 tabular-nums">
@@ -965,6 +991,77 @@ export default function SourceAttributionPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Funnel by Source ---- */}
+      {!loading && sortedRows.length > 0 && (
+        <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+          <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2">
+            <BarChart3 className="w-5 h-5 text-sage-600" />
+            Funnel by Source
+          </h2>
+          <p className="text-xs text-sage-500 mb-4 mt-1">
+            Inquiry → Tour Booked → Tour Held → Proposal → Booked, attributed by{' '}
+            {model === 'first_touch' ? 'first-touch' : model === 'last_touch' ? 'last-touch' : 'linear'} model.
+          </p>
+          <div className="space-y-3">
+            {sortedRows
+              .filter((r) => r.inquiries > 0)
+              .slice(0, 8)
+              .map((row) => {
+                const max = row.inquiries || 1
+                const cells: Array<[string, number]> = [
+                  ['Inquiries', row.inquiries],
+                  ['Tours Booked', row.tours_booked],
+                  ['Tours Held', row.tours_conducted],
+                  ['Proposals', row.proposals_sent],
+                  ['Booked', row.bookings],
+                ]
+                return (
+                  <div key={row.source_key}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <div
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: getSourceColor(row.source_name) }}
+                      />
+                      <span className="text-sm font-medium text-sage-900">
+                        {row.source_name}
+                      </span>
+                      {scope.level !== 'venue' && (
+                        <VenueChip venueName={row.venue_name} />
+                      )}
+                      <span className="text-xs text-sage-500">
+                        · {fmtPct(row.conversion_rate)} conversion
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-5 gap-1.5">
+                      {cells.map(([label, value]) => {
+                        const pct = (value / max) * 100
+                        return (
+                          <div key={label} className="relative">
+                            <div className="h-8 bg-sage-50 rounded overflow-hidden">
+                              <div
+                                className="h-full rounded transition-all"
+                                style={{
+                                  width: `${Math.max(pct, 4)}%`,
+                                  backgroundColor: getSourceColor(row.source_name),
+                                  opacity: 0.7,
+                                }}
+                              />
+                            </div>
+                            <div className="flex items-center justify-between mt-1 px-0.5">
+                              <span className="text-[10px] uppercase tracking-wide text-sage-500">{label}</span>
+                              <span className="text-xs font-medium text-sage-700 tabular-nums">{fmtCount(value)}</span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
           </div>
         </div>
       )}
