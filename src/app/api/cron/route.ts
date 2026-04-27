@@ -22,6 +22,7 @@ import { persistDropoffInsights } from '@/lib/services/quality-signals'
 import { refreshAllCensusData } from '@/lib/services/census-ingest'
 import { computeCorrelationsAllVenues } from '@/lib/services/correlation-engine'
 import { mineTranscriptVoiceForAllVenues } from '@/lib/services/transcript-voice-learning'
+import { findBacktraceCandidates } from '@/lib/services/source-backtrace'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -49,6 +50,7 @@ const VALID_JOBS = [
   'census_refresh',
   'transcript_voice_mining',
   'correlation_analysis',
+  'backtrace_scan',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -137,7 +139,99 @@ async function runJob(job: JobName): Promise<unknown> {
       // intelligence_insights where |r| >= 0.6 and both series have >= 20
       // non-zero days. Pure stats — no AI call. Runs weekly.
       return computeCorrelationsAllVenues(createServiceClient())
+
+    case 'backtrace_scan':
+      // Daily re-scan of source-backtrace candidates per venue. The
+      // initial scan happens on the onboarding Go Live step, but Gmail
+      // polling continues to ingest emails for hours/days after that —
+      // the high-confidence relay matches we couldn't see at T0 land
+      // later. This job re-runs findBacktraceCandidates(useLiveGmail)
+      // and notifies the coordinator when new high-confidence
+      // candidates exist that they haven't already reviewed. Skips
+      // venues without Gmail (no inbox = no point), uses unread
+      // admin_notifications as the dedup mechanism (one open notif per
+      // venue at a time; coordinator marks read and the next batch
+      // creates a fresh one).
+      return scanBacktraceAllVenues()
   }
+}
+
+/**
+ * Daily re-scan for source-backtrace candidates. For each venue with a
+ * live Gmail connection, walks weddings whose first-touch is a
+ * scheduling tool and asks the source-backtrace service whether any
+ * high-confidence relay matches now exist. Only emits a notification
+ * when there's at least one open candidate AND the coordinator has
+ * already cleared (read) the previous notification — so we don't keep
+ * pushing the same alert at someone who's actively triaging.
+ *
+ * Returns per-venue stats so the cron log shows what changed.
+ */
+async function scanBacktraceAllVenues(): Promise<
+  Record<string, { highConfidence: number; mediumConfidence: number; notified: boolean }>
+> {
+  const supabase = createServiceClient()
+
+  // Only scan venues that actually have a live Gmail connection — no
+  // inbox = no findBacktraceCandidates work worth doing.
+  const { data: connectedRows } = await supabase
+    .from('gmail_connections')
+    .select('venue_id')
+    .eq('sync_enabled', true)
+    .eq('status', 'active')
+  const venueIds = new Set<string>()
+  for (const row of connectedRows ?? []) {
+    if (row.venue_id) venueIds.add(row.venue_id as string)
+  }
+  if (venueIds.size === 0) return {}
+
+  const out: Record<string, { highConfidence: number; mediumConfidence: number; notified: boolean }> = {}
+
+  for (const venueId of venueIds) {
+    try {
+      const candidates = await findBacktraceCandidates(venueId, { useLiveGmail: true })
+      const high = candidates.filter((c) => c.confidence === 'high').length
+      const medium = candidates.filter((c) => c.confidence === 'medium').length
+
+      let notified = false
+      if (high > 0) {
+        // Dedup window: at most one notification per 7 days per venue,
+        // regardless of read state. This balances two pressures:
+        //   - Don't spam: a coordinator who's seen the alert once
+        //     this week shouldn't get pinged again every cron tick.
+        //   - Don't fall silent: if new candidates land later (Gmail
+        //     polling delivers more emails over time), we want them
+        //     to surface within a week without needing a re-scan
+        //     click.
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+        const { data: recent } = await supabase
+          .from('admin_notifications')
+          .select('id')
+          .eq('venue_id', venueId)
+          .eq('type', 'source_backtrace_ready')
+          .gte('created_at', sevenDaysAgo)
+          .limit(1)
+        if (!recent || recent.length === 0) {
+          await createNotification({
+            venueId,
+            type: 'source_backtrace_ready',
+            title: `Source attribution: ${high} ${high === 1 ? 'lead' : 'leads'} ready for re-attribution`,
+            body:
+              `We found ${high} high-confidence ${high === 1 ? 'match' : 'matches'} ` +
+              `where the real first-touch source was misattributed to a scheduling ` +
+              `tool. Review and apply at /settings/sources.`,
+          })
+          notified = true
+        }
+      }
+
+      out[venueId] = { highConfidence: high, mediumConfidence: medium, notified }
+    } catch (err) {
+      console.error(`[cron] backtrace scan failed for venue ${venueId}:`, err)
+      out[venueId] = { highConfidence: -1, mediumConfidence: -1, notified: false }
+    }
+  }
+  return out
 }
 
 async function refreshQualitySignalsAllVenues(): Promise<Record<string, number>> {

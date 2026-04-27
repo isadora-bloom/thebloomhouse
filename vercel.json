@@ -67,6 +67,10 @@
     {
       "path": "/api/cron?job=correlation_analysis",
       "schedule": "0 7 * * 2"
+    },
+    {
+      "path": "/api/cron?job=backtrace_scan",
+      "schedule": "30 4 * * *"
     }
   ]
 }
