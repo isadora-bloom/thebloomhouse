@@ -1304,16 +1304,36 @@ export default function InboxPage() {
         }
       })
 
-      // Pull pending drafts that are linked to any of these interactions
-      // and merge them in. This is what powers the inline approval card
-      // under each email row in the list.
+      // Pull pending drafts and attach them to the email row they reply to.
+      //   1) Drafts with interaction_id → attach directly to that interaction.
+      //   2) Drafts with NULL interaction_id but with wedding_id → attach to
+      //      the most recent inbound interaction on that wedding. This is the
+      //      shape produced by seed-agent-intel.mjs, where Sage-drafted-but-
+      //      unlinked replies sit on a wedding without pointing at a specific
+      //      inbound email. Without this branch ~85% of demo pending drafts
+      //      would render no inline card despite the badge counting them.
       const interactionIdList = mapped.map((m) => m.id)
-      let draftRows: any[] = []
+      const weddingIds = Array.from(
+        new Set(mapped.map((m) => m.wedding_id).filter((v): v is string => !!v))
+      )
+      const draftByInteraction = new Map<string, PendingDraft>()
+
+      const buildDraft = (d: any): PendingDraft => ({
+        id: d.id,
+        draft_body: d.draft_body,
+        subject: d.subject,
+        to_email: d.to_email,
+        brain_used: d.brain_used,
+        confidence_score: d.confidence_score,
+        auto_sent: d.auto_sent ?? false,
+        created_at: d.created_at,
+      })
+
       if (interactionIdList.length > 0) {
         let dq = supabase
           .from('drafts')
           .select(
-            'id, interaction_id, draft_body, subject, to_email, brain_used, confidence_score, auto_sent, created_at'
+            'id, interaction_id, wedding_id, draft_body, subject, to_email, brain_used, confidence_score, auto_sent, created_at'
           )
           .eq('status', 'pending')
           .in('interaction_id', interactionIdList)
@@ -1321,23 +1341,43 @@ export default function InboxPage() {
           dq = dq.in('venue_id', venueIds)
         }
         const { data: dData } = await dq
-        draftRows = dData ?? []
-      }
-      const draftByInteraction = new Map<string, PendingDraft>()
-      for (const d of draftRows) {
-        if (d.interaction_id) {
-          draftByInteraction.set(d.interaction_id, {
-            id: d.id,
-            draft_body: d.draft_body,
-            subject: d.subject,
-            to_email: d.to_email,
-            brain_used: d.brain_used,
-            confidence_score: d.confidence_score,
-            auto_sent: d.auto_sent ?? false,
-            created_at: d.created_at,
-          })
+        for (const d of dData ?? []) {
+          if (d.interaction_id) draftByInteraction.set(d.interaction_id, buildDraft(d))
         }
       }
+
+      if (weddingIds.length > 0) {
+        let oq = supabase
+          .from('drafts')
+          .select(
+            'id, interaction_id, wedding_id, draft_body, subject, to_email, brain_used, confidence_score, auto_sent, created_at'
+          )
+          .eq('status', 'pending')
+          .is('interaction_id', null)
+          .in('wedding_id', weddingIds)
+        if (venueIds && venueIds.length > 0) {
+          oq = oq.in('venue_id', venueIds)
+        }
+        const { data: orphanDrafts } = await oq
+        // mapped is already sorted by timestamp DESC, so the first match is
+        // the most recent inbound for that wedding. Skip rows that already
+        // have a draft attached (a directly-linked draft wins).
+        const claimed = new Set<string>(draftByInteraction.keys())
+        for (const orphan of orphanDrafts ?? []) {
+          if (!orphan.wedding_id) continue
+          const target = mapped.find(
+            (m) =>
+              m.wedding_id === orphan.wedding_id &&
+              m.direction === 'inbound' &&
+              !claimed.has(m.id)
+          )
+          if (target) {
+            draftByInteraction.set(target.id, buildDraft(orphan))
+            claimed.add(target.id)
+          }
+        }
+      }
+
       const merged = mapped.map((m) => ({
         ...m,
         pending_draft: draftByInteraction.get(m.id) ?? null,
