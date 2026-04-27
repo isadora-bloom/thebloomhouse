@@ -28,6 +28,8 @@ import {
   PenLine,
   Trash2,
   Save,
+  Brain,
+  Pencil,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -95,6 +97,18 @@ interface Interaction {
   is_read?: boolean
   client_code?: string | null
   venue_name?: string | null
+  pending_draft?: PendingDraft | null
+}
+
+interface PendingDraft {
+  id: string
+  draft_body: string
+  subject: string | null
+  to_email: string | null
+  brain_used: string | null
+  confidence_score: number | null
+  auto_sent: boolean
+  created_at: string
 }
 
 type FilterTab = 'all' | 'inquiries' | 'client' | 'unread'
@@ -822,6 +836,289 @@ function ThreadView({
 }
 
 // ---------------------------------------------------------------------------
+// Inline draft approval (rendered under matching email in the list)
+// ---------------------------------------------------------------------------
+
+function confidenceMeta(score: number | null) {
+  if (score === null) return { bg: 'bg-sage-50', text: 'text-sage-600', label: '?' }
+  if (score >= 90) return { bg: 'bg-emerald-50', text: 'text-emerald-700', label: `${score}%` }
+  if (score >= 75) return { bg: 'bg-amber-50', text: 'text-amber-700', label: `${score}%` }
+  return { bg: 'bg-red-50', text: 'text-red-700', label: `${score}%` }
+}
+
+function brainMeta(brain: string | null) {
+  switch (brain) {
+    case 'inquiry_brain':
+      return { bg: 'bg-teal-50', text: 'text-teal-700', label: 'Inquiry Brain' }
+    case 'client_brain':
+      return { bg: 'bg-sage-50', text: 'text-sage-700', label: 'Client Brain' }
+    default:
+      return { bg: 'bg-sage-50', text: 'text-sage-600', label: brain || 'Unknown' }
+  }
+}
+
+function InlineDraftApproval({
+  draft,
+  isProcessing,
+  onApprove,
+  onApproveAndSend,
+  onEdit,
+  onReject,
+}: {
+  draft: PendingDraft
+  isProcessing: boolean
+  onApprove: () => void
+  onApproveAndSend: () => void
+  onEdit: () => void
+  onReject: () => void
+}) {
+  const conf = confidenceMeta(draft.confidence_score)
+  const brain = brainMeta(draft.brain_used)
+  const [expanded, setExpanded] = useState(false)
+  const stop = (fn: () => void) => (e: React.MouseEvent) => {
+    e.stopPropagation()
+    fn()
+  }
+  return (
+    <div className="px-4 pb-4 pt-1 bg-amber-50/40 border-l-2 border-l-amber-400">
+      <div className="rounded-lg border border-amber-200 bg-white p-3">
+        <div className="flex items-center gap-2 mb-2 flex-wrap">
+          <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+          <span className="text-xs font-semibold text-amber-800">AI draft ready</span>
+          <span
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${conf.bg} ${conf.text}`}
+          >
+            <Sparkles className="w-2.5 h-2.5" />
+            {conf.label}
+          </span>
+          <span
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${brain.bg} ${brain.text}`}
+          >
+            <Brain className="w-2.5 h-2.5" />
+            {brain.label}
+          </span>
+          {draft.auto_sent && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700">
+              <Send className="w-2.5 h-2.5" />
+              Auto-sent
+            </span>
+          )}
+        </div>
+        <p
+          className={`text-xs text-sage-700 whitespace-pre-wrap leading-relaxed mb-2 ${
+            expanded ? '' : 'line-clamp-4'
+          }`}
+        >
+          {draft.draft_body}
+        </p>
+        {draft.draft_body && draft.draft_body.length > 200 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              setExpanded(!expanded)
+            }}
+            className="text-[11px] font-medium text-sage-600 hover:text-sage-900 underline-offset-2 hover:underline mb-2 block"
+          >
+            {expanded ? 'Show less' : 'Show full draft'}
+          </button>
+        )}
+        <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-amber-100">
+          <button
+            onClick={stop(onApprove)}
+            disabled={isProcessing}
+            title="Mark approved. Won't send until you click Send from the Approved tab."
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isProcessing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5" />}
+            Approve
+          </button>
+          <button
+            onClick={stop(onEdit)}
+            disabled={isProcessing}
+            title="Edit the draft, then mark approved (no send)."
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-sage-700 border border-sage-300 rounded-md hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+            Edit & Approve
+          </button>
+          <button
+            onClick={stop(onApproveAndSend)}
+            disabled={isProcessing}
+            title="Approve and send immediately."
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium bg-emerald-500 hover:bg-emerald-600 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Send className="w-3.5 h-3.5" />
+            Approve & Send
+          </button>
+          <button
+            onClick={stop(onReject)}
+            disabled={isProcessing}
+            title="Reject with feedback for AI learning."
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-md hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ml-auto"
+          >
+            <XCircle className="w-3.5 h-3.5" />
+            Reject
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function EditDraftModal({
+  draft,
+  onClose,
+  onSave,
+}: {
+  draft: PendingDraft
+  onClose: () => void
+  onSave: (id: string, body: string) => Promise<void>
+}) {
+  const [body, setBody] = useState(draft.draft_body)
+  const [saving, setSaving] = useState(false)
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await onSave(draft.id, body)
+      onClose()
+    } catch {
+      // error handled in parent
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="absolute inset-0 bg-black/40" />
+      <div className="relative bg-surface rounded-2xl shadow-2xl w-full max-w-2xl border border-border">
+        <div className="flex items-center justify-between px-6 pt-6 pb-4">
+          <div className="flex items-center gap-2">
+            <Pencil className="w-5 h-5 text-sage-600" />
+            <h2 className="font-heading text-lg font-semibold text-sage-900">Edit Draft</h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-sage-400 hover:text-sage-600 hover:bg-sage-50 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="px-6 pb-6 space-y-4">
+          <div className="text-sm text-sage-600">
+            <span className="font-medium text-sage-800">To:</span>{' '}
+            {draft.to_email || 'Unknown'}
+            {draft.subject && (
+              <>
+                <br />
+                <span className="font-medium text-sage-800">Subject:</span> {draft.subject}
+              </>
+            )}
+          </div>
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={12}
+            className="w-full px-3 py-2.5 border border-sage-200 rounded-lg text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 resize-none bg-warm-white leading-relaxed"
+          />
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-sage-700 border border-sage-300 rounded-lg hover:bg-sage-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={!body.trim() || saving}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-sage-500 hover:bg-sage-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <CheckCircle className="w-4 h-4" />
+              {saving ? 'Saving...' : 'Save & Approve'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RejectDraftModal({
+  onClose,
+  onReject,
+}: {
+  onClose: () => void
+  onReject: (reason: string) => Promise<void>
+}) {
+  const [reason, setReason] = useState('')
+  const [rejecting, setRejecting] = useState(false)
+  const handleReject = async () => {
+    setRejecting(true)
+    try {
+      await onReject(reason.trim())
+      onClose()
+    } catch {
+      // error handled in parent
+    } finally {
+      setRejecting(false)
+    }
+  }
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="absolute inset-0 bg-black/40" />
+      <div className="relative bg-surface rounded-2xl shadow-2xl w-full max-w-md border border-border">
+        <div className="flex items-center justify-between px-6 pt-6 pb-4">
+          <div className="flex items-center gap-2">
+            <XCircle className="w-5 h-5 text-red-500" />
+            <h2 className="font-heading text-lg font-semibold text-sage-900">Reject Draft</h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-sage-400 hover:text-sage-600 hover:bg-sage-50 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="px-6 pb-6 space-y-4">
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Why are you rejecting this draft? (optional but helps AI learn)"
+            rows={3}
+            className="w-full px-3 py-2.5 border border-sage-200 rounded-lg text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 resize-none bg-warm-white"
+          />
+          <div className="flex items-center justify-end gap-3">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-sage-700 border border-sage-300 rounded-lg hover:bg-sage-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleReject}
+              disabled={rejecting}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <XCircle className="w-4 h-4" />
+              {rejecting ? 'Rejecting...' : 'Reject'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
@@ -857,6 +1154,9 @@ export default function InboxPage() {
   const [threadLoading, setThreadLoading] = useState(false)
   const [showCompose, setShowCompose] = useState(false)
   const [pendingDraftCount, setPendingDraftCount] = useState(0)
+  const [editingDraft, setEditingDraft] = useState<{ draft: PendingDraft; venueId: string } | null>(null)
+  const [rejectingDraft, setRejectingDraft] = useState<{ draftId: string; venueId: string } | null>(null)
+  const [processingDraftId, setProcessingDraftId] = useState<string | null>(null)
   // Current user name for thread locking — in real mode this would come from auth
   const currentUserName = 'You'
 
@@ -1004,7 +1304,46 @@ export default function InboxPage() {
         }
       })
 
-      setInteractions(mapped)
+      // Pull pending drafts that are linked to any of these interactions
+      // and merge them in. This is what powers the inline approval card
+      // under each email row in the list.
+      const interactionIdList = mapped.map((m) => m.id)
+      let draftRows: any[] = []
+      if (interactionIdList.length > 0) {
+        let dq = supabase
+          .from('drafts')
+          .select(
+            'id, interaction_id, draft_body, subject, to_email, brain_used, confidence_score, auto_sent, created_at'
+          )
+          .eq('status', 'pending')
+          .in('interaction_id', interactionIdList)
+        if (venueIds && venueIds.length > 0) {
+          dq = dq.in('venue_id', venueIds)
+        }
+        const { data: dData } = await dq
+        draftRows = dData ?? []
+      }
+      const draftByInteraction = new Map<string, PendingDraft>()
+      for (const d of draftRows) {
+        if (d.interaction_id) {
+          draftByInteraction.set(d.interaction_id, {
+            id: d.id,
+            draft_body: d.draft_body,
+            subject: d.subject,
+            to_email: d.to_email,
+            brain_used: d.brain_used,
+            confidence_score: d.confidence_score,
+            auto_sent: d.auto_sent ?? false,
+            created_at: d.created_at,
+          })
+        }
+      }
+      const merged = mapped.map((m) => ({
+        ...m,
+        pending_draft: draftByInteraction.get(m.id) ?? null,
+      }))
+
+      setInteractions(merged)
       setError(null)
     } catch (err) {
       console.error('Failed to fetch interactions:', err)
@@ -1013,6 +1352,115 @@ export default function InboxPage() {
       setLoading(false)
     }
   }, [scope.loading, resolveVenueIds, supabase])
+
+  // ---- Inline draft approval handlers ----
+  const clearDraftFromList = useCallback((draftId: string) => {
+    setInteractions((prev) =>
+      prev.map((i) => (i.pending_draft?.id === draftId ? { ...i, pending_draft: null } : i))
+    )
+    setPendingDraftCount((c) => Math.max(0, c - 1))
+  }, [])
+
+  const handleInlineApprove = async (draftId: string, venueId: string) => {
+    setProcessingDraftId(draftId)
+    try {
+      await supabase
+        .from('drafts')
+        .update({ status: 'approved', approved_at: new Date().toISOString() })
+        .eq('id', draftId)
+      await supabase.from('draft_feedback').insert({
+        venue_id: venueId,
+        draft_id: draftId,
+        action: 'approved',
+      })
+      clearDraftFromList(draftId)
+    } catch (err) {
+      console.error('Failed to approve draft:', err)
+    } finally {
+      setProcessingDraftId(null)
+    }
+  }
+
+  const handleInlineApproveAndSend = async (draftId: string, venueId: string) => {
+    setProcessingDraftId(draftId)
+    try {
+      await supabase
+        .from('drafts')
+        .update({ status: 'approved', approved_at: new Date().toISOString() })
+        .eq('id', draftId)
+      await supabase.from('draft_feedback').insert({
+        venue_id: venueId,
+        draft_id: draftId,
+        action: 'approved',
+      })
+      try {
+        await fetch('/api/agent/drafts', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ draftId }),
+        })
+      } catch {
+        // email send is best-effort
+      }
+      clearDraftFromList(draftId)
+    } catch (err) {
+      console.error('Failed to approve & send draft:', err)
+    } finally {
+      setProcessingDraftId(null)
+    }
+  }
+
+  const handleInlineEditApprove = async (draftId: string, body: string) => {
+    setProcessingDraftId(draftId)
+    try {
+      const target = interactions.find((i) => i.pending_draft?.id === draftId)
+      const venueId = target?.venue_id
+      const original = target?.pending_draft?.draft_body
+      await supabase
+        .from('drafts')
+        .update({
+          draft_body: body,
+          status: 'approved',
+          approved_at: new Date().toISOString(),
+        })
+        .eq('id', draftId)
+      await supabase.from('draft_feedback').insert({
+        venue_id: venueId,
+        draft_id: draftId,
+        action: 'edited',
+        original_body: original,
+        edited_body: body,
+      })
+      clearDraftFromList(draftId)
+    } catch (err) {
+      console.error('Failed to edit/approve draft:', err)
+      throw err
+    } finally {
+      setProcessingDraftId(null)
+    }
+  }
+
+  const handleInlineReject = async (draftId: string, venueId: string, reason: string) => {
+    setProcessingDraftId(draftId)
+    try {
+      await supabase
+        .from('drafts')
+        .update({ status: 'rejected', feedback_notes: reason || null })
+        .eq('id', draftId)
+      await supabase.from('draft_feedback').insert({
+        venue_id: venueId,
+        draft_id: draftId,
+        action: 'rejected',
+        rejection_reason: reason || null,
+      })
+      clearDraftFromList(draftId)
+    } catch (err) {
+      console.error('Failed to reject draft:', err)
+      throw err
+    } finally {
+      setProcessingDraftId(null)
+    }
+  }
 
   useEffect(() => {
     fetchInteractions()
@@ -1442,13 +1890,44 @@ export default function InboxPage() {
               }`}
             >
               {filteredInteractions.map((interaction) => (
-                <EmailListItem
-                  key={interaction.id}
-                  interaction={interaction}
-                  isSelected={interaction.id === selectedId}
-                  onClick={() => loadThread(interaction)}
-                  showVenueChip={showVenueChip}
-                />
+                <div key={interaction.id}>
+                  <EmailListItem
+                    interaction={interaction}
+                    isSelected={interaction.id === selectedId}
+                    onClick={() => loadThread(interaction)}
+                    showVenueChip={showVenueChip}
+                  />
+                  {interaction.pending_draft && (
+                    <InlineDraftApproval
+                      draft={interaction.pending_draft}
+                      isProcessing={processingDraftId === interaction.pending_draft.id}
+                      onApprove={() =>
+                        handleInlineApprove(
+                          interaction.pending_draft!.id,
+                          interaction.venue_id
+                        )
+                      }
+                      onApproveAndSend={() =>
+                        handleInlineApproveAndSend(
+                          interaction.pending_draft!.id,
+                          interaction.venue_id
+                        )
+                      }
+                      onEdit={() =>
+                        setEditingDraft({
+                          draft: interaction.pending_draft!,
+                          venueId: interaction.venue_id,
+                        })
+                      }
+                      onReject={() =>
+                        setRejectingDraft({
+                          draftId: interaction.pending_draft!.id,
+                          venueId: interaction.venue_id,
+                        })
+                      }
+                    />
+                  )}
+                </div>
               ))}
             </div>
 
@@ -1592,6 +2071,27 @@ export default function InboxPage() {
           venueId={composeVenueId}
           onClose={() => setShowCompose(false)}
           onSent={fetchInteractions}
+        />
+      )}
+
+      {/* Edit draft modal (from inline approval card in list) */}
+      {editingDraft && (
+        <EditDraftModal
+          draft={editingDraft.draft}
+          onClose={() => setEditingDraft(null)}
+          onSave={async (id, body) => {
+            await handleInlineEditApprove(id, body)
+          }}
+        />
+      )}
+
+      {/* Reject draft modal (from inline approval card in list) */}
+      {rejectingDraft && (
+        <RejectDraftModal
+          onClose={() => setRejectingDraft(null)}
+          onReject={async (reason) => {
+            await handleInlineReject(rejectingDraft.draftId, rejectingDraft.venueId, reason)
+          }}
         />
       )}
     </div>
