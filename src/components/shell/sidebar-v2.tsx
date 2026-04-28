@@ -15,17 +15,27 @@ import {
 } from './nav-config'
 
 /**
- * Sidebar v2 — mode-aware. Reads the active mode from the current URL
- * and renders only that mode's rail. Sections collapse per-mode state
- * in a cookie so the collapse pattern persists across reloads. Same
- * plan-tier gates as the legacy sidebar. Venue-only sections hide at
- * group/company scope.
+ * SidebarV2 — mode-aware nav. Reads the active mode from the URL
+ * and renders only that mode's rail.
+ *
+ * Two view modes:
+ *   - "Essential" (default) — only items flagged `daily: true` in
+ *     nav-config.ts. ~18 items across all four modes; what a
+ *     coordinator opens every day.
+ *   - "All" — every item in the mode. Use when you need to dig into
+ *     something less common (sequence editing, voice training, etc.).
+ *
+ * Selection persists in `bloom_nav_view` cookie. Per-section collapse
+ * state still persists in `bloom_nav_collapsed`. Plan-tier gates and
+ * venue-only sections still apply in both views.
  */
 
 interface SidebarV2Props {
   isDemo?: boolean
   scopeLevel: 'venue' | 'group' | 'company'
 }
+
+type View = 'essential' | 'all'
 
 function isNavItemVisible(item: NavItem, planTier: 'starter' | 'intelligence' | 'enterprise'): boolean {
   if (!item.requiresPlan) return true
@@ -53,11 +63,31 @@ function isSectionVisible(
   return true
 }
 
+function readView(): View {
+  if (typeof document === 'undefined') return 'essential'
+  const raw = document.cookie.split('; ').find((c) => c.startsWith('bloom_nav_view='))?.split('=')[1]
+  return raw === 'all' ? 'all' : 'essential'
+}
+
+function writeView(view: View) {
+  document.cookie = `bloom_nav_view=${view}; path=/; max-age=${60 * 60 * 24 * 365}`
+}
+
 export function SidebarV2({ scopeLevel }: SidebarV2Props) {
   const pathname = usePathname()
   const { tier: planTier } = usePlanTier()
   const activeMode = modeForPath(pathname)
   const mode: ModeConfig | undefined = MODES.find((m) => m.mode === activeMode) ?? MODES[0]
+
+  const [view, setView] = useState<View>('essential')
+  useEffect(() => {
+    setView(readView())
+  }, [])
+
+  function flipView(next: View) {
+    setView(next)
+    writeView(next)
+  }
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   useEffect(() => {
@@ -78,6 +108,29 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
 
   const sections = mode.sections.filter((s) => isSectionVisible(s, scopeLevel, planTier))
 
+  // For each section, filter items by plan, then by view mode if
+  // Essential. Drop sections that have zero matching items so the
+  // sidebar doesn't render empty headers.
+  const renderable = sections
+    .map((s) => {
+      const planFiltered = s.items.filter((i) => isNavItemVisible(i, planTier))
+      const items = view === 'essential' ? planFiltered.filter((i) => i.daily === true) : planFiltered
+      return { section: s, items }
+    })
+    .filter(({ items }) => items.length > 0)
+
+  // Count what the OTHER view would show — used to render the
+  // "+ N more" hint on the Essential pill so the user knows there's
+  // depth waiting in All.
+  const allCount = sections.reduce(
+    (sum, s) => sum + s.items.filter((i) => isNavItemVisible(i, planTier)).length,
+    0
+  )
+  const essentialCount = sections.reduce(
+    (sum, s) => sum + s.items.filter((i) => isNavItemVisible(i, planTier) && i.daily === true).length,
+    0
+  )
+
   return (
     <aside className="hidden lg:flex fixed top-0 left-0 h-screen w-64 flex-col border-r border-border bg-warm-white overflow-y-auto z-20">
       <div className="px-5 py-4 border-b border-border">
@@ -87,11 +140,40 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
         <p className="text-[11px] text-sage-500 mt-0.5">{mode.description}</p>
       </div>
 
+      {/* Essential / All toggle. Sits below the brand block; persists
+          in bloom_nav_view cookie. */}
+      <div className="px-3 pt-3">
+        <div className="flex items-center bg-sage-50 rounded-lg p-0.5 text-xs">
+          <button
+            onClick={() => flipView('essential')}
+            className={cn(
+              'flex-1 px-2 py-1 rounded-md font-medium transition-colors',
+              view === 'essential'
+                ? 'bg-surface text-sage-900 shadow-sm'
+                : 'text-sage-500 hover:text-sage-700'
+            )}
+          >
+            Essential
+            <span className="ml-1 text-[10px] text-sage-400">{essentialCount}</span>
+          </button>
+          <button
+            onClick={() => flipView('all')}
+            className={cn(
+              'flex-1 px-2 py-1 rounded-md font-medium transition-colors',
+              view === 'all'
+                ? 'bg-surface text-sage-900 shadow-sm'
+                : 'text-sage-500 hover:text-sage-700'
+            )}
+          >
+            All
+            <span className="ml-1 text-[10px] text-sage-400">{allCount}</span>
+          </button>
+        </div>
+      </div>
+
       <nav className="flex-1 px-3 py-4 space-y-5">
-        {sections.map((s) => {
+        {renderable.map(({ section: s, items }) => {
           const isCollapsed = collapsed.has(s.title)
-          const visibleItems = s.items.filter((i) => isNavItemVisible(i, planTier))
-          if (visibleItems.length === 0) return null
           return (
             <div key={s.title}>
               <button
@@ -106,12 +188,12 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
                   )}
                 />
               </button>
-              {s.subtitle && !isCollapsed && (
+              {s.subtitle && !isCollapsed && view === 'all' && (
                 <p className="text-[11px] text-sage-400 px-2 mb-1">{s.subtitle}</p>
               )}
               {!isCollapsed && (
                 <ul className="space-y-0.5">
-                  {visibleItems.map((item) => {
+                  {items.map((item) => {
                     const active = pathname === item.href || pathname.startsWith(item.href + '/')
                     const Icon = item.icon
                     return (
@@ -141,6 +223,20 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
             </div>
           )
         })}
+
+        {/* Hint when Essential is empty for this mode (no items have
+            daily:true). Falls back to a soft prompt to flip to All. */}
+        {view === 'essential' && renderable.length === 0 && (
+          <div className="px-2 py-3 text-xs text-sage-500 text-center">
+            <p className="mb-2">No essentials configured for this view.</p>
+            <button
+              onClick={() => flipView('all')}
+              className="text-sage-700 underline underline-offset-2 hover:text-sage-900"
+            >
+              Show all options
+            </button>
+          </div>
+        )}
       </nav>
     </aside>
   )
