@@ -5,6 +5,8 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { usePlanTier } from '@/lib/hooks/use-plan-tier'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { createClient } from '@/lib/supabase/client'
 import { ChevronDown } from 'lucide-react'
 import {
   MODES,
@@ -76,6 +78,7 @@ function writeView(view: View) {
 export function SidebarV2({ scopeLevel }: SidebarV2Props) {
   const pathname = usePathname()
   const { tier: planTier } = usePlanTier()
+  const venueId = useVenueId()
   const activeMode = modeForPath(pathname)
   const mode: ModeConfig | undefined = MODES.find((m) => m.mode === activeMode) ?? MODES[0]
 
@@ -83,6 +86,28 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
   useEffect(() => {
     setView(readView())
   }, [])
+
+  // Live counts for nav badges. Today only Anomalies has one — count
+  // of unacknowledged anomaly_alerts for this venue. Re-fetched when
+  // the venue changes; not on every navigation. The cron writes new
+  // anomalies and the badge stays accurate within an hour, which is
+  // good enough for "you have unread anomalies."
+  const [anomalyCount, setAnomalyCount] = useState<number>(0)
+  useEffect(() => {
+    if (!venueId) return
+    let cancelled = false
+    async function load() {
+      const sb = createClient()
+      const { count } = await sb
+        .from('anomaly_alerts')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .eq('acknowledged', false)
+      if (!cancelled) setAnomalyCount(count ?? 0)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [venueId])
 
   function flipView(next: View) {
     setView(next)
@@ -196,6 +221,15 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
                   {items.map((item) => {
                     const active = pathname === item.href || pathname.startsWith(item.href + '/')
                     const Icon = item.icon
+                    // Live anomaly count override — shows on the
+                    // Anomalies nav item only. Falls through to the
+                    // static badge for other items.
+                    const isAnomalies = item.href === '/intel/anomalies'
+                    const badgeText =
+                      isAnomalies && anomalyCount > 0
+                        ? String(anomalyCount)
+                        : item.badge
+                    const badgeUrgent = isAnomalies && anomalyCount > 0
                     return (
                       <li key={item.href}>
                         <Link
@@ -209,9 +243,16 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
                         >
                           <Icon className="w-4 h-4 shrink-0" />
                           <span className="flex-1 truncate">{item.label}</span>
-                          {item.badge && (
-                            <span className="text-[9px] px-1 py-0.5 rounded bg-sage-200 text-sage-700 font-medium">
-                              {item.badge}
+                          {badgeText && (
+                            <span
+                              className={cn(
+                                'text-[9px] px-1.5 py-0.5 rounded font-semibold',
+                                badgeUrgent
+                                  ? 'bg-red-100 text-red-700'
+                                  : 'bg-sage-200 text-sage-700'
+                              )}
+                            >
+                              {badgeText}
                             </span>
                           )}
                         </Link>

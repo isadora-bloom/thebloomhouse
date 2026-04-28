@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
 import {
@@ -209,6 +209,7 @@ interface QualityApiRow {
   avgReviewScore: number | null
   referralCount: number
   frictionRate: number
+  avgDaysToBook: number | null
   venueId: string
   venueName: string
 }
@@ -222,6 +223,7 @@ type QualitySortKey =
   | 'avgReviewScore'
   | 'referralCount'
   | 'frictionRate'
+  | 'avgDaysToBook'
 
 interface ScorecardProps {
   scope: ReturnType<typeof useScope>
@@ -233,6 +235,16 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
   const [error, setError] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<QualitySortKey>('bookedCount')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  // At group/company scope, default to the cross-venue rollup so the
+  // coordinator sees portfolio-level "Knot's avg booking value" rather
+  // than one row per (venue, source). At venue scope the toggle is
+  // hidden — there's nothing to roll up.
+  const [aggregate, setAggregate] = useState<boolean>(scope.level !== 'venue')
+
+  // If the scope changes (single venue -> portfolio) the default flips.
+  useEffect(() => {
+    setAggregate(scope.level !== 'venue')
+  }, [scope.level])
 
   useEffect(() => {
     if (scope.loading) return
@@ -248,6 +260,9 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
           params.set('group_id', scope.groupId)
         } else if (scope.orgId) {
           params.set('org_id', scope.orgId)
+        }
+        if (aggregate && scope.level !== 'venue') {
+          params.set('aggregate', 'cross_venue')
         }
         const res = await fetch(`/api/intel/source-quality?${params.toString()}`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -268,7 +283,7 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
     return () => {
       cancelled = true
     }
-  }, [scope.level, scope.venueId, scope.groupId, scope.orgId, scope.loading])
+  }, [scope.level, scope.venueId, scope.groupId, scope.orgId, scope.loading, aggregate])
 
   function handleSort(key: QualitySortKey) {
     if (sortKey === key) {
@@ -296,16 +311,40 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
 
   return (
     <div className="bg-surface border border-border rounded-xl shadow-sm overflow-hidden">
-      <div className="px-6 py-4 border-b border-border">
-        <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2">
-          <Award className="w-5 h-5 text-sage-600" />
-          Source Quality
-        </h2>
-        <p className="text-xs text-sage-500 mt-1">
-          Quality-of-lead signals per source, measured from weddings that
-          actually booked. Higher review scores and lower friction rates
-          mean better-fit couples.
-        </p>
+      <div className="px-6 py-4 border-b border-border flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2">
+            <Award className="w-5 h-5 text-sage-600" />
+            Source Quality
+          </h2>
+          <p className="text-xs text-sage-500 mt-1">
+            Quality-of-lead signals per source, measured from weddings that
+            actually booked. Higher review scores, lower friction rates,
+            and faster time-to-book mean better-fit couples.
+          </p>
+        </div>
+        {scope.level !== 'venue' && (
+          <div className="flex items-center bg-sage-50 rounded-lg p-0.5 text-xs shrink-0">
+            <button
+              onClick={() => setAggregate(true)}
+              className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                aggregate ? 'bg-surface text-sage-900 shadow-sm' : 'text-sage-500 hover:text-sage-700'
+              }`}
+              title="One row per source, weighted across the whole portfolio"
+            >
+              Portfolio
+            </button>
+            <button
+              onClick={() => setAggregate(false)}
+              className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                !aggregate ? 'bg-surface text-sage-900 shadow-sm' : 'text-sage-500 hover:text-sage-700'
+              }`}
+              title="One row per (venue, source) so you can see which venue benefits from which channel"
+            >
+              By Venue
+            </button>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -322,6 +361,7 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
                 ['source', 'Source'],
                 ['bookedCount', 'Booked'],
                 ['avgRevenue', 'Avg Revenue'],
+                ['avgDaysToBook', 'Days to Book'],
                 ['avgEmailsExchanged', 'Emails Exchanged'],
                 ['avgPortalActivity', 'Portal Activity'],
                 ['avgReviewScore', 'Review Score'],
@@ -346,64 +386,278 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
           <tbody className="divide-y divide-border">
             {sortedRows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-6 text-center text-sm text-sage-500">
+                <td colSpan={9} className="px-4 py-6 text-center text-sm text-sage-500">
                   Not enough booked weddings yet to score source quality.
                   Need at least 2 bookings per source.
                 </td>
               </tr>
             ) : (
-              sortedRows.map((row, i) => (
-                <tr
-                  key={`${row.venueId}-${row.source}-${i}`}
-                  className="hover:bg-sage-50/30 transition-colors"
-                >
-                  <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
-                    <div className="flex items-center gap-2">
-                      <div
-                        className="w-2.5 h-2.5 rounded-full shrink-0"
-                        style={{ backgroundColor: getSourceColor(formatSource(row.source)) }}
-                      />
-                      {formatSource(row.source)}
-                      {scope.level !== 'venue' && (
-                        <VenueChip venueName={row.venueName} />
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-sage-700 tabular-nums">
-                    {row.bookedCount}
-                  </td>
-                  <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">
-                    {fmt$(row.avgRevenue)}
-                  </td>
-                  <td className="px-4 py-3 text-sage-700 tabular-nums">
-                    {row.avgEmailsExchanged.toFixed(1)}
-                  </td>
-                  <td className="px-4 py-3 text-sage-700 tabular-nums">
-                    {row.avgPortalActivity.toFixed(1)}
-                  </td>
-                  <td className="px-4 py-3 text-sage-700 tabular-nums">
-                    {row.avgReviewScore !== null
-                      ? row.avgReviewScore.toFixed(2)
-                      : '—'}
-                  </td>
-                  <td className="px-4 py-3 text-sage-700 tabular-nums">
-                    {row.referralCount}
-                  </td>
-                  <td className="px-4 py-3 tabular-nums">
-                    <span
-                      className={`font-medium ${
-                        row.frictionRate === 0
-                          ? 'text-emerald-600'
-                          : row.frictionRate < 0.25
-                          ? 'text-sage-700'
-                          : 'text-red-600'
-                      }`}
-                    >
-                      {fmtPct(row.frictionRate)}
-                    </span>
-                  </td>
-                </tr>
-              ))
+              sortedRows.map((row, i) => {
+                const isAggregateRow = row.venueId === '__aggregate__'
+                return (
+                  <tr
+                    key={`${row.venueId}-${row.source}-${i}`}
+                    className="hover:bg-sage-50/30 transition-colors"
+                  >
+                    <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <div
+                          className="w-2.5 h-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: getSourceColor(formatSource(row.source)) }}
+                        />
+                        {formatSource(row.source)}
+                        {scope.level !== 'venue' && !isAggregateRow && (
+                          <VenueChip venueName={row.venueName} />
+                        )}
+                        {isAggregateRow && (
+                          <span className="text-[10px] text-sage-400 font-normal">
+                            · {row.venueName}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">
+                      {row.bookedCount}
+                    </td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">
+                      {fmt$(row.avgRevenue)}
+                    </td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">
+                      {row.avgDaysToBook !== null
+                        ? `${Math.round(row.avgDaysToBook)} d`
+                        : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">
+                      {row.avgEmailsExchanged.toFixed(1)}
+                    </td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">
+                      {row.avgPortalActivity.toFixed(1)}
+                    </td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">
+                      {row.avgReviewScore !== null
+                        ? row.avgReviewScore.toFixed(2)
+                        : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">
+                      {row.referralCount}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums">
+                      <span
+                        className={`font-medium ${
+                          row.frictionRate === 0
+                            ? 'text-emerald-600'
+                            : row.frictionRate < 0.25
+                            ? 'text-sage-700'
+                            : 'text-red-600'
+                        }`}
+                      >
+                        {fmtPct(row.frictionRate)}
+                      </span>
+                    </td>
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Model Comparison — side-by-side first / last / linear attribution
+// ---------------------------------------------------------------------------
+
+interface ModelComparisonProps {
+  scope: ReturnType<typeof useScope>
+}
+
+function ModelComparisonCard({ scope }: ModelComparisonProps) {
+  // Per-model rollups, keyed by attribution model. Each has the same
+  // FunnelApiRow shape — just computed under a different attribution
+  // contract. The card fetches all three in parallel; on a small
+  // venue this is three quick queries totaling ~half a second.
+  const [byModel, setByModel] = useState<{
+    first_touch: FunnelApiRow[]
+    last_touch: FunnelApiRow[]
+    linear: FunnelApiRow[]
+  }>({ first_touch: [], last_touch: [], linear: [] })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [metric, setMetric] = useState<'bookings' | 'inquiries' | 'tour_conducted'>('bookings')
+
+  useEffect(() => {
+    if (scope.loading) return
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      const baseParams = new URLSearchParams()
+      if (scope.level === 'venue' && scope.venueId) baseParams.set('venue_id', scope.venueId)
+      else if (scope.level === 'group' && scope.groupId) baseParams.set('group_id', scope.groupId)
+      else if (scope.orgId) baseParams.set('org_id', scope.orgId)
+
+      try {
+        const models: AttributionModel[] = ['first_touch', 'last_touch', 'linear']
+        const results = await Promise.all(
+          models.map(async (m) => {
+            const p = new URLSearchParams(baseParams)
+            p.set('model', m)
+            const res = await fetch(`/api/intel/sources/funnel?${p.toString()}`)
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            const json = (await res.json()) as { rows?: FunnelApiRow[] }
+            return [m, json.rows ?? []] as const
+          })
+        )
+        if (cancelled) return
+        const next = { first_touch: [], last_touch: [], linear: [] } as typeof byModel
+        for (const [m, rows] of results) next[m] = rows
+        setByModel(next)
+        setError(null)
+      } catch (err) {
+        if (cancelled) return
+        console.error('Failed to load model comparison:', err)
+        setError('Failed to load model comparison')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [scope.level, scope.venueId, scope.groupId, scope.orgId, scope.loading])
+
+  // Build a unified per-source table where each row carries the metric
+  // value under each model. Source set is the union across models —
+  // some sources only appear under last-touch (where they actually
+  // closed) but not first-touch (because they never originated leads).
+  const rows = useMemo(() => {
+    const sources = new Set<string>()
+    for (const m of ['first_touch', 'last_touch', 'linear'] as const) {
+      for (const r of byModel[m]) {
+        if (scope.level === 'venue' || r.source) sources.add(r.source ?? '(unknown)')
+      }
+    }
+    function pick(model: AttributionModel, source: string): number {
+      const matches = byModel[model].filter((r) => (r.source ?? '(unknown)') === source)
+      return matches.reduce((sum, r) => {
+        if (metric === 'bookings') return sum + r.bookings
+        if (metric === 'inquiries') return sum + r.inquiries
+        return sum + r.tours_conducted
+      }, 0)
+    }
+    return [...sources].map((source) => {
+      const ft = pick('first_touch', source)
+      const lt = pick('last_touch', source)
+      const lin = pick('linear', source)
+      // Spread is the max-min divergence across models — highlights
+      // sources where the choice of model matters most.
+      const spread = Math.max(ft, lt, lin) - Math.min(ft, lt, lin)
+      return { source, ft, lt, lin, spread }
+    }).sort((a, b) => b.spread - a.spread || b.ft + b.lt + b.lin - (a.ft + a.lt + a.lin))
+  }, [byModel, metric, scope.level])
+
+  if (loading) return <TableSkeleton />
+
+  return (
+    <div className="bg-surface border border-border rounded-xl shadow-sm overflow-hidden">
+      <div className="px-6 py-4 border-b border-border flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2">
+            <ArrowUpDown className="w-5 h-5 text-sage-600" />
+            Compare Attribution Models
+          </h2>
+          <p className="text-xs text-sage-500 mt-1">
+            How much does the choice of attribution model change the picture?
+            Sources are sorted by widest divergence — the channels where the
+            model you pick matters most.
+          </p>
+        </div>
+        <div className="flex items-center bg-sage-50 rounded-lg p-0.5 text-xs shrink-0">
+          {([
+            ['inquiries', 'Inquiries'],
+            ['tour_conducted', 'Tours'],
+            ['bookings', 'Bookings'],
+          ] as Array<[typeof metric, string]>).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setMetric(key)}
+              className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                metric === key
+                  ? 'bg-surface text-sage-900 shadow-sm'
+                  : 'text-sage-500 hover:text-sage-700'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <div className="px-6 py-4 bg-red-50 border-b border-red-200 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-sage-50/50">
+              <th className="px-4 py-3 text-left font-medium text-sage-600">Source</th>
+              <th className="px-4 py-3 text-right font-medium text-sage-600">First-touch</th>
+              <th className="px-4 py-3 text-right font-medium text-sage-600">Last-touch</th>
+              <th className="px-4 py-3 text-right font-medium text-sage-600">Linear</th>
+              <th className="px-4 py-3 text-right font-medium text-sage-600" title="Difference between max and min across models — bigger = model choice matters more">
+                Spread
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-6 text-center text-sm text-sage-500">
+                  No attribution data yet.
+                </td>
+              </tr>
+            ) : (
+              rows.map((row) => {
+                const label = row.source === '(unknown)' ? 'Unknown' : (SOURCE_LABELS[row.source] ?? row.source.replace(/_/g, ' '))
+                return (
+                  <tr key={row.source} className="hover:bg-sage-50/30 transition-colors">
+                    <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <div
+                          className="w-2.5 h-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: getSourceColor(label) }}
+                        />
+                        {label}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right text-sage-700 tabular-nums">
+                      {fmtCount(row.ft)}
+                    </td>
+                    <td className="px-4 py-3 text-right text-sage-700 tabular-nums">
+                      {fmtCount(row.lt)}
+                    </td>
+                    <td className="px-4 py-3 text-right text-sage-700 tabular-nums">
+                      {fmtCount(row.lin)}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums">
+                      <span
+                        className={
+                          row.spread === 0
+                            ? 'text-sage-400'
+                            : row.spread > 5
+                            ? 'text-amber-700 font-semibold'
+                            : 'text-sage-600'
+                        }
+                      >
+                        {fmtCount(row.spread)}
+                      </span>
+                    </td>
+                  </tr>
+                )
+              })
             )}
           </tbody>
         </table>
@@ -849,6 +1103,9 @@ export default function SourceAttributionPage() {
 
       {/* ---- Source Quality Scorecard (Phase 4 Task 39) ---- */}
       <SourceQualityScorecard scope={scope} />
+
+      {/* ---- Compare Attribution Models (Phase 4 P4.4) ---- */}
+      <ModelComparisonCard scope={scope} />
 
       {/* ---- Cost per Booking Chart ---- */}
       {loading ? (
