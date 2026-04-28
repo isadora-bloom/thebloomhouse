@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
-import { useScope } from '@/lib/hooks/use-scope'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import {
   MessageSquare, ThumbsUp, ThumbsDown, Zap, Trophy, ArrowLeft,
   Check, X, BarChart3, Play, Mic,
@@ -102,11 +102,18 @@ const GAME_CONFIGS = {
 // ---------------------------------------------------------------------------
 
 export default function VoiceTrainingPage() {
-  const scope = useScope()
+  // Synchronous, SSR-resolved venue id from the platform layout's
+  // VenueScopeProvider. Demo mode falls back to Hawthorne via
+  // resolvePlatformScope. This replaces the previous useScope() +
+  // anon-fallback path that left buttons stuck-disabled when the
+  // demo cookie was company-level (no venueId in the bloom_scope
+  // cookie). The fallback query depended on whether anon RLS on
+  // venues happened to be permissive at the time, which it usually
+  // isn't outside dev — meaning the page stayed greyed out forever.
+  const venueId = useVenueId()
   // Global state
   const [screen, setScreen] = useState<Screen>('select')
   const [activeGame, setActiveGame] = useState<GameType | null>(null)
-  const [venueId, setVenueId] = useState<string | null>(null)
   const [stats, setStats] = useState<TrainingStats>({ total_sessions: 0, completed_sessions: 0, last_played: null })
   const [preferences, setPreferences] = useState<VoicePreference[]>([])
 
@@ -126,31 +133,17 @@ export default function VoiceTrainingPage() {
   const [shuffledQuiz, setShuffledQuiz] = useState<QuizQuestion[]>([])
 
   // -------------------------------------------------------------------------
-  // Load venue & stats
+  // Load stats + preferences for this venue
   // -------------------------------------------------------------------------
 
   useEffect(() => {
-    if (scope.loading) return
-    async function loadVenueAndStats() {
-      // Use the scoped venue ID instead of grabbing first venue from DB (prevents cross-org leak)
-      let resolvedVenueId: string | null = scope.venueId ?? null
-      if (!resolvedVenueId) {
-        // Fallback: get first venue from the user's org
-        let vq = supabase.from('venues').select('id').limit(1)
-        if (scope.orgId) vq = vq.eq('org_id', scope.orgId)
-        const { data: venue } = await vq.single()
-        if (!venue) return
-        resolvedVenueId = venue.id
-      }
-
-      setVenueId(resolvedVenueId)
-      const venue = { id: resolvedVenueId }
-
+    if (!venueId) return
+    async function loadStats() {
       // Load training stats
       const { data: sessions } = await supabase
         .from('voice_training_sessions')
         .select('id, completed_at, started_at')
-        .eq('venue_id', venue.id)
+        .eq('venue_id', venueId)
         .order('started_at', { ascending: false })
 
       if (sessions) {
@@ -165,15 +158,15 @@ export default function VoiceTrainingPage() {
       const { data: prefs } = await supabase
         .from('voice_preferences')
         .select('preference_type, content, score, sample_count')
-        .eq('venue_id', venue.id)
+        .eq('venue_id', venueId)
 
       if (prefs) {
         setPreferences(prefs as VoicePreference[])
       }
     }
 
-    loadVenueAndStats()
-  }, [scope.loading, scope.venueId, scope.orgId])
+    loadStats()
+  }, [venueId])
 
   // -------------------------------------------------------------------------
   // Game lifecycle
