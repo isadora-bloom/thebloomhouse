@@ -563,29 +563,15 @@ INSERT INTO knowledge_gaps (id, venue_id, question, category, frequency, status,
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================================
--- 33. FOLLOW-UP SEQUENCE TEMPLATES
+-- 33. FOLLOW-UP SEQUENCE TEMPLATES — REMOVED
+-- 34. WEDDING SEQUENCES — REMOVED
 -- ============================================
-INSERT INTO follow_up_sequence_templates (id, venue_id, name, trigger, steps, is_active) VALUES
-  ('dddd0033-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', 'New Inquiry — 3 Touch Sequence', 'new_inquiry',
-   '[{"step": 1, "delay_hours": 0, "action": "auto_reply", "subject_template": "Welcome! Let''s find your perfect date at Hawthorne Manor", "tone": "warm_enthusiastic", "include_availability": true, "include_pricing": false}, {"step": 2, "delay_hours": 48, "action": "follow_up", "subject_template": "Still thinking about Hawthorne Manor? Here''s what makes us special", "tone": "helpful_not_pushy", "include_availability": false, "include_pricing": true}, {"step": 3, "delay_hours": 168, "action": "final_touch", "subject_template": "One last thing from Sage at Hawthorne Manor", "tone": "gentle_close", "include_availability": true, "include_pricing": false}]',
-   true),
-  ('dddd0033-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', 'Post Tour — 2 Touch Follow-Up', 'post_tour',
-   '[{"step": 1, "delay_hours": 2, "action": "thank_you", "subject_template": "Thank you for visiting Hawthorne Manor!", "tone": "warm_personal", "include_photos": true, "include_proposal": false}, {"step": 2, "delay_hours": 120, "action": "proposal_nudge", "subject_template": "Your Hawthorne Manor proposal is ready", "tone": "confident_helpful", "include_photos": false, "include_proposal": true}]',
-   true),
-  ('dddd0033-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222202', 'New Inquiry — Crestwood Warm Welcome', 'new_inquiry',
-   '[{"step": 1, "delay_hours": 0, "action": "auto_reply", "subject_template": "Hey from Crestwood Farm! Let''s chat about your big day", "tone": "playful_warm", "include_availability": true, "include_pricing": false}, {"step": 2, "delay_hours": 72, "action": "follow_up", "subject_template": "Y''all still looking for the perfect barn? 🌻", "tone": "casual_friendly", "include_availability": true, "include_pricing": true}]',
-   true)
-ON CONFLICT (id) DO NOTHING;
-
--- ============================================
--- 34. WEDDING SEQUENCES
--- ============================================
-INSERT INTO wedding_sequences (id, venue_id, wedding_id, template_id, status, enrolled_at, paused_at, completed_at, current_step) VALUES
-  ('dddd0034-0001-0001-0001-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000115', 'dddd0033-0001-0001-0001-000000000001', 'active', '2026-03-24 14:30:00+00', NULL, NULL, 2),
-  ('dddd0034-0001-0001-0001-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000116', 'dddd0033-0001-0001-0001-000000000001', 'active', '2026-03-26 10:15:00+00', NULL, NULL, 1),
-  ('dddd0034-0001-0001-0001-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000113', 'dddd0033-0001-0001-0001-000000000002', 'paused', '2026-03-05 16:00:00+00', '2026-03-10 09:00:00+00', NULL, 2),
-  ('dddd0034-0001-0001-0001-000000000004', '22222222-2222-2222-2222-222222222202', '44444444-4444-4444-4444-444444000212', 'dddd0033-0001-0001-0001-000000000003', 'active', '2026-03-22 09:00:00+00', NULL, NULL, 1)
-ON CONFLICT (id) DO NOTHING;
+-- Migration 040 dropped both follow_up_sequence_templates and
+-- wedding_sequences (renamed to _archived_*) when the parallel
+-- sequencing system was consolidated. The canonical replacement is
+-- the follow_up_sequences + sequence_steps tables, seeded by
+-- seed-dedup-sequences.sql for the demo venues. Leaving the section
+-- headers for git-blame.
 
 -- ============================================
 -- 35. RELATIONSHIPS

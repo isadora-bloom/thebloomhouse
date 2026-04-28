@@ -569,9 +569,14 @@ export default function NotificationsPage() {
         setPushRegistered(Notification.permission === 'granted')
       }
 
-      // Fetch recent notifications (scoped)
+      // Fetch recent notifications (scoped). Reads admin_notifications —
+      // the canonical table written by email-pipeline (auto_send_pending),
+      // heat-mapping (booking_confirmation_prompt), and the cron jobs.
+      // The deprecated `notifications` table from migration 017 has no
+      // current writers; switching here so coordinators see the actual
+      // alert stream instead of an empty seed-only table.
       let notifsQuery = supabase
-        .from('notifications')
+        .from('admin_notifications')
         .select('*, venues:venue_id ( name )')
       if (venueIds && venueIds.length > 0) {
         notifsQuery = notifsQuery.in('venue_id', venueIds)

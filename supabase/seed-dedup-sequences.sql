@@ -218,14 +218,12 @@ VALUES
 -- P5: EMAIL SEQUENCES (Hawthorne Manor)
 -- ---------------------------------------------------------------------------
 
--- Clean re-runs
-DELETE FROM wedding_sequences
- WHERE template_id IN (
-   'f0000000-0000-0000-0000-000000000001',
-   'f0000000-0000-0000-0000-000000000002',
-   'f0000000-0000-0000-0000-000000000003'
- );
-
+-- Clean re-runs.
+-- Migration 040 dropped wedding_sequences + follow_up_sequence_templates
+-- (renamed to _archived_*); the canonical sequence-tracking system is now
+-- follow_up_sequences + sequence_steps with no per-wedding enrollment table
+-- (the cron service walks weddings dynamically). Only delete from the
+-- still-existing tables.
 DELETE FROM sequence_steps
  WHERE sequence_id IN (
    'f0000000-0000-0000-0000-000000000001',
@@ -240,55 +238,9 @@ DELETE FROM follow_up_sequences
    'f0000000-0000-0000-0000-000000000003'
  );
 
-DELETE FROM follow_up_sequence_templates
- WHERE id IN (
-   'f0000000-0000-0000-0000-000000000001',
-   'f0000000-0000-0000-0000-000000000002',
-   'f0000000-0000-0000-0000-000000000003'
- );
-
--- follow_up_sequence_templates is a parallel template table (jsonb steps)
--- referenced by wedding_sequences.template_id. We keep both in sync by
--- reusing the same UUIDs across both tables.
--- Note: follow_up_sequence_templates.trigger uses a DIFFERENT enum than
--- follow_up_sequences.trigger_type: allowed values are
--- new_inquiry | no_response | post_tour | post_hold
-INSERT INTO follow_up_sequence_templates
-  (id, venue_id, name, trigger, steps, is_active, created_at)
-VALUES
-  ('f0000000-0000-0000-0000-000000000001',
-   '22222222-2222-2222-2222-222222222201',
-   'Post-Inquiry Nurture',
-   'new_inquiry',
-   '[
-     {"step": 1, "delay_days": 0,  "subject": "Hi {{first_name}} — thanks for reaching out to {{venue_name}}", "body": "Thanks for your interest..."},
-     {"step": 2, "delay_days": 2,  "subject": "Did you get a chance to look through our info?",                "body": "Just checking in..."},
-     {"step": 3, "delay_days": 5,  "subject": "Would you like to schedule a tour?",                             "body": "The best way to get a feel for the space..."},
-     {"step": 4, "delay_days": 10, "subject": "Still thinking it over?",                                        "body": "Wanted to check in one more time..."}
-   ]'::jsonb,
-   true,
-   NOW() - INTERVAL '45 days'),
-  ('f0000000-0000-0000-0000-000000000002',
-   '22222222-2222-2222-2222-222222222201',
-   'Post-Tour Follow-Up',
-   'post_tour',
-   '[
-     {"step": 1, "delay_days": 1, "subject": "It was so nice meeting you, {{first_name}}",     "body": "Thanks for visiting..."},
-     {"step": 2, "delay_days": 3, "subject": "Any questions bubbling up after your visit?",    "body": "Sometimes the questions land later..."},
-     {"step": 3, "delay_days": 7, "subject": "Where are you landing on {{venue_name}}?",        "body": "Just wanted to check where you''re leaning..."}
-   ]'::jsonb,
-   true,
-   NOW() - INTERVAL '60 days'),
-  ('f0000000-0000-0000-0000-000000000003',
-   '22222222-2222-2222-2222-222222222201',
-   'Ghosted Re-Engagement',
-   'no_response',
-   '[
-     {"step": 1, "delay_days": 0, "subject": "Hi {{first_name}} — still there?", "body": "Haven''t heard from you in a bit..."},
-     {"step": 2, "delay_days": 7, "subject": "One last check-in",                "body": "This will be my last note unless I hear back..."}
-   ]'::jsonb,
-   true,
-   NOW() - INTERVAL '30 days');
+-- follow_up_sequence_templates was the parallel template table dropped
+-- by migration 040 (renamed to _archived_*). All template content now
+-- lives in follow_up_sequences + sequence_steps below.
 
 -- ========================= SEQUENCE 1: Post-Inquiry Nurture ===============
 INSERT INTO follow_up_sequences
@@ -390,81 +342,15 @@ VALUES
    true, NOW() - INTERVAL '30 days');
 
 -- ---------------------------------------------------------------------------
--- ENROLL WEDDINGS into each sequence (Hawthorne)
+-- ENROLL WEDDINGS — REMOVED
 -- ---------------------------------------------------------------------------
--- Available Hawthorne weddings (sample used):
---   inquiries: ab000000-...0006, 0007, 0008, 44444444-...000115, 000116, 000200
---   booked:    ab000000-...0001, 0002, 0010, 0013, 0014, 44444444-...000109, 000110, 000111, 000112
---   completed: 44444444-...000101, 000103, 000106, 000107, 000119, 000120
-
--- Sequence 1: Post-Inquiry Nurture — 4 enrolled, 1 completed
-INSERT INTO wedding_sequences
-  (id, venue_id, wedding_id, template_id, status, enrolled_at, completed_at, current_step, created_at)
-VALUES
-  ('a1000000-0000-0000-0000-000000000001',
-   '22222222-2222-2222-2222-222222222201',
-   'ab000000-0000-0000-0000-000000000006',
-   'f0000000-0000-0000-0000-000000000001',
-   'active', NOW() - INTERVAL '6 days', NULL, 2,
-   NOW() - INTERVAL '6 days'),
-  ('a1000000-0000-0000-0000-000000000002',
-   '22222222-2222-2222-2222-222222222201',
-   'ab000000-0000-0000-0000-000000000007',
-   'f0000000-0000-0000-0000-000000000001',
-   'active', NOW() - INTERVAL '3 days', NULL, 1,
-   NOW() - INTERVAL '3 days'),
-  ('a1000000-0000-0000-0000-000000000003',
-   '22222222-2222-2222-2222-222222222201',
-   'ab000000-0000-0000-0000-000000000008',
-   'f0000000-0000-0000-0000-000000000001',
-   'active', NOW() - INTERVAL '8 days', NULL, 3,
-   NOW() - INTERVAL '8 days'),
-  ('a1000000-0000-0000-0000-000000000004',
-   '22222222-2222-2222-2222-222222222201',
-   '44444444-4444-4444-4444-444444000115',
-   'f0000000-0000-0000-0000-000000000001',
-   'completed', NOW() - INTERVAL '20 days', NOW() - INTERVAL '5 days', 4,
-   NOW() - INTERVAL '20 days');
-
--- Sequence 2: Post-Tour Follow-Up — 2 enrolled, 1 completed
-INSERT INTO wedding_sequences
-  (id, venue_id, wedding_id, template_id, status, enrolled_at, completed_at, current_step, created_at)
-VALUES
-  ('a2000000-0000-0000-0000-000000000001',
-   '22222222-2222-2222-2222-222222222201',
-   'ab000000-0000-0000-0000-000000000001',
-   'f0000000-0000-0000-0000-000000000002',
-   'completed', NOW() - INTERVAL '25 days', NOW() - INTERVAL '15 days', 3,
-   NOW() - INTERVAL '25 days'),
-  ('a2000000-0000-0000-0000-000000000002',
-   '22222222-2222-2222-2222-222222222201',
-   'ab000000-0000-0000-0000-000000000002',
-   'f0000000-0000-0000-0000-000000000002',
-   'active', NOW() - INTERVAL '4 days', NULL, 2,
-   NOW() - INTERVAL '4 days');
-
--- Sequence 3: Ghosted Re-Engagement — 3 enrolled, 0 completed
-INSERT INTO wedding_sequences
-  (id, venue_id, wedding_id, template_id, status, enrolled_at, completed_at, current_step, created_at)
-VALUES
-  ('a3000000-0000-0000-0000-000000000001',
-   '22222222-2222-2222-2222-222222222201',
-   '44444444-4444-4444-4444-444444000116',
-   'f0000000-0000-0000-0000-000000000003',
-   'active', NOW() - INTERVAL '5 days', NULL, 1,
-   NOW() - INTERVAL '5 days'),
-  ('a3000000-0000-0000-0000-000000000002',
-   '22222222-2222-2222-2222-222222222201',
-   '44444444-4444-4444-4444-444444000200',
-   'f0000000-0000-0000-0000-000000000003',
-   'active', NOW() - INTERVAL '2 days', NULL, 1,
-   NOW() - INTERVAL '2 days'),
-  ('a3000000-0000-0000-0000-000000000003',
-   '22222222-2222-2222-2222-222222222201',
-   'ab000000-0000-0000-0000-000000000010',
-   'f0000000-0000-0000-0000-000000000003',
-   'paused', NOW() - INTERVAL '9 days', NULL, 2,
-   NOW() - INTERVAL '9 days');
+-- Migration 040 dropped wedding_sequences (renamed to
+-- _archived_wedding_sequences). The current cron-driven follow-up
+-- system in src/lib/services/follow-up-sequences.ts walks weddings
+-- dynamically against the sequences seeded above; no per-wedding
+-- enrollment table is required. Demo data for "this wedding is
+-- enrolled" is now derivable from wedding status + heat score, so
+-- the explicit INSERTs are removed.
 
 COMMIT;
 
@@ -477,6 +363,5 @@ UNION ALL SELECT 'follow_up_sequences', COUNT(*) FROM follow_up_sequences
 UNION ALL SELECT 'sequence_steps', COUNT(*) FROM sequence_steps
   WHERE sequence_id IN (
     SELECT id FROM follow_up_sequences WHERE venue_id = '22222222-2222-2222-2222-222222222201'
-  )
-UNION ALL SELECT 'wedding_sequences', COUNT(*) FROM wedding_sequences
-  WHERE venue_id = '22222222-2222-2222-2222-222222222201';
+  );
+-- wedding_sequences COUNT removed: table dropped by migration 040.

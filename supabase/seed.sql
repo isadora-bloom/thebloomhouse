@@ -730,18 +730,21 @@ INSERT INTO phrase_usage (id, venue_id, contact_email, phrase_category, phrase_t
   ('c6000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', 'emma.rodriguez@gmail.com', 'greeting', 'Congratulations on your engagement!');
 
 -- ============================================
--- 34. BOOKED DATES
+-- 34. VENUE AVAILABILITY (was booked_dates before migration 073)
 -- ============================================
-INSERT INTO booked_dates (id, venue_id, date, wedding_id, block_type) VALUES
-  ('c7000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '2026-05-30', '44444444-4444-4444-4444-444444000109', 'wedding');
-INSERT INTO booked_dates (id, venue_id, date, wedding_id, block_type) VALUES
-  ('c7000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', '2026-06-20', '44444444-4444-4444-4444-444444000110', 'wedding');
-INSERT INTO booked_dates (id, venue_id, date, wedding_id, block_type) VALUES
-  ('c7000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', '2026-09-12', '44444444-4444-4444-4444-444444000111', 'wedding');
-INSERT INTO booked_dates (id, venue_id, date, wedding_id, block_type) VALUES
-  ('c7000001-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222201', '2026-10-17', '44444444-4444-4444-4444-444444000112', 'wedding');
-INSERT INTO booked_dates (id, venue_id, date, wedding_id, block_type, notes) VALUES
-  ('c7000001-0000-0000-0000-000000000005', '22222222-2222-2222-2222-222222222201', '2026-07-04', NULL, 'maintenance', 'Annual deep clean and maintenance');
+-- Migration 073 renamed booked_dates -> venue_availability and replaced
+-- the block_type column with a status enum: 'wedding' -> 'booked',
+-- 'maintenance' -> 'blocked'.
+INSERT INTO venue_availability (id, venue_id, date, wedding_id, status) VALUES
+  ('c7000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '2026-05-30', '44444444-4444-4444-4444-444444000109', 'booked');
+INSERT INTO venue_availability (id, venue_id, date, wedding_id, status) VALUES
+  ('c7000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', '2026-06-20', '44444444-4444-4444-4444-444444000110', 'booked');
+INSERT INTO venue_availability (id, venue_id, date, wedding_id, status) VALUES
+  ('c7000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', '2026-09-12', '44444444-4444-4444-4444-444444000111', 'booked');
+INSERT INTO venue_availability (id, venue_id, date, wedding_id, status) VALUES
+  ('c7000001-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222201', '2026-10-17', '44444444-4444-4444-4444-444444000112', 'booked');
+INSERT INTO venue_availability (id, venue_id, date, wedding_id, status, notes) VALUES
+  ('c7000001-0000-0000-0000-000000000005', '22222222-2222-2222-2222-222222222201', '2026-07-04', NULL, 'blocked', 'Annual deep clean and maintenance');
 
 -- ============================================
 -- 35. GUEST LIST (for Chloe & Ryan wedding 109)
@@ -777,14 +780,9 @@ INSERT INTO seating_tables (id, venue_id, wedding_id, table_name, table_type, ca
 INSERT INTO seating_tables (id, venue_id, wedding_id, table_name, table_type, capacity, x_position, y_position) VALUES
   ('c9000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'Table 2', 'round', 10, 600, 300);
 
-INSERT INTO seating_assignments (id, venue_id, wedding_id, guest_id, table_id, seat_number) VALUES
-  ('ca000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'c8000001-0000-0000-0000-000000000001', 'c9000001-0000-0000-0000-000000000001', 1);
-INSERT INTO seating_assignments (id, venue_id, wedding_id, guest_id, table_id, seat_number) VALUES
-  ('ca000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'c8000001-0000-0000-0000-000000000002', 'c9000001-0000-0000-0000-000000000001', 2);
-INSERT INTO seating_assignments (id, venue_id, wedding_id, guest_id, table_id, seat_number) VALUES
-  ('ca000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'c8000001-0000-0000-0000-000000000005', 'c9000001-0000-0000-0000-000000000002', 1);
-INSERT INTO seating_assignments (id, venue_id, wedding_id, guest_id, table_id, seat_number) VALUES
-  ('ca000001-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'c8000001-0000-0000-0000-000000000006', 'c9000001-0000-0000-0000-000000000002', 2);
+-- seating_assignments was dropped by migration 094 (zero readers in
+-- src/; assignments live on guest_list.table_assignment_id and the
+-- couple-portal text column guest_list.table_assignment).
 
 -- ============================================
 -- 37. TIMELINE (for wedding 109)

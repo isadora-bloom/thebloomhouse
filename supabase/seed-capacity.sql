@@ -17,42 +17,46 @@
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
--- Part A: booked_dates
+-- Part A: venue_availability (was booked_dates before migration 073)
 -- ---------------------------------------------------------------------
 -- Hawthorne Manor — 9 Saturdays, $238,500 total
 -- Crestwood Farm  — 4 Saturdays,  $78,500 total
 -- The Glass House — 4 Saturdays, $166,500 total
 -- Rose Hill Gardens — 2 Saturdays, $30,500 total
+--
+-- Migration 073 renamed booked_dates -> venue_availability and replaced
+-- the block_type column with a 5-state status enum. block_type='wedding'
+-- maps to status='booked'.
 -- ---------------------------------------------------------------------
 
-INSERT INTO booked_dates (id, venue_id, date, wedding_id, block_type, notes)
+INSERT INTO venue_availability (id, venue_id, date, wedding_id, status, notes)
 VALUES
   -- Hawthorne Manor (venue 201)
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-04-18', NULL, 'wedding', 'Hawthorne booked — $24,500'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-05-09', NULL, 'wedding', 'Hawthorne booked — $22,000'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-06-13', NULL, 'wedding', 'Hawthorne booked — $31,000'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-07-11', NULL, 'wedding', 'Hawthorne booked — $28,000'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-08-22', NULL, 'wedding', 'Hawthorne booked — $26,500'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-09-05', NULL, 'wedding', 'Hawthorne booked — $29,000'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-10-10', NULL, 'wedding', 'Hawthorne booked — $24,500'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-10-24', NULL, 'wedding', 'Hawthorne booked — $31,000'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-11-07', NULL, 'wedding', 'Hawthorne booked — $22,000'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-04-18', NULL, 'booked', 'Hawthorne booked — $24,500'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-05-09', NULL, 'booked', 'Hawthorne booked — $22,000'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-06-13', NULL, 'booked', 'Hawthorne booked — $31,000'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-07-11', NULL, 'booked', 'Hawthorne booked — $28,000'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-08-22', NULL, 'booked', 'Hawthorne booked — $26,500'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-09-05', NULL, 'booked', 'Hawthorne booked — $29,000'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-10-10', NULL, 'booked', 'Hawthorne booked — $24,500'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-10-24', NULL, 'booked', 'Hawthorne booked — $31,000'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222201', '2026-11-07', NULL, 'booked', 'Hawthorne booked — $22,000'),
 
   -- Crestwood Farm (venue 202)
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222202', '2026-05-16', NULL, 'wedding', 'Crestwood booked — $18,000'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222202', '2026-07-18', NULL, 'wedding', 'Crestwood booked — $19,500'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222202', '2026-09-12', NULL, 'wedding', 'Crestwood booked — $21,000'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222202', '2026-10-03', NULL, 'wedding', 'Crestwood booked — $20,000'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222202', '2026-05-16', NULL, 'booked', 'Crestwood booked — $18,000'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222202', '2026-07-18', NULL, 'booked', 'Crestwood booked — $19,500'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222202', '2026-09-12', NULL, 'booked', 'Crestwood booked — $21,000'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222202', '2026-10-03', NULL, 'booked', 'Crestwood booked — $20,000'),
 
   -- The Glass House (venue 203)
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222203', '2026-03-28', NULL, 'wedding', 'Glass House booked — $44,000'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222203', '2026-05-30', NULL, 'wedding', 'Glass House booked — $42,000'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222203', '2026-08-15', NULL, 'wedding', 'Glass House booked — $39,500'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222203', '2026-11-07', NULL, 'wedding', 'Glass House booked — $41,000'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222203', '2026-03-28', NULL, 'booked', 'Glass House booked — $44,000'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222203', '2026-05-30', NULL, 'booked', 'Glass House booked — $42,000'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222203', '2026-08-15', NULL, 'booked', 'Glass House booked — $39,500'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222203', '2026-11-07', NULL, 'booked', 'Glass House booked — $41,000'),
 
   -- Rose Hill Gardens (venue 204)
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222204', '2026-06-27', NULL, 'wedding', 'Rose Hill booked — $16,500'),
-  (gen_random_uuid(), '22222222-2222-2222-2222-222222222204', '2026-08-08', NULL, 'wedding', 'Rose Hill booked — $14,000')
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222204', '2026-06-27', NULL, 'booked', 'Rose Hill booked — $16,500'),
+  (gen_random_uuid(), '22222222-2222-2222-2222-222222222204', '2026-08-08', NULL, 'booked', 'Rose Hill booked — $14,000')
 ON CONFLICT DO NOTHING;
 
 -- ---------------------------------------------------------------------
