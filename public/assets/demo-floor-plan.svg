@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+  <!-- Demo floor plan: 80ft x 45ft venue (20 px per foot). Stripped-down,
+       used by the table-map editor as a backdrop so coordinators can place
+       tables without needing to upload a real plan. -->
+  <defs>
+    <pattern id="floorboards" width="40" height="40" patternUnits="userSpaceOnUse">
+      <rect width="40" height="40" fill="#FAF6F0"/>
+      <path d="M0 0 L40 0" stroke="#E8DDC9" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+
+  <rect width="1600" height="900" fill="#F5EFE3"/>
+
+  <!-- Outer walls -->
+  <rect x="40" y="40" width="1520" height="820" fill="url(#floorboards)" stroke="#5D4E3A" stroke-width="6"/>
+
+  <!-- Stage area (top-right) -->
+  <rect x="1100" y="80" width="420" height="160" fill="#E5DAC4" stroke="#8C7355" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="1310" y="170" text-anchor="middle" font-family="serif" font-size="32" fill="#5D4E3A">Stage / Band</text>
+
+  <!-- Dance floor (centre) -->
+  <rect x="600" y="320" width="400" height="260" fill="#EDE2CC" stroke="#A6894A" stroke-width="3"/>
+  <text x="800" y="460" text-anchor="middle" font-family="serif" font-size="36" fill="#7B6440" letter-spacing="2">Dance Floor</text>
+
+  <!-- Bar (left wall) -->
+  <rect x="80" y="320" width="60" height="260" fill="#D4B98C" stroke="#5D4E3A" stroke-width="2"/>
+  <text x="110" y="460" text-anchor="middle" font-family="serif" font-size="22" fill="#3A2D1A" transform="rotate(-90 110 460)">Bar</text>
+
+  <!-- Entrance (bottom-centre) -->
+  <rect x="720" y="820" width="160" height="40" fill="#FAF6F0" stroke="#5D4E3A" stroke-width="3"/>
+  <text x="800" y="848" text-anchor="middle" font-family="serif" font-size="20" fill="#5D4E3A">Entrance</text>
+
+  <!-- Patio doors (right wall) -->
+  <rect x="1540" y="400" width="20" height="100" fill="#FAF6F0" stroke="#5D4E3A" stroke-width="2"/>
+  <text x="1500" y="455" text-anchor="end" font-family="serif" font-size="16" fill="#7B6440">Patio →</text>
+
+  <!-- Compass marker -->
+  <g transform="translate(1480 820)">
+    <circle r="28" fill="#FAF6F0" stroke="#5D4E3A" stroke-width="1.5"/>
+    <text y="-8" text-anchor="middle" font-family="serif" font-size="14" fill="#5D4E3A">N</text>
+    <line x1="0" y1="-18" x2="0" y2="18" stroke="#5D4E3A" stroke-width="1"/>
+  </g>
+
+  <!-- Scale legend -->
+  <g transform="translate(80 820)">
+    <line x1="0" y1="0" x2="200" y2="0" stroke="#5D4E3A" stroke-width="2"/>
+    <line x1="0" y1="-6" x2="0" y2="6" stroke="#5D4E3A" stroke-width="2"/>
+    <line x1="200" y1="-6" x2="200" y2="6" stroke="#5D4E3A" stroke-width="2"/>
+    <text x="100" y="22" text-anchor="middle" font-family="serif" font-size="14" fill="#5D4E3A">10 ft</text>
+  </g>
+
+  <text x="800" y="80" text-anchor="middle" font-family="serif" font-size="14" fill="#A6894A" letter-spacing="3" opacity="0.6">DEMO FLOOR PLAN — 80FT × 45FT</text>
+</svg>
