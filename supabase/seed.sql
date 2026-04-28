@@ -803,20 +803,11 @@ INSERT INTO timeline (id, venue_id, wedding_id, time, duration_minutes, title, c
   ('cb000001-0000-0000-0000-000000000007', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', '22:00', 15, 'Sparkler Send-Off', 'departure', 'Front Drive', 7);
 
 -- ============================================
--- 38. BUDGET (for wedding 109)
+-- 38. BUDGET — REMOVED
 -- ============================================
-INSERT INTO budget (id, venue_id, wedding_id, category, item_name, estimated_cost, actual_cost, paid_amount) VALUES
-  ('cc000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'venue', 'Hawthorne Manor Venue Rental', 8500, 8500, 8500);
-INSERT INTO budget (id, venue_id, wedding_id, category, item_name, estimated_cost, actual_cost, paid_amount) VALUES
-  ('cc000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'catering', 'BBQ Company Catering', 5200, 5400, 5400);
-INSERT INTO budget (id, venue_id, wedding_id, category, item_name, estimated_cost, actual_cost, paid_amount) VALUES
-  ('cc000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'bar', 'Mobile Bar Co', 2800, 3100, 3100);
-INSERT INTO budget (id, venue_id, wedding_id, category, item_name, estimated_cost, actual_cost, paid_amount) VALUES
-  ('cc000001-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'photography', 'Lens & Light Studio', 4500, 4500, 2250);
-INSERT INTO budget (id, venue_id, wedding_id, category, item_name, estimated_cost, actual_cost) VALUES
-  ('cc000001-0000-0000-0000-000000000005', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'florals', 'Valley Blooms', 3500, NULL);
-INSERT INTO budget (id, venue_id, wedding_id, category, item_name, estimated_cost) VALUES
-  ('cc000001-0000-0000-0000-000000000006', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'music', 'DJ Marcus', 1500);
+-- Migration 101 dropped the legacy `budget` table (deprecated by
+-- migration 052). Demo budget data now lives in budget_items
+-- (seeded elsewhere in this file or by seed-couple-portal.sql).
 
 -- ============================================
 -- 39. SAGE CONVERSATIONS (for wedding 109)

@@ -174,44 +174,15 @@ INSERT INTO rsvp_responses (id, venue_id, wedding_id, guest_id, attending, meal_
   ('e9000001-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222201', '44444444-4444-4444-4444-444444000109', 'c8000001-0000-0000-0000-000000000004', true, 'Vegetarian risotto', 'Vegetarian', true, 'Sam Park', 'Beef tenderloin', 'September by Earth Wind & Fire', '{"rehearsal_dinner": "yes", "accessibility": ""}'::jsonb, '2026-03-22 11:00:00+00');
 
 -- ============================================
--- 10. COUPLE BUDGET (summary)
+-- 10. COUPLE BUDGET — REMOVED
+-- 11. NOTIFICATIONS — REMOVED
 -- ============================================
-INSERT INTO couple_budget (
-  id, venue_id, wedding_id,
-  total_budget, total_committed, total_paid,
-  categories
-) VALUES (
-  'ea000001-0000-0000-0000-000000000001',
-  '22222222-2222-2222-2222-222222222201',
-  '44444444-4444-4444-4444-444444000109',
-  40000, 39000, 14200,
-  '{
-    "Venue": {"budgeted": 8500, "committed": 8500, "paid": 4250},
-    "Photography": {"budgeted": 4200, "committed": 4200, "paid": 1000},
-    "Videography": {"budgeted": 3500, "committed": 3500, "paid": 800},
-    "Music": {"budgeted": 1800, "committed": 1800, "paid": 500},
-    "Catering": {"budgeted": 8500, "committed": 8500, "paid": 2000},
-    "Flowers": {"budgeted": 3200, "committed": 3200, "paid": 800},
-    "Cake": {"budgeted": 650, "committed": 650, "paid": 0},
-    "Beauty": {"budgeted": 1400, "committed": 1400, "paid": 350},
-    "Attire": {"budgeted": 4000, "committed": 4000, "paid": 3400},
-    "Stationery": {"budgeted": 600, "committed": 600, "paid": 600},
-    "Rentals": {"budgeted": 900, "committed": 900, "paid": 0},
-    "Favors": {"budgeted": 250, "committed": 250, "paid": 250},
-    "Other": {"budgeted": 2500, "committed": 0, "paid": 0}
-  }'::jsonb
-) ON CONFLICT (venue_id, wedding_id) DO NOTHING;
-
--- ============================================
--- 11. NOTIFICATIONS (sample coordinator notifications)
--- ============================================
-INSERT INTO notifications (id, venue_id, user_id, type, title, body, read, created_at) VALUES
-  ('eb000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333301', 'rsvp', 'New RSVP received', 'Guest #1 (c8000001) RSVPed yes with +1', false, '2026-03-15 14:22:00+00'),
-  ('eb000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333301', 'rsvp', 'New RSVP received', 'Guest #2 (c8000002) RSVPed yes, gluten-free', false, '2026-03-18 09:45:00+00'),
-  ('eb000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333301', 'rsvp', 'RSVP decline', 'Guest #3 (c8000003) RSVPed no', true, '2026-03-20 17:30:00+00'),
-  ('eb000001-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333301', 'contract', 'Contract uploaded', 'Wildflower Catering contract uploaded by Chloe', true, '2026-02-20 10:00:00+00'),
-  ('eb000001-0000-0000-0000-000000000005', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333301', 'timeline', 'Timeline updated', 'Chloe updated the day-of timeline (added sparkler exit)', false, '2026-03-28 16:00:00+00'),
-  ('eb000001-0000-0000-0000-000000000006', '22222222-2222-2222-2222-222222222201', '33333333-3333-3333-3333-333333333301', 'budget', 'Payment recorded', 'Chloe recorded $2,000 payment to Wildflower Catering', true, '2026-01-10 12:00:00+00');
+-- Migration 101 dropped both legacy tables. Their replacements:
+--   * couple_budget   → budget_items (already seeded above)
+--   * notifications   → admin_notifications (written by services
+--                       at runtime — pipeline auto-send prompts,
+--                       booking-confirmation prompts, source-
+--                       backtrace alerts, etc.)
 
 -- ============================================
 -- 12. VENUE CONFIG — add feature_flags for couple portal testing

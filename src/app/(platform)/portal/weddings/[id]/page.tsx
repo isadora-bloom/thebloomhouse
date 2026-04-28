@@ -105,7 +105,12 @@ interface GuestRow {
   id: string
   rsvp_status: string | null
   dietary_restrictions: string | null
-  table_assignment_id: string | null
+  // Free-text table label the couple types in (e.g. "Table 5",
+  // "Family"). This is the column the couple guests page actually
+  // writes. There's also a `table_assignment_id` UUID FK in the
+  // schema but it has no writer in src/ — switching to the text
+  // column makes the "X of Y assigned" count reflect reality.
+  table_assignment: string | null
 }
 
 interface TimelineItemRow {
@@ -634,7 +639,7 @@ function GuestsTab({ guests, guestCountEstimate }: { guests: GuestRow[]; guestCo
   const attending = guests.filter((g) => g.rsvp_status === 'attending').length
   const declined = guests.filter((g) => g.rsvp_status === 'declined').length
   const pending = guests.filter((g) => !g.rsvp_status || g.rsvp_status === 'pending' || g.rsvp_status === 'maybe').length
-  const assigned = guests.filter((g) => g.table_assignment_id).length
+  const assigned = guests.filter((g) => g.table_assignment && g.table_assignment.trim().length > 0).length
 
   // Dietary summary
   const dietaryMap: Record<string, number> = {}
@@ -1985,7 +1990,7 @@ export default function WeddingProfilePage() {
         supabase.from('venues').select('name, slug').eq('id', w.venue_id).single(),
         supabase.from('planning_notes').select('id, category, content, source_message, status, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }),
         supabase.from('booked_vendors').select('id, vendor_type, vendor_name, vendor_contact, is_booked, contract_uploaded, notes').eq('wedding_id', weddingId),
-        supabase.from('guest_list').select('id, rsvp_status, dietary_restrictions, table_assignment_id').eq('wedding_id', weddingId),
+        supabase.from('guest_list').select('id, rsvp_status, dietary_restrictions, table_assignment').eq('wedding_id', weddingId),
         supabase.from('timeline').select('id, time, title, description, category, location, sort_order').eq('wedding_id', weddingId).order('sort_order'),
         supabase.from('budget_items').select('id, category, item_name, budgeted, committed, paid').eq('wedding_id', weddingId),
         supabase.from('messages').select('id, sender_role, content, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }).limit(100),
