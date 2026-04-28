@@ -14,7 +14,7 @@
  *   - Last 5 processed meetings (topic, date, has-transcript pill)
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
@@ -73,6 +73,15 @@ function formatDate(iso: string | null | undefined): string {
 }
 
 export default function ZoomSettingsPage() {
+  // useSearchParams() forces CSR bailout; Next.js requires a Suspense boundary
+  return (
+    <Suspense fallback={<div className="p-8 text-sm text-sage-500">Loading Zoom settings...</div>}>
+      <ZoomSettingsInner />
+    </Suspense>
+  )
+}
+
+function ZoomSettingsInner() {
   const { venueId, loading: scopeLoading } = useScope()
   const searchParams = useSearchParams()
 

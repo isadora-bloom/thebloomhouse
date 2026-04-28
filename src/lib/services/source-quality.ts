@@ -8,6 +8,8 @@
  *   - avgReviewScore    (if reviews exist for couples from that source)
  *   - referralCount     (weddings with referred_by populated, per source)
  *   - frictionRate      (weddings with non-empty friction_tags / total)
+ *   - avgDaysToBook     (inquiry_date -> booked_at, in days, of booked
+ *                        weddings; null when neither timestamp is set)
  *
  * Returns one row per source. All metrics are scoped to the venueId
  * passed in — cross-venue aggregation is a read-time responsibility for
@@ -25,13 +27,16 @@ export interface SourceQualityRow {
   avgReviewScore: number | null
   referralCount: number
   frictionRate: number
+  /** Mean days from inquiry to booking for this source's booked
+   *  weddings. Null when no wedding has both timestamps. */
+  avgDaysToBook: number | null
 }
 
 export async function computeSourceQuality(venueId: string): Promise<SourceQualityRow[]> {
   const supabase = createServiceClient()
   const { data: weddings } = await supabase
     .from('weddings')
-    .select('id, source, booking_value, friction_tags, referred_by, status')
+    .select('id, source, booking_value, friction_tags, referred_by, status, inquiry_date, booked_at')
     .eq('venue_id', venueId)
     .not('source', 'is', null)
 
@@ -40,6 +45,7 @@ export async function computeSourceQuality(venueId: string): Promise<SourceQuali
     revenues: number[]
     frictionHits: number
     referralHits: number
+    daysToBook: number[]
   }> = {}
 
   for (const w of weddings ?? []) {
@@ -48,13 +54,26 @@ export async function computeSourceQuality(venueId: string): Promise<SourceQuali
     const booked = status === 'booked' || status === 'completed'
     if (!booked) continue
 
-    if (!bySource[src]) bySource[src] = { ids: [], revenues: [], frictionHits: 0, referralHits: 0 }
+    if (!bySource[src]) bySource[src] = { ids: [], revenues: [], frictionHits: 0, referralHits: 0, daysToBook: [] }
     bySource[src].ids.push(w.id as string)
     if (w.booking_value) bySource[src].revenues.push(Number(w.booking_value))
 
     const ft = w.friction_tags
     if (Array.isArray(ft) && ft.length > 0) bySource[src].frictionHits++
     if (w.referred_by) bySource[src].referralHits++
+
+    // Days to book: inquiry_date -> booked_at. Skip rows missing
+    // either timestamp; some legacy bookings were entered manually
+    // without a recorded inquiry. Negative values (booked before
+    // inquiry — manual entry of a deposit etc.) are dropped as
+    // nonsensical for this metric.
+    const inquiry = w.inquiry_date as string | null
+    const bookedAt = w.booked_at as string | null
+    if (inquiry && bookedAt) {
+      const ms = new Date(bookedAt).getTime() - new Date(inquiry).getTime()
+      const days = ms / (1000 * 60 * 60 * 24)
+      if (Number.isFinite(days) && days >= 0) bySource[src].daysToBook.push(days)
+    }
   }
 
   const results: SourceQualityRow[] = []
@@ -116,6 +135,10 @@ export async function computeSourceQuality(venueId: string): Promise<SourceQuali
       }
     }
 
+    const avgDaysToBook = data.daysToBook.length > 0
+      ? data.daysToBook.reduce((a, b) => a + b, 0) / data.daysToBook.length
+      : null
+
     results.push({
       source,
       bookedCount,
@@ -125,6 +148,7 @@ export async function computeSourceQuality(venueId: string): Promise<SourceQuali
       avgReviewScore,
       referralCount: data.referralHits,
       frictionRate: bookedCount > 0 ? data.frictionHits / bookedCount : 0,
+      avgDaysToBook,
     })
   }
 
