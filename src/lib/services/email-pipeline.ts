@@ -946,6 +946,23 @@ export async function processIncomingEmail(
       } catch (err) {
         console.warn('[pipeline] inquiry touchpoint insert failed:', err)
       }
+
+      // Source-attribution self-heal at create time: if a scheduling
+      // tool ended up as the wedding's first-touch source, immediately
+      // search Gmail for the upstream Knot/WW/etc. relay email. A
+      // high-confidence match auto-applies (weddings.source flips to
+      // the real channel + audit trail says backtraced_by='auto').
+      // Fire-and-forget — Gmail latency must not block the pipeline.
+      void (async () => {
+        try {
+          const { backtraceOneWedding, WEAK_FIRST_TOUCH_SOURCES } = await import('@/lib/services/source-backtrace')
+          if (weddingId && WEAK_FIRST_TOUCH_SOURCES.has(detectedSource)) {
+            await backtraceOneWedding(venueId, weddingId)
+          }
+        } catch (err) {
+          console.warn('[pipeline] create-time backtrace failed:', err)
+        }
+      })()
     }
   } else if (weddingId && parsedEventDate) {
     // Existing wedding — backfill any extracted date / guest count that
@@ -1222,6 +1239,21 @@ export async function processIncomingEmail(
           [{ eventType: 'initial_inquiry', metadata: { source: schedulingEvent.source, via: 'scheduling_tool' } }],
           email.date
         )
+
+        // Source-attribution self-heal: same back-trace fire as the
+        // form-relay wedding-create path. Calendly is the OBVIOUS
+        // case — wedding was just born with source='calendly' and
+        // there's a 70%+ chance the couple actually came from Knot
+        // or the venue website. Async, never blocks.
+        const newWeddingId = weddingId
+        void (async () => {
+          try {
+            const { backtraceOneWedding } = await import('@/lib/services/source-backtrace')
+            await backtraceOneWedding(venueId, newWeddingId)
+          } catch (err) {
+            console.warn('[pipeline] scheduling-tool create-time backtrace failed:', err)
+          }
+        })()
       }
     } catch (err) {
       await logPipelineError(venueId, 'scheduling_tool_wedding_create', err, {

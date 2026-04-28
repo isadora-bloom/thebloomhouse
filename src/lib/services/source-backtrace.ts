@@ -517,6 +517,148 @@ export async function findBacktraceCandidates(
 }
 
 /**
+ * Single-wedding backtrace + auto-apply if high-confidence.
+ *
+ * Called from the email pipeline at wedding-create time so we
+ * never persist 'calendly' as the first-touch source when the real
+ * upstream channel (the_knot, wedding_wire, etc.) is one Gmail
+ * search away. Fire-and-forget from the caller's POV: it returns
+ * the candidate so the caller can log / surface it, but no error
+ * propagates.
+ *
+ * Behavior:
+ *   - If the wedding's source isn't in WEAK_FIRST_TOUCH_SOURCES,
+ *     no-op (only scheduling tools need backtracing).
+ *   - Searches local interactions FIRST (cheap), then live Gmail.
+ *   - High-confidence relay match → applyBacktrace runs with
+ *     backtraced_by='auto' so the audit trail distinguishes
+ *     auto-applied from coordinator-confirmed corrections.
+ *   - Medium / low / none → returns the candidate without writing.
+ *     The bulk panel and inline override remain available for
+ *     manual confirmation.
+ *
+ * Multi-venue safe: every read filters on venueId and the wedding
+ * is verified to belong to that venue before any work.
+ */
+export async function backtraceOneWedding(
+  venueId: string,
+  weddingId: string,
+  options: { useLiveGmail?: boolean; autoApplyHigh?: boolean } = {}
+): Promise<BacktraceCandidate | null> {
+  const useLiveGmail = options.useLiveGmail !== false
+  const autoApplyHigh = options.autoApplyHigh !== false
+  const sb = createServiceClient()
+
+  const { data: wedding } = await sb
+    .from('weddings')
+    .select('id, venue_id, source, inquiry_date, created_at')
+    .eq('id', weddingId)
+    .maybeSingle()
+  const wedRow = wedding as
+    | { id: string; venue_id: string; source: string | null; inquiry_date: string | null; created_at: string }
+    | null
+  if (!wedRow || wedRow.venue_id !== venueId) return null
+  if (!wedRow.source || !WEAK_FIRST_TOUCH_SOURCES.has(wedRow.source)) return null
+
+  // Pull this couple's name tokens.
+  const { data: people } = await sb
+    .from('people')
+    .select('wedding_id, first_name, last_name, role')
+    .eq('wedding_id', weddingId)
+    .in('role', ['partner1', 'partner2'])
+  const ppl = (people ?? []) as PersonRow[]
+  const coupleNames = ppl
+    .map((p) => [p.first_name, p.last_name].filter(Boolean).join(' ').trim())
+    .filter(Boolean)
+    .join(' & ') || null
+  const tokens = nameTokens(coupleNames)
+  if (tokens.length === 0) return null
+
+  const inquiryCutoff = wedRow.inquiry_date ? new Date(wedRow.inquiry_date) : new Date(wedRow.created_at)
+  inquiryCutoff.setDate(inquiryCutoff.getDate() + 1)
+
+  // Local first — only this wedding's already-linked inbound emails.
+  // Skip scheduling-tool senders (their confirmation emails would
+  // just recommend Calendly back to itself).
+  const { data: localIxs } = await sb
+    .from('interactions')
+    .select('id, wedding_id, from_email, from_name, subject, body_preview, full_body, timestamp, direction')
+    .eq('venue_id', venueId)
+    .eq('wedding_id', weddingId)
+    .eq('direction', 'inbound')
+    .order('timestamp', { ascending: true })
+  const localCandidates = ((localIxs ?? []) as InteractionRow[])
+    .filter((i) => new Date(i.timestamp) <= inquiryCutoff && !isSchedulingToolSender(i.from_email))
+
+  let pick: { i: InteractionRow; score: ReturnType<typeof scoreEvidence> } | null = null
+  for (const i of localCandidates) {
+    const s = scoreEvidence(i, tokens)
+    if (s.sourceFromRelay) {
+      pick = { i, score: s }
+      break
+    }
+    if (!pick && inferSourceFromSender(i.from_email)) pick = { i, score: s }
+  }
+
+  if (useLiveGmail && (!pick || !pick.score.sourceFromRelay)) {
+    const liveHit = await searchGmailForCouple(venueId, tokens, inquiryCutoff)
+    if (liveHit) {
+      const s = scoreEvidence(liveHit, tokens)
+      if (s.sourceFromRelay || !pick) pick = { i: liveHit, score: s }
+    }
+  }
+
+  let suggestedSource: string | null = null
+  let confidence: BacktraceCandidate['confidence'] = 'none'
+  let evidence: Evidence | null = null
+  if (pick) {
+    const { i, score } = pick
+    if (score.sourceFromRelay) {
+      suggestedSource = score.sourceFromRelay.source
+      confidence = 'high'
+    } else {
+      const inferred = inferSourceFromSender(i.from_email)
+      if (inferred && inferred !== wedRow.source) {
+        suggestedSource = inferred
+        confidence = 'medium'
+      }
+    }
+    evidence = {
+      interactionId: i.id,
+      fromEmail: i.from_email,
+      fromName: i.from_name,
+      subject: i.subject,
+      timestamp: i.timestamp,
+      snippet: makeSnippet(i.body_preview ?? i.full_body),
+    }
+  }
+
+  const normalized = suggestedSource ? normalizeSource(suggestedSource) : null
+  const candidate: BacktraceCandidate = {
+    weddingId,
+    coupleNames,
+    currentSource: wedRow.source,
+    inquiryDate: wedRow.inquiry_date,
+    suggestedSource: normalized,
+    evidence,
+    confidence,
+  }
+
+  // Auto-apply only on the strongest signal: a form-relay parser
+  // unambiguously identified the upstream channel. Anything weaker
+  // we leave for human review.
+  if (autoApplyHigh && confidence === 'high' && normalized && normalized !== wedRow.source) {
+    try {
+      await applyBacktrace(venueId, weddingId, normalized, 'auto')
+    } catch (err) {
+      console.warn(`[backtrace] auto-apply failed for ${weddingId}:`, err)
+    }
+  }
+
+  return candidate
+}
+
+/**
  * Apply an approved backtrace correction. Updates weddings.source AND
  * the wedding's inquiry touchpoint, with audit metadata so a re-run of
  * findBacktraceCandidates skips weddings that were already corrected.
