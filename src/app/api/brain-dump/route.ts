@@ -11,10 +11,11 @@ import {
   importLeads,
   importReviews,
   importTourLinks,
-  importPlatformActivity,
   type ImportSummary,
 } from '@/lib/services/brain-dump-imports'
 import { importIdentityCandidates } from '@/lib/services/tangential-signals-import'
+import { detectPlatformSource } from '@/lib/services/platform-detectors'
+import { importPlatformSignals } from '@/lib/services/platform-signals-import'
 import { callAIVision, callAIJson } from '@/lib/ai/client'
 
 const FILE_CONTENT_CAP = 40_000 // chars embedded into the classifier prompt
@@ -455,7 +456,7 @@ function routedTable(shape: ShapeDetection['shape']): string {
     case 'knowledge_base_qa':
     case 'knowledge_base_tc': return 'knowledge_base'
     case 'tour_links': return 'venue_ai_config'
-    case 'platform_activity': return 'engagement_events'
+    case 'platform_activity': return 'tangential_signals'
     case 'reviews': return 'reviews'
     case 'marketing_spend': return 'marketing_spend'
     default: return 'unknown'
@@ -491,8 +492,54 @@ export async function runCsvImport(args: {
         })),
       })
     }
-    case 'platform_activity':
-      return importPlatformActivity({ supabase, venueId, detection, headerRow, dataRows, sourceHint: 'wedding_wire' })
+    case 'platform_activity': {
+      // Phase A (2026-04-28): platform_activity routes through the
+      // pluggable detector dispatcher so any platform export — Knot,
+      // WeddingWire, Instagram, Pinterest, Google Business, Facebook
+      // — auto-identifies and lands in tangential_signals (NOT
+      // engagement_events as the previous importPlatformActivity
+      // path did). tangential_signals is what the matching engine
+      // reads, so this is the inflow that feeds first-touch
+      // reattribution. detectPlatformSource returns a confidence-
+      // ranked match; if no detector hits, we still pick the highest
+      // (over 50) to give the import a chance — the coordinator can
+      // override the platform on a future re-run.
+      const detection2 = detectPlatformSource(headerRow, dataRows.slice(0, 30))
+      const best = detection2.best ?? detection2.all[0]
+      if (!best || best.confidence < 50) {
+        return {
+          inserted: 0,
+          updated: 0,
+          skipped: dataRows.length,
+          errors: [
+            `No platform detector recognized this CSV. Headers: ${headerRow.join(', ')}. Top candidates: ${detection2.all
+              .slice(0, 3)
+              .map((m) => `${m.detector.key}@${m.confidence}`)
+              .join(', ') || 'none'}.`,
+          ],
+        }
+      }
+      const result = await importPlatformSignals({
+        supabase,
+        venueId,
+        detector: best.detector,
+        headers: headerRow,
+        rows: dataRows,
+      })
+      // Bridge to ImportSummary so brain-dump's downstream UI keeps
+      // the same shape. inserted = inserted, updated = 0, skipped =
+      // duplicates + empty-name + unparseable-date.
+      const skipped =
+        result.skipped_duplicate +
+        result.skipped_empty_name +
+        result.skipped_unparseable_date
+      return {
+        inserted: result.inserted,
+        updated: 0,
+        skipped,
+        errors: result.errors,
+      }
+    }
     case 'reviews': {
       const rows = dataRows.map((r) => rowToRecord(detection, headerRow, r))
         .filter((r) => r.reviewer && r.body)
