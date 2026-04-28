@@ -244,25 +244,41 @@ export default function GettingStartedPage() {
 
   const supabase = createClient()
 
-  // ---- Fetch ----
+  // ---- Fetch + derive + persist progress ----
+  // Migration 094 added the wide-column shape this page expected. The
+  // existing (step, completed) shape was multi-row and didn't match the
+  // single-row TypeScript interface, so reads silently returned null.
+  // The fix has two parts:
+  //   1. Read progress (now single-row with the wide cols).
+  //   2. Detect from downstream tables which steps are ALREADY done
+  //      (photo uploaded, message sent, vendor booked, inspo uploaded,
+  //      checklist item completed) — couples may have done the action
+  //      before this writer existed. Upsert the derived state. After
+  //      this runs once per couple, normal future visits read the row
+  //      directly without re-deriving.
   const fetchData = useCallback(async () => {
-    if (!weddingId) return
-    const [progressRes, weddingRes] = await Promise.all([
-      supabase
-        .from('onboarding_progress')
-        .select('*')
-        .eq('wedding_id', weddingId)
-        .maybeSingle(),
-      supabase
-        .from('weddings')
-        .select('wedding_date, people!people_wedding_id_fkey(first_name, last_name, role)')
-        .eq('id', weddingId)
-        .maybeSingle(),
-    ])
+    if (!weddingId || !venueId) return
+    const [progressRes, weddingRes, photoRes, messageRes, vendorRes, inspoRes, checklistRes] =
+      await Promise.all([
+        supabase
+          .from('onboarding_progress')
+          .select('*')
+          .eq('wedding_id', weddingId)
+          .order('updated_at', { ascending: false, nullsFirst: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('weddings')
+          .select('wedding_date, people!people_wedding_id_fkey(first_name, last_name, role)')
+          .eq('id', weddingId)
+          .maybeSingle(),
+        supabase.from('photo_library').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+        supabase.from('messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('sender_role', 'couple'),
+        supabase.from('booked_vendors').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+        supabase.from('inspo_gallery').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+        supabase.from('checklist_items').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('is_completed', true),
+      ])
 
-    if (!progressRes.error && progressRes.data) {
-      setProgress(progressRes.data as OnboardingProgress)
-    }
     if (!weddingRes.error && weddingRes.data) {
       const wd = weddingRes.data as {
         wedding_date: string | null
@@ -276,8 +292,69 @@ export default function GettingStartedPage() {
         partner2_name: partner2 ? partner2.first_name : null,
       })
     }
+
+    // Derive each step's truth from the downstream tables. count >= 1
+    // means the step happened. We OR with whatever's in the existing
+    // progress row so a coordinator-cleared flag re-trues on the next
+    // user action.
+    const existing = (progressRes.data as OnboardingProgress | null) ?? null
+    const derivedSteps = {
+      couple_photo_uploaded: (photoRes.count ?? 0) > 0,
+      first_message_sent: (messageRes.count ?? 0) > 0,
+      vendor_added: (vendorRes.count ?? 0) > 0,
+      inspo_uploaded: (inspoRes.count ?? 0) > 0,
+      checklist_item_completed: (checklistRes.count ?? 0) > 0,
+    }
+
+    // Compute the next progress shape. updated_at gets bumped via the
+    // 094 trigger on UPDATE, but the first INSERT needs an explicit
+    // value or it stays null until next write.
+    const merged = {
+      couple_photo_uploaded: derivedSteps.couple_photo_uploaded || (existing?.couple_photo_uploaded ?? false),
+      first_message_sent: derivedSteps.first_message_sent || (existing?.first_message_sent ?? false),
+      vendor_added: derivedSteps.vendor_added || (existing?.vendor_added ?? false),
+      inspo_uploaded: derivedSteps.inspo_uploaded || (existing?.inspo_uploaded ?? false),
+      checklist_item_completed: derivedSteps.checklist_item_completed || (existing?.checklist_item_completed ?? false),
+    }
+
+    // Only write if something is different — avoids a no-op write on
+    // every page load.
+    const needsWrite =
+      !existing ||
+      Object.entries(merged).some(([k, v]) => existing[k as keyof typeof merged] !== v)
+    if (needsWrite) {
+      const now = new Date().toISOString()
+      const stamps = {
+        couple_photo_uploaded_at: merged.couple_photo_uploaded ? (existing?.updated_at ?? now) : null,
+        first_message_sent_at: merged.first_message_sent ? (existing?.updated_at ?? now) : null,
+        vendor_added_at: merged.vendor_added ? (existing?.updated_at ?? now) : null,
+        inspo_uploaded_at: merged.inspo_uploaded ? (existing?.updated_at ?? now) : null,
+        checklist_item_completed_at: merged.checklist_item_completed ? (existing?.updated_at ?? now) : null,
+      }
+      if (existing?.id) {
+        await supabase
+          .from('onboarding_progress')
+          .update({ ...merged, ...stamps })
+          .eq('id', existing.id)
+      } else {
+        await supabase.from('onboarding_progress').insert({
+          venue_id: venueId,
+          wedding_id: weddingId,
+          ...merged,
+          ...stamps,
+        })
+      }
+    }
+
+    setProgress({
+      id: existing?.id ?? '',
+      wedding_id: weddingId,
+      ...merged,
+      updated_at: existing?.updated_at ?? null,
+    })
+
     setLoading(false)
-  }, [supabase, weddingId])
+  }, [supabase, weddingId, venueId])
 
   // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {

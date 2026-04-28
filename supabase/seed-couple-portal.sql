@@ -134,42 +134,15 @@ INSERT INTO wedding_config (
 ) ON CONFLICT (venue_id, wedding_id) DO NOTHING;
 
 -- ============================================
--- 7. WEDDING TIMELINE
+-- 7. WEDDING TIMELINE — REMOVED
 -- ============================================
-INSERT INTO wedding_timeline (
-  id, venue_id, wedding_id,
-  ceremony_start, reception_end, notes,
-  timeline_data
-) VALUES (
-  'e7000001-0000-0000-0000-000000000001',
-  '22222222-2222-2222-2222-222222222201',
-  '44444444-4444-4444-4444-444444000109',
-  '16:30', '23:00',
-  'First look at 3:00 PM by the garden gazebo. Sunset is ~8:15 PM.',
-  '{
-    "events": [
-      {"time": "12:00", "title": "Hair & Makeup begins", "category": "prep", "notes": "Bridal suite"},
-      {"time": "14:00", "title": "Photographer arrives", "category": "vendor", "notes": "Detail shots first"},
-      {"time": "15:00", "title": "First Look", "category": "ceremony", "notes": "Garden gazebo"},
-      {"time": "15:30", "title": "Wedding party photos", "category": "photos", "notes": "30 min"},
-      {"time": "16:00", "title": "Family photos", "category": "photos", "notes": "Both families, 20 min"},
-      {"time": "16:15", "title": "Guests arrive", "category": "guests", "notes": "Ushers in place"},
-      {"time": "16:30", "title": "Ceremony begins", "category": "ceremony", "notes": "Processional music starts"},
-      {"time": "17:00", "title": "Ceremony ends", "category": "ceremony", "notes": "Recessional"},
-      {"time": "17:15", "title": "Cocktail hour", "category": "reception", "notes": "Lawn games available"},
-      {"time": "18:15", "title": "Grand entrance", "category": "reception", "notes": "DJ announces couple"},
-      {"time": "18:30", "title": "First dance", "category": "reception", "notes": "\"At Last\" by Etta James"},
-      {"time": "18:40", "title": "Toasts", "category": "reception", "notes": "MOH then Best Man"},
-      {"time": "19:00", "title": "Dinner served", "category": "reception", "notes": "Plated, 3 courses"},
-      {"time": "19:15", "title": "Parent dances", "category": "reception", "notes": "During dinner service"},
-      {"time": "20:00", "title": "Cake cutting", "category": "reception", "notes": "Sugar & Bloom 3-tier"},
-      {"time": "20:15", "title": "Open dancing", "category": "reception", "notes": "Shoe game at 20:45"},
-      {"time": "22:30", "title": "Last dance", "category": "reception", "notes": "\"Forever Young\""},
-      {"time": "22:45", "title": "Sparkler exit", "category": "send_off", "notes": "200 sparklers ready"},
-      {"time": "23:00", "title": "Event ends", "category": "logistics", "notes": "Vendors out by midnight"}
-    ]
-  }'::jsonb
-) ON CONFLICT (venue_id, wedding_id) DO NOTHING;
+-- Migration 076_consolidate_wedding_timeline.sql dropped the
+-- wedding_timeline table. ceremony_start / reception_end now live as
+-- columns on the parent weddings row, and the per-event list lives in
+-- the canonical `timeline` table (seeded above by seed.sql / a
+-- subsequent seed file). The previous INSERT here would error on a
+-- fresh deploy because the table no longer exists. Leaving the section
+-- header for git-blame readability.
 
 -- ============================================
 -- 8. RSVP CONFIG
