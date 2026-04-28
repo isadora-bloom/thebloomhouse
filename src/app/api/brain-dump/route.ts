@@ -16,6 +16,8 @@ import {
 import { importIdentityCandidates } from '@/lib/services/tangential-signals-import'
 import { detectPlatformSource } from '@/lib/services/platform-detectors'
 import { importPlatformSignals } from '@/lib/services/platform-signals-import'
+import { clusterSignals } from '@/lib/services/candidate-clusterer'
+import { resolveVenueCandidates } from '@/lib/services/candidate-resolver'
 import { callAIVision, callAIJson } from '@/lib/ai/client'
 
 const FILE_CONTENT_CAP = 40_000 // chars embedded into the classifier prompt
@@ -526,6 +528,23 @@ export async function runCsvImport(args: {
         headers: headerRow,
         rows: dataRows,
       })
+
+      // Phase B (PB.5 — 2026-04-28): chain clusterer + resolver so the
+      // moment a CSV lands, signals are grouped into candidates and
+      // matched against existing weddings. Errors here are non-fatal —
+      // the import itself succeeded; clustering/resolving can be re-run
+      // by the nightly safety sweep if anything failed.
+      if (result.inserted_signal_ids.length > 0) {
+        try {
+          await clusterSignals({ supabase, signalIds: result.inserted_signal_ids })
+          await resolveVenueCandidates({ supabase, venueId })
+        } catch (err) {
+          result.errors.push(
+            `phase_b_chain: ${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
+      }
+
       // Bridge to ImportSummary so brain-dump's downstream UI keeps
       // the same shape. inserted = inserted, updated = 0, skipped =
       // duplicates + empty-name + unparseable-date.

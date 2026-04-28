@@ -37,6 +37,10 @@ export interface PlatformSignalsImportSummary {
   /** Per signal_type-future-bridge: which actions had a parsed signal_date
    *  vs not. Used to decide whether the import is good-enough for ROI. */
   date_parse_rate: { parsed: number; unparseable: number }
+  /** Phase B: IDs of newly-inserted signals so the brain-dump route can
+   *  hand them to the clusterer + resolver. Empty when no rows were
+   *  inserted. Order matches insert order. */
+  inserted_signal_ids: string[]
 }
 
 interface ImportArgs {
@@ -85,6 +89,7 @@ export async function importPlatformSignals(args: ImportArgs): Promise<PlatformS
     errors: [],
     by_action: {},
     date_parse_rate: { parsed: 0, unparseable: 0 },
+    inserted_signal_ids: [],
   }
 
   // Map every row first so we can see the parse rate before writing.
@@ -202,7 +207,7 @@ export async function importPlatformSignals(args: ImportArgs): Promise<PlatformS
   const CHUNK = 200
   for (let i = 0; i < toInsert.length; i += CHUNK) {
     const chunk = toInsert.slice(i, i + CHUNK)
-    const { error } = await supabase.from('tangential_signals').insert(chunk)
+    const { data, error } = await supabase.from('tangential_signals').insert(chunk).select('id')
     if (error) {
       summary.errors.push(`insert chunk @${i}: ${error.message}`)
       continue
@@ -210,6 +215,9 @@ export async function importPlatformSignals(args: ImportArgs): Promise<PlatformS
     summary.inserted += chunk.length
     for (const r of chunk) {
       summary.by_action[r.action_class] = (summary.by_action[r.action_class] ?? 0) + 1
+    }
+    for (const row of (data ?? []) as Array<{ id: string }>) {
+      summary.inserted_signal_ids.push(row.id)
     }
   }
 
