@@ -32,6 +32,7 @@ import {
   Wine, HardHat, Bus, UtensilsCrossed,
   Armchair, Building, Flower2, HeartHandshake,
   Hotel, FileText, CheckSquare, SlidersHorizontal, Phone,
+  Link2, ShoppingBag, Box,
   // Org admin
   Users, CreditCard, Building2, Layers,
   MapPin, ShieldCheck,
@@ -310,6 +311,9 @@ export const MODE_SAGE: ModeConfig = {
     '/portal/decor-config',
     '/portal/guest-care-config',
     '/portal/accommodations-config',
+    '/portal/venue-resources-config',
+    '/portal/storefront-config',
+    '/portal/borrow-catalog-config',
     '/portal/vendors',
     '/onboarding',
     '/setup',
@@ -351,6 +355,7 @@ export const MODE_SAGE: ModeConfig = {
         { label: 'Auto-send & Follow-ups', href: '/agent/settings', icon: Settings, daily: true },
         { label: 'Inbox Filters', href: '/settings/inbox-filters', icon: MailX },
         { label: "What Makes Us Different", href: '/portal/venue-usps-config', icon: Sparkles },
+        { label: 'Seasonal Content', href: '/settings/seasonal-content', icon: TrendsIcon },
       ],
     },
     {
@@ -371,6 +376,7 @@ export const MODE_SAGE: ModeConfig = {
         { label: 'Bar & Beverages', href: '/portal/bar-config', icon: Wine },
         { label: 'Staffing', href: '/portal/staffing-config', icon: HardHat },
         { label: 'Decor & Spaces', href: '/portal/decor-config', icon: Flower2 },
+        { label: 'Borrow Catalog', href: '/portal/borrow-catalog-config', icon: Box },
         { label: 'Guest Care', href: '/portal/guest-care-config', icon: HeartHandshake },
       ],
     },
@@ -398,6 +404,8 @@ export const MODE_SAGE: ModeConfig = {
       venueOnly: true,
       items: [
         { label: 'Downloads & Resources', href: '/portal/venue-assets-config', icon: FileText },
+        { label: 'Resource Links', href: '/portal/venue-resources-config', icon: Link2 },
+        { label: 'Curated Picks', href: '/portal/storefront-config', icon: ShoppingBag },
         { label: 'Portal Sections', href: '/portal/section-settings', icon: SlidersHorizontal },
       ],
     },

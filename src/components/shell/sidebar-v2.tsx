@@ -87,11 +87,12 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
     setView(readView())
   }, [])
 
-  // Live counts for nav badges. Today only Anomalies has one — count
-  // of unacknowledged anomaly_alerts for this venue. Re-fetched when
-  // the venue changes; not on every navigation. The cron writes new
-  // anomalies and the badge stays accurate within an hour, which is
-  // good enough for "you have unread anomalies."
+  // Live count of unacknowledged anomaly_alerts for the badge. Re-fires
+  // on every pathname change so navigating to /intel/anomalies, hitting
+  // dismiss, and returning shows the updated count without a hard
+  // reload. (Initial implementation only fetched on mount, leaving the
+  // badge stale after dismissal — caught in the 2026-04-28
+  // self-critical audit.)
   const [anomalyCount, setAnomalyCount] = useState<number>(0)
   useEffect(() => {
     if (!venueId) return
@@ -107,7 +108,7 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
     }
     load()
     return () => { cancelled = true }
-  }, [venueId])
+  }, [venueId, pathname])
 
   function flipView(next: View) {
     setView(next)
