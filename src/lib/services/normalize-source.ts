@@ -33,6 +33,18 @@ export const CANONICAL_SOURCES = [
   'walk_in',
   'csv_import',
   'vendor_referral',
+  // Scheduling tools — not acquisition channels, but the email
+  // pipeline writes these as the wedding's source when a Calendly
+  // booking is the only signal. Keep them canonical so
+  // normalizeSource() doesn't clobber them to 'other' on round-trip
+  // (the back-trace flow temporarily reads-then-writes the existing
+  // source while applying audit metadata). Coordinators should never
+  // pick these in the source override UI — the override route's
+  // whitelist excludes them — but the storage layer needs to round-
+  // trip them faithfully.
+  'calendly',
+  'acuity',
+  'dubsado',
   'other',
 ] as const
 
@@ -117,6 +129,14 @@ const ALIAS_TO_CANONICAL: Record<string, CanonicalSource> = {
   csv_import: 'csv_import',
   import: 'csv_import',
   manual: 'csv_import',
+  // Scheduling tools — round-trip preserve.
+  calendly: 'calendly',
+  calendly_com: 'calendly',
+  acuity: 'acuity',
+  acuityscheduling: 'acuity',
+  acuityscheduling_com: 'acuity',
+  dubsado: 'dubsado',
+  dubsado_com: 'dubsado',
   other: 'other',
   unknown: 'other',
   null: 'other',

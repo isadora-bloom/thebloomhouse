@@ -45,6 +45,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { WeddingJourney } from '@/components/agent/wedding-journey'
+import { SourceBadgeEditable } from '@/components/agent/source-badge-editable'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -806,7 +807,6 @@ export default function ClientProfilePage() {
     )
   }
 
-  const source = sourceBadge(wedding.source)
   const status = statusConfig(wedding.status)
 
   return (
@@ -836,9 +836,16 @@ export default function ClientProfilePage() {
               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${status.bg} ${status.text}`}>
                 {status.label}
               </span>
-              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${source.bg} ${source.text}`}>
-                {source.label}
-              </span>
+              <SourceBadgeEditable
+                weddingId={weddingId}
+                initialSource={wedding.source}
+                onUpdated={(newSource) => {
+                  // Local optimistic update so the badge re-renders
+                  // immediately even though wedding state is fetched
+                  // separately. The next fetchData() call will reconcile.
+                  setWedding((prev) => prev ? { ...prev, source: newSource } : prev)
+                }}
+              />
               <span className={cn('flex items-center gap-1 text-sm font-bold', heatColor(wedding.temperature_tier))}>
                 <Flame className="w-4 h-4" />
                 {wedding.heat_score} {wedding.temperature_tier}
