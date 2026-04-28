@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -164,6 +165,64 @@ function classificationBadge(cls: 'inquiry' | 'client' | 'vendor') {
 }
 
 // ---------------------------------------------------------------------------
+// Search helpers
+//
+// Search runs Postgres ILIKE across subject / body_preview / from_email /
+// from_name. We need to escape the SQL LIKE metacharacters (% and _) so a
+// user typing "50%" doesn't accidentally match every row. The PostgREST
+// .or() filter parses commas as separators, so we also strip commas
+// defensively (a search containing a literal comma would otherwise build
+// a malformed filter expression).
+//
+// MIN_QUERY_LEN = 2 — anything shorter renders an empty state instead of
+// running a query that would scan most of the table for one trigram.
+// ---------------------------------------------------------------------------
+
+const MIN_QUERY_LEN = 2
+
+function sanitizeSearchQuery(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[%_]/g, (m) => `\\${m}`)
+    .replace(/,/g, ' ')
+}
+
+function useDebouncedValue<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(t)
+  }, [value, delay])
+  return debounced
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Wraps occurrences of `term` in `text` with a subtle highlight span. Done
+// client-side so we don't refetch when highlighting and so we never double-
+// process server-rendered HTML. The split keeps the original casing of the
+// match in the DOM, only the visual treatment changes.
+function highlightMatch(text: string | null | undefined, term: string) {
+  const value = text ?? ''
+  if (!term || term.length < MIN_QUERY_LEN || !value) return value
+  const matchRe = new RegExp(`^${escapeRegExp(term)}$`, 'i')
+  const parts = value.split(new RegExp(`(${escapeRegExp(term)})`, 'ig'))
+  if (parts.length === 1) return value
+  return parts.map((part, i) =>
+    matchRe.test(part) ? (
+      <mark key={i} className="bg-gold-100 text-sage-900 rounded px-0.5">
+        {part}
+      </mark>
+    ) : (
+      <span key={i}>{part}</span>
+    )
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Skeleton
 // ---------------------------------------------------------------------------
 
@@ -212,15 +271,24 @@ function EmailListItem({
   isSelected,
   onClick,
   showVenueChip,
+  searchTerm,
 }: {
   interaction: Interaction
   isSelected: boolean
   onClick: () => void
   showVenueChip: boolean
+  searchTerm: string
 }) {
   const cls = interaction.classification ?? 'inquiry'
   const badge = classificationBadge(cls)
   const isRead = interaction.is_read ?? interaction.direction === 'outbound'
+
+  const senderText =
+    interaction.direction === 'inbound'
+      ? interaction.person_name || interaction.person_email || 'No sender on record'
+      : `To: ${interaction.person_name || interaction.person_email || 'No recipient on record'}`
+  const subjectText = interaction.subject || '(No subject)'
+  const previewText = stripHtml(interaction.body_preview) || 'No preview available'
 
   return (
     <button
@@ -241,9 +309,7 @@ function EmailListItem({
               isRead ? 'text-sage-600' : 'font-semibold text-sage-900'
             }`}
           >
-            {interaction.direction === 'inbound'
-              ? interaction.person_name || interaction.person_email || 'No sender on record'
-              : `To: ${interaction.person_name || interaction.person_email || 'No recipient on record'}`}
+            {highlightMatch(senderText, searchTerm)}
           </span>
         </div>
         <span className="text-xs text-sage-400 shrink-0">
@@ -255,11 +321,11 @@ function EmailListItem({
           isRead ? 'text-sage-600' : 'font-medium text-sage-800'
         }`}
       >
-        {interaction.subject || '(No subject)'}
+        {highlightMatch(subjectText, searchTerm)}
       </p>
       <div className="flex items-center gap-2">
         <p className="text-xs text-sage-400 truncate flex-1">
-          {stripHtml(interaction.body_preview) || 'No preview available'}
+          {highlightMatch(previewText, searchTerm)}
         </p>
         {showVenueChip && <VenueChip venueName={interaction.venue_name} />}
         <span
@@ -1124,6 +1190,9 @@ function RejectDraftModal({
 
 export default function InboxPage() {
   const scope = useScope()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const initialSearchQuery = searchParams?.get('q') ?? ''
   const showVenueChip = scope.level !== 'venue'
   // For compose modal and mutations that need a concrete venue
   const composeVenueId = scope.venueId ?? ''
@@ -1133,7 +1202,18 @@ export default function InboxPage() {
   const [syncStatus, setSyncStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<FilterTab>('all')
-  const [searchQuery, setSearchQuery] = useState('')
+  const [searchQuery, setSearchQuery] = useState(initialSearchQuery)
+  // Debounce 300ms — keeps the URL stable and avoids hammering Postgres on
+  // every keystroke. The server query keys off the debounced value; the
+  // input/highlighter use the immediate value so typing feels instant.
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 300)
+  const sanitizedQuery = useMemo(
+    () => sanitizeSearchQuery(debouncedSearchQuery),
+    [debouncedSearchQuery]
+  )
+  const isSearching = sanitizedQuery.length >= MIN_QUERY_LEN
+  const hasShortQuery =
+    debouncedSearchQuery.trim().length > 0 && !isSearching
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [threadMessages, setThreadMessages] = useState<Interaction[]>([])
   const [threadDraft, setThreadDraft] = useState<{
@@ -1203,6 +1283,15 @@ export default function InboxPage() {
   }, [threadDraft, scope.loading, scope.level, scope.venueId, scope.groupId, resolveVenueIds, supabase])
 
   // ---- Fetch interactions ----
+  //
+  // The optional `q` param is the sanitized search term. It's applied as a
+  // Postgres ILIKE across subject / body_preview / from_email / from_name on
+  // the interactions row itself. Names that live only on the joined `people`
+  // row are caught by the existing person_name fallback because the inbound
+  // pipeline writes from_name into interactions.from_name (migration 063), so
+  // we don't need a join-side filter here. If a future row has a person_name
+  // that didn't make it into from_name, that row simply won't match — a known
+  // tradeoff vs. building a full-text materialized view.
   const fetchInteractions = useCallback(async () => {
     if (scope.loading) return
     try {
@@ -1234,6 +1323,20 @@ export default function InboxPage() {
         .eq('type', 'email')
       if (venueIds && venueIds.length > 0) {
         query = query.in('venue_id', venueIds)
+      }
+      if (isSearching) {
+        const q = sanitizedQuery
+        // PostgREST .or() builds a single SQL expression: subject.ilike.%q%,
+        // body_preview.ilike.%q%, from_email.ilike.%q%, from_name.ilike.%q%.
+        // The trigram GIN indexes from migration 099 keep this cheap.
+        query = query.or(
+          [
+            `subject.ilike.%${q}%`,
+            `body_preview.ilike.%${q}%`,
+            `from_email.ilike.%${q}%`,
+            `from_name.ilike.%${q}%`,
+          ].join(',')
+        )
       }
       const { data: interactionsData, error: fetchError } = await query
         .order('timestamp', { ascending: false })
@@ -1391,7 +1494,7 @@ export default function InboxPage() {
     } finally {
       setLoading(false)
     }
-  }, [scope.loading, resolveVenueIds, supabase])
+  }, [scope.loading, resolveVenueIds, supabase, isSearching, sanitizedQuery])
 
   // ---- Inline draft approval handlers ----
   const clearDraftFromList = useCallback((draftId: string) => {
@@ -1505,6 +1608,24 @@ export default function InboxPage() {
   useEffect(() => {
     fetchInteractions()
   }, [fetchInteractions])
+
+  // ---- Sync ?q=... to the URL so the search is shareable + back-button
+  // friendly. We use replaceState (not router.push) to avoid filling the
+  // history stack on every keystroke past the debounce. router.replace is
+  // used so Next still picks up the new searchParams without triggering a
+  // full re-render that would remount the page.
+  const lastUrlSyncRef = useRef<string | null>(null)
+  useEffect(() => {
+    const trimmed = debouncedSearchQuery.trim()
+    if (trimmed === lastUrlSyncRef.current) return
+    lastUrlSyncRef.current = trimmed
+    const params = new URLSearchParams(searchParams?.toString() ?? '')
+    if (trimmed) params.set('q', trimmed)
+    else params.delete('q')
+    const qs = params.toString()
+    const next = qs ? `?${qs}` : window.location.pathname
+    router.replace(next, { scroll: false })
+  }, [debouncedSearchQuery, router, searchParams])
 
   // ---- Load thread when selecting an email ----
   const loadThread = useCallback(
@@ -1750,19 +1871,28 @@ export default function InboxPage() {
   }
 
   // ---- Filtering ----
+  //
+  // Tab filtering stays client-side (it's a fast pass over a 200-row max).
+  // Search filtering happens server-side in fetchInteractions when the
+  // debounced query is long enough; we run a lightweight client mirror
+  // during the debounce gap so the list feels reactive while the user is
+  // still typing.
+  const liveSanitized = sanitizeSearchQuery(searchQuery)
+  const liveSearching = liveSanitized.length >= MIN_QUERY_LEN
   const filteredInteractions = interactions.filter((i) => {
     // Tab filter
     if (activeTab === 'inquiries' && i.classification !== 'inquiry') return false
     if (activeTab === 'client' && i.classification !== 'client') return false
     if (activeTab === 'unread' && i.is_read) return false
 
-    // Search filter
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase()
+    if (liveSearching && liveSanitized !== sanitizedQuery) {
+      const q = liveSanitized
       return (
         (i.subject?.toLowerCase().includes(q) ?? false) ||
         (i.person_name?.toLowerCase().includes(q) ?? false) ||
         (i.person_email?.toLowerCase().includes(q) ?? false) ||
+        (i.from_email?.toLowerCase().includes(q) ?? false) ||
+        (i.from_name?.toLowerCase().includes(q) ?? false) ||
         (i.body_preview?.toLowerCase().includes(q) ?? false)
       )
     }
@@ -1882,17 +2012,39 @@ export default function InboxPage() {
           ))}
         </div>
 
-        <div className="relative sm:ml-auto">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-sage-400" />
-          <input
-            type="text"
-            placeholder="Search emails..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 pr-4 py-2 text-sm border border-sage-200 rounded-lg text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 w-full sm:w-64 bg-warm-white"
-          />
+        <div className="sm:ml-auto flex items-center gap-3">
+          {searchQuery.trim() && isSearching && (
+            <span className="text-xs text-sage-500 whitespace-nowrap">
+              {filteredInteractions.length}{' '}
+              {filteredInteractions.length === 1 ? 'match' : 'matches'}
+            </span>
+          )}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-sage-400" />
+            <input
+              type="text"
+              placeholder="Search subject, body, sender..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 pr-9 py-2 text-sm border border-sage-200 rounded-lg text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 w-full sm:w-72 bg-warm-white"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                title="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-sage-400 hover:text-sage-700 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
+      {hasShortQuery && (
+        <p className="text-xs text-sage-500 -mt-2">
+          Type at least {MIN_QUERY_LEN} characters to search.
+        </p>
+      )}
 
       {/* ---- Main content: list + detail ---- */}
       <div className="bg-surface border border-border rounded-xl shadow-sm overflow-hidden">
@@ -1909,17 +2061,26 @@ export default function InboxPage() {
           <div className="p-12 text-center">
             <Inbox className="w-12 h-12 text-sage-300 mx-auto mb-4" />
             <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">
-              {searchQuery
-                ? 'No matching emails'
+              {searchQuery.trim()
+                ? `No matches for "${searchQuery.trim()}"`
                 : activeTab !== 'all'
                   ? `No ${activeTab} emails`
                   : 'Inbox is empty'}
             </h3>
             <p className="text-sm text-sage-600 max-w-md mx-auto">
-              {searchQuery
-                ? `No emails match "${searchQuery}". Try a different search term.`
+              {searchQuery.trim()
+                ? 'Try a different search term, or clear the search to see all emails.'
                 : 'Click "Sync Emails" to pull in the latest from Gmail.'}
             </p>
+            {searchQuery.trim() && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="mt-4 inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-sage-700 border border-sage-300 rounded-lg hover:bg-sage-50 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+                Clear search
+              </button>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-5 min-h-[600px]">
@@ -1936,6 +2097,7 @@ export default function InboxPage() {
                     isSelected={interaction.id === selectedId}
                     onClick={() => loadThread(interaction)}
                     showVenueChip={showVenueChip}
+                    searchTerm={isSearching ? sanitizedQuery : ''}
                   />
                   {interaction.pending_draft && (
                     <InlineDraftApproval

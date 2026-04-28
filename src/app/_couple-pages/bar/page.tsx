@@ -22,6 +22,9 @@ import {
   ChevronUp,
   Info,
   Download,
+  Link2,
+  Upload,
+  Sparkles,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -597,6 +600,14 @@ export default function BarPlannerPage() {
   const [recipeNotes, setRecipeNotes] = useState('')
   const [editableIngredients, setEditableIngredients] = useState<RecipeIngredient[]>([])
 
+  // Recipe import (URL or file upload — extracted by AI)
+  const [importMode, setImportMode] = useState<'url' | 'upload'>('url')
+  const [importUrl, setImportUrl] = useState('')
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState<string | null>(null)
+  const importFileRef = useRef<HTMLInputElement | null>(null)
+
   // Notes per tab
   const [notes, setNotes] = useState({ calculator: '', list: '', recipes: '' })
   const [showCalcSummary, setShowCalcSummary] = useState(false)
@@ -864,6 +875,71 @@ export default function BarPlannerPage() {
     if (!confirm('Remove this recipe?')) return
     setRecipes((prev) => prev.filter((r) => r.id !== id))
     await supabase.from('bar_recipes').delete().eq('id', id)
+  }
+
+  // ── Recipe import (URL / upload → AI extraction) ──────────────────────────
+  // POSTs to /api/bar-recipes/extract-{url,upload}. The API persists the row
+  // and returns it. We append optimistically; on failure, we surface the
+  // server's error message.
+
+  const handleImportRecipe = async () => {
+    if (!weddingId || !venueId) return
+    if (importMode === 'url' && !importUrl.trim()) {
+      setImportError('Paste a recipe URL.')
+      return
+    }
+    if (importMode === 'upload' && !importFile) {
+      setImportError('Choose an image or PDF.')
+      return
+    }
+
+    setImporting(true)
+    setImportError(null)
+
+    try {
+      let res: Response
+      if (importMode === 'url') {
+        res = await fetch('/api/bar-recipes/extract-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: importUrl.trim(), weddingId }),
+        })
+      } else {
+        const form = new FormData()
+        form.append('file', importFile as File)
+        form.append('weddingId', weddingId)
+        res = await fetch('/api/bar-recipes/extract-upload', {
+          method: 'POST',
+          body: form,
+        })
+      }
+
+      const data = (await res.json().catch(() => ({}))) as { recipe?: Recipe; error?: string }
+      if (!res.ok || !data.recipe) {
+        setImportError(data.error || 'Could not extract this recipe.')
+        return
+      }
+
+      const saved = data.recipe as Recipe & { ingredients: RecipeIngredient[] | string }
+      const recipe: Recipe = {
+        ...saved,
+        ingredients:
+          typeof saved.ingredients === 'string'
+            ? (JSON.parse(saved.ingredients) as RecipeIngredient[])
+            : (saved.ingredients as RecipeIngredient[]),
+      }
+      setRecipes((prev) => [...prev, recipe])
+
+      // Reset the import form
+      setImportUrl('')
+      setImportFile(null)
+      if (importFileRef.current) importFileRef.current.value = ''
+    } catch (err) {
+      console.error('[BarPlanner] Import failed:', err)
+      setImportError(err instanceof Error ? err.message : 'Import failed.')
+    } finally {
+      setImporting(false)
+    }
   }
 
   const addRecipeToList = async (recipe: Recipe) => {
@@ -1506,10 +1582,97 @@ export default function BarPlannerPage() {
          ════════════════════════════════════════════════════════════════════════ */}
       {tab === 'recipes' && (
         <div className="space-y-5">
+          {/* ── Pull a recipe (AI extraction) ──────────────────────────── */}
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
+              <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--couple-primary)' }}>
+                Pull a Recipe
+              </p>
+            </div>
+            <p className="text-xs text-gray-500">
+              Paste a link to a cocktail recipe, or upload a screenshot / PDF of a recipe card. We&rsquo;ll extract the ingredients and scale them to your guest count.
+            </p>
+
+            {/* Mode toggle */}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { setImportMode('url'); setImportError(null) }}
+                className={cn(
+                  'flex-1 py-2 rounded-lg text-sm border-2 transition flex items-center justify-center gap-1.5',
+                  importMode === 'url' ? 'bg-gray-50' : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                )}
+                style={importMode === 'url' ? { borderColor: 'var(--couple-primary)', color: 'var(--couple-primary)' } : undefined}
+              >
+                <Link2 className="w-3.5 h-3.5" />
+                Paste a link
+              </button>
+              <button
+                type="button"
+                onClick={() => { setImportMode('upload'); setImportError(null) }}
+                className={cn(
+                  'flex-1 py-2 rounded-lg text-sm border-2 transition flex items-center justify-center gap-1.5',
+                  importMode === 'upload' ? 'bg-gray-50' : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                )}
+                style={importMode === 'upload' ? { borderColor: 'var(--couple-primary)', color: 'var(--couple-primary)' } : undefined}
+              >
+                <Upload className="w-3.5 h-3.5" />
+                Upload a card
+              </button>
+            </div>
+
+            {importMode === 'url' ? (
+              <input
+                value={importUrl}
+                onChange={(e) => setImportUrl(e.target.value)}
+                placeholder="https://&hellip;"
+                disabled={importing}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-50"
+                style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
+              />
+            ) : (
+              <div>
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept="image/*,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    setImportFile(e.target.files?.[0] ?? null)
+                    setImportError(null)
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => importFileRef.current?.click()}
+                  disabled={importing}
+                  className="w-full py-3 border-2 border-dashed border-gray-300 rounded-lg text-sm text-gray-500 hover:border-gray-400 hover:text-gray-600 transition disabled:opacity-50"
+                >
+                  {importFile ? importFile.name : 'Choose image or PDF… (max 10 MB)'}
+                </button>
+              </div>
+            )}
+
+            {importError && (
+              <p className="text-xs text-red-500">{importError}</p>
+            )}
+
+            <button
+              type="button"
+              onClick={handleImportRecipe}
+              disabled={importing || (importMode === 'url' ? !importUrl.trim() : !importFile)}
+              className="w-full py-2 text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition"
+              style={{ backgroundColor: 'var(--couple-primary)' }}
+            >
+              {importing ? 'Extracting with AI…' : 'Extract Recipe'}
+            </button>
+          </div>
+
           {recipes.length === 0 && !addingRecipe && (
-            <div className="text-center py-10 text-gray-400">
+            <div className="text-center py-6 text-gray-400">
               <p className="text-3xl mb-3">{'\u{1F379}'}</p>
-              <p className="text-sm">No cocktail recipes yet. Add one and ingredients will scale to your guest count.</p>
+              <p className="text-sm">No cocktail recipes yet. Pull one from a link above, or build one by hand below.</p>
             </div>
           )}
 

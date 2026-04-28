@@ -35,8 +35,13 @@ import {
   UserCheck,
   UserPlus,
   Check,
+  Camera,
 } from 'lucide-react'
 import { CommunicationPulse } from '../communication-pulse'
+import { checkEscalation } from '@/config/escalation-keywords'
+import { DayOfMemoriesTab } from './_components/day-of-memories-tab'
+import { VendorChecklistSection } from './_components/vendor-checklist-section'
+import { InternalNotesFeed } from './_components/internal-notes-feed'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -188,7 +193,7 @@ interface EventFeedbackVendorRow {
 // Tab definitions
 // ---------------------------------------------------------------------------
 
-type TabKey = 'overview' | 'completeness' | 'planning-notes' | 'vendors' | 'guests' | 'timeline' | 'budget' | 'ceremony-chairs' | 'table-map' | 'communications' | 'internal-notes' | 'feedback'
+type TabKey = 'overview' | 'completeness' | 'planning-notes' | 'vendors' | 'guests' | 'timeline' | 'budget' | 'ceremony-chairs' | 'table-map' | 'communications' | 'internal-notes' | 'feedback' | 'day-of-memories'
 
 const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: 'overview', label: 'Overview', icon: Activity },
@@ -202,6 +207,7 @@ const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?
   { key: 'table-map', label: 'Table Map', icon: Eye },
   { key: 'communications', label: 'Communications', icon: MessageCircle },
   { key: 'internal-notes', label: 'Internal Notes', icon: Lock },
+  { key: 'day-of-memories', label: 'Day-of Memories', icon: Camera },
   { key: 'feedback', label: 'Feedback', icon: ClipboardCheck },
 ]
 
@@ -380,20 +386,17 @@ function OverviewTab({
   ].sort((a, b) => b.localeCompare(a))
   const lastActivity = allTimestamps[0] ?? wedding.updated_at
 
-  // Escalation detection: scan recent messages for urgent keywords
-  const ESCALATION_KEYWORDS = [
-    'urgent', 'emergency', 'asap', 'immediately', 'concerned', 'worried',
-    'unhappy', 'frustrated', 'disappointed', 'cancel', 'refund', 'complaint',
-    'unacceptable', 'terrible', 'furious', 'angry', 'awful', 'horrible',
-    'worst', 'never', 'lawyer', 'legal', 'sue', 'demand',
-  ]
+  // Escalation detection: scan recent couple messages for keywords.
+  // Uses the canonical helper from @/config/escalation-keywords so this view
+  // stays aligned with the same list the email pipeline + couple-side
+  // message paths use (see src/lib/services/escalation-detector.ts).
   const sevenDaysAgo = new Date()
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
   const recentCoupleMessages = messages.filter(m =>
     m.sender_role === 'couple' && new Date(m.created_at) >= sevenDaysAgo
   )
   const escalationMessages = recentCoupleMessages.filter(m =>
-    ESCALATION_KEYWORDS.some(kw => m.content.toLowerCase().includes(kw))
+    checkEscalation(m.content).shouldEscalate
   )
 
   return (
@@ -562,7 +565,7 @@ function PlanningNotesTab({ notes }: { notes: PlanningNoteRow[] }) {
   )
 }
 
-function VendorsTab({ vendors }: { vendors: BookedVendorRow[] }) {
+function VendorsTab({ vendors, weddingId, venueId }: { vendors: BookedVendorRow[]; weddingId: string; venueId: string }) {
   if (vendors.length === 0) {
     return (
       <div className="text-center py-12">
@@ -582,9 +585,10 @@ function VendorsTab({ vendors }: { vendors: BookedVendorRow[] }) {
         <span className="text-emerald-600">Booked: <strong>{booked.length}</strong></span>
         <span className="text-amber-600">Pending: <strong>{pending.length}</strong></span>
       </div>
-      <div className="space-y-2">
+      <div className="space-y-3">
         {vendors.map((vendor) => (
-          <div key={vendor.id} className="flex items-center gap-3 bg-warm-white rounded-lg p-3 border border-sage-100">
+          <div key={vendor.id} className="space-y-2">
+            <div className="flex items-center gap-3 bg-warm-white rounded-lg p-3 border border-sage-100">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-sage-900">{vendor.vendor_name || vendor.vendor_type}</span>
@@ -611,6 +615,13 @@ function VendorsTab({ vendors }: { vendors: BookedVendorRow[] }) {
                 {vendor.is_booked ? 'Booked' : 'Pending'}
               </span>
             </div>
+            </div>
+            <VendorChecklistSection
+              weddingId={weddingId}
+              venueId={venueId}
+              vendorId={vendor.id}
+              vendorType={vendor.vendor_type}
+            />
           </div>
         ))}
       </div>
@@ -1062,53 +1073,6 @@ function CommunicationsTab({
         ) : (
           <p className="text-sm text-sage-400 italic">No direct messages yet.</p>
         )}
-      </div>
-    </div>
-  )
-}
-
-function InternalNotesTab({
-  notes,
-  weddingId,
-  onSave,
-  saving,
-}: {
-  notes: string
-  weddingId: string
-  onSave: (text: string) => void
-  saving: boolean
-}) {
-  const [text, setText] = useState(notes)
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2 text-xs text-sage-500">
-        <Lock className="w-3.5 h-3.5" />
-        Staff-only notes. Not visible to the couple.
-      </div>
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="Add internal notes about this wedding — coordination details, special requests, concerns, anything the team should know..."
-        className="w-full min-h-[200px] p-4 rounded-xl border border-sage-200 bg-warm-white text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 resize-y"
-      />
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-sage-400">
-          {text !== notes ? 'Unsaved changes' : 'Saved'}
-        </p>
-        <button
-          onClick={() => onSave(text)}
-          disabled={saving || text === notes}
-          className={cn(
-            'inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-            text !== notes
-              ? 'bg-sage-600 text-white hover:bg-sage-700'
-              : 'bg-sage-100 text-sage-400 cursor-not-allowed'
-          )}
-        >
-          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-          Save Notes
-        </button>
       </div>
     </div>
   )
@@ -1966,7 +1930,6 @@ export default function WeddingProfilePage() {
   const [activeTab, setActiveTab] = useState<TabKey>('overview')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
 
   // Data
   const [wedding, setWedding] = useState<WeddingRow | null>(null)
@@ -2081,28 +2044,6 @@ export default function WeddingProfilePage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
-
-  // Save internal notes
-  async function saveInternalNotes(text: string) {
-    setSaving(true)
-    try {
-      const supabase = createClient()
-      const { error: updateErr } = await supabase
-        .from('weddings')
-        .update({ notes: text, updated_at: new Date().toISOString() })
-        .eq('id', weddingId)
-
-      if (updateErr) throw updateErr
-      setInternalNotes(text)
-      if (wedding) {
-        setWedding({ ...wedding, notes: text })
-      }
-    } catch (err) {
-      console.error('Failed to save notes:', err)
-    } finally {
-      setSaving(false)
-    }
-  }
 
   // Derived
   const coupleNames = useMemo(() => getCoupleNames(people), [people])
@@ -2290,8 +2231,8 @@ export default function WeddingProfilePage() {
         {activeTab === 'planning-notes' && (
           <PlanningNotesTab notes={planningNotes} />
         )}
-        {activeTab === 'vendors' && (
-          <VendorsTab vendors={vendors} />
+        {activeTab === 'vendors' && wedding && (
+          <VendorsTab vendors={vendors} weddingId={weddingId} venueId={wedding.venue_id} />
         )}
         {activeTab === 'guests' && (
           <GuestsTab guests={guests} guestCountEstimate={wedding.guest_count_estimate} />
@@ -2319,13 +2260,16 @@ export default function WeddingProfilePage() {
         {activeTab === 'communications' && (
           <CommunicationsTab messages={messages} sageConversations={sageConversations} />
         )}
-        {activeTab === 'internal-notes' && (
-          <InternalNotesTab
-            notes={internalNotes}
+        {activeTab === 'internal-notes' && wedding && (
+          <InternalNotesFeed
             weddingId={weddingId}
-            onSave={saveInternalNotes}
-            saving={saving}
+            venueId={wedding.venue_id}
+            legacyNote={internalNotes}
+            onLegacyDismiss={() => setInternalNotes('')}
           />
+        )}
+        {activeTab === 'day-of-memories' && wedding && (
+          <DayOfMemoriesTab weddingId={weddingId} venueId={wedding.venue_id} />
         )}
         {activeTab === 'feedback' && (
           <PostEventFeedbackTab

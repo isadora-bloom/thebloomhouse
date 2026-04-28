@@ -6,7 +6,7 @@ import { FONT_PAIRS, getFontUrl } from '@/config/fonts'
 import { useScope, type Scope } from '@/lib/hooks/use-scope'
 import {
   Settings, Palette, Type, Save, Eye, Building2, User, Clock, DollarSign,
-  Layers, ArrowRight, Plus, Trash2, Image as ImageIcon, X,
+  Layers, ArrowRight, Plus, Trash2, Image as ImageIcon, X, Plug,
 } from 'lucide-react'
 
 const supabase = createBrowserClient(
@@ -803,6 +803,35 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
         </div>
       </section>
 
+      {/* ------------------------------------------------------------------ */}
+      {/* Integrations — Calendly                                             */}
+      {/* ------------------------------------------------------------------ */}
+      <CalendlyIntegrationSection venueId={scope.venueId} />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Integrations — OpenPhone (Quo)                                      */}
+      {/* ------------------------------------------------------------------ */}
+      <section className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-heading text-xl font-semibold text-sage-900 mb-1">
+              OpenPhone (SMS &amp; voice)
+            </h2>
+            <p className="text-sage-600 text-sm">
+              Pull SMS, voicemails, and call summaries into the Agent inbox alongside email.
+              Configure your API key and select which numbers to sync.
+            </p>
+          </div>
+          <a
+            href="/settings/openphone"
+            className="shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium transition-colors"
+          >
+            Configure
+            <ArrowRight className="w-4 h-4" />
+          </a>
+        </div>
+      </section>
+
       {/* Bottom Save */}
       <div className="flex justify-end pb-8">
         <button
@@ -815,6 +844,185 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
         </button>
       </div>
     </div>
+  )
+}
+
+/* ================================================================== */
+/* Calendly Integration — paste link + access token, test connection    */
+/* ================================================================== */
+function CalendlyIntegrationSection({ venueId }: { venueId: string | null | undefined }) {
+  const [calendlyLink, setCalendlyLink] = useState<string>('')
+  const [accessToken, setAccessToken] = useState<string>('')
+  const [hasStoredToken, setHasStoredToken] = useState<boolean>(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null)
+
+  useEffect(() => {
+    if (!venueId) {
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    async function load() {
+      const { data } = await supabase
+        .from('venue_config')
+        .select('calendly_link, calendly_tokens')
+        .eq('venue_id', venueId!)
+        .maybeSingle()
+      if (cancelled) return
+      setCalendlyLink((data?.calendly_link as string | null) ?? '')
+      const tokens = data?.calendly_tokens as { access_token?: string } | null
+      setHasStoredToken(!!tokens?.access_token)
+      setLoading(false)
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [venueId])
+
+  const handleSave = useCallback(async () => {
+    if (!venueId) return
+    setSaving(true)
+    setMessage(null)
+    try {
+      const update: Record<string, unknown> = {
+        calendly_link: calendlyLink.trim() || null,
+        updated_at: new Date().toISOString(),
+      }
+      // Only overwrite tokens if a new value was entered
+      if (accessToken.trim()) {
+        update.calendly_tokens = { access_token: accessToken.trim() }
+      }
+      const { error } = await supabase
+        .from('venue_config')
+        .update(update)
+        .eq('venue_id', venueId)
+      if (error) throw error
+      if (accessToken.trim()) {
+        setHasStoredToken(true)
+        setAccessToken('')
+      }
+      setMessage({ type: 'success', text: 'Calendly settings saved.' })
+    } catch (err) {
+      console.error('Calendly save failed:', err)
+      setMessage({ type: 'error', text: 'Failed to save Calendly settings.' })
+    } finally {
+      setSaving(false)
+      setTimeout(() => setMessage(null), 3000)
+    }
+  }, [venueId, calendlyLink, accessToken])
+
+  const handleTest = useCallback(async () => {
+    setTesting(true)
+    setMessage(null)
+    try {
+      const res = await fetch('/api/calendly/events?limit=1', { cache: 'no-store' })
+      const json = await res.json()
+      if (!res.ok) {
+        setMessage({ type: 'error', text: json?.error ?? `Request failed (${res.status})` })
+      } else if (json.notConfigured) {
+        setMessage({ type: 'info', text: 'No Calendly token saved yet. Paste an access token and Save first.' })
+      } else if (json.reconnect) {
+        setMessage({ type: 'error', text: 'Stored token is invalid or expired. Paste a fresh token and Save.' })
+      } else {
+        const count = Array.isArray(json.events) ? json.events.length : 0
+        setMessage({
+          type: 'success',
+          text: count > 0
+            ? `Connection works — found ${count} upcoming event${count === 1 ? '' : 's'}.`
+            : 'Connection works — no upcoming events on the calendar.',
+        })
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Test failed' })
+    } finally {
+      setTesting(false)
+    }
+  }, [])
+
+  if (loading) return null
+
+  return (
+    <section className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-6">
+      <div className="flex items-center gap-2 mb-2">
+        <Plug className="w-5 h-5 text-sage-500" />
+        <h2 className="font-heading text-xl font-semibold text-sage-900">Integrations</h2>
+      </div>
+
+      <div>
+        <h3 className="text-sm font-semibold text-sage-800 uppercase tracking-wider mb-4">Calendly</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-medium text-sage-700 mb-1">Booking Link</label>
+            <input
+              type="url"
+              value={calendlyLink}
+              onChange={(e) => setCalendlyLink(e.target.value)}
+              placeholder="https://calendly.com/your-venue/tour"
+              className={inputClasses}
+            />
+            <p className="text-xs text-sage-500 mt-1">
+              Used in AI-generated emails when a couple asks to book a tour.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-sage-700 mb-1">
+              Personal Access Token
+              {hasStoredToken && (
+                <span className="ml-2 text-xs font-normal text-sage-500">(token saved)</span>
+              )}
+            </label>
+            <input
+              type="password"
+              value={accessToken}
+              onChange={(e) => setAccessToken(e.target.value)}
+              placeholder={hasStoredToken ? '••••••••••••••• (paste a new token to replace)' : 'eyJraWQ...'}
+              className={inputClasses + ' font-mono text-sm'}
+              autoComplete="off"
+            />
+            <p className="text-xs text-sage-500 mt-1">
+              Generate at calendly.com/integrations/api_webhooks. Stored encrypted.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {message && (
+        <div
+          className={`px-4 py-2 rounded-lg text-sm font-medium ${
+            message.type === 'success'
+              ? 'bg-green-50 text-green-700 border border-green-200'
+              : message.type === 'info'
+                ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                : 'bg-red-50 text-red-700 border border-red-200'
+          }`}
+        >
+          {message.text}
+        </div>
+      )}
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={saving || !venueId}
+          className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 text-white font-medium rounded-lg px-5 py-2 transition-colors text-sm"
+        >
+          <Save className="w-4 h-4" />
+          {saving ? 'Saving...' : 'Save Calendly'}
+        </button>
+        <button
+          onClick={handleTest}
+          disabled={testing}
+          className="flex items-center gap-2 bg-warm-white hover:bg-sage-50 disabled:opacity-50 text-sage-700 border border-sage-300 font-medium rounded-lg px-5 py-2 transition-colors text-sm"
+        >
+          <Plug className="w-4 h-4" />
+          {testing ? 'Testing...' : 'Test Connection'}
+        </button>
+      </div>
+    </section>
   )
 }
 

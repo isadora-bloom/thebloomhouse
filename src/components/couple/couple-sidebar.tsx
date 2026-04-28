@@ -105,6 +105,12 @@ export function buildCoupleSidebarSections(base: string): NavSection[] {
         { label: 'Messages', href: `${base}/messages`, icon: MessagesSquare },
       ],
     },
+    {
+      title: 'After the Day',
+      items: [
+        { label: 'Day-of Memories', href: `${base}/day-of-memories`, icon: Camera },
+      ],
+    },
   ]
 }
 

@@ -31,7 +31,7 @@ import {
   BookOpen, Store, Settings, MailX,
   Wine, HardHat, Bus, UtensilsCrossed,
   Armchair, Building, Flower2, HeartHandshake,
-  Hotel, FileText, CheckSquare, SlidersHorizontal,
+  Hotel, FileText, CheckSquare, SlidersHorizontal, Phone,
   // Org admin
   Users, CreditCard, Building2, Layers,
   MapPin, ShieldCheck,
@@ -415,6 +415,7 @@ export const MODE_SAGE: ModeConfig = {
       venueOnly: true,
       items: [
         { label: 'Omi', href: '/settings/omi', icon: Inbox },
+        { label: 'OpenPhone (SMS)', href: '/settings/openphone', icon: Phone },
       ],
     },
     {

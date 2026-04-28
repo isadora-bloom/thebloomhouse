@@ -23,6 +23,8 @@ import { refreshAllCensusData } from '@/lib/services/census-ingest'
 import { computeCorrelationsAllVenues } from '@/lib/services/correlation-engine'
 import { mineTranscriptVoiceForAllVenues } from '@/lib/services/transcript-voice-learning'
 import { findBacktraceCandidates } from '@/lib/services/source-backtrace'
+import { syncMeetings as syncZoomMeetings } from '@/lib/services/zoom'
+import { syncAllVenues as syncOpenPhoneAllVenues } from '@/lib/services/openphone'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -51,6 +53,8 @@ const VALID_JOBS = [
   'transcript_voice_mining',
   'correlation_analysis',
   'backtrace_scan',
+  'zoom_poll',
+  'openphone_poll',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -139,6 +143,23 @@ async function runJob(job: JobName): Promise<unknown> {
       // intelligence_insights where |r| >= 0.6 and both series have >= 20
       // non-zero days. Pure stats — no AI call. Runs weekly.
       return computeCorrelationsAllVenues(createServiceClient())
+
+    case 'zoom_poll':
+      // Daily Zoom recording sync per active connection. We poll once a
+      // day because Zoom's cloud recording + transcript pipeline can take
+      // tens of minutes to materialize after a meeting ends, and there's
+      // no webhook fanout in our current Zoom app config — so a slow
+      // daily cadence is plenty. The service handles dedup against
+      // processed_zoom_meetings, so re-running is idempotent.
+      return pollZoomAllVenues()
+
+    case 'openphone_poll':
+      // Every-15-minutes OpenPhone (Quo) sync. Pulls SMS, voicemails,
+      // and call summaries for each active connection and dedups
+      // through processed_sms_messages before mirroring into
+      // interactions. The service already iterates active connections
+      // and catches per-venue failures so we just call it.
+      return syncOpenPhoneAllVenues()
 
     case 'backtrace_scan':
       // Daily re-scan of source-backtrace candidates per venue. The
@@ -229,6 +250,57 @@ async function scanBacktraceAllVenues(): Promise<
     } catch (err) {
       console.error(`[cron] backtrace scan failed for venue ${venueId}:`, err)
       out[venueId] = { highConfidence: -1, mediumConfidence: -1, notified: false }
+    }
+  }
+  return out
+}
+
+/**
+ * Poll Zoom recordings for every venue with an active connection. The
+ * service's syncMeetings handler dedups against processed_zoom_meetings, so
+ * even if recordings land slowly we just keep picking up new ones each day.
+ *
+ * If a connection's refresh token is permanently dead, the service marks
+ * it inactive and throws "reconnect needed" — we catch and continue so one
+ * dead venue doesn't block the rest.
+ */
+async function pollZoomAllVenues(): Promise<
+  Record<string, { fetched: number; newlyProcessed: number; matched: number; errors: number; reconnectNeeded?: boolean }>
+> {
+  const supabase = createServiceClient()
+
+  const { data: rows } = await supabase
+    .from('zoom_connections')
+    .select('venue_id')
+    .eq('is_active', true)
+
+  const venueIds = new Set<string>()
+  for (const row of rows ?? []) {
+    if (row.venue_id) venueIds.add(row.venue_id as string)
+  }
+  if (venueIds.size === 0) return {}
+
+  const out: Record<
+    string,
+    { fetched: number; newlyProcessed: number; matched: number; errors: number; reconnectNeeded?: boolean }
+  > = {}
+
+  for (const venueId of venueIds) {
+    try {
+      const result = await syncZoomMeetings(venueId, { sinceDays: 30 })
+      out[venueId] = {
+        fetched: result.fetched,
+        newlyProcessed: result.newlyProcessed,
+        matched: result.matched,
+        errors: result.errors,
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message === 'reconnect needed') {
+        out[venueId] = { fetched: 0, newlyProcessed: 0, matched: 0, errors: 0, reconnectNeeded: true }
+      } else {
+        console.error(`[cron] zoom poll failed for venue ${venueId}:`, err)
+        out[venueId] = { fetched: 0, newlyProcessed: 0, matched: 0, errors: 1 }
+      }
     }
   }
   return out

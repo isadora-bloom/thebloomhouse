@@ -1,7 +1,9 @@
 'use client'
 
 // Feature: configurable via venue_config.feature_flags
-// Table: staffing_assignments (calculator data stored as role='_calculator' with answers in notes)
+// Table: staffing_assignments (calculator stored as role='_calculator';
+// per-day counts and totals live in dedicated columns added in 098;
+// the questionnaire snapshot is persisted to the answers jsonb column).
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -15,20 +17,29 @@ import {
   Beer,
   UtensilsCrossed,
   Truck,
-  Sparkles,
   Save,
   RotateCcw,
   AlertTriangle,
   DollarSign,
-  Wine,
-  GlassWater,
-  Gem,
   Hand,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// TODO: Get from auth session
-const STAFF_RATE = 350 // 2026 rate per person per day
+// ---------------------------------------------------------------------------
+// Per-person per-day rates by wedding year. 2026 weddings are grandfathered
+// at the legacy Rixey $350 rate; 2027+ pick up Bloom's standard $400 rate.
+// We derive the rate from weddings.wedding_date.year when possible and fall
+// back to the current year so an unbooked / undated calculator preview still
+// produces a reasonable number.
+// ---------------------------------------------------------------------------
+
+const RATE_2026 = 350
+const RATE_2027_PLUS = 400
+
+function rateForYear(year: number | null | undefined): number {
+  if (!year || year <= 2026) return RATE_2026
+  return RATE_2027_PLUS
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -239,31 +250,64 @@ export default function StaffingCalculatorPage() {
   const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
   const [step, setStep] = useState(0)
   const [answers, setAnswers] = useState<StaffingAnswers>(DEFAULT_ANSWERS)
+  const [weddingYear, setWeddingYear] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
 
   const supabase = createClient()
   const TOTAL_STEPS = 6
+  const STAFF_RATE = rateForYear(weddingYear)
 
-  // Load existing data from staffing_assignments (role='_calculator')
+  // Load existing calculator state + the wedding's date (to derive the
+  // year-based per-person rate) and guest count (for the initial
+  // recommendation when there is no saved row yet).
   const loadData = useCallback(async () => {
     if (!weddingId) return
     try {
-      const { data } = await supabase
-        .from('staffing_assignments')
-        .select('notes')
-        .eq('wedding_id', weddingId)
-        .eq('role', '_calculator')
-        .maybeSingle()
+      const [{ data: wedding }, { data: existing }] = await Promise.all([
+        supabase
+          .from('weddings')
+          .select('wedding_date, guest_count_estimate')
+          .eq('id', weddingId)
+          .maybeSingle(),
+        supabase
+          .from('staffing_assignments')
+          .select('answers, notes')
+          .eq('wedding_id', weddingId)
+          .eq('role', '_calculator')
+          .maybeSingle(),
+      ])
 
-      if (data?.notes) {
+      // Year drives the rate (2026 = $350, 2027+ = $400).
+      if (wedding?.wedding_date) {
+        const year = new Date(wedding.wedding_date as string).getUTCFullYear()
+        if (Number.isFinite(year)) setWeddingYear(year)
+      }
+
+      // Prefer the new typed `answers` jsonb column. Fall back to parsing
+      // the legacy `notes` JSON blob so any rows persisted before the 098
+      // additive migration still hydrate correctly.
+      let savedAnswers: Partial<StaffingAnswers> | null = null
+      if (existing?.answers && typeof existing.answers === 'object') {
+        savedAnswers = existing.answers as Partial<StaffingAnswers>
+      } else if (existing?.notes) {
         try {
-          const parsed = JSON.parse(data.notes as string)
-          if (parsed.answers) {
-            setAnswers((prev) => ({ ...prev, ...parsed.answers }))
-          }
+          const parsed = JSON.parse(existing.notes as string)
+          if (parsed?.answers) savedAnswers = parsed.answers as Partial<StaffingAnswers>
         } catch { /* ignore parse errors */ }
+      }
+
+      if (savedAnswers) {
+        setAnswers((prev) => ({ ...prev, ...savedAnswers }))
+      } else if (wedding?.guest_count_estimate) {
+        // No prior calculator row: seed Saturday count from the wedding's
+        // estimate so the first preview the couple sees is grounded in
+        // their actual guest count instead of the 100-guest placeholder.
+        const guestCount = Number(wedding.guest_count_estimate)
+        if (Number.isFinite(guestCount) && guestCount > 0) {
+          setAnswers((prev) => ({ ...prev, guestCount }))
+        }
       }
     } catch (err) {
       console.error('Failed to load staffing:', err)
@@ -289,12 +333,19 @@ export default function StaffingCalculatorPage() {
   const totalStaff = friday.total + saturday.total
   const totalCost = totalStaff * STAFF_RATE
 
-  // Save — store calculator state in staffing_assignments with role='_calculator'
+  // Save — store calculator state in staffing_assignments with
+  // role='_calculator'. Persists per-day counts and totals to the dedicated
+  // columns added in migration 098 so admin views can read them without
+  // parsing JSON. The full questionnaire snapshot rides along in
+  // `answers` (jsonb) for round-tripping the wizard state.
   const handleSave = async () => {
     setSaving(true)
     try {
-      const calculatorData = {
-        answers,
+      const payload = {
+        venue_id: venueId,
+        wedding_id: weddingId,
+        role: '_calculator',
+        count: totalStaff,
         friday_bartenders: friday.bartenders,
         friday_extra_hands: friday.extraHands,
         friday_total: friday.total,
@@ -303,9 +354,12 @@ export default function StaffingCalculatorPage() {
         saturday_total: saturday.total,
         total_staff: totalStaff,
         total_cost: totalCost,
+        answers,
+        updated_at: new Date().toISOString(),
       }
 
-      // Check if calculator row exists
+      // Check if calculator row exists for this wedding (one per wedding,
+      // enforced by the partial unique index in 098).
       const { data: existing } = await supabase
         .from('staffing_assignments')
         .select('id')
@@ -316,17 +370,12 @@ export default function StaffingCalculatorPage() {
       if (existing) {
         await supabase
           .from('staffing_assignments')
-          .update({ notes: JSON.stringify(calculatorData) })
+          .update(payload)
           .eq('id', existing.id)
       } else {
         await supabase
           .from('staffing_assignments')
-          .insert({
-            venue_id: venueId,
-            wedding_id: weddingId,
-            role: '_calculator',
-            notes: JSON.stringify(calculatorData),
-          })
+          .insert(payload)
       }
 
       setSaved(true)
@@ -360,7 +409,9 @@ export default function StaffingCalculatorPage() {
             <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
               <DollarSign className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
               <div>
-                <p className="text-sm font-medium text-amber-800">2026 Rate: ${STAFF_RATE} per person per event day</p>
+                <p className="text-sm font-medium text-amber-800">
+                  {weddingYear ? `${weddingYear} Rate` : 'Current rate'}: ${STAFF_RATE} per person per event day
+                </p>
                 <p className="text-xs text-amber-700 mt-1">
                   Payment is collected via Venmo at your final walkthrough.
                 </p>

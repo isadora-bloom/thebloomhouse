@@ -13,6 +13,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { MarketContextCard } from '@/components/intel/market-context-card'
 import { InsightFeed } from '@/components/intel/insight-feed'
 import { BrainDumpQueue } from '@/components/portal/brain-dump-queue'
+import { UpcomingMeetings } from '@/components/platform/upcoming-meetings'
 
 interface Stats {
   activeInquiries: number
@@ -458,27 +459,32 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Quick Actions */}
-        <div className="space-y-3">
-          <h2 className="font-heading text-lg font-semibold text-sage-900">
-            Quick Actions
-          </h2>
-          {quickActions.map((action) => (
-            <Link
-              key={action.href}
-              href={action.href}
-              className="flex items-center gap-4 p-4 bg-surface border border-border rounded-xl hover:border-sage-300 hover:shadow-sm transition-all group"
-            >
-              <div className="bg-sage-50 p-2.5 rounded-lg group-hover:bg-sage-100 transition-colors">
-                <action.icon className="w-5 h-5 text-sage-600" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-sage-800">{action.label}</p>
-                <p className="text-xs text-muted">{action.description}</p>
-              </div>
-              <ArrowRight className="w-4 h-4 text-sage-400 group-hover:text-sage-600 transition-colors" />
-            </Link>
-          ))}
+        {/* Quick Actions + Upcoming Meetings */}
+        <div className="space-y-6">
+          <div className="space-y-3">
+            <h2 className="font-heading text-lg font-semibold text-sage-900">
+              Quick Actions
+            </h2>
+            {quickActions.map((action) => (
+              <Link
+                key={action.href}
+                href={action.href}
+                className="flex items-center gap-4 p-4 bg-surface border border-border rounded-xl hover:border-sage-300 hover:shadow-sm transition-all group"
+              >
+                <div className="bg-sage-50 p-2.5 rounded-lg group-hover:bg-sage-100 transition-colors">
+                  <action.icon className="w-5 h-5 text-sage-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-sage-800">{action.label}</p>
+                  <p className="text-xs text-muted">{action.description}</p>
+                </div>
+                <ArrowRight className="w-4 h-4 text-sage-400 group-hover:text-sage-600 transition-colors" />
+              </Link>
+            ))}
+          </div>
+
+          {/* Calendly upcoming meetings — only meaningful at venue scope */}
+          {scope.level === 'venue' && <UpcomingMeetings />}
         </div>
       </div>
     </div>

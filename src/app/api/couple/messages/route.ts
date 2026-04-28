@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getCoupleAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
+import { runEscalationCheck } from '@/lib/services/escalation-detector'
 
 // ---------------------------------------------------------------------------
 // /api/couple/messages
@@ -89,6 +90,17 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (error) throw error
+
+    // Escalation scan — fire-and-forget, must never block the message send.
+    // checkEscalation short-circuits on first hit so we don't double-fire.
+    void runEscalationCheck({
+      text: content.trim(),
+      venueId: auth.venueId,
+      weddingId: auth.weddingId,
+      sourceType: 'couple_message',
+      sourceId: data?.id ?? null,
+    })
+
     return NextResponse.json({ data }, { status: 201 })
   } catch (error) {
     return serverError(error)

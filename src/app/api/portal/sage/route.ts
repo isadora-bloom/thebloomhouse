@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { generateSageResponse } from '@/lib/services/sage-brain'
 import { extractPlanningDecisions, savePlanningNotes, extractAndSaveAINotes } from '@/lib/services/planning-extraction'
 import { createNotification } from '@/lib/services/admin-notifications'
+import { runEscalationCheck } from '@/lib/services/escalation-detector'
 import { callAIVision } from '@/lib/ai/client'
 import { rateLimit, secondsUntil } from '@/lib/rate-limit'
 import { getCoupleAuth, getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
@@ -228,6 +229,16 @@ export async function POST(request: NextRequest) {
       content: message,
       confidence_score: null,
       flagged_uncertain: false,
+    })
+
+    // Escalation scan on the couple's message — fire-and-forget so a notif
+    // failure can't break the chat. Only scans user content; the assistant
+    // reply is never scanned to avoid Sage's own paraphrases tripping it.
+    void runEscalationCheck({
+      text: message,
+      venueId,
+      weddingId: weddingId || null,
+      sourceType: 'sage_conversation',
     })
 
     // Extract and save planning decisions
