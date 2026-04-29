@@ -21,6 +21,7 @@ interface NarrativeShape {
   generated_at: string
   signal_count: number
   attribution_count: number
+  pinned: boolean
 }
 
 interface Props {
@@ -31,7 +32,6 @@ export function JourneyNarrative({ weddingId }: Props) {
   const [narrative, setNarrative] = useState<NarrativeShape | null>(null)
   const [loading, setLoading] = useState(true)
   const [regenerating, setRegenerating] = useState(false)
-  const [pinned, setPinned] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -72,13 +72,14 @@ export function JourneyNarrative({ weddingId }: Props) {
   }
 
   async function togglePin() {
-    if (pinned) return // unpinning would require a separate endpoint; keep simple
+    if (!narrative) return
+    const next = !narrative.pinned
     const res = await fetch('/api/intel/journey-narrative', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wedding_id: weddingId, pin: true }),
+      body: JSON.stringify({ wedding_id: weddingId, pin: next }),
     })
-    if (res.ok) setPinned(true)
+    if (res.ok) setNarrative({ ...narrative, pinned: next })
   }
 
   // Loading state intentionally subtle — first-view gen takes a few
@@ -118,10 +119,10 @@ export function JourneyNarrative({ weddingId }: Props) {
             <button
               onClick={togglePin}
               className="hover:text-sage-700 inline-flex items-center gap-1"
-              title={pinned ? 'Pinned (won\'t auto-regenerate)' : 'Pin to lock this narrative'}
+              title={narrative.pinned ? 'Pinned — click to unpin' : 'Pin to lock this narrative'}
             >
-              {pinned ? <Pin className="w-3 h-3" /> : <PinOff className="w-3 h-3" />}
-              {pinned ? 'Pinned' : 'Pin'}
+              {narrative.pinned ? <Pin className="w-3 h-3" /> : <PinOff className="w-3 h-3" />}
+              {narrative.pinned ? 'Pinned' : 'Pin'}
             </button>
           </div>
         </div>

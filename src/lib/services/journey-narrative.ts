@@ -31,6 +31,7 @@ export interface JourneyNarrative {
   generated_at: string
   signal_count: number
   attribution_count: number
+  pinned: boolean
 }
 
 interface SignalRow {
@@ -254,17 +255,16 @@ export async function generateOrFetch(
       generated_at: existing.generated_at,
       signal_count: existing.signal_count_at_generation,
       attribution_count: existing.attribution_count_at_generation,
+      pinned: true,
     }
   }
 
   if (existing && !force) {
     // Cheap freshness check: does the wedding still have ~the same
-    // signal + attribution counts as when we generated?
-    const { count: currentSignals } = await supabase
-      .from('tangential_signals')
-      .select('id', { count: 'exact', head: true })
-      .eq('venue_id', existing.id)  // dummy; we don't have venue_id here efficiently — fall back to candidates path
-    // Actually, the cheap path: count attributions for this wedding.
+    // attribution count as when we generated? attribution_events are
+    // the consequence-bearing rows (every signal-attached candidate
+    // resolved to this wedding produces one), so drift here means
+    // the journey changed enough to matter.
     const { count: currentAttribs } = await supabase
       .from('attribution_events')
       .select('id', { count: 'exact', head: true })
@@ -280,10 +280,9 @@ export async function generateOrFetch(
         generated_at: existing.generated_at,
         signal_count: existing.signal_count_at_generation,
         attribution_count: existing.attribution_count_at_generation,
+        pinned: existing.pinned,
       }
     }
-    // void unused warning
-    void currentSignals
   }
 
   const generated = await generateNarrativeText(supabase, weddingId)
@@ -312,5 +311,8 @@ export async function generateOrFetch(
     generated_at: new Date().toISOString(),
     signal_count: generated.signal_count,
     attribution_count: generated.attribution_count,
+    // A fresh generation never carries a stale pin — explicit pin
+    // step is the user's separate action.
+    pinned: existing?.pinned ?? false,
   }
 }

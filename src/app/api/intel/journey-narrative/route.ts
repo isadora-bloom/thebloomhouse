@@ -72,12 +72,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  if (body.pin) {
+  if (typeof body.pin === 'boolean') {
     await supabase
       .from('wedding_journey_narratives')
-      .update({ pinned: true })
+      .update({ pinned: body.pin })
       .eq('wedding_id', body.wedding_id)
-    return NextResponse.json({ ok: true, pinned: true })
+    return NextResponse.json({ ok: true, pinned: body.pin })
   }
 
   try {
