@@ -682,39 +682,52 @@ export async function resolveVenueCandidates(args: {
     return aggregate
   }
 
-  const PAGE = 200
-  let from = 0
-  for (;;) {
-    let q = supabase
-      .from('candidate_identities')
-      .select('id, venue_id, source_platform, first_name, last_initial, last_name, email, phone, username, city, state, country, first_seen, last_seen, funnel_depth, signal_count, resolved_wedding_id, resolved_person_id')
-      .eq('venue_id', venueId)
-      .is('resolved_wedding_id', null)
-      .is('deleted_at', null)
-      .range(from, from + PAGE - 1)
-    if (candidateIds && candidateIds.length > 0) q = q.in('id', candidateIds as string[])
-    if (updatedSince) q = q.gte('updated_at', updatedSince)
-    const { data, error } = await q
-    if (error) {
-      aggregate.errors.push(`fetch unresolved @${from}: ${error.message}`)
-      break
+  // PostgREST drops `.in()` filters once the URL gets too long
+  // (around 100+ UUIDs). Chunk the candidate ID list ourselves so a
+  // 785-candidate import doesn't silently match zero rows.
+  const ID_CHUNK = 100
+  const idChunks = candidateIds && candidateIds.length > 0
+    ? Array.from({ length: Math.ceil(candidateIds.length / ID_CHUNK) }, (_, i) =>
+        (candidateIds as string[]).slice(i * ID_CHUNK, (i + 1) * ID_CHUNK))
+    : [null]
+
+  const processCandidate = async (c: CandidateRow) => {
+    const s = await resolveCandidate({ supabase, candidate: c })
+    aggregate.candidates_processed += s.candidates_processed
+    aggregate.resolved_tier_1_exact += s.resolved_tier_1_exact
+    aggregate.resolved_tier_1_name_window += s.resolved_tier_1_name_window
+    aggregate.resolved_tier_1_full_name += s.resolved_tier_1_full_name
+    aggregate.resolved_tier_2_ai += s.resolved_tier_2_ai
+    aggregate.deferred_to_ai += s.deferred_to_ai
+    aggregate.parked_tier_3 += s.parked_tier_3
+    aggregate.no_match += s.no_match
+    aggregate.conflicts_flagged += s.conflicts_flagged
+    aggregate.errors.push(...s.errors)
+  }
+
+  for (const chunk of idChunks) {
+    const PAGE = 200
+    let from = 0
+    for (;;) {
+      let q = supabase
+        .from('candidate_identities')
+        .select('id, venue_id, source_platform, first_name, last_initial, last_name, email, phone, username, city, state, country, first_seen, last_seen, funnel_depth, signal_count, resolved_wedding_id, resolved_person_id')
+        .eq('venue_id', venueId)
+        .is('resolved_wedding_id', null)
+        .is('deleted_at', null)
+        .range(from, from + PAGE - 1)
+      if (chunk) q = q.in('id', chunk)
+      if (updatedSince) q = q.gte('updated_at', updatedSince)
+      const { data, error } = await q
+      if (error) {
+        aggregate.errors.push(`fetch unresolved @${from}: ${error.message}`)
+        break
+      }
+      const page = (data ?? []) as CandidateRow[]
+      for (const c of page) await processCandidate(c)
+      if (page.length < PAGE) break
+      from += PAGE
     }
-    const page = (data ?? []) as CandidateRow[]
-    for (const c of page) {
-      const s = await resolveCandidate({ supabase, candidate: c })
-      aggregate.candidates_processed += s.candidates_processed
-      aggregate.resolved_tier_1_exact += s.resolved_tier_1_exact
-      aggregate.resolved_tier_1_name_window += s.resolved_tier_1_name_window
-      aggregate.resolved_tier_1_full_name += s.resolved_tier_1_full_name
-      aggregate.resolved_tier_2_ai += s.resolved_tier_2_ai
-      aggregate.deferred_to_ai += s.deferred_to_ai
-      aggregate.parked_tier_3 += s.parked_tier_3
-      aggregate.no_match += s.no_match
-      aggregate.conflicts_flagged += s.conflicts_flagged
-      aggregate.errors.push(...s.errors)
-    }
-    if (page.length < PAGE) break
-    from += PAGE
   }
   return aggregate
 }
