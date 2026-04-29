@@ -10,6 +10,10 @@ import {
   ArrowUpDown,
   Megaphone,
   Award,
+  AlertTriangle,
+  Activity,
+  ArrowRight,
+  Layers,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
@@ -192,6 +196,283 @@ function TableSkeleton() {
           <div key={i} className="h-10 bg-sage-50 rounded" />
         ))}
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Phase B intel panels — Phase C / PC.2 (2026-04-29)
+// Three candidate-driven panels that read from Phase B's tables:
+//   1. Conflict alert tile — live count of attribution conflicts.
+//   2. Non-converting high-funnel cohort — candidates that engaged
+//      deeply (funnel_depth >= 3) but never resolved to a wedding.
+//      Coordinator-actionable list.
+//   3. Multi-touch split — for booked weddings, how many distinct
+//      platforms contributed first-touch + nurture signals.
+// ---------------------------------------------------------------------------
+
+interface PhaseBPanelsProps {
+  scope: ReturnType<typeof useScope>
+}
+
+interface NonConvertingRow {
+  id: string
+  source_platform: string
+  first_name: string | null
+  last_initial: string | null
+  state: string | null
+  signal_count: number
+  funnel_depth: number
+  action_counts: Record<string, number> | null
+  last_seen: string | null
+  cluster_group_key: string | null
+}
+
+interface MultiTouchBucket {
+  platforms: number // distinct platform count
+  weddings: number  // weddings in this bucket
+  pct: number
+}
+
+function PhaseBIntelPanels({ scope }: PhaseBPanelsProps) {
+  const [conflictCount, setConflictCount] = useState<number | null>(null)
+  const [nonConverting, setNonConverting] = useState<NonConvertingRow[]>([])
+  const [multiTouch, setMultiTouch] = useState<MultiTouchBucket[]>([])
+  const [bookedAttributed, setBookedAttributed] = useState<number>(0)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (scope.loading) return
+    // Phase B panels are venue-scoped; group/company scope shows
+    // the empty state for now (we'd need cross-venue rollup logic).
+    if (scope.level !== 'venue' || !scope.venueId) {
+      setLoading(false)
+      setConflictCount(0)
+      setNonConverting([])
+      setMultiTouch([])
+      return
+    }
+    let cancelled = false
+    const sb = createBrowserClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    )
+
+    ;(async () => {
+      setLoading(true)
+      const venueId = scope.venueId!
+
+      const [conflictRes, cohortRes, attribRes] = await Promise.all([
+        // 1. Conflict count.
+        sb
+          .from('attribution_events')
+          .select('id', { count: 'exact', head: true })
+          .eq('venue_id', venueId)
+          .not('conflict_with_legacy_source', 'is', null)
+          .is('reverted_at', null),
+        // 2. Non-converting high-funnel cohort.
+        sb
+          .from('candidate_identities')
+          .select('id, source_platform, first_name, last_initial, state, signal_count, funnel_depth, action_counts, last_seen, cluster_group_key')
+          .eq('venue_id', venueId)
+          .gte('funnel_depth', 3)
+          .is('resolved_wedding_id', null)
+          .is('deleted_at', null)
+          .order('last_seen', { ascending: false })
+          .limit(25),
+        // 3. Multi-touch — fetch all live attribution_events for the
+        //    venue, group by wedding_id in memory.
+        sb
+          .from('attribution_events')
+          .select('wedding_id, source_platform')
+          .eq('venue_id', venueId)
+          .is('reverted_at', null),
+      ])
+
+      if (cancelled) return
+
+      setConflictCount(conflictRes.count ?? 0)
+      setNonConverting((cohortRes.data ?? []) as NonConvertingRow[])
+
+      // Multi-touch grouping: count distinct platforms per wedding.
+      const platformsByWedding = new Map<string, Set<string>>()
+      for (const e of ((attribRes.data ?? []) as Array<{ wedding_id: string; source_platform: string }>)) {
+        const set = platformsByWedding.get(e.wedding_id) ?? new Set<string>()
+        set.add(e.source_platform)
+        platformsByWedding.set(e.wedding_id, set)
+      }
+      // Filter to BOOKED weddings so this matches what coordinators
+      // care about — "of the leads that became real customers, how
+      // multi-platform was their journey?" Need to fetch wedding
+      // statuses for the IDs.
+      const weddingIds = Array.from(platformsByWedding.keys())
+      let bookedSet = new Set<string>()
+      if (weddingIds.length > 0) {
+        const CHUNK = 100
+        for (let i = 0; i < weddingIds.length; i += CHUNK) {
+          const chunk = weddingIds.slice(i, i + CHUNK)
+          const { data } = await sb
+            .from('weddings')
+            .select('id, status')
+            .in('id', chunk)
+            .in('status', ['booked', 'completed'])
+          for (const w of ((data ?? []) as Array<{ id: string }>)) {
+            bookedSet.add(w.id)
+          }
+        }
+      }
+
+      const bucketCounts = new Map<number, number>()
+      for (const wid of bookedSet) {
+        const platforms = platformsByWedding.get(wid)?.size ?? 0
+        if (platforms === 0) continue
+        bucketCounts.set(platforms, (bucketCounts.get(platforms) ?? 0) + 1)
+      }
+      const total = bookedSet.size
+      const buckets: MultiTouchBucket[] = []
+      const sortedKeys = Array.from(bucketCounts.keys()).sort((a, b) => a - b)
+      for (const k of sortedKeys) {
+        const c = bucketCounts.get(k)!
+        buckets.push({ platforms: k, weddings: c, pct: total > 0 ? c / total : 0 })
+      }
+      setMultiTouch(buckets)
+      setBookedAttributed(total)
+      setLoading(false)
+    })()
+
+    return () => { cancelled = true }
+  }, [scope.level, scope.venueId, scope.loading])
+
+  if (scope.level !== 'venue') {
+    return null
+  }
+  if (loading) {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="h-48 bg-sage-50 rounded-xl animate-pulse" />
+        <div className="h-48 bg-sage-50 rounded-xl animate-pulse" />
+      </div>
+    )
+  }
+  // Empty when there's literally nothing to show — better than a
+  // bunch of empty cards.
+  if (
+    (conflictCount ?? 0) === 0 &&
+    nonConverting.length === 0 &&
+    multiTouch.length === 0
+  ) {
+    return null
+  }
+
+  return (
+    <div className="space-y-4">
+      {(conflictCount ?? 0) > 0 && (
+        <Link
+          href="/intel/candidates"
+          className="block bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 hover:bg-amber-100/60 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-amber-900">
+                {conflictCount} attribution conflict{conflictCount === 1 ? '' : 's'} need review
+              </p>
+              <p className="text-xs text-amber-700 mt-0.5">
+                Computed first-touch disagrees with the legacy lead source. Open the candidate review queue to decide which is right.
+              </p>
+            </div>
+            <ArrowRight className="w-4 h-4 text-amber-600 shrink-0" />
+          </div>
+        </Link>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <NonConvertingCohortPanel rows={nonConverting} />
+        <MultiTouchSplitPanel buckets={multiTouch} totalBooked={bookedAttributed} />
+      </div>
+    </div>
+  )
+}
+
+function NonConvertingCohortPanel({ rows }: { rows: NonConvertingRow[] }) {
+  return (
+    <div className="bg-surface border border-border rounded-xl shadow-sm">
+      <div className="px-5 py-3 border-b border-border">
+        <h3 className="font-heading text-base font-semibold text-sage-900 flex items-center gap-2">
+          <Activity className="w-4 h-4 text-sage-600" />
+          Engaged but didn't inquire
+        </h3>
+        <p className="text-xs text-sage-500 mt-0.5">
+          High-funnel candidates (depth ≥ 3) on platforms that never sent an inquiry. Re-engage candidates here.
+        </p>
+      </div>
+      {rows.length === 0 ? (
+        <div className="px-5 py-6 text-center text-xs text-sage-500">
+          No high-funnel non-converting candidates. Either everyone engaged is converting, or the platform isn't deep yet.
+        </div>
+      ) : (
+        <div className="max-h-80 overflow-y-auto divide-y divide-border">
+          {rows.map((c) => (
+            <div key={c.id} className="px-5 py-2 flex items-center gap-3 text-xs hover:bg-sage-50/50">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-sage-900 truncate">
+                  {c.first_name} {c.last_initial}.
+                  {c.state && <span className="text-sage-500 font-normal ml-1">({c.state.toUpperCase()})</span>}
+                </p>
+                <p className="text-[11px] text-sage-500">
+                  {formatSource(c.source_platform)} · depth {c.funnel_depth} · {c.signal_count} signal{c.signal_count === 1 ? '' : 's'} · last{' '}
+                  {c.last_seen ? new Date(c.last_seen).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' }) : '—'}
+                </p>
+                {c.action_counts && Object.keys(c.action_counts).length > 0 && (
+                  <p className="text-[10px] text-sage-400 mt-0.5">
+                    {Object.entries(c.action_counts).map(([k, v]) => `${v} ${k}`).join(' · ')}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MultiTouchSplitPanel({ buckets, totalBooked }: { buckets: MultiTouchBucket[]; totalBooked: number }) {
+  return (
+    <div className="bg-surface border border-border rounded-xl shadow-sm">
+      <div className="px-5 py-3 border-b border-border">
+        <h3 className="font-heading text-base font-semibold text-sage-900 flex items-center gap-2">
+          <Layers className="w-4 h-4 text-sage-600" />
+          Multi-touch journey split
+        </h3>
+        <p className="text-xs text-sage-500 mt-0.5">
+          Of {totalBooked} booked lead{totalBooked === 1 ? '' : 's'} with platform-signal coverage, how many distinct platforms each touched.
+        </p>
+      </div>
+      {buckets.length === 0 ? (
+        <div className="px-5 py-6 text-center text-xs text-sage-500">
+          No booked weddings have platform-signal attribution yet. Once Phase B matches ramp up, distribution shows up here.
+        </div>
+      ) : (
+        <div className="px-5 py-4 space-y-2">
+          {buckets.map((b) => (
+            <div key={b.platforms} className="flex items-center gap-3 text-xs">
+              <span className="w-20 shrink-0 text-sage-700 font-medium">
+                {b.platforms} platform{b.platforms === 1 ? '' : 's'}
+              </span>
+              <div className="flex-1 h-2.5 bg-sage-50 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-sage-500 rounded-full"
+                  style={{ width: `${(b.pct * 100).toFixed(1)}%` }}
+                />
+              </div>
+              <span className="w-16 shrink-0 text-right text-sage-700 tabular-nums">
+                {b.weddings} · {(b.pct * 100).toFixed(0)}%
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -1233,8 +1514,11 @@ export default function SourceAttributionPage() {
         <InsightPanel insights={sourceInsights} />
       )}
 
-      {/* ---- Source Quality Scorecard (Phase 4 Task 39) ---- */}
+      {/* ---- Source Quality Scorecard (Phase 4 Task 39 + Phase C / PC.1) ---- */}
       <SourceQualityScorecard scope={scope} />
+
+      {/* ---- Phase C / PC.2: candidate-driven intelligence panels ---- */}
+      <PhaseBIntelPanels scope={scope} />
 
       {/* ---- Compare Attribution Models (Phase 4 P4.4) ---- */}
       <ModelComparisonCard scope={scope} />
