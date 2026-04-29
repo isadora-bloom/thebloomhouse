@@ -19,10 +19,31 @@ import { createBrowserClient } from '@supabase/ssr'
 import { Brain, X, Loader2, Send, CheckCircle2, AlertCircle, Upload } from 'lucide-react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 
+interface ImportSummaryShape {
+  inserted: number
+  updated: number
+  skipped: number
+  errors: string[]
+  phase_b?: {
+    candidates_created: number
+    candidates_updated: number
+    candidates_flagged_for_review: number
+    auto_linked_to_wedding: number
+    deferred_to_ai: number
+    conflicts_flagged: number
+    no_match: number
+  }
+}
+
 type SubmitState =
   | { kind: 'idle' }
   | { kind: 'submitting' }
-  | { kind: 'done'; intent: string; clarification: string | null }
+  | {
+      kind: 'done'
+      intent: string
+      clarification: string | null
+      importSummary?: ImportSummaryShape | null
+    }
   | { kind: 'error'; message: string }
 
 const BUCKET = 'brain-dump'
@@ -115,11 +136,13 @@ export function FloatingBrainDump() {
       const data = (await res.json()) as {
         intent: string
         clarificationQuestion?: string | null
+        importSummary?: ImportSummaryShape | null
       }
       setState({
         kind: 'done',
         intent: data.intent ?? 'unknown',
         clarification: data.clarificationQuestion ?? null,
+        importSummary: data.importSummary ?? null,
       })
     } catch (err) {
       setState({
@@ -182,11 +205,42 @@ export function FloatingBrainDump() {
                 ) : (
                   <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
-                    <div>
+                    <div className="min-w-0">
                       <p className="text-sm font-medium text-emerald-900">Filed.</p>
                       <p className="text-xs text-emerald-800 mt-1">
                         Classified as <strong>{state.intent.replace(/_/g, ' ')}</strong>.
                       </p>
+                      {state.importSummary && (
+                        <div className="mt-2 text-xs text-emerald-800 space-y-0.5">
+                          <p>
+                            {state.importSummary.inserted} new · {state.importSummary.skipped} skipped
+                            {state.importSummary.errors.length > 0 &&
+                              ` · ${state.importSummary.errors.length} error${state.importSummary.errors.length === 1 ? '' : 's'}`}
+                          </p>
+                          {state.importSummary.phase_b && (
+                            <div className="mt-1 pt-1 border-t border-emerald-200 space-y-0.5 text-emerald-900">
+                              <p>
+                                <strong>{state.importSummary.phase_b.candidates_created}</strong> new candidates ·{' '}
+                                <strong>{state.importSummary.phase_b.auto_linked_to_wedding}</strong> auto-linked to leads
+                              </p>
+                              {state.importSummary.phase_b.candidates_flagged_for_review > 0 && (
+                                <p>
+                                  {state.importSummary.phase_b.candidates_flagged_for_review} flagged for review
+                                </p>
+                              )}
+                              {state.importSummary.phase_b.deferred_to_ai > 0 && (
+                                <p>{state.importSummary.phase_b.deferred_to_ai} deferred to AI</p>
+                              )}
+                              {state.importSummary.phase_b.conflicts_flagged > 0 && (
+                                <p className="text-amber-800">
+                                  {state.importSummary.phase_b.conflicts_flagged} source conflict
+                                  {state.importSummary.phase_b.conflicts_flagged === 1 ? '' : 's'} to review
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

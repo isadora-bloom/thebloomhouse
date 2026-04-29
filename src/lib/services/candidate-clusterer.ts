@@ -26,9 +26,32 @@
  * are LEFT WITHOUT a candidate. They count for ROI volume metrics
  * but never resolve to a wedding.
  *
- * Idempotency: re-running the clusterer on signals already attached
- * to a candidate is a no-op. Re-running on new signals only attaches
- * the new ones; existing cluster boundaries are stable.
+ * Performance:
+ *   - One SELECT to fetch all signals in the batch.
+ *   - One SELECT per (venue, platform) group to fetch existing
+ *     candidates (paginated past 1000).
+ *   - All cluster decisions made in memory using a fingerprint index.
+ *   - One INSERT for net-new candidates (returns IDs).
+ *   - One UPSERT for existing candidate aggregate updates.
+ *   - One UPDATE per affected candidate to write candidate_identity_id
+ *     onto its newly-attached signals (N where N = affected
+ *     candidates, NOT N where N = signal count).
+ *
+ * Round-trip count for a 1486-row Knot CSV producing ~250 clusters:
+ * ~5 + 1 + 1 + 250 = ~260, down from ~4500 in the per-row version.
+ *
+ * Consistency: all writes for a (venue, platform) group are issued
+ * after the in-memory model is fully resolved. A failure mid-batch
+ * leaves a coherent partial state — not "candidate aggregates
+ * incremented but signal not linked to candidate" as the per-row
+ * version could.
+ *
+ * Cluster boundaries are immutable post-creation: reclusterVenue only
+ * processes signals with candidate_identity_id IS NULL, so existing
+ * cluster assignments never shift. The ordering of new arrivals
+ * within their batch is deterministic (sorted by signal_date); across
+ * batches a late-arriving earlier signal joins the closest existing
+ * cluster within window — that's reality, not instability.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -42,6 +65,10 @@ export interface ClustererSummary {
   signals_attached_to_existing: number
   signals_creating_new_cluster: number
   candidates_flagged_for_review: number
+  /** IDs of candidates created or updated by this run. Caller can pass
+   *  these to resolveVenueCandidates to scope resolution to just the
+   *  ones that changed. */
+  affected_candidate_ids: string[]
   errors: string[]
 }
 
@@ -89,11 +116,18 @@ interface SignalFingerprint {
   country: string | null
 }
 
-/**
- * Pull fingerprint fields from extracted_identity jsonb. Lower-cases
- * comparison-keyed fields up-front; persisted candidate uses the
- * lower-cased value for exact-match indexes.
- */
+function emptySummary(): ClustererSummary {
+  return {
+    signals_processed: 0,
+    signals_skipped_anonymous: 0,
+    signals_attached_to_existing: 0,
+    signals_creating_new_cluster: 0,
+    candidates_flagged_for_review: 0,
+    affected_candidate_ids: [],
+    errors: [],
+  }
+}
+
 function extractFingerprint(signal: SignalRow): SignalFingerprint {
   const ei = signal.extracted_identity ?? {}
   return {
@@ -110,16 +144,9 @@ function extractFingerprint(signal: SignalRow): SignalFingerprint {
 }
 
 function daysBetween(a: string, b: string): number {
-  const ms = Math.abs(new Date(a).getTime() - new Date(b).getTime())
-  return ms / 86_400_000
+  return Math.abs(new Date(a).getTime() - new Date(b).getTime()) / 86_400_000
 }
 
-/**
- * Cluster_group_key is stable across re-runs for the same identity
- * fingerprint on the same venue + platform. Long-gap candidates of
- * the same fingerprint share this key so the review UI can group
- * them without auto-merging.
- */
 function clusterGroupKey(venueId: string, platform: string, fp: SignalFingerprint): string {
   const fn = fp.first_name ?? '_'
   const li = fp.last_initial ?? '_'
@@ -127,133 +154,199 @@ function clusterGroupKey(venueId: string, platform: string, fp: SignalFingerprin
   return `${venueId.slice(0, 8)}|${platform}|${fn}|${li}|${st}`
 }
 
-/**
- * State conflict: a candidate with state='VA' cannot accept a signal
- * with state='TX'. Either-side null is fine (and we fill in the
- * candidate's null with the signal's value when attaching).
- */
-function statesConflict(candidateState: string | null, signalState: string | null): boolean {
-  if (!candidateState || !signalState) return false
-  return candidateState.toLowerCase() !== signalState.toLowerCase()
+function statesConflict(a: string | null, b: string | null): boolean {
+  if (!a || !b) return false
+  return a.toLowerCase() !== b.toLowerCase()
 }
 
 /**
- * Find the best existing candidate to attach this signal to.
- *
- * Returns null when:
- *   - no candidate matches the fingerprint at all
- *   - all candidates with matching fingerprint are >30d away (caller
- *     creates a new candidate sharing the cluster_group_key)
+ * In-memory mutable cluster state. We mutate this as we process
+ * signals; at the end of the batch we serialize to INSERT/UPSERT
+ * statements.
  */
-async function findClusterCandidate(
+interface MutableCandidate {
+  /** When isNew=true, this is a temp string key; otherwise it's the
+   *  existing DB UUID. */
+  tempId: string
+  isNew: boolean
+  /** The DB UUID. For new candidates, populated AFTER bulk insert. */
+  dbId: string | null
+  venue_id: string
+  source_platform: string
+  first_name: string | null
+  last_initial: string | null
+  last_name: string | null
+  email: string | null
+  phone: string | null
+  username: string | null
+  city: string | null
+  state: string | null
+  country: string | null
+  cluster_group_key: string | null
+  signal_count: number
+  funnel_depth: number
+  action_counts: Record<string, number>
+  first_seen: string | null
+  last_seen: string | null
+  review_status: 'clean' | 'needs_review' | 'reviewed'
+  /** True when at least one new attach happened in this batch. */
+  dirty: boolean
+  /** Signals attached to this cluster in THIS batch (for the final
+   *  signals.candidate_identity_id update). */
+  signal_ids_to_link: string[]
+  /** Whether this cluster was bumped to needs_review by THIS batch
+   *  (we don't downgrade 'reviewed' clusters). */
+  bumped_to_review: boolean
+}
+
+function indexCandidatesByFingerprint(rows: CandidateRow[]): Map<string, MutableCandidate[]> {
+  const map = new Map<string, MutableCandidate[]>()
+  for (const r of rows) {
+    if (!r.first_name || !r.last_initial) continue
+    const key = `${r.first_name}|${r.last_initial}`
+    const m: MutableCandidate = {
+      tempId: r.id,
+      isNew: false,
+      dbId: r.id,
+      venue_id: r.venue_id,
+      source_platform: r.source_platform,
+      first_name: r.first_name,
+      last_initial: r.last_initial,
+      last_name: r.last_name,
+      email: r.email,
+      phone: r.phone,
+      username: r.username,
+      city: r.city,
+      state: r.state,
+      country: r.country,
+      cluster_group_key: r.cluster_group_key,
+      signal_count: r.signal_count,
+      funnel_depth: r.funnel_depth,
+      action_counts: r.action_counts ?? {},
+      first_seen: r.first_seen,
+      last_seen: r.last_seen,
+      review_status: (r.review_status as 'clean' | 'needs_review' | 'reviewed') ?? 'clean',
+      dirty: false,
+      signal_ids_to_link: [],
+      bumped_to_review: false,
+    }
+    const arr = map.get(key) ?? []
+    arr.push(m)
+    map.set(key, arr)
+  }
+  return map
+}
+
+async function fetchSignals(
   supabase: SupabaseClient,
+  signalIds: readonly string[],
+): Promise<SignalRow[]> {
+  const FETCH_CHUNK = 200
+  const out: SignalRow[] = []
+  for (let i = 0; i < signalIds.length; i += FETCH_CHUNK) {
+    const chunk = signalIds.slice(i, i + FETCH_CHUNK) as string[]
+    const { data } = await supabase
+      .from('tangential_signals')
+      .select('id, venue_id, source_platform, signal_date, action_class, candidate_identity_id, extracted_identity')
+      .in('id', chunk)
+    out.push(...((data ?? []) as SignalRow[]))
+  }
+  return out
+}
+
+async function fetchExistingCandidates(
+  supabase: SupabaseClient,
+  venueId: string,
+  platform: string,
+): Promise<CandidateRow[]> {
+  const PAGE = 1000
+  let from = 0
+  const out: CandidateRow[] = []
+  for (;;) {
+    const { data, error } = await supabase
+      .from('candidate_identities')
+      .select('id, venue_id, source_platform, first_name, last_initial, last_name, email, phone, username, city, state, country, cluster_group_key, signal_count, funnel_depth, action_counts, first_seen, last_seen, review_status')
+      .eq('venue_id', venueId)
+      .eq('source_platform', platform)
+      .is('deleted_at', null)
+      .range(from, from + PAGE - 1)
+    if (error) throw new Error(`fetchExistingCandidates: ${error.message}`)
+    const page = (data ?? []) as CandidateRow[]
+    out.push(...page)
+    if (page.length < PAGE) break
+    from += PAGE
+  }
+  return out
+}
+
+/**
+ * Apply one signal to the in-memory cluster index. Returns the
+ * MutableCandidate it landed on (existing or freshly minted) so the
+ * caller can track signal-to-candidate assignments.
+ */
+function applySignalInMemory(
   signal: SignalRow,
   fp: SignalFingerprint,
-): Promise<{ candidate: CandidateRow; gapDays: number } | null> {
-  if (!signal.source_platform || !signal.signal_date) return null
-  if (!fp.first_name || !fp.last_initial) return null
+  index: Map<string, MutableCandidate[]>,
+  newCandidates: MutableCandidate[],
+): { candidate: MutableCandidate; flaggedForReview: boolean; isNewCluster: boolean } {
+  const fingerprintKey = `${fp.first_name}|${fp.last_initial}`
+  const action = signal.action_class ?? 'other'
+  const sigDate = signal.signal_date!
 
-  const { data, error } = await supabase
-    .from('candidate_identities')
-    .select('*')
-    .eq('venue_id', signal.venue_id)
-    .eq('source_platform', signal.source_platform)
-    .eq('first_name', fp.first_name)
-    .eq('last_initial', fp.last_initial)
-    .is('deleted_at', null)
-    .order('last_seen', { ascending: false })
-
-  if (error || !data || data.length === 0) return null
-
-  const eligible = (data as CandidateRow[])
+  const existing = index.get(fingerprintKey) ?? []
+  const eligible = existing
     .filter((c) => !statesConflict(c.state, fp.state))
     .map((c) => {
       const candDate = c.last_seen ?? c.first_seen
-      const gap = candDate ? daysBetween(candDate, signal.signal_date!) : Infinity
-      return { candidate: c, gapDays: gap }
+      const gap = candDate ? daysBetween(candDate, sigDate) : Infinity
+      return { c, gap }
     })
-    .filter((x) => x.gapDays <= REVIEW_CLUSTER_DAYS)
-    .sort((a, b) => a.gapDays - b.gapDays)
+    .filter((x) => x.gap <= REVIEW_CLUSTER_DAYS)
+    .sort((a, b) => a.gap - b.gap)
 
-  return eligible[0] ?? null
-}
+  if (eligible.length > 0) {
+    const target = eligible[0].c
+    const flaggedForReview =
+      eligible[0].gap > AUTO_CLUSTER_DAYS && target.review_status !== 'reviewed'
 
-/**
- * Update candidate aggregates after attaching one new signal.
- * action_counts gets the action_class incremented; funnel_depth is
- * the count of distinct action_class keys with a value > 0;
- * first/last_seen widen the window; signal_count increments.
- *
- * If the gap is in the 14-30d review zone, review_status is bumped
- * to 'needs_review' (unless coordinator already 'reviewed' it).
- */
-async function attachSignalToCandidate(
-  supabase: SupabaseClient,
-  candidate: CandidateRow,
-  signal: SignalRow,
-  fp: SignalFingerprint,
-  gapDays: number,
-): Promise<{ flaggedForReview: boolean; error?: string }> {
-  const action = signal.action_class ?? 'other'
-  const newActionCounts: Record<string, number> = { ...(candidate.action_counts ?? {}) }
-  newActionCounts[action] = (newActionCounts[action] ?? 0) + 1
-  const newFunnelDepth = Object.keys(newActionCounts).filter((k) => newActionCounts[k] > 0).length
-  const newSignalCount = (candidate.signal_count ?? 0) + 1
+    target.action_counts[action] = (target.action_counts[action] ?? 0) + 1
+    target.funnel_depth = Object.keys(target.action_counts).filter((k) => target.action_counts[k] > 0).length
+    target.signal_count++
 
-  const candFirst = candidate.first_seen ? new Date(candidate.first_seen).getTime() : Infinity
-  const candLast = candidate.last_seen ? new Date(candidate.last_seen).getTime() : -Infinity
-  const sigTs = new Date(signal.signal_date!).getTime()
-  const newFirstSeen = sigTs < candFirst ? signal.signal_date! : candidate.first_seen
-  const newLastSeen = sigTs > candLast ? signal.signal_date! : candidate.last_seen
+    const sigTs = new Date(sigDate).getTime()
+    const fsTs = target.first_seen ? new Date(target.first_seen).getTime() : Infinity
+    const lsTs = target.last_seen ? new Date(target.last_seen).getTime() : -Infinity
+    if (sigTs < fsTs) target.first_seen = sigDate
+    if (sigTs > lsTs) target.last_seen = sigDate
 
-  const flaggedForReview =
-    gapDays > AUTO_CLUSTER_DAYS && candidate.review_status !== 'reviewed'
+    if (flaggedForReview) {
+      target.review_status = 'needs_review'
+      target.bumped_to_review = true
+    }
+    if (!target.state && fp.state) target.state = fp.state
+    if (!target.city && fp.city) target.city = fp.city
+    if (!target.last_name && fp.last_name) target.last_name = fp.last_name
+    if (!target.email && fp.email) target.email = fp.email
+    if (!target.phone && fp.phone) target.phone = fp.phone
+    if (!target.username && fp.username) target.username = fp.username
 
-  const update: Record<string, unknown> = {
-    signal_count: newSignalCount,
-    funnel_depth: newFunnelDepth,
-    action_counts: newActionCounts,
-    first_seen: newFirstSeen,
-    last_seen: newLastSeen,
+    target.dirty = true
+    target.signal_ids_to_link.push(signal.id)
+    return { candidate: target, flaggedForReview, isNewCluster: false }
   }
-  if (flaggedForReview) update.review_status = 'needs_review'
-  if (!candidate.state && fp.state) update.state = fp.state
-  if (!candidate.city && fp.city) update.city = fp.city
-  if (!candidate.last_name && fp.last_name) update.last_name = fp.last_name
-  if (!candidate.email && fp.email) update.email = fp.email
-  if (!candidate.phone && fp.phone) update.phone = fp.phone
-  if (!candidate.username && fp.username) update.username = fp.username
 
-  const { error: updErr } = await supabase
-    .from('candidate_identities')
-    .update(update)
-    .eq('id', candidate.id)
-  if (updErr) return { flaggedForReview, error: `candidate update ${candidate.id}: ${updErr.message}` }
+  // No eligible cluster — mint a new one. Inherit cluster_group_key
+  // from a sibling >30d candidate of the same fingerprint if one
+  // exists (long-gap split case).
+  const sibling = existing.find((c) => c.cluster_group_key !== null)
+  const groupKey = sibling?.cluster_group_key ?? clusterGroupKey(signal.venue_id, signal.source_platform!, fp)
 
-  const { error: linkErr } = await supabase
-    .from('tangential_signals')
-    .update({ candidate_identity_id: candidate.id })
-    .eq('id', signal.id)
-  if (linkErr) return { flaggedForReview, error: `signal link ${signal.id}: ${linkErr.message}` }
-
-  return { flaggedForReview }
-}
-
-/**
- * Mint a new candidate from a single signal. If a sibling cluster
- * already exists for this fingerprint (long-gap split), share the
- * cluster_group_key so the coordinator review UI can group them.
- */
-async function createCandidate(
-  supabase: SupabaseClient,
-  signal: SignalRow,
-  fp: SignalFingerprint,
-  existingClusterGroupKey: string | null,
-): Promise<{ id: string | null; error?: string }> {
-  const action = signal.action_class ?? 'other'
-  const groupKey = existingClusterGroupKey ?? clusterGroupKey(signal.venue_id, signal.source_platform!, fp)
-
-  const insertRow = {
+  const tempId = `__new__${newCandidates.length}__${signal.id}`
+  const fresh: MutableCandidate = {
+    tempId,
+    isNew: true,
+    dbId: null,
     venue_id: signal.venue_id,
     source_platform: signal.source_platform!,
     first_name: fp.first_name,
@@ -269,160 +362,187 @@ async function createCandidate(
     signal_count: 1,
     funnel_depth: 1,
     action_counts: { [action]: 1 },
-    first_seen: signal.signal_date,
-    last_seen: signal.signal_date,
+    first_seen: sigDate,
+    last_seen: sigDate,
     review_status: 'clean',
+    dirty: true,
+    signal_ids_to_link: [signal.id],
+    bumped_to_review: false,
   }
-
-  const { data, error } = await supabase
-    .from('candidate_identities')
-    .insert(insertRow)
-    .select('id')
-    .single()
-  if (error || !data) return { id: null, error: `candidate insert: ${error?.message ?? 'no data'}` }
-
-  const { error: linkErr } = await supabase
-    .from('tangential_signals')
-    .update({ candidate_identity_id: data.id })
-    .eq('id', signal.id)
-  if (linkErr) return { id: data.id, error: `signal link ${signal.id}: ${linkErr.message}` }
-
-  return { id: data.id }
+  newCandidates.push(fresh)
+  const arr = index.get(fingerprintKey) ?? []
+  arr.push(fresh)
+  index.set(fingerprintKey, arr)
+  return { candidate: fresh, flaggedForReview: false, isNewCluster: true }
 }
 
 /**
- * For a fingerprint with NO eligible existing candidate within 30d
- * but maybe candidates >30d away, look up the cluster_group_key from
- * the most recent same-fingerprint candidate so the new one inherits
- * it. Otherwise return null and createCandidate will mint a fresh key.
+ * Bulk-write the resolved in-memory cluster state for one
+ * (venue, platform) group:
+ *  1. Insert net-new candidates (one round trip, returns IDs)
+ *  2. Upsert dirty existing candidates (one round trip)
+ *  3. Per affected candidate, one UPDATE on tangential_signals to
+ *     attach the signal_ids that landed on this cluster.
  */
-async function findExistingClusterGroupKey(
+async function flushCandidatesForGroup(
   supabase: SupabaseClient,
-  signal: SignalRow,
-  fp: SignalFingerprint,
-): Promise<string | null> {
-  if (!signal.source_platform || !fp.first_name || !fp.last_initial) return null
-  const { data } = await supabase
-    .from('candidate_identities')
-    .select('cluster_group_key')
-    .eq('venue_id', signal.venue_id)
-    .eq('source_platform', signal.source_platform)
-    .eq('first_name', fp.first_name)
-    .eq('last_initial', fp.last_initial)
-    .is('deleted_at', null)
-    .not('cluster_group_key', 'is', null)
-    .order('created_at', { ascending: false })
-    .limit(1)
-  return ((data?.[0] as { cluster_group_key: string | null } | undefined)?.cluster_group_key) ?? null
-}
-
-/**
- * Cluster one signal. Idempotent — if the signal already has
- * candidate_identity_id set, this is a no-op.
- */
-async function clusterOneSignal(
-  supabase: SupabaseClient,
-  signal: SignalRow,
+  newCandidates: MutableCandidate[],
+  existingDirty: MutableCandidate[],
   summary: ClustererSummary,
 ): Promise<void> {
-  summary.signals_processed++
-
-  if (signal.candidate_identity_id) {
-    return
-  }
-
-  const fp = extractFingerprint(signal)
-  if (!fp.first_name || !fp.last_initial) {
-    summary.signals_skipped_anonymous++
-    return
-  }
-  if (!signal.source_platform || !signal.signal_date) {
-    summary.signals_skipped_anonymous++
-    return
-  }
-
-  const found = await findClusterCandidate(supabase, signal, fp)
-  if (found) {
-    const { flaggedForReview, error } = await attachSignalToCandidate(
-      supabase,
-      found.candidate,
-      signal,
-      fp,
-      found.gapDays,
-    )
+  if (newCandidates.length > 0) {
+    const insertRows = newCandidates.map((c) => ({
+      venue_id: c.venue_id,
+      source_platform: c.source_platform,
+      first_name: c.first_name,
+      last_initial: c.last_initial,
+      last_name: c.last_name,
+      email: c.email,
+      phone: c.phone,
+      username: c.username,
+      city: c.city,
+      state: c.state,
+      country: c.country,
+      cluster_group_key: c.cluster_group_key,
+      signal_count: c.signal_count,
+      funnel_depth: c.funnel_depth,
+      action_counts: c.action_counts,
+      first_seen: c.first_seen,
+      last_seen: c.last_seen,
+      review_status: c.review_status,
+    }))
+    const { data, error } = await supabase
+      .from('candidate_identities')
+      .insert(insertRows)
+      .select('id')
     if (error) {
-      summary.errors.push(error)
-      return
+      summary.errors.push(`new candidates insert: ${error.message}`)
+    } else {
+      const ids = ((data ?? []) as Array<{ id: string }>).map((r) => r.id)
+      newCandidates.forEach((c, idx) => {
+        c.dbId = ids[idx] ?? null
+      })
     }
-    summary.signals_attached_to_existing++
-    if (flaggedForReview) summary.candidates_flagged_for_review++
-    return
   }
 
-  const groupKey = await findExistingClusterGroupKey(supabase, signal, fp)
-  const { error } = await createCandidate(supabase, signal, fp, groupKey)
-  if (error) {
-    summary.errors.push(error)
-    return
+  if (existingDirty.length > 0) {
+    // upsert lets us update many rows in one round trip; PostgREST
+    // matches by primary key.
+    const upsertRows = existingDirty.map((c) => ({
+      id: c.dbId!,
+      venue_id: c.venue_id,
+      source_platform: c.source_platform,
+      first_name: c.first_name,
+      last_initial: c.last_initial,
+      last_name: c.last_name,
+      email: c.email,
+      phone: c.phone,
+      username: c.username,
+      city: c.city,
+      state: c.state,
+      country: c.country,
+      cluster_group_key: c.cluster_group_key,
+      signal_count: c.signal_count,
+      funnel_depth: c.funnel_depth,
+      action_counts: c.action_counts,
+      first_seen: c.first_seen,
+      last_seen: c.last_seen,
+      review_status: c.review_status,
+    }))
+    const { error } = await supabase.from('candidate_identities').upsert(upsertRows)
+    if (error) summary.errors.push(`existing candidates upsert: ${error.message}`)
   }
-  summary.signals_creating_new_cluster++
+
+  for (const c of [...newCandidates, ...existingDirty]) {
+    if (!c.dbId || c.signal_ids_to_link.length === 0) continue
+    summary.affected_candidate_ids.push(c.dbId)
+    const { error } = await supabase
+      .from('tangential_signals')
+      .update({ candidate_identity_id: c.dbId })
+      .in('id', c.signal_ids_to_link)
+    if (error) summary.errors.push(`signal link cluster ${c.dbId}: ${error.message}`)
+  }
 }
 
 /**
  * Cluster a batch of signals (e.g. all signals from one CSV import).
- * Processes serially so within-batch attaches see the candidates that
- * earlier signals in the batch just created — Sarah R view followed
- * by Sarah R save in the same import lands on the SAME candidate.
+ * Idempotent — signals already linked to a candidate skip the in-
+ * memory pass.
  */
 export async function clusterSignals(args: {
   supabase: SupabaseClient
   signalIds: readonly string[]
 }): Promise<ClustererSummary> {
   const { supabase, signalIds } = args
-  const summary: ClustererSummary = {
-    signals_processed: 0,
-    signals_skipped_anonymous: 0,
-    signals_attached_to_existing: 0,
-    signals_creating_new_cluster: 0,
-    candidates_flagged_for_review: 0,
-    errors: [],
-  }
-
+  const summary = emptySummary()
   if (signalIds.length === 0) return summary
 
-  const FETCH_CHUNK = 200
-  const signals: SignalRow[] = []
-  for (let i = 0; i < signalIds.length; i += FETCH_CHUNK) {
-    const chunkIds = signalIds.slice(i, i + FETCH_CHUNK)
-    const { data, error } = await supabase
-      .from('tangential_signals')
-      .select('id, venue_id, source_platform, signal_date, action_class, candidate_identity_id, extracted_identity')
-      .in('id', chunkIds as string[])
-    if (error) {
-      summary.errors.push(`fetch signals @${i}: ${error.message}`)
+  const allSignals = await fetchSignals(supabase, signalIds)
+  const toProcess = allSignals.filter((s) => !s.candidate_identity_id)
+  summary.signals_processed = toProcess.length
+
+  // Group by (venue_id, source_platform). Almost always one group per
+  // brain-dump batch, but we don't assume — multi-venue admin runs
+  // could mix.
+  const groups = new Map<string, SignalRow[]>()
+  for (const s of toProcess) {
+    if (!s.source_platform || !s.signal_date) {
+      summary.signals_skipped_anonymous++
       continue
     }
-    signals.push(...((data ?? []) as SignalRow[]))
+    const fp = extractFingerprint(s)
+    if (!fp.first_name || !fp.last_initial) {
+      summary.signals_skipped_anonymous++
+      continue
+    }
+    const k = `${s.venue_id}|${s.source_platform}`
+    const arr = groups.get(k) ?? []
+    arr.push(s)
+    groups.set(k, arr)
   }
 
-  signals.sort((a, b) => {
-    const ad = a.signal_date ?? ''
-    const bd = b.signal_date ?? ''
-    return ad.localeCompare(bd)
-  })
+  for (const [groupKey, groupSignals] of groups) {
+    const [venueId, platform] = groupKey.split('|')
+    let existingCandidates: CandidateRow[] = []
+    try {
+      existingCandidates = await fetchExistingCandidates(supabase, venueId, platform)
+    } catch (err) {
+      summary.errors.push(err instanceof Error ? err.message : String(err))
+      continue
+    }
+    const index = indexCandidatesByFingerprint(existingCandidates)
+    const newCandidates: MutableCandidate[] = []
 
-  for (const s of signals) {
-    await clusterOneSignal(supabase, s, summary)
+    // Process chronologically so earlier signals land first and later
+    // signals can attach to the cluster they just created.
+    groupSignals.sort((a, b) => (a.signal_date ?? '').localeCompare(b.signal_date ?? ''))
+
+    for (const s of groupSignals) {
+      const fp = extractFingerprint(s)
+      const result = applySignalInMemory(s, fp, index, newCandidates)
+      if (result.isNewCluster) summary.signals_creating_new_cluster++
+      else summary.signals_attached_to_existing++
+      if (result.flaggedForReview) summary.candidates_flagged_for_review++
+    }
+
+    const existingDirty: MutableCandidate[] = []
+    for (const arr of index.values()) {
+      for (const c of arr) {
+        if (!c.isNew && c.dirty) existingDirty.push(c)
+      }
+    }
+
+    await flushCandidatesForGroup(supabase, newCandidates, existingDirty, summary)
   }
 
   return summary
 }
 
 /**
- * Re-cluster every signal for a venue (or for a venue + platform).
+ * Re-cluster every unattached signal for a venue (or venue+platform).
  * Used by the cross-venue historical backfill (PB.7) and the nightly
- * safety sweep (PB.8). Stable cluster boundaries — re-running on
- * existing-attached signals is a no-op.
+ * safety sweep (PB.8). Existing cluster boundaries are preserved
+ * because attached signals are skipped.
  */
 export async function reclusterVenue(args: {
   supabase: SupabaseClient
@@ -430,21 +550,15 @@ export async function reclusterVenue(args: {
   platform?: string
 }): Promise<ClustererSummary> {
   const { supabase, venueId, platform } = args
-  const summary: ClustererSummary = {
-    signals_processed: 0,
-    signals_skipped_anonymous: 0,
-    signals_attached_to_existing: 0,
-    signals_creating_new_cluster: 0,
-    candidates_flagged_for_review: 0,
-    errors: [],
-  }
+  const summary = emptySummary()
 
   const PAGE = 1000
   let from = 0
+  const allIds: string[] = []
   for (;;) {
     let q = supabase
       .from('tangential_signals')
-      .select('id, venue_id, source_platform, signal_date, action_class, candidate_identity_id, extracted_identity')
+      .select('id')
       .eq('venue_id', venueId)
       .is('candidate_identity_id', null)
       .order('signal_date', { ascending: true, nullsFirst: false })
@@ -455,11 +569,12 @@ export async function reclusterVenue(args: {
       summary.errors.push(`recluster fetch @${from}: ${error.message}`)
       break
     }
-    const page = (data ?? []) as SignalRow[]
-    for (const s of page) await clusterOneSignal(supabase, s, summary)
+    const page = (data ?? []) as Array<{ id: string }>
+    allIds.push(...page.map((r) => r.id))
     if (page.length < PAGE) break
     from += PAGE
   }
 
-  return summary
+  if (allIds.length === 0) return summary
+  return clusterSignals({ supabase, signalIds: allIds })
 }

@@ -46,6 +46,17 @@
 -- Cross-venue: each candidate is venue-scoped. Same Sarah R. on Rixey
 -- AND Hawthorne Manor (when multi-venue) = two candidates. Each
 -- venue's intelligence stays in its scope.
+--
+-- Cluster boundary semantics: existing cluster assignments are
+-- immutable post-creation. The clusterer only processes signals
+-- whose candidate_identity_id IS NULL, so re-running it never
+-- shifts a previously-attached signal. Within a single batch the
+-- ordering is deterministic (signals sorted by signal_date before
+-- processing); across batches a late-arriving earlier signal joins
+-- the closest existing cluster within window — that's the
+-- chronological reality, not instability. To rebuild from scratch,
+-- coordinator can soft-delete candidates and the nightly sweep
+-- re-attaches their signals.
 -- ---------------------------------------------------------------------------
 
 -- ============================================================================

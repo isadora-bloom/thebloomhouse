@@ -36,6 +36,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { normalizeSource } from './normalize-source'
 
 const TIER_1_NAME_WINDOW_HOURS = 72
 
@@ -450,9 +451,16 @@ async function writeAttributionEvents(args: {
 
   const inquiryTs = match.inquiry_date ? new Date(match.inquiry_date).getTime() : null
 
+  // Both sides normalized through normalizeSource so naming drift
+  // (wedding_wire vs weddingwire, google_business vs google) doesn't
+  // produce false-positive conflicts. Only real disagreement flags.
   let conflict_flag: string | null = null
-  if (match.legacy_source && candidate.source_platform && match.legacy_source !== candidate.source_platform) {
-    conflict_flag = `legacy=${match.legacy_source} computed=${candidate.source_platform}`
+  if (match.legacy_source && candidate.source_platform) {
+    const legacyNorm = normalizeSource(match.legacy_source)
+    const computedNorm = normalizeSource(candidate.source_platform)
+    if (legacyNorm !== computedNorm && legacyNorm !== 'other' && computedNorm !== 'other') {
+      conflict_flag = `legacy=${legacyNorm} computed=${computedNorm}`
+    }
   }
 
   const rows = signals
@@ -567,26 +575,44 @@ export async function resolveCandidate(args: {
 }
 
 /**
- * Resolve every unresolved candidate for a venue. Used by the
- * historical backfill (PB.7) and the nightly safety sweep (PB.8).
+ * Resolve unresolved candidates for a venue.
+ *
+ * Pass `candidateIds` to scope the run to a specific batch (e.g. the
+ * candidates a brain-dump CSV import just produced) — this is the
+ * common case after Phase A. Without `candidateIds`, scans every
+ * unresolved candidate in the venue (the path used by the historical
+ * backfill (PB.7) and nightly safety sweep (PB.8)).
+ *
+ * Pass `updatedSince` to scope to candidates touched since a
+ * timestamp — used by the nightly sweep to catch candidates whose
+ * aggregates changed but whose previous resolver run failed.
  */
 export async function resolveVenueCandidates(args: {
   supabase: SupabaseClient
   venueId: string
+  candidateIds?: readonly string[]
+  updatedSince?: string
 }): Promise<ResolverSummary> {
-  const { supabase, venueId } = args
+  const { supabase, venueId, candidateIds, updatedSince } = args
   const aggregate = emptySummary()
+
+  if (candidateIds !== undefined && candidateIds.length === 0) {
+    return aggregate
+  }
 
   const PAGE = 200
   let from = 0
   for (;;) {
-    const { data, error } = await supabase
+    let q = supabase
       .from('candidate_identities')
       .select('id, venue_id, source_platform, first_name, last_initial, last_name, email, phone, username, city, state, country, first_seen, last_seen, funnel_depth, signal_count, resolved_wedding_id, resolved_person_id')
       .eq('venue_id', venueId)
       .is('resolved_wedding_id', null)
       .is('deleted_at', null)
       .range(from, from + PAGE - 1)
+    if (candidateIds && candidateIds.length > 0) q = q.in('id', candidateIds as string[])
+    if (updatedSince) q = q.gte('updated_at', updatedSince)
+    const { data, error } = await q
     if (error) {
       aggregate.errors.push(`fetch unresolved @${from}: ${error.message}`)
       break

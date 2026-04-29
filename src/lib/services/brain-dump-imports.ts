@@ -34,6 +34,21 @@ export interface ImportSummary {
   updated: number
   skipped: number
   errors: string[]
+  /** Phase B (2026-04-28): platform-signal imports also chain
+   *  candidate clustering + resolver. When present, surfaces
+   *  cluster + match counts in the import summary UI so the
+   *  coordinator sees what happened end-to-end (not just "1486 rows
+   *  inserted"). Optional so the leads/reviews/etc paths don't have
+   *  to populate it. */
+  phase_b?: {
+    candidates_created: number
+    candidates_updated: number
+    candidates_flagged_for_review: number
+    auto_linked_to_wedding: number
+    deferred_to_ai: number
+    conflicts_flagged: number
+    no_match: number
+  }
 }
 
 function parseFirstName(full: string | null): string {

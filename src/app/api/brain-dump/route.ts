@@ -534,10 +534,31 @@ export async function runCsvImport(args: {
       // matched against existing weddings. Errors here are non-fatal —
       // the import itself succeeded; clustering/resolving can be re-run
       // by the nightly safety sweep if anything failed.
+      let phaseB: ImportSummary['phase_b'] | undefined
       if (result.inserted_signal_ids.length > 0) {
         try {
-          await clusterSignals({ supabase, signalIds: result.inserted_signal_ids })
-          await resolveVenueCandidates({ supabase, venueId })
+          const clusterStats = await clusterSignals({
+            supabase,
+            signalIds: result.inserted_signal_ids,
+          })
+          const resolverStats = await resolveVenueCandidates({
+            supabase,
+            venueId,
+            candidateIds: clusterStats.affected_candidate_ids,
+          })
+          phaseB = {
+            candidates_created: clusterStats.signals_creating_new_cluster,
+            candidates_updated: clusterStats.signals_attached_to_existing,
+            candidates_flagged_for_review: clusterStats.candidates_flagged_for_review,
+            auto_linked_to_wedding:
+              resolverStats.resolved_tier_1_exact +
+              resolverStats.resolved_tier_1_name_window +
+              resolverStats.resolved_tier_1_full_name,
+            deferred_to_ai: resolverStats.deferred_to_ai,
+            conflicts_flagged: resolverStats.conflicts_flagged,
+            no_match: resolverStats.no_match,
+          }
+          result.errors.push(...clusterStats.errors, ...resolverStats.errors)
         } catch (err) {
           result.errors.push(
             `phase_b_chain: ${err instanceof Error ? err.message : String(err)}`,
@@ -547,7 +568,8 @@ export async function runCsvImport(args: {
 
       // Bridge to ImportSummary so brain-dump's downstream UI keeps
       // the same shape. inserted = inserted, updated = 0, skipped =
-      // duplicates + empty-name + unparseable-date.
+      // duplicates + empty-name + unparseable-date. phase_b carries
+      // the cluster + match counts for the import summary panel.
       const skipped =
         result.skipped_duplicate +
         result.skipped_empty_name +
@@ -557,6 +579,7 @@ export async function runCsvImport(args: {
         updated: 0,
         skipped,
         errors: result.errors,
+        phase_b: phaseB,
       }
     }
     case 'reviews': {
