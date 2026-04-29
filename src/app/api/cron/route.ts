@@ -23,6 +23,8 @@ import { refreshAllCensusData } from '@/lib/services/census-ingest'
 import { computeCorrelationsAllVenues } from '@/lib/services/correlation-engine'
 import { mineTranscriptVoiceForAllVenues } from '@/lib/services/transcript-voice-learning'
 import { findBacktraceCandidates } from '@/lib/services/source-backtrace'
+import { reclusterVenue } from '@/lib/services/candidate-clusterer'
+import { resolveVenueCandidates } from '@/lib/services/candidate-resolver'
 import { syncMeetings as syncZoomMeetings } from '@/lib/services/zoom'
 import { syncAllVenues as syncOpenPhoneAllVenues } from '@/lib/services/openphone'
 
@@ -55,6 +57,7 @@ const VALID_JOBS = [
   'backtrace_scan',
   'zoom_poll',
   'openphone_poll',
+  'phase_b_sweep',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -174,6 +177,19 @@ async function runJob(job: JobName): Promise<unknown> {
       // venue at a time; coordinator marks read and the next batch
       // creates a fresh one).
       return scanBacktraceAllVenues()
+
+    case 'phase_b_sweep':
+      // Phase B safety sweep (PB.8 — 2026-04-28). Daily catch-up that
+      // re-clusters any tangential_signals still without a candidate
+      // and re-resolves any candidate_identities still without a
+      // wedding. Idempotent: signals already attached + candidates
+      // already resolved are skipped. Catches edges where the
+      // brain-dump-time clusterer/resolver chain failed (timeouts,
+      // RLS race, transient service unavailable) and ensures no
+      // signal silently sits unattributed. Does NOT call AI for
+      // ambiguous cases on the sweep — that already happened at
+      // import time; AI is too expensive to retry every night.
+      return sweepPhaseBAllVenues()
   }
 }
 
@@ -188,6 +204,68 @@ async function runJob(job: JobName): Promise<unknown> {
  *
  * Returns per-venue stats so the cron log shows what changed.
  */
+/**
+ * Phase B safety sweep across every venue. Re-attaches any orphaned
+ * signals (clusterer) and re-resolves any unmatched candidates
+ * (resolver). Returns per-venue counts. AI adjudicator is NOT
+ * triggered here — ambiguous cases stay queued for coordinator.
+ */
+async function sweepPhaseBAllVenues(): Promise<
+  Record<string, {
+    signals_processed: number
+    new_clusters: number
+    candidates_resolved: number
+    deferred: number
+    conflicts: number
+    errors: number
+  }>
+> {
+  const supabase = createServiceClient()
+  const { data: venues } = await supabase
+    .from('venues')
+    .select('id, name')
+    .is('archived_at', null)
+  const out: Record<string, {
+    signals_processed: number
+    new_clusters: number
+    candidates_resolved: number
+    deferred: number
+    conflicts: number
+    errors: number
+  }> = {}
+
+  for (const v of ((venues ?? []) as Array<{ id: string; name: string }>)) {
+    try {
+      const cluster = await reclusterVenue({ supabase, venueId: v.id })
+      const resolve = await resolveVenueCandidates({ supabase, venueId: v.id })
+      out[v.name] = {
+        signals_processed: cluster.signals_processed,
+        new_clusters: cluster.signals_creating_new_cluster,
+        candidates_resolved:
+          resolve.resolved_tier_1_exact +
+          resolve.resolved_tier_1_name_window +
+          resolve.resolved_tier_1_full_name +
+          resolve.resolved_tier_2_ai,
+        deferred: resolve.deferred_to_ai,
+        conflicts: resolve.conflicts_flagged,
+        errors: cluster.errors.length + resolve.errors.length,
+      }
+    } catch (err) {
+      out[v.name] = {
+        signals_processed: 0,
+        new_clusters: 0,
+        candidates_resolved: 0,
+        deferred: 0,
+        conflicts: 0,
+        errors: 1,
+      }
+      console.error(`[phase_b_sweep] ${v.name}:`, err instanceof Error ? err.message : err)
+    }
+  }
+
+  return out
+}
+
 async function scanBacktraceAllVenues(): Promise<
   Record<string, { highConfidence: number; mediumConfidence: number; notified: boolean }>
 > {

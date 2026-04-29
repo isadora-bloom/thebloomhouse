@@ -79,6 +79,10 @@
     {
       "path": "/api/cron?job=openphone_poll",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron?job=phase_b_sweep",
+      "schedule": "45 4 * * *"
     }
   ]
 }

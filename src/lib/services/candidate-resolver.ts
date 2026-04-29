@@ -37,8 +37,14 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeSource } from './normalize-source'
+import {
+  adjudicateAmbiguousMatch,
+  fetchWeddingContext,
+  type CandidateContextForAI,
+} from './candidate-ai-adjudicator'
 
 const TIER_1_NAME_WINDOW_HOURS = 72
+const AI_CONFIDENT_THRESHOLD = 70
 
 type Tier =
   | 'tier_1_exact'
@@ -53,6 +59,7 @@ export interface ResolverSummary {
   resolved_tier_1_exact: number
   resolved_tier_1_name_window: number
   resolved_tier_1_full_name: number
+  resolved_tier_2_ai: number
   deferred_to_ai: number
   parked_tier_3: number
   no_match: number
@@ -113,6 +120,7 @@ function emptySummary(): ResolverSummary {
     resolved_tier_1_exact: 0,
     resolved_tier_1_name_window: 0,
     resolved_tier_1_full_name: 0,
+    resolved_tier_2_ai: 0,
     deferred_to_ai: 0,
     parked_tier_3: 0,
     no_match: 0,
@@ -228,22 +236,28 @@ async function findFullNameMatch(
 }
 
 /**
- * Tier 1.3 — name + last_initial + ±72h window + uniqueness gate.
+ * Tier 1.3 / Tier 2 — find ALL weddings whose people match the
+ * candidate's first_name + last_initial AND have inquiry/tour within
+ * ±72h of any candidate signal.
  *
- * The most common path for Knot/WW signals where we only have first
- * name + last initial. The window is hours, not days, so the
- * probability of two unrelated "Sarah R."s both signaling AND
- * inquiring within 72h at the same venue is acceptably small.
+ * Returns:
+ *   - matches: every viable wedding (deduplicated by wedding_id)
+ *   - other_candidates_in_window: true if a SECOND candidate cluster
+ *     with the same fingerprint also sits in the same window — that
+ *     ambiguity goes to coordinator, not AI (AI can't tell which
+ *     candidate cluster belongs to the lead without coordinator
+ *     context).
  *
- * Uniqueness gate: if more than one candidate with the same fingerprint
- * has signals in this 72h window for this same wedding, we defer
- * to coordinator confirm — Tier 1 must be unambiguous or it's not
- * Tier 1.
+ * Caller decides:
+ *   - matches.length === 1 + !other_candidates_in_window → Tier 1 auto-link
+ *   - matches.length === 1 + other_candidates_in_window  → coordinator queue
+ *   - matches.length  >= 2                               → AI adjudicator
+ *   - matches.length === 0                               → no_match
  */
-async function findNameWindowMatch(
+async function findNameWindowMatches(
   supabase: SupabaseClient,
   c: CandidateRow,
-): Promise<{ match: PersonMatch; ambiguous: boolean } | null> {
+): Promise<{ matches: PersonMatch[]; other_candidates_in_window: boolean } | null> {
   if (!c.first_name || !c.last_initial || !c.first_seen) return null
 
   const { data: people } = await supabase
@@ -251,21 +265,27 @@ async function findNameWindowMatch(
     .select('id, wedding_id, first_name, last_name')
     .eq('venue_id', c.venue_id)
     .ilike('first_name', c.first_name)
-  const candidates = ((people ?? []) as PersonRow[])
+  const peopleRows = ((people ?? []) as PersonRow[])
     .filter((p) => p.wedding_id)
     .filter((p) => (p.last_name ?? '').toLowerCase().startsWith(c.last_initial!.toLowerCase()))
 
-  for (const p of candidates) {
+  const matches: PersonMatch[] = []
+  const seenWeddings = new Set<string>()
+  let other_candidates_in_window = false
+
+  for (const p of peopleRows) {
+    if (seenWeddings.has(p.wedding_id!)) continue
     const wed = await fetchWedding(supabase, p.wedding_id!)
     if (!wed) continue
-    const targets: Array<{ key: 'inquiry_date' | 'tour_date'; value: string }> = []
-    if (wed.inquiry_date) targets.push({ key: 'inquiry_date', value: wed.inquiry_date })
-    if (wed.tour_date) targets.push({ key: 'tour_date', value: wed.tour_date })
+
+    const targets: string[] = []
+    if (wed.inquiry_date) targets.push(wed.inquiry_date)
+    if (wed.tour_date) targets.push(wed.tour_date)
 
     let inWindow = false
     for (const t of targets) {
-      const fsHours = hoursBetween(c.first_seen, t.value)
-      const lsHours = c.last_seen ? hoursBetween(c.last_seen, t.value) : Infinity
+      const fsHours = hoursBetween(c.first_seen, t)
+      const lsHours = c.last_seen ? hoursBetween(c.last_seen, t) : Infinity
       if (Math.min(fsHours, lsHours) <= TIER_1_NAME_WINDOW_HOURS) {
         inWindow = true
         break
@@ -273,19 +293,22 @@ async function findNameWindowMatch(
     }
     if (!inWindow) continue
 
-    const ambiguous = await hasOtherCandidatesInWindow(supabase, c, wed)
-    return {
-      match: {
-        person_id: p.id,
-        wedding_id: wed.id,
-        inquiry_date: wed.inquiry_date,
-        tour_date: wed.tour_date,
-        legacy_source: wed.source,
-      },
-      ambiguous,
+    seenWeddings.add(wed.id)
+    matches.push({
+      person_id: p.id,
+      wedding_id: wed.id,
+      inquiry_date: wed.inquiry_date,
+      tour_date: wed.tour_date,
+      legacy_source: wed.source,
+    })
+
+    if (!other_candidates_in_window) {
+      other_candidates_in_window = await hasOtherCandidatesInWindow(supabase, c, wed)
     }
   }
-  return null
+
+  if (matches.length === 0) return null
+  return { matches, other_candidates_in_window }
 }
 
 /**
@@ -548,11 +571,18 @@ export async function resolveCandidate(args: {
     return summary
   }
 
-  const nameWindow = await findNameWindowMatch(supabase, candidate)
-  if (nameWindow && !nameWindow.ambiguous) {
+  const nameWindow = await findNameWindowMatches(supabase, candidate)
+  if (!nameWindow) {
+    summary.no_match++
+    return summary
+  }
+
+  // Single matching wedding, no other candidates competing → Tier 1 auto.
+  if (nameWindow.matches.length === 1 && !nameWindow.other_candidates_in_window) {
     const conf = 90 + Math.min(5, candidate.funnel_depth)
     const { flagged_conflict, error } = await writeAttributionEvents({
-      supabase, candidate, match: nameWindow.match, tier: 'tier_1_name_window', decided_by: 'auto', confidence: conf,
+      supabase, candidate, match: nameWindow.matches[0],
+      tier: 'tier_1_name_window', decided_by: 'auto', confidence: conf,
     })
     if (error) summary.errors.push(error)
     else {
@@ -561,16 +591,68 @@ export async function resolveCandidate(args: {
     }
     return summary
   }
-  if (nameWindow && nameWindow.ambiguous) {
+
+  // Multiple weddings could match → AI adjudicator picks one (or none).
+  if (nameWindow.matches.length >= 2) {
     await supabase
       .from('candidate_identities')
       .update({ review_status: 'needs_review' })
       .eq('id', candidate.id)
+
+    let aiVerdict: { match_wedding_id: string | null; confidence: number; reasoning: string } | null = null
+    try {
+      const candCtx: CandidateContextForAI = {
+        id: candidate.id,
+        source_platform: candidate.source_platform,
+        first_name: candidate.first_name!,
+        last_initial: candidate.last_initial!,
+        last_name: candidate.last_name,
+        state: candidate.state,
+        city: candidate.city,
+        signal_count: candidate.signal_count,
+        funnel_depth: candidate.funnel_depth,
+        action_counts: {},
+        first_seen: candidate.first_seen,
+        last_seen: candidate.last_seen,
+      }
+      const wedCtxs = (await Promise.all(
+        nameWindow.matches.map((m) => fetchWeddingContext(supabase, m.wedding_id)),
+      )).filter((v): v is NonNullable<typeof v> => Boolean(v))
+      aiVerdict = await adjudicateAmbiguousMatch({
+        candidate: candCtx,
+        candidates: wedCtxs,
+        venueId: candidate.venue_id,
+      })
+    } catch (err) {
+      summary.errors.push(`ai adjudicate ${candidate.id}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    if (aiVerdict && aiVerdict.match_wedding_id && aiVerdict.confidence >= AI_CONFIDENT_THRESHOLD) {
+      const chosen = nameWindow.matches.find((m) => m.wedding_id === aiVerdict!.match_wedding_id)
+      if (chosen) {
+        const { flagged_conflict, error } = await writeAttributionEvents({
+          supabase, candidate, match: chosen,
+          tier: 'tier_2_ai', decided_by: 'ai', confidence: aiVerdict.confidence,
+          reasoning: aiVerdict.reasoning,
+        })
+        if (error) summary.errors.push(error)
+        else {
+          summary.resolved_tier_2_ai++
+          if (flagged_conflict) summary.conflicts_flagged++
+        }
+        return summary
+      }
+    }
     summary.deferred_to_ai++
     return summary
   }
 
-  summary.no_match++
+  // Single match but other candidates competing → coordinator decides.
+  await supabase
+    .from('candidate_identities')
+    .update({ review_status: 'needs_review' })
+    .eq('id', candidate.id)
+  summary.deferred_to_ai++
   return summary
 }
 
@@ -624,6 +706,7 @@ export async function resolveVenueCandidates(args: {
       aggregate.resolved_tier_1_exact += s.resolved_tier_1_exact
       aggregate.resolved_tier_1_name_window += s.resolved_tier_1_name_window
       aggregate.resolved_tier_1_full_name += s.resolved_tier_1_full_name
+      aggregate.resolved_tier_2_ai += s.resolved_tier_2_ai
       aggregate.deferred_to_ai += s.deferred_to_ai
       aggregate.parked_tier_3 += s.parked_tier_3
       aggregate.no_match += s.no_match

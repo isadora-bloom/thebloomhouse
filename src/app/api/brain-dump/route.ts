@@ -553,7 +553,8 @@ export async function runCsvImport(args: {
             auto_linked_to_wedding:
               resolverStats.resolved_tier_1_exact +
               resolverStats.resolved_tier_1_name_window +
-              resolverStats.resolved_tier_1_full_name,
+              resolverStats.resolved_tier_1_full_name +
+              resolverStats.resolved_tier_2_ai,
             deferred_to_ai: resolverStats.deferred_to_ai,
             conflicts_flagged: resolverStats.conflicts_flagged,
             no_match: resolverStats.no_match,
