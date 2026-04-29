@@ -47,6 +47,7 @@ import { cn } from '@/lib/utils'
 import { WeddingJourney } from '@/components/agent/wedding-journey'
 import { SourceBadgeEditable } from '@/components/agent/source-badge-editable'
 import { CandidateSignalEvidence } from '@/components/agent/candidate-signal-evidence'
+import { JourneyNarrative } from '@/components/agent/journey-narrative'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -865,6 +866,11 @@ export default function ClientProfilePage() {
           </button>
         </div>
       </div>
+
+      {/* Phase C / PC.3: AI-generated journey narrative. Self-hides
+          when the wedding has no Phase B candidates so the page
+          doesn't show an empty bar. */}
+      <JourneyNarrative weddingId={weddingId} />
 
       {/* Main Layout: 2/3 + 1/3 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
