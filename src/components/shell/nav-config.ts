@@ -252,6 +252,7 @@ export const MODE_INTEL: ModeConfig = {
       items: [
         { label: 'All Clients', href: '/intel/clients', icon: UserCheck },
         { label: 'Matching / Dedup', href: '/intel/matching', icon: GitMerge },
+        { label: 'Candidate Review', href: '/intel/candidates', icon: Sparkles },
         { label: 'Team Comparison', href: '/intel/team-compare', icon: Users },
       ],
     },

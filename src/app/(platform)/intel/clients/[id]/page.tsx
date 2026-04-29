@@ -46,6 +46,7 @@ import {
 import { cn } from '@/lib/utils'
 import { WeddingJourney } from '@/components/agent/wedding-journey'
 import { SourceBadgeEditable } from '@/components/agent/source-badge-editable'
+import { CandidateSignalEvidence } from '@/components/agent/candidate-signal-evidence'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1043,6 +1044,14 @@ export default function ClientProfilePage() {
 
         {/* Right column — Journey + Heat + Events */}
         <div className="space-y-6">
+          {/* Phase B: platform-signal candidate evidence. Self-hides when
+              no candidates resolve to this wedding so the column doesn't
+              get an empty card. */}
+          <CandidateSignalEvidence
+            weddingId={weddingId}
+            legacySource={wedding.source ?? null}
+          />
+
           {/* Client Journey */}
           <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
             <h2 className="font-heading text-base font-semibold text-sage-900 mb-4">
