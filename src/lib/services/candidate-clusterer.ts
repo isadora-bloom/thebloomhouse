@@ -241,7 +241,11 @@ async function fetchSignals(
   supabase: SupabaseClient,
   signalIds: readonly string[],
 ): Promise<SignalRow[]> {
-  const FETCH_CHUNK = 200
+  // PostgREST drops .in() filters once the URL gets too long. UUIDs are
+  // 36 chars; ~100 per chunk keeps us safely under the ~8KB URL ceiling.
+  // The earlier 200-per-chunk version was right at the cliff and could
+  // silently truncate on larger imports.
+  const FETCH_CHUNK = 100
   const out: SignalRow[] = []
   for (let i = 0; i < signalIds.length; i += FETCH_CHUNK) {
     const chunk = signalIds.slice(i, i + FETCH_CHUNK) as string[]

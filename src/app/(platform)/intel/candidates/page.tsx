@@ -77,7 +77,9 @@ function platformLabel(key: string): string {
 
 function fmtDate(d: string | null): string {
   if (!d) return '—'
-  return new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  // UTC formatting — all coordinators see the same calendar day for
+  // day-precision vendor signals regardless of local timezone.
+  return new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 }
 
 export default function CandidatesReviewPage() {
@@ -175,12 +177,57 @@ export default function CandidatesReviewPage() {
     setNeedsReview((prev) => prev.filter((c) => c.id !== id))
   }
 
-  async function revertAttribution(eventId: string) {
-    if (!confirm('Revert this attribution? Stays in audit trail; first-touch is recomputed.')) return
+  async function linkCandidateToWedding(candidateId: string, weddingId: string) {
+    // Manual link from the review queue. Writes attribution_events for
+    // every signal attached to the candidate, marks candidate resolved,
+    // and recomputes first-touch on the wedding.
     const sb = getSupabase()
-    await sb.from('attribution_events').update({ reverted_at: new Date().toISOString() }).eq('id', eventId)
+    const res = await fetch('/api/intel/candidates/link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ candidate_identity_id: candidateId, wedding_id: weddingId }),
+    })
+    if (!res.ok) {
+      alert('Link failed.')
+      return
+    }
+    setNeedsReview((prev) => prev.filter((c) => c.id !== candidateId))
+    void sb // suppress unused warning
+  }
+
+  async function revertAttribution(eventId: string, asAcceptLegacy = false) {
+    const msg = asAcceptLegacy
+      ? 'Keep legacy source? Reverts the attribution row; first-touch is recomputed.'
+      : 'Revert this attribution? Stays in audit trail; first-touch is recomputed.'
+    if (!confirm(msg)) return
+    const res = await fetch('/api/intel/attribution', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: asAcceptLegacy ? 'accept_legacy' : 'revert',
+        attribution_event_id: eventId,
+      }),
+    })
+    if (!res.ok) {
+      alert('Revert failed.')
+      return
+    }
     setConflicts((prev) => prev.filter((e) => e.id !== eventId))
     setRecent((prev) => prev.filter((e) => e.id !== eventId))
+  }
+
+  async function acceptComputed(eventId: string) {
+    if (!confirm('Overwrite leads.source with the computed platform? Clears this conflict.')) return
+    const res = await fetch('/api/intel/attribution', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'accept_computed', attribution_event_id: eventId }),
+    })
+    if (!res.ok) {
+      alert('Update failed.')
+      return
+    }
+    setConflicts((prev) => prev.filter((e) => e.id !== eventId))
   }
 
   if (!venueId) return null
@@ -214,7 +261,13 @@ export default function CandidatesReviewPage() {
         ) : (
           <div className="space-y-3">
             {needsReview.map((c) => (
-              <NeedsReviewCard key={c.id} candidate={c} onDismiss={() => dismissCandidate(c.id)} />
+              <NeedsReviewCard
+                key={c.id}
+                candidate={c}
+                venueId={venueId}
+                onDismiss={() => dismissCandidate(c.id)}
+                onLink={(weddingId) => linkCandidateToWedding(c.id, weddingId)}
+              />
             ))}
           </div>
         )
@@ -224,7 +277,12 @@ export default function CandidatesReviewPage() {
         ) : (
           <div className="space-y-3">
             {conflicts.map((e) => (
-              <ConflictCard key={e.id} event={e} onRevert={() => revertAttribution(e.id)} />
+              <ConflictCard
+                key={e.id}
+                event={e}
+                onAcceptComputed={() => acceptComputed(e.id)}
+                onAcceptLegacy={() => revertAttribution(e.id, true)}
+              />
             ))}
           </div>
         )
@@ -266,7 +324,62 @@ function EmptyState({ icon: Icon, text }: { icon: typeof CheckCircle2; text: str
   )
 }
 
-function NeedsReviewCard({ candidate, onDismiss }: { candidate: CandidateRow; onDismiss: () => void }) {
+function NeedsReviewCard({
+  candidate,
+  venueId,
+  onDismiss,
+  onLink,
+}: {
+  candidate: CandidateRow
+  venueId: string
+  onDismiss: () => void
+  onLink: (weddingId: string) => void
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerLoading, setPickerLoading] = useState(false)
+  const [pickerCandidates, setPickerCandidates] = useState<Array<{ wedding_id: string; first_name: string | null; last_name: string | null; inquiry_date: string | null; status: string | null }>>([])
+
+  async function openPicker() {
+    setPickerOpen(true)
+    if (pickerCandidates.length > 0) return
+    setPickerLoading(true)
+    const sb = getSupabase()
+    // Suggest weddings whose people share the candidate's first name.
+    const { data: people } = await sb
+      .from('people')
+      .select('wedding_id, first_name, last_name')
+      .eq('venue_id', venueId)
+      .ilike('first_name', candidate.first_name ?? '')
+      .not('wedding_id', 'is', null)
+    const wedIds = Array.from(new Set(((people ?? []) as Array<{ wedding_id: string }>).map((p) => p.wedding_id))).slice(0, 100)
+    if (wedIds.length === 0) {
+      setPickerCandidates([])
+      setPickerLoading(false)
+      return
+    }
+    const { data: weddings } = await sb
+      .from('weddings')
+      .select('id, inquiry_date, status')
+      .in('id', wedIds)
+      .order('inquiry_date', { ascending: false, nullsFirst: false })
+    const peopleMap = new Map<string, { first_name: string | null; last_name: string | null }>()
+    for (const p of (people ?? []) as Array<{ wedding_id: string; first_name: string | null; last_name: string | null }>) {
+      if (!peopleMap.has(p.wedding_id)) peopleMap.set(p.wedding_id, { first_name: p.first_name, last_name: p.last_name })
+    }
+    const enriched = ((weddings ?? []) as Array<{ id: string; inquiry_date: string | null; status: string | null }>).map((w) => {
+      const p = peopleMap.get(w.id)
+      return {
+        wedding_id: w.id,
+        first_name: p?.first_name ?? null,
+        last_name: p?.last_name ?? null,
+        inquiry_date: w.inquiry_date,
+        status: w.status,
+      }
+    })
+    setPickerCandidates(enriched)
+    setPickerLoading(false)
+  }
+
   return (
     <div className="bg-surface border border-amber-200 rounded-xl p-4 shadow-sm">
       <div className="flex items-start justify-between gap-4">
@@ -297,20 +410,57 @@ function NeedsReviewCard({ candidate, onDismiss }: { candidate: CandidateRow; on
         </div>
         <div className="flex flex-col gap-2 shrink-0">
           <button
+            onClick={openPicker}
+            className="text-xs px-3 py-1.5 bg-sage-600 text-white rounded-lg hover:bg-sage-700"
+          >
+            Link to lead…
+          </button>
+          <button
             onClick={onDismiss}
             className="text-xs px-3 py-1.5 border border-sage-200 rounded-lg hover:bg-sage-50 text-sage-700"
           >
-            Mark reviewed
+            Dismiss
           </button>
         </div>
       </div>
+
+      {pickerOpen && (
+        <div className="mt-3 pt-3 border-t border-amber-100">
+          <p className="text-xs text-sage-500 mb-2">
+            Leads with first name "{candidate.first_name}":
+          </p>
+          {pickerLoading ? (
+            <p className="text-xs text-sage-500">Loading…</p>
+          ) : pickerCandidates.length === 0 ? (
+            <p className="text-xs text-sage-500">No matching leads. Mark dismissed if this is noise.</p>
+          ) : (
+            <div className="space-y-1 max-h-48 overflow-y-auto">
+              {pickerCandidates.map((p) => (
+                <button
+                  key={p.wedding_id}
+                  onClick={() => onLink(p.wedding_id)}
+                  className="w-full text-left text-xs px-2 py-1.5 border border-sage-100 rounded hover:bg-sage-50 flex items-center justify-between gap-2"
+                >
+                  <span className="font-medium text-sage-900 truncate">
+                    {p.first_name} {p.last_name}
+                  </span>
+                  <span className="text-sage-500 shrink-0">
+                    {p.status} · {fmtDate(p.inquiry_date)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
 
-function ConflictCard({ event, onRevert }: {
+function ConflictCard({ event, onAcceptComputed, onAcceptLegacy }: {
   event: AttributionRow & { wedding: WeddingRow | null; candidate: CandidateRow | null }
-  onRevert: () => void
+  onAcceptComputed: () => void
+  onAcceptLegacy: () => void
 }) {
   const w = event.wedding
   const c = event.candidate
@@ -336,18 +486,24 @@ function ConflictCard({ event, onRevert }: {
               From {c.signal_count} signal{c.signal_count === 1 ? '' : 's'} on {platformLabel(c.source_platform)} (funnel depth {c.funnel_depth}).
             </p>
           )}
-          <div className="flex gap-2 mt-3">
+          <div className="flex gap-2 mt-3 flex-wrap">
             <a
               href={`/intel/clients/${event.wedding_id}`}
-              className="text-xs px-3 py-1.5 bg-sage-600 text-white rounded-lg hover:bg-sage-700 inline-flex items-center gap-1"
+              className="text-xs px-3 py-1.5 border border-sage-200 rounded-lg hover:bg-sage-50 text-sage-700 inline-flex items-center gap-1"
             >
               Open lead <ArrowRight className="w-3 h-3" />
             </a>
             <button
-              onClick={onRevert}
+              onClick={onAcceptComputed}
+              className="text-xs px-3 py-1.5 bg-sage-600 text-white rounded-lg hover:bg-sage-700"
+            >
+              Use computed source
+            </button>
+            <button
+              onClick={onAcceptLegacy}
               className="text-xs px-3 py-1.5 border border-sage-200 rounded-lg hover:bg-sage-50 text-sage-700 inline-flex items-center gap-1"
             >
-              <RotateCcw className="w-3 h-3" /> Revert attribution
+              <RotateCcw className="w-3 h-3" /> Keep legacy
             </button>
           </div>
         </div>

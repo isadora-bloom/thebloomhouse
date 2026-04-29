@@ -63,6 +63,18 @@ function parseCsvLine(line: string): string[] {
   return out.map((s) => s.trim().replace(/^"|"$/g, ''))
 }
 
+// Programmatic assertions so a future regression fails the script
+// instead of just printing a number that nobody re-reads.
+const failures: string[] = []
+function expect(label: string, actual: unknown, predicate: (v: unknown) => boolean, hint: string): void {
+  if (predicate(actual)) {
+    console.log(`    ✓ ${label}`)
+  } else {
+    console.log(`    ✗ ${label}: ${hint} (got ${JSON.stringify(actual)})`)
+    failures.push(`${label}: ${hint} (got ${JSON.stringify(actual)})`)
+  }
+}
+
 async function cleanup(): Promise<void> {
   await sb.from('attribution_events').delete().eq('venue_id', RIXEY)
   await sb.from('candidate_identities').delete().eq('venue_id', RIXEY).eq('source_platform', 'the_knot')
@@ -84,9 +96,12 @@ async function main() {
   const detection = detectPlatformSource(headers, rows.slice(0, 30))
   if (!detection.best) {
     console.log('  ❌ no detector matched')
+    failures.push('no detector matched')
     return
   }
   console.log(`  ✓ ${detection.best.detector.key} @ ${detection.best.confidence}%`)
+  expect('detection key', detection.best.detector.key, (v) => v === 'the_knot', 'expected the_knot')
+  expect('detection confidence', detection.best.confidence, (v) => typeof v === 'number' && v >= 90, 'expected ≥ 90%')
 
   if (!APPLY) {
     console.log('\n[--apply skipped — not exercising writes]')
@@ -113,6 +128,9 @@ async function main() {
   if (importResult.errors.length > 0) {
     for (const e of importResult.errors.slice(0, 3)) console.log(`    error: ${e}`)
   }
+  expect('import has rows inserted', importResult.inserted, (v) => typeof v === 'number' && v > 0, 'expected > 0 rows inserted')
+  expect('import errors empty', importResult.errors.length, (v) => v === 0, 'expected no errors')
+  expect('import returns signal IDs', importResult.inserted_signal_ids.length, (v) => v === importResult.inserted, 'expected ID count == inserted count')
 
   // CHECK 3 — Phase B clusterer
   console.log('\n[3] Phase B clusterer')
@@ -128,6 +146,9 @@ async function main() {
   if (clusterStats.errors.length > 0) {
     for (const e of clusterStats.errors.slice(0, 3)) console.log(`    error: ${e}`)
   }
+  expect('clusterer no errors', clusterStats.errors.length, (v) => v === 0, 'expected zero clusterer errors')
+  expect('clusterer produced clusters', clusterStats.signals_creating_new_cluster, (v) => typeof v === 'number' && v > 0, 'expected > 0 new clusters')
+  expect('clusterer affected_candidate_ids non-empty', clusterStats.affected_candidate_ids.length, (v) => typeof v === 'number' && v > 0, 'expected affected_candidate_ids list')
 
   // CHECK 4 — funnel pattern collapse: count candidates with funnel_depth > 1
   const { data: funnelCands } = await sb
@@ -151,6 +172,7 @@ async function main() {
     .eq('source_platform', 'the_knot')
     .is('candidate_identity_id', null)
   console.log(`\n[5] anonymous signals (no candidate): ${anonSignals}`)
+  expect('anonymous count matches clusterer skip count', anonSignals, (v) => v === clusterStats.signals_skipped_anonymous, 'expected anon DB count == skipped_anonymous')
 
   // CHECK 6 — resolver
   console.log('\n[6] Phase B resolver (against existing Rixey weddings)')
@@ -173,6 +195,8 @@ async function main() {
   console.log(`  deferred: ${resolverStats.deferred_to_ai}`)
   console.log(`  no_match: ${resolverStats.no_match}`)
   console.log(`  conflicts: ${resolverStats.conflicts_flagged}`)
+  expect('resolver processed all affected candidates', resolverStats.candidates_processed, (v) => v === clusterStats.affected_candidate_ids.length, 'expected processed == affected_candidate_ids count (PostgREST .in() chunking)')
+  expect('resolver no errors', resolverStats.errors.length, (v) => v === 0, 'expected zero resolver errors')
 
   // CHECK 7 — attribution_events written when matches happen
   const { count: attribCount } = await sb
@@ -212,6 +236,11 @@ async function main() {
   await cleanup()
   console.log('  done')
 
+  if (failures.length > 0) {
+    console.log(`\n=== FAILED: ${failures.length} assertion${failures.length === 1 ? '' : 's'} ===`)
+    for (const f of failures) console.log(`  - ${f}`)
+    process.exit(1)
+  }
   console.log('\n=== done ===')
 }
 

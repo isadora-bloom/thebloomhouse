@@ -372,9 +372,10 @@ async function fetchSignalsForCandidate(
  * Recompute is_first_touch across all live attribution_events for one
  * wedding. The earliest pre-inquiry signal_date among bucket='attribution'
  * rows wins. Run after every new attribution_event lands so the flag
- * stays accurate as new earlier signals arrive.
+ * stays accurate as new earlier signals arrive — and after a coordinator
+ * reverts a row from the lead detail or review queue UI.
  */
-async function recomputeFirstTouch(
+export async function recomputeFirstTouch(
   supabase: SupabaseClient,
   weddingId: string,
 ): Promise<{ error?: string }> {
@@ -536,8 +537,14 @@ async function writeAttributionEvents(args: {
 export async function resolveCandidate(args: {
   supabase: SupabaseClient
   candidate: CandidateRow
+  /** Skip the AI adjudicator on Tier 2 ambiguity (cron sweep, backfill
+   *  --no-ai). Without this, the nightly sweep would call Claude every
+   *  night for every still-ambiguous candidate — at scale that's real
+   *  money on retries that almost never resolve. AI is run once at
+   *  import time; sweep just leaves them needs_review. */
+  skipAI?: boolean
 }): Promise<ResolverSummary> {
-  const { supabase, candidate } = args
+  const { supabase, candidate, skipAI = false } = args
   const summary = emptySummary()
   summary.candidates_processed = 1
 
@@ -599,6 +606,11 @@ export async function resolveCandidate(args: {
       .update({ review_status: 'needs_review' })
       .eq('id', candidate.id)
 
+    if (skipAI) {
+      summary.deferred_to_ai++
+      return summary
+    }
+
     let aiVerdict: { match_wedding_id: string | null; confidence: number; reasoning: string } | null = null
     try {
       const candCtx: CandidateContextForAI = {
@@ -641,6 +653,13 @@ export async function resolveCandidate(args: {
           if (flagged_conflict) summary.conflicts_flagged++
         }
         return summary
+      } else {
+        // AI returned a UUID we don't recognize — hallucination or
+        // race. Log so the coordinator can investigate instead of
+        // silently falling through.
+        summary.errors.push(
+          `ai adjudicate ${candidate.id}: returned unrecognized wedding_id "${aiVerdict.match_wedding_id}" (confidence ${aiVerdict.confidence})`,
+        )
       }
     }
     summary.deferred_to_ai++
@@ -674,8 +693,14 @@ export async function resolveVenueCandidates(args: {
   venueId: string
   candidateIds?: readonly string[]
   updatedSince?: string
+  /** Filter to one platform — used by the backfill --platform flag so
+   *  the resolver step matches the clusterer step's scope. */
+  platform?: string
+  /** Skip AI adjudicator on Tier 2 ambiguity. Used by the cron sweep
+   *  and backfill --no-ai. */
+  skipAI?: boolean
 }): Promise<ResolverSummary> {
-  const { supabase, venueId, candidateIds, updatedSince } = args
+  const { supabase, venueId, candidateIds, updatedSince, platform, skipAI } = args
   const aggregate = emptySummary()
 
   if (candidateIds !== undefined && candidateIds.length === 0) {
@@ -692,7 +717,7 @@ export async function resolveVenueCandidates(args: {
     : [null]
 
   const processCandidate = async (c: CandidateRow) => {
-    const s = await resolveCandidate({ supabase, candidate: c })
+    const s = await resolveCandidate({ supabase, candidate: c, skipAI })
     aggregate.candidates_processed += s.candidates_processed
     aggregate.resolved_tier_1_exact += s.resolved_tier_1_exact
     aggregate.resolved_tier_1_name_window += s.resolved_tier_1_name_window
@@ -718,6 +743,7 @@ export async function resolveVenueCandidates(args: {
         .range(from, from + PAGE - 1)
       if (chunk) q = q.in('id', chunk)
       if (updatedSince) q = q.gte('updated_at', updatedSince)
+      if (platform) q = q.eq('source_platform', platform)
       const { data, error } = await q
       if (error) {
         aggregate.errors.push(`fetch unresolved @${from}: ${error.message}`)

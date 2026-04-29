@@ -237,7 +237,7 @@ async function sweepPhaseBAllVenues(): Promise<
   for (const v of ((venues ?? []) as Array<{ id: string; name: string }>)) {
     try {
       const cluster = await reclusterVenue({ supabase, venueId: v.id })
-      const resolve = await resolveVenueCandidates({ supabase, venueId: v.id })
+      const resolve = await resolveVenueCandidates({ supabase, venueId: v.id, skipAI: true })
       out[v.name] = {
         signals_processed: cluster.signals_processed,
         new_clusters: cluster.signals_creating_new_cluster,

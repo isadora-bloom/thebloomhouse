@@ -91,8 +91,13 @@ function actionIcon(action: string) {
 
 function fmtDate(d: string | null): string {
   if (!d) return '—'
+  // Format in UTC so all coordinators see the same calendar day for a
+  // signal regardless of local timezone. Vendor signal_date is
+  // day-precision originally; rendering it in the viewer's local
+  // timezone would shift it across the day boundary for users east
+  // of the venue.
   const date = new Date(d)
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
 export function CandidateSignalEvidence({ weddingId, legacySource, onChangeAttribution }: Props) {
@@ -153,16 +158,54 @@ export function CandidateSignalEvidence({ weddingId, legacySource, onChangeAttri
   const conflict = events.find((e) => e.conflict_with_legacy_source && !e.reverted_at)
 
   async function handleRevert(eventId: string) {
-    if (!confirm('Revert this attribution? It stays in the audit trail but is_first_touch will be recomputed.')) return
+    if (!confirm('Revert this attribution? It stays in the audit trail; first-touch will be recomputed across remaining signals.')) return
     setRevertingId(eventId)
-    const sb = getSupabase()
-    await sb
-      .from('attribution_events')
-      .update({ reverted_at: new Date().toISOString() })
-      .eq('id', eventId)
-    setEvents((prev) => prev.filter((e) => e.id !== eventId))
+    const res = await fetch('/api/intel/attribution', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'revert', attribution_event_id: eventId }),
+    })
+    if (res.ok) {
+      setEvents((prev) => prev.filter((e) => e.id !== eventId))
+      onChangeAttribution?.(eventId)
+    } else {
+      alert('Revert failed.')
+    }
     setRevertingId(null)
-    onChangeAttribution?.(eventId)
+  }
+
+  async function handleAcceptComputed(eventId: string) {
+    if (!confirm('Overwrite leads.source with the computed first-touch platform? Resolves the conflict.')) return
+    setRevertingId(eventId)
+    const res = await fetch('/api/intel/attribution', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'accept_computed', attribution_event_id: eventId }),
+    })
+    if (res.ok) {
+      setEvents((prev) => prev.map((e) => (e.id === eventId ? { ...e, conflict_with_legacy_source: null } : e)))
+      onChangeAttribution?.(eventId)
+    } else {
+      alert('Update failed.')
+    }
+    setRevertingId(null)
+  }
+
+  async function handleAcceptLegacy(eventId: string) {
+    if (!confirm('Keep leads.source as-is and clear this conflict? The attribution row is reverted; first-touch is recomputed.')) return
+    setRevertingId(eventId)
+    const res = await fetch('/api/intel/attribution', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'accept_legacy', attribution_event_id: eventId }),
+    })
+    if (res.ok) {
+      setEvents((prev) => prev.filter((e) => e.id !== eventId))
+      onChangeAttribution?.(eventId)
+    } else {
+      alert('Update failed.')
+    }
+    setRevertingId(null)
   }
 
   return (
@@ -194,13 +237,28 @@ export function CandidateSignalEvidence({ weddingId, legacySource, onChangeAttri
       {conflict && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs flex items-start gap-2">
           <AlertTriangle className="w-3.5 h-3.5 text-amber-600 mt-0.5 shrink-0" />
-          <div>
+          <div className="flex-1 min-w-0">
             <p className="font-medium text-amber-900">Source conflict</p>
             <p className="text-amber-700 mt-0.5">
               Computed: <strong>{conflict.source_platform.replace(/_/g, ' ')}</strong> ·
               Legacy <code className="text-[10px]">leads.source</code>: <strong>{legacySource ?? 'unset'}</strong>.
-              Decide which is correct.
             </p>
+            <div className="flex gap-2 mt-2">
+              <button
+                onClick={() => handleAcceptComputed(conflict.id)}
+                disabled={revertingId === conflict.id}
+                className="text-xs px-2 py-1 bg-sage-600 text-white rounded hover:bg-sage-700 disabled:opacity-50"
+              >
+                Use computed
+              </button>
+              <button
+                onClick={() => handleAcceptLegacy(conflict.id)}
+                disabled={revertingId === conflict.id}
+                className="text-xs px-2 py-1 border border-sage-200 rounded hover:bg-sage-50 text-sage-700 disabled:opacity-50"
+              >
+                Keep legacy
+              </button>
+            </div>
           </div>
         </div>
       )}

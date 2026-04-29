@@ -6,15 +6,17 @@
 // resolved are skipped. Safe to re-run.
 //
 // Usage:
-//   npx tsx scripts/backfill-phase-b.ts                 # all venues, AI on
+//   npx tsx scripts/backfill-phase-b.ts                 # all venues, AI on (prompts before running)
 //   npx tsx scripts/backfill-phase-b.ts --no-ai         # skip AI adjudicator (Tier 2 stays at needs_review)
 //   npx tsx scripts/backfill-phase-b.ts --venue <uuid>  # one venue only
-//   npx tsx scripts/backfill-phase-b.ts --platform the_knot  # one platform only
+//   npx tsx scripts/backfill-phase-b.ts --platform the_knot  # one platform — applies to BOTH cluster and resolve
+//   npx tsx scripts/backfill-phase-b.ts --yes           # skip confirmation prompt
 //
 // Reads tangential_signals + leads (weddings) → writes candidate_identities,
 // attribution_events, wedding_touchpoints. RLS bypassed via service role.
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
+import { createInterface } from 'node:readline'
 import { reclusterVenue } from '../src/lib/services/candidate-clusterer'
 import { resolveVenueCandidates } from '../src/lib/services/candidate-resolver'
 
@@ -36,6 +38,18 @@ const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_
 const args = process.argv.slice(2)
 const venueArg = args.includes('--venue') ? args[args.indexOf('--venue') + 1] : null
 const platformArg = args.includes('--platform') ? args[args.indexOf('--platform') + 1] : undefined
+const skipAI = args.includes('--no-ai')
+const skipConfirm = args.includes('--yes')
+
+async function prompt(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close()
+      resolve(answer.trim().toLowerCase())
+    })
+  })
+}
 
 async function main() {
   console.log('\n=== Phase B historical backfill ===\n')
@@ -57,7 +71,19 @@ async function main() {
     console.log('no venues to process')
     return
   }
-  console.log(`processing ${venues.length} venue(s)${platformArg ? ` (platform=${platformArg})` : ''}\n`)
+  console.log(`processing ${venues.length} venue(s)${platformArg ? ` (platform=${platformArg})` : ''}${skipAI ? ' (AI adjudicator OFF)' : ''}\n`)
+
+  if (!skipConfirm) {
+    const venueLabel = venues.length === 1
+      ? venues[0].name
+      : `${venues.length} venues (${venues.slice(0, 3).map((v) => v.name).join(', ')}${venues.length > 3 ? '...' : ''})`
+    const answer = await prompt(`Run backfill against ${venueLabel}? (yes to proceed): `)
+    if (answer !== 'yes') {
+      console.log('cancelled')
+      return
+    }
+    console.log()
+  }
 
   let totalSignalsProcessed = 0
   let totalCandidatesCreated = 0
@@ -89,7 +115,12 @@ async function main() {
       }
     }
 
-    const resolverStats = await resolveVenueCandidates({ supabase: sb, venueId: v.id })
+    const resolverStats = await resolveVenueCandidates({
+      supabase: sb,
+      venueId: v.id,
+      platform: platformArg,
+      skipAI,
+    })
     if (resolverStats.candidates_processed === 0 && resolverStats.errors.length === 0) {
       console.log(`    resolve: 0 unresolved candidates`)
     } else {
