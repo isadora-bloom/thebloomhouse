@@ -30,9 +30,48 @@ export interface SourceQualityRow {
   /** Mean days from inquiry to booking for this source's booked
    *  weddings. Null when no wedding has both timestamps. */
   avgDaysToBook: number | null
+
+  // Phase C / PC.1 (2026-04-28): candidate-funnel + CAC fields,
+  // sourced from Phase B's attribution_events + tangential_signals.
+  // Window-bounded by the windowDays argument to computeSourceQuality.
+
+  /** Total signals delivered on this platform inside the window —
+   *  includes anonymous (no candidate) signals. Pure volume metric. */
+  signalsDelivered: number
+  /** Candidate identities created on this platform inside the window
+   *  (excludes anonymous). The "people-shaped engagement" count. */
+  candidatesCreated: number
+  /** Average funnel depth across this source's candidates. A value
+   *  of 1 = view-only audience; ≥3 means routinely reaching the
+   *  message tier. */
+  avgFunnelDepth: number
+  /** Share of candidates that resolved to a wedding (auto + AI +
+   *  manual). 0-1. */
+  autoLinkRate: number
+  /** Number of weddings where this platform won is_first_touch
+   *  inside the window — the methodologically-correct lead count
+   *  per source. May differ from bookedCount (which uses the legacy
+   *  weddings.source enum); the gap is the migration delta. */
+  firstTouchLeads: number
+  /** Subset of firstTouchLeads that reached tour_date status. */
+  firstTouchTours: number
+  /** Subset of firstTouchLeads that reached booked status. */
+  firstTouchBookings: number
+  /** Sum of marketing_spend inside the window. */
+  spendInWindow: number
+  /** spendInWindow / firstTouchLeads (or null when leads = 0). */
+  costPerLead: number | null
+  costPerTour: number | null
+  costPerBooking: number | null
 }
 
-export async function computeSourceQuality(venueId: string): Promise<SourceQualityRow[]> {
+export async function computeSourceQuality(
+  venueId: string,
+  opts: { windowDays?: number } = {},
+): Promise<SourceQualityRow[]> {
+  const windowDays = opts.windowDays ?? 90
+  const windowStartIso = new Date(Date.now() - windowDays * 86_400_000).toISOString()
+  const windowMonthCutoff = windowStartIso.slice(0, 7) + '-01' // marketing_spend.month is first-of-month
   const supabase = createServiceClient()
   const { data: weddings } = await supabase
     .from('weddings')
@@ -149,8 +188,180 @@ export async function computeSourceQuality(venueId: string): Promise<SourceQuali
       referralCount: data.referralHits,
       frictionRate: bookedCount > 0 ? data.frictionHits / bookedCount : 0,
       avgDaysToBook,
+      // Phase C fields populated below in one pass; default to zero
+      // here so the row shape stays consistent.
+      signalsDelivered: 0,
+      candidatesCreated: 0,
+      avgFunnelDepth: 0,
+      autoLinkRate: 0,
+      firstTouchLeads: 0,
+      firstTouchTours: 0,
+      firstTouchBookings: 0,
+      spendInWindow: 0,
+      costPerLead: null,
+      costPerTour: null,
+      costPerBooking: null,
     })
   }
 
-  return results.sort((a, b) => b.bookedCount - a.bookedCount)
+  // ---- Phase C / PC.1: candidate-funnel + CAC enrichment ----
+  // Most platforms in attribution_events don't have a row in `bySource`
+  // yet (no booked weddings). We need entries for every platform that
+  // shows up in tangential_signals OR attribution_events OR
+  // marketing_spend so the scorecard isn't blind to fresh-traffic
+  // sources that haven't converted yet.
+
+  // Per-source signal counts (window-bounded by signal_date).
+  const { data: signals } = await supabase
+    .from('tangential_signals')
+    .select('source_platform, candidate_identity_id, signal_date')
+    .eq('venue_id', venueId)
+    .not('source_platform', 'is', null)
+    .gte('signal_date', windowStartIso)
+  const signalsBySource = new Map<string, { delivered: number }>()
+  for (const s of (signals ?? []) as Array<{ source_platform: string | null; candidate_identity_id: string | null; signal_date: string | null }>) {
+    if (!s.source_platform) continue
+    const key = s.source_platform
+    const cur = signalsBySource.get(key) ?? { delivered: 0 }
+    cur.delivered++
+    signalsBySource.set(key, cur)
+  }
+
+  // Per-source candidates (excludes anonymous since they have no
+  // candidate_identity_id). first_seen-bounded.
+  const { data: candidates } = await supabase
+    .from('candidate_identities')
+    .select('source_platform, funnel_depth, resolved_wedding_id')
+    .eq('venue_id', venueId)
+    .is('deleted_at', null)
+    .gte('first_seen', windowStartIso)
+  const candByPlatform = new Map<string, { count: number; funnelTotal: number; resolved: number }>()
+  for (const c of (candidates ?? []) as Array<{ source_platform: string; funnel_depth: number; resolved_wedding_id: string | null }>) {
+    const key = c.source_platform
+    const cur = candByPlatform.get(key) ?? { count: 0, funnelTotal: 0, resolved: 0 }
+    cur.count++
+    cur.funnelTotal += c.funnel_depth ?? 0
+    if (c.resolved_wedding_id) cur.resolved++
+    candByPlatform.set(key, cur)
+  }
+
+  // First-touch leads/tours/bookings via attribution_events. Window
+  // by decided_at. Only is_first_touch=true and not reverted rows
+  // count.
+  const { data: attribEvents } = await supabase
+    .from('attribution_events')
+    .select('source_platform, wedding_id, decided_at')
+    .eq('venue_id', venueId)
+    .eq('is_first_touch', true)
+    .is('reverted_at', null)
+    .gte('decided_at', windowStartIso)
+  const ftWeddingsBySource = new Map<string, Set<string>>()
+  for (const e of (attribEvents ?? []) as Array<{ source_platform: string; wedding_id: string }>) {
+    const key = e.source_platform
+    const set = ftWeddingsBySource.get(key) ?? new Set<string>()
+    set.add(e.wedding_id)
+    ftWeddingsBySource.set(key, set)
+  }
+  // Single fetch of every first-touched wedding's status + tour_date.
+  const allFtWeddingIds = Array.from(new Set(
+    Array.from(ftWeddingsBySource.values()).flatMap((s) => Array.from(s)),
+  ))
+  const wedStatusMap = new Map<string, { status: string | null; tour_date: string | null; booked_at: string | null }>()
+  if (allFtWeddingIds.length > 0) {
+    const FT_CHUNK = 100
+    for (let i = 0; i < allFtWeddingIds.length; i += FT_CHUNK) {
+      const chunk = allFtWeddingIds.slice(i, i + FT_CHUNK)
+      const { data: ws } = await supabase
+        .from('weddings')
+        .select('id, status, tour_date, booked_at')
+        .in('id', chunk)
+      for (const w of (ws ?? []) as Array<{ id: string; status: string | null; tour_date: string | null; booked_at: string | null }>) {
+        wedStatusMap.set(w.id, { status: w.status, tour_date: w.tour_date, booked_at: w.booked_at })
+      }
+    }
+  }
+
+  // Spend per source within window.
+  const { data: spendRows } = await supabase
+    .from('marketing_spend')
+    .select('source, amount')
+    .eq('venue_id', venueId)
+    .gte('month', windowMonthCutoff)
+  const spendBySource = new Map<string, number>()
+  for (const r of (spendRows ?? []) as Array<{ source: string; amount: number }>) {
+    spendBySource.set(r.source, (spendBySource.get(r.source) ?? 0) + Number(r.amount))
+  }
+
+  // Make sure every source that has any signal/candidate/attribution/spend
+  // gets a row, even if no booking exists yet.
+  const allSources = new Set<string>([
+    ...Object.keys(bySource),
+    ...signalsBySource.keys(),
+    ...candByPlatform.keys(),
+    ...ftWeddingsBySource.keys(),
+    ...spendBySource.keys(),
+  ])
+  for (const src of allSources) {
+    if (!results.find((r) => r.source === src)) {
+      results.push({
+        source: src,
+        bookedCount: 0,
+        avgRevenue: 0,
+        avgEmailsExchanged: 0,
+        avgPortalActivity: 0,
+        avgReviewScore: null,
+        referralCount: 0,
+        frictionRate: 0,
+        avgDaysToBook: null,
+        signalsDelivered: 0,
+        candidatesCreated: 0,
+        avgFunnelDepth: 0,
+        autoLinkRate: 0,
+        firstTouchLeads: 0,
+        firstTouchTours: 0,
+        firstTouchBookings: 0,
+        spendInWindow: 0,
+        costPerLead: null,
+        costPerTour: null,
+        costPerBooking: null,
+      })
+    }
+  }
+
+  for (const row of results) {
+    const sig = signalsBySource.get(row.source)
+    row.signalsDelivered = sig?.delivered ?? 0
+
+    const cand = candByPlatform.get(row.source)
+    row.candidatesCreated = cand?.count ?? 0
+    row.avgFunnelDepth = cand && cand.count > 0 ? cand.funnelTotal / cand.count : 0
+    row.autoLinkRate = cand && cand.count > 0 ? cand.resolved / cand.count : 0
+
+    const ftWeddings = ftWeddingsBySource.get(row.source) ?? new Set<string>()
+    row.firstTouchLeads = ftWeddings.size
+    let tours = 0
+    let bookings = 0
+    for (const wid of ftWeddings) {
+      const w = wedStatusMap.get(wid)
+      if (!w) continue
+      if (w.tour_date) tours++
+      if (w.status === 'booked' || w.status === 'completed' || w.booked_at) bookings++
+    }
+    row.firstTouchTours = tours
+    row.firstTouchBookings = bookings
+
+    row.spendInWindow = spendBySource.get(row.source) ?? 0
+    row.costPerLead = row.firstTouchLeads > 0 ? row.spendInWindow / row.firstTouchLeads : null
+    row.costPerTour = row.firstTouchTours > 0 ? row.spendInWindow / row.firstTouchTours : null
+    row.costPerBooking = row.firstTouchBookings > 0 ? row.spendInWindow / row.firstTouchBookings : null
+  }
+
+  return results.sort((a, b) => {
+    // Bookings first, then first-touch leads, then candidates — keeps
+    // the most-converted platforms at the top while still surfacing
+    // platforms that have engagement but haven't booked yet.
+    if (b.bookedCount !== a.bookedCount) return b.bookedCount - a.bookedCount
+    if (b.firstTouchLeads !== a.firstTouchLeads) return b.firstTouchLeads - a.firstTouchLeads
+    return b.candidatesCreated - a.candidatesCreated
+  })
 }

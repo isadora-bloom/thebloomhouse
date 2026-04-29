@@ -210,6 +210,19 @@ interface QualityApiRow {
   referralCount: number
   frictionRate: number
   avgDaysToBook: number | null
+  // Phase C / PC.1 — candidate funnel + CAC fields. May be 0 / null
+  // when the scope has no Phase B data yet (no signals imported).
+  signalsDelivered: number
+  candidatesCreated: number
+  avgFunnelDepth: number
+  autoLinkRate: number
+  firstTouchLeads: number
+  firstTouchTours: number
+  firstTouchBookings: number
+  spendInWindow: number
+  costPerLead: number | null
+  costPerTour: number | null
+  costPerBooking: number | null
   venueId: string
   venueName: string
 }
@@ -224,6 +237,20 @@ type QualitySortKey =
   | 'referralCount'
   | 'frictionRate'
   | 'avgDaysToBook'
+  | 'signalsDelivered'
+  | 'candidatesCreated'
+  | 'avgFunnelDepth'
+  | 'autoLinkRate'
+  | 'firstTouchLeads'
+  | 'firstTouchTours'
+  | 'firstTouchBookings'
+  | 'spendInWindow'
+  | 'costPerLead'
+  | 'costPerTour'
+  | 'costPerBooking'
+
+type ScorecardViewMode = 'quality' | 'funnel' | 'cac'
+type ScorecardWindow = 30 | 90 | 365 | 3650
 
 interface ScorecardProps {
   scope: ReturnType<typeof useScope>
@@ -240,6 +267,13 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
   // than one row per (venue, source). At venue scope the toggle is
   // hidden — there's nothing to roll up.
   const [aggregate, setAggregate] = useState<boolean>(scope.level !== 'venue')
+  // Phase C / PC.1: view-mode + time window. Three modes share the
+  // same source rows but show different columns — Quality (legacy
+  // booked-lead metrics), Funnel (candidate volume / depth /
+  // conversion), CAC (spend, $/lead, $/tour, $/booking from
+  // first-touch attribution). Window default 90d (locked 2026-04-28).
+  const [viewMode, setViewMode] = useState<ScorecardViewMode>('quality')
+  const [windowDays, setWindowDays] = useState<ScorecardWindow>(90)
 
   // If the scope changes (single venue -> portfolio) the default flips.
   useEffect(() => {
@@ -264,6 +298,7 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
         if (aggregate && scope.level !== 'venue') {
           params.set('aggregate', 'cross_venue')
         }
+        params.set('window', String(windowDays))
         const res = await fetch(`/api/intel/source-quality?${params.toString()}`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const json = (await res.json()) as { rows?: QualityApiRow[] }
@@ -283,7 +318,7 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
     return () => {
       cancelled = true
     }
-  }, [scope.level, scope.venueId, scope.groupId, scope.orgId, scope.loading, aggregate])
+  }, [scope.level, scope.venueId, scope.groupId, scope.orgId, scope.loading, aggregate, windowDays])
 
   function handleSort(key: QualitySortKey) {
     if (sortKey === key) {
@@ -318,33 +353,70 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
             Source Quality
           </h2>
           <p className="text-xs text-sage-500 mt-1">
-            Quality-of-lead signals per source, measured from weddings that
-            actually booked. Higher review scores, lower friction rates,
-            and faster time-to-book mean better-fit couples.
+            {viewMode === 'quality'
+              ? 'Quality-of-lead signals per source, measured from weddings that actually booked. Higher review scores, lower friction, and faster time-to-book mean better-fit couples.'
+              : viewMode === 'funnel'
+              ? 'Volume → engagement → conversion across platform signals. Funnel depth ≥3 = audience routinely reaches the message tier; high link rate = candidates who became real leads.'
+              : 'Cost-per acquisition by stage, using first-touch attribution. $/booking is the bottom-line CAC; $/tour and $/lead show where each platform stops paying off.'}
           </p>
         </div>
-        {scope.level !== 'venue' && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Phase C / PC.1: view mode selector. */}
           <div className="flex items-center bg-sage-50 rounded-lg p-0.5 text-xs shrink-0">
-            <button
-              onClick={() => setAggregate(true)}
-              className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                aggregate ? 'bg-surface text-sage-900 shadow-sm' : 'text-sage-500 hover:text-sage-700'
-              }`}
-              title="One row per source, weighted across the whole portfolio"
-            >
-              Portfolio
-            </button>
-            <button
-              onClick={() => setAggregate(false)}
-              className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                !aggregate ? 'bg-surface text-sage-900 shadow-sm' : 'text-sage-500 hover:text-sage-700'
-              }`}
-              title="One row per (venue, source) so you can see which venue benefits from which channel"
-            >
-              By Venue
-            </button>
+            {(['quality', 'funnel', 'cac'] as ScorecardViewMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                className={`px-3 py-1 rounded-md font-medium transition-colors capitalize ${
+                  viewMode === mode ? 'bg-surface text-sage-900 shadow-sm' : 'text-sage-500 hover:text-sage-700'
+                }`}
+                title={
+                  mode === 'quality'
+                    ? 'Quality of leads that booked from each source'
+                    : mode === 'funnel'
+                    ? 'Volume + depth + conversion from candidate signals'
+                    : 'Spend / cost-per-lead / tour / booking (first-touch attribution)'
+                }
+              >
+                {mode === 'cac' ? 'CAC' : mode}
+              </button>
+            ))}
           </div>
-        )}
+          {/* Time window selector. */}
+          <select
+            value={windowDays}
+            onChange={(e) => setWindowDays(parseInt(e.target.value, 10) as ScorecardWindow)}
+            className="text-xs border border-sage-200 rounded-md px-2 py-1.5 bg-surface text-sage-700"
+            title="Time window for funnel + CAC metrics"
+          >
+            <option value="30">Last 30d</option>
+            <option value="90">Last 90d</option>
+            <option value="365">Last 1y</option>
+            <option value="3650">All time</option>
+          </select>
+          {scope.level !== 'venue' && (
+            <div className="flex items-center bg-sage-50 rounded-lg p-0.5 text-xs shrink-0">
+              <button
+                onClick={() => setAggregate(true)}
+                className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                  aggregate ? 'bg-surface text-sage-900 shadow-sm' : 'text-sage-500 hover:text-sage-700'
+                }`}
+                title="One row per source, weighted across the whole portfolio"
+              >
+                Portfolio
+              </button>
+              <button
+                onClick={() => setAggregate(false)}
+                className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                  !aggregate ? 'bg-surface text-sage-900 shadow-sm' : 'text-sage-500 hover:text-sage-700'
+                }`}
+                title="One row per (venue, source) so you can see which venue benefits from which channel"
+              >
+                By Venue
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -357,17 +429,41 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-sage-50/50">
-              {([
-                ['source', 'Source'],
-                ['bookedCount', 'Booked'],
-                ['avgRevenue', 'Avg Revenue'],
-                ['avgDaysToBook', 'Days to Book'],
-                ['avgEmailsExchanged', 'Emails Exchanged'],
-                ['avgPortalActivity', 'Portal Activity'],
-                ['avgReviewScore', 'Review Score'],
-                ['referralCount', 'Referrals'],
-                ['frictionRate', 'Friction Rate'],
-              ] as [QualitySortKey, string][]).map(([key, label]) => (
+              {(() => {
+                const qualityCols: [QualitySortKey, string][] = [
+                  ['source', 'Source'],
+                  ['bookedCount', 'Booked'],
+                  ['avgRevenue', 'Avg Revenue'],
+                  ['avgDaysToBook', 'Days to Book'],
+                  ['avgEmailsExchanged', 'Emails Exchanged'],
+                  ['avgPortalActivity', 'Portal Activity'],
+                  ['avgReviewScore', 'Review Score'],
+                  ['referralCount', 'Referrals'],
+                  ['frictionRate', 'Friction Rate'],
+                ]
+                const funnelCols: [QualitySortKey, string][] = [
+                  ['source', 'Source'],
+                  ['signalsDelivered', 'Signals'],
+                  ['candidatesCreated', 'Candidates'],
+                  ['avgFunnelDepth', 'Funnel Depth'],
+                  ['autoLinkRate', 'Link Rate'],
+                  ['firstTouchLeads', 'First-Touch Leads'],
+                  ['firstTouchTours', 'Tours'],
+                  ['firstTouchBookings', 'Bookings'],
+                ]
+                const cacCols: [QualitySortKey, string][] = [
+                  ['source', 'Source'],
+                  ['spendInWindow', 'Spend'],
+                  ['firstTouchLeads', 'Leads'],
+                  ['firstTouchTours', 'Tours'],
+                  ['firstTouchBookings', 'Bookings'],
+                  ['costPerLead', '$/Lead'],
+                  ['costPerTour', '$/Tour'],
+                  ['costPerBooking', '$/Booking'],
+                ]
+                const cols = viewMode === 'funnel' ? funnelCols : viewMode === 'cac' ? cacCols : qualityCols
+                return cols
+              })().map(([key, label]) => (
                 <th
                   key={key}
                   className="px-4 py-3 text-left font-medium text-sage-600 cursor-pointer hover:text-sage-900 transition-colors select-none whitespace-nowrap"
@@ -387,73 +483,109 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
             {sortedRows.length === 0 ? (
               <tr>
                 <td colSpan={9} className="px-4 py-6 text-center text-sm text-sage-500">
-                  Not enough booked weddings yet to score source quality.
-                  Need at least 2 bookings per source.
+                  {viewMode === 'quality'
+                    ? 'Not enough booked weddings yet to score source quality. Need at least 2 bookings per source.'
+                    : viewMode === 'funnel'
+                    ? 'No platform signals yet in this window. Drop a CSV in the brain-dump capture to populate.'
+                    : 'No spend recorded yet for this window. Add data at /intel/sources in the spend importer.'}
                 </td>
               </tr>
             ) : (
               sortedRows.map((row, i) => {
                 const isAggregateRow = row.venueId === '__aggregate__'
+                const sourceCell = (
+                  <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: getSourceColor(formatSource(row.source)) }}
+                      />
+                      {formatSource(row.source)}
+                      {scope.level !== 'venue' && !isAggregateRow && (
+                        <VenueChip venueName={row.venueName} />
+                      )}
+                      {isAggregateRow && (
+                        <span className="text-[10px] text-sage-400 font-normal">
+                          · {row.venueName}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                )
                 return (
                   <tr
-                    key={`${row.venueId}-${row.source}-${i}`}
+                    key={`${row.venueId}-${row.source}-${i}-${viewMode}`}
                     className="hover:bg-sage-50/30 transition-colors"
                   >
-                    <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        <div
-                          className="w-2.5 h-2.5 rounded-full shrink-0"
-                          style={{ backgroundColor: getSourceColor(formatSource(row.source)) }}
-                        />
-                        {formatSource(row.source)}
-                        {scope.level !== 'venue' && !isAggregateRow && (
-                          <VenueChip venueName={row.venueName} />
-                        )}
-                        {isAggregateRow && (
-                          <span className="text-[10px] text-sage-400 font-normal">
-                            · {row.venueName}
+                    {sourceCell}
+                    {viewMode === 'quality' && (
+                      <>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">{row.bookedCount}</td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">{fmt$(row.avgRevenue)}</td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">
+                          {row.avgDaysToBook !== null ? `${Math.round(row.avgDaysToBook)} d` : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">{row.avgEmailsExchanged.toFixed(1)}</td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">{row.avgPortalActivity.toFixed(1)}</td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">
+                          {row.avgReviewScore !== null ? row.avgReviewScore.toFixed(2) : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">{row.referralCount}</td>
+                        <td className="px-4 py-3 tabular-nums">
+                          <span
+                            className={`font-medium ${
+                              row.frictionRate === 0
+                                ? 'text-emerald-600'
+                                : row.frictionRate < 0.25
+                                ? 'text-sage-700'
+                                : 'text-red-600'
+                            }`}
+                          >
+                            {fmtPct(row.frictionRate)}
                           </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">
-                      {row.bookedCount}
-                    </td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">
-                      {fmt$(row.avgRevenue)}
-                    </td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">
-                      {row.avgDaysToBook !== null
-                        ? `${Math.round(row.avgDaysToBook)} d`
-                        : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">
-                      {row.avgEmailsExchanged.toFixed(1)}
-                    </td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">
-                      {row.avgPortalActivity.toFixed(1)}
-                    </td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">
-                      {row.avgReviewScore !== null
-                        ? row.avgReviewScore.toFixed(2)
-                        : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">
-                      {row.referralCount}
-                    </td>
-                    <td className="px-4 py-3 tabular-nums">
-                      <span
-                        className={`font-medium ${
-                          row.frictionRate === 0
-                            ? 'text-emerald-600'
-                            : row.frictionRate < 0.25
-                            ? 'text-sage-700'
-                            : 'text-red-600'
-                        }`}
-                      >
-                        {fmtPct(row.frictionRate)}
-                      </span>
-                    </td>
+                        </td>
+                      </>
+                    )}
+                    {viewMode === 'funnel' && (
+                      <>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">{fmtCount(row.signalsDelivered)}</td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">{fmtCount(row.candidatesCreated)}</td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">
+                          {row.candidatesCreated > 0 ? row.avgFunnelDepth.toFixed(1) : '—'}
+                        </td>
+                        <td className="px-4 py-3 tabular-nums">
+                          {row.candidatesCreated > 0 ? (
+                            <span className={`font-medium ${row.autoLinkRate >= 0.5 ? 'text-emerald-600' : row.autoLinkRate >= 0.2 ? 'text-sage-700' : 'text-red-600'}`}>
+                              {fmtPct(row.autoLinkRate)}
+                            </span>
+                          ) : (
+                            <span className="text-sage-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">{row.firstTouchLeads}</td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">{row.firstTouchTours}</td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">{row.firstTouchBookings}</td>
+                      </>
+                    )}
+                    {viewMode === 'cac' && (
+                      <>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">
+                          {row.spendInWindow > 0 ? fmt$(row.spendInWindow) : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">{row.firstTouchLeads}</td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">{row.firstTouchTours}</td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">{row.firstTouchBookings}</td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">
+                          {row.costPerLead !== null ? fmt$(row.costPerLead) : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums">
+                          {row.costPerTour !== null ? fmt$(row.costPerTour) : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">
+                          {row.costPerBooking !== null ? fmt$(row.costPerBooking) : '—'}
+                        </td>
+                      </>
+                    )}
                   </tr>
                 )
               })

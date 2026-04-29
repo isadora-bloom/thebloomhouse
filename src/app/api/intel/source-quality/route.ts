@@ -43,6 +43,12 @@ export async function GET(request: NextRequest) {
   const groupIdParam = sp.get('group_id')
   const orgIdParam = sp.get('org_id')
   const aggregateMode = sp.get('aggregate') === 'cross_venue'
+  // Phase C / PC.1: time window in days. Default 90 (locked 2026-04-28).
+  // Coordinator can pass any positive integer; clamped 1-3650.
+  const windowParam = parseInt(sp.get('window') ?? '', 10)
+  const windowDays = Number.isFinite(windowParam) && windowParam > 0
+    ? Math.min(windowParam, 3650)
+    : 90
 
   const service = createServiceClient()
 
@@ -85,7 +91,7 @@ export async function GET(request: NextRequest) {
     // ---- Compute quality rows per venue (parallel) ----
     const perVenue = await Promise.all(
       venueIds.map(async (vid) => {
-        const rows = await computeSourceQuality(vid)
+        const rows = await computeSourceQuality(vid, { windowDays })
         return rows.map((r) => ({
           ...r,
           venueId: vid,
@@ -117,6 +123,15 @@ export async function GET(request: NextRequest) {
       frictionHits: number
       daysToBookSum: number
       daysToBookCount: number
+      // Phase C aggregations (sums; averages/rates derived at the end).
+      signalsDelivered: number
+      candidatesCreated: number
+      funnelDepthSum: number
+      autoLinkedSum: number
+      firstTouchLeads: number
+      firstTouchTours: number
+      firstTouchBookings: number
+      spendInWindow: number
       venuesContributing: Set<string>
     }>()
     for (const r of flat) {
@@ -131,6 +146,14 @@ export async function GET(request: NextRequest) {
         frictionHits: 0,
         daysToBookSum: 0,
         daysToBookCount: 0,
+        signalsDelivered: 0,
+        candidatesCreated: 0,
+        funnelDepthSum: 0,
+        autoLinkedSum: 0,
+        firstTouchLeads: 0,
+        firstTouchTours: 0,
+        firstTouchBookings: 0,
+        spendInWindow: 0,
         venuesContributing: new Set<string>(),
       }
       a.bookedCount += r.bookedCount
@@ -151,6 +174,16 @@ export async function GET(request: NextRequest) {
         a.daysToBookSum += r.avgDaysToBook * r.bookedCount
         a.daysToBookCount += r.bookedCount
       }
+      // Phase C: sum-of-counts/spend straight, weighted averages for
+      // the per-candidate ratios.
+      a.signalsDelivered += r.signalsDelivered
+      a.candidatesCreated += r.candidatesCreated
+      a.funnelDepthSum += r.avgFunnelDepth * r.candidatesCreated
+      a.autoLinkedSum += r.autoLinkRate * r.candidatesCreated
+      a.firstTouchLeads += r.firstTouchLeads
+      a.firstTouchTours += r.firstTouchTours
+      a.firstTouchBookings += r.firstTouchBookings
+      a.spendInWindow += r.spendInWindow
       a.venuesContributing.add(r.venueId)
       bySource.set(r.source, a)
     }
@@ -165,6 +198,17 @@ export async function GET(request: NextRequest) {
       referralCount: a.referralCount,
       frictionRate: a.bookedCount > 0 ? a.frictionHits / a.bookedCount : 0,
       avgDaysToBook: a.daysToBookCount > 0 ? a.daysToBookSum / a.daysToBookCount : null,
+      signalsDelivered: a.signalsDelivered,
+      candidatesCreated: a.candidatesCreated,
+      avgFunnelDepth: a.candidatesCreated > 0 ? a.funnelDepthSum / a.candidatesCreated : 0,
+      autoLinkRate: a.candidatesCreated > 0 ? a.autoLinkedSum / a.candidatesCreated : 0,
+      firstTouchLeads: a.firstTouchLeads,
+      firstTouchTours: a.firstTouchTours,
+      firstTouchBookings: a.firstTouchBookings,
+      spendInWindow: a.spendInWindow,
+      costPerLead: a.firstTouchLeads > 0 ? a.spendInWindow / a.firstTouchLeads : null,
+      costPerTour: a.firstTouchTours > 0 ? a.spendInWindow / a.firstTouchTours : null,
+      costPerBooking: a.firstTouchBookings > 0 ? a.spendInWindow / a.firstTouchBookings : null,
       // venueId/venueName are slotted with sentinels so the UI can
       // distinguish a cross-venue row from a per-venue one.
       venueId: '__aggregate__',
