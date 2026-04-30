@@ -365,10 +365,34 @@ function parseCalendly(from: string, subject: string, body: string): SchedulingE
   ])
   // Additional Guests block — value is multi-line; grab every email that
   // follows the label and precedes the next known labelled section.
-  const guestsSection = text.match(/additional guests\s*[:：]?\s*\n([\s\S]*?)(?:\n\s*(?:event date|location|invitee time zone|questions|description)|\n\n\n|$)/i)
-  const additionalGuestEmails = guestsSection
-    ? (guestsSection[1].match(EMAIL_RE) ?? []).map((e) => e.toLowerCase())
-    : []
+  //
+  // Hardened (2026-04-30): user-controlled guest comments could
+  // contain "Event date:" or "Location:" inside their text and
+  // truncate the section. Boundary now requires a label to start
+  // at the very beginning of a line (no leading whitespace) AND
+  // followed by `:` to mimic Calendly's actual section-label
+  // formatting. We also extract emails directly from the body if
+  // the section regex fails — emails belonging to a Calendly
+  // event email are extremely unlikely to collide with anything
+  // else, so a forward-only scan limited to the post-label window
+  // is a safer fallback than nothing.
+  const guestsSection = text.match(/additional guests\s*[:：]?\s*\n([\s\S]*?)(?:\n(?:Event date|Location|Invitee time zone|Questions|Description|Event Type|Invitee)\s*[:：]|\n{3,}|$)/i)
+  let additionalGuestEmails: string[] = []
+  if (guestsSection) {
+    additionalGuestEmails = (guestsSection[1].match(EMAIL_RE) ?? []).map((e) => e.toLowerCase())
+  } else if (/additional guests/i.test(text)) {
+    // Section label exists but boundary regex didn't match. Take the
+    // 1KB of text after the label and pull emails forward — bounded
+    // window prevents picking up the venue's reply-block addresses.
+    const labelIdx = text.search(/additional guests\s*[:：]?\s*\n/i)
+    if (labelIdx >= 0) {
+      const window = text.slice(labelIdx, labelIdx + 1000)
+      additionalGuestEmails = (window.match(EMAIL_RE) ?? []).map((e) => e.toLowerCase())
+      if (additionalGuestEmails.length > 0) {
+        console.warn('[parseCalendly] additional-guests boundary regex did not match; used 1KB window fallback')
+      }
+    }
+  }
 
   // Extract Calendly's "Event Type:" label — drives kind classification.
   // Sample values from Rixey: "Rixey Manor Venue Tour",

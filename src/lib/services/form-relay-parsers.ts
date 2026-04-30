@@ -73,6 +73,25 @@ function findAllEmails(text: string): string[] {
 
 /** Grab the first value after a "Label:" style key. Case-insensitive, tolerates
  *  newline-separated or same-line value formats. */
+/**
+ * Does this string look like a person's name? Used to reject regex
+ * captures that latched onto something else (an email, a URL, a
+ * label-without-value, an entire paragraph). Conservative — when in
+ * doubt, reject and let the caller fail loud rather than store
+ * garbage in `people.first_name`.
+ */
+function looksLikeRealName(s: string): boolean {
+  const t = s.trim()
+  if (t.length < 2 || t.length > 80) return false
+  if (!/[A-Za-z]/.test(t)) return false           // must contain a letter
+  if (/@/.test(t)) return false                   // not an email
+  if (/https?:|www\./i.test(t)) return false      // not a URL
+  if (/[\r\n]/.test(t)) return false              // single line
+  // 12+ word "name" is almost certainly a sentence captured by mistake.
+  if (t.split(/\s+/).length > 12) return false
+  return true
+}
+
 function fieldAfter(text: string, label: string): string | null {
   if (!text) return null
   // Match "Label:" then optional whitespace (incl. newline) then value up to newline.
@@ -242,16 +261,28 @@ function parseZola(from: string, body: string): FormRelayLead | null {
 
   // Prospect name(s): "Molly w & Ethan W sent you an inquiry!"
   //                  "Jane Smith sent you an inquiry!"
+  //
+  // Hardened (2026-04-30): allow any non-newline char in the name
+  // — old pattern excluded `!` which truncated names with
+  // intentional punctuation. We then validate the captured name is
+  // sane (length, contains letters, not a URL/email) before using
+  // it. Failures fall through to leadName=null with a console.warn
+  // instead of silently producing garbage downstream.
   let leadName: string | null = null
   let partnerName: string | null = null
-  const sentRe = /([A-Z][^\n\r!]*?)\s+sent you an inquiry/i
+  const sentRe = /^([^\n\r]{2,120}?)\s+sent you an inquiry/im
   const sentMatch = body.match(sentRe)
   if (sentMatch) {
-    const whole = sentMatch[1].trim()
-    // "X & Y" or "X and Y" → split.
-    const split = whole.split(/\s*(?:&|\band\b)\s*/i)
-    leadName = split[0]?.trim() || null
-    partnerName = split[1]?.trim() || null
+    const whole = sentMatch[1].trim().replace(/[!?.,;:]+$/, '')
+    if (looksLikeRealName(whole)) {
+      const split = whole.split(/\s*(?:&|\band\b)\s*/i)
+      leadName = (split[0]?.trim() && looksLikeRealName(split[0])) ? split[0].trim() : null
+      partnerName = (split[1]?.trim() && looksLikeRealName(split[1])) ? split[1].trim() : null
+    } else {
+      console.warn('[parseZola] sent-you-an-inquiry capture rejected by name validator:', whole.slice(0, 80))
+    }
+  } else if (/sent you an inquiry/i.test(body)) {
+    console.warn('[parseZola] body contains "sent you an inquiry" but name regex did not match')
   }
 
   // "Desired day:", "Guest count:", "Overall budget:".
@@ -259,10 +290,29 @@ function parseZola(from: string, body: string): FormRelayLead | null {
   const guestCount = fieldAfter(body, 'Guest count')
   const budget = fieldAfter(body, 'Overall budget') || fieldAfter(body, 'Budget')
 
-  // Their note is wrapped in curly quotes after "Their note to you".
+  // Their note follows "Their note to you" and is typically wrapped
+  // in curly quotes — but a user note that itself contains a curly
+  // close-quote would truncate. Two-stage extraction (2026-04-30):
+  //   1. Try the quoted form (preferred — it's the cleanest signal)
+  //   2. Fallback: everything after the label up to the next known
+  //      Zola section label, then strip any leading/trailing quote
+  //      character. We bound by length to refuse pathological matches.
   let note: string | null = null
-  const noteMatch = body.match(/Their note to you\s*[\r\n]+[""“]([\s\S]*?)[""”]/i)
-  if (noteMatch) note = noteMatch[1].trim()
+  const noteQuotedRe = /Their note to you\s*[\r\n]+["“”]([\s\S]{1,2000}?)["“”]\s*(?:\r?\n|$)/i
+  const noteFallbackRe = /Their note to you\s*[\r\n]+([\s\S]{1,2000}?)(?:\r?\n\s*(?:Desired day|Guest count|Overall budget|Wedding date|Budget|Personal email|Phone)|\r?\n\s*-{3,}|$)/i
+  const quotedMatch = body.match(noteQuotedRe)
+  if (quotedMatch) {
+    note = quotedMatch[1].trim() || null
+  } else {
+    const fallback = body.match(noteFallbackRe)
+    if (fallback) {
+      note = fallback[1].replace(/^["“”'']+|["“”'']+$/g, '').trim() || null
+      if (note) console.warn('[parseZola] note extracted via fallback (quoted form did not match)')
+    } else if (/Their note to you/i.test(body)) {
+      console.warn('[parseZola] body has "Their note to you" but neither quoted nor fallback regex matched')
+    }
+  }
+  if (note && note.length > 2000) note = note.slice(0, 2000) + '…'
 
   return {
     source: 'zola',
