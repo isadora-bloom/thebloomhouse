@@ -940,6 +940,26 @@ export async function processIncomingEmail(
         .update({ wedding_id: weddingId })
         .eq('id', interactionId)
 
+      // Sweep prior orphan interactions for this person and attach
+      // them to the new wedding. 2026-04-30: Ryan Schubert at Rixey
+      // had a calculator estimate (Apr 15, $14,663) sitting orphan
+      // because the calculator parser failed to fire; the eventual
+      // wedding creation 8 days later didn't pick it up. Without
+      // this sweep, calculator submissions / brain-dump CSV imports
+      // / classification-misses that happen before the wedding gets
+      // created stay invisible to coordinators forever.
+      if (personId) {
+        try {
+          await supabase
+            .from('interactions')
+            .update({ wedding_id: weddingId })
+            .eq('person_id', personId)
+            .is('wedding_id', null)
+        } catch (err) {
+          console.warn('[email-pipeline] orphan-sweep failed for person', personId, ':', err)
+        }
+      }
+
       // Create initial engagement event + trigger heat recalculation.
       // Without the recalc, weddings.heat_score sat at 0 despite the
       // +40 initial_inquiry event existing — leads page hid them behind
@@ -1289,6 +1309,23 @@ export async function processIncomingEmail(
           await supabase.from('people').update({ wedding_id: weddingId, role: 'partner1' }).eq('id', personId)
         }
         await supabase.from('interactions').update({ wedding_id: weddingId, person_id: personId }).eq('id', interactionId)
+
+        // Same orphan sweep as the new-inquiry path. A scheduling-
+        // event wedding (Calendly tour booking → wedding creation)
+        // routinely picks up prior calculator-submission / form-relay
+        // orphans for the same person.
+        if (personId) {
+          try {
+            await supabase
+              .from('interactions')
+              .update({ wedding_id: weddingId })
+              .eq('person_id', personId)
+              .is('wedding_id', null)
+          } catch (err) {
+            console.warn('[email-pipeline] scheduling-path orphan-sweep failed:', err)
+          }
+        }
+
         // Seed partner2 from the Calendly extras if present — most
         // Calendly booking forms capture the second partner's name.
         if (schedulingEvent.extras?.partnerName) {

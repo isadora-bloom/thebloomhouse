@@ -362,17 +362,35 @@ const CALCULATOR_SUBJECT_KEYWORDS = [
   'inquiry summary',
 ]
 
-function looksLikeCalculator(subject: string, body: string): boolean {
+/**
+ * Distinguishes "definitely a calculator" from "looks calculator-shaped."
+ *   strong: body contains an unmistakable calculator marker
+ *           ("NEW CALCULATOR SUBMISSION", "Estimated total: $", etc).
+ *           Trust this regardless of the From-address — many venues
+ *           use a service that emails from an alias not registered in
+ *           gmail_connections (Rixey 2026-04-30: hello@rixeymanor.com
+ *           sends estimates but only info@rixeymanor.com is connected).
+ *   weak:   subject + section-keyword + dollar shape. Could be a
+ *           passthrough or quote-style email; require venueOwn to
+ *           guard against false positives.
+ */
+function detectCalculator(subject: string, body: string): { confidence: 'strong' | 'weak' } | null {
   const s = (subject || '').toLowerCase()
   const b = (body || '').toLowerCase()
-  if (CALCULATOR_SUBJECT_KEYWORDS.some((k) => s.includes(k))) return true
-  if (CALCULATOR_BODY_KEYWORDS.some((k) => b.includes(k))) return true
-  if (CALCULATOR_BODY_PATTERNS.some((r) => r.test(body))) return true
-  // Generic shape: body contains "Season" + "Guests" + a dollar total.
+  // Strong markers — body shape unambiguously a calculator.
+  if (b.includes('new calculator submission')) return { confidence: 'strong' }
+  if (/estimated total[\s:]*\$/i.test(body)) return { confidence: 'strong' }
+  if (b.includes('retainer on booking')) return { confidence: 'strong' }
+  if (b.includes("here's a summary of what you put together")) return { confidence: 'strong' }
+  if (CALCULATOR_BODY_PATTERNS.some((r) => r.test(body))) return { confidence: 'strong' }
+  // Weak shape: subject keyword + section content. Needs venueOwn confirmation.
+  if (CALCULATOR_SUBJECT_KEYWORDS.some((k) => s.includes(k))) return { confidence: 'weak' }
+  if (CALCULATOR_BODY_KEYWORDS.some((k) => b.includes(k))) return { confidence: 'weak' }
   const hasSeason = /\bseason\b/i.test(body)
   const hasGuests = /\bguests?\b/i.test(body)
   const hasTotal = /\$\s?\d[\d,]{2,}/.test(body)
-  return hasSeason && hasGuests && hasTotal
+  if (hasSeason && hasGuests && hasTotal) return { confidence: 'weak' }
+  return null
 }
 
 function parseVenueCalculator(
@@ -383,8 +401,17 @@ function parseVenueCalculator(
   venueOwn: Set<string>
 ): FormRelayLead | null {
   const fromAddr = extractEmailAddress(from)
-  if (!venueOwn.has(fromAddr)) return null
-  if (!looksLikeCalculator(subject, body)) return null
+  const detection = detectCalculator(subject, body)
+  if (!detection) return null
+  // Weak detection requires the From-address to be venue-owned —
+  // protects against false positives on quote-shaped emails from
+  // unrelated services. Strong detection (unambiguous body markers)
+  // bypasses this so calculator emails sent from un-registered
+  // venue aliases (e.g. hello@ when only info@ is in
+  // gmail_connections) still get parsed. The downstream extraction
+  // still requires a non-venue-own email in the body, so we can't
+  // accidentally attribute a calculator to a venue insider.
+  if (detection.confidence === 'weak' && !venueOwn.has(fromAddr)) return null
 
   // First non-venue recipient in the To header. "To" may be comma-separated
   // and may contain "Name <email>" pairs.
