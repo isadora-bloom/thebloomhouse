@@ -1204,17 +1204,22 @@ export async function processIncomingEmail(
   if (schedulingEvent && !weddingId && POSITIVE_KINDS.has(schedulingEvent.kind)) {
     try {
       const targetStatus = eventKindToStatus(schedulingEvent.kind) ?? 'tour_scheduled'
-      // 2026-04-30: a Calendly notification email arriving Mar 29 about a
-      // tour scheduled for Apr 13 is one event, two timestamps: when we
-      // learned (email.date) vs when the event actually happens
-      // (schedulingEvent.eventDatetime). Prior code used email.date for
-      // every downstream field, collapsing the journey rendering
-      // ("Tour booked Mar 29" instead of "Tour booked for Apr 13") and
-      // breaking ±72h matching. New convention: prefer eventDatetime
-      // for everything event-time-shaped; the email arrival stays as a
-      // fallback only for inquiry_date when eventDatetime is absent.
-      const eventOccurredAt = chooseEventTime(schedulingEvent.eventDatetime, email.date)
-      const inquiryDateForSchedulingEvent = eventOccurredAt ?? new Date().toISOString()
+      // 2026-04-30 corrected: a Calendly notification arriving Mar 29
+      // about a tour for Apr 13 carries TWO distinct timestamps that
+      // serve different fields:
+      //   email.date (Mar 29)           = when the booking happened
+      //                                    (when the customer clicked
+      //                                    Book in Calendly, ≈ when
+      //                                    they inquired)
+      //   eventDatetime (Apr 13 6pm)    = when the tour actually
+      //                                    happens / happened
+      // wedding.inquiry_date and tour-booking touchpoints take
+      // email.date. Only the tour itself (tour_date, tour_conducted)
+      // takes eventDatetime. Earlier sweep (a9b48ed) wrongly unified
+      // these on eventDatetime — caused journeys where the tour
+      // appeared completed BEFORE the inquiry was received.
+      const inquiryDateForSchedulingEvent =
+        chooseEventTime(email.date) ?? new Date().toISOString()
       const { data: newWedding } = await supabase
         .from('weddings')
         .insert({
@@ -1344,14 +1349,27 @@ export async function processIncomingEmail(
   if (schedulingEvent && weddingId) {
     try {
       const eventType = eventKindToEngagementType(schedulingEvent.kind)
-      // 2026-04-30: same root cause as the new-wedding path above.
-      // engagement_events.occurred_at and wedding_touchpoints.occurred_at
-      // both represent "when did the event happen", which for a
-      // Calendly-emitted scheduling email is the schedulingEvent's own
-      // eventDatetime, NOT the moment the notification arrived in our
-      // inbox. Keep email.date as a fallback for the rare case Calendly
-      // omits the event datetime from the body.
-      const schedulingOccurredAt = chooseEventTime(schedulingEvent.eventDatetime, email.date) ?? new Date().toISOString()
+      // 2026-04-30 corrected: which timestamp depends on what the
+      // event represents:
+      //   tour_scheduled / contract_sent / payment_received   →
+      //     these are "the booking action happened" — use email.date
+      //     (the moment the customer's action surfaced to us).
+      //   tour_completed / tour_cancelled / final_walkthrough /
+      //   pre_wedding_event / planning_meeting / contract_signed →
+      //     these are "the event itself happened" — use the
+      //     scheduledDatetime (when the tour / walkthrough / meeting
+      //     actually takes place).
+      // Earlier sweep (a9b48ed) used eventDatetime for everything
+      // which produced "Tour booked Apr 13" (wrong — booking
+      // happened Mar 29 when the customer clicked Book in Calendly).
+      const TOUR_HAPPENED_KINDS = new Set([
+        'tour_completed', 'tour_cancelled', 'final_walkthrough',
+        'pre_wedding_event', 'planning_meeting', 'contract_signed',
+      ])
+      const useEventDatetime = TOUR_HAPPENED_KINDS.has(schedulingEvent.kind)
+      const schedulingOccurredAt = useEventDatetime
+        ? (chooseEventTime(schedulingEvent.eventDatetime, email.date) ?? new Date().toISOString())
+        : (chooseEventTime(email.date) ?? new Date().toISOString())
       await recordEngagementEventsBatch(venueId, weddingId, [{
         eventType,
         metadata: {
