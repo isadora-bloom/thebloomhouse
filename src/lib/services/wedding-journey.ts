@@ -311,6 +311,17 @@ export async function getWeddingJourney(
   const events: JourneyEvent[] = []
 
   // ---- Touchpoints (funnel-step truth) ----
+  // Inquiry anchor for pre/post-inquiry classification of platform
+  // signals. Platform signals BEFORE the inquiry are attribution
+  // (pre-inquiry engagement that led to the inquiry); signals AFTER
+  // are nurture (continued browsing post-inquiry, e.g. comparison
+  // shopping). Without this distinction every Knot view reads as
+  // "pre-inquiry" even when chronology says otherwise — Ryan
+  // Schubert's Apr 14 Knot saves on a Mar 29 Calendly inquiry +
+  // Apr 13 tour are clearly post-inquiry browsing.
+  const inquiryAnchorMs = wedding.inquiry_date
+    ? new Date(wedding.inquiry_date).getTime()
+    : null
   for (const tp of (touchpointRes.data ?? []) as TouchpointRow[]) {
     const meta = tp.metadata ?? {}
     // Phase B platform-signal touchpoints stuff action_class +
@@ -334,13 +345,25 @@ export async function getWeddingJourney(
     } else {
       title = touchpointLabel(tp.touch_type)
     }
+    let description: string | undefined
+    if (isPlatformSignal) {
+      const tpMs = new Date(tp.occurred_at).getTime()
+      if (inquiryAnchorMs === null) {
+        description = 'Platform engagement'
+      } else if (tpMs < inquiryAnchorMs) {
+        description = 'Pre-inquiry platform engagement'
+      } else {
+        description = 'Post-inquiry platform engagement'
+      }
+    } else if (tp.medium) {
+      description = `via ${tp.medium}`
+    }
     events.push({
       id: `tp-${tp.id}`,
       timestamp: tp.occurred_at,
       category: 'funnel_step',
       title,
-      description:
-        isPlatformSignal ? 'Pre-inquiry platform engagement' : tp.medium ? `via ${tp.medium}` : undefined,
+      description,
       source: tp.source,
       actor: tp.touch_type === 'inquiry' ? 'couple' : 'system',
       evidence: { ...meta, touch_type: tp.touch_type, medium: tp.medium },
