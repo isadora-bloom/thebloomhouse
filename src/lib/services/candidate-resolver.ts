@@ -53,6 +53,16 @@ const TIER_1_NAME_WINDOW_HOURS = 72
 // the 5-30 day window.
 const TIER_2_WIDE_WINDOW_HOURS = 30 * 24
 const AI_CONFIDENT_THRESHOLD = 70
+// The AI adjudicator's system prompt is calibrated for "2 or more"
+// candidate weddings — in practice 2-5 at the Tier 1 ±72h scope.
+// At Tier 2 ±30d a common name + busy venue could in theory match
+// many more, which would balloon the prompt and degrade AI confidence
+// calibration (picking 1-of-15 is materially harder than 1-of-3).
+// Above this cap, defer to coordinator without invoking AI. Picked
+// 12 as a soft ceiling — high enough that real match sets always
+// fit, low enough to catch a pathological case before it costs
+// money or returns garbage.
+const MAX_AI_CANDIDATES = 12
 
 type Tier =
   | 'tier_1_exact'
@@ -623,6 +633,17 @@ async function runAIAdjudication(args: {
     .eq('id', candidate.id)
 
   if (skipAI) {
+    summary.deferred_to_ai++
+    return summary
+  }
+
+  // Pathological-fanout guard. See MAX_AI_CANDIDATES. We never invoke
+  // the AI on a set bigger than the prompt was calibrated for —
+  // coordinator gets the candidate in the review queue instead.
+  if (matches.length > MAX_AI_CANDIDATES) {
+    summary.errors.push(
+      `ai adjudicate ${candidate.id}: ${matches.length} candidate weddings exceeds MAX_AI_CANDIDATES=${MAX_AI_CANDIDATES}, deferring to coordinator`,
+    )
     summary.deferred_to_ai++
     return summary
   }
