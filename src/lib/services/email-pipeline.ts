@@ -38,6 +38,7 @@ import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consul
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
 import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
+import { chooseEventTime, parseEventTime } from '@/lib/services/event-time'
 import { detectFormRelay, type FormRelayLead } from '@/lib/services/form-relay-parsers'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
@@ -859,14 +860,12 @@ export async function processIncomingEmail(
     // arrived. On a Gmail history backfill (e.g. Rixey 2026-04-24),
     // 77 weddings of varying real ages all collapsed to the same
     // import day, breaking ±72h cross-platform matching against
-    // platform-side candidate timelines (Knot, Instagram, etc.).
-    // Now: use the email's RFC-2822 Date header. Fall back to NOW()
-    // only if the header is missing or unparseable.
-    const parsedEmailDate = email.date ? new Date(email.date) : null
-    const inquiryDateValue =
-      parsedEmailDate && !isNaN(parsedEmailDate.getTime())
-        ? parsedEmailDate.toISOString()
-        : new Date().toISOString()
+    // platform-side candidate timelines. For the cold-inquiry path
+    // (no scheduling event, no form-relay) the email arrival IS the
+    // inquiry, so email.date is the right anchor; NOW() stays as the
+    // last-resort fallback when the Date header is missing or
+    // unparseable.
+    const inquiryDateValue = chooseEventTime(email.date) ?? new Date().toISOString()
     const { data: newWedding } = await supabase
       .from('weddings')
       .insert({
@@ -1205,13 +1204,25 @@ export async function processIncomingEmail(
   if (schedulingEvent && !weddingId && POSITIVE_KINDS.has(schedulingEvent.kind)) {
     try {
       const targetStatus = eventKindToStatus(schedulingEvent.kind) ?? 'tour_scheduled'
+      // 2026-04-30: a Calendly notification email arriving Mar 29 about a
+      // tour scheduled for Apr 13 is one event, two timestamps: when we
+      // learned (email.date) vs when the event actually happens
+      // (schedulingEvent.eventDatetime). Prior code used email.date for
+      // every downstream field, collapsing the journey rendering
+      // ("Tour booked Mar 29" instead of "Tour booked for Apr 13") and
+      // breaking ±72h matching. New convention: prefer eventDatetime
+      // for everything event-time-shaped; the email arrival stays as a
+      // fallback only for inquiry_date when eventDatetime is absent.
+      const eventOccurredAt = chooseEventTime(schedulingEvent.eventDatetime, email.date)
+      const inquiryDateForSchedulingEvent = eventOccurredAt ?? new Date().toISOString()
       const { data: newWedding } = await supabase
         .from('weddings')
         .insert({
           venue_id: venueId,
           status: targetStatus,
           source: schedulingEvent.source,
-          inquiry_date: email.date,
+          inquiry_date: inquiryDateForSchedulingEvent,
+          tour_date: parseEventTime(schedulingEvent.eventDatetime),
           heat_score: 0,
           temperature_tier: 'cool',
         })
@@ -1333,6 +1344,14 @@ export async function processIncomingEmail(
   if (schedulingEvent && weddingId) {
     try {
       const eventType = eventKindToEngagementType(schedulingEvent.kind)
+      // 2026-04-30: same root cause as the new-wedding path above.
+      // engagement_events.occurred_at and wedding_touchpoints.occurred_at
+      // both represent "when did the event happen", which for a
+      // Calendly-emitted scheduling email is the schedulingEvent's own
+      // eventDatetime, NOT the moment the notification arrived in our
+      // inbox. Keep email.date as a fallback for the rare case Calendly
+      // omits the event datetime from the body.
+      const schedulingOccurredAt = chooseEventTime(schedulingEvent.eventDatetime, email.date) ?? new Date().toISOString()
       await recordEngagementEventsBatch(venueId, weddingId, [{
         eventType,
         metadata: {
@@ -1340,8 +1359,9 @@ export async function processIncomingEmail(
           source: schedulingEvent.source,
           scheduling_kind: schedulingEvent.kind,
           event_datetime: schedulingEvent.eventDatetime,
+          email_arrival: email.date,
         },
-      }], email.date)
+      }], schedulingOccurredAt)
 
       // Mirror to wedding_touchpoints. Source is the scheduling tool
       // ('calendly' / 'acuity' / etc.), not the wedding's first-touch
@@ -1353,11 +1373,12 @@ export async function processIncomingEmail(
         await recordTouchpointsForEngagementEvents(venueId, weddingId, [{
           eventType,
           source: schedulingEvent.source,
-          occurredAt: email.date,
+          occurredAt: schedulingOccurredAt,
           metadata: {
             interaction_id: interactionId,
             scheduling_kind: schedulingEvent.kind,
             event_datetime: schedulingEvent.eventDatetime,
+            email_arrival: email.date,
           },
         }])
       } catch (err) {
@@ -1391,9 +1412,9 @@ export async function processIncomingEmail(
             const { recordStatusChangeTouchpoint } = await import('@/lib/services/touchpoints')
             await recordStatusChangeTouchpoint(venueId, weddingId, targetStatus, {
               source: schedulingEvent.source,
-              occurredAt: email.date,
+              occurredAt: schedulingOccurredAt,
               medium: 'email',
-              metadata: { interaction_id: interactionId, scheduling_kind: schedulingEvent.kind },
+              metadata: { interaction_id: interactionId, scheduling_kind: schedulingEvent.kind, email_arrival: email.date },
             })
           } catch (err) {
             console.warn('[pipeline] status-change touchpoint failed:', err)

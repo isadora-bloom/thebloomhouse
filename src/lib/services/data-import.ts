@@ -874,10 +874,21 @@ export async function importSocialPosts(
         continue
       }
 
+      // 2026-04-30: was `parseDatetime(row.posted_at) || new Date()`.
+      // The NOW() fallback collapsed unparseable historical posts to
+      // import day, which then participated in date-windowed analytics
+      // as if they happened today. Reject the row instead — the
+      // posted_at field is the whole point of importing a post.
+      const parsedPostedAt = parseDatetime(row.posted_at || '')
+      if (!parsedPostedAt) {
+        errors.push(`Row ${i + 1}: Unparseable posted_at "${row.posted_at}", skipping`)
+        skipped++
+        continue
+      }
       const { error } = await supabase.from('social_posts').insert({
         venue_id: venueId,
         platform,
-        posted_at: parseDatetime(row.posted_at || '') || new Date().toISOString(),
+        posted_at: parsedPostedAt,
         caption: row.caption || null,
         post_url: row.post_url || null,
         likes: parseInt_(row.likes || '') || 0,
@@ -955,7 +966,18 @@ export async function importReviews(
       else if (['yelp'].includes(rawSource)) source = 'yelp'
       else if (['facebook', 'fb'].includes(rawSource)) source = 'facebook'
 
-      const reviewDate = parseDate(row.review_date || '') || new Date().toISOString().split('T')[0]
+      // 2026-04-30: was `parseDate(row.review_date) || new Date().split('T')[0]`.
+      // The NOW() fallback put historical reviews on the import day,
+      // which corrupted the dedup key (source + reviewer_name +
+      // review_date) — re-imports either created duplicates or
+      // silently skipped depending on the prior day's import. Reject
+      // the row instead.
+      const reviewDate = parseDate(row.review_date || '')
+      if (!reviewDate) {
+        errors.push(`Row ${i + 1}: Unparseable review_date "${row.review_date}", skipping`)
+        skipped++
+        continue
+      }
 
       // Dedup: same source + reviewer + date
       const reviewerName = (row.reviewer_name || '').trim()

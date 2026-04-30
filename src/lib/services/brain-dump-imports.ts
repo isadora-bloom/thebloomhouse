@@ -213,7 +213,13 @@ export async function importLeads(args: {
       }
 
       // Capture the notes field as an interaction so Sage has context.
-      if (r.notes) {
+      // 2026-04-30: only insert when we have a real inquiryDate from
+      // the CRM row. Previously fell back to NOW(), which dated every
+      // unparseable-date note to import day — confusing the journey
+      // chronology after the fact (a historical note rendered as
+      // "today's note"). Without a date, the note is still on
+      // wedding.notes; losing the interaction row is acceptable.
+      if (r.notes && inquiryDate?.iso) {
         await supabase.from('interactions').insert({
           venue_id: venueId,
           wedding_id: wedding.id,
@@ -222,7 +228,7 @@ export async function importLeads(args: {
           subject: 'Historical note from CRM import',
           full_body: r.notes,
           body_preview: r.notes.slice(0, 200),
-          timestamp: inquiryDate?.iso ? `${inquiryDate.iso}T00:00:00Z` : new Date().toISOString(),
+          timestamp: `${inquiryDate.iso}T00:00:00Z`,
           from_email: email1,
           from_name: r.client_name ?? null,
         })

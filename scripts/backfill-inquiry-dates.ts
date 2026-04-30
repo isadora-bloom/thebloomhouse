@@ -1,23 +1,30 @@
-// Backfill weddings.inquiry_date from the earliest inbound interaction's
-// timestamp. Pre-2026-04-30 the email-pipeline stamped inquiry_date to
-// wall-clock NOW() instead of the email's actual date — see the fix in
-// src/lib/services/email-pipeline.ts. On Rixey's 2026-04-24 Gmail
-// backfill that collapsed 77 weddings of varying real ages onto a single
-// day, breaking cross-platform matching.
+// Backfill weddings.inquiry_date from the most authoritative source
+// available, in priority order:
 //
-// Strategy: for each wedding at the venue, compute the earliest
-// `interactions.timestamp` where direction='inbound'. If that timestamp
-// is meaningfully earlier than the current `inquiry_date` (>2 days
-// older), update inquiry_date to it. This is conservative — we don't
-// touch weddings whose current date already lines up.
+//   1. wedding_touchpoints.occurred_at WHERE touch_type='inquiry'
+//      — the touchpoint mapper has already identified this as the
+//      inquiry event. Most reliable when present.
 //
-// Skips weddings with no inbound interaction (RSVPs, manual creates,
-// imported leads). Also skips weddings whose current inquiry_date is
-// already <= the earliest inbound (the existing date is fine or already
-// older).
+//   2. Earliest inbound interaction.timestamp where the linked
+//      intelligence_extractions classification = 'new_inquiry'
+//      — picks the actual inquiry email when there are also
+//      Calendly notifications, follow-up replies, etc.
+//
+//   3. Earliest inbound interaction.timestamp (any classification)
+//      — last-resort proxy for weddings without classification rows.
+//
+// 2026-04-30: previous version of this script used (3) only and
+// regressed weddings whose earliest inbound was a Calendly tour-
+// notification email. Ryan Schubert's wedding had inquiry_date set
+// to Mar 29 22:40 (Calendly notification day) instead of Apr 23 16:20
+// (real inquiry day) until this rewrite.
+//
+// Update threshold: > 48h drift between current inquiry_date and the
+// chosen new value. Below that, leave the row alone (already accurate
+// or close enough; not worth churning).
 //
 // Usage:
-//   npx tsx scripts/backfill-inquiry-dates.ts --dry-run
+//   npx tsx scripts/backfill-inquiry-dates.ts                # dry-run
 //   npx tsx scripts/backfill-inquiry-dates.ts --apply
 //   npx tsx scripts/backfill-inquiry-dates.ts --apply --venue <uuid>
 import { createClient } from '@supabase/supabase-js'
@@ -43,14 +50,50 @@ const apply = args.includes('--apply')
 const venueIdx = args.indexOf('--venue')
 const venueId = venueIdx >= 0 ? args[venueIdx + 1] : 'f3d10226-4c5c-47ad-b89b-98ad63842492'
 
-// Drift threshold: only update if the earliest inbound is >2 days
-// older than the current inquiry_date. Below this, treat as noise
-// (clock skew, slow imports). Above it, almost certainly stale.
 const MIN_DRIFT_HOURS = 48
 
 interface Wedding {
   id: string
   inquiry_date: string | null
+}
+
+type Source = 'inquiry_touchpoint' | 'classified_interaction' | 'earliest_interaction' | 'none'
+
+async function pickInquiryDate(weddingId: string): Promise<{ value: string | null; source: Source }> {
+  // Priority 1: inquiry touchpoint
+  const { data: tp } = await sb
+    .from('wedding_touchpoints')
+    .select('occurred_at')
+    .eq('wedding_id', weddingId)
+    .eq('touch_type', 'inquiry')
+    .order('occurred_at', { ascending: true })
+    .limit(1)
+  const tpRow = tp?.[0] as { occurred_at: string | null } | undefined
+  if (tpRow?.occurred_at) return { value: tpRow.occurred_at, source: 'inquiry_touchpoint' }
+
+  // Priority 2: earliest inbound interaction with new_inquiry
+  // classification.
+  const { data: classified } = await sb
+    .from('interactions')
+    .select('id, timestamp, intelligence_extractions(classification)')
+    .eq('wedding_id', weddingId)
+    .eq('direction', 'inbound')
+    .not('timestamp', 'is', null)
+    .order('timestamp', { ascending: true })
+  type Row = { id: string; timestamp: string; intelligence_extractions?: Array<{ classification: string | null }> | { classification: string | null } | null }
+  for (const r of (classified ?? []) as Row[]) {
+    const ext = r.intelligence_extractions
+    const cls = Array.isArray(ext) ? ext[0]?.classification : ext?.classification
+    if (cls === 'new_inquiry' && r.timestamp) {
+      return { value: r.timestamp, source: 'classified_interaction' }
+    }
+  }
+
+  // Priority 3: earliest inbound, any classification
+  const earliest = ((classified ?? []) as Row[])[0]
+  if (earliest?.timestamp) return { value: earliest.timestamp, source: 'earliest_interaction' }
+
+  return { value: null, source: 'none' }
 }
 
 async function main() {
@@ -61,9 +104,15 @@ async function main() {
   let scanned = 0
   let needsUpdate = 0
   let updated = 0
-  let noInbound = 0
   let alreadyAccurate = 0
-  const samples: Array<{ id: string; was: string; will: string; driftDays: number }> = []
+  let noSource = 0
+  const sourceCounts: Record<Source, number> = {
+    inquiry_touchpoint: 0,
+    classified_interaction: 0,
+    earliest_interaction: 0,
+    none: 0,
+  }
+  const samples: Array<{ id: string; was: string; will: string; driftDays: number; source: Source }> = []
 
   for (;;) {
     const { data: weddings, error } = await sb
@@ -81,51 +130,41 @@ async function main() {
 
     for (const w of page) {
       scanned++
-
-      const { data: firstInbound } = await sb
-        .from('interactions')
-        .select('timestamp')
-        .eq('wedding_id', w.id)
-        .eq('direction', 'inbound')
-        .not('timestamp', 'is', null)
-        .order('timestamp', { ascending: true })
-        .limit(1)
-
-      const earliestInboundStr = (firstInbound?.[0] as { timestamp: string } | undefined)?.timestamp
-      if (!earliestInboundStr) {
-        noInbound++
+      const { value, source } = await pickInquiryDate(w.id)
+      sourceCounts[source]++
+      if (!value) {
+        noSource++
         continue
       }
 
       const currentTs = w.inquiry_date ? new Date(w.inquiry_date).getTime() : null
-      const earliestTs = new Date(earliestInboundStr).getTime()
-      if (isNaN(earliestTs)) {
-        noInbound++
-        continue
-      }
+      const newTs = new Date(value).getTime()
+      if (isNaN(newTs)) continue
 
-      // Only fix if the earliest inbound is materially earlier than
-      // the stored inquiry_date.
-      if (currentTs !== null && earliestTs >= currentTs - MIN_DRIFT_HOURS * 3_600_000) {
+      // Skip if drift is below threshold (already accurate enough).
+      if (currentTs !== null && Math.abs(newTs - currentTs) < MIN_DRIFT_HOURS * 3_600_000) {
         alreadyAccurate++
         continue
       }
 
-      const driftHours = currentTs !== null ? (currentTs - earliestTs) / 3_600_000 : Infinity
+      const driftDays = currentTs !== null
+        ? Math.round(((newTs - currentTs) / 86_400_000) * 10) / 10
+        : 0
       needsUpdate++
-      if (samples.length < 5) {
+      if (samples.length < 8) {
         samples.push({
           id: w.id,
           was: w.inquiry_date ?? 'null',
-          will: earliestInboundStr,
-          driftDays: Math.round((driftHours / 24) * 10) / 10,
+          will: value,
+          driftDays,
+          source,
         })
       }
 
       if (apply) {
         const { error: updErr } = await sb
           .from('weddings')
-          .update({ inquiry_date: earliestInboundStr })
+          .update({ inquiry_date: value })
           .eq('id', w.id)
         if (updErr) {
           console.error(`  update ${w.id}: ${updErr.message}`)
@@ -139,17 +178,22 @@ async function main() {
     offset += PAGE
   }
 
-  console.log(`scanned:           ${scanned}`)
-  console.log(`no inbound email:  ${noInbound}`)
-  console.log(`already accurate:  ${alreadyAccurate}`)
-  console.log(`needs update:      ${needsUpdate}`)
-  if (apply) console.log(`updated:           ${updated}`)
+  console.log(`scanned:               ${scanned}`)
+  console.log(`already accurate:      ${alreadyAccurate}`)
+  console.log(`needs update:          ${needsUpdate}`)
+  if (apply) console.log(`updated:               ${updated}`)
+  console.log(`no source available:   ${noSource}`)
+  console.log(`\nsource distribution (per wedding):`)
+  console.log(`  inquiry_touchpoint:  ${sourceCounts.inquiry_touchpoint}`)
+  console.log(`  classified inbound:  ${sourceCounts.classified_interaction}`)
+  console.log(`  earliest inbound:    ${sourceCounts.earliest_interaction}`)
+  console.log(`  none:                ${sourceCounts.none}`)
   if (samples.length > 0) {
     console.log(`\nfirst ${samples.length} drift sample${samples.length === 1 ? '' : 's'}:`)
     for (const s of samples) {
-      console.log(`  ${s.id}`)
+      console.log(`  ${s.id} (source: ${s.source}, drift ${s.driftDays > 0 ? '+' : ''}${s.driftDays}d)`)
       console.log(`    was:  ${s.was}`)
-      console.log(`    will: ${s.will}  (drift ${s.driftDays}d)`)
+      console.log(`    will: ${s.will}`)
     }
   }
   if (!apply && needsUpdate > 0) {
