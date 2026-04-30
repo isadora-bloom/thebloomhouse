@@ -578,7 +578,8 @@ export async function runCsvImport(args: {
               resolverStats.resolved_tier_1_exact +
               resolverStats.resolved_tier_1_name_window +
               resolverStats.resolved_tier_1_full_name +
-              resolverStats.resolved_tier_2_ai,
+              resolverStats.resolved_tier_2_ai +
+              resolverStats.resolved_tier_2_wide_ai,
             deferred_to_ai: resolverStats.deferred_to_ai,
             conflicts_flagged: resolverStats.conflicts_flagged,
             no_match: resolverStats.no_match,

@@ -474,7 +474,7 @@ export async function recalculateHeatScore(
     .from('attribution_events')
     .select('id', { count: 'exact', head: true })
     .eq('wedding_id', weddingId)
-    .eq('tier', 'tier_2_ai')
+    .in('tier', ['tier_2_ai', 'tier_2_wide_ai'])
     .is('reverted_at', null)
   // AI bonus capped at +6 (max 2 matches contribute) so heavy AI
   // attribution can't dominate the 20-point Phase B headroom.

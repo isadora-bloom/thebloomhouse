@@ -45,6 +45,13 @@ import {
 import { recalculateHeatScore } from './heat-mapping'
 
 const TIER_1_NAME_WINDOW_HOURS = 72
+// Tier 2 wide-window is 30 days. Catches platform engagements that
+// happened 5-30 days before the inquiry — too wide for auto-link
+// but the right scope to hand to the AI adjudicator with full
+// context. Locked 2026-04-30 after the first Knot import revealed
+// only 4/785 matched at ±72h while hundreds had matches sitting in
+// the 5-30 day window.
+const TIER_2_WIDE_WINDOW_HOURS = 30 * 24
 const AI_CONFIDENT_THRESHOLD = 70
 
 type Tier =
@@ -52,6 +59,7 @@ type Tier =
   | 'tier_1_name_window'
   | 'tier_1_full_name'
   | 'tier_2_ai'
+  | 'tier_2_wide_ai'
   | 'tier_2_coordinator'
   | 'tier_3_manual'
 
@@ -61,6 +69,7 @@ export interface ResolverSummary {
   resolved_tier_1_name_window: number
   resolved_tier_1_full_name: number
   resolved_tier_2_ai: number
+  resolved_tier_2_wide_ai: number
   deferred_to_ai: number
   parked_tier_3: number
   no_match: number
@@ -122,6 +131,7 @@ function emptySummary(): ResolverSummary {
     resolved_tier_1_name_window: 0,
     resolved_tier_1_full_name: 0,
     resolved_tier_2_ai: 0,
+    resolved_tier_2_wide_ai: 0,
     deferred_to_ai: 0,
     parked_tier_3: 0,
     no_match: 0,
@@ -258,6 +268,12 @@ async function findFullNameMatch(
 async function findNameWindowMatches(
   supabase: SupabaseClient,
   c: CandidateRow,
+  windowHours: number = TIER_1_NAME_WINDOW_HOURS,
+  /** Tier 2 callers don't consult `other_candidates_in_window` (the
+   *  output is always routed to AI regardless), so they pass false to
+   *  skip the competitor pre-fetch. Saves one DB roundtrip per
+   *  Tier-2-reaching candidate. */
+  needsCompetitorCheck: boolean = true,
 ): Promise<{ matches: PersonMatch[]; other_candidates_in_window: boolean } | null> {
   if (!c.first_name || !c.last_initial || !c.first_seen) return null
 
@@ -296,15 +312,20 @@ async function findNameWindowMatches(
 
   // Pre-fetch competitor candidates ONCE: same fingerprint, this
   // venue, not us. We'll check window overlap per wedding in memory.
-  const { data: competitorRows } = await supabase
-    .from('candidate_identities')
-    .select('id, first_seen, last_seen')
-    .eq('venue_id', c.venue_id)
-    .eq('first_name', c.first_name!)
-    .eq('last_initial', c.last_initial!)
-    .is('deleted_at', null)
-    .neq('id', c.id)
-  const competitors = (competitorRows ?? []) as Array<{ id: string; first_seen: string | null; last_seen: string | null }>
+  // Skipped on Tier 2 wide-window calls — the caller routes straight
+  // to AI regardless of competitors.
+  let competitors: Array<{ id: string; first_seen: string | null; last_seen: string | null }> = []
+  if (needsCompetitorCheck) {
+    const { data: competitorRows } = await supabase
+      .from('candidate_identities')
+      .select('id, first_seen, last_seen')
+      .eq('venue_id', c.venue_id)
+      .eq('first_name', c.first_name!)
+      .eq('last_initial', c.last_initial!)
+      .is('deleted_at', null)
+      .neq('id', c.id)
+    competitors = (competitorRows ?? []) as Array<{ id: string; first_seen: string | null; last_seen: string | null }>
+  }
 
   const matches: PersonMatch[] = []
   const seenWeddings = new Set<string>()
@@ -323,7 +344,7 @@ async function findNameWindowMatches(
     for (const t of targets) {
       const fsHours = hoursBetween(c.first_seen, t)
       const lsHours = c.last_seen ? hoursBetween(c.last_seen, t) : Infinity
-      if (Math.min(fsHours, lsHours) <= TIER_1_NAME_WINDOW_HOURS) {
+      if (Math.min(fsHours, lsHours) <= windowHours) {
         inWindow = true
         break
       }
@@ -346,7 +367,7 @@ async function findNameWindowMatches(
         for (const t of targets) {
           const fs = hoursBetween(o.first_seen, t)
           const ls = o.last_seen ? hoursBetween(o.last_seen, t) : Infinity
-          if (Math.min(fs, ls) <= TIER_1_NAME_WINDOW_HOURS) {
+          if (Math.min(fs, ls) <= windowHours) {
             other_candidates_in_window = true
             break
           }
@@ -570,6 +591,98 @@ async function writeAttributionEvents(args: {
   return { flagged_conflict: !!conflict_flag }
 }
 
+/**
+ * Hand a set of candidate-wedding matches to the AI adjudicator,
+ * write the attribution if the AI is confident, otherwise mark for
+ * coordinator review. Used by both the Tier 1 ambiguous-multi path
+ * (tier='tier_2_ai') and the Tier 2 wide-window path
+ * (tier='tier_2_wide_ai'). Same writer, different label so the
+ * /intel/sources analytics can split the tight-window AI decisions
+ * from the wide-window ones.
+ *
+ * skipAI=true short-circuits to coordinator queue without invoking
+ * the AI — used by the nightly sweep so it doesn't pay AI cost on
+ * every retry of an ambiguous candidate.
+ */
+async function runAIAdjudication(args: {
+  supabase: SupabaseClient
+  candidate: CandidateRow
+  matches: PersonMatch[]
+  summary: ResolverSummary
+  /** Tier label written on the attribution_event row when the AI
+   *  decides confidently. The two values map to the same writer logic
+   *  and confidence bar; only the analytics slice differs. */
+  tier: 'tier_2_ai' | 'tier_2_wide_ai'
+  skipAI?: boolean
+}): Promise<ResolverSummary> {
+  const { supabase, candidate, matches, summary, tier, skipAI } = args
+
+  await supabase
+    .from('candidate_identities')
+    .update({ review_status: 'needs_review' })
+    .eq('id', candidate.id)
+
+  if (skipAI) {
+    summary.deferred_to_ai++
+    return summary
+  }
+
+  let aiVerdict: { match_wedding_id: string | null; confidence: number; reasoning: string } | null = null
+  try {
+    const candCtx: CandidateContextForAI = {
+      id: candidate.id,
+      source_platform: candidate.source_platform,
+      first_name: candidate.first_name!,
+      last_initial: candidate.last_initial!,
+      last_name: candidate.last_name,
+      state: candidate.state,
+      city: candidate.city,
+      signal_count: candidate.signal_count,
+      funnel_depth: candidate.funnel_depth,
+      action_counts: {},
+      first_seen: candidate.first_seen,
+      last_seen: candidate.last_seen,
+    }
+    const wedCtxs = (await Promise.all(
+      matches.map((m) => fetchWeddingContext(supabase, m.wedding_id)),
+    )).filter((v): v is NonNullable<typeof v> => Boolean(v))
+    aiVerdict = await adjudicateAmbiguousMatch({
+      candidate: candCtx,
+      candidates: wedCtxs,
+      venueId: candidate.venue_id,
+    })
+  } catch (err) {
+    summary.errors.push(`ai adjudicate ${candidate.id}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  if (aiVerdict && aiVerdict.match_wedding_id && aiVerdict.confidence >= AI_CONFIDENT_THRESHOLD) {
+    const chosen = matches.find((m) => m.wedding_id === aiVerdict!.match_wedding_id)
+    if (chosen) {
+      const { flagged_conflict, error } = await writeAttributionEvents({
+        supabase, candidate, match: chosen,
+        tier, decided_by: 'ai', confidence: aiVerdict.confidence,
+        reasoning: aiVerdict.reasoning,
+      })
+      if (error) summary.errors.push(error)
+      else {
+        if (tier === 'tier_2_wide_ai') summary.resolved_tier_2_wide_ai++
+        else summary.resolved_tier_2_ai++
+        if (flagged_conflict) summary.conflicts_flagged++
+      }
+      return summary
+    } else {
+      // AI returned a UUID we don't recognize — hallucination or
+      // race. Log so the coordinator can investigate instead of
+      // silently falling through.
+      summary.errors.push(
+        `ai adjudicate ${candidate.id}: returned unrecognized wedding_id "${aiVerdict.match_wedding_id}" (confidence ${aiVerdict.confidence})`,
+      )
+    }
+  }
+  summary.deferred_to_ai++
+  return summary
+}
+
 export async function resolveCandidate(args: {
   supabase: SupabaseClient
   candidate: CandidateRow
@@ -614,17 +727,16 @@ export async function resolveCandidate(args: {
     return summary
   }
 
-  const nameWindow = await findNameWindowMatches(supabase, candidate)
-  if (!nameWindow) {
-    summary.no_match++
-    return summary
-  }
+  // Tier 1: attempt name + last_initial within ±72h. Single
+  // match with no competing candidates auto-links at high
+  // confidence. Multiple matches go to AI adjudicator. Single
+  // match with competitors goes to coordinator queue.
+  const tier1 = await findNameWindowMatches(supabase, candidate, TIER_1_NAME_WINDOW_HOURS)
 
-  // Single matching wedding, no other candidates competing → Tier 1 auto.
-  if (nameWindow.matches.length === 1 && !nameWindow.other_candidates_in_window) {
+  if (tier1 && tier1.matches.length === 1 && !tier1.other_candidates_in_window) {
     const conf = 90 + Math.min(5, candidate.funnel_depth)
     const { flagged_conflict, error } = await writeAttributionEvents({
-      supabase, candidate, match: nameWindow.matches[0],
+      supabase, candidate, match: tier1.matches[0],
       tier: 'tier_1_name_window', decided_by: 'auto', confidence: conf,
     })
     if (error) summary.errors.push(error)
@@ -635,80 +747,40 @@ export async function resolveCandidate(args: {
     return summary
   }
 
-  // Multiple weddings could match → AI adjudicator picks one (or none).
-  if (nameWindow.matches.length >= 2) {
+  if (tier1 && tier1.matches.length >= 2) {
+    return runAIAdjudication({
+      supabase, candidate, matches: tier1.matches, summary,
+      tier: 'tier_2_ai', skipAI,
+    })
+  }
+
+  if (tier1 && tier1.matches.length === 1 && tier1.other_candidates_in_window) {
     await supabase
       .from('candidate_identities')
       .update({ review_status: 'needs_review' })
       .eq('id', candidate.id)
-
-    if (skipAI) {
-      summary.deferred_to_ai++
-      return summary
-    }
-
-    let aiVerdict: { match_wedding_id: string | null; confidence: number; reasoning: string } | null = null
-    try {
-      const candCtx: CandidateContextForAI = {
-        id: candidate.id,
-        source_platform: candidate.source_platform,
-        first_name: candidate.first_name!,
-        last_initial: candidate.last_initial!,
-        last_name: candidate.last_name,
-        state: candidate.state,
-        city: candidate.city,
-        signal_count: candidate.signal_count,
-        funnel_depth: candidate.funnel_depth,
-        action_counts: {},
-        first_seen: candidate.first_seen,
-        last_seen: candidate.last_seen,
-      }
-      const wedCtxs = (await Promise.all(
-        nameWindow.matches.map((m) => fetchWeddingContext(supabase, m.wedding_id)),
-      )).filter((v): v is NonNullable<typeof v> => Boolean(v))
-      aiVerdict = await adjudicateAmbiguousMatch({
-        candidate: candCtx,
-        candidates: wedCtxs,
-        venueId: candidate.venue_id,
-      })
-    } catch (err) {
-      summary.errors.push(`ai adjudicate ${candidate.id}: ${err instanceof Error ? err.message : String(err)}`)
-    }
-
-    if (aiVerdict && aiVerdict.match_wedding_id && aiVerdict.confidence >= AI_CONFIDENT_THRESHOLD) {
-      const chosen = nameWindow.matches.find((m) => m.wedding_id === aiVerdict!.match_wedding_id)
-      if (chosen) {
-        const { flagged_conflict, error } = await writeAttributionEvents({
-          supabase, candidate, match: chosen,
-          tier: 'tier_2_ai', decided_by: 'ai', confidence: aiVerdict.confidence,
-          reasoning: aiVerdict.reasoning,
-        })
-        if (error) summary.errors.push(error)
-        else {
-          summary.resolved_tier_2_ai++
-          if (flagged_conflict) summary.conflicts_flagged++
-        }
-        return summary
-      } else {
-        // AI returned a UUID we don't recognize — hallucination or
-        // race. Log so the coordinator can investigate instead of
-        // silently falling through.
-        summary.errors.push(
-          `ai adjudicate ${candidate.id}: returned unrecognized wedding_id "${aiVerdict.match_wedding_id}" (confidence ${aiVerdict.confidence})`,
-        )
-      }
-    }
     summary.deferred_to_ai++
     return summary
   }
 
-  // Single match but other candidates competing → coordinator decides.
-  await supabase
-    .from('candidate_identities')
-    .update({ review_status: 'needs_review' })
-    .eq('id', candidate.id)
-  summary.deferred_to_ai++
-  return summary
+  // Tier 2 wide window (±30 days, 2026-04-30): catches the
+  // realistic gap between platform engagement and email inquiry
+  // (a Knot view 5-25 days before the inbound email). Tier 1's
+  // ±72h was too tight — first Knot import matched 4/785 because
+  // most engagements precede the inquiry by a week or more. Wide
+  // window always routes to AI since the confidence at this scope
+  // is below the auto-link bar.
+  const tier2 = await findNameWindowMatches(
+    supabase, candidate, TIER_2_WIDE_WINDOW_HOURS, /* needsCompetitorCheck */ false,
+  )
+  if (!tier2 || tier2.matches.length === 0) {
+    summary.no_match++
+    return summary
+  }
+  return runAIAdjudication({
+    supabase, candidate, matches: tier2.matches, summary,
+    tier: 'tier_2_wide_ai', skipAI,
+  })
 }
 
 /**
@@ -759,6 +831,7 @@ export async function resolveVenueCandidates(args: {
     aggregate.resolved_tier_1_name_window += s.resolved_tier_1_name_window
     aggregate.resolved_tier_1_full_name += s.resolved_tier_1_full_name
     aggregate.resolved_tier_2_ai += s.resolved_tier_2_ai
+    aggregate.resolved_tier_2_wide_ai += s.resolved_tier_2_wide_ai
     aggregate.deferred_to_ai += s.deferred_to_ai
     aggregate.parked_tier_3 += s.parked_tier_3
     aggregate.no_match += s.no_match

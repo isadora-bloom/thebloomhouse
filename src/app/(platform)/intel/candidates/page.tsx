@@ -524,7 +524,7 @@ function RecentCard({ event, onRevert }: {
   // renders "tier 2 ai · 78%" with no auditability — coordinator
   // has to click into each lead to see the reasoning.
   const hasReasoning = Boolean(event.reasoning && event.reasoning.trim())
-  const isAiTier = event.tier === 'tier_2_ai'
+  const isAiTier = event.tier === 'tier_2_ai' || event.tier === 'tier_2_wide_ai'
   return (
     <div className="bg-surface border border-border rounded-lg px-3 py-2 text-xs">
       <div className="flex items-center gap-3">

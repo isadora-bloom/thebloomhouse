@@ -245,7 +245,8 @@ async function sweepPhaseBAllVenues(): Promise<
           resolve.resolved_tier_1_exact +
           resolve.resolved_tier_1_name_window +
           resolve.resolved_tier_1_full_name +
-          resolve.resolved_tier_2_ai,
+          resolve.resolved_tier_2_ai +
+          resolve.resolved_tier_2_wide_ai,
         deferred: resolve.deferred_to_ai,
         conflicts: resolve.conflicts_flagged,
         errors: cluster.errors.length + resolve.errors.length,

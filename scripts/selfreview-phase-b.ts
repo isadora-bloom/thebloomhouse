@@ -185,13 +185,15 @@ async function main() {
     resolverStats.resolved_tier_1_exact +
     resolverStats.resolved_tier_1_name_window +
     resolverStats.resolved_tier_1_full_name +
-    resolverStats.resolved_tier_2_ai
+    resolverStats.resolved_tier_2_ai +
+    resolverStats.resolved_tier_2_wide_ai
   console.log(`  candidates processed: ${resolverStats.candidates_processed}`)
   console.log(`  matched: ${resolved}`)
   console.log(`    T1 exact: ${resolverStats.resolved_tier_1_exact}`)
   console.log(`    T1 name+window: ${resolverStats.resolved_tier_1_name_window}`)
   console.log(`    T1 full name: ${resolverStats.resolved_tier_1_full_name}`)
-  console.log(`    T2 AI: ${resolverStats.resolved_tier_2_ai}`)
+  console.log(`    T2 AI (±72h): ${resolverStats.resolved_tier_2_ai}`)
+  console.log(`    T2 wide (±30d): ${resolverStats.resolved_tier_2_wide_ai}`)
   console.log(`  deferred: ${resolverStats.deferred_to_ai}`)
   console.log(`  no_match: ${resolverStats.no_match}`)
   console.log(`  conflicts: ${resolverStats.conflicts_flagged}`)

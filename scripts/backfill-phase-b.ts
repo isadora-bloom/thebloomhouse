@@ -129,13 +129,15 @@ async function main() {
         resolverStats.resolved_tier_1_exact +
         resolverStats.resolved_tier_1_name_window +
         resolverStats.resolved_tier_1_full_name +
-        resolverStats.resolved_tier_2_ai
+        resolverStats.resolved_tier_2_ai +
+        resolverStats.resolved_tier_2_wide_ai
       console.log(
         `    resolve: ${resolverStats.candidates_processed} processed, ` +
           `${resolved} matched (T1 exact=${resolverStats.resolved_tier_1_exact}, ` +
           `T1 name+win=${resolverStats.resolved_tier_1_name_window}, ` +
           `T1 full=${resolverStats.resolved_tier_1_full_name}, ` +
-          `T2 AI=${resolverStats.resolved_tier_2_ai}), ` +
+          `T2 AI=${resolverStats.resolved_tier_2_ai}, ` +
+          `T2 wide=${resolverStats.resolved_tier_2_wide_ai}), ` +
           `${resolverStats.deferred_to_ai} deferred, ` +
           `${resolverStats.no_match} no match, ` +
           `${resolverStats.conflicts_flagged} conflicts`,
@@ -152,7 +154,8 @@ async function main() {
       resolverStats.resolved_tier_1_exact +
       resolverStats.resolved_tier_1_name_window +
       resolverStats.resolved_tier_1_full_name +
-      resolverStats.resolved_tier_2_ai
+      resolverStats.resolved_tier_2_ai +
+      resolverStats.resolved_tier_2_wide_ai
     totalDeferred += resolverStats.deferred_to_ai
     totalConflicts += resolverStats.conflicts_flagged
 
