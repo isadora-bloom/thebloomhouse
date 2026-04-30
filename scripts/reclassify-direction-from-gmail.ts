@@ -93,6 +93,24 @@ async function main() {
     process.exit(1)
   }
 
+  // Self-learned set of venue-owned sender addresses from the rows
+  // already classified as outbound. Used as a fallback when Gmail
+  // doesn't tag a message SENT but the From is clearly venue-owned.
+  const venueOwnSenders = new Set<string>()
+  for (const c of conns) venueOwnSenders.add(c.email_address.toLowerCase().trim())
+  const { data: priorOutbounds } = await sb
+    .from('interactions')
+    .select('from_email')
+    .eq('venue_id', venueId)
+    .eq('direction', 'outbound')
+    .not('from_email', 'is', null)
+    .limit(1000)
+  for (const r of (priorOutbounds ?? []) as Array<{ from_email: string | null }>) {
+    const e = (r.from_email ?? '').toLowerCase().trim()
+    if (e) venueOwnSenders.add(e)
+  }
+  console.log(`venue-own senders (from connections + prior outbounds): ${venueOwnSenders.size}`)
+
   const PAGE = 200
   let from = 0
   let scanned = 0
@@ -148,8 +166,17 @@ async function main() {
       if (labels === null) { notInGmail++; continue }
 
       const isSent = labels.some((l) => l.toUpperCase() === 'SENT')
-      const targetDirection = isSent ? 'outbound' : 'inbound'
+      // Some Gmail edge cases (send-mail-as, forwarding rules,
+      // calendar self-invites) produce messages whose From header is
+      // a venue-owned address but which Gmail labels as INBOX, not
+      // SENT. Treat these as outbound regardless — the customer
+      // never sent it. Venue-owned set is built from the from_email
+      // values we've already classified as outbound elsewhere
+      // (self-learning), so this only fires once at least one true
+      // outbound has been recorded for the venue.
       const realFromEmail = actualFromHeader ? extractEmail(actualFromHeader) : null
+      const isVenueOwnFrom = Boolean(realFromEmail && venueOwnSenders.has(realFromEmail))
+      const targetDirection = (isSent || isVenueOwnFrom) ? 'outbound' : 'inbound'
 
       const directionWrong = r.direction !== targetDirection
       const fromEmailWrong = Boolean(realFromEmail && r.from_email && r.from_email.toLowerCase() !== realFromEmail)

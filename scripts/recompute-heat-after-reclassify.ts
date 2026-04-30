@@ -25,11 +25,17 @@ const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_
 })
 
 const args = process.argv.slice(2)
+const apply = args.includes('--apply')
 const venueIdx = args.indexOf('--venue')
 const venueId = venueIdx >= 0 ? args[venueIdx + 1] : 'f3d10226-4c5c-47ad-b89b-98ad63842492'
 
 async function main() {
-  console.log(`\n=== Recompute heat — venue ${venueId} ===\n`)
+  console.log(`\n=== Recompute heat — venue ${venueId} ${apply ? '(apply)' : '(dry-run, skipped)'} ===\n`)
+  if (!apply) {
+    console.log('Heat recompute is not run in dry-run because recalculateHeatScore is')
+    console.log('inherently mutating (it writes the recomputed score back). Re-run with --apply.')
+    return
+  }
   const { data: weddings } = await sb
     .from('weddings')
     .select('id, heat_score, temperature_tier')
@@ -40,7 +46,7 @@ async function main() {
     total++
     try {
       const result = await recalculateHeatScore(venueId, w.id)
-      if (result.heat_score !== w.heat_score) updated++
+      if (result.newScore !== w.heat_score) updated++
     } catch (err) {
       console.error(`  ${w.id}: ${err instanceof Error ? err.message : String(err)}`)
     }
