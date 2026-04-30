@@ -25,7 +25,7 @@ import {
   LayoutDashboard, Lightbulb, AlertTriangle,
   TrendingUp, Sparkles as TrendsIcon, Star,
   MapPinIcon, XCircle, Megaphone, Share2, LineChart,
-  MessageSquareText, GitMerge, UserCheck,
+  MessageSquareText, GitMerge, UserCheck, Send,
   // Sage's Brain
   Sparkles, Mic, GraduationCap, ScrollText,
   BookOpen, Store, Settings, MailX,
@@ -253,6 +253,7 @@ export const MODE_INTEL: ModeConfig = {
         { label: 'All Clients', href: '/intel/clients', icon: UserCheck },
         { label: 'Matching / Dedup', href: '/intel/matching', icon: GitMerge },
         { label: 'Candidate Review', href: '/intel/candidates', icon: Sparkles },
+        { label: 'Re-engagement', href: '/intel/reengagement', icon: Send },
         { label: 'Team Comparison', href: '/intel/team-compare', icon: Users },
       ],
     },
