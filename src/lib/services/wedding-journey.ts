@@ -107,6 +107,13 @@ interface EngagementEventRow {
   event_type: string
   points: number | null
   metadata: Record<string, unknown> | null
+  /** When the event actually happened (the source-event time —
+   *  e.g. when the customer sent the email that triggered tour_requested).
+   *  This is what the journey UI should render. */
+  occurred_at: string | null
+  /** When the row was inserted. Equal to occurred_at for live-pipeline
+   *  events but diverges for backfill / scoring-rescue rows that get
+   *  inserted today for events that happened weeks ago. */
   created_at: string
 }
 
@@ -272,10 +279,10 @@ export async function getWeddingJourney(
       .order('created_at', { ascending: true }),
     sb
       .from('engagement_events')
-      .select('id, event_type, points, metadata, created_at')
+      .select('id, event_type, points, metadata, occurred_at, created_at')
       .eq('venue_id', venueId)
       .eq('wedding_id', weddingId)
-      .order('created_at', { ascending: true }),
+      .order('occurred_at', { ascending: true, nullsFirst: false }),
     sb
       .from('activity_log')
       .select('id, activity_type, entity_type, details, created_at')
@@ -435,9 +442,14 @@ export async function getWeddingJourney(
   //      touchpoints — heat-internal signals like sustained_engagement) ----
   for (const e of (engagementRes.data ?? []) as EngagementEventRow[]) {
     if (TOUCHPOINT_MIRRORED_EVENT_TYPES.has(e.event_type)) continue
+    // 2026-04-30: was e.created_at — wrong for any row inserted by a
+    // backfill or scoring-rescue pass, which stamps created_at to the
+    // moment of insertion. occurred_at is the real event time and is
+    // what the journey timeline must render. Falls back to created_at
+    // only on rows where occurred_at was never set.
     events.push({
       id: `eng-${e.id}`,
-      timestamp: e.created_at,
+      timestamp: e.occurred_at ?? e.created_at,
       category: 'engagement_signal',
       title: engagementLabel(e.event_type),
       description: e.points ? `+${e.points} heat points` : undefined,
