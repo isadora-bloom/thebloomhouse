@@ -50,8 +50,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'candidate not found' }, { status: 404 })
   }
   const c = cand as { id: string; venue_id: string; source_platform: string; resolved_wedding_id: string | null }
-  if (c.venue_id !== auth.venueId) {
+  // Org admins + super admins operate across every venue in their
+  // org. Coordinators are venue-scoped. Mirrors post-tour-brief.
+  const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
+  if (!isAdmin && c.venue_id !== auth.venueId) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+  if (isAdmin && auth.orgId) {
+    const { data: candVenue } = await supabase
+      .from('venues')
+      .select('org_id')
+      .eq('id', c.venue_id)
+      .single()
+    if ((candVenue as { org_id: string | null } | null)?.org_id !== auth.orgId) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
   }
   if (c.resolved_wedding_id === body.wedding_id) {
     return NextResponse.json({ ok: true, already_linked: true })
@@ -66,7 +79,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'wedding not found' }, { status: 404 })
   }
   const w = wed as { id: string; venue_id: string; source: string | null; inquiry_date: string | null }
-  if (w.venue_id !== auth.venueId) {
+  // Wedding must be in the same venue as the candidate (same row
+  // already venue-checked above) — protects against linking a
+  // candidate from venue X to a wedding in venue Y even if both
+  // belong to the same org.
+  if (w.venue_id !== c.venue_id) {
     return NextResponse.json({ error: 'Forbidden (wedding venue mismatch)' }, { status: 403 })
   }
 

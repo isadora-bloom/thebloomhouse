@@ -75,8 +75,23 @@ export async function POST(req: NextRequest) {
     conflict_with_legacy_source: string | null
     reverted_at: string | null
   }
-  if (r.venue_id !== auth.venueId) {
+  // Org admins + super admins manage attributions across every
+  // venue in their org. Coordinators are venue-scoped. Mirrors the
+  // pattern in /api/agent/post-tour-brief. Without this, org admins
+  // can't fix an attribution conflict on a venue they don't sit on.
+  const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
+  if (!isAdmin && r.venue_id !== auth.venueId) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+  if (isAdmin && auth.orgId) {
+    const { data: rowVenue } = await supabase
+      .from('venues')
+      .select('org_id')
+      .eq('id', r.venue_id)
+      .single()
+    if ((rowVenue as { org_id: string | null } | null)?.org_id !== auth.orgId) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
   }
 
   if (body.action === 'revert' || body.action === 'accept_legacy') {
