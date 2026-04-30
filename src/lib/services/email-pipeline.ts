@@ -853,13 +853,27 @@ export async function processIncomingEmail(
     // cues alone. Without this gate, campaign replies become ghost couples.
     !threadHasPriorOutbound
   ) {
+    // 2026-04-30: inquiry_date used to be `new Date().toISOString()` —
+    // wall-clock NOW. That stamped every wedding to the moment the
+    // pipeline processed the message, not when the email actually
+    // arrived. On a Gmail history backfill (e.g. Rixey 2026-04-24),
+    // 77 weddings of varying real ages all collapsed to the same
+    // import day, breaking ±72h cross-platform matching against
+    // platform-side candidate timelines (Knot, Instagram, etc.).
+    // Now: use the email's RFC-2822 Date header. Fall back to NOW()
+    // only if the header is missing or unparseable.
+    const parsedEmailDate = email.date ? new Date(email.date) : null
+    const inquiryDateValue =
+      parsedEmailDate && !isNaN(parsedEmailDate.getTime())
+        ? parsedEmailDate.toISOString()
+        : new Date().toISOString()
     const { data: newWedding } = await supabase
       .from('weddings')
       .insert({
         venue_id: venueId,
         status: 'inquiry',
         source: detectedSource,
-        inquiry_date: new Date().toISOString(),
+        inquiry_date: inquiryDateValue,
         wedding_date: parsedEventDate,
         wedding_date_precision: parsedEventDateObj?.precision ?? null,
         guest_count_estimate: parsedGuestCount,
