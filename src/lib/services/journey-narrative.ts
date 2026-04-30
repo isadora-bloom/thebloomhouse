@@ -126,6 +126,21 @@ async function fetchContext(supabase: SupabaseClient, weddingId: string) {
     .map((s) => s.subject)
     .filter((s): s is string => Boolean(s))
 
+  // Computed inquiry channel — the touchpoint mapper has already
+  // identified WHICH channel the inquiry actually came in on
+  // (e.g. 'calendly' for a Calendly-routed lead). The wedding.source
+  // field is the LEGACY first-touch which can be stale or wrong
+  // (e.g. 'website' on a Calendly inquiry). Pass both so the AI can
+  // describe the actual channel without conflating with legacy.
+  const { data: inqTp } = await supabase
+    .from('wedding_touchpoints')
+    .select('source')
+    .eq('wedding_id', weddingId)
+    .eq('touch_type', 'inquiry')
+    .order('occurred_at', { ascending: true })
+    .limit(1)
+  const computedInquirySource = ((inqTp?.[0] as { source: string | null } | undefined)?.source) ?? null
+
   return {
     wedding,
     candidates,
@@ -133,13 +148,14 @@ async function fetchContext(supabase: SupabaseClient, weddingId: string) {
     attributions,
     people,
     interactionSubjects,
+    computedInquirySource,
     signal_count: signals.length,
     attribution_count: attributions.filter((a) => !a.bucket || a.bucket).length,
   }
 }
 
 function buildUserPrompt(ctx: NonNullable<Awaited<ReturnType<typeof fetchContext>>>): string {
-  const { wedding, candidates, signals, attributions, people, interactionSubjects } = ctx
+  const { wedding, candidates, signals, attributions, people, interactionSubjects, computedInquirySource } = ctx
   const couple = people
     .filter((p) => p.first_name)
     .map((p) => `${p.first_name}${p.last_name ? ' ' + p.last_name : ''}`)
@@ -150,7 +166,15 @@ function buildUserPrompt(ctx: NonNullable<Awaited<ReturnType<typeof fetchContext
   lines.push(`STATUS: ${wedding.status ?? 'unknown'}`)
   if (wedding.inquiry_date) lines.push(`INQUIRY_DATE: ${wedding.inquiry_date.slice(0, 10)}`)
   if (wedding.tour_date) lines.push(`TOUR_DATE: ${wedding.tour_date.slice(0, 10)}`)
-  if (wedding.source) lines.push(`LEGACY_SOURCE: ${wedding.source}`)
+  // INQUIRY_CHANNEL is the actual channel the inquiry arrived on
+  // (e.g. 'calendly'). Use this when describing how the couple
+  // reached out. LEGACY_SOURCE is the wedding.source field, which
+  // may be stale or wrong — included only as a hint when there's
+  // a conflict between computed and legacy.
+  if (computedInquirySource) lines.push(`INQUIRY_CHANNEL: ${computedInquirySource}`)
+  if (wedding.source && wedding.source !== computedInquirySource) {
+    lines.push(`LEGACY_SOURCE: ${wedding.source}  (note: this disagrees with INQUIRY_CHANNEL — prefer INQUIRY_CHANNEL when describing how they reached out)`)
+  }
   lines.push('')
   lines.push('PLATFORM CANDIDATES (one per platform that matched this couple):')
   for (const c of candidates) {
@@ -185,8 +209,19 @@ Input describes a couple, their inquiry/tour dates, the platform signals our sys
 Your output is a SINGLE PARAGRAPH (one or two sentences) that:
 - Names the couple naturally
 - Describes the chronological discovery sequence using actual dates
+- When describing how they reached out, USE the INQUIRY_CHANNEL value
+  if present (it's the computed channel from the inquiry touchpoint,
+  e.g. 'calendly'). DO NOT use LEGACY_SOURCE for this — it can be
+  stale and disagree with the computed channel.
 - Mentions the platforms involved and the engagement type (viewed, saved, messaged, followed, etc.)
-- Calls out the first-touch platform if attribution_events flagged one
+- Only call something "first-touch" if the input ATTRIBUTION DECISIONS
+  section explicitly flags it FIRST-TOUCH. If no row says FIRST-TOUCH,
+  do NOT claim first-touch credit; describe the signals as engagement
+  rather than attribution.
+- Pay attention to chronology: signals BEFORE the inquiry are
+  attribution, signals AFTER are post-inquiry browsing — describe
+  them differently. Post-inquiry browsing on a vendor platform is a
+  comparison-shopping signal, not first-touch credit.
 - If a recent email subject mentions "saw you on X" or similar, weave it in as confirming evidence
 - Never invent dates or platforms not in the input
 - Use natural prose, no bullet points, no headers, no markdown
@@ -197,6 +232,8 @@ Examples of good output:
 "Sarah Reynolds first viewed your Knot listing on March 12, came back twice over the next two days, and saved it on March 13. She also followed your Instagram on March 14. The inquiry email arrived March 20 — first-touch credit goes to The Knot, six days before she reached out."
 
 "Mark and Jenna have been quiet since their March 18 inquiry but were active on Pinterest before — they saved your venue twice in early March. Pinterest is the first-touch source even though the inquiry came through your website form."
+
+"Ryan Schubert and Madison Bryant booked a tour through Calendly on March 29 and toured the venue on April 13. Madison came back to The Knot the next day to save and view your listing again — post-tour comparison browsing rather than first-touch attribution."
 
 Return ONLY the narrative text. No JSON, no quotes around it, no explanation.`
 
