@@ -355,6 +355,10 @@ interface SignalForAttribution {
   id: string
   signal_date: string | null
   source_platform: string | null
+  /** Carried through to wedding_touchpoints.metadata so the journey
+   *  UI can render "Knot save" / "Knot message" instead of a generic
+   *  "Other touchpoint via platform_signal". */
+  action_class: string | null
 }
 
 async function fetchSignalsForCandidate(
@@ -363,7 +367,7 @@ async function fetchSignalsForCandidate(
 ): Promise<SignalForAttribution[]> {
   const { data } = await supabase
     .from('tangential_signals')
-    .select('id, signal_date, source_platform')
+    .select('id, signal_date, source_platform, action_class')
     .eq('candidate_identity_id', candidateId)
     .order('signal_date', { ascending: true, nullsFirst: false })
   return (data ?? []) as SignalForAttribution[]
@@ -455,7 +459,14 @@ async function backfillTouchpoint(
     medium: 'platform_signal',
     touch_type: 'other',
     occurred_at: signal.signal_date,
-    metadata: { signal_id: signal.id, candidate_identity_id: candidate.id },
+    metadata: {
+      signal_id: signal.id,
+      candidate_identity_id: candidate.id,
+      // Carried so the wedding-journey UI can render "Knot save"
+      // instead of a generic "Other touchpoint via platform_signal".
+      action_class: signal.action_class,
+      source_platform: signal.source_platform ?? candidate.source_platform,
+    },
   })
 }
 

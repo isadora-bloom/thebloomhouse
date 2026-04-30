@@ -309,14 +309,35 @@ export async function getWeddingJourney(
     const backtraced = meta.backtraced_from && meta.backtraced_to
       ? ` (re-attributed from ${String(meta.backtraced_from)} to ${String(meta.backtraced_to)})`
       : ''
+    // Phase B platform-signal touchpoints stuff action_class +
+    // source_platform into metadata so we can render a specific
+    // label instead of "Other touchpoint via platform_signal".
+    const isPlatformSignal = tp.medium === 'platform_signal'
+    const platformAction = isPlatformSignal
+      ? (typeof meta.action_class === 'string' ? meta.action_class : null)
+      : null
+    const platformSource = isPlatformSignal
+      ? (typeof meta.source_platform === 'string' ? meta.source_platform : tp.source)
+      : null
+    let title: string
+    if (isPlatformSignal && platformSource && platformAction) {
+      const platformLabel = String(platformSource).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+      const actionLabel = platformAction.charAt(0).toUpperCase() + platformAction.slice(1)
+      title = `${platformLabel} ${actionLabel}`
+    } else if (isPlatformSignal && platformSource) {
+      const platformLabel = String(platformSource).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+      title = `${platformLabel} signal`
+    } else {
+      title = touchpointLabel(tp.touch_type)
+    }
     events.push({
       id: `tp-${tp.id}`,
       timestamp: tp.occurred_at,
       category: 'funnel_step',
-      title: touchpointLabel(tp.touch_type),
+      title,
       description:
         backtraced ||
-        (tp.medium ? `via ${tp.medium}` : undefined),
+        (isPlatformSignal ? 'Pre-inquiry platform engagement' : tp.medium ? `via ${tp.medium}` : undefined),
       source: tp.source,
       actor: tp.touch_type === 'inquiry' ? 'couple' : 'system',
       evidence: { ...meta, touch_type: tp.touch_type, medium: tp.medium },
