@@ -54,6 +54,19 @@ interface BriefingContent {
     high_funnel_non_converting: number
     open_conflicts: number
   }
+  // Connective tissue II / fix #2 (2026-04-30). Anomaly detection
+  // generates per-alert ai_explanation + ranked causes with actions.
+  // Was being squeezed into the alertSummary string for the AI
+  // prompt, then summarized away by the AI itself. Preserved
+  // structurally so the email body always shows the full reasoning
+  // verbatim, and the /intel/briefings dashboard can render them.
+  anomaly_details?: Array<{
+    metric: string
+    alert_type: string
+    severity: 'info' | 'warning' | 'critical'
+    explanation: string
+    top_action: string | null
+  }>
 }
 
 interface MonthlyBriefingContent extends BriefingContent {
@@ -385,6 +398,25 @@ Generate the weekly briefing.`,
     taskType: 'weekly_briefing',
   })
 
+  // Connective II / fix #2: pull structured anomaly details from
+  // the live alerts so the email + dashboard render the AI's
+  // explanation verbatim, not the AI summary's paraphrase.
+  const anomaly_details = ((alerts ?? []) as Array<{
+    alert_type: string
+    metric_name: string
+    severity: 'info' | 'warning' | 'critical'
+    ai_explanation: string | null
+    causes: Array<{ likelihood: string; description: string; action: string }> | null
+  }>)
+    .filter((a) => a.ai_explanation)
+    .map((a) => ({
+      metric: a.metric_name,
+      alert_type: a.alert_type,
+      severity: a.severity,
+      explanation: a.ai_explanation as string,
+      top_action: a.causes && a.causes.length > 0 ? a.causes[0].action : null,
+    }))
+
   // Assemble the full content object
   const content: BriefingContent = {
     summary: aiResult.summary,
@@ -402,6 +434,7 @@ Generate the weekly briefing.`,
       high_funnel_non_converting: phaseB.highFunnelNonConverting,
       open_conflicts: phaseB.openConflicts,
     },
+    anomaly_details,
   }
 
   // Persist to ai_briefings
@@ -666,6 +699,22 @@ async function deliverBriefingEmail(
     const recsBlock = content.recommendations.length > 0
       ? `\n\nRecommendations:\n${content.recommendations.map((r) => `  • ${r}`).join('\n')}`
       : ''
+    // Connective II / fix #2: anomaly explanations + suggested
+    // actions render verbatim in the email so the AI summary
+    // can't strip them. Filtered to warning/critical so info-level
+    // alerts don't bloat the email.
+    const anomalyBlock = content.anomaly_details && content.anomaly_details.length > 0
+      ? `\n\nAlerts (${content.anomaly_details.length}):\n` +
+        content.anomaly_details
+          .filter((a) => a.severity !== 'info')
+          .slice(0, 5)
+          .map((a) => {
+            const lines = [`  • [${a.severity.toUpperCase()}] ${a.metric.replace(/_/g, ' ')}: ${a.explanation}`]
+            if (a.top_action) lines.push(`    → suggested: ${a.top_action}`)
+            return lines.join('\n')
+          })
+          .join('\n')
+      : ''
     const phaseBBlock = content.phase_b && (
       content.phase_b.new_candidates > 0 ||
       content.phase_b.auto_linked > 0 ||
@@ -678,7 +727,7 @@ async function deliverBriefingEmail(
         `  • ${content.phase_b.high_funnel_non_converting} engaged but didn't inquire\n` +
         `  • ${content.phase_b.open_conflicts} attribution conflict${content.phase_b.open_conflicts === 1 ? '' : 's'} to review`
       : ''
-    const body = `${subjectPrefix}\n\n${content.summary}${recsBlock}${phaseBBlock}\n\nView the full briefing in your Bloom House dashboard.`
+    const body = `${subjectPrefix}\n\n${content.summary}${anomalyBlock}${recsBlock}${phaseBBlock}\n\nView the full briefing in your Bloom House dashboard.`
 
     // Try venue's authenticated Gmail first
     const messageId = await sendGmail(venueId, briefingEmail, subject, body)

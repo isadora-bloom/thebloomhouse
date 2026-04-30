@@ -16,6 +16,7 @@ import { getLatestIndicators, calculateDemandScore } from '@/lib/services/econom
 import { detectTrendDeviations } from '@/lib/services/trends'
 import { getPriorTouches, narrateTouches } from '@/lib/services/prior-touches'
 import { fetchCachedNarrative } from '@/lib/services/journey-narrative'
+import { getLearningContext } from '@/lib/services/learning'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -318,6 +319,46 @@ export async function buildSageIntelligenceContext(
     } catch (err) {
       console.warn('[sage-intel] Failed to fetch Phase B journey:', err)
     }
+  }
+
+  // --- Recent voice preferences from coordinator edits (D1.2 / fix #3 — 2026-04-30) ---
+  // The voice loop was half-built: learning.ts has been recording
+  // every approval/edit/rejection to draft_feedback for weeks but
+  // Sage's prompt context was never reading it. Coordinators
+  // edited the same kinds of phrases out of drafts week after
+  // week and Sage never adapted. Now: pull a small window of
+  // recent edits + rejections + a couple of strong-approval
+  // examples, summarize as preferences, inject before Sage drafts.
+  try {
+    const learning = await getLearningContext(venueId, 'inquiry')
+    const sectionLines: string[] = []
+    if (learning.editPatterns.length > 0) {
+      sectionLines.push('Recent edits (coordinator preferred phrasing on the right):')
+      for (const ep of learning.editPatterns.slice(0, 3)) {
+        const orig = ep.original.slice(0, 140).replace(/\s+/g, ' ').trim()
+        const edited = ep.edited.slice(0, 140).replace(/\s+/g, ' ').trim()
+        sectionLines.push(`  • "${orig}" → "${edited}"`)
+      }
+    }
+    if (learning.rejectionReasons.length > 0) {
+      sectionLines.push('Recent rejection reasons (avoid these patterns):')
+      for (const r of learning.rejectionReasons.slice(0, 3)) {
+        sectionLines.push(`  • ${r.slice(0, 120)}`)
+      }
+    }
+    if (learning.goodExamples.length > 0) {
+      sectionLines.push('Recently approved drafts (subject lines that work):')
+      for (const g of learning.goodExamples.slice(0, 2)) {
+        sectionLines.push(`  • "${g.subject}"`)
+      }
+    }
+    if (sectionLines.length > 0) {
+      sections.push(
+        `RECENT VOICE PREFERENCES FROM YOUR TEAM:\n${sectionLines.join('\n')}\n\nMatch the edited side. Avoid the rejection patterns. The right column above shows what landed.`,
+      )
+    }
+  } catch (err) {
+    console.warn('[sage-intel] Failed to fetch learning context:', err)
   }
 
   // --- Demand outlook ---

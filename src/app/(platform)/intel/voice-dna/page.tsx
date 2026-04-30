@@ -439,6 +439,14 @@ export default function VoiceDnaPage() {
       </section>
 
       {/* =============================================================== */}
+      {/* Sage's active context (Connective II / fix #6)                   */}
+      {/* =============================================================== */}
+      {/* What's actively shaping Sage's draft prompts right now —
+          surfaces the same numbers that the buildSageIntelligenceContext
+          service injects so coordinators can see the loop is closed. */}
+      {scope.venueId && <SageActiveContextCard aiName={aiName} venueId={scope.venueId} />}
+
+      {/* =============================================================== */}
       {/* Learned phrases (approved_for_sage)                              */}
       {/* =============================================================== */}
       <section>
@@ -717,5 +725,88 @@ function LearningTimeline({ timeline }: { timeline: VoiceDnaData['timeline'] }) 
         </div>
       </div>
     </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Sage's active context card (Connective II / fix #6 — 2026-04-30)
+// ---------------------------------------------------------------------------
+//
+// Shows the same numbers buildSageIntelligenceContext injects into
+// Sage's prompt so coordinators can see what's actively shaping
+// drafts. Closes the loop on PD.1 fix #3 (draft_feedback feeding
+// Sage) — coordinator edits drafts, edits show up here, Sage's
+// next draft already learned from them.
+
+interface SageActiveContextCardProps {
+  aiName: string
+  venueId: string
+}
+
+interface SageContextCounts {
+  approvedPhrases: number
+  recentEditPatterns: number
+  recentRejections: number
+  recentApprovedExamples: number
+  bannedPhrases: number
+}
+
+function SageActiveContextCard({ aiName, venueId }: SageActiveContextCardProps) {
+  const [counts, setCounts] = useState<SageContextCounts | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/intel/voice-dna?venueId=${venueId}&context_only=1`)
+        if (!res.ok) {
+          // Fallback: hit a simpler endpoint or fail gracefully
+          if (!cancelled) setCounts(null)
+          return
+        }
+        const json = (await res.json().catch(() => null)) as { context?: SageContextCounts } | null
+        if (!cancelled) setCounts(json?.context ?? null)
+      } catch {
+        if (!cancelled) setCounts(null)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [venueId])
+
+  // Render even when counts are zero — coordinator sees "Sage has
+  // no learning yet" which is itself useful information.
+  return (
+    <section className="bg-surface border border-border rounded-xl p-5 shadow-sm">
+      <div className="mb-3 flex items-center gap-2">
+        <Sparkles className="w-4 h-4 text-sage-500" />
+        <h2 className="font-heading text-base font-semibold text-sage-900">
+          {aiName}&apos;s active context
+        </h2>
+      </div>
+      <p className="text-xs text-sage-500 mb-3">
+        What {aiName} is consulting in real-time before drafting any reply.
+      </p>
+      {counts ? (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <ContextStat label="Approved phrases" value={counts.approvedPhrases} hint="Review-derived voice" />
+          <ContextStat label="Banned phrases" value={counts.bannedPhrases} hint="From voice training games" />
+          <ContextStat label="Recent edits" value={counts.recentEditPatterns} hint="Patterns from your team last 14d" />
+          <ContextStat label="Rejections" value={counts.recentRejections} hint="With reasons last 14d" />
+          <ContextStat label="Approved drafts" value={counts.recentApprovedExamples} hint="Used as voice anchors" />
+        </div>
+      ) : (
+        <p className="text-xs text-sage-400 italic">No context summary available.</p>
+      )}
+    </section>
+  )
+}
+
+function ContextStat({ label, value, hint }: { label: string; value: number; hint: string }) {
+  return (
+    <div className="border border-sage-100 rounded-lg p-3 bg-warm-white">
+      <p className="text-[10px] text-sage-500 uppercase tracking-wide">{label}</p>
+      <p className="text-lg font-semibold text-sage-900 tabular-nums">{value}</p>
+      <p className="text-[10px] text-sage-500 mt-0.5">{hint}</p>
+    </div>
   )
 }

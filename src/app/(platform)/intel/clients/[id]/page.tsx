@@ -49,6 +49,7 @@ import { SourceBadgeEditable } from '@/components/agent/source-badge-editable'
 import { CandidateSignalEvidence } from '@/components/agent/candidate-signal-evidence'
 import { JourneyNarrative } from '@/components/agent/journey-narrative'
 import { TourInsightsPanel } from '@/components/agent/tour-insights-panel'
+import { CommitmentSignalsPanel } from '@/components/agent/commitment-signals-panel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1062,6 +1063,13 @@ export default function ClientProfilePage() {
           {/* Connective tissue II / fix #1: Tour insights — cached AI
               brief per tour. Self-hides when no tours exist. */}
           <TourInsightsPanel weddingId={weddingId} />
+
+          {/* Connective tissue II / fix #5: Commitment signals
+              checklist. Engagement events were rendering as a flat
+              feed; this groups the qualitative cues so coordinator
+              sees "X of N signals present" at a glance. Self-hides
+              when no commitment signals have fired. */}
+          <CommitmentSignalsPanel weddingId={weddingId} />
 
           {/* Client Journey */}
           <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">

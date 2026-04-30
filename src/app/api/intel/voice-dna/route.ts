@@ -145,6 +145,31 @@ export async function GET(req: NextRequest) {
     venueId = requestedVenueId
   }
 
+  // Connective II / fix #6 (2026-04-30): lightweight "what is Sage
+  // consulting right now" summary. The full Voice DNA endpoint is
+  // expensive (multiple joins, dimension aggregation); this branch
+  // returns just the counts for the active-context status card.
+  const contextOnly = req.nextUrl.searchParams.get('context_only') === '1'
+  if (contextOnly) {
+    const sinceIso = new Date(Date.now() - 14 * 86_400_000).toISOString()
+    const [approved, banned, edits, rejects, goodEx] = await Promise.all([
+      service.from('review_language').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('approved_for_sage', true),
+      service.from('voice_preferences').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('preference_type', 'banned_phrase'),
+      service.from('draft_feedback').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('feedback_type', 'edited').gte('created_at', sinceIso),
+      service.from('draft_feedback').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('feedback_type', 'rejected').gte('created_at', sinceIso),
+      service.from('draft_feedback').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('feedback_type', 'approved').gte('created_at', sinceIso),
+    ])
+    return NextResponse.json({
+      context: {
+        approvedPhrases: approved.count ?? 0,
+        bannedPhrases: banned.count ?? 0,
+        recentEditPatterns: edits.count ?? 0,
+        recentRejections: rejects.count ?? 0,
+        recentApprovedExamples: goodEx.count ?? 0,
+      },
+    })
+  }
+
   // ----- Fetch all the raw data in parallel -------------------------------
   const [
     venueRes,
