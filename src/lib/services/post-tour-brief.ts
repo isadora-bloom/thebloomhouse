@@ -183,6 +183,53 @@ Rules:
 // Main
 // ---------------------------------------------------------------------------
 
+/**
+ * Cached fetch of a previously-persisted brief. Returns null when
+ * no brief has ever been generated for this tour. Used by surfaces
+ * (lead detail, tours page) that want the brief WITHOUT triggering
+ * a fresh AI call. Connective tissue II / fix #1 (2026-04-30).
+ */
+export async function fetchCachedTourBrief(tourId: string): Promise<PostTourBrief | null> {
+  const supabase = createServiceClient()
+  const { data: tour } = await supabase
+    .from('tours')
+    .select('id, venue_id, wedding_id, tour_brief_text, tour_brief_followup_draft, tour_brief_confidence, tour_brief_generated_at')
+    .eq('id', tourId)
+    .maybeSingle()
+  const t = tour as
+    | {
+        id: string
+        venue_id: string
+        wedding_id: string | null
+        tour_brief_text: string | null
+        tour_brief_followup_draft: string | null
+        tour_brief_confidence: 'high' | 'medium' | 'low' | null
+        tour_brief_generated_at: string | null
+      }
+    | null
+  if (!t || !t.tour_brief_text) return null
+  // Resolve aiName + venueName the same way the live path does so
+  // the cached row renders identically.
+  const { data: cfg } = await supabase
+    .from('venue_ai_config')
+    .select('ai_name')
+    .eq('venue_id', t.venue_id)
+    .maybeSingle()
+  const { data: ven } = await supabase
+    .from('venues')
+    .select('name')
+    .eq('id', t.venue_id)
+    .maybeSingle()
+  return {
+    tourId: t.id,
+    aiName: ((cfg as { ai_name: string | null } | null)?.ai_name ?? 'Sage'),
+    venueName: ((ven as { name: string | null } | null)?.name ?? 'this venue'),
+    brief: t.tour_brief_text,
+    suggestedFollowUpDraft: t.tour_brief_followup_draft,
+    confidence: t.tour_brief_confidence ?? 'medium',
+  }
+}
+
 export async function generatePostTourBrief(
   tourId: string
 ): Promise<PostTourBrief | null> {
@@ -304,14 +351,25 @@ export async function generatePostTourBrief(
   // 5. Persist: mark brief generated + optionally insert a draft row.
   const nowIso = new Date().toISOString()
 
+  // Connective tissue II / fix #1 (2026-04-30): persist the brief
+  // text + draft + confidence to tours so the lead detail and the
+  // tours page can render the cached version without re-paying AI
+  // cost. Migration 108 added these columns. Coordinator regenerates
+  // via POST when they want a fresh take.
   const { error: tourUpdateErr } = await supabase
     .from('tours')
-    .update({ tour_brief_generated_at: nowIso })
+    .update({
+      tour_brief_generated_at: nowIso,
+      tour_brief_text: briefMarkdown,
+      tour_brief_followup_draft: draftBody,
+      tour_brief_confidence: confidence,
+      tour_brief_model: 'claude-sonnet-4',
+    })
     .eq('id', tourId)
 
   if (tourUpdateErr) {
     console.error(
-      '[post-tour-brief] failed to stamp tour_brief_generated_at:',
+      '[post-tour-brief] failed to persist brief:',
       tourUpdateErr.message
     )
     // Continue: the brief data itself is still useful to the caller.

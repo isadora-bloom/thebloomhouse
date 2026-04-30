@@ -306,9 +306,6 @@ export async function getWeddingJourney(
   // ---- Touchpoints (funnel-step truth) ----
   for (const tp of (touchpointRes.data ?? []) as TouchpointRow[]) {
     const meta = tp.metadata ?? {}
-    const backtraced = meta.backtraced_from && meta.backtraced_to
-      ? ` (re-attributed from ${String(meta.backtraced_from)} to ${String(meta.backtraced_to)})`
-      : ''
     // Phase B platform-signal touchpoints stuff action_class +
     // source_platform into metadata so we can render a specific
     // label instead of "Other touchpoint via platform_signal".
@@ -336,12 +333,44 @@ export async function getWeddingJourney(
       category: 'funnel_step',
       title,
       description:
-        backtraced ||
-        (isPlatformSignal ? 'Pre-inquiry platform engagement' : tp.medium ? `via ${tp.medium}` : undefined),
+        isPlatformSignal ? 'Pre-inquiry platform engagement' : tp.medium ? `via ${tp.medium}` : undefined,
       source: tp.source,
       actor: tp.touch_type === 'inquiry' ? 'couple' : 'system',
       evidence: { ...meta, touch_type: tp.touch_type, medium: tp.medium },
     })
+
+    // Connective tissue II / fix #9 (2026-04-30): if this
+    // touchpoint was re-attributed by the source-backtrace service,
+    // emit a SEPARATE journey event marking the moment of
+    // re-attribution. Before this, the backtrace audit was a
+    // parenthetical inside the original touchpoint description —
+    // coordinator couldn't see the AI made an attribution decision.
+    // The re-attribution event lands at backtraced_at (or now)
+    // because that's when the system flipped the source.
+    if (meta.backtraced_from && meta.backtraced_to) {
+      const fromLabel = String(meta.backtraced_from).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+      const toLabel = String(meta.backtraced_to).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+      const decidedBy = typeof meta.backtraced_by === 'string' ? meta.backtraced_by : 'auto'
+      const backtraceTs = typeof meta.backtraced_at === 'string' ? meta.backtraced_at : tp.occurred_at
+      events.push({
+        id: `tp-${tp.id}-backtrace`,
+        timestamp: backtraceTs,
+        // Use the existing identity_merge category — closest semantic
+        // fit for "the system corrected an earlier attribution
+        // decision". Avoids expanding the category enum just for one
+        // event type.
+        category: 'identity_merge',
+        title: `Source re-attributed: ${fromLabel} → ${toLabel}`,
+        description: `Source-backtrace match (${decidedBy === 'auto' ? 'AI' : 'coordinator'}) flipped this lead's first-touch from a scheduling tool to the actual discovery channel.`,
+        source: String(meta.backtraced_to),
+        actor: 'system',
+        evidence: {
+          backtraced_from: meta.backtraced_from,
+          backtraced_to: meta.backtraced_to,
+          backtraced_by: meta.backtraced_by,
+        },
+      })
+    }
   }
 
   // ---- Interactions (raw emails / calls) ----

@@ -48,6 +48,7 @@ import { WeddingJourney } from '@/components/agent/wedding-journey'
 import { SourceBadgeEditable } from '@/components/agent/source-badge-editable'
 import { CandidateSignalEvidence } from '@/components/agent/candidate-signal-evidence'
 import { JourneyNarrative } from '@/components/agent/journey-narrative'
+import { TourInsightsPanel } from '@/components/agent/tour-insights-panel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1057,6 +1058,10 @@ export default function ClientProfilePage() {
             weddingId={weddingId}
             legacySource={wedding.source ?? null}
           />
+
+          {/* Connective tissue II / fix #1: Tour insights — cached AI
+              brief per tour. Self-hides when no tours exist. */}
+          <TourInsightsPanel weddingId={weddingId} />
 
           {/* Client Journey */}
           <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { generatePostTourBrief } from '@/lib/services/post-tour-brief'
+import { fetchCachedTourBrief, generatePostTourBrief } from '@/lib/services/post-tour-brief'
 
 // ---------------------------------------------------------------------------
 // POST { tourId }
@@ -13,6 +13,36 @@ import { generatePostTourBrief } from '@/lib/services/post-tour-brief'
 // Mirrors the access-control pattern used by /api/agent/tour-transcript-
 // extract so coordinators can't read briefs for tours they don't own.
 // ---------------------------------------------------------------------------
+
+// Connective tissue II / fix #1 (2026-04-30): GET returns the cached
+// brief from migration 108's persisted columns. Without this, every
+// surface that wants to display a brief had to re-invoke Claude. POST
+// remains the regenerate path.
+export async function GET(request: NextRequest) {
+  const auth = await getPlatformAuth()
+  if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const tourId = request.nextUrl.searchParams.get('tourId') ?? request.nextUrl.searchParams.get('tour_id')
+  if (!tourId) return NextResponse.json({ error: 'tourId required' }, { status: 400 })
+
+  const service = createServiceClient()
+  const { data: tour } = await service
+    .from('tours')
+    .select('id, venue_id')
+    .eq('id', tourId)
+    .maybeSingle()
+  if (!tour) return NextResponse.json({ error: 'Tour not found' }, { status: 404 })
+  const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
+  if (!isAdmin && (tour as { venue_id: string }).venue_id !== auth.venueId) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+  try {
+    const brief = await fetchCachedTourBrief(tourId)
+    return NextResponse.json({ brief })
+  } catch (err) {
+    console.error('[api/agent/post-tour-brief] GET error:', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
 
 export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()

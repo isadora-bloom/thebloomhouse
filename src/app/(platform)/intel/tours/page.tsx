@@ -65,6 +65,12 @@ interface TourRow {
   transcript: string | null
   transcript_extracted: TranscriptExtractedShape | null
   tour_brief_generated_at: string | null
+  // Connective tissue II / fix #1: brief content now persists on
+  // the tours row (migration 108). Page hydrates state from these
+  // on mount so the AI work isn't redone on every reload.
+  tour_brief_text?: string | null
+  tour_brief_followup_draft?: string | null
+  tour_brief_confidence?: 'high' | 'medium' | 'low' | null
   venue?: { name: string | null } | null
   conductor?: { first_name: string | null; last_name: string | null } | null
 }
@@ -198,7 +204,27 @@ export default function ToursPage() {
 
       const { data, error: err } = await query
       if (err) throw err
-      setTours((data ?? []) as TourRow[])
+      const rows = (data ?? []) as TourRow[]
+      setTours(rows)
+      // Connective tissue II / fix #1: hydrate brief state from
+      // the persisted columns so the panel renders the cached brief
+      // immediately on page load instead of nudging the coordinator
+      // to regenerate.
+      const cachedBriefs: Record<string, { aiName: string; venueName: string; brief: string; suggestedFollowUpDraft: string | null; confidence: 'high' | 'medium' | 'low' }> = {}
+      for (const t of rows) {
+        if (t.tour_brief_text) {
+          cachedBriefs[t.id] = {
+            aiName: 'Sage', // venue's actual aiName comes back from the regenerate POST; for hydration the brand-default reads cleanly
+            venueName: t.venue?.name ?? 'this venue',
+            brief: t.tour_brief_text,
+            suggestedFollowUpDraft: t.tour_brief_followup_draft ?? null,
+            confidence: t.tour_brief_confidence ?? 'medium',
+          }
+        }
+      }
+      if (Object.keys(cachedBriefs).length > 0) {
+        setBriefs((prev) => ({ ...cachedBriefs, ...prev })) // existing in-session generations win
+      }
       setError(null)
     } catch (err) {
       console.error('Failed to fetch tours:', err)
