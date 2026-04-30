@@ -24,6 +24,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI } from '@/lib/ai/client'
 
 const STALENESS_DELTA = 2
+const GEN_LOCK_TTL_MS = 60_000 // 60s — generation that takes longer than this is assumed crashed
 
 export interface JourneyNarrative {
   text: string
@@ -32,6 +33,9 @@ export interface JourneyNarrative {
   signal_count: number
   attribution_count: number
   pinned: boolean
+  /** True when another request is currently generating; the widget
+   *  should poll briefly instead of triggering a duplicate AI call. */
+  generating?: boolean
 }
 
 interface SignalRow {
@@ -214,8 +218,16 @@ export async function generateNarrativeText(
     taskType: 'journey_narrative',
   })
 
+  // PC.4 fix #9: AI sometimes wraps the paragraph in quotes despite
+  // the prompt's instruction not to. Strip a single matched pair of
+  // surrounding quotes (curly or straight) without disturbing
+  // intentional dialogue inside the narrative. [\s\S] used in place
+  // of the `s` regex flag, which is es2018+.
+  let text = result.text.trim()
+  text = text.replace(/^["'“‘]([\s\S]*)["'”’]$/, '$1').trim()
+
   return {
-    text: result.text.trim(),
+    text,
     signal_count: ctx.signal_count,
     attribution_count: ctx.attribution_count,
     venue_id: ctx.wedding.venue_id,
@@ -234,7 +246,7 @@ export async function generateOrFetch(
 ): Promise<JourneyNarrative | null> {
   const { data: existingRaw } = await supabase
     .from('wedding_journey_narratives')
-    .select('id, narrative_text, signal_count_at_generation, attribution_count_at_generation, generated_at, pinned')
+    .select('id, narrative_text, signal_count_at_generation, attribution_count_at_generation, generated_at, pinned, generating_at')
     .eq('wedding_id', weddingId)
     .single()
   const existing = existingRaw as
@@ -245,8 +257,28 @@ export async function generateOrFetch(
         attribution_count_at_generation: number
         generated_at: string
         pinned: boolean
+        generating_at: string | null
       }
     | null
+
+  // PC.4 fix #5: if another request is mid-generation for this
+  // wedding, return generating=true so the caller can poll instead
+  // of double-charging Claude. Lock is considered stale after
+  // GEN_LOCK_TTL_MS; a crashed gen doesn't permanently wedge the row.
+  if (existing && existing.generating_at && !force) {
+    const age = Date.now() - new Date(existing.generating_at).getTime()
+    if (age < GEN_LOCK_TTL_MS) {
+      return {
+        text: existing.narrative_text || '',
+        cached: true,
+        generated_at: existing.generated_at,
+        signal_count: existing.signal_count_at_generation,
+        attribution_count: existing.attribution_count_at_generation,
+        pinned: existing.pinned,
+        generating: true,
+      }
+    }
+  }
 
   if (existing && existing.pinned && !force) {
     return {
@@ -285,8 +317,50 @@ export async function generateOrFetch(
     }
   }
 
+  // PC.4 fix #5: claim the lock BEFORE calling Claude so concurrent
+  // requests see generating_at and back off. We need a venue_id to
+  // upsert; fetch it cheaply if no existing row.
+  let venueIdForLock: string | null = null
+  if (existing) {
+    // We don't carry venue_id on the existing fetch above to keep it
+    // narrow; pull it from weddings.
+    const { data: wed } = await supabase.from('weddings').select('venue_id').eq('id', weddingId).single()
+    venueIdForLock = ((wed as { venue_id: string } | null)?.venue_id) ?? null
+  }
+  if (!venueIdForLock) {
+    const { data: wed } = await supabase.from('weddings').select('venue_id').eq('id', weddingId).single()
+    venueIdForLock = ((wed as { venue_id: string } | null)?.venue_id) ?? null
+  }
+  if (venueIdForLock) {
+    await supabase
+      .from('wedding_journey_narratives')
+      .upsert(
+        {
+          ...(existing ? { id: existing.id } : {}),
+          venue_id: venueIdForLock,
+          wedding_id: weddingId,
+          narrative_text: existing?.narrative_text ?? '',
+          signal_count_at_generation: existing?.signal_count_at_generation ?? 0,
+          attribution_count_at_generation: existing?.attribution_count_at_generation ?? 0,
+          generating_at: new Date().toISOString(),
+        },
+        { onConflict: 'wedding_id' },
+      )
+  }
+
   const generated = await generateNarrativeText(supabase, weddingId)
-  if (!generated) return null
+  if (!generated) {
+    // Clear the lock so a future call can retry instead of hitting
+    // the lock window for 60s on a wedding that legitimately has
+    // nothing to narrate.
+    if (existing) {
+      await supabase
+        .from('wedding_journey_narratives')
+        .update({ generating_at: null })
+        .eq('id', existing.id)
+    }
+    return null
+  }
 
   await supabase
     .from('wedding_journey_narratives')
@@ -301,6 +375,7 @@ export async function generateOrFetch(
         model: 'claude-sonnet-4',
         generated_at: new Date().toISOString(),
         generated_by: force ? 'coordinator' : 'auto',
+        generating_at: null, // release the lock
       },
       { onConflict: 'wedding_id' },
     )

@@ -73,10 +73,25 @@ export async function POST(req: NextRequest) {
   }
 
   if (typeof body.pin === 'boolean') {
-    await supabase
+    // PC.4 fix #10: verify the row exists before reporting success.
+    // Otherwise pinning a wedding with no narrative yet returns
+    // ok: true and silently does nothing.
+    const { data: row } = await supabase
+      .from('wedding_journey_narratives')
+      .select('id')
+      .eq('wedding_id', body.wedding_id)
+      .single()
+    if (!row) {
+      return NextResponse.json(
+        { error: 'No narrative exists for this wedding yet. Generate one first.' },
+        { status: 404 },
+      )
+    }
+    const { error } = await supabase
       .from('wedding_journey_narratives')
       .update({ pinned: body.pin })
       .eq('wedding_id', body.wedding_id)
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json({ ok: true, pinned: body.pin })
   }
 

@@ -22,6 +22,7 @@ interface NarrativeShape {
   signal_count: number
   attribution_count: number
   pinned: boolean
+  generating?: boolean
 }
 
 interface Props {
@@ -30,28 +31,50 @@ interface Props {
 
 export function JourneyNarrative({ weddingId }: Props) {
   const [narrative, setNarrative] = useState<NarrativeShape | null>(null)
-  const [loading, setLoading] = useState(true)
+  // PC.4 fix #8: don't show the "Composing journey…" loader on
+  // cache hits. Delay the loader by 400ms; if the API returns
+  // before then (cache hit), we never show it.
+  const [showLoader, setShowLoader] = useState(false)
+  const [done, setDone] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
 
   useEffect(() => {
     let cancelled = false
+    setDone(false)
+    setShowLoader(false)
+    const loaderTimer = setTimeout(() => {
+      if (!cancelled) setShowLoader(true)
+    }, 400)
+    async function fetchNarrative(): Promise<NarrativeShape | null> {
+      const res = await fetch(`/api/intel/journey-narrative?wedding_id=${weddingId}`)
+      if (!res.ok) return null
+      const json = (await res.json()) as { narrative: NarrativeShape | null }
+      return json.narrative
+    }
     ;(async () => {
-      setLoading(true)
       try {
-        const res = await fetch(`/api/intel/journey-narrative?wedding_id=${weddingId}`)
-        if (!res.ok) {
-          setNarrative(null)
-        } else {
-          const json = (await res.json()) as { narrative: NarrativeShape | null }
-          if (!cancelled) setNarrative(json.narrative)
+        let n = await fetchNarrative()
+        // PC.4 fix #5 client side: when another request is mid-gen,
+        // the API returns generating=true with empty text. Poll once
+        // after 6s to pick up the result instead of rendering an
+        // empty bar.
+        if (n && n.generating && (!n.text || n.text === '')) {
+          await new Promise((r) => setTimeout(r, 6000))
+          if (cancelled) return
+          n = await fetchNarrative()
         }
+        if (!cancelled) setNarrative(n)
       } catch {
         if (!cancelled) setNarrative(null)
       } finally {
-        if (!cancelled) setLoading(false)
+        clearTimeout(loaderTimer)
+        if (!cancelled) {
+          setShowLoader(false)
+          setDone(true)
+        }
       }
     })()
-    return () => { cancelled = true }
+    return () => { cancelled = true; clearTimeout(loaderTimer) }
   }, [weddingId])
 
   async function regenerate() {
@@ -82,9 +105,10 @@ export function JourneyNarrative({ weddingId }: Props) {
     if (res.ok) setNarrative({ ...narrative, pinned: next })
   }
 
-  // Loading state intentionally subtle — first-view gen takes a few
-  // seconds and we don't want a giant spinner banner.
-  if (loading) {
+  // Loading state only shows when the request takes longer than
+  // 400ms — cache hits are silent. First-view gen typically takes
+  // 2-5 seconds and surfaces this banner.
+  if (!done && showLoader) {
     return (
       <div className="bg-sage-50/40 border border-sage-100 rounded-xl px-4 py-3 flex items-center gap-3 text-sm text-sage-500">
         <Loader2 className="w-4 h-4 animate-spin" />
@@ -93,7 +117,7 @@ export function JourneyNarrative({ weddingId }: Props) {
     )
   }
 
-  if (!narrative) return null
+  if (!done || !narrative) return null
 
   return (
     <div className="bg-gradient-to-br from-sage-50/80 to-warm-white border border-sage-100 rounded-xl px-5 py-4 shadow-sm">

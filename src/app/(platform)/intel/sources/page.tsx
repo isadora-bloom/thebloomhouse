@@ -213,6 +213,7 @@ function TableSkeleton() {
 
 interface PhaseBPanelsProps {
   scope: ReturnType<typeof useScope>
+  windowDays: ScorecardWindow
 }
 
 interface NonConvertingRow {
@@ -234,18 +235,20 @@ interface MultiTouchBucket {
   pct: number
 }
 
-function PhaseBIntelPanels({ scope }: PhaseBPanelsProps) {
+function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
   const [conflictCount, setConflictCount] = useState<number | null>(null)
   const [nonConverting, setNonConverting] = useState<NonConvertingRow[]>([])
   const [multiTouch, setMultiTouch] = useState<MultiTouchBucket[]>([])
   const [bookedAttributed, setBookedAttributed] = useState<number>(0)
-  const [loading, setLoading] = useState(true)
+  // PC.4 fix #7: don't enter loading state at non-venue scope —
+  // before this, the skeleton flashed for a frame at portfolio
+  // scope before the panel evaporated.
+  const isVenueScope = scope.level === 'venue' && Boolean(scope.venueId)
+  const [loading, setLoading] = useState(isVenueScope)
 
   useEffect(() => {
     if (scope.loading) return
-    // Phase B panels are venue-scoped; group/company scope shows
-    // the empty state for now (we'd need cross-venue rollup logic).
-    if (scope.level !== 'venue' || !scope.venueId) {
+    if (!isVenueScope) {
       setLoading(false)
       setConflictCount(0)
       setNonConverting([])
@@ -257,6 +260,7 @@ function PhaseBIntelPanels({ scope }: PhaseBPanelsProps) {
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     )
+    const windowStartIso = new Date(Date.now() - windowDays * 86_400_000).toISOString()
 
     ;(async () => {
       setLoading(true)
@@ -270,7 +274,10 @@ function PhaseBIntelPanels({ scope }: PhaseBPanelsProps) {
           .eq('venue_id', venueId)
           .not('conflict_with_legacy_source', 'is', null)
           .is('reverted_at', null),
-        // 2. Non-converting high-funnel cohort.
+        // 2. Non-converting high-funnel cohort. PC.4 fix #3: exclude
+        //    candidates the coordinator already dismissed. Window-
+        //    bound by last_seen so the panel scopes consistently
+        //    with the rest of the page.
         sb
           .from('candidate_identities')
           .select('id, source_platform, first_name, last_initial, state, signal_count, funnel_depth, action_counts, last_seen, cluster_group_key')
@@ -278,15 +285,17 @@ function PhaseBIntelPanels({ scope }: PhaseBPanelsProps) {
           .gte('funnel_depth', 3)
           .is('resolved_wedding_id', null)
           .is('deleted_at', null)
+          .neq('review_status', 'reviewed')
+          .gte('last_seen', windowStartIso)
           .order('last_seen', { ascending: false })
           .limit(25),
-        // 3. Multi-touch — fetch all live attribution_events for the
-        //    venue, group by wedding_id in memory.
+        // 3. Multi-touch — window-bound by decided_at. PC.4 fix #4.
         sb
           .from('attribution_events')
           .select('wedding_id, source_platform')
           .eq('venue_id', venueId)
-          .is('reverted_at', null),
+          .is('reverted_at', null)
+          .gte('decided_at', windowStartIso),
       ])
 
       if (cancelled) return
@@ -341,7 +350,7 @@ function PhaseBIntelPanels({ scope }: PhaseBPanelsProps) {
     })()
 
     return () => { cancelled = true }
-  }, [scope.level, scope.venueId, scope.loading])
+  }, [scope.level, scope.venueId, scope.loading, isVenueScope, windowDays])
 
   if (scope.level !== 'venue') {
     return null
@@ -535,9 +544,11 @@ type ScorecardWindow = 30 | 90 | 365 | 3650
 
 interface ScorecardProps {
   scope: ReturnType<typeof useScope>
+  windowDays: ScorecardWindow
+  onWindowChange: (w: ScorecardWindow) => void
 }
 
-function SourceQualityScorecard({ scope }: ScorecardProps) {
+function SourceQualityScorecard({ scope, windowDays, onWindowChange }: ScorecardProps) {
   const [rows, setRows] = useState<QualityApiRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -548,13 +559,10 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
   // than one row per (venue, source). At venue scope the toggle is
   // hidden — there's nothing to roll up.
   const [aggregate, setAggregate] = useState<boolean>(scope.level !== 'venue')
-  // Phase C / PC.1: view-mode + time window. Three modes share the
-  // same source rows but show different columns — Quality (legacy
-  // booked-lead metrics), Funnel (candidate volume / depth /
-  // conversion), CAC (spend, $/lead, $/tour, $/booking from
-  // first-touch attribution). Window default 90d (locked 2026-04-28).
+  // Phase C / PC.1: view-mode tabs. Window state is owned by the
+  // parent page (PC.4 fix) so multi-touch + non-converting cohort
+  // panels stay in sync with the scorecard's window.
   const [viewMode, setViewMode] = useState<ScorecardViewMode>('quality')
-  const [windowDays, setWindowDays] = useState<ScorecardWindow>(90)
 
   // If the scope changes (single venue -> portfolio) the default flips.
   useEffect(() => {
@@ -610,7 +618,14 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
     }
   }
 
-  const sortedRows = [...rows].sort((a, b) => {
+  // PC.4 fix #2: in Quality view, hide rows that have 0 bookings.
+  // PC.1 added rows for any source with signals/candidates/spend even
+  // without bookings — that's correct for Funnel/CAC but pollutes
+  // Quality with all-zeros rows.
+  const filteredForView = viewMode === 'quality'
+    ? rows.filter((r) => r.bookedCount > 0)
+    : rows
+  const sortedRows = [...filteredForView].sort((a, b) => {
     const aVal = a[sortKey]
     const bVal = b[sortKey]
     if (typeof aVal === 'string' && typeof bVal === 'string') {
@@ -635,10 +650,10 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
           </h2>
           <p className="text-xs text-sage-500 mt-1">
             {viewMode === 'quality'
-              ? 'Quality-of-lead signals per source, measured from weddings that actually booked. Higher review scores, lower friction, and faster time-to-book mean better-fit couples.'
+              ? 'Quality-of-lead signals per source, measured from weddings that actually booked inside the window. Higher review scores, lower friction, and faster time-to-book mean better-fit couples. Booked counts here use the legacy leads.source field.'
               : viewMode === 'funnel'
-              ? 'Volume → engagement → conversion across platform signals. Funnel depth ≥3 = audience routinely reaches the message tier; high link rate = candidates who became real leads.'
-              : 'Cost-per acquisition by stage, using first-touch attribution. $/booking is the bottom-line CAC; $/tour and $/lead show where each platform stops paying off.'}
+              ? 'Volume → engagement → conversion across platform signals. Funnel depth ≥3 = audience routinely reaches the message tier; high link rate = candidates who became real leads. Counts use first-touch attribution and may differ from Quality view.'
+              : 'Cost-per acquisition by stage, using first-touch attribution.  $/booking is the bottom-line CAC;  $/tour and  $/lead show where each platform stops paying off. Lead/tour/booking counts here use first-touch attribution; Quality view uses the legacy leads.source field — small differences are expected.'}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -666,9 +681,9 @@ function SourceQualityScorecard({ scope }: ScorecardProps) {
           {/* Time window selector. */}
           <select
             value={windowDays}
-            onChange={(e) => setWindowDays(parseInt(e.target.value, 10) as ScorecardWindow)}
+            onChange={(e) => onWindowChange(parseInt(e.target.value, 10) as ScorecardWindow)}
             className="text-xs border border-sage-200 rounded-md px-2 py-1.5 bg-surface text-sage-700"
-            title="Time window for funnel + CAC metrics"
+            title="Time window applies to all three view modes plus the panels below"
           >
             <option value="30">Last 30d</option>
             <option value="90">Last 90d</option>
@@ -1092,6 +1107,10 @@ export default function SourceAttributionPage() {
   const [error, setError] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('inquiries')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  // PC.4 fix #4: window state lifted to page so the scorecard,
+  // multi-touch split, non-converting cohort, and conflict tile
+  // all see the same window. Default 90d (locked).
+  const [windowDays, setWindowDays] = useState<ScorecardWindow>(90)
 
   // ---- Fetch data ----
   // Funnel rows come from the multi-touch attribution endpoint (reads
@@ -1515,10 +1534,10 @@ export default function SourceAttributionPage() {
       )}
 
       {/* ---- Source Quality Scorecard (Phase 4 Task 39 + Phase C / PC.1) ---- */}
-      <SourceQualityScorecard scope={scope} />
+      <SourceQualityScorecard scope={scope} windowDays={windowDays} onWindowChange={setWindowDays} />
 
       {/* ---- Phase C / PC.2: candidate-driven intelligence panels ---- */}
-      <PhaseBIntelPanels scope={scope} />
+      <PhaseBIntelPanels scope={scope} windowDays={windowDays} />
 
       {/* ---- Compare Attribution Models (Phase 4 P4.4) ---- */}
       <ModelComparisonCard scope={scope} />

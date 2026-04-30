@@ -73,11 +73,17 @@ export async function computeSourceQuality(
   const windowStartIso = new Date(Date.now() - windowDays * 86_400_000).toISOString()
   const windowMonthCutoff = windowStartIso.slice(0, 7) + '-01' // marketing_spend.month is first-of-month
   const supabase = createServiceClient()
+  // Window-bound Quality columns to weddings BOOKED inside the
+  // window. Coordinator selecting "Last 90d" expects "Knot's quality
+  // of bookings in the last 90 days," not all-time. PC.4 fix #1:
+  // before this, the window selector silently did nothing for the
+  // Quality view.
   const { data: weddings } = await supabase
     .from('weddings')
     .select('id, source, booking_value, friction_tags, referred_by, status, inquiry_date, booked_at')
     .eq('venue_id', venueId)
     .not('source', 'is', null)
+    .gte('booked_at', windowStartIso)
 
   const bySource: Record<string, {
     ids: string[]
