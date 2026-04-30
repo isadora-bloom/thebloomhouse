@@ -40,6 +40,7 @@ import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { chooseEventTime, parseEventTime } from '@/lib/services/event-time'
 import { detectFormRelay, type FormRelayLead } from '@/lib/services/form-relay-parsers'
+import { extractIdentityFromEmail } from '@/lib/services/body-identity-extract'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
 
@@ -598,12 +599,40 @@ export async function processIncomingEmail(
     ownEmails
   )
 
+  // Universal body-identity extraction — runs on every email
+  // regardless of whether a platform parser matched. Two purposes:
+  //   1. Persisted on interactions.extracted_identity for future
+  //      retroactive linkage scripts and downstream analytics.
+  //   2. Provides a primary_email fallback for findOrCreateContact
+  //      when no platform parser fired AND the From header is a
+  //      venue-own alias or a generic shared relay (otherwise the
+  //      venue itself becomes "the prospect" and the real prospect
+  //      vanishes — Rixey 2026-04-30 calculator orphan pattern).
+  const extractedIdentity = extractIdentityFromEmail(
+    { subject: email.subject, body: email.body },
+    { ownEmails },
+  )
+
   // Step 1a.55: Scheduling-tool detection already ran at 1a.0 to bypass
   // the universal-ignore short-circuit. Reuse the same result here so
   // we don't double-parse the body.
   let schedulingEvent: SchedulingEvent | null = schedulingPreCheck
 
-  const fromEmail = formLead?.leadEmail ?? schedulingEvent?.inviteeEmail ?? rawFromEmail
+  // Identity priority:
+  //   1. Form-relay parser's extracted lead email (Knot, WW, Zola,
+  //      calculator) — most reliable when the parser fires
+  //   2. Scheduling-event's invitee email (Calendly + friends)
+  //   3. Universal body-extracted primary email — used when the From
+  //      header is a venue-own alias (the calculator orphan pattern)
+  //      or a known shared relay; otherwise the From is the prospect
+  //   4. Raw From header — default fallback
+  const useExtractedFallback =
+    extractedIdentity.primary_email !== null &&
+    (ownEmails.has(rawFromEmail) || /^messages@(weddingwire|theknotww)\.com$/i.test(rawFromEmail))
+  const fromEmail =
+    formLead?.leadEmail ??
+    schedulingEvent?.inviteeEmail ??
+    (useExtractedFallback ? extractedIdentity.primary_email! : rawFromEmail)
   // When a form relay or scheduling tool fires, the raw From display
   // name is the platform / venue / tool name (e.g. "Rixey Manor", "Zola
   // Vendor Communication", "Calendly"), not the prospect. Falling back
@@ -840,6 +869,11 @@ export async function processIncomingEmail(
     gmail_message_id: email.messageId,
     gmail_thread_id: email.threadId,
     timestamp: email.date,
+    // Universal body-identity payload — populated on every email
+    // regardless of parser match. Coordinator UIs and retroactive
+    // linkage scripts read interactions.extracted_identity rather
+    // than re-parsing.
+    extracted_identity: extractedIdentity,
   }
   if (email.connectionId) {
     interactionPayload.gmail_connection_id = email.connectionId
