@@ -65,7 +65,12 @@ const STEPS: Step[] = [
     rationale: 'Touchpoint source matches the actual channel (inferred from interaction.from_email), not the wedding\'s legacy first-touch.',
   },
   {
-    name: '5. Recompute heat scores',
+    name: '5. Recompute attribution buckets',
+    script: 'scripts/recompute-attribution-buckets.ts',
+    rationale: 'After step 3 corrected inquiry_date, bucket / is_first_touch on existing attribution_events may be stale (a signal that\'s now post-inquiry may still be labeled \'attribution\'). Re-derive against current inquiry dates so the journey narrative + first-touch reporting are accurate.',
+  },
+  {
+    name: '6. Recompute heat scores',
     script: 'scripts/recompute-heat-after-reclassify.ts',
     rationale: 'Heat may be inflated from now-deleted false-positive engagement events. Reset everything.',
   },
