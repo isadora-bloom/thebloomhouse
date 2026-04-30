@@ -235,8 +235,24 @@ interface MultiTouchBucket {
   pct: number
 }
 
+// Wedding sources where we ingest engagement signals via the
+// candidate-identity pipeline. If a wedding lists one of these as
+// its source but no candidate resolves to it, that's the
+// "automated batch lead" pattern — Knot/WeddingWire forwarded
+// contact details from a search-form fill rather than a profile-
+// engaged prospect (2026-04-30).
+const TRACKED_PLATFORM_SOURCES_FOR_FLAG = [
+  'the_knot',
+  'wedding_wire',
+  'instagram',
+  'pinterest',
+  'google_business',
+  'facebook',
+] as const
+
 function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
   const [conflictCount, setConflictCount] = useState<number | null>(null)
+  const [batchLeadCount, setBatchLeadCount] = useState<number | null>(null)
   const [nonConverting, setNonConverting] = useState<NonConvertingRow[]>([])
   const [multiTouch, setMultiTouch] = useState<MultiTouchBucket[]>([])
   const [bookedAttributed, setBookedAttributed] = useState<number>(0)
@@ -251,6 +267,7 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
     if (!isVenueScope) {
       setLoading(false)
       setConflictCount(0)
+      setBatchLeadCount(0)
       setNonConverting([])
       setMultiTouch([])
       return
@@ -302,6 +319,43 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
 
       setConflictCount(conflictRes.count ?? 0)
       setNonConverting((cohortRes.data ?? []) as NonConvertingRow[])
+
+      // Batch-lead count: weddings on a tracked platform with no
+      // candidate resolved on that same platform. Two-query approach
+      // since PostgREST doesn't expose NOT EXISTS subselects cleanly:
+      //   (a) fetch IDs of tracked-source weddings in window
+      //   (b) fetch resolved_wedding_ids from candidate_identities
+      //   matching those wedding source platforms
+      //   (c) diff in memory
+      const { data: trackedSourceWeddings } = await sb
+        .from('weddings')
+        .select('id, source')
+        .eq('venue_id', venueId)
+        .in('source', TRACKED_PLATFORM_SOURCES_FOR_FLAG as unknown as string[])
+        .gte('inquiry_date', windowStartIso)
+      const trackedRows = (trackedSourceWeddings ?? []) as Array<{ id: string; source: string }>
+      let batchLeads = 0
+      if (trackedRows.length > 0) {
+        const trackedIds = trackedRows.map((r) => r.id)
+        const CHUNK = 100
+        const resolvedSet = new Set<string>() // wedding_id|source pairs
+        for (let i = 0; i < trackedIds.length; i += CHUNK) {
+          const chunk = trackedIds.slice(i, i + CHUNK)
+          const { data: cands } = await sb
+            .from('candidate_identities')
+            .select('resolved_wedding_id, source_platform')
+            .in('resolved_wedding_id', chunk)
+            .is('deleted_at', null)
+          for (const c of (cands ?? []) as Array<{ resolved_wedding_id: string; source_platform: string }>) {
+            resolvedSet.add(`${c.resolved_wedding_id}|${c.source_platform}`)
+          }
+        }
+        for (const w of trackedRows) {
+          if (!resolvedSet.has(`${w.id}|${w.source}`)) batchLeads++
+        }
+      }
+      if (cancelled) return
+      setBatchLeadCount(batchLeads)
 
       // Multi-touch grouping: count distinct platforms per wedding.
       const platformsByWedding = new Map<string, Set<string>>()
@@ -367,6 +421,7 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
   // bunch of empty cards.
   if (
     (conflictCount ?? 0) === 0 &&
+    (batchLeadCount ?? 0) === 0 &&
     nonConverting.length === 0 &&
     multiTouch.length === 0
   ) {
@@ -393,6 +448,22 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
             <ArrowRight className="w-4 h-4 text-amber-600 shrink-0" />
           </div>
         </Link>
+      )}
+
+      {(batchLeadCount ?? 0) > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-amber-900">
+                {batchLeadCount} likely batch lead{batchLeadCount === 1 ? '' : 's'} (no platform engagement)
+              </p>
+              <p className="text-xs text-amber-700 mt-0.5">
+                Weddings sourced from a tracked platform (Knot, WW, IG, etc.) but with zero matching engagement signal. Often automated batch leads from a search-form fill rather than profile-engaged prospects. Each affected lead detail page shows the warning.
+              </p>
+            </div>
+          </div>
+        </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

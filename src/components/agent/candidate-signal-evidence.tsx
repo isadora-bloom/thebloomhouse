@@ -15,9 +15,15 @@
  *     conflict flag if weddings.source disagrees.
  *   - Per-platform candidate cards — funnel depth, action_counts,
  *     timeline of signals, AI reasoning if Tier 2, change button.
+ *   - No-engagement warning — when wedding.source is a platform we
+ *     ingest signals for (Knot, WW, IG, etc.) but no candidate
+ *     resolved here, often signals an automated batch lead from
+ *     the platform's recommendation engine rather than a prospect
+ *     who actually engaged with the venue's profile (2026-04-30).
  *
- * Empty state: shows nothing when no candidates resolve here. The
- * widget self-hides so the page doesn't get an empty box.
+ * Empty state: shows nothing when no candidates resolve here AND the
+ * legacy source isn't on a tracked platform. Otherwise renders the
+ * no-engagement warning.
  */
 
 import { useEffect, useState } from 'react'
@@ -78,6 +84,21 @@ function getSupabase() {
 function platformLabel(key: string): string {
   return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
+
+// Platforms we ingest engagement signals for (clusterer/resolver pipeline).
+// Mirrors ALL_DETECTOR_KEYS in src/lib/services/platform-detectors/index.ts
+// — duplicated here to keep this client component free of server imports.
+// If a wedding's source is in this set but no candidate resolves here,
+// either (a) it's a Knot/WW automated batch lead with no profile view,
+// or (b) we haven't ingested signals for this lead yet.
+const TRACKED_PLATFORM_SOURCES = new Set([
+  'the_knot',
+  'wedding_wire',
+  'instagram',
+  'pinterest',
+  'google_business',
+  'facebook',
+])
 
 function actionIcon(action: string) {
   if (action === 'view') return <Eye className="w-3 h-3" />
@@ -152,7 +173,39 @@ export function CandidateSignalEvidence({ weddingId, legacySource, onChangeAttri
   }, [weddingId])
 
   if (loading) return null
-  if (candidates.length === 0 && events.length === 0) return null
+  if (candidates.length === 0 && events.length === 0) {
+    // Wedding came in through a tracked platform but we have no
+    // candidate evidence here — render the no-engagement warning
+    // instead of self-hiding, so coordinator can act on it.
+    if (legacySource && TRACKED_PLATFORM_SOURCES.has(legacySource)) {
+      return (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 shadow-sm">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-amber-900">
+                No {platformLabel(legacySource)} engagement signal
+              </h3>
+              <p className="text-xs text-amber-700 mt-1.5 leading-relaxed">
+                This inquiry is marked source <strong>{platformLabel(legacySource)}</strong>,
+                but we have no record of this person viewing or saving the venue's
+                profile on that platform.
+              </p>
+              <p className="text-xs text-amber-700 mt-2 leading-relaxed">
+                On The Knot and WeddingWire this often indicates an automated
+                batch lead — the platform forwarded contact details from a
+                user who filled a search form, not someone who specifically
+                engaged with this listing. Treat with proportional skepticism;
+                conversion rates are typically much lower than profile-engaged
+                inquiries.
+              </p>
+            </div>
+          </div>
+        </div>
+      )
+    }
+    return null
+  }
 
   const firstTouchEvent = events.find((e) => e.is_first_touch && e.bucket === 'attribution')
   const conflict = events.find((e) => e.conflict_with_legacy_source && !e.reverted_at)
