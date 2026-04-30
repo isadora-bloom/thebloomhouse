@@ -28,6 +28,7 @@ import { resolveVenueCandidates } from '@/lib/services/candidate-resolver'
 import { syncMeetings as syncZoomMeetings } from '@/lib/services/zoom'
 import { syncAllVenues as syncOpenPhoneAllVenues } from '@/lib/services/openphone'
 import { runDataIntegritySweepAllVenues } from '@/lib/services/data-integrity'
+import { sweepReEngagementConversions } from '@/lib/services/re-engagement'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -60,6 +61,7 @@ const VALID_JOBS = [
   'openphone_poll',
   'phase_b_sweep',
   'data_integrity_sweep',
+  're_engagement_attribution',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -203,6 +205,16 @@ async function runJob(job: JobName): Promise<unknown> {
       // status on /intel/anomalies without having to re-run any
       // script. Cheap (~5-10s per venue) and idempotent.
       return sweepDataIntegrityAllVenues()
+
+    case 're_engagement_attribution':
+      // Phase D Tier 2 / Stage 3 (2026-04-30). Daily — for each
+      // sent re_engagement_action whose 60-day window is still
+      // open, look for a wedding that arrived within the window
+      // whose primary person matches the candidate's first_name
+      // + last_initial. Unique match → attribute. Ambiguous
+      // (2+) → leave for coordinator. Closed window with no
+      // match → counted, no attribution. Idempotent; rerun-safe.
+      return sweepReEngagementAttribution()
   }
 }
 
@@ -290,6 +302,11 @@ async function sweepPhaseBAllVenues(): Promise<
 async function sweepDataIntegrityAllVenues() {
   const supabase = createServiceClient()
   return runDataIntegritySweepAllVenues(supabase)
+}
+
+async function sweepReEngagementAttribution() {
+  const supabase = createServiceClient()
+  return sweepReEngagementConversions(supabase)
 }
 
 async function scanBacktraceAllVenues(): Promise<

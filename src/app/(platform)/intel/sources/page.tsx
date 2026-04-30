@@ -19,6 +19,7 @@ import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { SpendImporter } from '@/components/intel/spend-importer'
+import { ReEngagementROIPanel } from '@/components/intel/ReEngagementROIPanel'
 import Link from 'next/link'
 import {
   BarChart,
@@ -1609,6 +1610,7 @@ export default function SourceAttributionPage() {
 
       {/* ---- Phase C / PC.2: candidate-driven intelligence panels ---- */}
       <PhaseBIntelPanels scope={scope} windowDays={windowDays} />
+      {scope.level === 'venue' && <ReEngagementROIPanel />}
 
       {/* ---- Compare Attribution Models (Phase 4 P4.4) ---- */}
       <ModelComparisonCard scope={scope} />
