@@ -742,7 +742,7 @@ export default function BriefingsPage() {
                     <div className="text-sm text-sage-700 leading-relaxed min-w-0">
                       <span className="font-medium text-sage-900">{a.metric.replace(/_/g, ' ')}</span>
                       <span className="text-[10px] uppercase tracking-wide ml-2 text-sage-500">{a.severity}</span>
-                      <p className="mt-1">{a.explanation}</p>
+                      <p className="mt-1">{a.explanation || '(explanation pending)'}</p>
                       {a.top_action && (
                         <p className="mt-1 text-xs text-sage-600 italic">→ Suggested: {a.top_action}</p>
                       )}

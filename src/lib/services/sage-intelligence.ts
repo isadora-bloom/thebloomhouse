@@ -312,53 +312,65 @@ export async function buildSageIntelligenceContext(
             lines.push(`- Evidence: ${evidence}`)
           }
           lines.push('')
-          lines.push('Reference the platform and the engagement naturally — "glad our Knot listing caught your eye" or similar — but stay grounded in the facts above.')
+          // Audit 5 / privacy guard (2026-04-30): tighter instruction
+          // so Sage references the SOURCE (which the couple already
+          // knows they used) but never quotes specific engagement
+          // metrics. "Saw you on The Knot" → fine. "Saw you save our
+          // listing twice" → creepy. The Evidence list above is for
+          // routing context only, never copied into the email body.
+          lines.push('You may reference the discovery source naturally (e.g. "thanks for finding us through The Knot" — they know they used it). NEVER quote specific engagement metrics: no view counts, save counts, message counts, dates from the timeline, or "we noticed you ___" phrasing. The Evidence breakdown above informs your tone and warmth — it does NOT belong in the email body. Stay grounded in the narrative; never invent details beyond it.')
           sections.push(lines.join('\n'))
         }
       }
     } catch (err) {
       console.warn('[sage-intel] Failed to fetch Phase B journey:', err)
     }
-  }
 
-  // --- Recent voice preferences from coordinator edits (D1.2 / fix #3 — 2026-04-30) ---
-  // The voice loop was half-built: learning.ts has been recording
-  // every approval/edit/rejection to draft_feedback for weeks but
-  // Sage's prompt context was never reading it. Coordinators
-  // edited the same kinds of phrases out of drafts week after
-  // week and Sage never adapted. Now: pull a small window of
-  // recent edits + rejections + a couple of strong-approval
-  // examples, summarize as preferences, inject before Sage drafts.
-  try {
-    const learning = await getLearningContext(venueId, 'inquiry')
-    const sectionLines: string[] = []
-    if (learning.editPatterns.length > 0) {
-      sectionLines.push('Recent edits (coordinator preferred phrasing on the right):')
-      for (const ep of learning.editPatterns.slice(0, 3)) {
-        const orig = ep.original.slice(0, 140).replace(/\s+/g, ' ').trim()
-        const edited = ep.edited.slice(0, 140).replace(/\s+/g, ' ').trim()
-        sectionLines.push(`  • "${orig}" → "${edited}"`)
+    // --- Recent voice preferences from coordinator edits (D1.2 / fix #3 — 2026-04-30) ---
+    // The voice loop was half-built: learning.ts has been recording
+    // every approval/edit/rejection to draft_feedback for weeks but
+    // Sage's prompt context was never reading it. Coordinators
+    // edited the same kinds of phrases out of drafts week after
+    // week and Sage never adapted. Now: pull a small window of
+    // recent edits + rejections + a couple of strong-approval
+    // examples, summarize as preferences, inject before Sage drafts.
+    //
+    // Audit 5 (2026-04-30): gated on personId so couple-side Sage
+    // chat (which calls buildSageIntelligenceContext without a
+    // personId) doesn't pull coordinator-only inquiry-reply tuning.
+    // The 'inquiry' category is specifically about email drafts to
+    // a known person; couple chat is a different domain.
+    try {
+      const learning = await getLearningContext(venueId, 'inquiry')
+      const sectionLines: string[] = []
+      if (learning.editPatterns.length > 0) {
+        sectionLines.push('Recent edits (coordinator preferred phrasing on the right):')
+        for (const ep of learning.editPatterns.slice(0, 3)) {
+          const orig = ep.original.slice(0, 140).replace(/\s+/g, ' ').trim()
+          const edited = ep.edited.slice(0, 140).replace(/\s+/g, ' ').trim()
+          sectionLines.push(`  • "${orig}" → "${edited}"`)
+        }
       }
-    }
-    if (learning.rejectionReasons.length > 0) {
-      sectionLines.push('Recent rejection reasons (avoid these patterns):')
-      for (const r of learning.rejectionReasons.slice(0, 3)) {
-        sectionLines.push(`  • ${r.slice(0, 120)}`)
+      if (learning.rejectionReasons.length > 0) {
+        sectionLines.push('Recent rejection reasons (avoid these patterns):')
+        for (const r of learning.rejectionReasons.slice(0, 3)) {
+          sectionLines.push(`  • ${r.slice(0, 120)}`)
+        }
       }
-    }
-    if (learning.goodExamples.length > 0) {
-      sectionLines.push('Recently approved drafts (subject lines that work):')
-      for (const g of learning.goodExamples.slice(0, 2)) {
-        sectionLines.push(`  • "${g.subject}"`)
+      if (learning.goodExamples.length > 0) {
+        sectionLines.push('Recently approved drafts (subject lines that work):')
+        for (const g of learning.goodExamples.slice(0, 2)) {
+          sectionLines.push(`  • "${g.subject}"`)
+        }
       }
+      if (sectionLines.length > 0) {
+        sections.push(
+          `RECENT VOICE PREFERENCES FROM YOUR TEAM:\n${sectionLines.join('\n')}\n\nMatch the edited side. Avoid the rejection patterns. The right column above shows what landed.`,
+        )
+      }
+    } catch (err) {
+      console.warn('[sage-intel] Failed to fetch learning context:', err)
     }
-    if (sectionLines.length > 0) {
-      sections.push(
-        `RECENT VOICE PREFERENCES FROM YOUR TEAM:\n${sectionLines.join('\n')}\n\nMatch the edited side. Avoid the rejection patterns. The right column above shows what landed.`,
-      )
-    }
-  } catch (err) {
-    console.warn('[sage-intel] Failed to fetch learning context:', err)
   }
 
   // --- Demand outlook ---
