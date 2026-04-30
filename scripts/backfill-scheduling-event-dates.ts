@@ -145,6 +145,62 @@ async function backfillEngagementEvents(): Promise<Stats> {
 }
 
 /**
+ * Propagate from sibling: when an engagement_event has no parseable
+ * metadata, look for another engagement_event on the same wedding
+ * with the same interaction_id and copy its (already-corrected)
+ * occurred_at. Mirrors the touchpoint-from-siblings pass below.
+ */
+async function backfillEngagementEventsFromSiblings(): Promise<Stats> {
+  const stats = newStats()
+  const { data } = await sb
+    .from('engagement_events')
+    .select('id, wedding_id, occurred_at, metadata, event_type')
+    .eq('venue_id', venueId)
+    .in('event_type', ['tour_scheduled', 'tour_completed', 'tour_cancelled', 'contract_signed'])
+  const rows = (data ?? []) as Array<{ id: string; wedding_id: string; occurred_at: string | null; metadata: { event_datetime?: string | null; subject?: string | null; interaction_id?: string | null } | null; event_type: string }>
+  for (const r of rows) {
+    stats.scanned++
+    if (pickEventTime(r.metadata)) continue // already covered by main backfill
+    const interactionId = r.metadata?.interaction_id ?? null
+    if (!interactionId) { stats.skippedNoMetadata++; continue }
+    const { data: sibling } = await sb
+      .from('engagement_events')
+      .select('id, occurred_at, metadata')
+      .eq('wedding_id', r.wedding_id)
+      .contains('metadata', { interaction_id: interactionId })
+      .neq('id', r.id)
+      .limit(10)
+    const sibs = (sibling ?? []) as Array<{ occurred_at: string | null; metadata: { event_datetime?: string | null; subject?: string | null } | null }>
+    let correct: string | null = null
+    for (const sib of sibs) {
+      const fromMeta = pickEventTime(sib.metadata)
+      if (fromMeta) { correct = fromMeta; break }
+    }
+    if (!correct && sibs.length > 0) {
+      const latest = sibs.map((s) => s.occurred_at).filter((v): v is string => Boolean(v)).sort().at(-1)
+      correct = latest ?? null
+    }
+    if (!correct) { stats.skippedUnparseable++; continue }
+    const currentTs = r.occurred_at ? new Date(r.occurred_at).getTime() : null
+    if (currentTs !== null && Math.abs(new Date(correct).getTime() - currentTs) < MIN_DRIFT_HOURS * 3_600_000) {
+      stats.skippedAlreadyAccurate++
+      continue
+    }
+    if (apply) {
+      const { error: updErr } = await sb
+        .from('engagement_events')
+        .update({ occurred_at: correct })
+        .eq('id', r.id)
+      if (!updErr) stats.updated++
+      else console.error(`  ee-sibling ${r.id}: ${updErr.message}`)
+    } else {
+      stats.updated++
+    }
+  }
+  return stats
+}
+
+/**
  * Propagate from sibling: when a tour_conducted / contract_signed
  * touchpoint has no parseable metadata, look for a tour_scheduled
  * engagement_event on the same wedding with the same interaction_id
@@ -301,6 +357,10 @@ async function main() {
   console.log('[engagement_events]')
   const ee = await backfillEngagementEvents()
   console.log(`  scanned: ${ee.scanned}  ${apply ? 'updated' : 'would update'}: ${ee.updated}  no_metadata: ${ee.skippedNoMetadata}  already_accurate: ${ee.skippedAlreadyAccurate}  unparseable: ${ee.skippedUnparseable}`)
+
+  console.log('\n[engagement_events from siblings]')
+  const eesibs = await backfillEngagementEventsFromSiblings()
+  console.log(`  scanned: ${eesibs.scanned}  ${apply ? 'updated' : 'would update'}: ${eesibs.updated}  no_metadata: ${eesibs.skippedNoMetadata}  already_accurate: ${eesibs.skippedAlreadyAccurate}  unparseable: ${eesibs.skippedUnparseable}`)
 
   console.log('\n[wedding_touchpoints]')
   const tp = await backfillTouchpoints()

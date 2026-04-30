@@ -99,9 +99,16 @@ function stripHtml(body: string): string {
   let s = body
   // Remove script + style blocks entirely (content unsafe)
   s = s.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, '')
-  // Block-level tags → newlines so "Label" and "Value" stay on separate lines
-  s = s.replace(/<\/(p|div|tr|td|li|h[1-6]|table|br)\s*\/?>/gi, '\n')
-  s = s.replace(/<br\s*\/?>/gi, '\n')
+  // Block-level tags → newlines so "Label" and "Value" stay on separate lines.
+  // Match optional attributes ([^>]*) so Calendly's inline-styled
+  // `<br style='...'>` and `</p style='...'>` (yes, real samples)
+  // become line breaks instead of being silently stripped to empty
+  // by the catch-all below — without this, two adjacent label/value
+  // pairs concatenate and the next regex captures whichever fragment
+  // it sees, including HTML tag remnants like "</strong>" (the
+  // 2026-04-30 Rixey corruption surface). 2026-04-30: widened from
+  // bare-tag-only to attribute-tolerant.
+  s = s.replace(/<\/?(p|div|tr|td|li|h[1-6]|table|br)\b[^>]*>/gi, '\n')
   // Strip all remaining tags
   s = s.replace(/<[^>]+>/g, '')
   // Decode common entities
