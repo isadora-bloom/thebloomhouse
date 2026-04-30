@@ -24,9 +24,33 @@ const FILE_CONTENT_CAP = 40_000 // chars embedded into the classifier prompt
 const LARGE_CSV_ROW_THRESHOLD = 50 // rows above this → preview + confirm
 
 function extractAttachmentMeta(rawText: string): { name: string; type: string; path: string } | null {
-  const match = rawText.match(/\[Attached file:\s*([^(]+?)\s*\(([^)]*)\)\s*stored at\s+([^\]]+)\]/)
-  if (!match) return null
-  return { name: match[1].trim(), type: match[2].trim(), path: match[3].trim() }
+  // Format produced by FloatingBrainDump:
+  //   [Attached file: <JSON {name, type, path}>]
+  // JSON-encoded so user-controlled filename can contain anything —
+  // parens, brackets, quotes, etc. — without colliding with the
+  // marker's outer delimiter. Bit Rixey 2026-04-30: previous
+  // free-text format ("[Attached file: NAME (TYPE) stored at PATH]")
+  // failed for "Rixey (1).csv" because the regex assumed parens
+  // never appeared inside NAME. The general principle: never parse
+  // structured user content with hand-rolled regex; encode it.
+  //
+  // Backwards-compat: still accepts the old free-text marker for
+  // any in-flight uploads, with the corrected regex (NAME captures
+  // .+?, TYPE forbids parens).
+  const jsonMatch = rawText.match(/\[Attached file:\s*(\{[^]*?\})\s*\]/)
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[1]) as { name?: unknown; type?: unknown; path?: unknown }
+      if (typeof parsed.name === 'string' && typeof parsed.type === 'string' && typeof parsed.path === 'string') {
+        return { name: parsed.name, type: parsed.type, path: parsed.path }
+      }
+    } catch {
+      // fall through to legacy parser
+    }
+  }
+  const legacy = rawText.match(/\[Attached file:\s*(.+?)\s*\(([^()]*)\)\s+stored at\s+([^\]]+)\]/)
+  if (!legacy) return null
+  return { name: legacy[1].trim(), type: legacy[2].trim(), path: legacy[3].trim() }
 }
 
 async function readAttachedFileText(

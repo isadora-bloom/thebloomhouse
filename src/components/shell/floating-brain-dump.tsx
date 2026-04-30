@@ -43,7 +43,13 @@ type SubmitState =
       intent: string
       clarification: string | null
       importSummary?: ImportSummaryShape | null
+      // When the route returns needsClarification with a CSV-preview
+      // intent, we surface an inline Confirm button so the coordinator
+      // doesn't have to navigate to /agent/notifications. Set when
+      // intent ends in '_preview' and entryId is present.
+      pendingConfirm?: { entryId: string; previewRows: number; intent: string } | null
     }
+  | { kind: 'confirming'; entryId: string }
   | { kind: 'error'; message: string }
 
 const BUCKET = 'brain-dump'
@@ -84,6 +90,38 @@ export function FloatingBrainDump() {
     setState({ kind: 'idle' })
   }, [])
 
+  // Inline confirm for parked CSV previews. Avoids forcing the
+  // coordinator to navigate to /agent/notifications for every large
+  // CSV upload — the same pipeline that runs small CSVs inline runs
+  // here when called.
+  async function confirmImport(entryId: string) {
+    setState({ kind: 'confirming', entryId })
+    try {
+      const res = await fetch(`/api/brain-dump/${entryId}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'confirm' }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || `HTTP ${res.status}`)
+      }
+      const data = (await res.json()) as { id: string; status: string; importSummary?: ImportSummaryShape }
+      setState({
+        kind: 'done',
+        intent: 'imported',
+        clarification: null,
+        importSummary: data.importSummary ?? null,
+        pendingConfirm: null,
+      })
+    } catch (err) {
+      setState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Confirm failed',
+      })
+    }
+  }
+
   const close = useCallback(() => {
     setOpen(false)
     // keep the last completion visible for a beat if the coordinator
@@ -110,7 +148,13 @@ export function FloatingBrainDump() {
           .from(BUCKET)
           .upload(path, file, { contentType: file.type || undefined })
         if (upErr) throw upErr
-        rawText = `${rawText}\n\n[Attached file: ${file.name} (${file.type || 'unknown'}) stored at ${path}]`
+        // JSON-encoded marker so user-controlled filenames (parens,
+        // brackets, quotes, etc.) don't collide with the marker's
+        // outer delimiter. The route's extractAttachmentMeta parses
+        // this structured form first, falling back to the legacy
+        // free-text form for compatibility.
+        const meta = JSON.stringify({ name: file.name, type: file.type || 'unknown', path })
+        rawText = `${rawText}\n\n[Attached file: ${meta}]`
         if (file.type.startsWith('image/')) inputType = 'image'
         else if (file.type === 'application/pdf') inputType = 'pdf'
         else if (file.type === 'text/csv' || file.name.endsWith('.csv')) inputType = 'csv'
@@ -134,15 +178,30 @@ export function FloatingBrainDump() {
         throw new Error(err.error || `HTTP ${res.status}`)
       }
       const data = (await res.json()) as {
+        entryId?: string
         intent: string
         clarificationQuestion?: string | null
         importSummary?: ImportSummaryShape | null
+        needsClarification?: boolean
+        previewRows?: number
       }
+      // Detect a large-CSV preview parked for confirmation. The route's
+      // CSV fast-path produces intents like 'platform_activity_preview',
+      // 'leads_preview', etc. when row count > LARGE_CSV_ROW_THRESHOLD.
+      const isCsvPreview =
+        data.needsClarification === true &&
+        typeof data.intent === 'string' &&
+        data.intent.endsWith('_preview') &&
+        typeof data.entryId === 'string' &&
+        typeof data.previewRows === 'number'
       setState({
         kind: 'done',
         intent: data.intent ?? 'unknown',
         clarification: data.clarificationQuestion ?? null,
         importSummary: data.importSummary ?? null,
+        pendingConfirm: isCsvPreview
+          ? { entryId: data.entryId!, previewRows: data.previewRows!, intent: data.intent }
+          : null,
       })
     } catch (err) {
       setState({
@@ -191,7 +250,37 @@ export function FloatingBrainDump() {
 
             {state.kind === 'done' ? (
               <div className="space-y-3 py-2">
-                {state.clarification ? (
+                {state.pendingConfirm ? (
+                  // Inline confirm path: large CSV detected, parked
+                  // for confirmation. Coordinator confirms here
+                  // instead of navigating to Notifications.
+                  <div className="flex items-start gap-2 bg-sage-50 border border-sage-200 rounded-lg px-3 py-2">
+                    <CheckCircle2 className="w-4 h-4 text-sage-600 mt-0.5 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-sage-900">
+                        Detected {state.pendingConfirm.intent.replace(/_preview$/, '').replace(/_/g, ' ')} ·{' '}
+                        {state.pendingConfirm.previewRows.toLocaleString()} rows
+                      </p>
+                      <p className="text-xs text-sage-700 mt-1">
+                        Confirm to import. {aiName} will cluster signals + match candidates against existing leads.
+                      </p>
+                      <div className="flex gap-2 mt-2">
+                        <button
+                          onClick={() => confirmImport(state.pendingConfirm!.entryId)}
+                          className="text-xs px-3 py-1.5 bg-sage-600 text-white rounded-lg hover:bg-sage-700"
+                        >
+                          Confirm import
+                        </button>
+                        <button
+                          onClick={reset}
+                          className="text-xs px-3 py-1.5 border border-sage-200 rounded-lg text-sage-700 hover:bg-sage-100"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : state.clarification ? (
                   <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                     <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
                     <div>
@@ -257,6 +346,18 @@ export function FloatingBrainDump() {
                   >
                     Done
                   </button>
+                </div>
+              </div>
+            ) : state.kind === 'confirming' ? (
+              <div className="space-y-3 py-2">
+                <div className="flex items-start gap-2 bg-sage-50 border border-sage-200 rounded-lg px-3 py-3">
+                  <Loader2 className="w-4 h-4 text-sage-600 animate-spin mt-0.5 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-sage-900">Importing…</p>
+                    <p className="text-xs text-sage-700 mt-1">
+                      Inserting signals, clustering candidates, matching against existing leads. This can take a minute on large files.
+                    </p>
+                  </div>
                 </div>
               </div>
             ) : (
