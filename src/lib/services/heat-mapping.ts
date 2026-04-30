@@ -415,15 +415,12 @@ export async function recalculateHeatScore(
     .eq('wedding_id', weddingId)
     .order('occurred_at', { ascending: false })
 
-  if (!events || events.length === 0) {
-    return {
-      weddingId,
-      newScore: 0,
-      previousScore,
-      temperatureTier: getTier(0),
-      pointsAwarded: 0,
-    }
-  }
+  // PD.1 fix #2 (2026-04-30): no early-return when engagement_events
+  // is empty. A wedding with deep platform-signal engagement but no
+  // email/portal activity yet is a real case post-Phase B — Knot
+  // candidates can resolve to a wedding before any inbound email
+  // arrives. Returning 0 here would discard the entire Phase B
+  // contribution computed below.
 
   // Sum points with time decay
   const now = Date.now()
@@ -432,7 +429,7 @@ export async function recalculateHeatScore(
 
   let totalScore = 0
 
-  for (const event of events) {
+  for (const event of events ?? []) {
     const eventPoints = event.points as number
     const tsSource = (event.occurred_at ?? event.created_at) as string
     const eventDate = new Date(tsSource).getTime()
@@ -452,10 +449,10 @@ export async function recalculateHeatScore(
   //
   // Per candidate: funnel_depth * 2 points, time-decayed from
   // last_seen via the same 0.98/day rate. Plus +5 cross-platform
-  // bonus when 2+ distinct platforms resolved here. Plus +3 per
-  // AI-confident Tier 2 match (the model is willing to bet on
-  // this lead being engaged). Phase B contribution capped at +20
-  // so platform-rich leads can't crowd out the 0-100 score.
+  // bonus when 2+ distinct platforms resolved here. Plus AI-tier
+  // bonus capped separately (PD.1 fix #7) so a wedding with many
+  // AI-tier matches doesn't crowd out funnel evidence under the
+  // overall +20 cap.
   const { data: phaseBCandidates } = await supabase
     .from('candidate_identities')
     .select('source_platform, funnel_depth, last_seen')
@@ -479,8 +476,10 @@ export async function recalculateHeatScore(
     .eq('wedding_id', weddingId)
     .eq('tier', 'tier_2_ai')
     .is('reverted_at', null)
+  // AI bonus capped at +6 (max 2 matches contribute) so heavy AI
+  // attribution can't dominate the 20-point Phase B headroom.
   if (typeof aiTierCount === 'number' && aiTierCount > 0) {
-    phaseBContribution += aiTierCount * 3
+    phaseBContribution += Math.min(6, aiTierCount * 3)
   }
   totalScore += Math.min(20, phaseBContribution)
 

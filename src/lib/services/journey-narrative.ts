@@ -235,6 +235,45 @@ export async function generateNarrativeText(
 }
 
 /**
+ * Cache-only fetch. Returns existing row when present, null when
+ * the wedding has no narrative yet. Never invokes Claude. Used by
+ * Sage's draft path (PD.1 fix #3 — 2026-04-30) so first-draft
+ * latency on a fresh lead doesn't pay an in-line AI call. Lead
+ * detail page still uses generateOrFetch which has the lazy-gen
+ * behavior.
+ */
+export async function fetchCachedNarrative(
+  supabase: SupabaseClient,
+  weddingId: string,
+): Promise<JourneyNarrative | null> {
+  const { data } = await supabase
+    .from('wedding_journey_narratives')
+    .select('narrative_text, signal_count_at_generation, attribution_count_at_generation, generated_at, pinned, generating_at')
+    .eq('wedding_id', weddingId)
+    .maybeSingle()
+  const row = data as
+    | {
+        narrative_text: string
+        signal_count_at_generation: number
+        attribution_count_at_generation: number
+        generated_at: string
+        pinned: boolean
+        generating_at: string | null
+      }
+    | null
+  if (!row || !row.narrative_text) return null
+  return {
+    text: row.narrative_text,
+    cached: true,
+    generated_at: row.generated_at,
+    signal_count: row.signal_count_at_generation,
+    attribution_count: row.attribution_count_at_generation,
+    pinned: row.pinned,
+    generating: Boolean(row.generating_at),
+  }
+}
+
+/**
  * Lazy fetch-or-generate. Returns cached row when fresh; otherwise
  * regenerates. force=true bypasses the freshness check (used by an
  * explicit "regenerate" button).

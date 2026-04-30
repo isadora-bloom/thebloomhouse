@@ -99,7 +99,12 @@ interface PhaseBWeeklyState {
 async function getPhaseBWeeklyState(venueId: string): Promise<PhaseBWeeklyState> {
   const supabase = createServiceClient()
   const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000).toISOString()
-  const empty: PhaseBWeeklyState = {
+
+  // PD.1 fix #10: each sub-query is awaited individually with a
+  // narrow try/catch so one failure (e.g. an RLS edge case) doesn't
+  // wipe the whole section. The previous shape silently dropped to
+  // all-zeros without logging which query failed.
+  const state: PhaseBWeeklyState = {
     newCandidates: 0,
     platformsActive: 0,
     autoLinked: 0,
@@ -108,47 +113,68 @@ async function getPhaseBWeeklyState(venueId: string): Promise<PhaseBWeeklyState>
   }
 
   try {
-    const [candRes, attribRes, nonConvRes, conflictRes] = await Promise.all([
-      supabase
-        .from('candidate_identities')
-        .select('source_platform')
-        .eq('venue_id', venueId)
-        .is('deleted_at', null)
-        .gte('first_seen', sevenDaysAgo),
-      supabase
-        .from('attribution_events')
-        .select('id', { count: 'exact', head: true })
-        .eq('venue_id', venueId)
-        .is('reverted_at', null)
-        .in('decided_by', ['auto', 'ai'])
-        .gte('decided_at', sevenDaysAgo),
-      supabase
-        .from('candidate_identities')
-        .select('id', { count: 'exact', head: true })
-        .eq('venue_id', venueId)
-        .gte('funnel_depth', 3)
-        .is('resolved_wedding_id', null)
-        .is('deleted_at', null)
-        .neq('review_status', 'reviewed'),
-      supabase
-        .from('attribution_events')
-        .select('id', { count: 'exact', head: true })
-        .eq('venue_id', venueId)
-        .not('conflict_with_legacy_source', 'is', null)
-        .is('reverted_at', null),
-    ])
-    const candRows = (candRes.data ?? []) as Array<{ source_platform: string }>
-    return {
-      newCandidates: candRows.length,
-      platformsActive: new Set(candRows.map((c) => c.source_platform)).size,
-      autoLinked: attribRes.count ?? 0,
-      highFunnelNonConverting: nonConvRes.count ?? 0,
-      openConflicts: conflictRes.count ?? 0,
-    }
+    const { data, error } = await supabase
+      .from('candidate_identities')
+      .select('source_platform')
+      .eq('venue_id', venueId)
+      .is('deleted_at', null)
+      .gte('first_seen', sevenDaysAgo)
+    if (error) throw error
+    const rows = (data ?? []) as Array<{ source_platform: string }>
+    state.newCandidates = rows.length
+    state.platformsActive = new Set(rows.map((c) => c.source_platform)).size
   } catch (err) {
-    console.warn('[briefings] Phase B weekly state fetch failed:', err)
-    return empty
+    console.warn('[briefings] Phase B newCandidates fetch failed:', err)
   }
+
+  try {
+    // PD.1 fix #9: include coordinator-decided links too. The
+    // /intel/candidates review queue's "Link to lead" button writes
+    // attribution_events with decided_by='coordinator' — those are
+    // legitimate auto-links from the system's perspective and were
+    // being undercounted before.
+    const { count, error } = await supabase
+      .from('attribution_events')
+      .select('id', { count: 'exact', head: true })
+      .eq('venue_id', venueId)
+      .is('reverted_at', null)
+      .in('decided_by', ['auto', 'ai', 'coordinator'])
+      .gte('decided_at', sevenDaysAgo)
+    if (error) throw error
+    state.autoLinked = count ?? 0
+  } catch (err) {
+    console.warn('[briefings] Phase B autoLinked fetch failed:', err)
+  }
+
+  try {
+    const { count, error } = await supabase
+      .from('candidate_identities')
+      .select('id', { count: 'exact', head: true })
+      .eq('venue_id', venueId)
+      .gte('funnel_depth', 3)
+      .is('resolved_wedding_id', null)
+      .is('deleted_at', null)
+      .neq('review_status', 'reviewed')
+    if (error) throw error
+    state.highFunnelNonConverting = count ?? 0
+  } catch (err) {
+    console.warn('[briefings] Phase B highFunnelNonConverting fetch failed:', err)
+  }
+
+  try {
+    const { count, error } = await supabase
+      .from('attribution_events')
+      .select('id', { count: 'exact', head: true })
+      .eq('venue_id', venueId)
+      .not('conflict_with_legacy_source', 'is', null)
+      .is('reverted_at', null)
+    if (error) throw error
+    state.openConflicts = count ?? 0
+  } catch (err) {
+    console.warn('[briefings] Phase B openConflicts fetch failed:', err)
+  }
+
+  return state
 }
 
 /**
@@ -231,6 +257,11 @@ Return a JSON object with these exact fields:
 - weather_outlook: string (natural language weather summary for the next 14 days)
 - anomaly_summary: string[] (active anomalies in plain English, empty array if none)
 - recommendations: string[] (2-4 actionable recommendations for this week)
+
+The user prompt also includes a PLATFORM SIGNAL HEALTH section with new candidates, auto-linked count, high-funnel non-converting, and conflicts. When ANY of these numbers is non-zero:
+  - Mention them naturally in the summary (e.g. "We saw 23 new platform candidates land this week, 4 of which auto-linked to existing leads.")
+  - When high-funnel non-converting > 5, add a recommendation about re-engaging them (the /intel/sources cohort panel surfaces who).
+  - When conflicts > 0, add a recommendation to clear the candidate review queue.
 
 Be direct and specific. Use actual numbers from the data provided. Do not hedge or use vague language.`
 

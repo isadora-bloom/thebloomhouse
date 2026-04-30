@@ -15,6 +15,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getLatestIndicators, calculateDemandScore } from '@/lib/services/economics'
 import { detectTrendDeviations } from '@/lib/services/trends'
 import { getPriorTouches, narrateTouches } from '@/lib/services/prior-touches'
+import { fetchCachedNarrative } from '@/lib/services/journey-narrative'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -244,12 +245,23 @@ export async function buildSageIntelligenceContext(
     }
 
     // --- Phase B journey narrative + signal evidence (D1.2 — 2026-04-30) ---
-    // The cross-source narrative paragraph already summarizes the
-    // couple's discovery → engagement → inquiry path in natural
-    // prose. We dump it straight into Sage's context so Sage can
-    // reference dates and platforms without inventing them.
-    // Lazy gen + cached, so we don't pay the AI cost on every
-    // draft.
+    // The cross-source narrative paragraph summarizes the couple's
+    // discovery → engagement → inquiry path in natural prose. We
+    // dump it straight into Sage's context so Sage can reference
+    // dates and platforms without inventing them.
+    //
+    // Cache-only fetch (PD.1 fix #3): never trigger an AI gen
+    // mid-draft. If the lead has no cached narrative yet, the
+    // section is omitted — Sage drafts as before. Narrative gen
+    // happens on the lead-detail-page view (the existing flow), so
+    // by the second draft it's usually ready.
+    //
+    // Candidate evidence filters through attribution_events
+    // (PD.1 fix #4): if a coordinator reverted the attribution for
+    // a candidate, that candidate is no longer cited in Sage's
+    // context. The candidate row still exists and resolved_wedding_id
+    // still points here, but no live evidence row means no Sage
+    // mention.
     try {
       const { data: person } = await supabase
         .from('people')
@@ -258,19 +270,34 @@ export async function buildSageIntelligenceContext(
         .maybeSingle()
       const weddingId = (person as { wedding_id: string | null } | null)?.wedding_id ?? null
       if (weddingId) {
-        const { generateOrFetch } = await import('./journey-narrative')
-        const narrative = await generateOrFetch(supabase, weddingId)
+        const narrative = await fetchCachedNarrative(supabase, weddingId)
         if (narrative && narrative.text && !narrative.generating) {
-          const { data: candidates } = await supabase
-            .from('candidate_identities')
-            .select('source_platform, funnel_depth, action_counts')
-            .eq('resolved_wedding_id', weddingId)
-            .is('deleted_at', null)
-          const candList = (candidates ?? []) as Array<{
-            source_platform: string
-            funnel_depth: number
-            action_counts: Record<string, number> | null
-          }>
+          // Distinct candidates with at least one LIVE attribution_event
+          // for this wedding — the resolver may have written
+          // attributions that were later reverted.
+          const { data: liveAttribs } = await supabase
+            .from('attribution_events')
+            .select('candidate_identity_id')
+            .eq('wedding_id', weddingId)
+            .is('reverted_at', null)
+          const liveCandIds = Array.from(
+            new Set(((liveAttribs ?? []) as Array<{ candidate_identity_id: string }>).map((r) => r.candidate_identity_id)),
+          )
+          let candList: Array<{ source_platform: string; funnel_depth: number; action_counts: Record<string, number> | null }> = []
+          if (liveCandIds.length > 0) {
+            const CHUNK = 100
+            for (let i = 0; i < liveCandIds.length; i += CHUNK) {
+              const chunk = liveCandIds.slice(i, i + CHUNK)
+              const { data } = await supabase
+                .from('candidate_identities')
+                .select('source_platform, funnel_depth, action_counts')
+                .in('id', chunk)
+                .is('deleted_at', null)
+              candList.push(
+                ...((data ?? []) as Array<{ source_platform: string; funnel_depth: number; action_counts: Record<string, number> | null }>),
+              )
+            }
+          }
           const lines: string[] = ['SIGNAL JOURNEY (use to write a warm, specific opener — do NOT invent dates or platforms not stated):']
           lines.push(`- ${narrative.text}`)
           if (candList.length > 0) {

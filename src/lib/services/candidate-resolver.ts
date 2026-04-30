@@ -42,6 +42,7 @@ import {
   fetchWeddingContext,
   type CandidateContextForAI,
 } from './candidate-ai-adjudicator'
+import { recalculateHeatScore } from './heat-mapping'
 
 const TIER_1_NAME_WINDOW_HOURS = 72
 const AI_CONFIDENT_THRESHOLD = 70
@@ -530,6 +531,17 @@ async function writeAttributionEvents(args: {
 
   const ft = await recomputeFirstTouch(supabase, match.wedding_id)
   if (ft.error) return { flagged_conflict: !!conflict_flag, error: ft.error }
+
+  // PD.1 fix #1 (2026-04-30): platform-signal attribution should
+  // immediately influence the heat score. Without this, the Phase B
+  // contribution from D1.1 stays cold until the next engagement_event
+  // or daily decay sweep — sometimes 24h. Best-effort, never throws:
+  // a heat-recalc failure shouldn't roll back the attribution write.
+  try {
+    await recalculateHeatScore(candidate.venue_id, match.wedding_id)
+  } catch (err) {
+    console.warn('[resolver] post-attribution heat recalc failed:', err)
+  }
 
   return { flagged_conflict: !!conflict_flag }
 }
