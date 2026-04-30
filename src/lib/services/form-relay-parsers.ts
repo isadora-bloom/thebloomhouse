@@ -170,22 +170,106 @@ function parseTheKnot(from: string, body: string): FormRelayLead | null {
 // WeddingWire (stub — same shape as Knot, refine when a real sample arrives)
 // ---------------------------------------------------------------------------
 
-function parseWeddingWire(from: string, body: string): FormRelayLead | null {
+/**
+ * Extract WeddingWire's per-prospect identifier from the body.
+ *
+ * Every WW notification email (from the shared messages@weddingwire.com
+ * relay) embeds a unique `authsolic` token in the WeddingPro Reply
+ * URL — typically inside a TraceClick wrapper, URL-encoded:
+ *
+ *   https://www.weddingwire.com/emp-mail-TraceClick.php?
+ *     tipo=EMP_RESPUESTA_USUARIO
+ *     &durl=%2F%2Fwww.weddingwire.com%2Fpreq.php%3F
+ *           authsolic%3D89436314x5bc3841a91c6ac001d558cb
+ *     &utm_...
+ *
+ * The token is per-prospect and stable across all of that prospect's
+ * messages. Without extracting it the pipeline can't tell two
+ * prospects apart from the same shared relay address — which is how
+ * Rixey ended up with 10 different prospects collapsed into one
+ * wedding (2026-04-30).
+ *
+ * Returns the token (alphanumeric, lowercased) or null when no URL
+ * with authsolic is present.
+ */
+function extractWeddingWireAuthsolic(body: string): string | null {
+  // Match either URL-encoded (`authsolic%3DTOKEN`) or plain
+  // (`authsolic=TOKEN`). Token is alphanumeric, length >= 12 to
+  // avoid matching short noise.
+  const m = body.match(/authsolic(?:%3D|=)([a-zA-Z0-9]{12,})/i)
+  return m ? m[1].toLowerCase() : null
+}
+
+/**
+ * Extract the prospect's name from a WW notification subject or
+ * body. Subject patterns observed:
+ *   "📩 Kellie Phillis sent you a new message"
+ *   "📩 Kellie Phillis is waiting to hear back from you!"
+ *   "📩 Don't leave Kellie Phillis hanging!"
+ * Body patterns:
+ *   "Kellie Phillis says: ..."
+ */
+function extractWeddingWireName(subject: string, body: string): string | null {
+  const sub = subject ?? ''
+  // Subject: "📩 NAME sent you / is waiting / wants to ..."
+  const subSent = sub.match(/(?:📩\s*)?([A-Z][\w'.-]+(?:\s+[\w'.-]+){0,3}?)\s+(?:sent you|is waiting|wants to)/i)
+  if (subSent) return subSent[1].trim()
+  // Subject: "Don't leave NAME hanging"
+  const subHanging = sub.match(/Don['']?t\s+leave\s+([A-Z][\w'.-]+(?:\s+[\w'.-]+){0,3}?)\s+hanging/i)
+  if (subHanging) return subHanging[1].trim()
+  // Body: "NAME says:"
+  const bodySays = body.match(/^([A-Z][\w'.-]+(?:\s+[\w'.-]+){0,3}?)\s+says:/m)
+  if (bodySays) return bodySays[1].trim()
+  return null
+}
+
+/**
+ * Build the synthetic per-prospect email for WW relays. WW doesn't
+ * expose a real email per prospect — only the authsolic token.
+ * Synthesize a stable, deterministic, NON-ROUTABLE address using
+ * `.invalid` (RFC 2606 reserved TLD) so accidental sends fail
+ * loud + nothing routes anywhere unintended.
+ */
+function syntheticWeddingWireEmail(authsolic: string): string {
+  return `authsolic-${authsolic}@weddingwire.bloom-relay.invalid`
+}
+
+function parseWeddingWire(from: string, body: string, subject: string): FormRelayLead | null {
   const fromAddr = extractEmailAddress(from)
   const isWW =
     /weddingwire\.com$/i.test(fromAddr) ||
-    /@.*weddingwire\.com$/i.test(fromAddr)
+    /@.*weddingwire\.com$/i.test(fromAddr) ||
+    /theknotww\.com$/i.test(fromAddr)
   if (!isWW) return null
 
-  const displayName = extractDisplayName(from)
   const personalEmail = fieldAfter(body, 'Personal email') || fieldAfter(body, 'Email')
   const weddingDate = fieldAfter(body, 'Wedding date') || fieldAfter(body, 'Event date')
   const guestCount = fieldAfter(body, 'Guest count') || fieldAfter(body, 'Guests')
   const budget = fieldAfter(body, 'Budget')
+  const authsolic = extractWeddingWireAuthsolic(body)
+  const extractedName = extractWeddingWireName(subject, body)
+  const displayName = extractedName ?? extractDisplayName(from)
 
-  const leadEmail = personalEmail && personalEmail.includes('@')
-    ? personalEmail.toLowerCase()
-    : fromAddr
+  // Identity priority for WW:
+  //   1. Real personal email if WW exposed it (rare — only on
+  //      certain prospect-side flows)
+  //   2. Synthetic authsolic-token email (per-prospect, stable
+  //      across that prospect's messages)
+  //   3. Relay address (fallback — collides for all prospects of
+  //      this venue, the conflation pattern we're trying to escape)
+  let leadEmail: string
+  if (personalEmail && personalEmail.includes('@')) {
+    leadEmail = personalEmail.toLowerCase()
+  } else if (authsolic) {
+    leadEmail = syntheticWeddingWireEmail(authsolic)
+  } else {
+    // No authsolic token AND no personal email — without a unique
+    // identifier we can't responsibly create a contact (would
+    // collapse with every other prospect). Refuse to parse and
+    // let the pipeline log a warning.
+    console.warn('[parseWeddingWire] no personal email + no authsolic token, skipping. Subject:', subject?.slice(0, 80))
+    return null
+  }
 
   return {
     source: 'wedding_wire',
@@ -590,7 +674,7 @@ export function detectFormRelay(
 ): FormRelayLead | null {
   return (
     parseTheKnot(email.from, email.body) ||
-    parseWeddingWire(email.from, email.body) ||
+    parseWeddingWire(email.from, email.body, email.subject) ||
     parseHereComesTheGuide(email.from, email.body) ||
     parseZola(email.from, email.body) ||
     parseVenueCalculator(email.from, email.to, email.subject, email.body, venueOwn) ||
