@@ -41,6 +41,19 @@ interface BriefingContent {
   anomaly_summary: string[]
   recommendations: string[]
   generated_at: string
+  // Connective tissue (gap E — 2026-04-30). Phase B counts preserved
+  // structurally so the email body and dashboard render them
+  // deterministically — not at the AI's mercy. The AI is still
+  // instructed (via WEEKLY_SYSTEM_PROMPT) to weave them into the
+  // summary, but if it doesn't, the structured field is the
+  // fallback the rendering layer uses.
+  phase_b?: {
+    new_candidates: number
+    platforms_active: number
+    auto_linked: number
+    high_funnel_non_converting: number
+    open_conflicts: number
+  }
 }
 
 interface MonthlyBriefingContent extends BriefingContent {
@@ -382,6 +395,13 @@ Generate the weekly briefing.`,
     anomaly_summary: aiResult.anomaly_summary ?? [],
     recommendations: aiResult.recommendations ?? [],
     generated_at: new Date().toISOString(),
+    phase_b: {
+      new_candidates: phaseB.newCandidates,
+      platforms_active: phaseB.platformsActive,
+      auto_linked: phaseB.autoLinked,
+      high_funnel_non_converting: phaseB.highFunnelNonConverting,
+      open_conflicts: phaseB.openConflicts,
+    },
   }
 
   // Persist to ai_briefings
@@ -397,7 +417,7 @@ Generate the weekly briefing.`,
   }
 
   // Email the briefing to the venue's briefing address
-  await deliverBriefingEmail(venueId, 'Weekly Intelligence Briefing', content.summary)
+  await deliverBriefingEmail(venueId, 'Weekly Intelligence Briefing', content)
 
   return content
 }
@@ -547,7 +567,7 @@ Generate the monthly briefing with strategic recommendations.`,
   }
 
   // Email the briefing to the venue's briefing address
-  await deliverBriefingEmail(venueId, 'Monthly Intelligence Briefing', content.summary)
+  await deliverBriefingEmail(venueId, 'Monthly Intelligence Briefing', content)
 
   return content
 }
@@ -623,7 +643,7 @@ export async function getAllBriefings(
 async function deliverBriefingEmail(
   venueId: string,
   subjectPrefix: string,
-  summary: string
+  content: BriefingContent
 ): Promise<void> {
   try {
     const supabase = createServiceClient()
@@ -637,7 +657,28 @@ async function deliverBriefingEmail(
     if (!briefingEmail) return
 
     const subject = `${venue?.name ?? 'Bloom House'} — ${subjectPrefix}`
-    const body = `${subjectPrefix}\n\n${summary}\n\nView the full briefing in your Bloom House dashboard.`
+    // Connective tissue (gap E — 2026-04-30): the email body now
+    // composes deterministically from structured content fields
+    // instead of relying on the AI summary to mention everything.
+    // If the AI worked the Phase B numbers into the summary that's
+    // fine; this section is the structural fallback so coordinators
+    // never miss a non-zero count.
+    const recsBlock = content.recommendations.length > 0
+      ? `\n\nRecommendations:\n${content.recommendations.map((r) => `  • ${r}`).join('\n')}`
+      : ''
+    const phaseBBlock = content.phase_b && (
+      content.phase_b.new_candidates > 0 ||
+      content.phase_b.auto_linked > 0 ||
+      content.phase_b.high_funnel_non_converting > 0 ||
+      content.phase_b.open_conflicts > 0
+    )
+      ? `\n\nPlatform signal health:\n` +
+        `  • ${content.phase_b.new_candidates} new candidates across ${content.phase_b.platforms_active} platform${content.phase_b.platforms_active === 1 ? '' : 's'}\n` +
+        `  • ${content.phase_b.auto_linked} auto-linked to existing leads\n` +
+        `  • ${content.phase_b.high_funnel_non_converting} engaged but didn't inquire\n` +
+        `  • ${content.phase_b.open_conflicts} attribution conflict${content.phase_b.open_conflicts === 1 ? '' : 's'} to review`
+      : ''
+    const body = `${subjectPrefix}\n\n${content.summary}${recsBlock}${phaseBBlock}\n\nView the full briefing in your Bloom House dashboard.`
 
     // Try venue's authenticated Gmail first
     const messageId = await sendGmail(venueId, briefingEmail, subject, body)

@@ -24,6 +24,8 @@ import {
   XCircle,
   Timer,
   Loader2,
+  Sparkles,
+  ArrowRight,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -163,6 +165,136 @@ function timeAgo(dateStr: string): string {
 // ---------------------------------------------------------------------------
 // Pending Auto-Send Card
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Phase B pile-up card (gap F — 2026-04-30)
+// ---------------------------------------------------------------------------
+//
+// Surfaces three Phase B work items coordinators should action:
+//   - Needs review: candidates the resolver couldn't auto-link
+//   - Conflicts: attribution_events disagreeing with leads.source
+//   - High-funnel non-converting: candidates with depth ≥ 3 who
+//     never inquired (re-engagement targets)
+//
+// Each row links to the right tab on /intel/candidates so this is a
+// jumping-off point, not a separate review surface. Self-hides when
+// every count is zero so the page stays clean for healthy venues.
+
+interface PhaseBCounts {
+  needsReview: number
+  conflicts: number
+  highFunnelNonConverting: number
+  venueId: string | null
+}
+
+function PhaseBPileupCard({ scope }: { scope: ReturnType<typeof useScope> }) {
+  const [counts, setCounts] = useState<PhaseBCounts | null>(null)
+  const supabase = createClient()
+
+  useEffect(() => {
+    if (scope.loading) return
+    // Venue-scoped only — group/company rollups would need cross-venue
+    // logic the underlying tables don't aggregate yet.
+    if (scope.level !== 'venue' || !scope.venueId) {
+      setCounts(null)
+      return
+    }
+    const venueId = scope.venueId
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [needsRes, conflictRes, nonConvRes] = await Promise.all([
+          supabase
+            .from('candidate_identities')
+            .select('id', { count: 'exact', head: true })
+            .eq('venue_id', venueId)
+            .eq('review_status', 'needs_review')
+            .is('resolved_wedding_id', null)
+            .is('deleted_at', null),
+          supabase
+            .from('attribution_events')
+            .select('id', { count: 'exact', head: true })
+            .eq('venue_id', venueId)
+            .not('conflict_with_legacy_source', 'is', null)
+            .is('reverted_at', null),
+          supabase
+            .from('candidate_identities')
+            .select('id', { count: 'exact', head: true })
+            .eq('venue_id', venueId)
+            .gte('funnel_depth', 3)
+            .is('resolved_wedding_id', null)
+            .is('deleted_at', null)
+            .neq('review_status', 'reviewed'),
+        ])
+        if (cancelled) return
+        setCounts({
+          needsReview: needsRes.count ?? 0,
+          conflicts: conflictRes.count ?? 0,
+          highFunnelNonConverting: nonConvRes.count ?? 0,
+          venueId,
+        })
+      } catch (err) {
+        console.warn('[notifications] Phase B counts fetch failed:', err)
+        if (!cancelled) setCounts(null)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [scope.level, scope.venueId, scope.loading, supabase])
+
+  if (!counts) return null
+  const total = counts.needsReview + counts.conflicts + counts.highFunnelNonConverting
+  if (total === 0) return null
+
+  const items: Array<{ count: number; label: string; href: string; severity: 'high' | 'medium' }> = []
+  if (counts.conflicts > 0) {
+    items.push({
+      count: counts.conflicts,
+      label: `attribution conflict${counts.conflicts === 1 ? '' : 's'} to review`,
+      href: '/intel/candidates',
+      severity: 'high',
+    })
+  }
+  if (counts.needsReview > 0) {
+    items.push({
+      count: counts.needsReview,
+      label: `candidate${counts.needsReview === 1 ? '' : 's'} needing review`,
+      href: '/intel/candidates',
+      severity: 'medium',
+    })
+  }
+  if (counts.highFunnelNonConverting >= 5) {
+    items.push({
+      count: counts.highFunnelNonConverting,
+      label: `engaged but didn't inquire (re-engagement candidates)`,
+      href: '/intel/sources',
+      severity: 'medium',
+    })
+  }
+
+  return (
+    <div>
+      <h2 className="font-heading text-lg font-semibold text-sage-900 mb-3 flex items-center gap-2">
+        <Sparkles className="w-5 h-5 text-sage-500" />
+        Platform Signals
+      </h2>
+      <div className="bg-surface border border-sage-200 rounded-xl shadow-sm overflow-hidden divide-y divide-sage-100">
+        {items.map((item) => (
+          <a
+            key={item.href + item.label}
+            href={item.href}
+            className="flex items-center gap-3 px-4 py-3 hover:bg-sage-50/50 transition-colors"
+          >
+            <span className={`text-2xl font-bold tabular-nums ${item.severity === 'high' ? 'text-amber-600' : 'text-sage-700'}`}>
+              {item.count}
+            </span>
+            <span className="text-sm text-sage-800 flex-1">{item.label}</span>
+            <ArrowRight className="w-4 h-4 text-sage-400" />
+          </a>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 function PendingAutoSendCard({
   notification,
@@ -868,6 +1000,9 @@ export default function NotificationsPage() {
           </div>
         </div>
       )}
+
+      {/* ---- Phase B candidate review pile-ups (gap F — 2026-04-30) ---- */}
+      <PhaseBPileupCard scope={scope} />
 
       {/* ---- Brain-dump clarifications ---- */}
       <BrainDumpClarifications />

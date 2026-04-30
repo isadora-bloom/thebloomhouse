@@ -74,6 +74,14 @@ const METRICS: Record<string, MetricConfig> = {
   avg_booking_value: { threshold: 0.20, description: 'average booking value' },
   lost_deal_rate: { threshold: 0.30, description: 'lost deals / total inquiries ratio' },
   engagement_rate: { threshold: 0.25, description: 'Engagement rate per inquiry' },
+  // Connective tissue (gap G — 2026-04-30): Phase B metrics get
+  // anomaly-monitored too. Big drops in candidate volume mean the
+  // platform changed an export format or an integration broke.
+  // Spikes in conflicts mean attribution rules need tuning. Drops
+  // in auto-link rate mean the matching engine is mis-firing.
+  candidate_volume: { threshold: 0.30, description: 'count of new platform-signal candidates' },
+  attribution_conflict_rate: { threshold: 0.40, description: 'share of new attributions flagging conflicts vs legacy source' },
+  auto_link_rate: { threshold: 0.25, description: 'share of new candidates auto-linked to leads (Tier 1 + Tier 2 AI)' },
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +299,85 @@ async function queryMetric(
       return (engagementCount ?? 0) / inquiryCount
     }
 
+    // ----- candidate_volume: count of candidate_identities created -----
+    // Excludes anonymous (which never become candidates) by virtue of
+    // the table itself.
+    case 'candidate_volume': {
+      const { count, error } = await supabase
+        .from('candidate_identities')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .is('deleted_at', null)
+        .gte('first_seen', periodStart)
+        .lt('first_seen', periodEnd)
+
+      if (error) {
+        console.error(`[anomaly] Error querying candidate_volume:`, error.message)
+        return null
+      }
+      return count ?? 0
+    }
+
+    // ----- attribution_conflict_rate: conflict rows / total live attributions ----
+    case 'attribution_conflict_rate': {
+      const { count: total, error: totErr } = await supabase
+        .from('attribution_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .is('reverted_at', null)
+        .gte('decided_at', periodStart)
+        .lt('decided_at', periodEnd)
+      if (totErr) {
+        console.error(`[anomaly] Error querying attribution_conflict_rate total:`, totErr.message)
+        return null
+      }
+      if (!total || total === 0) return null
+
+      const { count: conflictCount, error: cErr } = await supabase
+        .from('attribution_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .is('reverted_at', null)
+        .not('conflict_with_legacy_source', 'is', null)
+        .gte('decided_at', periodStart)
+        .lt('decided_at', periodEnd)
+      if (cErr) {
+        console.error(`[anomaly] Error querying attribution_conflict_rate conflicts:`, cErr.message)
+        return null
+      }
+      return (conflictCount ?? 0) / total
+    }
+
+    // ----- auto_link_rate: candidates resolved this period / candidates created this period ----
+    case 'auto_link_rate': {
+      const { count: created, error: cErr } = await supabase
+        .from('candidate_identities')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .is('deleted_at', null)
+        .gte('first_seen', periodStart)
+        .lt('first_seen', periodEnd)
+      if (cErr) {
+        console.error(`[anomaly] Error querying auto_link_rate created:`, cErr.message)
+        return null
+      }
+      if (!created || created === 0) return null
+
+      const { count: resolved, error: rErr } = await supabase
+        .from('candidate_identities')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .is('deleted_at', null)
+        .gte('first_seen', periodStart)
+        .lt('first_seen', periodEnd)
+        .not('resolved_wedding_id', 'is', null)
+      if (rErr) {
+        console.error(`[anomaly] Error querying auto_link_rate resolved:`, rErr.message)
+        return null
+      }
+      return (resolved ?? 0) / created
+    }
+
     default:
       return null
   }
@@ -370,6 +457,12 @@ function formatMetricValue(metricName: string, value: number): string {
       return `$${Math.round(value).toLocaleString()}`
     case 'engagement_rate':
       return `${(value * 100).toFixed(1)}% engagement per inquiry`
+    case 'candidate_volume':
+      return `${Math.round(value)} new candidates`
+    case 'attribution_conflict_rate':
+      return `${(value * 100).toFixed(1)}% of attributions flagged conflict`
+    case 'auto_link_rate':
+      return `${(value * 100).toFixed(1)}% of candidates auto-linked`
     default:
       return String(value)
   }

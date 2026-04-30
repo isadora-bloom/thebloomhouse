@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { recomputeFirstTouch } from '@/lib/services/candidate-resolver'
+import { recalculateHeatScore } from '@/lib/services/heat-mapping'
 import { normalizeSource } from '@/lib/services/normalize-source'
 
 /**
@@ -128,6 +129,17 @@ export async function POST(req: NextRequest) {
 
   const ft = await recomputeFirstTouch(supabase, w.id)
   if (ft.error) return NextResponse.json({ error: ft.error }, { status: 500 })
+
+  // Connective tissue (gap D — 2026-04-30): a manual link is the
+  // strongest possible attribution signal (coordinator confirmed),
+  // so the wedding's heat should reflect it immediately. Without
+  // this, the link is invisible in the inbox heat ranking until
+  // the next engagement event or daily decay sweep.
+  try {
+    await recalculateHeatScore(c.venue_id, w.id)
+  } catch (err) {
+    console.warn('[candidate link] heat recalc failed:', err)
+  }
 
   return NextResponse.json({ ok: true, attributions_written: rows.length })
 }

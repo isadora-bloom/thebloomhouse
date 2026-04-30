@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { recomputeFirstTouch } from '@/lib/services/candidate-resolver'
+import { recalculateHeatScore } from '@/lib/services/heat-mapping'
 import { normalizeSource } from '@/lib/services/normalize-source'
 
 /**
@@ -103,6 +104,16 @@ export async function POST(req: NextRequest) {
 
     const ft = await recomputeFirstTouch(supabase, r.wedding_id)
     if (ft.error) return NextResponse.json({ error: ft.error }, { status: 500 })
+    // Connective tissue (gap C — 2026-04-30): the reverted
+    // attribution was contributing to the wedding's heat (cross-
+    // platform bonus, AI-tier bonus, funnel weight). Recompute so
+    // the score reflects the new live attribution set. Best-effort
+    // — never roll back the revert on heat-calc failure.
+    try {
+      await recalculateHeatScore(r.venue_id, r.wedding_id)
+    } catch (err) {
+      console.warn('[attribution revert] heat recalc failed:', err)
+    }
     return NextResponse.json({ ok: true })
   }
 

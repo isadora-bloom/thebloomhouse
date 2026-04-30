@@ -55,6 +55,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { recalculateHeatScore } from './heat-mapping'
 
 const AUTO_CLUSTER_DAYS = 14
 const REVIEW_CLUSTER_DAYS = 30
@@ -102,6 +103,7 @@ interface CandidateRow {
   first_seen: string | null
   last_seen: string | null
   review_status: string
+  resolved_wedding_id: string | null
 }
 
 interface SignalFingerprint {
@@ -189,6 +191,11 @@ interface MutableCandidate {
   first_seen: string | null
   last_seen: string | null
   review_status: 'clean' | 'needs_review' | 'reviewed'
+  /** When this candidate has already been resolved to a wedding,
+   *  attaching new signals changes its funnel depth — the wedding's
+   *  heat needs to recompute (gap B fix). null = not resolved yet,
+   *  resolver will handle heat when it lands a match. */
+  resolved_wedding_id: string | null
   /** True when at least one new attach happened in this batch. */
   dirty: boolean
   /** Signals attached to this cluster in THIS batch (for the final
@@ -226,6 +233,7 @@ function indexCandidatesByFingerprint(rows: CandidateRow[]): Map<string, Mutable
       first_seen: r.first_seen,
       last_seen: r.last_seen,
       review_status: (r.review_status as 'clean' | 'needs_review' | 'reviewed') ?? 'clean',
+      resolved_wedding_id: r.resolved_wedding_id,
       dirty: false,
       signal_ids_to_link: [],
       bumped_to_review: false,
@@ -269,7 +277,7 @@ async function fetchExistingCandidates(
   for (;;) {
     const { data, error } = await supabase
       .from('candidate_identities')
-      .select('id, venue_id, source_platform, first_name, last_initial, last_name, email, phone, username, city, state, country, cluster_group_key, signal_count, funnel_depth, action_counts, first_seen, last_seen, review_status')
+      .select('id, venue_id, source_platform, first_name, last_initial, last_name, email, phone, username, city, state, country, cluster_group_key, signal_count, funnel_depth, action_counts, first_seen, last_seen, review_status, resolved_wedding_id')
       .eq('venue_id', venueId)
       .eq('source_platform', platform)
       .is('deleted_at', null)
@@ -369,6 +377,7 @@ function applySignalInMemory(
     first_seen: sigDate,
     last_seen: sigDate,
     review_status: 'clean',
+    resolved_wedding_id: null,
     dirty: true,
     signal_ids_to_link: [signal.id],
     bumped_to_review: false,
@@ -465,6 +474,29 @@ async function flushCandidatesForGroup(
       .update({ candidate_identity_id: c.dbId })
       .in('id', c.signal_ids_to_link)
     if (error) summary.errors.push(`signal link cluster ${c.dbId}: ${error.message}`)
+  }
+
+  // Connective tissue (gap B — 2026-04-30): when this batch
+  // attached signals to candidates that are ALREADY resolved to
+  // weddings, those weddings' funnel-depth changed — heat needs
+  // to recompute. The resolver only fires heat-recalc on new
+  // attribution writes; without this, returning Knot visitors
+  // never bump heat after the first match. Dedupe wedding ids
+  // so we recalc each at most once per batch.
+  const weddingsToRefresh = new Map<string, string>() // wedding_id -> venue_id
+  for (const c of existingDirty) {
+    if (c.resolved_wedding_id && c.signal_ids_to_link.length > 0) {
+      weddingsToRefresh.set(c.resolved_wedding_id, c.venue_id)
+    }
+  }
+  for (const [weddingId, venueId] of weddingsToRefresh) {
+    try {
+      await recalculateHeatScore(venueId, weddingId)
+    } catch (err) {
+      summary.errors.push(
+        `heat recalc for wedding ${weddingId}: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
   }
 }
 

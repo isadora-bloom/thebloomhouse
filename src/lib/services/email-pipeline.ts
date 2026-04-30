@@ -963,6 +963,25 @@ export async function processIncomingEmail(
           console.warn('[pipeline] create-time backtrace failed:', err)
         }
       })()
+
+      // Connective tissue (gap A — 2026-04-30): Phase B resolver
+      // hook on lead create. The new wedding may be the missing
+      // match for an unresolved candidate — Sarah viewed Knot 5
+      // days ago, finally emails today, the candidate has been
+      // sitting unresolved waiting for someone to inquire. Without
+      // this, the match waits up to 24h for the nightly sweep.
+      // Fire-and-forget — resolver runtime must not block the
+      // pipeline. Best-effort, errors logged.
+      void (async () => {
+        try {
+          const { resolveForWedding } = await import('@/lib/services/candidate-resolver')
+          if (weddingId) {
+            await resolveForWedding({ supabase, weddingId })
+          }
+        } catch (err) {
+          console.warn('[pipeline] create-time candidate resolve failed:', err)
+        }
+      })()
     }
   } else if (weddingId && parsedEventDate) {
     // Existing wedding — backfill any extracted date / guest count that

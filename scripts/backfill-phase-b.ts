@@ -19,6 +19,7 @@ import { readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { reclusterVenue } from '../src/lib/services/candidate-clusterer'
 import { resolveVenueCandidates } from '../src/lib/services/candidate-resolver'
+import { recalculateHeatScore } from '../src/lib/services/heat-mapping'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')
@@ -154,6 +155,36 @@ async function main() {
       resolverStats.resolved_tier_2_ai
     totalDeferred += resolverStats.deferred_to_ai
     totalConflicts += resolverStats.conflicts_flagged
+
+    // Connective tissue (gap H — 2026-04-30): one-time heat refresh
+    // for every wedding with platform-signal candidates. Tier 1 D1.1
+    // changed the heat-score formula; weddings whose last engagement
+    // event predates the deploy still reflect the old formula until
+    // their next event or the daily decay sweep. Recalc them once
+    // here so the new Phase B contribution lands immediately.
+    let heatRefreshed = 0
+    let heatErrors = 0
+    const { data: wedRows } = await sb
+      .from('candidate_identities')
+      .select('resolved_wedding_id')
+      .eq('venue_id', v.id)
+      .not('resolved_wedding_id', 'is', null)
+      .is('deleted_at', null)
+    const distinctWeddingIds = Array.from(
+      new Set(((wedRows ?? []) as Array<{ resolved_wedding_id: string }>).map((r) => r.resolved_wedding_id)),
+    )
+    for (const wid of distinctWeddingIds) {
+      try {
+        await recalculateHeatScore(v.id, wid)
+        heatRefreshed++
+      } catch (err) {
+        heatErrors++
+        if (heatErrors <= 3) console.log(`    heat refresh ${wid.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    if (distinctWeddingIds.length > 0) {
+      console.log(`    heat:    ${heatRefreshed}/${distinctWeddingIds.length} weddings refreshed${heatErrors > 0 ? `, ${heatErrors} errors` : ''}`)
+    }
   }
 
   console.log('\n=== summary ===')
