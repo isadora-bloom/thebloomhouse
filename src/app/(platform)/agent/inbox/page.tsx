@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { PriorTouchesChip } from '@/components/agent/PriorTouchesChip'
+import { GmailConnectionStatus } from '@/components/agent/gmail-connection-status'
 import {
   Mail,
   RefreshCw,
@@ -1922,6 +1923,10 @@ export default function InboxPage() {
 
   return (
     <div className="space-y-6">
+      {/* Gmail connection status — surfaces at the top so a broken
+          token doesn't fail silently in the cron. Bit Rixey 2026-04-30. */}
+      <GmailConnectionStatus venueId={scope.venueId ?? null} />
+
       {/* ---- Header ---- */}
       <div className="flex items-center justify-between gap-4">
         <div>

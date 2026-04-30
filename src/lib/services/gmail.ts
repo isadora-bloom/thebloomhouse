@@ -755,6 +755,11 @@ async function fetchNewEmailsFromConnection(
 
   try {
     let messageIds: string[] = []
+    // Set when the history-API path runs and successfully paginates.
+    // Used at the end to advance the checkpoint to a value we
+    // actually processed instead of profile.historyId (which would
+    // skip past any unread pages on truncation).
+    let historyEndCheckpoint: string | null = null
 
     // Backfill mode: ignore history_id and pull the whole window. Used
     // when a venue onboards mid-flight and needs their existing inbox
@@ -765,35 +770,11 @@ async function fetchNewEmailsFromConnection(
     if (forceListPath) {
       messageIds = await fetchMessageIdsByList(gmail, maxResults, opts)
     } else if (conn.last_history_id) {
-      // Incremental sync via history API
-      try {
-        const historyResponse = await gmail.users.history.list({
-          userId: 'me',
-          startHistoryId: conn.last_history_id,
-          historyTypes: ['messageAdded'],
-          maxResults,
-        })
-
-        const historyRecords = historyResponse.data.history ?? []
-
-        for (const record of historyRecords) {
-          const messagesAdded = record.messagesAdded ?? []
-          for (const added of messagesAdded) {
-            if (added.message?.id) {
-              messageIds.push(added.message.id)
-            }
-          }
-        }
-
-        messageIds = [...new Set(messageIds)]
-      } catch (historyErr: unknown) {
-        const errObj = historyErr as { code?: number }
-        if (errObj.code === 404) {
-          console.warn(`[gmail] History ID expired for connection ${conn.id} — falling back to list`)
-          messageIds = await fetchMessageIdsByList(gmail, maxResults, opts)
-        } else {
-          throw historyErr
-        }
+      const result = await fetchMessageIdsByHistory(gmail, conn.last_history_id, maxResults, opts)
+      messageIds = result.messageIds
+      historyEndCheckpoint = result.nextCheckpoint
+      if (result.truncated) {
+        await flagPaginationTruncation(conn.venue_id, conn.id, conn.email_address)
       }
     } else {
       messageIds = await fetchMessageIdsByList(gmail, maxResults, opts)
@@ -828,9 +809,20 @@ async function fetchNewEmailsFromConnection(
       }
     }
 
-    // Get the current history ID for next sync
-    const profileResponse = await gmail.users.getProfile({ userId: 'me' })
-    const currentHistoryId = String(profileResponse.data.historyId ?? '')
+    // Advance the checkpoint. Prefer the highest history id we
+    // actually processed during pagination — if pagination truncated
+    // mid-way (MAX_PAGES, transient error), this leaves the unread
+    // pages in scope for the next run. Falling back to
+    // profile.historyId (live head) would jump past everything
+    // pagination hadn't reached, which is the bug that bit Rixey
+    // 2026-04-30.
+    let currentHistoryId: string
+    if (historyEndCheckpoint) {
+      currentHistoryId = historyEndCheckpoint
+    } else {
+      const profileResponse = await gmail.users.getProfile({ userId: 'me' })
+      currentHistoryId = String(profileResponse.data.historyId ?? '')
+    }
 
     await updateConnectionSyncState(conn.id, currentHistoryId, 'active')
   } catch (err) {
@@ -860,37 +852,16 @@ async function fetchNewEmailsLegacy(
     let messageIds: string[] = []
 
     const forceListPathLegacy = (opts?.sinceDays && opts.sinceDays > 0) || Boolean(opts?.extraQuery)
+    let legacyHistoryEndCheckpoint: string | null = null
     if (forceListPathLegacy) {
       messageIds = await fetchMessageIdsByList(gmail, maxResults, opts)
     } else if (syncState?.last_history_id) {
-      try {
-        const historyResponse = await gmail.users.history.list({
-          userId: 'me',
-          startHistoryId: syncState.last_history_id,
-          historyTypes: ['messageAdded'],
-          maxResults,
-        })
-
-        const historyRecords = historyResponse.data.history ?? []
-
-        for (const record of historyRecords) {
-          const messagesAdded = record.messagesAdded ?? []
-          for (const added of messagesAdded) {
-            if (added.message?.id) {
-              messageIds.push(added.message.id)
-            }
-          }
-        }
-
-        messageIds = [...new Set(messageIds)]
-      } catch (historyErr: unknown) {
-        const errObj = historyErr as { code?: number }
-        if (errObj.code === 404) {
-          console.warn(`[gmail] History ID expired for venue ${venueId} — falling back to list`)
-          messageIds = await fetchMessageIdsByList(gmail, maxResults, opts)
-        } else {
-          throw historyErr
-        }
+      // Same paginated-history fix as the multi-connection path.
+      const result = await fetchMessageIdsByHistory(gmail, syncState.last_history_id, maxResults, opts)
+      messageIds = result.messageIds
+      legacyHistoryEndCheckpoint = result.nextCheckpoint
+      if (result.truncated) {
+        await flagPaginationTruncation(venueId, 'legacy', '(legacy single-connection)')
       }
     } else {
       messageIds = await fetchMessageIdsByList(gmail, maxResults, opts)
@@ -923,8 +894,16 @@ async function fetchNewEmailsLegacy(
       }
     }
 
-    const profileResponse = await gmail.users.getProfile({ userId: 'me' })
-    const currentHistoryId = String(profileResponse.data.historyId ?? '')
+    // Use paginated checkpoint when present (history path); fall
+    // back to profile head only when no records were processed
+    // (list path or empty response).
+    let currentHistoryId: string
+    if (legacyHistoryEndCheckpoint) {
+      currentHistoryId = legacyHistoryEndCheckpoint
+    } else {
+      const profileResponse = await gmail.users.getProfile({ userId: 'me' })
+      currentHistoryId = String(profileResponse.data.historyId ?? '')
+    }
 
     await updateSyncState(venueId, currentHistoryId, 'synced')
 
@@ -949,6 +928,121 @@ async function fetchNewEmailsLegacy(
  * Forums + Updates stay in; inquiry form submissions from Zola/Knot often
  * land in Updates.
  */
+/**
+ * Fetch message ids via the history.list API, paginating through
+ * every page until exhausted or MAX_PAGES is hit. Returns the
+ * highest historyId seen across processed records so the caller
+ * can advance the sync checkpoint to a value pagination actually
+ * reached (never past it).
+ *
+ * Bit Rixey 2026-04-30: previous version called history.list once,
+ * pulled the first page only, then advanced the checkpoint to
+ * profile.historyId (the live head). When the user reconnected
+ * after a 3-day disconnect, the second-and-onward history pages
+ * were silently abandoned and ~48 hours of inbox vanished. The
+ * paginated helper is the structural fix.
+ *
+ * On 404 (history id expired by Gmail's 7-day TTL): falls back to
+ * the list path since history is no longer available.
+ */
+async function fetchMessageIdsByHistory(
+  gmail: ReturnType<typeof google.gmail>,
+  startHistoryId: string,
+  maxResults: number,
+  opts?: { sinceDays?: number; extraQuery?: string; includeAllLabels?: boolean },
+): Promise<{ messageIds: string[]; nextCheckpoint: string | null; truncated: boolean }> {
+  const messageIds: string[] = []
+  let nextPageToken: string | undefined = undefined
+  let lastSeenHistoryId: string | null = null
+  let pageCount = 0
+  // Safety cap. 50 pages × ~100 records ≈ 5000 history events per
+  // run is plenty for a busy venue's 5-minute cron tick. If we
+  // truly hit it (massive backlog), the next run picks up from the
+  // checkpoint we set and continues — and we surface a notification
+  // so the coordinator knows pagination is stretched.
+  const MAX_PAGES = 50
+  let truncated = false
+
+  try {
+    do {
+      const historyResponse: Awaited<ReturnType<typeof gmail.users.history.list>> =
+        await gmail.users.history.list({
+          userId: 'me',
+          startHistoryId,
+          historyTypes: ['messageAdded'],
+          maxResults,
+          pageToken: nextPageToken,
+        })
+
+      const historyRecords = historyResponse.data.history ?? []
+      for (const record of historyRecords) {
+        const messagesAdded = record.messagesAdded ?? []
+        for (const added of messagesAdded) {
+          if (added.message?.id) messageIds.push(added.message.id)
+        }
+        if (record.id) lastSeenHistoryId = String(record.id)
+      }
+
+      nextPageToken = historyResponse.data.nextPageToken ?? undefined
+      pageCount++
+      if (pageCount >= MAX_PAGES && nextPageToken) {
+        truncated = true
+        break
+      }
+    } while (nextPageToken)
+  } catch (historyErr: unknown) {
+    const errObj = historyErr as { code?: number }
+    if (errObj.code === 404) {
+      // History TTL expired (Gmail keeps history ~7 days). Fall
+      // back to date-windowed list.
+      console.warn('[gmail] History ID expired — falling back to list path')
+      const listIds = await fetchMessageIdsByList(gmail, maxResults, opts)
+      return { messageIds: listIds, nextCheckpoint: null, truncated: false }
+    }
+    throw historyErr
+  }
+
+  return {
+    messageIds: [...new Set(messageIds)],
+    nextCheckpoint: lastSeenHistoryId,
+    truncated,
+  }
+}
+
+/**
+ * Pagination truncation hit MAX_PAGES with more pages still
+ * pending. We've still made progress (the checkpoint advanced to
+ * the last page we processed), but the coordinator should know.
+ * Idempotent on alert_type so we don't spam: one open notification
+ * per connection until acknowledged.
+ */
+async function flagPaginationTruncation(
+  venueId: string,
+  connId: string,
+  emailAddress: string,
+): Promise<void> {
+  try {
+    const supabase = createServiceClient()
+    const { data: existing } = await supabase
+      .from('admin_notifications')
+      .select('id')
+      .eq('venue_id', venueId)
+      .eq('alert_type', 'gmail_pagination_truncation')
+      .is('read_at', null)
+      .limit(1)
+    if (existing && existing.length > 0) return // already open
+    await supabase.from('admin_notifications').insert({
+      venue_id: venueId,
+      alert_type: 'gmail_pagination_truncation',
+      severity: 'warning',
+      message: `Gmail sync for ${emailAddress} paginated past ${50} pages. Some messages may sync next run instead of immediately. If the cron is keeping up this clears on its own.`,
+      metadata: { connection_id: connId, email_address: emailAddress },
+    })
+  } catch (err) {
+    console.warn('[gmail] could not flag pagination truncation:', err)
+  }
+}
+
 async function fetchMessageIdsByList(
   gmail: ReturnType<typeof google.gmail>,
   maxResults: number,
