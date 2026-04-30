@@ -27,6 +27,7 @@ import { reclusterVenue } from '@/lib/services/candidate-clusterer'
 import { resolveVenueCandidates } from '@/lib/services/candidate-resolver'
 import { syncMeetings as syncZoomMeetings } from '@/lib/services/zoom'
 import { syncAllVenues as syncOpenPhoneAllVenues } from '@/lib/services/openphone'
+import { runDataIntegritySweepAllVenues } from '@/lib/services/data-integrity'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -58,6 +59,7 @@ const VALID_JOBS = [
   'zoom_poll',
   'openphone_poll',
   'phase_b_sweep',
+  'data_integrity_sweep',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -190,6 +192,17 @@ async function runJob(job: JobName): Promise<unknown> {
       // ambiguous cases on the sweep — that already happened at
       // import time; AI is too expensive to retry every night.
       return sweepPhaseBAllVenues()
+
+    case 'data_integrity_sweep':
+      // Phase 2 multi-venue rollout (2026-04-30). Runs the 8 data
+      // integrity invariants on every venue and persists current
+      // violations as 'data_anomaly' rows on intelligence_insights.
+      // Self-healing: when an invariant returns clean on a venue
+      // that previously had an open anomaly, the row is dismissed
+      // with status='self_healed'. Coordinators see live anomaly
+      // status on /intel/anomalies without having to re-run any
+      // script. Cheap (~5-10s per venue) and idempotent.
+      return sweepDataIntegrityAllVenues()
   }
 }
 
@@ -265,6 +278,18 @@ async function sweepPhaseBAllVenues(): Promise<
   }
 
   return out
+}
+
+/**
+ * Daily data-integrity sweep wrapper. Runs the 8 invariants on
+ * every venue, persists violations as data_anomaly insights, and
+ * self-heals previously-open anomalies that now pass. Thin wrapper
+ * over runDataIntegritySweepAllVenues — exists so the cron switch
+ * stays consistent with the other named jobs.
+ */
+async function sweepDataIntegrityAllVenues() {
+  const supabase = createServiceClient()
+  return runDataIntegritySweepAllVenues(supabase)
 }
 
 async function scanBacktraceAllVenues(): Promise<

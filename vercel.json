@@ -83,6 +83,10 @@
     {
       "path": "/api/cron?job=phase_b_sweep",
       "schedule": "45 4 * * *"
+    },
+    {
+      "path": "/api/cron?job=data_integrity_sweep",
+      "schedule": "0 5 * * *"
     }
   ]
 }
