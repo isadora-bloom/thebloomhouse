@@ -443,6 +443,47 @@ export async function recalculateHeatScore(
     totalScore += decayedPoints
   }
 
+  // Phase D / D1.1 (2026-04-30): platform-signal contribution.
+  // engagement_events captures behavior from inquiry onwards;
+  // Phase B captures the PRE-inquiry signal trail. The two
+  // sources don't overlap, so the contribution is genuinely
+  // additive — and a lead who deeply engaged on Knot before
+  // emailing is hotter than one who showed up cold.
+  //
+  // Per candidate: funnel_depth * 2 points, time-decayed from
+  // last_seen via the same 0.98/day rate. Plus +5 cross-platform
+  // bonus when 2+ distinct platforms resolved here. Plus +3 per
+  // AI-confident Tier 2 match (the model is willing to bet on
+  // this lead being engaged). Phase B contribution capped at +20
+  // so platform-rich leads can't crowd out the 0-100 score.
+  const { data: phaseBCandidates } = await supabase
+    .from('candidate_identities')
+    .select('source_platform, funnel_depth, last_seen')
+    .eq('resolved_wedding_id', weddingId)
+    .is('deleted_at', null)
+  let phaseBContribution = 0
+  const platformsSeen = new Set<string>()
+  for (const c of (phaseBCandidates ?? []) as Array<{ source_platform: string; funnel_depth: number; last_seen: string | null }>) {
+    platformsSeen.add(c.source_platform)
+    const lastSeenTs = c.last_seen ? new Date(c.last_seen).getTime() : now
+    const daysAgo = Math.max(0, (now - lastSeenTs) / dayMs)
+    const base = (c.funnel_depth ?? 0) * 2
+    phaseBContribution += base * Math.pow(decayRate, daysAgo)
+  }
+  if (platformsSeen.size >= 2) {
+    phaseBContribution += 5
+  }
+  const { count: aiTierCount } = await supabase
+    .from('attribution_events')
+    .select('id', { count: 'exact', head: true })
+    .eq('wedding_id', weddingId)
+    .eq('tier', 'tier_2_ai')
+    .is('reverted_at', null)
+  if (typeof aiTierCount === 'number' && aiTierCount > 0) {
+    phaseBContribution += aiTierCount * 3
+  }
+  totalScore += Math.min(20, phaseBContribution)
+
   // Clamp score to 0-100
   const newScore = Math.max(0, Math.min(100, Math.round(totalScore)))
   const temperatureTier = getTier(newScore)

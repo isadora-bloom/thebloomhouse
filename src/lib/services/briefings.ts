@@ -84,6 +84,74 @@ function today(): string {
 }
 
 /**
+ * Phase B/C state summary for the weekly briefing (D1.3 — 2026-04-30).
+ * Counts of: new candidates, auto-links, non-converting high-funnel,
+ * open conflicts. All rolling 7d.
+ */
+interface PhaseBWeeklyState {
+  newCandidates: number
+  platformsActive: number
+  autoLinked: number
+  highFunnelNonConverting: number
+  openConflicts: number
+}
+
+async function getPhaseBWeeklyState(venueId: string): Promise<PhaseBWeeklyState> {
+  const supabase = createServiceClient()
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000).toISOString()
+  const empty: PhaseBWeeklyState = {
+    newCandidates: 0,
+    platformsActive: 0,
+    autoLinked: 0,
+    highFunnelNonConverting: 0,
+    openConflicts: 0,
+  }
+
+  try {
+    const [candRes, attribRes, nonConvRes, conflictRes] = await Promise.all([
+      supabase
+        .from('candidate_identities')
+        .select('source_platform')
+        .eq('venue_id', venueId)
+        .is('deleted_at', null)
+        .gte('first_seen', sevenDaysAgo),
+      supabase
+        .from('attribution_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .is('reverted_at', null)
+        .in('decided_by', ['auto', 'ai'])
+        .gte('decided_at', sevenDaysAgo),
+      supabase
+        .from('candidate_identities')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .gte('funnel_depth', 3)
+        .is('resolved_wedding_id', null)
+        .is('deleted_at', null)
+        .neq('review_status', 'reviewed'),
+      supabase
+        .from('attribution_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .not('conflict_with_legacy_source', 'is', null)
+        .is('reverted_at', null),
+    ])
+    const candRows = (candRes.data ?? []) as Array<{ source_platform: string }>
+    return {
+      newCandidates: candRows.length,
+      platformsActive: new Set(candRows.map((c) => c.source_platform)).size,
+      autoLinked: attribRes.count ?? 0,
+      highFunnelNonConverting: nonConvRes.count ?? 0,
+      openConflicts: conflictRes.count ?? 0,
+    }
+  } catch (err) {
+    console.warn('[briefings] Phase B weekly state fetch failed:', err)
+    return empty
+  }
+}
+
+/**
  * Query wedding-related metrics for a venue over a date window.
  */
 async function getWeddingMetrics(
@@ -193,12 +261,13 @@ export async function generateWeeklyBriefing(
   const toDate = today()
 
   // Gather all data sources in parallel
-  const [metrics, deviations, weather, indicators, alerts] = await Promise.all([
+  const [metrics, deviations, weather, indicators, alerts, phaseB] = await Promise.all([
     getWeddingMetrics(venueId, fromDate, toDate),
     detectTrendDeviations(venueId),
     getWeatherForDateRange(venueId, today(), daysFromNow(14)),
     getLatestIndicators(),
     getActiveAlerts(venueId),
+    getPhaseBWeeklyState(venueId),
   ])
 
   const demandScore = calculateDemandScore(indicators)
@@ -258,6 +327,12 @@ ${weatherSummary}
 
 ANOMALY ALERTS:
 ${alertSummary}
+
+PLATFORM SIGNAL HEALTH (last 7 days):
+- New candidate identities: ${phaseB.newCandidates} across ${phaseB.platformsActive} platform${phaseB.platformsActive === 1 ? '' : 's'}
+- Auto-linked to leads: ${phaseB.autoLinked} (Tier 1 deterministic + Tier 2 AI)
+- High-funnel non-converting: ${phaseB.highFunnelNonConverting} candidates engaged deeply but didn't inquire
+- Conflicts to review: ${phaseB.openConflicts}
 
 Generate the weekly briefing.`,
     maxTokens: 1500,

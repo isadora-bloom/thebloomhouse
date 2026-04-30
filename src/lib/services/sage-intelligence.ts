@@ -242,6 +242,55 @@ export async function buildSageIntelligenceContext(
     } catch (err) {
       console.warn('[sage-intel] Failed to fetch prior touches:', err)
     }
+
+    // --- Phase B journey narrative + signal evidence (D1.2 — 2026-04-30) ---
+    // The cross-source narrative paragraph already summarizes the
+    // couple's discovery → engagement → inquiry path in natural
+    // prose. We dump it straight into Sage's context so Sage can
+    // reference dates and platforms without inventing them.
+    // Lazy gen + cached, so we don't pay the AI cost on every
+    // draft.
+    try {
+      const { data: person } = await supabase
+        .from('people')
+        .select('wedding_id')
+        .eq('id', personId)
+        .maybeSingle()
+      const weddingId = (person as { wedding_id: string | null } | null)?.wedding_id ?? null
+      if (weddingId) {
+        const { generateOrFetch } = await import('./journey-narrative')
+        const narrative = await generateOrFetch(supabase, weddingId)
+        if (narrative && narrative.text && !narrative.generating) {
+          const { data: candidates } = await supabase
+            .from('candidate_identities')
+            .select('source_platform, funnel_depth, action_counts')
+            .eq('resolved_wedding_id', weddingId)
+            .is('deleted_at', null)
+          const candList = (candidates ?? []) as Array<{
+            source_platform: string
+            funnel_depth: number
+            action_counts: Record<string, number> | null
+          }>
+          const lines: string[] = ['SIGNAL JOURNEY (use to write a warm, specific opener — do NOT invent dates or platforms not stated):']
+          lines.push(`- ${narrative.text}`)
+          if (candList.length > 0) {
+            const evidence = candList
+              .map((c) => {
+                const counts = c.action_counts ?? {}
+                const actions = Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(' + ')
+                return `${c.source_platform.replace(/_/g, ' ')} (depth ${c.funnel_depth}${actions ? ': ' + actions : ''})`
+              })
+              .join(', ')
+            lines.push(`- Evidence: ${evidence}`)
+          }
+          lines.push('')
+          lines.push('Reference the platform and the engagement naturally — "glad our Knot listing caught your eye" or similar — but stay grounded in the facts above.')
+          sections.push(lines.join('\n'))
+        }
+      }
+    } catch (err) {
+      console.warn('[sage-intel] Failed to fetch Phase B journey:', err)
+    }
   }
 
   // --- Demand outlook ---
