@@ -270,13 +270,49 @@ async function findNameWindowMatches(
     .filter((p) => p.wedding_id)
     .filter((p) => (p.last_name ?? '').toLowerCase().startsWith(c.last_initial!.toLowerCase()))
 
+  // Audit 2 / fix #1 + #2 (2026-04-30): batch the fetches.
+  // Before: per-person fetchWedding (N+1) + per-match
+  // hasOtherCandidatesInWindow (same query repeated per wedding).
+  // After: one bulk wedding fetch by id list, one competitor-
+  // candidate fetch per resolveCandidate call. The competitor
+  // candidate set is fingerprint-scoped and doesn't change across
+  // matches in this resolveCandidate call — fetch it once, then
+  // check overlap in memory per wedding.
+  const candidateWeddingIds = Array.from(
+    new Set(peopleRows.map((p) => p.wedding_id).filter((v): v is string => Boolean(v))),
+  )
+  const wedMap = new Map<string, WeddingRow>()
+  if (candidateWeddingIds.length > 0) {
+    const CHUNK = 100
+    for (let i = 0; i < candidateWeddingIds.length; i += CHUNK) {
+      const chunk = candidateWeddingIds.slice(i, i + CHUNK)
+      const { data: weds } = await supabase
+        .from('weddings')
+        .select('id, venue_id, source, inquiry_date, tour_date')
+        .in('id', chunk)
+      for (const w of (weds ?? []) as WeddingRow[]) wedMap.set(w.id, w)
+    }
+  }
+
+  // Pre-fetch competitor candidates ONCE: same fingerprint, this
+  // venue, not us. We'll check window overlap per wedding in memory.
+  const { data: competitorRows } = await supabase
+    .from('candidate_identities')
+    .select('id, first_seen, last_seen')
+    .eq('venue_id', c.venue_id)
+    .eq('first_name', c.first_name!)
+    .eq('last_initial', c.last_initial!)
+    .is('deleted_at', null)
+    .neq('id', c.id)
+  const competitors = (competitorRows ?? []) as Array<{ id: string; first_seen: string | null; last_seen: string | null }>
+
   const matches: PersonMatch[] = []
   const seenWeddings = new Set<string>()
   let other_candidates_in_window = false
 
   for (const p of peopleRows) {
-    if (seenWeddings.has(p.wedding_id!)) continue
-    const wed = await fetchWedding(supabase, p.wedding_id!)
+    if (!p.wedding_id || seenWeddings.has(p.wedding_id)) continue
+    const wed = wedMap.get(p.wedding_id)
     if (!wed) continue
 
     const targets: string[] = []
@@ -303,48 +339,25 @@ async function findNameWindowMatches(
       legacy_source: wed.source,
     })
 
-    if (!other_candidates_in_window) {
-      other_candidates_in_window = await hasOtherCandidatesInWindow(supabase, c, wed)
+    if (!other_candidates_in_window && targets.length > 0) {
+      // In-memory overlap check against pre-fetched competitor list.
+      for (const o of competitors) {
+        if (!o.first_seen) continue
+        for (const t of targets) {
+          const fs = hoursBetween(o.first_seen, t)
+          const ls = o.last_seen ? hoursBetween(o.last_seen, t) : Infinity
+          if (Math.min(fs, ls) <= TIER_1_NAME_WINDOW_HOURS) {
+            other_candidates_in_window = true
+            break
+          }
+        }
+        if (other_candidates_in_window) break
+      }
     }
   }
 
   if (matches.length === 0) return null
   return { matches, other_candidates_in_window }
-}
-
-/**
- * Uniqueness check for Tier 1.3. Counts other candidates with the
- * same first_name + last_initial whose [first_seen, last_seen]
- * window overlaps the wedding's inquiry/tour ±72h window. If >0,
- * the match is ambiguous — Tier 1 can't fire and we route to AI.
- */
-async function hasOtherCandidatesInWindow(
-  supabase: SupabaseClient,
-  c: CandidateRow,
-  wed: WeddingRow,
-): Promise<boolean> {
-  const targets = [wed.inquiry_date, wed.tour_date].filter((v): v is string => Boolean(v))
-  if (targets.length === 0) return false
-
-  const { data } = await supabase
-    .from('candidate_identities')
-    .select('id, first_seen, last_seen')
-    .eq('venue_id', c.venue_id)
-    .eq('first_name', c.first_name!)
-    .eq('last_initial', c.last_initial!)
-    .is('deleted_at', null)
-    .neq('id', c.id)
-  const others = (data ?? []) as Array<{ id: string; first_seen: string | null; last_seen: string | null }>
-
-  for (const o of others) {
-    if (!o.first_seen) continue
-    for (const t of targets) {
-      const fs = hoursBetween(o.first_seen, t)
-      const ls = o.last_seen ? hoursBetween(o.last_seen, t) : Infinity
-      if (Math.min(fs, ls) <= TIER_1_NAME_WINDOW_HOURS) return true
-    }
-  }
-  return false
 }
 
 /**
