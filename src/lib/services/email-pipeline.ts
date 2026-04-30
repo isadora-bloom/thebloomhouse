@@ -206,6 +206,23 @@ export async function venueOwnEmails(venueId: string): Promise<Set<string>> {
     const e = (c.email_address || '').toLowerCase().trim()
     if (e) own.add(e)
   }
+  // 2026-04-30: also include any from_email observed on a previously-
+  // classified outbound interaction. Self-learns Sage's actual sending
+  // address (e.g. sage@rixeymanor.com when only the primary connection
+  // address sage@bloomhouse.app was registered). Without this, the
+  // first time Sage sent from a new alias every reply slipped through
+  // the self-loop guard as inbound from the customer.
+  const { data: prevOutbounds } = await supabase
+    .from('interactions')
+    .select('from_email')
+    .eq('venue_id', venueId)
+    .eq('direction', 'outbound')
+    .not('from_email', 'is', null)
+    .limit(500)
+  for (const row of (prevOutbounds ?? []) as Array<{ from_email: string | null }>) {
+    const e = (row.from_email ?? '').toLowerCase().trim()
+    if (e) own.add(e)
+  }
   // Team member emails — user_profiles rows for this venue's team are
   // not leads. Prior versions of this guard caught sage@venue.com and
   // info@venue.com but missed team members with personal Gmails that
@@ -617,15 +634,24 @@ export async function processIncomingEmail(
     }
   }
 
-  // Step 1b: Self-loop protection — when the sender is one of THIS venue's
-  // own addresses (Sage relay or any linked gmail_connection), this is our
-  // own outbound mail that Gmail returned alongside inbound in the same
-  // thread. Record it as an outbound interaction so the thread stays
-  // continuous, but short-circuit: no classification, no contact creation,
-  // no wedding, no draft. Without this, sage@venue.com ends up as a
-  // "couple" on the pipeline kanban. Skipped for form-relay matches —
-  // those intentionally have a venue-owned From.
-  if (!formLead && ownEmails.has(rawFromEmail)) {
+  // Step 1b: Self-loop protection — when the email is OUR OWN outbound
+  // returned by Gmail alongside inbound in the same thread. Two-signal
+  // detection (2026-04-30): the Gmail SENT label is authoritative — any
+  // message tagged SENT was sent by this Gmail account, regardless of
+  // from-address aliasing. Falls back to from-email matching against the
+  // venue's known own addresses. Earlier code only checked the latter,
+  // which silently broke when Sage sent from an address that wasn't yet
+  // registered (Rixey Apr 2026: 5 of Ryan Schubert's 6 interactions
+  // landed as direction='inbound' from twisters42@gmail.com — they were
+  // actually Sage's outbounds, slipped through the guard, then signal-
+  // inference fired tour_requested events on Sage's own marketing copy).
+  // Skipped for form-relay matches — those intentionally have a venue-
+  // owned From.
+  const isOwnOutbound = !formLead && (
+    ownEmails.has(rawFromEmail)
+    || (email.labels ?? []).some((l) => l.toUpperCase() === 'SENT')
+  )
+  if (isOwnOutbound) {
     // Dedup: if we've already recorded this outbound (either this exact
     // Gmail-id or the same from/subject/time from a sibling connection),
     // skip the insert. Without this, a 3-connection venue gets 3 copies

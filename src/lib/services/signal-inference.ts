@@ -23,6 +23,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
+import { venueOwnEmails } from '@/lib/services/email-pipeline'
 
 // ---------------------------------------------------------------------------
 // Pattern sets (source of truth)
@@ -179,18 +180,23 @@ export async function applySignalInference(
 }> {
   const sb = createServiceClient()
 
-  const [{ data: wedding }, { data: ints }, { data: existingEvents }] =
+  const [{ data: wedding }, { data: ints }, { data: existingEvents }, ownEmails] =
     await Promise.all([
       sb.from('weddings').select('status, source').eq('id', weddingId).maybeSingle(),
       sb
         .from('interactions')
-        .select('id, direction, timestamp, subject, body_preview, full_body')
+        .select('id, direction, timestamp, subject, body_preview, full_body, from_email')
         .eq('wedding_id', weddingId)
         .order('timestamp', { ascending: true }),
       sb
         .from('engagement_events')
         .select('event_type, metadata')
         .eq('wedding_id', weddingId),
+      // Defensive: even if direction is wrong on legacy data, skipping
+      // any interaction whose from_email belongs to the venue prevents
+      // signal-inference from firing tour_requested / high_specificity
+      // /etc on Sage's own marketing copy. Belt-and-suspenders.
+      venueOwnEmails(venueId),
     ])
 
   if (!wedding || !ints || ints.length === 0) {
@@ -228,10 +234,20 @@ export async function applySignalInference(
     subject: string | null
     body_preview: string | null
     full_body: string | null
+    from_email: string | null
   }>
 
-  const inbound = interactions.filter((i) => i.direction === 'inbound')
-  const outbound = interactions.filter((i) => i.direction === 'outbound')
+  // 2026-04-30 defensive guard: legacy data has Sage outbounds
+  // misclassified as direction='inbound' from the customer (the
+  // backfill that captured Rixey's history pre-dated the SENT-label
+  // direction check). Re-classify on read so signal-inference never
+  // fires patterns on our own marketing copy regardless of stored
+  // direction. The pipeline-side fix prevents new bad rows; this
+  // guard handles the existing pile.
+  const isVenueOwnSender = (i: { from_email: string | null }) =>
+    Boolean(i.from_email && ownEmails.has(i.from_email.toLowerCase().trim()))
+  const inbound = interactions.filter((i) => i.direction === 'inbound' && !isVenueOwnSender(i))
+  const outbound = interactions.filter((i) => i.direction === 'outbound' || isVenueOwnSender(i))
 
   const events: Array<{ eventType: string; metadata: Record<string, unknown>; occurredAt: string }> = []
   const fired: string[] = []
