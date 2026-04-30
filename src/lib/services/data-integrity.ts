@@ -341,24 +341,29 @@ export async function runDataIntegrityChecks(
 
 /**
  * Sweep every venue, run the invariants, and persist current
- * violations as `intelligence_insights` rows so coordinators see
- * them on /intel/anomalies. Idempotent — for each (venue, invariant)
- * pair we close-and-reopen rather than accumulating duplicate rows.
+ * violations as `anomaly_alerts` rows so coordinators see them
+ * on /intel/anomalies (which reads from anomaly_alerts, not
+ * intelligence_insights). Idempotent — one row per (venue,
+ * invariant) pair; updated daily.
  *
- * Closing logic: when an invariant returns 0 violations on a venue
- * that previously had an open anomaly, mark the prior row resolved.
- * Opening logic: when an invariant returns >0 violations, upsert a
- * single open row per (venue_id, context_id).
+ * Self-heal: when an invariant returns 0 violations on a venue
+ * that previously had an unacknowledged data-integrity row, the
+ * row is deleted. The anomaly_alerts table doesn't have a
+ * 'resolved' state distinct from 'acknowledged', so deletion
+ * keeps the alert list focused on currently-open issues. The
+ * audit trail of past data-integrity violations lives in git
+ * commits + the playbook, not in anomaly_alerts.
  */
 export async function runDataIntegritySweepAllVenues(
   sb: SupabaseClient,
 ): Promise<{
   venues_scanned: number
   anomalies_opened: number
+  anomalies_updated: number
   anomalies_resolved: number
   errors: string[]
 }> {
-  const summary = { venues_scanned: 0, anomalies_opened: 0, anomalies_resolved: 0, errors: [] as string[] }
+  const summary = { venues_scanned: 0, anomalies_opened: 0, anomalies_updated: 0, anomalies_resolved: 0, errors: [] as string[] }
   const { data: venues } = await sb
     .from('venues')
     .select('id, name')
@@ -371,19 +376,16 @@ export async function runDataIntegritySweepAllVenues(
       summary.errors.push(`${venue.name}: ${err instanceof Error ? err.message : String(err)}`)
       continue
     }
-    // Pull existing open data_anomaly rows for this venue so we can
-    // match by data_points.invariant rather than relying on
-    // context_id (which is uuid; our invariant ids are strings).
+    // Pull existing data_integrity rows for this venue. metric_name
+    // holds the invariant id so we can find existing rows to upsert.
     const { data: openRows } = await sb
-      .from('intelligence_insights')
-      .select('id, data_points, dismissed_at')
+      .from('anomaly_alerts')
+      .select('id, metric_name')
       .eq('venue_id', venue.id)
-      .eq('insight_type', 'data_anomaly')
-      .is('dismissed_at', null)
+      .eq('alert_type', 'data_integrity')
     const openByInvariant = new Map<string, { id: string }>()
-    for (const r of (openRows ?? []) as Array<{ id: string; data_points: { invariant?: string | null } | null }>) {
-      const inv = r.data_points?.invariant
-      if (inv) openByInvariant.set(inv, { id: r.id })
+    for (const r of (openRows ?? []) as Array<{ id: string; metric_name: string }>) {
+      openByInvariant.set(r.metric_name, { id: r.id })
     }
 
     for (const r of results) {
@@ -391,45 +393,49 @@ export async function runDataIntegritySweepAllVenues(
 
       if (r.count === 0) {
         if (existing) {
-          // Self-heal: a previously-open anomaly now passes. Mark
-          // dismissed with a reason so the audit trail shows it
-          // resolved without coordinator action.
+          // Self-heal: clean now → drop the row. Idempotent re-runs
+          // of this sweep won't spam the alerts list.
           await sb
-            .from('intelligence_insights')
-            .update({
-              dismissed_at: new Date().toISOString(),
-              status: 'self_healed',
-            })
+            .from('anomaly_alerts')
+            .delete()
             .eq('id', existing.id)
           summary.anomalies_resolved++
         }
         continue
       }
 
-      const body = `${r.count} violation${r.count === 1 ? '' : 's'} of "${r.name}". ${r.meaning}`
-      const dataPoints = {
-        invariant: r.id,
-        violation_count: r.count,
-        sample: r.sample.slice(0, 5),
-      }
+      // The /intel/anomalies UI expects causes as an array where
+      // each row has cause/likelihood/action fields. Map our
+      // sample violations into that shape so the page renders.
+      const causes = r.sample.slice(0, 5).map((s) => ({
+        cause: JSON.stringify(s),
+        likelihood: 'high' as const,
+        action: 'Run scripts/onboard-data-cleanup.ts --apply for this venue, then re-run the integrity check.',
+        source: 'data_integrity',
+        invariant_id: r.id,
+      }))
       if (existing) {
         await sb
-          .from('intelligence_insights')
-          .update({ body, data_points: dataPoints, updated_at: new Date().toISOString() })
+          .from('anomaly_alerts')
+          .update({
+            current_value: r.count,
+            ai_explanation: r.meaning,
+            causes,
+          })
           .eq('id', existing.id)
+        summary.anomalies_updated++
       } else {
         await sb
-          .from('intelligence_insights')
+          .from('anomaly_alerts')
           .insert({
             venue_id: venue.id,
-            insight_type: 'data_anomaly',
-            category: 'operations',
-            title: r.name,
-            body,
-            data_points: dataPoints,
-            priority: 'medium',
-            confidence: 0.95,
-            status: 'open',
+            alert_type: 'data_integrity',
+            metric_name: r.id,
+            current_value: r.count,
+            severity: 'warning',
+            ai_explanation: r.meaning,
+            causes,
+            acknowledged: false,
           })
         summary.anomalies_opened++
       }
