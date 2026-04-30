@@ -18,6 +18,7 @@ import {
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { WeeklyLearnedCard } from '@/components/intel/WeeklyLearnedCard'
+import { PostTourBrowsingCard } from '@/components/intel/PostTourBrowsingCard'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -642,6 +643,13 @@ export default function IntelligenceDashboardPage() {
           </>
         )}
       </div>
+
+      {/* ---- Post-tour browsing intelligence ---- */}
+      {/* Self-hides when there are no leads still active on a
+          vendor platform after touring. When present, surfaces
+          high-intent "still considering" leads coordinator can
+          check in on. */}
+      {scope.level === 'venue' && <PostTourBrowsingCard />}
 
       {/* ---- What the AI learned this week ---- */}
       {scope.level === 'venue' && <WeeklyLearnedCard />}
