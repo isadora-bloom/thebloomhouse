@@ -306,6 +306,27 @@ export function FloatingBrainDump() {
                             {state.importSummary.errors.length > 0 &&
                               ` · ${state.importSummary.errors.length} error${state.importSummary.errors.length === 1 ? '' : 's'}`}
                           </p>
+                          {/* Connective II / fix #7: partial-import errors are
+                              now expandable inline. Vision + CSV imports
+                              sometimes drop rows for constraint reasons —
+                              the error strings explain why. Coordinator
+                              gets visibility instead of a silent failure
+                              count. */}
+                          {state.importSummary.errors.length > 0 && (
+                            <details className="mt-1">
+                              <summary className="cursor-pointer text-[11px] text-amber-800 hover:text-amber-900">
+                                See error details ({state.importSummary.errors.length})
+                              </summary>
+                              <ul className="mt-1 ml-3 space-y-0.5 list-disc list-inside text-[11px] text-amber-700">
+                                {state.importSummary.errors.slice(0, 5).map((err, i) => (
+                                  <li key={i} className="break-words">{err}</li>
+                                ))}
+                                {state.importSummary.errors.length > 5 && (
+                                  <li className="italic">+ {state.importSummary.errors.length - 5} more</li>
+                                )}
+                              </ul>
+                            </details>
+                          )}
                           {state.importSummary.phase_b && (
                             <div className="mt-1 pt-1 border-t border-emerald-200 space-y-0.5 text-emerald-900">
                               <p>

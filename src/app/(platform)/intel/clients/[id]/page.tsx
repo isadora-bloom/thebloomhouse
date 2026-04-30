@@ -50,6 +50,7 @@ import { CandidateSignalEvidence } from '@/components/agent/candidate-signal-evi
 import { JourneyNarrative } from '@/components/agent/journey-narrative'
 import { TourInsightsPanel } from '@/components/agent/tour-insights-panel'
 import { CommitmentSignalsPanel } from '@/components/agent/commitment-signals-panel'
+import { HeatHistoryPanel } from '@/components/agent/heat-history-panel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1070,6 +1071,13 @@ export default function ClientProfilePage() {
               sees "X of N signals present" at a glance. Self-hides
               when no commitment signals have fired. */}
           <CommitmentSignalsPanel weddingId={weddingId} />
+
+          {/* Connective tissue II / fix #8: heat history. lead_score_history
+              snapshots existed unread until this panel — coordinator
+              can now see "why did this lead get hot" via the
+              progression of scores + the events that fired between
+              snapshots. Self-hides when fewer than 2 snapshots. */}
+          <HeatHistoryPanel weddingId={weddingId} />
 
           {/* Client Journey */}
           <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">

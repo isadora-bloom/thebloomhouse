@@ -238,6 +238,9 @@ export default function AgentAnalyticsPage() {
   // for the venue scope. nulls render as "not enough data yet" in the UI.
   const [firstEmailActionRate, setFirstEmailActionRate] = useState<number | null>(null)
   const [firstEmailActionSample, setFirstEmailActionSample] = useState(0)
+  // Connective II / fix #10: AI cost breakdown by task type.
+  const [aiCostTotal, setAiCostTotal] = useState(0)
+  const [aiCostBreakdown, setAiCostBreakdown] = useState<Array<{ taskType: string; calls: number; cost: number }>>([])
   const [decisionDays, setDecisionDays] = useState<number | null>(null)
   const [decisionFastPct, setDecisionFastPct] = useState(0)
   const [decisionTypicalPct, setDecisionTypicalPct] = useState(0)
@@ -369,14 +372,33 @@ export default function AgentAnalyticsPage() {
           .map((t) => ({ tier: t.charAt(0).toUpperCase() + t.slice(1), count: tierMap[t] }))
       )
 
-      // 5. AI cost — fetched for internal monitoring/logging, not displayed
-      await supabase
+      // 5. AI cost — Connective II / fix #10 (2026-04-30): used to
+      // be fetched and dropped. Now grouped by context (taskType) so
+      // coordinators see where AI spend is going. Was a real
+      // visibility gap — admins had no breakdown of which feature
+      // consumed AI budget.
+      const { data: costRows } = await supabase
         .from('api_costs')
-        .select('cost, created_at')
+        .select('cost, context, created_at, model')
         .in('venue_id', venueIds)
         .gte('created_at', start)
         .lt('created_at', end)
-        .order('created_at', { ascending: true })
+      const aiCostByTask: Record<string, { calls: number; cost: number }> = {}
+      let aiCostTotal = 0
+      for (const r of (costRows ?? []) as Array<{ cost: number | null; context: string | null }>) {
+        const c = Number(r.cost ?? 0)
+        const ctx = r.context ?? 'unknown'
+        aiCostTotal += c
+        if (!aiCostByTask[ctx]) aiCostByTask[ctx] = { calls: 0, cost: 0 }
+        aiCostByTask[ctx].calls++
+        aiCostByTask[ctx].cost += c
+      }
+      const aiCostBreakdownLocal = Object.entries(aiCostByTask)
+        .map(([taskType, v]) => ({ taskType, calls: v.calls, cost: v.cost }))
+        .sort((a, b) => b.cost - a.cost)
+        .slice(0, 8)
+      setAiCostTotal(aiCostTotal)
+      setAiCostBreakdown(aiCostBreakdownLocal)
 
       // 6. Avg response time — REAL: median time from inbound email to
       // the next outbound on the same Gmail thread, in hours. Looks at
@@ -844,6 +866,49 @@ export default function AgentAnalyticsPage() {
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
+          )}
+        </div>
+      )}
+
+      {/* Connective II / fix #10: AI cost by task type. Was being
+          fetched and dropped — now broken down so coordinators see
+          where AI spend goes (drafts vs Sage chat vs anomaly
+          explanations vs candidate adjudication, etc). Self-hides
+          when no AI calls were made in the period. */}
+      {!loading && aiCostTotal > 0 && (
+        <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-heading text-base font-semibold text-sage-900">
+              AI cost by task
+            </h2>
+            <span className="text-sm text-sage-700 tabular-nums">
+              ${aiCostTotal.toFixed(2)} <span className="text-xs text-sage-400">total</span>
+            </span>
+          </div>
+          {aiCostBreakdown.length === 0 ? (
+            <p className="text-sm text-sage-400">No AI calls recorded in this period.</p>
+          ) : (
+            <div className="space-y-2">
+              {aiCostBreakdown.map((row) => {
+                const pct = aiCostTotal > 0 ? (row.cost / aiCostTotal) * 100 : 0
+                return (
+                  <div key={row.taskType} className="flex items-center gap-3 text-xs">
+                    <span className="w-40 shrink-0 text-sage-700 truncate" title={row.taskType}>
+                      {row.taskType.replace(/_/g, ' ')}
+                    </span>
+                    <div className="flex-1 h-2 bg-sage-50 rounded-full overflow-hidden">
+                      <div className="h-full bg-sage-500 rounded-full" style={{ width: `${pct.toFixed(1)}%` }} />
+                    </div>
+                    <span className="w-24 shrink-0 text-right text-sage-700 tabular-nums">
+                      ${row.cost.toFixed(3)}
+                    </span>
+                    <span className="w-16 shrink-0 text-right text-sage-500 tabular-nums">
+                      {row.calls} calls
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
           )}
         </div>
       )}
