@@ -97,6 +97,15 @@ meta:
 #          on status flip into booked/completed; helper formatter wired
 #          through 7 render sites; integration test covers the trigger.
 #          Tightening to require first_payment_received waits for T2-F.
+# (T1-F)   Provider hardening (circuit breaker + overrides):
+#          OPS-21.5.6-B doctrine-only→enforced, OPS-21.5.6-D
+#          doctrine-only→enforced, OPS-21.5.6-E doctrine-only→enforced.
+#          src/lib/ai/circuit-breaker.ts: 5-min rolling window per
+#          provider, trips at 20% error rate (≥5 samples), trip
+#          duration 60s. AI_FORCE_FALLBACK + AI_DISABLE_FALLBACK env
+#          var overrides. callAI threads recordCall + shouldSkip on
+#          every path. Vision fallback (B-25), dual prompt corpus
+#          (B-27), and shadow testing (B-28) remain as follow-up.
 # (T1-G)   Structured logger foundation (migration 128 +
 #          src/lib/observability/logger.ts): OPS-21.2.1 at-risk→partial.
 #          JSON-line schema (level/msg/venue_id/correlation_id/actor/
@@ -1549,10 +1558,10 @@ meta:
   notes: "Fallback configured for callAI but NOT callAIVision."
 
 - id: OPS-21.5.6-B
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: health checks per provider (rolling 5-min window)
-  severity: medium
+  notes: "T1-F (2026-05-01): src/lib/ai/circuit-breaker.ts tracks per-provider success/failure events in a rolling 5-min window. getProviderHealth(provider) returns {samplesInWindow, errorRate, tripped, trippedUntil}. callAI calls recordCall on every success/failure path."
 
 - id: OPS-21.5.6-C
   status: enforced
@@ -1562,16 +1571,16 @@ meta:
   severity: medium
 
 - id: OPS-21.5.6-D
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: circuit breaker (20% error / 5-min)
-  severity: medium
+  notes: "T1-F (2026-05-01): circuit-breaker.ts trips when rolling 5-min error rate ≥20% with min 5 samples. Trip duration 60s. shouldSkip(provider) is checked in callAI before the Anthropic call; tripped breaker routes straight to OpenAI fallback. Per-instance state (in-process); cross-instance propagation via Vercel KV is a follow-up if needed."
 
 - id: OPS-21.5.6-E
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: manual override config flag
-  severity: medium
+  notes: "T1-F (2026-05-01): AI_FORCE_FALLBACK env var bypasses Claude entirely (degraded-Anthropic incident or local fallback testing). AI_DISABLE_FALLBACK env var disables OpenAI fallback (debugging Claude-only output, A/B regression isolation). Both reachable via isFallbackForced() / isFallbackDisabled() in circuit-breaker.ts. Conflict (both set) throws with a clear message."
 
 - id: OPS-21.5.6-F
   status: partial

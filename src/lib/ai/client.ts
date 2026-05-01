@@ -3,6 +3,12 @@ import OpenAI from 'openai'
 import { createServiceClient } from '@/lib/supabase/service'
 import { calculateCost as calculateModelCost } from '@/lib/ai/cost-tracker'
 import { redactError } from '@/lib/observability/redact'
+import {
+  recordCall,
+  shouldSkip,
+  isFallbackForced,
+  isFallbackDisabled,
+} from '@/lib/ai/circuit-breaker'
 
 let anthropicClient: Anthropic | null = null
 let openaiClient: OpenAI | null = null
@@ -335,68 +341,97 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
   const started = Date.now()
   const requestedModel = modelForTier(options.tier)
 
-  try {
-    const result = await callAnthropic(options)
-    console.log(
-      JSON.stringify({
-        model: requestedModel,
-        tier: options.tier ?? 'sonnet',
-        fallback: false,
-        taskType,
-        durationMs: Date.now() - started,
-      })
-    )
-    return result
-  } catch (claudeErr) {
-    const claudeDuration = Date.now() - started
-    // Anthropic 4xx errors echo the prompt content in error.message
-    // (e.g. "input length exceeded: 'Hi, my email is alice@... (snip)'").
-    // For tier-1 calls (transcripts, sage chat with family context),
-    // that prompt content can include PII. Redact before stdout.
-    // OPS-21.3.3.
-    console.warn(
-      JSON.stringify({
-        model: requestedModel,
-        tier: options.tier ?? 'sonnet',
-        fallback: false,
-        taskType,
-        durationMs: claudeDuration,
-        error: redactError(claudeErr),
-      })
-    )
+  // Operator overrides + circuit-breaker (T1-F / OPS-21.5.6).
+  // AI_FORCE_FALLBACK skips Claude entirely (degraded-Anthropic
+  // incident, or local fallback testing). The breaker also skips
+  // Claude when its rolling 5-min error rate is ≥20%.
+  const skipClaude = isFallbackForced() || shouldSkip('anthropic')
 
-    if (!process.env.OPENAI_API_KEY) {
-      throw new Error(
-        'AI unavailable: Claude failed and no OpenAI fallback is configured.'
-      )
-    }
-
-    const fallbackStarted = Date.now()
+  if (!skipClaude) {
     try {
-      const result = await callOpenAIFallback(options)
+      const result = await callAnthropic(options)
+      recordCall('anthropic', true)
       console.log(
         JSON.stringify({
-          model: OPENAI_FALLBACK_MODEL,
-          fallback: true,
+          model: requestedModel,
+          tier: options.tier ?? 'sonnet',
+          fallback: false,
           taskType,
-          durationMs: Date.now() - fallbackStarted,
+          durationMs: Date.now() - started,
         })
       )
       return result
-    } catch (openaiErr) {
-      // OpenAI 4xx errors can also echo prompt content. Same redaction
-      // discipline as the Anthropic side. OPS-21.3.3.
-      console.error(
+    } catch (claudeErr) {
+      recordCall('anthropic', false)
+      const claudeDuration = Date.now() - started
+      // Anthropic 4xx errors echo the prompt content in error.message
+      // (e.g. "input length exceeded: 'Hi, my email is alice@... (snip)'").
+      // For tier-1 calls (transcripts, sage chat with family context),
+      // that prompt content can include PII. Redact before stdout.
+      // OPS-21.3.3.
+      console.warn(
         JSON.stringify({
-          model: OPENAI_FALLBACK_MODEL,
-          fallback: true,
+          model: requestedModel,
+          tier: options.tier ?? 'sonnet',
+          fallback: false,
           taskType,
-          durationMs: Date.now() - fallbackStarted,
-          error: redactError(openaiErr),
+          durationMs: claudeDuration,
+          error: redactError(claudeErr),
         })
       )
-      throw new Error('AI unavailable: both Claude and OpenAI fallback failed.')
+
+      if (isFallbackDisabled()) {
+        throw new Error('AI unavailable: Claude failed and AI_DISABLE_FALLBACK is set.')
+      }
+      if (!process.env.OPENAI_API_KEY) {
+        throw new Error(
+          'AI unavailable: Claude failed and no OpenAI fallback is configured.'
+        )
+      }
+      // fall through to fallback below
     }
+  } else if (isFallbackDisabled()) {
+    // Forced-fallback + disabled-fallback is a contradiction; surface
+    // it loudly rather than silently picking one.
+    throw new Error(
+      'AI config conflict: AI_FORCE_FALLBACK and AI_DISABLE_FALLBACK both set.'
+    )
+  }
+
+  // Either Claude was skipped (override / breaker) or it failed above.
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('AI unavailable: no OpenAI fallback configured.')
+  }
+  const fallbackStarted = Date.now()
+  try {
+    const result = await callOpenAIFallback(options)
+    recordCall('openai', true)
+    console.log(
+      JSON.stringify({
+        model: OPENAI_FALLBACK_MODEL,
+        fallback: true,
+        taskType,
+        durationMs: Date.now() - fallbackStarted,
+        skipReason: skipClaude
+          ? (isFallbackForced() ? 'force_fallback' : 'breaker_tripped')
+          : 'claude_failed',
+      })
+    )
+    return result
+  } catch (openaiErr) {
+    recordCall('openai', false)
+    // OpenAI 4xx errors can also echo prompt content. Same redaction
+    // discipline as the Anthropic side. OPS-21.3.3.
+    console.error(
+      JSON.stringify({
+        model: OPENAI_FALLBACK_MODEL,
+        fallback: true,
+        taskType,
+        durationMs: Date.now() - fallbackStarted,
+        error: redactError(openaiErr),
+      })
+    )
+    throw new Error('AI unavailable: both Claude and OpenAI fallback failed.')
   }
 }
 
