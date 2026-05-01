@@ -40,6 +40,8 @@ export interface ClientDraftOptions {
     body: string
   }
   taskType: string
+  /** Correlation id from upstream caller (T1-G). */
+  correlationId?: string
 }
 
 export interface OnboardingEmailOptions {
@@ -260,7 +262,7 @@ async function loadWeddingContext(weddingId: string): Promise<string> {
 export async function generateClientDraft(
   options: ClientDraftOptions
 ): Promise<DraftResult> {
-  const { venueId, contactEmail, weddingId, message, taskType } = options
+  const { venueId, contactEmail, weddingId, message, taskType, correlationId } = options
 
   // Load personality (Layer 1 + 2)
   const personalityData = await loadPersonalityData(venueId)
@@ -393,6 +395,7 @@ export async function generateClientDraft(
     venueId,
     taskType: `client_${taskType}`,
     promptVersion: BRAIN_PROMPT_VERSION,
+    correlationId,
   })
 
   // Confidence for client responses is generally high (we know who they are)

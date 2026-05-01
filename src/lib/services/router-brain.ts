@@ -261,6 +261,8 @@ export async function classifyEmail(
     threadHasPriorOutbound?: boolean
     /** Count of prior interactions from this exact sender address across all threads. */
     priorInteractionsFromSender?: number
+    /** Correlation id from upstream pipeline (T1-G). */
+    correlationId?: string
   }
 ): Promise<ClassificationResult> {
   const contextBlock = context
@@ -287,6 +289,7 @@ ${email.body.slice(0, 3000)}${contextBlock}`
     // 12x the cost for the same answer. OPS-21.4.2 enforcement.
     tier: 'haiku',
     promptVersion: BRAIN_PROMPT_VERSION,
+    correlationId: context?.correlationId,
   })
 
   // Normalize and validate

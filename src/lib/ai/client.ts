@@ -127,6 +127,15 @@ interface CallAIOptions {
    * to specific prompt revisions. Per Playbook OPS-21.5.1 / T1-E.
    */
   promptVersion?: string
+  /**
+   * Request-scoped uuid that ties this LLM call back to the inbound
+   * event (email, sage chat, cron tick) that produced it. Logged to
+   * api_costs.correlation_id so a coordinator can query "all costs
+   * for this inbound" with a single ID. Optional — calls without a
+   * correlationId are still logged but not threaded into a lineage.
+   * Per Playbook OPS-21.2.1 / T1-G.
+   */
+  correlationId?: string
 }
 
 function modelForTier(tier: ModelTier | undefined): string {
@@ -162,6 +171,7 @@ async function logUsage(
   service: 'anthropic' | 'openai' = 'anthropic',
   contentTier: ContentTier = 2,
   promptVersion?: string,
+  correlationId?: string,
 ) {
   try {
     const supabase = createServiceClient()
@@ -175,6 +185,7 @@ async function logUsage(
       context: taskType,
       content_tier: contentTier,
       prompt_version: promptVersion ?? null,
+      correlation_id: correlationId ?? null,
     })
   } catch {
     // Fire and forget — never block AI calls for logging
@@ -214,6 +225,7 @@ async function callAnthropic(options: CallAIOptions): Promise<CallAIResult> {
     contentTier = 2,
     tier,
     promptVersion,
+    correlationId,
   } = options
 
   const anthropic = getAnthropic()
@@ -244,7 +256,7 @@ async function callAnthropic(options: CallAIOptions): Promise<CallAIResult> {
   const outputTokens = response.usage.output_tokens
   const cost = calculateCost(model, inputTokens, outputTokens)
 
-  logUsage(venueId, taskType, inputTokens, outputTokens, cost, model, 'anthropic', contentTier, promptVersion)
+  logUsage(venueId, taskType, inputTokens, outputTokens, cost, model, 'anthropic', contentTier, promptVersion, correlationId)
 
   return { text, inputTokens, outputTokens, cost }
 }
@@ -259,6 +271,7 @@ async function callOpenAIFallback(options: CallAIOptions): Promise<CallAIResult>
     taskType = 'general',
     contentTier = 2,
     promptVersion,
+    correlationId,
   } = options
 
   const openai = getOpenAI()
@@ -298,7 +311,7 @@ async function callOpenAIFallback(options: CallAIOptions): Promise<CallAIResult>
   const outputTokens = response.usage?.completion_tokens ?? 0
   const cost = calculateCost(OPENAI_FALLBACK_MODEL, inputTokens, outputTokens)
 
-  logUsage(venueId, taskType, inputTokens, outputTokens, cost, OPENAI_FALLBACK_MODEL, 'openai', contentTier, promptVersion)
+  logUsage(venueId, taskType, inputTokens, outputTokens, cost, OPENAI_FALLBACK_MODEL, 'openai', contentTier, promptVersion, correlationId)
 
   return { text, inputTokens, outputTokens, cost }
 }
@@ -407,6 +420,7 @@ export async function callAIVision(options: {
   taskType?: string
   contentTier?: ContentTier
   promptVersion?: string
+  correlationId?: string
 }): Promise<CallAIResult> {
   const anthropic = getAnthropic()
   const contentTier = options.contentTier ?? 2
@@ -433,7 +447,7 @@ export async function callAIVision(options: {
   const outputTokens = response.usage.output_tokens
   const cost = calculateCost(CLAUDE_MODEL, inputTokens, outputTokens)
 
-  logUsage(options.venueId, options.taskType ?? 'vision', inputTokens, outputTokens, cost, CLAUDE_MODEL, 'anthropic', contentTier, options.promptVersion)
+  logUsage(options.venueId, options.taskType ?? 'vision', inputTokens, outputTokens, cost, CLAUDE_MODEL, 'anthropic', contentTier, options.promptVersion, options.correlationId)
 
   return { text, inputTokens, outputTokens, cost }
 }

@@ -45,6 +45,7 @@ import {
   isRelayAddress,
   isSyntheticAddress,
 } from '@/lib/services/body-identity-extract'
+import { createLogger, newCorrelationId } from '@/lib/observability/logger'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
 
@@ -565,11 +566,24 @@ function synthClassificationFromFormLead(lead: FormRelayLead): ClassificationRes
 export async function processIncomingEmail(
   venueId: string,
   email: IncomingEmail,
-  opts?: { skipDraft?: boolean }
+  opts?: { skipDraft?: boolean; correlationId?: string }
 ): Promise<PipelineResult> {
   const supabase = createServiceClient()
   const rawFromEmail = extractEmailAddress(email.from)
   const rawFromName = extractName(email.from)
+
+  // Correlation ID per Playbook OPS-21.2.1 / T1-G. Generated at the
+  // pipeline entry so every downstream LLM call (router-brain,
+  // inquiry-brain, client-brain) and DB write (drafts, api_costs)
+  // can be traced back to the originating inbound email with one ID.
+  // Caller (cron / poll-incoming / replay) can pass an explicit ID to
+  // tie a multi-step run together; otherwise a fresh uuid is minted.
+  const correlationId = opts?.correlationId ?? newCorrelationId()
+  const log = createLogger({
+    venueId,
+    correlationId,
+    actor: 'email_pipeline',
+  })
 
   // Normalise the email's Date header to ISO so Postgres can accept it
   // as timestamptz. Gmail returns RFC 2822 format on some senders
@@ -605,10 +619,20 @@ export async function processIncomingEmail(
     body: email.body,
   })
 
+  log.info('pipeline.start', {
+    event_type: 'email_pipeline.start',
+    data: { messageId: email.messageId, threadId: email.threadId },
+  })
+
   // Step 1a: Universal auto-ignore — no-reply / bounces / postmasters.
   // Bypassed when a scheduling tool matched above; those use no-reply
   // addresses by design but carry meaningful event payload.
   if (!schedulingPreCheck && matchesUniversalIgnore(rawFromEmail)) {
+    log.info('pipeline.ignored', {
+      event_type: 'email_pipeline.ignore',
+      outcome: 'skip',
+      data: { reason: 'universal_ignore' },
+    })
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
 
@@ -854,6 +878,7 @@ export async function processIncomingEmail(
           priorInteractionCount,
           threadHasPriorOutbound,
           priorInteractionsFromSender,
+          correlationId,
         }
       )
     } catch (err) {
@@ -1888,6 +1913,7 @@ export async function processIncomingEmail(
         // so first-touch replies can acknowledge the discovery channel
         // instead of treating every inquiry identically.
         source: detectedSource,
+        correlationId,
       })
 
       draftBody = inquiryResult.draft
@@ -1913,6 +1939,7 @@ export async function processIncomingEmail(
             body: email.body,
           },
           taskType: 'client_reply',
+          correlationId,
         })
 
         draftBody = clientResult.draft
@@ -1957,6 +1984,7 @@ export async function processIncomingEmail(
         confidence_score: confidenceScore,
         auto_sent: false,
         prompt_version_used: promptVersionUsed,
+        correlation_id: correlationId,
       })
       .select('id')
       .single()

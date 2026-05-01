@@ -60,6 +60,9 @@ export interface InquiryDraftOptions {
    *       | 'website' | 'direct' | (legacy) any other free-form string
    */
   source?: string
+  /** Correlation id from the upstream pipeline (T1-G). Logged onto
+   *  api_costs and downstream draft rows. */
+  correlationId?: string
 }
 
 export interface FollowUpOptions {
@@ -67,6 +70,8 @@ export interface FollowUpOptions {
   contactEmail: string
   weddingId: string
   daysSinceLastContact: number
+  /** Correlation id from the upstream caller (T1-G). */
+  correlationId?: string
 }
 
 export interface DraftResult {
@@ -327,6 +332,7 @@ export async function generateInquiryDraft(
     extractedData,
     taskType = 'new_inquiry',
     source,
+    correlationId,
   } = options
 
   // Step 1: Load personality data and build Layer 1 + 2 prompt
@@ -549,6 +555,7 @@ export async function generateInquiryDraft(
     venueId,
     taskType: `inquiry_${taskType}`,
     promptVersion: BRAIN_PROMPT_VERSION,
+    correlationId,
   })
 
   // Calculate confidence based on data completeness
@@ -583,7 +590,7 @@ export async function generateInquiryDraft(
 export async function generateFollowUp(
   options: FollowUpOptions
 ): Promise<DraftResult> {
-  const { venueId, contactEmail, weddingId, daysSinceLastContact } = options
+  const { venueId, contactEmail, weddingId, daysSinceLastContact, correlationId } = options
 
   const supabase = createServiceClient()
 
@@ -744,6 +751,7 @@ export async function generateFollowUp(
     venueId,
     taskType: `follow_up_${daysSinceLastContact >= 14 ? 'final' : daysSinceLastContact >= 7 ? '7day' : '3day'}`,
     promptVersion: BRAIN_PROMPT_VERSION,
+    correlationId,
   })
 
   // Follow-ups are fairly templated, confidence is generally high
