@@ -334,9 +334,14 @@ export async function generateSageResponse(
       getWeddingContext(weddingId),
     ])
 
-  // Build prompt layers
+  // Build prompt layers. Extract aiName up-front so the task prompt's
+  // {AI_NAME} substitution honors the venue's configured name. Pre-fix
+  // task-prompts-sage hardcoded "Sage" in TASK_WELCOME, so every venue
+  // welcomed couples as if they were Rixey — INV-4.4-A violation.
+  const aiNameForTask = (personalityData.config as Record<string, unknown>)
+    ?.ai_name as string | undefined
   const personalityPrompt = buildPersonalityPrompt(personalityData)
-  const taskPrompt = getSageTaskPrompt(taskType ?? 'couple_question')
+  const taskPrompt = getSageTaskPrompt(taskType ?? 'couple_question', aiNameForTask)
 
   // Format KB results for context
   let kbContext = ''
@@ -424,16 +429,15 @@ export async function generateSageResponse(
 
   const confidence = assessConfidence(result.text, kbMatch)
 
-  // Extract aiName from personality config
-  const aiName = (personalityData.config as Record<string, unknown>)?.ai_name as string | undefined
-
   return {
     response: result.text,
     confidence,
     tokensUsed: result.inputTokens + result.outputTokens,
     cost: result.cost,
     kbMatch,
-    aiName: aiName || 'Sage',
+    // Reuses aiNameForTask extracted up-front so the SageResponse name
+    // matches what the task prompt was built with.
+    aiName: aiNameForTask || 'Sage',
     coupleFirstName: weddingContext?.coupleName?.split(' ')[0] ?? null,
   }
 }

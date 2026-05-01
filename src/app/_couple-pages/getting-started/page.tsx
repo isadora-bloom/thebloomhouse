@@ -65,7 +65,12 @@ const ACTION_CARDS: ActionCard[] = [
   {
     id: 'first_message_sent',
     emoji: '💬',
-    title: 'Say hi to Sage',
+    // {AI_NAME} placeholder substituted at render time. Pre-fix the
+    // literal 'Sage' string lived in the seed data and a defensive
+    // .replaceAll wrapped every render — fragile because any new
+    // render site that forgot the wrapper leaked 'Sage' to non-Sage
+    // venues. Now the canonical form uses the placeholder.
+    title: 'Say hi to {AI_NAME}',
     description: 'Your AI planning assistant is ready and waiting. Ask anything about your venue, your timeline, or just say hello.',
     actionLabel: 'Start chatting',
     path: 'chat',
@@ -124,7 +129,7 @@ const NUDGE_BUCKETS: NudgeBucket[] = [
       'Book your photographer early — the best ones fill up 12-18 months out',
       'Lock in your caterer and start thinking about the menu direction',
       'Start a guest list draft, even if it changes ten times',
-      'Chat with Sage about your venue — she knows every corner of this place',
+      'Chat with {AI_NAME} about your venue — they know every corner of this place',
     ],
   },
   {
@@ -540,14 +545,14 @@ export default function GettingStartedPage() {
                       'font-semibold text-[15px] leading-tight',
                       done ? 'text-emerald-700' : 'text-gray-800'
                     )}>
-                      {card.title.replaceAll('Sage', aiName)}
+                      {card.title.replaceAll('{AI_NAME}', aiName)}
                     </h3>
                   </div>
                 </div>
 
                 {/* Description */}
                 <p className="text-sm text-gray-500 leading-relaxed mb-4">
-                  {card.description.replaceAll('Sage', aiName)}
+                  {card.description.replaceAll('{AI_NAME}', aiName)}
                 </p>
 
                 {/* Action Button */}
@@ -614,7 +619,7 @@ export default function GettingStartedPage() {
                       {i + 1}
                     </span>
                   </div>
-                  <span className="text-sm text-gray-600 leading-relaxed">{tip.replaceAll('Sage', aiName)}</span>
+                  <span className="text-sm text-gray-600 leading-relaxed">{tip.replaceAll('{AI_NAME}', aiName)}</span>
                 </li>
               ))}
             </ul>

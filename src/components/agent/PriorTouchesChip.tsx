@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Flame, Sparkles, ChevronDown, ChevronUp, Mail, AtSign, Globe, Calendar, Star, Link as LinkIcon } from 'lucide-react'
+import { Flame, Sparkles, ChevronDown, ChevronUp, Mail, AtSign, Globe, Calendar, Star, Link as LinkIcon, Snowflake } from 'lucide-react'
 import type { PriorTouchSummary, PriorTouch } from '@/lib/services/prior-touches'
 
 interface PriorTouchesChipProps {
@@ -11,12 +11,18 @@ interface PriorTouchesChipProps {
 /**
  * Surfaces the Phase 8 multi-touch history for an inquiry row.
  *
- * Renders nothing if the person has no prior touchpoints (cold). Warm
- * couples (1-2 touches) get a small amber chip. Hot couples (3+) get a
- * sage chip. Clicking either expands an inline list of each touch.
+ * Hot couples (3+ touches) get a sage chip. Warm couples (1-2) get an
+ * amber chip. Cold couples — the lookup ran AND found no prior
+ * touchpoints — get a small neutral "no prior touches" chip rather
+ * than rendering nothing. Per Playbook INV-8.5.5, negative-result
+ * visibility is part of the doctrine: the coordinator must be able to
+ * tell the difference between "Bloom looked, found nothing" (real
+ * signal — cold inquiry) and "Bloom didn't look at all" (system
+ * failure / 401 / network error — chip is genuinely absent).
  *
  * The component silent-fails on 401/403/404/network errors and hides
- * itself rather than showing inbox-row error state.
+ * itself rather than showing inbox-row error state. The empty-state
+ * chip below only renders when the lookup ran successfully.
  */
 export function PriorTouchesChip({ personId }: PriorTouchesChipProps) {
   const [summary, setSummary] = useState<PriorTouchSummary | null>(null)
@@ -32,14 +38,17 @@ export function PriorTouchesChip({ personId }: PriorTouchesChipProps) {
       try {
         const res = await fetch(`/api/agent/inbox/prior-touches/${personId}`)
         if (!res.ok) {
-          // Silent fail on 401/403/404/5xx: hide the chip entirely.
+          // Silent fail on 401/403/404/5xx: hide the chip entirely so
+          // the coordinator doesn't mistake a system failure for a
+          // negative result. INV-8.5.5 distinguishes "we looked, found
+          // nothing" (the cold-state chip below) from "we didn't look".
           if (!cancelled) setSummary(null)
           return
         }
         const data = (await res.json()) as PriorTouchSummary
         if (!cancelled) setSummary(data)
       } catch {
-        // Network error: hide.
+        // Network error: hide. Same INV-8.5.5 rationale.
         if (!cancelled) setSummary(null)
       }
     })()
@@ -50,7 +59,19 @@ export function PriorTouchesChip({ personId }: PriorTouchesChipProps) {
 
   if (!personId) return null
   if (!summary) return null
-  if (summary.warmth === 'cold' || summary.touches.length === 0) return null
+
+  // Negative-result visibility: when the lookup ran and found nothing,
+  // surface that explicitly rather than disappearing. Per INV-8.5.5.
+  if (summary.warmth === 'cold' || summary.touches.length === 0) {
+    return (
+      <div className="w-full" title="Checked Knot, Instagram, Pinterest, WeddingWire, website + email signals — no prior anonymous touches detected">
+        <span className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] font-medium text-stone-500 whitespace-nowrap">
+          <Snowflake className="w-3 h-3" />
+          <span>No prior touches detected</span>
+        </span>
+      </div>
+    )
+  }
 
   const total = summary.touches.length
   const isHot = summary.warmth === 'hot'
