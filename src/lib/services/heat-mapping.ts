@@ -276,6 +276,7 @@ export async function recordEngagementEvent(
   venueId: string,
   weddingId: string,
   eventType: string,
+  direction: 'inbound' | 'outbound',
   metadata?: Record<string, unknown>,
   occurredAt?: string
 ): Promise<HeatScoreResult> {
@@ -291,6 +292,7 @@ export async function recordEngagementEvent(
     venue_id: venueId,
     wedding_id: weddingId,
     event_type: eventType,
+    direction,
     points,
     metadata: metadata ?? {},
   }
@@ -317,6 +319,7 @@ export async function recordEngagementEventsBatch(
   venueId: string,
   weddingId: string,
   events: Array<{ eventType: string; metadata?: Record<string, unknown>; occurredAt?: string }>,
+  direction: 'inbound' | 'outbound',
   occurredAt?: string
 ): Promise<HeatScoreResult> {
   if (events.length === 0) {
@@ -337,6 +340,7 @@ export async function recordEngagementEventsBatch(
       venue_id: venueId,
       wedding_id: weddingId,
       event_type: e.eventType,
+      direction,
       points,
       metadata: e.metadata ?? {},
     }
@@ -408,11 +412,19 @@ export async function recalculateHeatScore(
   // not created_at (row insert time), so historical backfill from
   // onboarding ages correctly instead of counting everything as
   // "today". Fallback to created_at for any legacy rows pre-089.
+  //
+  // Filter direction='inbound' per Playbook INV-14: heat scores
+  // increment only on couple-side actions. Schema defense (CHECK +
+  // NOT NULL on engagement_events.direction, migration 116) plus
+  // this read-side filter (INV-16) is belt-and-braces — even a
+  // future caller that forgot to gate at write time wouldn't
+  // accidentally inflate heat with a venue-originated event.
   const { data: events } = await supabase
     .from('engagement_events')
     .select('points, occurred_at, created_at')
     .eq('venue_id', venueId)
     .eq('wedding_id', weddingId)
+    .eq('direction', 'inbound')
     .order('occurred_at', { ascending: false })
 
   // PD.1 fix #2 (2026-04-30): no early-return when engagement_events
@@ -1033,11 +1045,14 @@ export async function markAsBooked(
     })
     .eq('id', weddingId)
 
-  // Record engagement event
+  // Record engagement event. Direction: 'inbound' — couple committed
+  // (signed contract, paid). Per INV-13 every engagement_event has
+  // explicit direction at write time.
   await supabase.from('engagement_events').insert({
     venue_id: venueId,
     wedding_id: weddingId,
     event_type: 'contract_signed',
+    direction: 'inbound',
     points: DEFAULT_POINTS.contract_signed,
     metadata: { action: 'marked_booked', notes: notes ?? null },
   })
@@ -1097,11 +1112,19 @@ export async function markAsLost(
     })
     .eq('id', weddingId)
 
-  // Record engagement event
+  // Record engagement event. Direction: 'inbound' for the audit row —
+  // the wedding-state observation belongs alongside the inbound
+  // couple-side timeline. The -100 points here are nominal: markAsLost
+  // sets weddings.heat_score = 0 directly above (line 1104), so this
+  // row is mostly an audit trail and recalculateHeatScore re-runs only
+  // matter if heat is later recomputed against this dataset. Keeping
+  // direction='inbound' avoids a phantom outbound event in the timeline
+  // that the couple never actually triggered. INV-13.
   await supabase.from('engagement_events').insert({
     venue_id: venueId,
     wedding_id: weddingId,
     event_type: 'marked_lost',
+    direction: 'inbound',
     points: DEFAULT_POINTS.marked_lost,
     metadata: { reason: reason ?? null, lost_to: lostTo ?? null },
   })

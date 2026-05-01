@@ -275,10 +275,16 @@ async function queryMetric(
       // per Playbook 12.2 + ANTI-2.6.4. Migration 089 added occurred_at
       // for exactly this reason — on backfilled venues, created_at
       // collapses every historical event to the import day.
+      //
+      // Filter direction='inbound' per INV-16. "Engagement rate" =
+      // couple-side activity divided by inquiries. Outbound auto-sends
+      // counted here would falsely lift the rate every time we replied
+      // to anyone.
       const { count: engagementCount, error: engError } = await supabase
         .from('engagement_events')
         .select('id', { count: 'exact', head: true })
         .eq('venue_id', venueId)
+        .eq('direction', 'inbound')
         .gte('occurred_at', periodStart)
         .lt('occurred_at', periodEnd)
 

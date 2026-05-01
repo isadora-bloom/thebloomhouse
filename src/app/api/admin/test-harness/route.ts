@@ -165,12 +165,17 @@ export async function POST(request: NextRequest) {
       const opts = payload.options as unknown as {
         weddingId: string
         eventType: string
+        direction?: 'inbound' | 'outbound'
         metadata?: Record<string, unknown>
       }
       if (!opts?.weddingId || !opts?.eventType) {
         return NextResponse.json({ error: 'options.weddingId and options.eventType required' }, { status: 400 })
       }
-      const result = await recordEngagementEvent(venueId, opts.weddingId, opts.eventType, opts.metadata)
+      // Test harness defaults direction to 'inbound' — every existing
+      // test case predates the direction column. Tests exercising
+      // the outbound path must set it explicitly.
+      const dir: 'inbound' | 'outbound' = opts.direction === 'outbound' ? 'outbound' : 'inbound'
+      const result = await recordEngagementEvent(venueId, opts.weddingId, opts.eventType, dir, opts.metadata)
       return NextResponse.json({ ok: true, result })
     }
 

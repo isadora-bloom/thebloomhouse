@@ -135,11 +135,17 @@ async function buildSeries(supabase: SupabaseClient, venueId: string): Promise<S
   }
   series.push({ channel: 'inquiries', values: inquiriesDaily })
 
-  // 2. marketing_metric events per day, grouped by source+metric
+  // 2. marketing_metric events per day, grouped by source+metric.
+  // Filter direction='inbound' per INV-16. Marketing_metric rows are
+  // couple-side platform observations (profile views, saves, clicks);
+  // see storefront-analytics-import.ts. Future outbound marketing
+  // tracking (autonomous social posts etc.) would land as 'outbound'
+  // and intentionally not enter this correlation series.
   const { data: mmRows } = await supabase
     .from('engagement_events')
     .select('metadata, created_at')
     .eq('venue_id', venueId)
+    .eq('direction', 'inbound')
     .eq('event_type', 'marketing_metric')
   const mmBySeries = new Map<string, Map<string, number>>()
   for (const r of mmRows ?? []) {

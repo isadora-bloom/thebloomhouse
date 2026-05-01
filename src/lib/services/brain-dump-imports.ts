@@ -423,6 +423,10 @@ export async function importPlatformActivity(args: {
       const { error } = await supabase.from('engagement_events').insert({
         venue_id: venueId,
         event_type,
+        // Platform activity rows from a CSV brain-dump (Knot/WW
+        // visitor exports etc.) are couple-side actions —
+        // visited storefront, saved venue, hearted. INV-13.
+        direction: 'inbound',
         points,
         metadata,
       })

@@ -112,6 +112,34 @@ async function checkDirectionParity(sb: SupabaseClient, venueId: string): Promis
   }
 }
 
+/**
+ * Playbook Invariant 13: every engagement_event row has explicit
+ * direction. Migration 116 adds NOT NULL + CHECK at the schema level,
+ * so this runtime check should always pass — but it catches drift if
+ * the constraint is ever dropped, and it's a load-bearing assertion
+ * for INV-14 / INV-16 (heat scoring + read filters depend on the
+ * column being non-null and one of the two allowed values).
+ */
+async function checkEngagementEventsDirection(sb: SupabaseClient, venueId: string): Promise<InvariantResult> {
+  const { data: bad } = await sb
+    .from('engagement_events')
+    .select('id, event_type, occurred_at, created_at, direction')
+    .eq('venue_id', venueId)
+    .or('direction.is.null,direction.not.in.(inbound,outbound)')
+    .limit(SAMPLE_LIMIT * 5)
+  const sample = (bad ?? []) as Array<Record<string, unknown>>
+  return {
+    id: 'engagement_event_direction',
+    name: 'Engagement event missing valid direction',
+    meaning:
+      'Every engagement_event must carry direction in {inbound, outbound} per Playbook INV-13. ' +
+      'NULL or other values mean a writer skipped the schema-level CHECK (constraint drop, ' +
+      'manual SQL insert, etc.) and downstream INV-14/INV-16 read filters will be wrong.',
+    count: sample.length,
+    sample: sample.slice(0, SAMPLE_LIMIT),
+  }
+}
+
 async function checkFalsePositiveEvents(sb: SupabaseClient, venueId: string): Promise<InvariantResult> {
   const { data: outboundIds } = await sb
     .from('interactions')
@@ -330,6 +358,7 @@ export async function runDataIntegrityChecks(
   return Promise.all([
     checkCausality(sb, venueId),
     checkDirectionParity(sb, venueId),
+    checkEngagementEventsDirection(sb, venueId),
     checkFalsePositiveEvents(sb, venueId),
     checkInquiryParity(sb, venueId),
     checkWeddingHasPeople(sb, venueId),

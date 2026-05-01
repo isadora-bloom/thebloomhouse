@@ -273,7 +273,10 @@ async function rescueVenue(venueId: string) {
   // runs once per wedding instead of per event.
   for (const [wid, evs] of Object.entries(perWeddingEvents)) {
     try {
-      await recordEngagementEventsBatch(venueId, wid, evs)
+      // One-off Rixey rescue script. All events here recover couple-side
+      // signals (initial_inquiry / tour_booked / tour_completed / etc.)
+      // that were lost or mis-routed; direction='inbound'. INV-13.
+      await recordEngagementEventsBatch(venueId, wid, evs, 'inbound')
     } catch (err) {
       console.error(`  insert failed for wedding ${wid.slice(0, 8)}:`, (err as Error).message)
     }

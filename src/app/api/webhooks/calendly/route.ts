@@ -156,8 +156,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ received: true })
     }
 
-    // Record the tour_booked engagement event
-    const result = await recordEngagementEvent(venueId, weddingId, 'tour_booked', {
+    // Record the tour_booked engagement event. Direction: inbound —
+    // couple booked their own tour through Calendly. Per Playbook
+    // INV-13 every engagement_event ships with explicit direction.
+    const result = await recordEngagementEvent(venueId, weddingId, 'tour_booked', 'inbound', {
       source: 'calendly',
       inviteeEmail,
       inviteeName: inviteeName ?? null,

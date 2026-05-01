@@ -177,10 +177,13 @@ export async function generateDigest(venueId: string): Promise<Digest> {
 
     // New engagement events in last 24 hours. Use occurred_at (event time)
     // not created_at (processing time) — see ANTI-2.6.4 / migration 089.
+    // Filter inbound per INV-16: the digest reports "what couples did",
+    // not "what we sent them".
     supabase
       .from('engagement_events')
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId)
+      .eq('direction', 'inbound')
       .gte('occurred_at', since),
 
     // Active anomaly alerts

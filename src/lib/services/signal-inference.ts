@@ -382,9 +382,12 @@ export async function applySignalInference(
     return { newEvents: 0, newStatus: null, fired: [] }
   }
 
-  // Single batch write + single recalc
+  // Single batch write + single recalc.
+  // Direction: inbound. signal-inference fires from inbound classifier
+  // output (sustained engagement on couple replies, etc.) — every
+  // event here is observation of a couple-side action.
   if (events.length > 0) {
-    await recordEngagementEventsBatch(venueId, weddingId, events)
+    await recordEngagementEventsBatch(venueId, weddingId, events, 'inbound')
     // Mirror to wedding_touchpoints. The source is the wedding's first-
     // touch source (this email arrived via the same channel that brought
     // the inquiry — Knot relay, direct email, etc.). engagementToTouchType

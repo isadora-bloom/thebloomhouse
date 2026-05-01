@@ -340,10 +340,12 @@ async function runVenue(venueId: string) {
       )
     }
     // Fire initial_inquiry to give the wedding baseline heat parity with
-    // couples who entered via email
+    // couples who entered via email. Direction='inbound' — couple booked
+    // their own tour historically (INV-13).
     await recordEngagementEventsBatch(
       venueId, wid,
       [{ eventType: 'initial_inquiry', metadata: { source: p.event.source, via: 'scheduling_tool_backfill' } }],
+      'inbound',
       p.timestamp
     )
     // Fire the scheduling event itself
@@ -358,6 +360,7 @@ async function runVenue(venueId: string) {
           event_datetime: p.event.eventDatetime,
         },
       }],
+      'inbound',
       p.timestamp
     )
     weddingsTouched.add(wid)
@@ -403,6 +406,7 @@ async function runVenue(venueId: string) {
             event_datetime: p.event.eventDatetime,
           },
         }],
+        'inbound',
         p.timestamp
       )
     }

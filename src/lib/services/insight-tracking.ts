@@ -217,10 +217,13 @@ async function measureMetric(
     case 'couple_behavior': {
       // Average engagement score. Use occurred_at (event time) not
       // created_at (processing time) per Playbook 12.2 + ANTI-2.6.4.
+      // Filter inbound per INV-16 — "couple_behavior" is literally
+      // about the couple, not the venue's outbound.
       const { data: events } = await supabase
         .from('engagement_events')
         .select('points')
         .eq('venue_id', venueId)
+        .eq('direction', 'inbound')
         .gte('occurred_at', periodStart)
         .lte('occurred_at', periodEnd)
 

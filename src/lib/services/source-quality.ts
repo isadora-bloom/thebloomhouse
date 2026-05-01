@@ -138,11 +138,17 @@ export async function computeSourceQuality(
       .in('wedding_id', data.ids)
     const avgEmailsExchanged = bookedCount > 0 ? (interactionCount ?? 0) / bookedCount : 0
 
-    // Portal activity: engagement events.
+    // Portal activity: engagement events. Filter direction='inbound'
+    // per Playbook INV-16 — "portal activity" semantically means
+    // couple-side actions, not autonomous-sender outbound. A future
+    // outbound row in this aggregation would inflate per-source
+    // activity in a way that has nothing to do with what the source
+    // sent us.
     const { count: eventCount } = await supabase
       .from('engagement_events')
       .select('id', { count: 'exact', head: true })
       .in('wedding_id', data.ids)
+      .eq('direction', 'inbound')
     const avgPortalActivity = bookedCount > 0 ? (eventCount ?? 0) / bookedCount : 0
 
     // Review score: match reviewer name to partner1/partner2 of these

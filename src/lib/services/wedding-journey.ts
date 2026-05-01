@@ -278,8 +278,13 @@ export async function getWeddingJourney(
       .eq('wedding_id', weddingId)
       .order('created_at', { ascending: true }),
     sb
+      // Timeline shows BOTH directions (Playbook 19.7.1: per-couple
+      // full record). The INV-16 read-time filter applies to
+      // aggregations / scoring consumers; this is a display surface
+      // and the coordinator wants to see the full conversation. Pull
+      // direction explicitly so the UI can label inbound vs outbound.
       .from('engagement_events')
-      .select('id, event_type, points, metadata, occurred_at, created_at')
+      .select('id, event_type, points, direction, metadata, occurred_at, created_at')
       .eq('venue_id', venueId)
       .eq('wedding_id', weddingId)
       .order('occurred_at', { ascending: true, nullsFirst: false }),

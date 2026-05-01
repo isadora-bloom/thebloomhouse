@@ -32,7 +32,13 @@ export async function GET() {
 
 // ---------------------------------------------------------------------------
 // POST — Record an engagement event
-//   Body: { weddingId: string, eventType: string, metadata?: object }
+//   Body: { weddingId: string, eventType: string, direction?: 'inbound'|'outbound', metadata?: object }
+//
+// Defaults direction to 'inbound' — this endpoint is used by the
+// admin / coordinator UI to manually log a couple-side action that
+// Bloom didn't auto-detect (couple texted us, called, showed up, etc.).
+// Outbound recording goes through the autonomous-sender / draft path,
+// not this endpoint. INV-13.
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
@@ -43,7 +49,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { weddingId, eventType, metadata } = body
+    const { weddingId, eventType, metadata, direction } = body
 
     if (!weddingId || typeof weddingId !== 'string') {
       return NextResponse.json(
@@ -59,10 +65,14 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const dir: 'inbound' | 'outbound' =
+      direction === 'outbound' ? 'outbound' : 'inbound'
+
     const result = await recordEngagementEvent(
       auth.venueId,
       weddingId,
       eventType,
+      dir,
       metadata
     )
 

@@ -1029,6 +1029,10 @@ export async function processIncomingEmail(
               metadata: { source: detectedSource, subject: email.subject },
             },
           ],
+          // Direction: inbound. The couple sent us this email. Per
+          // INV-13 every engagement_event ships with direction at
+          // write time.
+          'inbound',
           email.date
         )
       } catch (err) {
@@ -1176,7 +1180,11 @@ export async function processIncomingEmail(
 
     if (heatEvents.length > 0) {
       try {
-        await recordEngagementEventsBatch(venueId, weddingId, heatEvents, email.date)
+        // Heat events derived from inbound classifier output — couple
+        // signaled tour interest, commitment, family context, etc.
+        // INV-13 / INV-14: direction='inbound' so the events count
+        // toward the wedding's heat score.
+        await recordEngagementEventsBatch(venueId, weddingId, heatEvents, 'inbound', email.date)
         // Mirror attribution-relevant events to wedding_touchpoints so
         // /intel/sources can compute multi-touch journey + funnel.
         // engagementToTouchType returns null for heat-internal signals
@@ -1396,10 +1404,13 @@ export async function processIncomingEmail(
         // Seed the initial_inquiry event so baseline heat exists on
         // par with weddings that entered via an email inquiry. Without
         // this a Calendly-only couple sits at heat=0 until a reply arrives.
+        // Direction: inbound — couple booked the tour via the scheduling
+        // tool, that's a couple-side action.
         await recordEngagementEventsBatch(
           venueId,
           weddingId,
           [{ eventType: 'initial_inquiry', metadata: { source: schedulingEvent.source, via: 'scheduling_tool' } }],
+          'inbound',
           email.date
         )
 
@@ -1484,6 +1495,10 @@ export async function processIncomingEmail(
       const schedulingOccurredAt = useEventDatetime
         ? (chooseEventTime(schedulingEvent.eventDatetime, email.date) ?? new Date().toISOString())
         : (chooseEventTime(email.date) ?? new Date().toISOString())
+      // Direction: inbound. Tour booked / completed / final walkthrough
+      // / contract signed are all couple-side actions or events the
+      // couple committed to. Per Playbook 21.4.3 every engagement_event
+      // ships with explicit direction at write time.
       await recordEngagementEventsBatch(venueId, weddingId, [{
         eventType,
         metadata: {
@@ -1493,7 +1508,7 @@ export async function processIncomingEmail(
           event_datetime: schedulingEvent.eventDatetime,
           email_arrival: email.date,
         },
-      }], schedulingOccurredAt)
+      }], 'inbound', schedulingOccurredAt)
 
       // Mirror to wedding_touchpoints. Source is the scheduling tool
       // ('calendly' / 'acuity' / etc.), not the wedding's first-touch

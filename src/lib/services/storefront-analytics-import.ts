@@ -80,6 +80,14 @@ export async function importStorefrontAnalytics(args: {
     const { error } = await supabase.from('engagement_events').insert({
       venue_id: venueId,
       event_type: eventType,
+      // Storefront analytics rows are observations of couple-side
+      // platform behavior — profile views, saves, clicks. Direction
+      // = 'inbound' (couple-to-venue platform engagement). They're
+      // intentionally points=0 so they don't lift heat scores
+      // (heat scoring is gated by INV-14 + the recalculateHeatScore
+      // inbound filter, but points=0 belt-and-braces it). Migration
+      // 116 NOT NULL CHECK enforces this column on every insert.
+      direction: 'inbound',
       points: 0,
       metadata: {
         source,
