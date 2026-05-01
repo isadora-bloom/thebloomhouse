@@ -43,14 +43,19 @@ import {
   type CandidateContextForAI,
 } from './candidate-ai-adjudicator'
 import { recalculateHeatScore } from './heat-mapping'
+import {
+  loadPerPlatformWindows,
+  windowsForPlatform,
+  type PerPlatformWindowMap,
+} from './identity-windows'
 
+// Hard-coded fallbacks. Per-platform overrides flow through
+// loadPerPlatformWindows + windowsForPlatform (T2-D / ARCH-8.5.3).
+// These constants are now the last-resort floor when neither the
+// venue config nor the platform map produces a value — matching
+// pre-T2-D behaviour for any code path that doesn't pass a
+// PerPlatformWindowMap (legacy test paths, etc.).
 const TIER_1_NAME_WINDOW_HOURS = 72
-// Tier 2 wide-window is 30 days. Catches platform engagements that
-// happened 5-30 days before the inquiry — too wide for auto-link
-// but the right scope to hand to the AI adjudicator with full
-// context. Locked 2026-04-30 after the first Knot import revealed
-// only 4/785 matched at ±72h while hundreds had matches sitting in
-// the 5-30 day window.
 const TIER_2_WIDE_WINDOW_HOURS = 30 * 24
 const AI_CONFIDENT_THRESHOLD = 70
 // The AI adjudicator's system prompt is calibrated for "2 or more"
@@ -797,6 +802,13 @@ export async function resolveCandidate(args: {
     return summary
   }
 
+  // T2-D: Fetch per-platform windows once per candidate. Falls back to
+  // platform-aware defaults (Knot 365d, Pinterest 540d, Instagram 180d,
+  // GMB 1w/30d) overlaid with any per-venue overrides from
+  // venue_config.identity_match_config.per_platform.
+  const platformWindows = await loadPerPlatformWindows(supabase, candidate.venue_id)
+  const w = windowsForPlatform(platformWindows, candidate.source_platform)
+
   const exact = await findExactContactMatch(supabase, candidate)
   if (exact) {
     const { flagged_conflict, error } = await writeAttributionEvents({
@@ -823,11 +835,13 @@ export async function resolveCandidate(args: {
     return summary
   }
 
-  // Tier 1: attempt name + last_initial within ±72h. Single
-  // match with no competing candidates auto-links at high
-  // confidence. Multiple matches go to AI adjudicator. Single
-  // match with competitors goes to coordinator queue.
-  const tier1 = await findNameWindowMatches(supabase, candidate, TIER_1_NAME_WINDOW_HOURS)
+  // Tier 1: attempt name + last_initial within the platform's
+  // tier_1_hours window. Single match with no competing candidates
+  // auto-links at high confidence. Multiple matches go to AI
+  // adjudicator. Single match with competitors goes to coordinator
+  // queue. Per-platform window per ARCH-8.5.3 / T2-D — Knot 72h,
+  // Pinterest 72h, Instagram 72h, GMB 168h (1 week).
+  const tier1 = await findNameWindowMatches(supabase, candidate, w.tier_1_hours)
 
   if (tier1 && tier1.matches.length === 1 && !tier1.other_candidates_in_window) {
     const conf = 90 + Math.min(5, candidate.funnel_depth)
@@ -859,15 +873,17 @@ export async function resolveCandidate(args: {
     return summary
   }
 
-  // Tier 2 wide window (±30 days, 2026-04-30): catches the
-  // realistic gap between platform engagement and email inquiry
-  // (a Knot view 5-25 days before the inbound email). Tier 1's
-  // ±72h was too tight — first Knot import matched 4/785 because
-  // most engagements precede the inquiry by a week or more. Wide
-  // window always routes to AI since the confidence at this scope
-  // is below the auto-link bar.
+  // Tier 2 wide window — per-platform tier_2_days converted to
+  // hours. Knot/WW/Zola 365d, Pinterest 540d, Instagram/Facebook
+  // 180d, GMB 30d. Pre-T2-D this was a global 30 days for every
+  // platform — Knot Audit (2026-04-30) found 4/785 matched at ±72h
+  // because most engagements precede the inquiry by weeks-to-months
+  // and the global 30d cap missed the long tail. Wide window always
+  // routes to AI since the confidence at this scope is below the
+  // auto-link bar (ANTI-8.4-B).
+  const tier2HoursForPlatform = w.tier_2_days * 24
   const tier2 = await findNameWindowMatches(
-    supabase, candidate, TIER_2_WIDE_WINDOW_HOURS, /* needsCompetitorCheck */ false,
+    supabase, candidate, tier2HoursForPlatform, /* needsCompetitorCheck */ false,
   )
   if (!tier2 || tier2.matches.length === 0) {
     summary.no_match++

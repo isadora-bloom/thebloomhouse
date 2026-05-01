@@ -97,6 +97,14 @@ meta:
 #          on status flip into booked/completed; helper formatter wired
 #          through 7 render sites; integration test covers the trigger.
 #          Tightening to require first_payment_received waits for T2-F.
+# (T2-D)   Per-platform identity match windows:
+#          ARCH-8.5.3 doctrine-only→enforced, ARCH-8.2-B partial→enforced.
+#          identity-windows.ts owns DEFAULT_PER_PLATFORM_WINDOWS (Knot
+#          365d, Pinterest 540d, IG 180d, GMB 168h/30d, default 72h/30d)
+#          + windowsForPlatform fallback chain. resolveCandidate fetches
+#          once per candidate and threads the platform-specific window
+#          to both findNameWindowMatches calls. /agent/identity-windows
+#          admin UI for per-venue + custom-platform overrides.
 # (T1-F)   Provider hardening (circuit breaker + overrides):
 #          OPS-21.5.6-B doctrine-only→enforced, OPS-21.5.6-D
 #          doctrine-only→enforced, OPS-21.5.6-E doctrine-only→enforced.
@@ -395,10 +403,10 @@ meta:
   severity: high
 
 - id: ARCH-8.2-B
-  status: partial
+  status: enforced
   owner: Isadora
   target: match windows configurable in venue_config.identity_match_config
-  notes: "Schema accepts arbitrary JSON. Config keys are flat windows — no per-platform decay."
+  notes: "Schema accepts arbitrary JSON; identity-resolution.ts reads flat keys (name_plus_partner_days, etc.) for the people-matcher and identity-windows.ts (T2-D, 2026-05-01) reads the per_platform key for the candidate-resolver. Both merge over code defaults so a venue can override one key without redeclaring the rest. /agent/identity-windows admin UI lets coordinators edit the per-platform side without a deploy."
 
 - id: ANTI-8.4-A
   status: enforced
@@ -429,11 +437,10 @@ meta:
   severity: medium
 
 - id: ARCH-8.5.3
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: per-platform time-decay windows configured (Knot long, Pinterest 12+mo, Instagram 1-6mo, GMB days-to-weeks)
-  notes: "Single global TIER_1_NAME_WINDOW_HOURS=72 and TIER_2_WIDE_WINDOW_HOURS=30*24 for all platforms. No per-platform overrides."
-  severity: high
+  notes: "T2-D (2026-05-01): src/lib/services/identity-windows.ts owns DEFAULT_PER_PLATFORM_WINDOWS (Knot 365d, the_knot 365d, weddingwire 365d, zola 365d, here_comes_the_guide 365d, pinterest 540d, instagram 180d, facebook 180d, google_business 168h/30d, default 72h/30d) + windowsForPlatform fallback chain (exact → lowercased → default → hard-coded floor). loadPerPlatformWindows reads venue_config.identity_match_config.per_platform jsonb and merges per-key over the defaults. resolveCandidate fetches once per candidate at line 800 and passes the platform-specific window to both findNameWindowMatches calls (Tier 1 + Tier 2). Admin UI at /agent/identity-windows lets coordinators tune per-venue + add custom platforms. Closed 2026-05-01."
 
 - id: INV-8.5.4
   status: partial
