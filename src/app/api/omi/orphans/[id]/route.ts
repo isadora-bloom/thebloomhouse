@@ -5,7 +5,7 @@
  *
  *   PATCH { attachToTourId } → attach the orphan's transcript to an existing
  *                              tour (appends to tours.transcript, copies the
- *                              omi_session_id, marks the orphan 'attached').
+ *                              session_id, marks the orphan 'attached').
  *   PATCH { dismiss: true }  → mark orphan status='dismissed'. No tour write.
  *
  * The tour must belong to the same venue as the orphan. We enforce that on
@@ -49,7 +49,7 @@ export async function PATCH(
   // Load orphan, scoped to the caller's venue.
   const { data: orphan, error: orphanErr } = await service
     .from('tour_transcript_orphans')
-    .select('id, venue_id, omi_session_id, transcript, status')
+    .select('id, venue_id, session_id, audio_provider, transcript, status')
     .eq('id', id)
     .eq('venue_id', auth.venueId)
     .maybeSingle()
@@ -109,7 +109,8 @@ export async function PATCH(
     .from('tours')
     .update({
       transcript: nextTranscript,
-      omi_session_id: orphan.omi_session_id,
+      session_id: orphan.session_id,
+      audio_provider: orphan.audio_provider,
       transcript_received_at: nowIso,
     })
     .eq('id', tour.id)

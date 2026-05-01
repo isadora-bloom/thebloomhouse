@@ -148,7 +148,7 @@ export async function POST(request: NextRequest) {
       .from('tours')
       .select('id, transcript, outcome, scheduled_at')
       .eq('venue_id', venueId)
-      .eq('omi_session_id', sessionId)
+      .eq('session_id', sessionId)
       .maybeSingle()
 
     if (boundErr) {
@@ -190,10 +190,10 @@ export async function POST(request: NextRequest) {
 
       const { data: candidates, error: candErr } = await service
         .from('tours')
-        .select('id, scheduled_at, transcript, omi_session_id, outcome')
+        .select('id, scheduled_at, transcript, session_id, outcome')
         .eq('venue_id', venueId)
         .in('outcome', ['pending', 'completed'])
-        .is('omi_session_id', null)
+        .is('session_id', null)
         .gte('scheduled_at', lowerIso)
         .lte('scheduled_at', upperIso)
 
@@ -220,7 +220,8 @@ export async function POST(request: NextRequest) {
         const { error: bindErr } = await service
           .from('tours')
           .update({
-            omi_session_id: sessionId,
+            session_id: sessionId,
+            audio_provider: 'omi',
             transcript: nextTranscript,
             transcript_received_at: nowIso,
           })
@@ -247,7 +248,7 @@ export async function POST(request: NextRequest) {
       .from('tour_transcript_orphans')
       .select('id, transcript, segments_count')
       .eq('venue_id', venueId)
-      .eq('omi_session_id', sessionId)
+      .eq('session_id', sessionId)
       .maybeSingle()
 
     const currentOrphanText = typeof existingOrphan?.transcript === 'string'
@@ -265,13 +266,14 @@ export async function POST(request: NextRequest) {
       .upsert(
         {
           venue_id: venueId,
-          omi_session_id: sessionId,
+          session_id: sessionId,
+          audio_provider: 'omi',
           transcript: nextOrphanText,
           segments_count: currentCount + segments.length,
           last_segment_at: nowIso,
           status: 'pending',
         },
-        { onConflict: 'venue_id,omi_session_id' }
+        { onConflict: 'venue_id,session_id' }
       )
       .select('id')
       .single()

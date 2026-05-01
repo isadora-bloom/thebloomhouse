@@ -9,7 +9,7 @@
  *
  * Per-row actions:
  *   - Attach to tour: pick from recent tours for this venue; server copies
- *     the orphan transcript into tours.transcript + binds omi_session_id.
+ *     the orphan transcript into tours.transcript + binds session_id.
  *   - Dismiss: marks status='dismissed', nothing touches tours.
  *
  * White-label: no venue-name or AI-name hardcoding. Help copy resolves
@@ -24,7 +24,7 @@ import { Inbox, Paperclip, X, MapPin } from 'lucide-react'
 interface Orphan {
   id: string
   venue_id: string
-  omi_session_id: string
+  session_id: string
   transcript: string
   segments_count: number
   first_segment_at: string
@@ -169,7 +169,7 @@ export default function OmiInboxPage() {
         <div className="space-y-3">
           {orphans.map((orphan) => {
             const preview = (orphan.transcript || '').slice(0, 200)
-            const shortSession = orphan.omi_session_id.slice(0, 12)
+            const shortSession = orphan.session_id.slice(0, 12)
             return (
               <div
                 key={orphan.id}
