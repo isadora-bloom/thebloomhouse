@@ -236,7 +236,6 @@ export const MODE_INTEL: ModeConfig = {
         { label: 'ROI dashboard', href: '/intel/roi', icon: BarChart3 },
         { label: 'Lost Deals', href: '/intel/lost-deals', icon: XCircle },
         { label: 'Campaigns', href: '/intel/campaigns', icon: Megaphone },
-        { label: 'Social', href: '/intel/social', icon: Share2 },
       ],
     },
     {
@@ -254,14 +253,12 @@ export const MODE_INTEL: ModeConfig = {
         { label: 'Matching / Dedup', href: '/intel/matching', icon: GitMerge },
         { label: 'Candidate Review', href: '/intel/candidates', icon: Sparkles },
         { label: 'Re-engagement', href: '/intel/reengagement', icon: Send },
-        { label: 'Team Comparison', href: '/intel/team-compare', icon: Users },
       ],
     },
     {
       title: 'Tools',
       items: [
         { label: 'Ask Anything', href: '/intel/nlq', icon: MessageSquareText, badge: 'AI' },
-        { label: 'Annotations', href: '/intel/annotations', icon: FileText },
         { label: 'Health Score', href: '/intel/health', icon: Activity },
       ],
     },
