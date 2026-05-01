@@ -27,12 +27,13 @@ import { isAutonomousPaused } from '@/lib/services/cost-ceiling'
 interface AutoSendCheck {
   contextType: string
   /**
-   * Confidence score on 0.0–1.0 scale. The brains internally compute on a
-   * 0–100 integer scale; callers must normalise to 0.0–1.0 before passing
-   * here so the comparison against `auto_send_rules.confidence_threshold`
-   * (also 0.0–1.0) is correct. Pre-fix, this was passed as 75–95 against a
-   * 0.85 threshold and the gate silently never fired (75 ≥ 0.85 always
-   * true). See Playbook INV-7.3.
+   * Confidence score. Accepts EITHER:
+   *   - integer 0–100 (the brain output scale; e.g. 85 means 85%)
+   *   - float 0.0–1.0 (the auto_send_rules.confidence_threshold scale)
+   * The function normalises internally so callers can pass whichever
+   * scale they have without thinking about it. Pre-fix this was a
+   * leaky abstraction — callers had to /100 before passing or the
+   * gate silently never fired. INV-7.3.
    */
   confidenceScore: number
   source?: string
@@ -44,14 +45,15 @@ interface AutoSendCheck {
    */
   threadId?: string
   /**
-   * Direction of the engagement event that triggered this draft. Per
-   * Playbook Invariant 15, the eligibility check must filter on direction
-   * before any other gate — autonomous-sender NEVER produces drafts in
-   * response to outbound events. Defense-in-depth against upstream
-   * misclassification (e.g., self-loop guard miss). Default 'inbound' for
-   * legacy callers; new callers should pass explicitly.
+   * Direction of the engagement event that triggered this draft.
+   * REQUIRED — no default. Per Playbook Invariant 15 the eligibility
+   * check filters on direction before any other gate. Forcing every
+   * caller to pass explicitly means a future call site that forgets
+   * fails closed (TS error) instead of inheriting a permissive
+   * 'inbound' default. Self-review of the original code change
+   * (commit 439d012) flagged the default as a regression vector.
    */
-  direction?: 'inbound' | 'outbound'
+  direction: 'inbound' | 'outbound'
   /**
    * Wedding ID — used for the require_new_contact gate. When the rule is
    * configured to only auto-send to never-before-seen contacts, we count
@@ -216,15 +218,25 @@ export async function checkAutoSendEligible(
   }
 
   // Check 0b: Direction filter (Playbook INV-15). MUST run before any
-  // other gate. Default 'inbound' for legacy callers, but new code must
-  // pass explicitly so a future call site that forgets fails closed.
-  const direction = draft.direction ?? 'inbound'
-  if (direction !== 'inbound') {
+  // other gate. direction is REQUIRED on AutoSendCheck — TS catches
+  // missing callers; this runtime check enforces the enum.
+  if (draft.direction !== 'inbound') {
     return {
       eligible: false,
-      reason: `Auto-send blocked: direction is '${direction}', not 'inbound' (INV-15)`,
+      reason: `Auto-send blocked: direction is '${draft.direction}', not 'inbound' (INV-15)`,
     }
   }
+
+  // Confidence-scale normalization (INV-7.3). Brains return 0–100
+  // integer percentage; auto_send_rules.confidence_threshold stores
+  // 0.0–1.0 float. Accept either scale at the function boundary so
+  // callers don't have to manage the /100 conversion. Heuristic:
+  // anything > 1.5 is treated as a percentage, divided by 100.
+  // Anything <= 1.5 is treated as already on 0.0–1.0 scale.
+  // (1.0 is a valid "100% confident" float; 1.5 chosen as a safe
+  // cliff above the legitimate float range.)
+  const normalisedConfidence =
+    draft.confidenceScore > 1.5 ? draft.confidenceScore / 100 : draft.confidenceScore
 
   const rawSource = draft.source ?? 'direct'
   const detectedSource = typeof draft.source === 'string'
@@ -255,11 +267,12 @@ export async function checkAutoSendEligible(
     }
   }
 
-  // Check 2: Confidence threshold. Both sides on 0.0–1.0 scale.
-  if (draft.confidenceScore < rule.confidenceThreshold) {
+  // Check 2: Confidence threshold. Both sides on 0.0–1.0 scale —
+  // normalisedConfidence is the function-internal canonical form.
+  if (normalisedConfidence < rule.confidenceThreshold) {
     return {
       eligible: false,
-      reason: `Confidence ${draft.confidenceScore.toFixed(2)} below threshold ${rule.confidenceThreshold.toFixed(2)}`,
+      reason: `Confidence ${normalisedConfidence.toFixed(2)} below threshold ${rule.confidenceThreshold.toFixed(2)}`,
     }
   }
 
@@ -318,7 +331,7 @@ export async function checkAutoSendEligible(
   // All checks passed
   return {
     eligible: true,
-    reason: `Auto-send approved: source '${ruleSource}', confidence ${draft.confidenceScore.toFixed(2)}, ` +
+    reason: `Auto-send approved: source '${ruleSource}', confidence ${normalisedConfidence.toFixed(2)}, ` +
       `count ${todayCount + 1}/${rule.dailyLimit}`,
   }
 }

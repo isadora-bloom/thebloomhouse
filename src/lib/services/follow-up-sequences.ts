@@ -324,14 +324,13 @@ export async function generateFollowUps(venueId: string): Promise<number> {
       try {
         const eligibility = await checkAutoSendEligible(venueId, {
           contextType: 'inquiry',
-          // Brains return integer percentage; auto_send_rules threshold
-          // is on 0.0-1.0 scale. Normalise (matches email-pipeline call).
-          confidenceScore: result.confidence / 100,
+          // Pass raw brain confidence — checkAutoSendEligible normalises
+          // 0-100 → 0.0-1.0 internally (Repair K, 2026-05-01).
+          confidenceScore: result.confidence,
           source: detectedSource,
           threadId,
-          // Follow-ups are coordinator-initiated synthetic events
-          // simulating an inbound nudge — direction='inbound' for the
-          // INV-15 gate.
+          // Follow-ups simulate an inbound nudge — direction='inbound'
+          // satisfies the INV-15 gate. Required (no default).
           direction: 'inbound',
           weddingId: followUp.weddingId,
         })

@@ -1860,24 +1860,17 @@ export async function processIncomingEmail(
       try {
         const { checkAutoSendEligible } = await import('@/lib/services/autonomous-sender')
 
-        // Brains return confidence on a 0–100 integer scale; auto_send_rules
-        // store confidence_threshold on a 0.0–1.0 float scale (see settings
-        // UI which divides input by 100 on save). Normalise here so the
-        // gate compares apples to apples. Pre-fix this was passed raw and
-        // the threshold gate silently never fired (e.g., 75 ≥ 0.85 always
-        // true). Playbook INV-7.3.
-        const normalisedConfidence = (confidenceScore ?? 0) / 100
-
+        // Confidence scale conversion now happens INSIDE
+        // checkAutoSendEligible (Repair K, 2026-05-01). Pass raw
+        // brain output; the function normalises 0-100 → 0.0-1.0
+        // automatically.
         const eligibility = await checkAutoSendEligible(venueId, {
           contextType,
-          confidenceScore: normalisedConfidence,
+          confidenceScore: confidenceScore ?? 0,
           source: detectedSource,
           threadId: email.threadId,
-          // Direction is always 'inbound' on the auto-send path: the caller
-          // gates above only reach this branch for inbound classifications
-          // ('new_inquiry', 'inquiry_reply', 'client_message'). Defense-in-
-          // depth: pass explicitly so the eligibility check's INV-15 gate
-          // can fire if a future call site forgets.
+          // Direction is required (Repair K). Always 'inbound' on this
+          // path — the calling site only fires for inbound classifications.
           direction: 'inbound',
           weddingId: weddingId ?? undefined,
         })

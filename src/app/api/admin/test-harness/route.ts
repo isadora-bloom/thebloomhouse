@@ -156,7 +156,15 @@ export async function POST(request: NextRequest) {
         direction?: 'inbound' | 'outbound'
         weddingId?: string
       }
-      const result = await checkAutoSendEligible(venueId, opts)
+      // direction is required on AutoSendCheck (Repair K). The
+      // test harness defaults to 'inbound' if the test caller didn't
+      // pass it — this is the explicit harness-side default, NOT a
+      // function-side fallback. Tests that exercise the outbound
+      // path set direction='outbound' explicitly.
+      const result = await checkAutoSendEligible(venueId, {
+        ...opts,
+        direction: opts.direction ?? 'inbound',
+      })
       return NextResponse.json({ ok: true, result })
     }
 
