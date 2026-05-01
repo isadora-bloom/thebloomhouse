@@ -28,7 +28,7 @@ import {
   MessageSquareText, GitMerge, UserCheck, Send,
   // Sage's Brain
   Sparkles, Mic, GraduationCap, ScrollText,
-  BookOpen, Store, Settings, MailX,
+  BookOpen, Store, Settings, MailX, ShieldAlert,
   Wine, HardHat, Bus, UtensilsCrossed,
   Armchair, Building, Flower2, HeartHandshake,
   Hotel, FileText, CheckSquare, SlidersHorizontal, Phone,
@@ -293,6 +293,7 @@ export const MODE_SAGE: ModeConfig = {
     '/settings',
     '/agent/learning',
     '/agent/rules',
+    '/agent/forbidden-topics',
     '/agent/settings',
     '/portal/kb',
     '/portal/section-settings',
@@ -353,6 +354,7 @@ export const MODE_SAGE: ModeConfig = {
       items: [
         { label: 'Auto-send & Follow-ups', href: '/agent/settings', icon: Settings, daily: true },
         { label: 'Inbox Filters', href: '/settings/inbox-filters', icon: MailX },
+        { label: 'Forbidden Topics', href: '/agent/forbidden-topics', icon: ShieldAlert },
         { label: "What Makes Us Different", href: '/portal/venue-usps-config', icon: Sparkles },
         { label: 'Seasonal Content', href: '/settings/seasonal-content', icon: TrendsIcon },
       ],

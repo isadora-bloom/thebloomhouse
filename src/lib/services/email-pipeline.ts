@@ -40,7 +40,11 @@ import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { chooseEventTime, parseEventTime } from '@/lib/services/event-time'
 import { detectFormRelay, type FormRelayLead } from '@/lib/services/form-relay-parsers'
-import { extractIdentityFromEmail } from '@/lib/services/body-identity-extract'
+import {
+  extractIdentityFromEmail,
+  isRelayAddress,
+  isSyntheticAddress,
+} from '@/lib/services/body-identity-extract'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
 
@@ -476,6 +480,41 @@ export async function findOrCreateContact(
  * rest of the pipeline. source maps to the shape router-brain uses so
  * downstream wedding.source / intelligence_extractions stay consistent.
  */
+/**
+ * Extract question sentences from a free-text note. Used by form-relay
+ * synth classification (B-19) so /agent/knowledge-gaps no longer
+ * systematically under-counts Knot/WW/Zola questions.
+ *
+ * Pattern: split on sentence boundaries, keep tokens that end with '?'
+ * after trimming. Tolerates newlines and bullet-list shapes. Caps at
+ * 5 questions to match the upstream classifier's typical output.
+ *
+ * Pure regex; the LLM classifier still owns nuance (rephrased
+ * statements, indirect asks). For the form-relay path this is the
+ * "good-enough at zero token cost" line — knowledge_gaps is a
+ * coordinator-facing aggregate, not a precision-critical surface.
+ */
+function extractQuestionsFromNote(note: string | null | undefined): string[] {
+  if (!note) return []
+  // Split on terminator + whitespace to pick up "?", ".", "!" — then
+  // keep the question-marked sentences. Newlines also delimit (forms
+  // often format the note as bullet points without trailing punct).
+  const candidates = note
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+  const questions: string[] = []
+  for (const c of candidates) {
+    if (!c.endsWith('?')) continue
+    // Reject pathological captures: too long (a whole paragraph
+    // ending in a single '?'), or too short to be a real question.
+    if (c.length < 4 || c.length > 240) continue
+    questions.push(c)
+    if (questions.length >= 5) break
+  }
+  return questions
+}
+
 function synthClassificationFromFormLead(lead: FormRelayLead): ClassificationResult {
   // guestCount field may be "101 - 150" / "85" / "100–150" — take the first
   // integer we can find so downstream parseGuestCount-style logic has a
@@ -495,7 +534,11 @@ function synthClassificationFromFormLead(lead: FormRelayLead): ClassificationRes
       eventDate: lead.eventDate ?? undefined,
       guestCount,
       source: normalizeSource(lead.source),
-      questions: [],
+      // B-19: pull '?'-terminated sentences from the prospect's note
+      // so /agent/knowledge-gaps surfaces what they actually asked.
+      // Pre-fix this was hardcoded `[]`, systematically under-counting
+      // questions on Knot/WW/Zola/calculator leads.
+      questions: extractQuestionsFromNote(lead.note),
       urgencyLevel: 'medium',
       sentiment: 'positive',
     },
@@ -921,6 +964,22 @@ export async function processIncomingEmail(
   const parsedEventDate = parsedEventDateObj?.iso ?? null
   const parsedGuestCount = parseGuestCount(extracted.guestCount)
 
+  // Post-zero identifier gate (B-17 / Constitution Part-Zero): a wedding
+  // row encodes a couple that has REACHED Point Zero — name plus a
+  // reachable identifier. Synthetic per-prospect tokens
+  // (e.g. `authsolic-{hash}@weddingwire.bloom-relay.invalid` minted by
+  // form-relay-parsers when the platform exposes no real personal email)
+  // and known-relay senders (theknot.com, weddingwire.com, …) do NOT
+  // satisfy that bar — neither lets the venue actually email the couple
+  // back. Pre-fix, both shapes minted weddings with non-routable
+  // synthetic emails. The fix lands them in candidate_identities
+  // instead, awaiting a real identifier surfacing on a follow-up
+  // signal. The interaction row above is preserved as the audit trail
+  // either way.
+  const subZeroIdentifier =
+    classification.classification === 'new_inquiry' &&
+    (!fromEmail || isSyntheticAddress(fromEmail) || isRelayAddress(fromEmail))
+
   if (
     isNewContact &&
     !weddingId &&
@@ -929,7 +988,9 @@ export async function processIncomingEmail(
     // thread, the incoming is a reply to our campaign/outreach — never a
     // cold new_inquiry, even if the classifier ranked it that way on body
     // cues alone. Without this gate, campaign replies become ghost couples.
-    !threadHasPriorOutbound
+    !threadHasPriorOutbound &&
+    // Post-zero identifier gate — see subZeroIdentifier comment above.
+    !subZeroIdentifier
   ) {
     // 2026-04-30: inquiry_date used to be `new Date().toISOString()` —
     // wall-clock NOW. That stamped every wedding to the moment the
@@ -1096,6 +1157,53 @@ export async function processIncomingEmail(
           console.warn('[pipeline] create-time candidate resolve failed:', err)
         }
       })()
+    }
+  } else if (
+    isNewContact &&
+    !weddingId &&
+    !threadHasPriorOutbound &&
+    subZeroIdentifier
+  ) {
+    // Sub-point-zero new_inquiry: insert a candidate_identities row
+    // instead of a wedding. Constitution Part-Zero — the couple has a
+    // name candidate but no reachable identifier, so they are still
+    // pre-Point-Zero. The candidate clusterer / resolver will promote
+    // them to a wedding when a real identifier (personal email,
+    // phone, platform handle) surfaces on a future signal.
+    try {
+      // Best-effort name parse from senderName (classifier output) or
+      // fromName (raw From header). When neither produces anything,
+      // signal_count + email + source_platform alone are enough for the
+      // resolver to pin the candidate later.
+      const rawName =
+        (typeof extracted.senderName === 'string' && extracted.senderName.trim().length > 0
+          ? extracted.senderName.trim()
+          : null)
+        ?? (typeof fromName === 'string' && fromName.trim().length > 0
+          ? fromName.trim()
+          : null)
+      const nameParts = rawName ? rawName.split(/\s+/) : []
+      const subZeroFirstName = nameParts[0] ?? null
+      const subZeroLastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null
+
+      const sourcePlatform = detectedSource
+      await supabase.from('candidate_identities').insert({
+        venue_id: venueId,
+        source_platform: sourcePlatform,
+        first_name: subZeroFirstName,
+        last_initial: subZeroFirstName ? null : null,
+        last_name: subZeroLastName,
+        email: fromEmail,
+        phone: schedulingEvent?.extras?.phone ?? null,
+        signal_count: 1,
+        funnel_depth: 1,
+        action_counts: { email_inquiry: 1 },
+        first_seen: email.date,
+        last_seen: email.date,
+        review_status: 'needs_review',
+      })
+    } catch (err) {
+      console.warn('[pipeline] sub-zero candidate insert failed:', err)
     }
   } else if (weddingId && parsedEventDate) {
     // Existing wedding — backfill any extracted date / guest count that

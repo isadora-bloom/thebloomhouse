@@ -82,7 +82,7 @@ const KNOWN_RELAY_DOMAINS = new Set([
   'zola.com',
 ])
 
-function isRelayAddress(email: string): boolean {
+export function isRelayAddress(email: string): boolean {
   const at = email.indexOf('@')
   if (at < 0) return false
   const domain = email.slice(at + 1).toLowerCase()
@@ -93,6 +93,17 @@ function isRelayAddress(email: string): boolean {
     if (domain === known || domain.endsWith('.' + known)) return true
   }
   return false
+}
+
+/**
+ * Synthetic per-prospect identifiers that don't actually reach a human
+ * (e.g. `authsolic-{token}@weddingwire.bloom-relay.invalid` minted by
+ * form-relay-parsers when the relay platform doesn't expose a real
+ * personal email). RFC 2606 reserves `.invalid` so any TLD ending in
+ * `.invalid` is by definition non-routable.
+ */
+export function isSyntheticAddress(email: string): boolean {
+  return /\.invalid$/i.test(email.trim())
 }
 
 function digitsOnly(phone: string): string {

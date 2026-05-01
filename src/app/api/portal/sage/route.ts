@@ -4,6 +4,7 @@ import { generateSageResponse } from '@/lib/services/sage-brain'
 import { extractPlanningDecisions, savePlanningNotes, extractAndSaveAINotes } from '@/lib/services/planning-extraction'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { runEscalationCheck } from '@/lib/services/escalation-detector'
+import { checkEscalationForVenue } from '@/config/escalation-keywords'
 import { callAIVision, CLAUDE_MODEL } from '@/lib/ai/client'
 import { rateLimit, secondsUntil } from '@/lib/rate-limit'
 import { getCoupleAuth, getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
@@ -180,6 +181,87 @@ export async function POST(request: NextRequest) {
       } catch (err) {
         console.warn('[api/portal/sage] File context extraction failed (non-blocking):', err)
       }
+    }
+
+    // -----------------------------------------------------------------------
+    // 3a. Forbidden-topic pre-classification (B-20 / T1-J).
+    // Pre-fix the route was generate-then-assess: Sage answered first
+    // and the escalation scan ran AFTER, on the *user* message, in a
+    // fire-and-forget. That meant on a forbidden-topic ask we'd burn
+    // tokens generating an answer Sage shouldn't be giving (legal,
+    // refund, vendor disputes, per-venue prohibitions) and then alert
+    // the coordinator after the couple already received Sage's reply.
+    //
+    // Now: check the inbound against the merged global +
+    // venue_forbidden_topics list BEFORE generateSageResponse. On
+    // match: skip generation entirely, save the user message, drop a
+    // sage_uncertain_queue row with reason='forbidden_topic', notify
+    // the coordinator, and return a canned escalation response. The
+    // coordinator answers manually via the queue UI.
+    // -----------------------------------------------------------------------
+    const forbidden = await checkEscalationForVenue(message, venueId)
+    if (forbidden.shouldEscalate && forbidden.matchedKeyword) {
+      // Save the user message so the conversation history stays correct.
+      await supabase.from('sage_conversations').insert({
+        venue_id: venueId,
+        wedding_id: weddingId || null,
+        role: 'user',
+        content: message,
+        confidence_score: null,
+        flagged_uncertain: true,
+      })
+
+      const cannedResponse =
+        `That's an important question, and I want to make sure you get the right answer. ` +
+        `I've flagged this for your coordinator to handle directly — they'll be in touch shortly.`
+
+      const { data: cannedSageMsg } = await supabase
+        .from('sage_conversations')
+        .insert({
+          venue_id: venueId,
+          wedding_id: weddingId || null,
+          role: 'assistant',
+          content: cannedResponse,
+          model_used: null,
+          tokens_used: 0,
+          cost: 0,
+          confidence_score: 0,
+          flagged_uncertain: true,
+        })
+        .select('id')
+        .single()
+
+      await supabase.from('sage_uncertain_queue').insert({
+        venue_id: venueId,
+        wedding_id: weddingId || null,
+        conversation_id: cannedSageMsg?.id ?? null,
+        question: message,
+        sage_answer: cannedResponse,
+        confidence_score: 0,
+        reason: 'forbidden_topic',
+      })
+
+      try {
+        await createNotification({
+          venueId,
+          weddingId: weddingId || undefined,
+          type: 'sage_uncertain',
+          title: `Forbidden topic flagged: "${forbidden.matchedKeyword}"`,
+          body:
+            `Sage skipped generation because the message hit the forbidden-topic list ` +
+            `(matched "${forbidden.matchedKeyword}"). Excerpt: ` +
+            `"${message.slice(0, 160)}${message.length > 160 ? '…' : ''}"`,
+        })
+      } catch (err) {
+        console.warn('[api/portal/sage] notification failed (non-blocking):', err)
+      }
+
+      return NextResponse.json({
+        response: cannedResponse,
+        confidence: 0,
+        conversationId: cannedSageMsg?.id || null,
+        forbiddenTopic: forbidden.matchedKeyword,
+      })
     }
 
     // -----------------------------------------------------------------------

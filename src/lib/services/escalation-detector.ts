@@ -22,7 +22,7 @@
  *     from doubling up while letting genuinely separate escalations fire.
  */
 
-import { checkEscalation } from '@/config/escalation-keywords'
+import { checkEscalationForVenue } from '@/config/escalation-keywords'
 import { createServiceClient } from '@/lib/supabase/service'
 import { createNotification } from '@/lib/services/admin-notifications'
 
@@ -99,7 +99,7 @@ export async function runEscalationCheck(
       return { escalated: false, matchedKeyword: null }
     }
 
-    const { shouldEscalate, matchedKeyword } = checkEscalation(text)
+    const { shouldEscalate, matchedKeyword } = await checkEscalationForVenue(text, venueId)
     if (!shouldEscalate || !matchedKeyword) {
       return { escalated: false, matchedKeyword: null }
     }

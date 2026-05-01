@@ -97,6 +97,18 @@ meta:
 #          on status flip into booked/completed; helper formatter wired
 #          through 7 render sites; integration test covers the trigger.
 #          Tightening to require first_payment_received waits for T2-F.
+# (T1-J)   B-15 + B-17 + B-19 + B-20 + B-21 (migrations 125 + 126):
+#          source-quality.ts now uses attribution_events.source_platform
+#          (ANTI-2.6.5 partial→enforced); email-pipeline.ts gates wedding
+#          creation on a real reachable identifier (synthetic / relay
+#          falls back to candidate_identities); form-relay synth
+#          classification extracts ?-terminated questions from the note
+#          (knowledge-gaps no longer under-counts); venue_forbidden_topics
+#          + checkEscalationForVenue + /agent/forbidden-topics admin UI
+#          (LIMB-16.4); sage portal route does forbidden-topic
+#          pre-classification BEFORE generateSageResponse; sage_uncertain_queue
+#          gains reason column to disambiguate forbidden_topic from
+#          low_confidence escalations.
 
 # ===================================================================
 # PART 2 — POINT ZERO & FORENSIC RECORD
@@ -157,7 +169,7 @@ meta:
   status: enforced
   owner: Isadora
   target: no wedding row created for sub-point-zero candidate
-  notes: "email-pipeline.ts:907-916 gates on point zero. Note: wedding still created for synthetic .invalid emails — see STAGE-10.2.9."
+  notes: "email-pipeline.ts gates on point zero. T1-J B-17 closed the synthetic-identifier gap (2026-05-01): subZeroIdentifier check rejects new_inquiry rows where fromEmail is empty / .invalid synthetic / known-relay (theknot.com / weddingwire.com / zola.com / etc.). Sub-zero candidates land in candidate_identities with review_status='needs_review' so the resolver can promote them when a reachable identifier surfaces."
 
 - id: ANTI-2.6.4
   status: enforced
@@ -167,11 +179,10 @@ meta:
   severity: low
 
 - id: ANTI-2.6.5
-  status: partial
+  status: enforced
   owner: Isadora
   target: attribution_events.source authoritative; wedding.source denormalized only
-  notes: "source-quality.ts:81-85 groups bookedCount/avgRevenue/frictionRate by wedding.source (legacy). Only firstTouchLeads reads attribution_events. Same scorecard contains two attribution models silently."
-  severity: high
+  notes: "T1-J B-15 fix: source-quality.ts now builds firstTouchByWedding map from attribution_events (is_first_touch=true, reverted_at IS NULL) and groups Quality columns (bookedCount/avgRevenue/frictionRate/avgDaysToBook) by attribution_events.source_platform. wedding.source is the fallback ONLY for legacy rows without an attribution row. Funnel + Quality halves of the scorecard now share one attribution model. Closed 2026-05-01."
 
 # ===================================================================
 # PART 3 — TWO LEGS

@@ -85,6 +85,44 @@ export async function computeSourceQuality(
     .not('source', 'is', null)
     .gte('booked_at', windowStartIso)
 
+  // Per Constitution / Playbook ANTI-2.6.5: attribution_events.source_platform
+  // is the truth for "where this couple came from". wedding.source is
+  // the legacy denormalised field (the leg / channel of the inquiry
+  // email). Pre-T1-J / B-15 this scorecard grouped Quality columns
+  // (bookedCount, avgRevenue, frictionRate, avgDaysToBook) by
+  // wedding.source while the Funnel columns below grouped by
+  // attribution_events. Two attribution models on one scorecard
+  // would silently disagree (e.g. a wedding with a Knot first-touch
+  // signal but a direct-website inquiry showed up in `direct` for
+  // Quality and `the_knot` for Funnel). This block builds a
+  // wedding_id → first-touch source map and uses it for grouping;
+  // wedding.source is the fallback ONLY when no first-touch
+  // attribution row exists (legacy weddings imported before
+  // attribution tracking, manual entries, etc.).
+  const weddingIdsAll = (weddings ?? []).map((w) => w.id as string)
+  const firstTouchByWedding = new Map<string, string>()
+  if (weddingIdsAll.length > 0) {
+    const FT_CHUNK = 200
+    for (let i = 0; i < weddingIdsAll.length; i += FT_CHUNK) {
+      const chunk = weddingIdsAll.slice(i, i + FT_CHUNK)
+      const { data: ftRows } = await supabase
+        .from('attribution_events')
+        .select('wedding_id, source_platform')
+        .eq('venue_id', venueId)
+        .eq('is_first_touch', true)
+        .is('reverted_at', null)
+        .in('wedding_id', chunk)
+      for (const r of (ftRows ?? []) as Array<{ wedding_id: string; source_platform: string }>) {
+        // Multiple first-touch rows shouldn't happen (trigger enforces
+        // it) but if they do the first row wins; downstream invariant
+        // detection catches the duplicate.
+        if (!firstTouchByWedding.has(r.wedding_id)) {
+          firstTouchByWedding.set(r.wedding_id, r.source_platform)
+        }
+      }
+    }
+  }
+
   const bySource: Record<string, {
     ids: string[]
     revenues: number[]
@@ -94,7 +132,12 @@ export async function computeSourceQuality(
   }> = {}
 
   for (const w of weddings ?? []) {
-    const src = (w.source as string) ?? 'unknown'
+    // Prefer attribution_events.source_platform (B-15 fix); fall back
+    // to wedding.source for legacy rows without attribution data.
+    const src =
+      firstTouchByWedding.get(w.id as string)
+        ?? (w.source as string)
+        ?? 'unknown'
     const status = (w.status as string) ?? ''
     const booked = status === 'booked' || status === 'completed'
     if (!booked) continue
