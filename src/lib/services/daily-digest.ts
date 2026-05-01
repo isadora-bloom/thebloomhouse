@@ -175,12 +175,13 @@ export async function generateDigest(venueId: string): Promise<Digest> {
       .lte('wedding_date', daysFromNow(30))
       .order('wedding_date', { ascending: true }),
 
-    // New engagement events in last 24 hours
+    // New engagement events in last 24 hours. Use occurred_at (event time)
+    // not created_at (processing time) — see ANTI-2.6.4 / migration 089.
     supabase
       .from('engagement_events')
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId)
-      .gte('created_at', since),
+      .gte('occurred_at', since),
 
     // Active anomaly alerts
     supabase

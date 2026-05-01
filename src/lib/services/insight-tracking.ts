@@ -215,13 +215,14 @@ async function measureMetric(
     }
 
     case 'couple_behavior': {
-      // Average engagement score
+      // Average engagement score. Use occurred_at (event time) not
+      // created_at (processing time) per Playbook 12.2 + ANTI-2.6.4.
       const { data: events } = await supabase
         .from('engagement_events')
         .select('points')
         .eq('venue_id', venueId)
-        .gte('created_at', periodStart)
-        .lte('created_at', periodEnd)
+        .gte('occurred_at', periodStart)
+        .lte('occurred_at', periodEnd)
 
       if (!events || events.length === 0) {
         return { value: 0, periodStart, periodEnd }

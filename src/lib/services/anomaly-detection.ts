@@ -271,12 +271,16 @@ async function queryMetric(
     // A drop in engagement rate may indicate couples are losing interest
     // or the portal/emails aren't driving interaction.
     case 'engagement_rate': {
+      // Use occurred_at (event time) not created_at (processing time)
+      // per Playbook 12.2 + ANTI-2.6.4. Migration 089 added occurred_at
+      // for exactly this reason — on backfilled venues, created_at
+      // collapses every historical event to the import day.
       const { count: engagementCount, error: engError } = await supabase
         .from('engagement_events')
         .select('id', { count: 'exact', head: true })
         .eq('venue_id', venueId)
-        .gte('created_at', periodStart)
-        .lt('created_at', periodEnd)
+        .gte('occurred_at', periodStart)
+        .lt('occurred_at', periodEnd)
 
       if (engError) {
         console.error(`[anomaly] Error querying engagement_rate events:`, engError.message)

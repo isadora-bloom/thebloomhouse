@@ -897,6 +897,23 @@ export async function processIncomingEmail(
 
   const interactionId = interaction.id as string
 
+  // Step 5a: Spam early-return. Per Playbook 10.2 step 6, spam falls
+  // out of the pipeline before any intelligence work runs. The
+  // interaction row above is the audit trail; everything below
+  // (intelligence_extractions, signal_inference, booking_signal,
+  // knowledge_gaps, draft generation, auto-send eligibility) costs
+  // tokens or DB work that the spam path does not justify.
+  // Pre-fix the spam branch only skipped findOrCreateContact — every
+  // other downstream step still ran on spam payloads.
+  if (classification.classification === 'spam') {
+    return {
+      interactionId,
+      draftId: null,
+      classification: 'spam',
+      autoSent: false,
+    }
+  }
+
   // Step 5: If new inquiry, create wedding record and engagement event
   const extracted = classification.extractedData
   const detectedSource = normalizeSource(extracted.source ?? 'direct')
