@@ -425,11 +425,25 @@ export async function processAllVenueFollowUps(): Promise<
     return {}
   }
 
+  // Cost-ceiling gate: follow-up generation calls inquiry-brain
+  // (Sonnet) per follow-up due. The autonomous-sender path already
+  // refuses to flush when paused, so a paused venue's follow-ups
+  // would generate drafts that immediately stall in 'pending'. Skip
+  // them entirely instead — the drafts are pure cost. OPS-21.4.3.
+  const venueIds = venues.map((v) => v.id as string)
+  const venueNames = new Map<string, string>(
+    venues.map((v) => [v.id as string, (v.name as string) ?? (v.id as string)]),
+  )
+  const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
+  const { active, skipped } = await filterActiveVenues(venueIds)
+  if (skipped.length > 0) {
+    console.log(`[follow-ups] Skipping ${skipped.length} paused venue(s); running ${active.length}`)
+  }
+
   const results: Record<string, number> = {}
 
-  for (const venue of venues) {
-    const id = venue.id as string
-    const name = (venue.name as string) ?? id
+  for (const id of active) {
+    const name = venueNames.get(id) ?? id
 
     try {
       const count = await generateFollowUps(id)

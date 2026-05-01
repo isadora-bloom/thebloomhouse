@@ -342,14 +342,28 @@ export async function computeCorrelationsAllVenues(
   supabase: SupabaseClient
 ): Promise<Record<string, number>> {
   const { data: venues } = await supabase.from('venues').select('id').eq('status', 'active')
+
+  // Cost-ceiling gate: correlation-engine itself runs classical Pearson
+  // (no LLM cost), but it WRITES to intelligence_insights which is a
+  // "proactive insight" surface per Playbook 21.4.3. Paused venues
+  // shouldn't get new proactive insights even if they're free to
+  // compute — defense-in-depth around the doctrine boundary, not
+  // just the cost boundary.
+  const venueIds = (venues ?? []).map((v) => v.id as string)
+  const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
+  const { active, skipped } = await filterActiveVenues(venueIds)
+  if (skipped.length > 0) {
+    console.log(`[correlation] Skipping ${skipped.length} paused venue(s); running ${active.length}`)
+  }
+
   const out: Record<string, number> = {}
-  for (const v of venues ?? []) {
+  for (const id of active) {
     try {
-      const insights = await computeCorrelationsForVenue({ supabase, venueId: v.id as string })
-      out[v.id as string] = insights.length
+      const insights = await computeCorrelationsForVenue({ supabase, venueId: id })
+      out[id] = insights.length
     } catch (err) {
-      console.error(`[correlation] ${v.id}:`, err instanceof Error ? err.message : err)
-      out[v.id as string] = -1
+      console.error(`[correlation] ${id}:`, err instanceof Error ? err.message : err)
+      out[id] = -1
     }
   }
   return out

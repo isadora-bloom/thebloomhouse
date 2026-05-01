@@ -821,10 +821,21 @@ export async function runAllVenueAnomalies(): Promise<Record<string, AnomalyAler
     return {}
   }
 
+  // Cost-ceiling gate: skip venues whose autonomous behavior is
+  // paused (cost ceiling reached or coordinator override). Anomaly
+  // detection fires LLM hypothesis generation per metric per venue
+  // — proactive insights — exactly the kind of work the playbook says
+  // to pause when a venue hits 100% ceiling. OPS-21.4.3.
+  const venueIds = venues.map((v) => v.id as string)
+  const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
+  const { active, skipped } = await filterActiveVenues(venueIds)
+  if (skipped.length > 0) {
+    console.log(`[anomaly] Skipping ${skipped.length} paused venue(s); running ${active.length}`)
+  }
+
   const results: Record<string, AnomalyAlert[]> = {}
 
-  for (const venue of venues) {
-    const id = venue.id as string
+  for (const id of active) {
     const metricAlerts = await runAnomalyDetection(id)
 
     // Availability anomalies are additive: they live in the same table so

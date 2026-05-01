@@ -91,6 +91,14 @@
     {
       "path": "/api/cron?job=re_engagement_attribution",
       "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/cron?job=cost_ceiling_check",
+      "schedule": "15 * * * *"
+    },
+    {
+      "path": "/api/cron?job=cost_ceiling_reset",
+      "schedule": "5 0 * * *"
     }
   ]
 }

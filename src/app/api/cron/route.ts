@@ -700,10 +700,18 @@ async function generateDigestsForAllVenues(): Promise<Record<string, boolean>> {
     return {}
   }
 
+  // Cost-ceiling gate: weekly digests are LLM-narrated proactive
+  // surfaces. Skip paused venues per Playbook 21.4.3.
+  const venueIds = venues.map((v) => v.id as string)
+  const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
+  const { active, skipped } = await filterActiveVenues(venueIds)
+  if (skipped.length > 0) {
+    console.log(`[cron] Weekly digest skipping ${skipped.length} paused venue(s); running ${active.length}`)
+  }
+
   const results: Record<string, boolean> = {}
 
-  for (const venue of venues) {
-    const id = venue.id as string
+  for (const id of active) {
     try {
       await generateWeeklyDigest(id)
 
@@ -775,10 +783,18 @@ async function generateBriefingsForAllVenues(
     return {}
   }
 
+  // Cost-ceiling gate: weekly + monthly briefings call Sonnet for
+  // narration. Skip paused venues per Playbook 21.4.3.
+  const venueIds = venues.map((v) => v.id as string)
+  const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
+  const { active, skipped } = await filterActiveVenues(venueIds)
+  if (skipped.length > 0) {
+    console.log(`[cron] ${type} briefing skipping ${skipped.length} paused venue(s); running ${active.length}`)
+  }
+
   const results: Record<string, boolean> = {}
 
-  for (const venue of venues) {
-    const id = venue.id as string
+  for (const id of active) {
     try {
       if (type === 'weekly') {
         await generateWeeklyBriefing(id)

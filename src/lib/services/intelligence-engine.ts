@@ -2390,10 +2390,19 @@ export async function runAllVenueIntelligence(): Promise<Record<string, number>>
     return {}
   }
 
+  // Cost-ceiling gate: intelligence analysis is the most LLM-heavy
+  // cron path (multiple Sonnet calls per venue per run for insight
+  // generation). Skip paused venues per Playbook 21.4.3.
+  const venueIds = venues.map((v) => v.id as string)
+  const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
+  const { active, skipped } = await filterActiveVenues(venueIds)
+  if (skipped.length > 0) {
+    console.log(`[intelligence-engine] Skipping ${skipped.length} paused venue(s); running ${active.length}`)
+  }
+
   const results: Record<string, number> = {}
 
-  for (const venue of venues) {
-    const id = venue.id as string
+  for (const id of active) {
     try {
       results[id] = await runIntelligenceAnalysis(id)
     } catch (err) {

@@ -681,10 +681,19 @@ export async function sendAllDigests(): Promise<
     return {}
   }
 
+  // Cost-ceiling gate: digest generation runs Sonnet against the
+  // venue's data ("proactive insights" per Playbook 21.4.3). Skip
+  // venues whose autonomous behavior is paused.
+  const venueIds = venues.map((v) => v.id as string)
+  const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
+  const { active, skipped } = await filterActiveVenues(venueIds)
+  if (skipped.length > 0) {
+    console.log(`[daily-digest] Skipping ${skipped.length} paused venue(s); running ${active.length}`)
+  }
+
   const results: Record<string, { sent: boolean; to: string }> = {}
 
-  for (const venue of venues) {
-    const id = venue.id as string
+  for (const id of active) {
     try {
       results[id] = await sendDigestEmail(id)
     } catch (err) {

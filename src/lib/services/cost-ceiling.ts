@@ -142,6 +142,54 @@ export async function isAutonomousPaused(venueId: string): Promise<boolean> {
   return (data?.autonomous_paused as boolean) ?? false
 }
 
+/**
+ * Filter a list of venue IDs down to those whose autonomous behavior
+ * is NOT paused. Used by cron-driven AI services (anomaly detection,
+ * digests, intelligence engine, follow-ups, re-engagement) to skip
+ * venues at 100% ceiling per Playbook OPS-21.4.3:
+ *
+ *   "When 100% is reached, autonomous behavior pauses (drafts queue
+ *    for coordinator approval; no auto-sends; no proactive insights)
+ *    until next day or coordinator override."
+ *
+ * The autonomous-sender chokepoint catches the highest-risk path
+ * (auto-flushed sends to couples). This filter is the second line:
+ * cron services that consume LLM cost (anomaly hypothesis, weekly
+ * briefings, daily digests, intelligence engine, follow-up draft
+ * generation, re-engagement composition) skip paused venues so the
+ * ceiling isn't a softener.
+ *
+ * Returns the input list filtered, plus a count of skipped venues
+ * (logged by the cron job for visibility). Single SQL round-trip
+ * regardless of input size; uses .in() filter.
+ */
+export async function filterActiveVenues(
+  venueIds: string[]
+): Promise<{ active: string[]; skipped: string[] }> {
+  if (venueIds.length === 0) return { active: [], skipped: [] }
+  const supabase = createServiceClient()
+  const { data, error } = await supabase
+    .from('venue_config')
+    .select('venue_id, autonomous_paused')
+    .in('venue_id', venueIds)
+  if (error) {
+    console.error('[cost-ceiling] filterActiveVenues lookup failed:', error.message)
+    // Fail-open on lookup failure — better to over-run a paused
+    // venue than to over-block a healthy one when our DB is misbehaving.
+    return { active: venueIds, skipped: [] }
+  }
+  const pausedSet = new Set<string>()
+  for (const row of (data ?? []) as Array<{ venue_id: string; autonomous_paused: boolean }>) {
+    if (row.autonomous_paused) pausedSet.add(row.venue_id)
+  }
+  // Venues without a venue_config row are treated as active (fresh
+  // venues, demo-mode, etc.). The cron services do their own per-venue
+  // sanity checks downstream.
+  const active = venueIds.filter((id) => !pausedSet.has(id))
+  const skipped = venueIds.filter((id) => pausedSet.has(id))
+  return { active, skipped }
+}
+
 // ---------------------------------------------------------------------------
 // Enforce: cron-side check that may flip the pause flag and notify
 // ---------------------------------------------------------------------------
