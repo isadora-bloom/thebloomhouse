@@ -423,15 +423,19 @@ async function fetchSignalsForCandidate(
  *   signal_date >= inquiry_date → 'nurture' (post-point-zero touch)
  *   signal_date <  inquiry_date → 'attribution' (pre-point-zero touch)
  *
- * Migration 118 also installs a Postgres trigger that runs the same
- * recompute on every weddings UPDATE OF inquiry_date — that's the
- * primary defense (can never be forgotten by a code path). This
- * service-side helper exists so callers that mutate inquiry_date can
- * also recompute is_first_touch in the same atomic flow (the trigger
- * handles bucket only; first-touch is service-side because it joins
- * tangential_signals.signal_date which the trigger function does too
- * but for is_first_touch the rule is "earliest signal_date among
- * bucket='attribution'" which depends on bucket being already-correct).
+ * Migration 119 installs a Postgres trigger that recomputes BOTH
+ * bucket and is_first_touch atomically on every weddings UPDATE OF
+ * inquiry_date — that's the primary defense (can never be forgotten
+ * by a code path). This service-side helper exists for callers that
+ * want to perform the recompute in their own transaction — e.g.,
+ * scripts that bulk-update via service-role queries that bypass the
+ * trigger, or callers that want to invoke recompute without triggering
+ * the inquiry_date column UPDATE itself (rare).
+ *
+ * Note: callers that update weddings.inquiry_date through normal
+ * Supabase client paths get the trigger automatically — they DO NOT
+ * need to call this helper. It's the explicit-invocation path for
+ * edge cases.
  *
  * Per Playbook INV-2.5 + Part 12.3 (recomputation when event times change).
  */
