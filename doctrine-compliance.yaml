@@ -66,6 +66,32 @@ meta:
 #          INV-2.5 at-risk→enforced, INV-12.3 partial→enforced (for
 #          inquiry_date specifically; other event-time changes
 #          follow the same pattern in future PRs)
+# 7c2e54d  Repair J cost ceiling actually enforced — schedule + cron-side gate:
+#          OPS-21.4.3 quality of enforcement upgraded
+# 88d44ac  Repair K eligibility check — direction required, scale normalized inside:
+#          INV-7.3 + INV-15 quality upgraded
+# 63360c3  Repair L trigger atomically recomputes is_first_touch:
+#          INV-2.5 fully automated
+# df3ed00  Repair M tighten redact + apply broadly + tests:
+#          OPS-21.3.3 coverage upgraded; CI now fails on regex regression
+# e01555f  Repair N helper + REST split + batch lookup + YAML cells:
+#          INV-4.4-A + OPS-21.4.3 quality upgraded
+# 29cb9b3  Add migration-state checker (read-only Supabase REST probe)
+# 490535b  Repair O gate OMI webhook auto-extract: closes the last
+#          autonomous LLM caller missing from cost-ceiling enforcement
+# 541b419  Item 11 spot-check fix migration 120: NULL-safe is_first_touch
+#          in trigger (latent bug from 119 caught in self-review)
+# 7e648df  Item 5 strict confidence — integer 0-100 end-to-end (migration 121).
+#          Removes Repair K dual-scale heuristic; one scale across DB+UI+brain.
+# aa4724e  Item 7 OMI session_id rename + audio_provider (migration 122):
+#          ARCH-5.4 at-risk→partial (schema no longer single-vendor;
+#          abstraction layer Phase 2 still pending)
+# 62b49fb  Item 9 aggressive /intel cull: 3 pages removed
+#          (team-compare for privacy, social + annotations for low value).
+#          LIMB-16.2.6 partial→enforced (privacy violation closed).
+# 9aabd88  Item 8 Phase 1 — drop weddings.source CHECK constraint (migration 123):
+#          LIMB-16.2.4-A at-risk→partial. Phase 2 marketing_channels
+#          table still pending.
 
 # ===================================================================
 # PART 2 — POINT ZERO & FORENSIC RECORD
