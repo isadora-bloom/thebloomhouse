@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
 import { generatePricingElasticity } from '@/lib/services/insights/pricing-elasticity'
+import { generateSourceMixCounterfactual } from '@/lib/services/insights/source-mix-counterfactual'
 
 export async function GET(request: NextRequest) {
   const supabase = createServiceClient()
@@ -36,15 +37,18 @@ export async function GET(request: NextRequest) {
 
   const force = request.nextUrl.searchParams.get('refresh') === '1'
 
-  const [pricing] = await Promise.allSettled([
+  const [pricing, sourceMix] = await Promise.allSettled([
     generatePricingElasticity(supabase, venueId, force),
+    generateSourceMixCounterfactual(supabase, venueId, force),
   ])
 
   return NextResponse.json({
     venueId,
     pricing: pricing.status === 'fulfilled' ? pricing.value : null,
+    sourceMix: sourceMix.status === 'fulfilled' ? sourceMix.value : null,
     errors: [
       ...(pricing.status === 'rejected' ? [{ insight: 'pricing', error: String(pricing.reason) }] : []),
+      ...(sourceMix.status === 'rejected' ? [{ insight: 'sourceMix', error: String(sourceMix.reason) }] : []),
     ],
   })
 }

@@ -120,6 +120,7 @@ meta:
 #     cohort-match         T3-D INS-19.3.8 + ARCH-19.8-D → enforced
 #     cultural-moments-auto-propose T3-E INS-19.5.8 → partial
 #     pricing-elasticity   T3-F INS-19.5.2 → enforced
+#     source-mix-counterfactual T3-G INS-19.5.3 → enforced
 #
 # (T3-B) Decay re-engagement insight (2026-05-01):
 #   INS-19.3.3 partial→enforced. Replaces template-string
@@ -1198,9 +1199,10 @@ meta:
   severity: low
 
 - id: INS-19.5.3
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: source-mix shifts (counterfactual)
+  notes: "T3-G (2026-05-01): src/lib/services/insights/source-mix-counterfactual.ts simulates 'if you reallocated 20% of budget from <high-CAC source> to <low-CAC source>' over the last 90 days. Rides on top of existing computeSourceQuality (the canonical scorecard) — does NOT re-implement attribution, so multi-touch rules stay in one place. Concave sqrt response curve calibrated per-source from current (spend, bookings): bookings(s) = a*sqrt(s) where a = currentBookings/sqrt(currentSpend). Diminishing returns baked in — no naive linear extrapolation. Hard guards: >=3 eligible sources (each with >=2 bookings, >$0 spend, defined CAC), >=5 venue total bookings in window, CAC ratio between donor/recipient >=1.5x, projected delta >=0.5 bookings. Attribution-quality gap flag fires when donor and recipient have auto-link rate diff >=30pp; flag dampens confidence and forces a coordinator caveat. Floating-point boundary fix on the gap-pp comparison (rounded to 1 decimal pp before threshold check). Reallocation capped at MAX 50% of donor budget. Numbers-guard locks narration to per-source spend / bookings / CAC, reallocation amount, projected delta. Wired into GET /api/insights/venue. scripts/test-source-mix-counterfactual.ts: 23 assertions covering bookingsAt(0)=0, concave curve sub-linearity, marginal sign correctness, eligibility filter, pair selection, projection arithmetic, attribution-quality flag at 30pp boundary."
   severity: medium
 
 - id: INS-19.5.4
