@@ -32,20 +32,21 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadFredSeries } from './external-context/fred'
 import { loadCulturalMomentsSeries } from './external-context/cultural-moments'
 import { loadCalendarSeries } from './external-context/calendar'
+import { bonferroniCriticalR } from './external-context/stats'
 
 const WINDOW_DAYS = 90
 const LAGS = [0, 3, 5, 7, 14]
 const MIN_NONZERO_DAYS = 20
-// Per-test correlation threshold. T2-C 2026-05-01 also adds a Bonferroni
-// significance gate on top — see correctedThresholdFor() — so the
-// effective bar a correlation must clear scales with the number of
-// channel pairs being tested.
+// "Notable effect size" floor. The Bonferroni correction
+// (correctedThresholdFor) is computed on top — final threshold =
+// max(CORRELATION_THRESHOLD, Bonferroni-adjusted critical |r|).
+// The floor exists because passing the family-wise statistical-
+// significance bar (~0.4 for our typical channel count at n=90)
+// doesn't guarantee a NOTABLE effect a coordinator should act on.
+// Surfacing requirement is actionable correlations, not merely
+// non-random ones.
 const CORRELATION_THRESHOLD = 0.6
-// Roughly Pearson |r| at p<0.05 for n=90 (one-sided). Used as the
-// pre-correction significance floor for the Bonferroni adjustment.
-// Empirical for the WINDOW_DAYS=90 setting; if WINDOW_DAYS is changed
-// this baseline should be re-derived from the t-distribution.
-const PEARSON_R_AT_P05_N90 = 0.21
+const FAMILY_ALPHA = 0.05
 
 export interface CorrelationInsight {
   channelA: string
@@ -199,13 +200,20 @@ async function buildSeries(supabase: SupabaseClient, venueId: string): Promise<S
   // channels playbook 17.4-A flagged as the competitive moat.
   // Each loader returns ExternalChannelSeries[] with dense daily
   // points; convert to the engine's Map<dayKey,value> shape.
+  // 2026-05-01 (review pass 3): parallelize external-context loaders.
+  // Pre-fix this block ran sequentially: FRED → calendar → cultural →
+  // venue geo lookup. With ~3 round-trips at ~50-100ms each, the engine
+  // paid 200-400ms per venue per cron tick for no good reason. Now
+  // resolve venue geo + run all 3 loaders concurrently.
   try {
-    const externalSeries = [
-      ...await loadFredSeries(supabase, start, now),
-      ...await loadCalendarSeries(supabase, start, now, await getVenueGeoScope(supabase, venueId)),
-    ]
-    // Cultural moments returns a single channel even when no rows match
-    const cultural = await loadCulturalMomentsSeries(supabase, start, now)
+    const venueGeoScope = await getVenueGeoScope(supabase, venueId)
+    const [fredResult, calendarResult, cultural] = await Promise.all([
+      loadFredSeries(supabase, start, now),
+      loadCalendarSeries(supabase, start, now, venueGeoScope),
+      loadCulturalMomentsSeries(supabase, start, now),
+    ])
+    const externalSeries = [...fredResult, ...calendarResult]
+    // Cultural moments returns a single channel even when no rows match.
     if (cultural.points.length > 0) externalSeries.push(cultural)
 
     for (const ext of externalSeries) {
@@ -248,15 +256,19 @@ async function getVenueGeoScope(
 }
 
 /**
- * Bonferroni-style multiple-comparisons correction. With N channels we
- * test ~N×(N-1)×|LAGS| ordered pairs at multiple lags, so the family-
- * wise error rate balloons. Adjust the per-test threshold so the
- * effective alpha across all tests stays at ~0.05.
+ * Bonferroni-corrected critical |r| for the engine's family of tests.
+ * With N channels we test N×(N-1)×|LAGS| ordered pairs, so family-
+ * wise error rate balloons. Adjust per-test alpha to keep family-wise
+ * alpha at FAMILY_ALPHA.
  *
- * Returns max(CORRELATION_THRESHOLD, Bonferroni-adjusted critical |r|).
- * Floor of CORRELATION_THRESHOLD ensures a small N (3 channels × 5 lags
- * = 15 tests) doesn't relax below the meaningful-effect bar — we want
- * MEANINGFUL correlations, not just statistically-significant ones.
+ * The math is in src/lib/services/external-context/stats.ts —
+ * Acklam inverse normal + Cornish-Fisher t-correction + r = t/√(df+t²).
+ * Pre-fix this was a heuristic with magic constants; replaced
+ * 2026-05-01 with a proper derivation.
+ *
+ * Returns max(CORRELATION_THRESHOLD floor, Bonferroni critical r,
+ *             0.85 cap). The floor enforces "notable effect"; the
+ * cap prevents pathological N from making nothing detectable.
  *
  * Per Playbook ARCH-19.5 / T2-C requirement: "Add multiple-comparisons
  * correction + per-venue significance threshold to correlation engine."
@@ -264,14 +276,8 @@ async function getVenueGeoScope(
 function correctedThresholdFor(numChannels: number): number {
   if (numChannels < 2) return CORRELATION_THRESHOLD
   const numTests = numChannels * (numChannels - 1) * LAGS.length
-  // Family-wise alpha 0.05; Bonferroni divides per-test alpha by numTests.
-  // Translate to a critical |r| via the rough rule that |r|² ~ alpha
-  // scales for large enough N. For N=90 (WINDOW_DAYS), critical |r| at
-  // p=0.05 ≈ 0.21; at p=0.05/numTests, scale by sqrt(log).
-  // Cheap approximation: corrected |r| = baseline * sqrt(log(numTests)/log(2))
-  // — empirically reasonable for 10-1000 tests at our N.
-  const corrected = PEARSON_R_AT_P05_N90 * Math.sqrt(Math.log(numTests + 1) / Math.log(2))
-  return Math.max(CORRELATION_THRESHOLD, Math.min(0.85, corrected))
+  const bonferroniR = bonferroniCriticalR(numTests, WINDOW_DAYS, FAMILY_ALPHA)
+  return Math.max(CORRELATION_THRESHOLD, Math.min(0.85, bonferroniR))
 }
 
 function seriesToArray(s: Series, days: string[]): number[] {

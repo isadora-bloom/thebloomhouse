@@ -224,7 +224,7 @@ export async function applySignalInference(
 
   const [{ data: wedding }, { data: ints }, { data: existingEvents }, ownEmails] =
     await Promise.all([
-      sb.from('weddings').select('status, source').eq('id', weddingId).maybeSingle(),
+      sb.from('weddings').select('status, source, lost_at').eq('id', weddingId).maybeSingle(),
       sb
         .from('interactions')
         .select('id, direction, timestamp, subject, body_preview, full_body, from_email')
@@ -232,7 +232,7 @@ export async function applySignalInference(
         .order('timestamp', { ascending: true }),
       sb
         .from('engagement_events')
-        .select('event_type, metadata')
+        .select('event_type, metadata, occurred_at, created_at')
         .eq('wedding_id', weddingId),
       // Defensive: even if direction is wrong on legacy data, skipping
       // any interaction whose from_email belongs to the venue prevents
@@ -265,6 +265,34 @@ export async function applySignalInference(
   // fire-once-per-wedding for the same reason — once the couple says
   // they're going elsewhere, repeating the message doesn't make it
   // -50, and hearing "I cancelled" twice doesn't deserve -30.
+  // 2026-05-01 (review pass 2): reopen-aware dedup.
+  //
+  // If the wedding was marked lost (lost_at IS NOT NULL) and a
+  // fire-once-per-wedding event predates lost_at, the lead has
+  // since reopened — that old event shouldn't block a fresh fire on
+  // the new conversation. Without this, a couple who declined 6 months
+  // ago and just sent a fresh "we're back, can we tour?" wouldn't
+  // refire tour_requested.
+  //
+  // Logic: an event "blocks" a future fire only if its occurred_at
+  // (or created_at fallback) is AFTER the wedding's lost_at. If
+  // lost_at is null (lead never went lost), all past events block —
+  // matches the original fire-once-per-wedding behaviour.
+  const lostAtMs = (wedding.lost_at as string | null)
+    ? Date.parse(wedding.lost_at as string)
+    : NaN
+  const isStillBlocking = (e: { occurred_at: string | null; created_at: string | null }): boolean => {
+    if (!Number.isFinite(lostAtMs)) return true  // no lost event → all past events block
+    const t = e.occurred_at ?? e.created_at
+    if (!t) return true  // no timestamp → conservative
+    const tMs = Date.parse(t)
+    if (!Number.isFinite(tMs)) return true
+    // Event happened AFTER the lead went lost → it's part of the
+    // current (post-reopen) window, still blocks. Event happened
+    // BEFORE lost → it's stale, doesn't block.
+    return tMs > lostAtMs
+  }
+
   const seen = {
     tour_requested_fired: false,
     tour_scheduled_fired: false,
@@ -277,12 +305,21 @@ export async function applySignalInference(
     commitment_fired: false,
     reply_received: new Set<string>(),
   }
-  for (const e of (existingEvents ?? []) as Array<{ event_type: string; metadata: Record<string, unknown> | null }>) {
+  for (const e of (existingEvents ?? []) as Array<{
+    event_type: string
+    metadata: Record<string, unknown> | null
+    occurred_at: string | null
+    created_at: string | null
+  }>) {
     const iid = (e.metadata?.interaction_id as string | undefined) ?? null
-    if (e.event_type === 'tour_requested') seen.tour_requested_fired = true
-    if (e.event_type === 'tour_scheduled') seen.tour_scheduled_fired = true
-    if (e.event_type === 'tour_cancelled') seen.tour_cancelled_fired = true
-    if (e.event_type === 'not_interested_signal') seen.not_interested_fired = true
+    const blocks = isStillBlocking(e)
+
+    if (blocks && e.event_type === 'tour_requested') seen.tour_requested_fired = true
+    if (blocks && e.event_type === 'tour_scheduled') seen.tour_scheduled_fired = true
+    if (blocks && e.event_type === 'tour_cancelled') seen.tour_cancelled_fired = true
+    if (blocks && e.event_type === 'not_interested_signal') seen.not_interested_fired = true
+    // contract_sent / contract_signed dedup is per-interaction-id, not
+    // fire-once-per-wedding, so reopen-aware logic doesn't apply here.
     if (e.event_type === 'contract_sent' && iid) seen.contract_sent.add(iid)
     if (e.event_type === 'contract_signed' && iid) seen.contract_signed.add(iid)
     // T2-F: HoneyBook lifecycle equivalents. signed + payment both
@@ -292,9 +329,9 @@ export async function applySignalInference(
     if (e.event_type === 'honeybook_contract_signed' && iid) seen.contract_signed.add(iid)
     if (e.event_type === 'honeybook_payment_received' && iid) seen.contract_signed.add(iid)
     if (e.event_type === 'email_reply_received' && iid) seen.reply_received.add(iid)
-    if (e.event_type === 'high_specificity') seen.specificity_fired = true
-    if (e.event_type === 'sustained_engagement') seen.sustained_fired = true
-    if (e.event_type === 'high_commitment_signal') seen.commitment_fired = true
+    if (blocks && e.event_type === 'high_specificity') seen.specificity_fired = true
+    if (blocks && e.event_type === 'sustained_engagement') seen.sustained_fired = true
+    if (blocks && e.event_type === 'high_commitment_signal') seen.commitment_fired = true
   }
 
   const interactions = ints as Array<{

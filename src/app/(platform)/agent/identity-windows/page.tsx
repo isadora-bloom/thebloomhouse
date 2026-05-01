@@ -19,30 +19,14 @@ import { Clock, Save, RotateCcw, AlertTriangle, Plus, Trash2 } from 'lucide-reac
 // per-platform rows; deleting them all reverts the venue to defaults.
 // ---------------------------------------------------------------------------
 
-interface PerPlatformWindow {
-  tier_1_hours: number
-  tier_2_days: number
-}
-
-type WindowMap = Record<string, PerPlatformWindow>
-
-// Mirror of DEFAULT_PER_PLATFORM_WINDOWS — kept inline for client
-// rendering (the service module isn't bundle-friendly because it
-// pulls Supabase types). If the defaults change, update both.
-const DEFAULTS: WindowMap = {
-  knot:                 { tier_1_hours: 72,  tier_2_days: 365 },
-  the_knot:             { tier_1_hours: 72,  tier_2_days: 365 },
-  weddingwire:          { tier_1_hours: 72,  tier_2_days: 365 },
-  wedding_wire:         { tier_1_hours: 72,  tier_2_days: 365 },
-  zola:                 { tier_1_hours: 72,  tier_2_days: 365 },
-  pinterest:            { tier_1_hours: 72,  tier_2_days: 540 },
-  instagram:            { tier_1_hours: 72,  tier_2_days: 180 },
-  facebook:             { tier_1_hours: 72,  tier_2_days: 180 },
-  google_business:      { tier_1_hours: 168, tier_2_days: 30 },
-  google:               { tier_1_hours: 168, tier_2_days: 30 },
-  here_comes_the_guide: { tier_1_hours: 72,  tier_2_days: 365 },
-  default:              { tier_1_hours: 72,  tier_2_days: 30 },
-}
+// 2026-05-01 (review pass 4): single source of truth for defaults
+// lives in identity-windows-constants.ts. Pre-pass-4 this page had a
+// local copy that was drift-prone.
+import {
+  DEFAULT_PER_PLATFORM_WINDOWS as DEFAULTS,
+  type PerPlatformWindow,
+  type PerPlatformWindowMap as WindowMap,
+} from '@/lib/services/identity-windows-constants'
 
 // Display order — most-trafficked sources first, default last.
 const PLATFORM_ORDER = [

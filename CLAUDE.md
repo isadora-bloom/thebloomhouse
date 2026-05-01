@@ -68,4 +68,48 @@ npm run lint    # eslint
 Fresh Supabase project. Migrations in `supabase/migrations/`. Schema follows ownership rules in BLUEPRINT.md §2-6.
 
 ## AI System
-All AI calls go through `lib/ai/client.ts` (callAI, callAIJson, callAIVision). Every call logged to `api_costs` table. Claude primary, no fallback in v1.
+All AI calls go through `lib/ai/client.ts` (callAI, callAIJson, callAIVision). Every call logged to `api_costs` table. Claude primary; OpenAI fallback gated by circuit breaker (T1-F) at `lib/ai/circuit-breaker.ts` — env vars `AI_FORCE_FALLBACK` / `AI_DISABLE_FALLBACK` for manual override.
+
+Each brain module exports a `BRAIN_PROMPT_VERSION` constant (T1-E) that gets logged to `api_costs.prompt_version`. See `PROMPTS-CHANGELOG.md` at the repo root for the per-prompt revision history. Bumping a prompt requires updating the constant + adding a changelog row.
+
+## Observability
+Structured logger at `lib/observability/logger.ts` (T1-G) emits JSON-line events with required fields (level / msg / venue_id / correlation_id / actor / event_type / outcome / latency_ms / ts). PII redaction wraps msg + data via `lib/observability/redact.ts`. `processIncomingEmail` mints a correlation id at entry and threads through brain calls + draft writes.
+
+## Coordinator surfaces (admin pages)
+
+### Sage's Brain → Voice & Personality
+- `/agent/learning` — Teach voice
+- `/agent/rules` — Always / Never rules
+
+### Sage's Brain → Inquiry behaviour
+- `/agent/settings` — Auto-send + follow-ups
+- `/agent/forbidden-topics` — per-venue forbidden topic keywords (T1-J / B-21). Reads `venue_forbidden_topics` (migration 125). `checkEscalationForVenue` merges these with global ESCALATION_KEYWORDS.
+- `/agent/identity-windows` — per-platform decay windows for the candidate-resolver (T2-D / ARCH-8.5.3). Defaults at `lib/services/identity-windows-constants.ts`.
+
+### Sage's Brain → Internal context (T2-B Phase 2)
+- `/portal/marketing-channels-config` — venue-scoped channel registry (LIMB-16.2.4-A). Replaces the global CANONICAL_SOURCES const.
+- `/portal/absences-config` — coordinator absence windows (LIMB-16.2.1-A). Loaded into anomaly-detection hypothesis prompt.
+- `/portal/property-state-config` — renovation / closure / vendor-change / policy-change windows (LIMB-16.2.2). Same hypothesis-prompt loader.
+
+### Sage's Brain → Onboarding
+- `/onboarding` — quick 15-min wizard (legacy, friend-of-Isadora venues)
+- `/onboarding/project` — 5-day enterprise project flow (T2-A). One active project per venue. Steps link out to the actual work surfaces; coordinator marks done.
+
+### Intel → Demand
+- `/intel/cultural-moments` — propose-and-confirm queue (T2-C / INS-19.5.8). Confirmed moments enter the correlation engine's External Context.
+
+### Agent surfaces
+- `/agent/audio-inbox` (was `/agent/omi-inbox`) — orphan transcripts from any audio-capture provider (T2-E Phase 2 / ARCH-5.4)
+- `/settings/audio-capture` (was `/settings/omi`) — provider-agnostic audio settings
+
+## External Context (T2-C)
+`lib/services/external-context/` owns the channel loaders for the correlation engine:
+- `fred.ts` — DEFAULT_FRED_SERIES (CPI / mortgage rate / S&P 500 / unemployment / consumer sentiment), forward-fill from monthly to daily
+- `cultural-moments.ts` — propose / confirm / dismiss + per-day series projection
+- `calendar.ts` — hierarchical geo_scope (us → us_<state> → us_<state>_<metro>) with per-category channel split
+- `stats.ts` — Acklam inverse-normal + Cornish-Fisher t-correction + Bonferroni critical r derivation
+
+`correlation-engine.ts` `buildSeries` appends these alongside the Internal channels (inquiries / marketing_metric / tangential_signals) and runs lagged Pearson with Bonferroni-corrected significance.
+
+## Heat scoring
+Heat-map dedup (2026-05-01 fix) — `tour_requested` / `high_commitment_signal` / `family_mentioned` / `high_specificity` / `tour_cancelled` / `not_interested_signal` are FIRE-ONCE-PER-WEDDING. Reopen-aware: if `weddings.lost_at` is more recent than the existing event, dedup is bypassed (allows fresh fire on a re-engaged lead). `dedup-fire-once-events.ts` is the maintenance script for cleaning up legacy multi-fires + tour_completed-after-cancellation false positives.

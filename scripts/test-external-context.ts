@@ -89,48 +89,69 @@ for (const s of DEFAULT_FRED_SERIES) {
 }
 
 // ---------------------------------------------------------------------------
-// Bonferroni-corrected threshold (T2-C requirement)
-// Re-implement here to avoid importing the whole correlation-engine
-// (which pulls Supabase types). Verifies the formula's monotonicity +
-// floor properties.
+// Proper Bonferroni-corrected threshold (T2-C — review pass 2 replaced
+// the heuristic with stats.ts proper derivation).
 // ---------------------------------------------------------------------------
 
-const PEARSON_R_AT_P05_N90 = 0.21
-const LAGS_N = 5
+import { bonferroniCriticalR, inverseNormalCdf } from '../src/lib/services/external-context/stats'
+
 const FLOOR_R = 0.6
+const N = 90  // WINDOW_DAYS
+const LAGS_N = 5
 
 function correctedThresholdFor(numChannels: number): number {
   if (numChannels < 2) return FLOOR_R
   const numTests = numChannels * (numChannels - 1) * LAGS_N
-  const corrected = PEARSON_R_AT_P05_N90 * Math.sqrt(Math.log(numTests + 1) / Math.log(2))
-  return Math.max(FLOOR_R, Math.min(0.85, corrected))
+  const r = bonferroniCriticalR(numTests, N, 0.05)
+  return Math.max(FLOOR_R, Math.min(0.85, r))
 }
 
-// Single channel → floor (no tests possible)
-assertEq(correctedThresholdFor(1), FLOOR_R, 'numChannels=1 returns floor')
-// Small N stays at floor
-const smallN = correctedThresholdFor(3)
-if (smallN === FLOOR_R) pass++
-else { fail++; console.error(`FAIL: small N expected floor, got ${smallN}`) }
+// inverseNormalCdf — sanity check against textbook critical values.
+const z975 = inverseNormalCdf(0.975)
+if (Math.abs(z975 - 1.959964) < 0.001) pass++
+else { fail++; console.error(`FAIL: qnorm(0.975) expected ~1.96, got ${z975}`) }
 
-// Monotonic: more channels → higher (or equal) corrected threshold
-const t10 = correctedThresholdFor(10)
-const t20 = correctedThresholdFor(20)
-const t50 = correctedThresholdFor(50)
-if (t10 <= t20 && t20 <= t50) pass++
-else { fail++; console.error(`FAIL: not monotonic: 10=${t10} 20=${t20} 50=${t50}`) }
+const z995 = inverseNormalCdf(0.995)
+if (Math.abs(z995 - 2.5758) < 0.005) pass++
+else { fail++; console.error(`FAIL: qnorm(0.995) expected ~2.576, got ${z995}`) }
 
-// Capped at 0.85
-const t1000 = correctedThresholdFor(1000)
-if (t1000 <= 0.85) pass++
-else { fail++; console.error(`FAIL: cap exceeded: ${t1000}`) }
+const z50 = inverseNormalCdf(0.5)
+if (Math.abs(z50) < 0.001) pass++
+else { fail++; console.error(`FAIL: qnorm(0.5) expected 0, got ${z50}`) }
 
-// Always ≥ floor
+// 1 test at n=90, alpha=0.05 → critical |r| ≈ 0.21 (textbook value
+// from a Pearson r → t conversion).
+const r1 = bonferroniCriticalR(1, 90, 0.05)
+if (r1 > 0.18 && r1 < 0.24) pass++
+else { fail++; console.error(`FAIL: 1-test critical r expected ~0.21, got ${r1.toFixed(3)}`) }
+
+// 100 tests → tighter critical r
+const r100 = bonferroniCriticalR(100, 90, 0.05)
+if (r100 > r1 && r100 < 0.5) pass++
+else { fail++; console.error(`FAIL: 100-test critical r ${r100.toFixed(3)} not in (${r1.toFixed(3)}, 0.5)`) }
+
+// 1000 tests → tighter still
+const r1000 = bonferroniCriticalR(1000, 90, 0.05)
+if (r1000 > r100) pass++
+else { fail++; console.error(`FAIL: 1000-test critical r ${r1000.toFixed(3)} not > 100-test ${r100.toFixed(3)}`) }
+
+// Monotonicity (strict)
+const r10 = bonferroniCriticalR(10, 90, 0.05)
+if (r1 < r10 && r10 < r100 && r100 < r1000) pass++
+else { fail++; console.error(`FAIL: not monotonic: ${r1}, ${r10}, ${r100}, ${r1000}`) }
+
+// Engine wrapper — always in [floor, cap]
 for (const n of [2, 5, 10, 20, 50, 100]) {
   const t = correctedThresholdFor(n)
-  if (t >= FLOOR_R) pass++
-  else { fail++; console.error(`FAIL: below floor at N=${n}: ${t}`) }
+  if (t >= FLOOR_R && t <= 0.85) pass++
+  else { fail++; console.error(`FAIL: out of range at N=${n}: ${t}`) }
 }
+
+assertEq(correctedThresholdFor(1), FLOOR_R, 'numChannels=1 returns floor')
+
+const smallNT = correctedThresholdFor(3)
+if (smallNT === FLOOR_R) pass++
+else { fail++; console.error(`FAIL: small N expected floor, got ${smallNT}`) }
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

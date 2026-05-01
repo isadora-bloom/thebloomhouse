@@ -33,51 +33,20 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-
-export interface PerPlatformWindow {
-  /** Tier 1 auto-link window in hours. Below this, ±this-hours of the
-   *  wedding's inquiry/tour date is considered a confident match.
-   *  Above the per-platform tier_2_days, the candidate doesn't reach
-   *  even Tier 2 wide-window. */
-  tier_1_hours: number
-  /** Tier 2 wide-window in days. Between tier_1_hours and tier_2_days,
-   *  the candidate routes to the AI adjudicator with full context
-   *  (auto-merge is off above tier_1_hours per ANTI-8.4-B). */
-  tier_2_days: number
-}
-
-export type PerPlatformWindowMap = Record<string, PerPlatformWindow>
-
-/**
- * Per-platform decay defaults. Source: Playbook ARCH-8.5.3 + Knot
- * import audit 2026-04-30. The 'default' key is the fallback used by
- * any platform without an explicit row — keeps the pre-T2-D
- * behaviour for unrecognised sources.
- *
- * `tier_2_days` choices reflect the platform's decision-horizon:
- *   knot/weddingwire/zola   = 365 (year of bridal lead time)
- *   pinterest               = 540 (~18mo, longer save pattern)
- *   instagram               = 180 (~6mo follow/save decay)
- *   facebook                = 180 (similar to IG)
- *   google_business         =  30 (Google searches are immediate)
- *   default                 =  30 (pre-T2-D constant — conservative
- *                                  fallback for any platform we
- *                                  haven't characterised yet)
- */
-export const DEFAULT_PER_PLATFORM_WINDOWS: PerPlatformWindowMap = {
-  knot:            { tier_1_hours: 72,  tier_2_days: 365 },
-  the_knot:        { tier_1_hours: 72,  tier_2_days: 365 },
-  weddingwire:     { tier_1_hours: 72,  tier_2_days: 365 },
-  wedding_wire:    { tier_1_hours: 72,  tier_2_days: 365 },
-  zola:            { tier_1_hours: 72,  tier_2_days: 365 },
-  pinterest:       { tier_1_hours: 72,  tier_2_days: 540 },
-  instagram:       { tier_1_hours: 72,  tier_2_days: 180 },
-  facebook:        { tier_1_hours: 72,  tier_2_days: 180 },
-  google_business: { tier_1_hours: 168, tier_2_days: 30 },
-  google:          { tier_1_hours: 168, tier_2_days: 30 },
-  here_comes_the_guide: { tier_1_hours: 72, tier_2_days: 365 },
-  default:         { tier_1_hours: 72,  tier_2_days: 30 },
-}
+// 2026-05-01 (review pass 4): single source of truth lives in the
+// client-safe constants module. The admin page at /agent/identity-
+// windows imports the map from there too; pre-pass-4 the page had a
+// drift-prone local copy.
+export {
+  DEFAULT_PER_PLATFORM_WINDOWS,
+  type PerPlatformWindow,
+  type PerPlatformWindowMap,
+} from './identity-windows-constants'
+import {
+  DEFAULT_PER_PLATFORM_WINDOWS,
+  type PerPlatformWindow,
+  type PerPlatformWindowMap,
+} from './identity-windows-constants'
 
 /**
  * Lookup a candidate's window with the right fallback chain:

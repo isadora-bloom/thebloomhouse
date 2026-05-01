@@ -435,15 +435,33 @@ function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, a
                   </p>
                 )}
               </div>
-              {!stepDone && isCurrent && status === 'in_progress' && (
-                <button
-                  onClick={() => onCompleteStep(s)}
-                  disabled={busy}
-                  className="inline-flex items-center gap-1 rounded border border-sage-200 hover:bg-sage-50 text-xs text-sage-700 px-2 py-1"
-                >
-                  Mark done
-                </button>
-              )}
+              <div className="flex items-center gap-1 flex-wrap justify-end">
+                {/* 2026-05-01 (review pass 4): each step links to the
+                    actual work surface so coordinators don't have to
+                    memorise where each piece lives. Mark-done is the
+                    confirmation step until the T2-A follow-up
+                    automation auto-detects completion (OAuth connected,
+                    backfill finished, etc.). */}
+                {s.linkHref && !stepDone && isCurrent && (
+                  <a
+                    href={s.linkHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 rounded border border-sage-200 hover:bg-sage-50 text-xs text-sage-700 px-2 py-1"
+                  >
+                    {s.linkLabel ?? 'Open surface'} ↗
+                  </a>
+                )}
+                {!stepDone && isCurrent && status === 'in_progress' && (
+                  <button
+                    onClick={() => onCompleteStep(s)}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1 rounded border border-sage-200 hover:bg-sage-50 text-xs text-sage-700 px-2 py-1"
+                  >
+                    Mark done
+                  </button>
+                )}
+              </div>
             </li>
           )
         })}

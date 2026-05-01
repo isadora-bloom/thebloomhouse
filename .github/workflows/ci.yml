@@ -69,5 +69,8 @@ jobs:
       - name: Unit tests — External Context loaders + Bonferroni threshold (T2-C)
         run: npx tsx scripts/test-external-context.ts
 
+      - name: Integration test — cancellation guard (self-skips without .env.local)
+        run: npx tsx scripts/test-cancellation-guard-integration.ts
+
       - name: White-label check — no hardcoded 'Sage' in couple portal
         run: node scripts/check-no-hardcoded-sage.mjs

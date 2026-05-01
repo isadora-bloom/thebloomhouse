@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
+import { useSupabaseList } from '@/lib/hooks/use-supabase-list'
 import { ShieldAlert, Plus, Trash2, AlertTriangle } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -42,38 +43,35 @@ const CATEGORY_OPTIONS = [
 export default function ForbiddenTopicsPage() {
   const venueId = useVenueId()
   const supabase = createClient()
-  const [topics, setTopics] = useState<ForbiddenTopic[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [newKeyword, setNewKeyword] = useState('')
   const [newCategory, setNewCategory] = useState('')
   const [newReason, setNewReason] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const fetchTopics = useCallback(async () => {
-    if (!venueId) return
-    setLoading(true)
-    try {
-      const { data, error: fetchErr } = await supabase
-        .from('venue_forbidden_topics')
-        .select('id, venue_id, keyword, category, reason, created_at')
-        .eq('venue_id', venueId)
-        .is('deleted_at', null)
-        .order('created_at', { ascending: false })
-      if (fetchErr) throw fetchErr
-      setTopics((data ?? []) as ForbiddenTopic[])
-      setError(null)
-    } catch (err) {
-      console.error('Failed to load forbidden topics:', err)
-      setError('Failed to load forbidden topics')
-    } finally {
-      setLoading(false)
-    }
+  // 2026-05-01 (review pass 4): use the shared list hook (DRY across
+  // admin pages — handles request dedupe + unmount safety + reload).
+  const fetcher = useCallback(async (): Promise<ForbiddenTopic[]> => {
+    if (!venueId) return []
+    const { data, error: fetchErr } = await supabase
+      .from('venue_forbidden_topics')
+      .select('id, venue_id, keyword, category, reason, created_at')
+      .eq('venue_id', venueId)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+    if (fetchErr) throw fetchErr
+    return (data ?? []) as ForbiddenTopic[]
   }, [venueId, supabase])
 
-  useEffect(() => {
-    fetchTopics()
-  }, [fetchTopics])
+  const {
+    rows: topics,
+    loading,
+    error: loadError,
+    reload: fetchTopics,
+  } = useSupabaseList<ForbiddenTopic>(fetcher, [venueId])
+
+  // Combine load-error + mutation-error into a single banner.
+  const displayError = error ?? loadError
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault()
@@ -141,10 +139,10 @@ export default function ForbiddenTopicsPage() {
         </p>
       </header>
 
-      {error && (
+      {displayError && (
         <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
           <AlertTriangle className="w-4 h-4 mt-0.5" />
-          <span>{error}</span>
+          <span>{displayError}</span>
         </div>
       )}
 

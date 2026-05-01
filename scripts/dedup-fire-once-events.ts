@@ -27,7 +27,39 @@
  */
 
 import { createClient } from '@supabase/supabase-js'
-import { readFileSync } from 'node:fs'
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  appendFileSync,
+} from 'node:fs'
+import { join } from 'node:path'
+
+// Checkpoint file — lets the script resume safely after a mid-run
+// crash. Without this, a crash after deleting some rows but before
+// recalculating heat leaves scores inconsistent. With this, re-
+// running picks up where it left off (skips already-deleted ids,
+// skips already-recalced weddings).
+const CHECKPOINT_DIR = '.dedup-checkpoint'
+const DELETED_FILE = join(CHECKPOINT_DIR, 'deleted-ids.txt')
+const RECALCED_FILE = join(CHECKPOINT_DIR, 'recalced-wedding-ids.txt')
+
+function loadCheckpoint(file: string): Set<string> {
+  try {
+    if (!existsSync(file)) return new Set()
+    const content = readFileSync(file, 'utf8')
+    return new Set(content.split('\n').map((l) => l.trim()).filter(Boolean))
+  } catch {
+    return new Set()
+  }
+}
+function appendCheckpoint(file: string, ids: string[]): void {
+  if (!existsSync(CHECKPOINT_DIR)) mkdirSync(CHECKPOINT_DIR, { recursive: true })
+  appendFileSync(file, ids.map((id) => `${id}\n`).join(''))
+}
+
+void writeFileSync // touch to satisfy bundler — kept for future ad-hoc resets
 
 const FIRE_ONCE_TYPES = [
   'tour_requested',
@@ -113,12 +145,16 @@ async function findFireOnceDuplicates(): Promise<{ keep: string[]; remove: strin
 
 /**
  * tour_completed rows that auto-promoted past a cancellation.
- * If a wedding has BOTH tour_completed and tour_cancelled with
- * occurred_at / metadata.event_datetime within 6h of each other,
- * the tour_completed is the false-positive — delete it.
+ * Match strategies (any one suffices):
+ *   1. gmail_thread_id linkage — strongest. Resolved via interactions.
+ *   2. metadata.event_datetime equality / within 14 days — same
+ *      tolerance as the live cancellation guard. Pre-fix this was
+ *      6h which missed real cancel-arrival → tour-datetime gaps.
+ *   3. occurred_at within 14 days.
  */
 async function findFalseTourCompletedRows(): Promise<string[]> {
   const remove: string[] = []
+  const TOLERANCE_MS = 14 * 24 * 60 * 60 * 1000
   let cancelQuery = sb
     .from('engagement_events')
     .select('id, venue_id, wedding_id, event_type, occurred_at, metadata')
@@ -129,9 +165,18 @@ async function findFalseTourCompletedRows(): Promise<string[]> {
 
   for (const cancel of ((cancelRows ?? []) as EngagementRow[])) {
     const cancelDt = (cancel.metadata?.event_datetime as string | undefined) ?? cancel.occurred_at
-    if (!cancelDt) continue
-    const cancelMs = Date.parse(cancelDt)
-    if (!Number.isFinite(cancelMs)) continue
+    const cancelMs = cancelDt ? Date.parse(cancelDt) : NaN
+    const cancelInteractionId = (cancel.metadata?.interaction_id as string | undefined) ?? null
+
+    let cancelThreadId: string | null = null
+    if (cancelInteractionId) {
+      const { data: cancelIx } = await sb
+        .from('interactions')
+        .select('gmail_thread_id')
+        .eq('id', cancelInteractionId)
+        .maybeSingle()
+      cancelThreadId = (cancelIx?.gmail_thread_id as string | null) ?? null
+    }
 
     const { data: completedRows } = await sb
       .from('engagement_events')
@@ -141,15 +186,39 @@ async function findFalseTourCompletedRows(): Promise<string[]> {
       .eq('event_type', 'tour_completed')
 
     for (const c of ((completedRows ?? []) as Array<{ id: string; occurred_at: string | null; metadata: Record<string, unknown> | null }>)) {
+      const compInteractionId = (c.metadata?.interaction_id as string | undefined) ?? null
       const compDt = (c.metadata?.event_datetime as string | undefined) ?? c.occurred_at
-      if (!compDt) continue
-      const compMs = Date.parse(compDt)
-      if (!Number.isFinite(compMs)) continue
-      if (Math.abs(compMs - cancelMs) < 6 * 60 * 60 * 1000) {
+      const compMs = compDt ? Date.parse(compDt) : NaN
+
+      let matched = false
+      let matchReason = ''
+
+      if (cancelThreadId && compInteractionId) {
+        const { data: compIx } = await sb
+          .from('interactions')
+          .select('gmail_thread_id')
+          .eq('id', compInteractionId)
+          .maybeSingle()
+        const compThread = (compIx?.gmail_thread_id as string | null) ?? null
+        if (compThread && compThread === cancelThreadId) {
+          matched = true
+          matchReason = `thread=${compThread.slice(0, 12)}…`
+        }
+      }
+
+      if (!matched && Number.isFinite(cancelMs) && Number.isFinite(compMs)) {
+        if (Math.abs(compMs - cancelMs) < TOLERANCE_MS) {
+          matched = true
+          const days = Math.round(Math.abs(compMs - cancelMs) / 86400000)
+          matchReason = `${days}d apart`
+        }
+      }
+
+      if (matched) {
         remove.push(c.id)
         console.log(
-          `[dedup] tour_completed on wedding ${cancel.wedding_id} at ${compDt} ` +
-          `matches tour_cancelled at ${cancelDt} (within 6h) — removing as false-positive`,
+          `[dedup] tour_completed on wedding ${cancel.wedding_id} ` +
+          `matches tour_cancelled (${matchReason}) — removing as false-positive`,
         )
       }
     }
@@ -180,6 +249,8 @@ async function recalcAffectedWeddings(weddingIds: Set<string>): Promise<void> {
     }
     try {
       await recalculateHeatScore(vid, wid)
+      // Record per-wedding so a crash mid-batch can resume.
+      try { appendCheckpoint(RECALCED_FILE, [wid]) } catch { /* checkpoint optional */ }
       done++
     } catch (err) {
       console.warn(`  recalc failed for ${wid}:`, err instanceof Error ? err.message : err)
@@ -211,11 +282,18 @@ async function recalcAffectedWeddings(weddingIds: Set<string>): Promise<void> {
     process.exit(0)
   }
 
+  const alreadyDeleted = loadCheckpoint(DELETED_FILE)
+  const alreadyRecalced = loadCheckpoint(RECALCED_FILE)
+  const toDelete = allRemove.filter((id) => !alreadyDeleted.has(id))
+  if (alreadyDeleted.size > 0) {
+    console.log(`[checkpoint] resuming — ${alreadyDeleted.size} rows already deleted in prior run; ${toDelete.length} remain`)
+  }
+
   // Capture affected weddings BEFORE delete so we can recalc.
   const affectedWeddings = new Set<string>()
   const CHUNK = 500
-  for (let i = 0; i < allRemove.length; i += CHUNK) {
-    const chunk = allRemove.slice(i, i + CHUNK)
+  for (let i = 0; i < toDelete.length; i += CHUNK) {
+    const chunk = toDelete.slice(i, i + CHUNK)
     const { data } = await sb
       .from('engagement_events')
       .select('wedding_id')
@@ -225,21 +303,31 @@ async function recalcAffectedWeddings(weddingIds: Set<string>): Promise<void> {
     }
   }
 
-  console.log(`\nDeleting ${allRemove.length} rows…`)
+  console.log(`\nDeleting ${toDelete.length} rows (chunks of ${CHUNK})…`)
   let deleted = 0
-  for (let i = 0; i < allRemove.length; i += CHUNK) {
-    const chunk = allRemove.slice(i, i + CHUNK)
+  for (let i = 0; i < toDelete.length; i += CHUNK) {
+    const chunk = toDelete.slice(i, i + CHUNK)
     const { error } = await sb.from('engagement_events').delete().in('id', chunk)
     if (error) {
       console.error(`Delete chunk ${i} failed:`, error.message)
-    } else {
-      deleted += chunk.length
+      console.error('Stopping. Re-run to resume from checkpoint.')
+      process.exit(1)
     }
+    appendCheckpoint(DELETED_FILE, chunk)
+    deleted += chunk.length
+    if (i % 5000 === 0 && i > 0) console.log(`  deleted ${deleted}/${toDelete.length}`)
   }
   console.log(`Deleted ${deleted} rows.`)
 
-  await recalcAffectedWeddings(affectedWeddings)
+  // Recalc affected weddings, skipping any already done in a prior run.
+  const weddingsToRecalc = new Set([...affectedWeddings].filter((w) => !alreadyRecalced.has(w)))
+  if (alreadyRecalced.size > 0) {
+    console.log(`[checkpoint] ${alreadyRecalced.size} weddings already recalced; ${weddingsToRecalc.size} remain`)
+  }
+  await recalcAffectedWeddings(weddingsToRecalc)
+
   console.log('\nDone.')
+  console.log(`Checkpoint files retained at ${CHECKPOINT_DIR}/ for audit. Delete to start fresh.`)
 })().catch((err) => {
   console.error('FATAL:', err)
   process.exit(1)

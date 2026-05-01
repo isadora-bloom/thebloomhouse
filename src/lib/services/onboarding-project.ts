@@ -43,6 +43,13 @@ export interface DayStep {
   actionKey: 'oauth_gmail' | 'backfill_email' | 'seed_channels' | 'reconstruct_pricing'
     | 'import_crm' | 'orphan_triage' | 'voice_dna_seed' | 'kb_seed' | 'readiness_check'
     | 'manual'
+  /** External admin surface where the coordinator does the actual
+   *  work for this step. Page renders this as a "Go to surface" link
+   *  so coordinators don't have to memorise where each piece lives.
+   *  null when the step is purely confirmation (no surface to visit). */
+  linkHref: string | null
+  /** Optional CTA label for the link button. Defaults to "Open surface" */
+  linkLabel?: string
 }
 
 /**
@@ -61,13 +68,17 @@ export const PROJECT_PLAN: DayPlan[] = [
         description:
           'OAuth into the Gmail account that receives venue inquiries. Bloom subscribes to the inbox and starts ingesting new messages immediately.',
         actionKey: 'oauth_gmail',
+        linkHref: '/settings/gmail-connection',
+        linkLabel: 'Open Gmail connection',
       },
       {
         key: 'backfill_12mo',
         label: 'Run 12-month email backfill',
         description:
-          'Pull the last 12 months of inquiry messages, classify, and stamp confidence_flag=imported_low so downstream surfaces know these are backfilled.',
+          'Pull the last 12 months of inquiry messages, classify, and stamp confidence_flag=imported_low so downstream surfaces know these are backfilled. (Programmatic trigger landing as part of the T2-A follow-up; coordinator runs the legacy backfill button on the Gmail settings page for now.)',
         actionKey: 'backfill_email',
+        linkHref: '/settings/gmail-connection',
+        linkLabel: 'Trigger backfill',
       },
     ],
   },
@@ -80,15 +91,19 @@ export const PROJECT_PLAN: DayPlan[] = [
         key: 'marketing_channels',
         label: 'Register your marketing channels',
         description:
-          'Go to /portal/marketing-channels-config and add every channel you actively market through. Quick-add suggestions cover the common platforms; long-tail channels (regional bridal magazines, podcasts, partner referrals) need a custom entry.',
+          'Add every channel you actively market through. Quick-add suggestions cover the common platforms; long-tail channels (regional bridal magazines, podcasts, partner referrals) need a custom entry.',
         actionKey: 'seed_channels',
+        linkHref: '/portal/marketing-channels-config',
+        linkLabel: 'Open marketing channels',
       },
       {
         key: 'pricing_history',
         label: 'Reconstruct pricing history',
         description:
-          'Walk back through any pricing changes from the last 12 months. The pricing_history audit table captures these so the elasticity insight has signal to compute.',
+          'Walk back through any pricing changes from the last 12 months. base_price + capacity edits auto-log via the migration 134 trigger; calculator-config or tier-restructure changes need manual entry until the coordinator UI lands.',
         actionKey: 'reconstruct_pricing',
+        linkHref: '/agent/settings',
+        linkLabel: 'Open agent settings',
       },
     ],
   },
@@ -101,15 +116,19 @@ export const PROJECT_PLAN: DayPlan[] = [
         key: 'crm_export',
         label: 'Upload CRM export',
         description:
-          'Drop the CRM export in /agent/imports. Adapter templates handle HoneyBook / Dubsado / Aisle Planner; other CRMs map to the same column shape via a one-time mapping pass.',
+          'Drop the CRM export in the imports surface. Adapter templates handle HoneyBook / Dubsado / Aisle Planner — coming as part of the T2-A follow-up; until they land, use the existing CSV importer.',
         actionKey: 'import_crm',
+        linkHref: '/agent/imports',
+        linkLabel: 'Open imports',
       },
       {
         key: 'orphan_triage',
         label: 'Triage orphan transcripts + interactions',
         description:
-          'Audio-capture transcripts that didn\'t auto-match a tour land in /agent/audio-inbox; orphan interactions land in the standard inbox queue. Triage these so identity-resolution has clean anchors.',
+          'Audio-capture transcripts that didn\'t auto-match a tour land in the audio inbox; orphan interactions land in the standard inbox queue. Triage these so identity-resolution has clean anchors.',
         actionKey: 'orphan_triage',
+        linkHref: '/agent/audio-inbox',
+        linkLabel: 'Open audio inbox',
       },
     ],
   },
@@ -122,15 +141,19 @@ export const PROJECT_PLAN: DayPlan[] = [
         key: 'voice_dna_extract',
         label: 'Extract voice patterns from imports',
         description:
-          'Run transcript-voice-learning over the 12mo Gmail backfill + any tour transcripts. Patterns surface for confirmation — coordinator approves or rejects each.',
+          'Run transcript-voice-learning over the 12mo Gmail backfill + any tour transcripts. Patterns surface for confirmation — coordinator approves or rejects each. (Bulk extraction trigger landing in T2-A follow-up; for now use the existing voice training games to seed.)',
         actionKey: 'voice_dna_seed',
+        linkHref: '/settings/voice',
+        linkLabel: 'Open voice training',
       },
       {
         key: 'voice_dna_confirm',
         label: 'Confirm extracted patterns',
         description:
-          'Review the proposed voice anchors at /settings/personality. Confirmed patterns seed the per-venue voice_anchors table; rejected ones move to a learning corpus for future iteration.',
+          'Review the proposed voice anchors. Confirmed patterns seed the per-venue voice anchors; rejected ones move to a learning corpus for future iteration.',
         actionKey: 'manual',
+        linkHref: '/settings/personality',
+        linkLabel: 'Open personality',
       },
     ],
   },
@@ -143,15 +166,18 @@ export const PROJECT_PLAN: DayPlan[] = [
         key: 'kb_seed',
         label: 'Seed knowledge base from FAQs',
         description:
-          'Either pull from the existing 15-min wizard FAQs or hand-enter at /portal/kb. KB feeds Sage\'s answer confidence — sparse KB = more coordinator escalations.',
+          'Either pull from the existing 15-min wizard FAQs or hand-enter. KB feeds Sage\'s answer confidence — sparse KB = more coordinator escalations.',
         actionKey: 'kb_seed',
+        linkHref: '/portal/kb',
+        linkLabel: 'Open knowledge base',
       },
       {
         key: 'readiness_gate',
         label: 'Run readiness gate',
         description:
-          'Evaluates minimum data-volume thresholds across Internal Context (channels, absences, pricing), Forensic Record (interactions, weddings), and Voice DNA. All limbs must pass before Go Live unlocks.',
+          'Evaluates minimum data-volume thresholds across Internal Context (channels, absences, pricing), Forensic Record (interactions, weddings), and Voice DNA. All limbs must pass before Go Live unlocks. (Library-side runner landing in T2-A follow-up; for now run scripts/onboarding-readiness.ts manually and paste the verdict into a coordinator note.)',
         actionKey: 'readiness_check',
+        linkHref: null,
       },
       {
         key: 'go_live',
@@ -159,6 +185,7 @@ export const PROJECT_PLAN: DayPlan[] = [
         description:
           'Flips the venue from onboarding to live. Auto-send + drafts + intel surfaces all activate. Reversible via "Pause project" if something needs revisiting.',
         actionKey: 'manual',
+        linkHref: null,
       },
     ],
   },

@@ -1394,6 +1394,28 @@ export async function processIncomingEmail(
   // below skips the engagement_event + status-advance writes. The
   // cancellation event has already fired for this tour instance; re-
   // processing the original booking email shouldn't double-write.
+  // 2026-05-01 (review pass 1): cancellation guard.
+  //
+  // When timeAwareTourKind would auto-promote tour_scheduled →
+  // tour_completed because eventDatetime has passed, check whether
+  // this tour instance has already been cancelled. If so, suppress
+  // the engagement-event write; re-processing the original booking
+  // email shouldn't fire +20 tour_completed when the cancellation
+  // already fired -15 for the same tour.
+  //
+  // Three matching strategies (any one is sufficient):
+  //   1. gmail_thread_id linkage — strongest. A cancel email replying
+  //      on the same thread as the original booking confirms it's
+  //      the same tour instance. Robust to date format drift.
+  //   2. metadata.event_datetime equality (or within 14 days). The
+  //      cancel email's parsed scheduling event_datetime stamps to
+  //      the original tour's scheduled time. Pre-fix the tolerance
+  //      was 6h — too tight. Real cancellations arrive 1-3 days
+  //      before the tour, sometimes more. Widened to 14 days to
+  //      cover the realistic cancel-arrival → tour-datetime gap.
+  //   3. occurred_at on the cancel row close to this tour's
+  //      eventDatetime — same TOUR_HAPPENED_KINDS stamping rule.
+  //      Tolerance 14 days for the same reason.
   let suppressBecauseCancelled = false
   if (schedulingEvent) {
     const adjustedKind = timeAwareTourKind(schedulingEvent.kind, schedulingEvent.eventDatetime)
@@ -1402,6 +1424,19 @@ export async function processIncomingEmail(
       weddingId &&
       schedulingEvent.eventDatetime
     ) {
+      // Pull the current interaction's gmail_thread_id so we can match
+      // on thread linkage. The interaction was inserted earlier in
+      // the pipeline.
+      let currentThreadId: string | null = null
+      if (interactionId) {
+        const { data: ix } = await supabase
+          .from('interactions')
+          .select('gmail_thread_id')
+          .eq('id', interactionId)
+          .maybeSingle()
+        currentThreadId = (ix?.gmail_thread_id as string | null) ?? null
+      }
+
       const { data: cancelRows } = await supabase
         .from('engagement_events')
         .select('metadata, occurred_at')
@@ -1409,30 +1444,60 @@ export async function processIncomingEmail(
         .eq('wedding_id', weddingId)
         .eq('event_type', 'tour_cancelled')
         .limit(20)
+
       const evtDt = schedulingEvent.eventDatetime
+      const evtMs = Date.parse(evtDt)
+      const TOLERANCE_MS = 14 * 24 * 60 * 60 * 1000  // 14 days
       const cancelMatchesThisTour = ((cancelRows ?? []) as Array<{
         metadata: Record<string, unknown> | null
         occurred_at: string | null
       }>).some((row) => {
-        const mdDt = (row.metadata?.event_datetime as string | undefined) ?? null
-        if (mdDt) {
+        const md = (row.metadata ?? {}) as Record<string, unknown>
+        // Strategy 1: thread_id linkage (cancel email's interaction
+        // was on the same gmail_thread_id as this booking).
+        const cancelInteractionId = (md.interaction_id as string | undefined) ?? null
+        if (cancelInteractionId && currentThreadId) {
+          // Resolved synchronously below by a separate fetch; here
+          // we just flag that a thread-id match is possible.
+          // (See thread-match block after this loop.)
+        }
+        // Strategy 2: event_datetime equality / proximity.
+        const mdDt = (md.event_datetime as string | undefined) ?? null
+        if (mdDt && Number.isFinite(evtMs)) {
           if (mdDt === evtDt) return true
           const a = Date.parse(mdDt)
-          const b = Date.parse(evtDt)
-          if (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 6 * 60 * 60 * 1000) return true
+          if (Number.isFinite(a) && Math.abs(a - evtMs) < TOLERANCE_MS) return true
         }
-        // Fallback: occurred_at on the cancel row close to this tour's
-        // eventDatetime is also strong evidence of "this tour was
-        // cancelled" (TOUR_HAPPENED_KINDS stamps occurred_at to the
-        // tour's scheduled time, not email arrival).
-        if (row.occurred_at) {
+        // Strategy 3: occurred_at proximity.
+        if (row.occurred_at && Number.isFinite(evtMs)) {
           const a = Date.parse(row.occurred_at)
-          const b = Date.parse(evtDt)
-          if (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 6 * 60 * 60 * 1000) return true
+          if (Number.isFinite(a) && Math.abs(a - evtMs) < TOLERANCE_MS) return true
         }
         return false
       })
-      if (cancelMatchesThisTour) {
+
+      // Strategy 1 (thread-id linkage) — requires a join across
+      // engagement_events.metadata.interaction_id → interactions
+      // .gmail_thread_id. Only run if the proximity check missed
+      // (cheap optimisation).
+      let threadMatched = false
+      if (!cancelMatchesThisTour && currentThreadId) {
+        const cancelInteractionIds = ((cancelRows ?? []) as Array<{
+          metadata: Record<string, unknown> | null
+        }>)
+          .map((r) => (r.metadata as Record<string, unknown> | null)?.interaction_id)
+          .filter((v): v is string => typeof v === 'string')
+        if (cancelInteractionIds.length > 0) {
+          const { data: ixRows } = await supabase
+            .from('interactions')
+            .select('gmail_thread_id')
+            .in('id', cancelInteractionIds)
+          threadMatched = ((ixRows ?? []) as Array<{ gmail_thread_id: string | null }>)
+            .some((r) => r.gmail_thread_id === currentThreadId)
+        }
+      }
+
+      if (cancelMatchesThisTour || threadMatched) {
         suppressBecauseCancelled = true
       }
     }

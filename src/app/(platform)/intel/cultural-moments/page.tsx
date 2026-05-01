@@ -102,6 +102,30 @@ export default function CulturalMomentsPage() {
   async function handlePropose(e: React.FormEvent) {
     e.preventDefault()
     if (!newTitle.trim() || !newStartAt || submitting) return
+
+    // 2026-05-01 (review pass 4): client-side validation. The DB has a
+    // CHECK that would reject end_at <= start_at but the error message
+    // surfaced via Supabase is opaque ("new row for relation
+    // \"cultural_moments\" violates check constraint…") — confusing for
+    // a coordinator. Validate here so the inline error reads cleanly.
+    const startMs = new Date(newStartAt).getTime()
+    if (!Number.isFinite(startMs)) {
+      setError('Start date is invalid.')
+      return
+    }
+    if (!newOngoing && newEndAt) {
+      const endMs = new Date(newEndAt).getTime()
+      if (!Number.isFinite(endMs)) {
+        setError('End date is invalid.')
+        return
+      }
+      if (endMs <= startMs) {
+        setError('End date must be after start date (or mark the moment ongoing).')
+        return
+      }
+    }
+    setError(null)
+
     setSubmitting(true)
     try {
       const { error: insertErr } = await supabase.from('cultural_moments').insert({
