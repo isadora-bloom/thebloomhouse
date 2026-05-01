@@ -13,7 +13,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { generateFollowUp } from './inquiry-brain'
+import { generateFollowUp, BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION } from './inquiry-brain'
 import { checkAutoSendEligible } from './autonomous-sender'
 import { createNotification } from './admin-notifications'
 
@@ -328,6 +328,7 @@ export async function generateFollowUps(venueId: string): Promise<number> {
           cost: result.cost,
           tokens_used: result.tokensUsed,
           auto_sent: false,
+          prompt_version_used: INQUIRY_BRAIN_PROMPT_VERSION,
         })
         .select('id')
         .single()

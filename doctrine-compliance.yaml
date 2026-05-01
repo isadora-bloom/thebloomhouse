@@ -97,6 +97,12 @@ meta:
 #          on status flip into booked/completed; helper formatter wired
 #          through 7 render sites; integration test covers the trigger.
 #          Tightening to require first_payment_received waits for T2-F.
+# (T1-E)   Prompt versioning + model identifier discipline (migration 127):
+#          OPS-21.5.1 doctrine-only→enforced. BRAIN_PROMPT_VERSION on
+#          inquiry/client/sage/router/intel/post-tour-brief; callAI logs
+#          promptVersion to api_costs; drafts.prompt_version_used stamped
+#          on insert in email-pipeline / follow-up-sequences /
+#          post-tour-brief; PROMPTS-CHANGELOG.md at repo root.
 # (T1-J)   B-15 + B-17 + B-19 + B-20 + B-21 (migrations 125 + 126):
 #          source-quality.ts now uses attribution_events.source_platform
 #          (ANTI-2.6.5 partial→enforced); email-pipeline.ts gates wedding
@@ -1496,11 +1502,10 @@ meta:
   severity: high
 
 - id: OPS-21.5.1
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: every prompt has version ID, logged on every call
-  notes: "Zero version-tracking in any prompt file. logUsage doesn't log prompt version."
-  severity: high
+  notes: "T1-E (2026-05-01): each brain (inquiry / client / sage / router / intel / post-tour-brief) exports BRAIN_PROMPT_VERSION = '<module>.prompt.v1.0'. callAI / callAIJson / callAIVision accept promptVersion option, logUsage writes it to api_costs.prompt_version (migration 127). Drafts inserted by email-pipeline / follow-up-sequences / post-tour-brief stamp drafts.prompt_version_used. PROMPTS-CHANGELOG.md at repo root tracks revision history. Bump rule: <MAJOR>.<MINOR> with MAJOR for contract breaks, MINOR for wording refinements."
 
 - id: OPS-21.5.2
   status: enforced

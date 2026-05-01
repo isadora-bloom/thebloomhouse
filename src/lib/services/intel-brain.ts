@@ -14,6 +14,9 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI, callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 
+/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
+export const BRAIN_PROMPT_VERSION = 'intel-brain.prompt.v1.0'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -465,6 +468,7 @@ export async function answerNaturalLanguageQuery(
     temperature: 0.3,
     venueId,
     taskType: 'natural_language_query',
+    promptVersion: BRAIN_PROMPT_VERSION,
   })
 
   // Log the query and response
@@ -627,6 +631,7 @@ Rules:
     temperature: 0.5,
     venueId,
     taskType: 'positioning_suggestions',
+    promptVersion: BRAIN_PROMPT_VERSION,
   })
 
   // Validate the response

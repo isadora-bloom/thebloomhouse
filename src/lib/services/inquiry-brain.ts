@@ -17,6 +17,13 @@
 import { callAI } from '@/lib/ai/client'
 import { buildPersonalityPrompt, type PersonalityData } from '@/lib/ai/personality-builder'
 import { resolveSageIdentity, renderOpenerConstraints } from '@/lib/services/sage-identity'
+
+/**
+ * Prompt revision identifier — bump when the system prompt or task
+ * prompt structure changes. Logged to api_costs.prompt_version on
+ * every call. Per Playbook OPS-21.5.1 / T1-E. See PROMPTS-CHANGELOG.md.
+ */
+export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.0'
 import { selectPhrase } from '@/lib/ai/phrase-selector'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
@@ -541,6 +548,7 @@ export async function generateInquiryDraft(
     temperature: 0.4,
     venueId,
     taskType: `inquiry_${taskType}`,
+    promptVersion: BRAIN_PROMPT_VERSION,
   })
 
   // Calculate confidence based on data completeness
@@ -735,6 +743,7 @@ export async function generateFollowUp(
     temperature: 0.4,
     venueId,
     taskType: `follow_up_${daysSinceLastContact >= 14 ? 'final' : daysSinceLastContact >= 7 ? '7day' : '3day'}`,
+    promptVersion: BRAIN_PROMPT_VERSION,
   })
 
   // Follow-ups are fairly templated, confidence is generally high

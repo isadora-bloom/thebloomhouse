@@ -29,6 +29,9 @@ import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { redactError } from '@/lib/observability/redact'
 import type { TranscriptExtraction } from './tour-transcript-extract'
 
+/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
+export const BRAIN_PROMPT_VERSION = 'post-tour-brief.prompt.v1.0'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -310,6 +313,7 @@ export async function generatePostTourBrief(
       // store:false; api_costs.content_tier records the tag for the
       // ZDR audit. OPS-21.3.5.
       contentTier: 1,
+      promptVersion: BRAIN_PROMPT_VERSION,
     })
     briefMarkdown = briefResult.text.trim()
   } catch (err) {
@@ -343,6 +347,7 @@ export async function generatePostTourBrief(
       // Same tier-1 reasoning as the brief above — the draft is composed
       // FROM the same transcript-derived intelligence.
       contentTier: 1,
+      promptVersion: BRAIN_PROMPT_VERSION,
     })
     const text = draftResult.text.trim()
     if (text === 'NO_DRAFT' || text.length < 40) {
@@ -408,6 +413,7 @@ export async function generatePostTourBrief(
       confidence_score:
         confidence === 'high' ? 85 : confidence === 'medium' ? 65 : 40,
       auto_sent: false,
+      prompt_version_used: BRAIN_PROMPT_VERSION,
     })
 
     if (insertErr) {

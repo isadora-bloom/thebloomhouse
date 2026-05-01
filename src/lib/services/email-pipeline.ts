@@ -19,8 +19,8 @@ import {
   isMachineGenerated,
   type ClassificationResult,
 } from '@/lib/services/router-brain'
-import { generateInquiryDraft } from '@/lib/services/inquiry-brain'
-import { generateClientDraft } from '@/lib/services/client-brain'
+import { generateInquiryDraft, BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION } from '@/lib/services/inquiry-brain'
+import { generateClientDraft, BRAIN_PROMPT_VERSION as CLIENT_BRAIN_PROMPT_VERSION } from '@/lib/services/client-brain'
 import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/gmail'
 import { detectBookingSignal } from '@/lib/services/booking-signal'
 import {
@@ -1940,6 +1940,8 @@ export async function processIncomingEmail(
   if (draftBody) {
     const contextType = brainUsed === 'client' ? 'client' : 'inquiry'
 
+    const promptVersionUsed =
+      brainUsed === 'client' ? CLIENT_BRAIN_PROMPT_VERSION : INQUIRY_BRAIN_PROMPT_VERSION
     const { data: draft } = await supabase
       .from('drafts')
       .insert({
@@ -1954,6 +1956,7 @@ export async function processIncomingEmail(
         brain_used: brainUsed,
         confidence_score: confidenceScore,
         auto_sent: false,
+        prompt_version_used: promptVersionUsed,
       })
       .select('id')
       .single()

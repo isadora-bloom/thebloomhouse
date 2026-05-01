@@ -15,6 +15,9 @@
 import { callAI } from '@/lib/ai/client'
 import { buildPersonalityPrompt, type PersonalityData } from '@/lib/ai/personality-builder'
 import { buildSageIntelligenceContext } from './sage-intelligence'
+
+/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
+export const BRAIN_PROMPT_VERSION = 'sage-brain.prompt.v1.0'
 import { searchKnowledgeBase } from './knowledge-base'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
@@ -431,6 +434,7 @@ export async function generateSageResponse(
     venueId,
     taskType: taskType ?? 'sage_chat',
     contentTier: 1,
+    promptVersion: BRAIN_PROMPT_VERSION,
   })
 
   const confidence = assessConfidence(result.text, kbMatch)

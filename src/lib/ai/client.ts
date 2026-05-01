@@ -119,6 +119,14 @@ interface CallAIOptions {
    * synthesis. Higher tier than necessary = budget bleed.
    */
   tier?: ModelTier
+  /**
+   * Prompt revision identifier (e.g. 'inquiry-brain.prompt.v1.0'). Each
+   * brain module exports a BRAIN_PROMPT_VERSION constant the caller
+   * threads through. Logged to api_costs.prompt_version so prompt-
+   * regression audits can correlate cost / latency / output quality
+   * to specific prompt revisions. Per Playbook OPS-21.5.1 / T1-E.
+   */
+  promptVersion?: string
 }
 
 function modelForTier(tier: ModelTier | undefined): string {
@@ -153,6 +161,7 @@ async function logUsage(
   model: string,
   service: 'anthropic' | 'openai' = 'anthropic',
   contentTier: ContentTier = 2,
+  promptVersion?: string,
 ) {
   try {
     const supabase = createServiceClient()
@@ -165,6 +174,7 @@ async function logUsage(
       cost,
       context: taskType,
       content_tier: contentTier,
+      prompt_version: promptVersion ?? null,
     })
   } catch {
     // Fire and forget — never block AI calls for logging
@@ -203,6 +213,7 @@ async function callAnthropic(options: CallAIOptions): Promise<CallAIResult> {
     taskType = 'general',
     contentTier = 2,
     tier,
+    promptVersion,
   } = options
 
   const anthropic = getAnthropic()
@@ -233,7 +244,7 @@ async function callAnthropic(options: CallAIOptions): Promise<CallAIResult> {
   const outputTokens = response.usage.output_tokens
   const cost = calculateCost(model, inputTokens, outputTokens)
 
-  logUsage(venueId, taskType, inputTokens, outputTokens, cost, model, 'anthropic', contentTier)
+  logUsage(venueId, taskType, inputTokens, outputTokens, cost, model, 'anthropic', contentTier, promptVersion)
 
   return { text, inputTokens, outputTokens, cost }
 }
@@ -247,6 +258,7 @@ async function callOpenAIFallback(options: CallAIOptions): Promise<CallAIResult>
     venueId,
     taskType = 'general',
     contentTier = 2,
+    promptVersion,
   } = options
 
   const openai = getOpenAI()
@@ -286,7 +298,7 @@ async function callOpenAIFallback(options: CallAIOptions): Promise<CallAIResult>
   const outputTokens = response.usage?.completion_tokens ?? 0
   const cost = calculateCost(OPENAI_FALLBACK_MODEL, inputTokens, outputTokens)
 
-  logUsage(venueId, taskType, inputTokens, outputTokens, cost, OPENAI_FALLBACK_MODEL, 'openai', contentTier)
+  logUsage(venueId, taskType, inputTokens, outputTokens, cost, OPENAI_FALLBACK_MODEL, 'openai', contentTier, promptVersion)
 
   return { text, inputTokens, outputTokens, cost }
 }
@@ -394,6 +406,7 @@ export async function callAIVision(options: {
   venueId?: string
   taskType?: string
   contentTier?: ContentTier
+  promptVersion?: string
 }): Promise<CallAIResult> {
   const anthropic = getAnthropic()
   const contentTier = options.contentTier ?? 2
@@ -420,7 +433,7 @@ export async function callAIVision(options: {
   const outputTokens = response.usage.output_tokens
   const cost = calculateCost(CLAUDE_MODEL, inputTokens, outputTokens)
 
-  logUsage(options.venueId, options.taskType ?? 'vision', inputTokens, outputTokens, cost, CLAUDE_MODEL, 'anthropic', contentTier)
+  logUsage(options.venueId, options.taskType ?? 'vision', inputTokens, outputTokens, cost, CLAUDE_MODEL, 'anthropic', contentTier, options.promptVersion)
 
   return { text, inputTokens, outputTokens, cost }
 }

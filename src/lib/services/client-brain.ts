@@ -15,6 +15,9 @@
 import { callAI } from '@/lib/ai/client'
 import { buildPersonalityPrompt, type PersonalityData } from '@/lib/ai/personality-builder'
 import { selectPhrase } from '@/lib/ai/phrase-selector'
+
+/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
+export const BRAIN_PROMPT_VERSION = 'client-brain.prompt.v1.0'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
 import { CLIENT_RULES, getClientTaskPrompt } from '@/config/prompts/task-prompts-client'
@@ -389,6 +392,7 @@ export async function generateClientDraft(
     temperature: 0.3,
     venueId,
     taskType: `client_${taskType}`,
+    promptVersion: BRAIN_PROMPT_VERSION,
   })
 
   // Confidence for client responses is generally high (we know who they are)
@@ -532,6 +536,7 @@ export async function generateOnboardingEmail(
     temperature: 0.4,
     venueId,
     taskType: 'client_onboarding',
+    promptVersion: BRAIN_PROMPT_VERSION,
   })
 
   // Onboarding emails are well-structured, high confidence

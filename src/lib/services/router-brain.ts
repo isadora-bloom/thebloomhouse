@@ -13,6 +13,9 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
+
+/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
+export const BRAIN_PROMPT_VERSION = 'router-brain.prompt.v1.0'
 import {
   SPAM_KEYWORDS,
   checkSpam,
@@ -283,6 +286,7 @@ ${email.body.slice(0, 3000)}${contextBlock}`
     // values), bounded structured output, high volume. Sonnet was
     // 12x the cost for the same answer. OPS-21.4.2 enforcement.
     tier: 'haiku',
+    promptVersion: BRAIN_PROMPT_VERSION,
   })
 
   // Normalize and validate
