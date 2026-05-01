@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
+import { useSupabaseList } from '@/lib/hooks/use-supabase-list'
 import { CalendarOff, Plus, Trash2, AlertTriangle, User, Save } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -49,9 +50,7 @@ function formatRange(startIso: string, endIso: string): string {
 export default function AbsencesConfigPage() {
   const venueId = useVenueId()
   const supabase = createClient()
-  const [absences, setAbsences] = useState<Absence[]>([])
   const [consultants, setConsultants] = useState<ConsultantOption[]>([])
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -61,47 +60,56 @@ export default function AbsencesConfigPage() {
   const [newReason, setNewReason] = useState('')
   const [newHandoff, setNewHandoff] = useState('')
 
-  const fetchData = useCallback(async () => {
+  // 2026-05-01 (review pass 4 follow-up): consultants fetched separately
+  // since the form needs them; absences flow through the shared hook.
+  // Both keyed off venueId so they re-fetch on venue switch.
+  useEffect(() => {
     if (!venueId) return
-    setLoading(true)
-    try {
-      const [absRes, conRes] = await Promise.all([
-        supabase
-          .from('coordinator_absences')
-          .select('id, venue_id, assigned_consultant_id, start_at, end_at, reason, handoff_notes, created_at')
-          .eq('venue_id', venueId)
-          .is('deleted_at', null)
-          .order('start_at', { ascending: false }),
-        supabase
-          .from('user_profiles')
-          .select('id, first_name, last_name')
-          .eq('venue_id', venueId),
-      ])
-      if (absRes.error) throw absRes.error
-      const consultants: ConsultantOption[] = ((conRes.data ?? []) as Array<{ id: string; first_name: string | null; last_name: string | null }>)
-        .map((u) => ({
-          id: u.id,
-          name: [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || 'Unnamed user',
-        }))
-      const consultantMap = new Map(consultants.map((c) => [c.id, c.name]))
-      const enriched: Absence[] = ((absRes.data ?? []) as Absence[]).map((a) => ({
-        ...a,
-        consultant_name: a.assigned_consultant_id
-          ? consultantMap.get(a.assigned_consultant_id) ?? 'Unknown'
-          : null,
+    let alive = true
+    ;(async () => {
+      const { data } = await supabase
+        .from('user_profiles')
+        .select('id, first_name, last_name')
+        .eq('venue_id', venueId)
+      if (!alive) return
+      const list: ConsultantOption[] = ((data ?? []) as Array<{
+        id: string
+        first_name: string | null
+        last_name: string | null
+      }>).map((u) => ({
+        id: u.id,
+        name: [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || 'Unnamed user',
       }))
-      setAbsences(enriched)
-      setConsultants(consultants)
-      setError(null)
-    } catch (err) {
-      console.error('Failed to load absences:', err)
-      setError('Failed to load absences')
-    } finally {
-      setLoading(false)
-    }
+      setConsultants(list)
+    })()
+    return () => { alive = false }
   }, [venueId, supabase])
 
-  useEffect(() => { fetchData() }, [fetchData])
+  const fetcher = useCallback(async (): Promise<Absence[]> => {
+    if (!venueId) return []
+    const { data, error: fetchErr } = await supabase
+      .from('coordinator_absences')
+      .select('id, venue_id, assigned_consultant_id, start_at, end_at, reason, handoff_notes, created_at')
+      .eq('venue_id', venueId)
+      .is('deleted_at', null)
+      .order('start_at', { ascending: false })
+    if (fetchErr) throw fetchErr
+    const consultantMap = new Map(consultants.map((c) => [c.id, c.name]))
+    return ((data ?? []) as Absence[]).map((a) => ({
+      ...a,
+      consultant_name: a.assigned_consultant_id
+        ? consultantMap.get(a.assigned_consultant_id) ?? 'Unknown'
+        : null,
+    }))
+  }, [venueId, supabase, consultants])
+
+  const {
+    rows: absences,
+    loading,
+    error: loadError,
+    reload: fetchData,
+  } = useSupabaseList<Absence>(fetcher, [venueId, consultants])
+  const displayError = error ?? loadError
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault()
@@ -180,10 +188,10 @@ export default function AbsencesConfigPage() {
         </p>
       </header>
 
-      {error && (
+      {displayError && (
         <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
           <AlertTriangle className="w-4 h-4 mt-0.5" />
-          <span>{error}</span>
+          <span>{displayError}</span>
         </div>
       )}
 

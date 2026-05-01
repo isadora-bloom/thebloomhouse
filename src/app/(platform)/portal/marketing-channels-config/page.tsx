@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
+import { useSupabaseList } from '@/lib/hooks/use-supabase-list'
 import {
   Megaphone,
   Plus,
@@ -73,39 +74,35 @@ const SUGGESTED_CHANNELS: Array<{ key: string; label: string; category: string }
 export default function MarketingChannelsConfigPage() {
   const venueId = useVenueId()
   const supabase = createClient()
-  const [channels, setChannels] = useState<MarketingChannel[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [newKey, setNewKey] = useState('')
   const [newLabel, setNewLabel] = useState('')
   const [newCategory, setNewCategory] = useState('')
   const [newNotes, setNewNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const fetchChannels = useCallback(async () => {
-    if (!venueId) return
-    setLoading(true)
-    try {
-      const { data, error: fetchErr } = await supabase
-        .from('marketing_channels')
-        .select('id, venue_id, key, label, category, is_active, notes, created_at')
-        .eq('venue_id', venueId)
-        .is('deleted_at', null)
-        .order('is_active', { ascending: false })
-        .order('label', { ascending: true })
-      if (fetchErr) throw fetchErr
-      setChannels((data ?? []) as MarketingChannel[])
-      setError(null)
-    } catch (err) {
-      console.error('Failed to load marketing channels:', err)
-      setError('Failed to load marketing channels')
-    } finally {
-      setLoading(false)
-    }
+  // 2026-05-01 (review pass 4 follow-up): use the shared list hook.
+  const fetcher = useCallback(async (): Promise<MarketingChannel[]> => {
+    if (!venueId) return []
+    const { data, error: fetchErr } = await supabase
+      .from('marketing_channels')
+      .select('id, venue_id, key, label, category, is_active, notes, created_at')
+      .eq('venue_id', venueId)
+      .is('deleted_at', null)
+      .order('is_active', { ascending: false })
+      .order('label', { ascending: true })
+    if (fetchErr) throw fetchErr
+    return (data ?? []) as MarketingChannel[]
   }, [venueId, supabase])
 
-  useEffect(() => { fetchChannels() }, [fetchChannels])
+  const {
+    rows: channels,
+    loading,
+    error: loadError,
+    reload: fetchChannels,
+  } = useSupabaseList<MarketingChannel>(fetcher, [venueId])
+  const displayError = error ?? loadError
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault()
@@ -220,10 +217,10 @@ export default function MarketingChannelsConfigPage() {
         </p>
       </header>
 
-      {error && (
+      {displayError && (
         <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
           <AlertTriangle className="w-4 h-4 mt-0.5" />
-          <span>{error}</span>
+          <span>{displayError}</span>
         </div>
       )}
 

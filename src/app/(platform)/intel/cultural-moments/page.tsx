@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useSupabaseList } from '@/lib/hooks/use-supabase-list'
 import {
   Sparkles,
   Plus,
@@ -64,8 +65,6 @@ function formatRange(startIso: string, endIso: string | null): string {
 
 export default function CulturalMomentsPage() {
   const supabase = createClient()
-  const [moments, setMoments] = useState<Moment[]>([])
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showProposeForm, setShowProposeForm] = useState(false)
 
@@ -78,26 +77,25 @@ export default function CulturalMomentsPage() {
   const [newOngoing, setNewOngoing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
-  const fetchMoments = useCallback(async () => {
-    setLoading(true)
-    try {
-      const { data, error: fetchErr } = await supabase
-        .from('cultural_moments')
-        .select('id, status, title, description, start_at, end_at, category, evidence, influence_weight, geo_scope, proposed_by, reviewed_at, created_at')
-        .neq('status', 'archived')
-        .order('created_at', { ascending: false })
-        .limit(200)
-      if (fetchErr) throw fetchErr
-      setMoments((data ?? []) as Moment[])
-      setError(null)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load')
-    } finally {
-      setLoading(false)
-    }
+  // 2026-05-01 (review pass 4 follow-up): use the shared list hook.
+  const fetcher = useCallback(async (): Promise<Moment[]> => {
+    const { data, error: fetchErr } = await supabase
+      .from('cultural_moments')
+      .select('id, status, title, description, start_at, end_at, category, evidence, influence_weight, geo_scope, proposed_by, reviewed_at, created_at')
+      .neq('status', 'archived')
+      .order('created_at', { ascending: false })
+      .limit(200)
+    if (fetchErr) throw fetchErr
+    return (data ?? []) as Moment[]
   }, [supabase])
 
-  useEffect(() => { fetchMoments() }, [fetchMoments])
+  const {
+    rows: moments,
+    loading,
+    error: loadError,
+    reload: fetchMoments,
+  } = useSupabaseList<Moment>(fetcher, [])
+  const displayError = error ?? loadError
 
   async function handlePropose(e: React.FormEvent) {
     e.preventDefault()
@@ -220,10 +218,10 @@ export default function CulturalMomentsPage() {
         </p>
       </header>
 
-      {error && (
+      {displayError && (
         <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
           <AlertTriangle className="w-4 h-4 mt-0.5" />
-          <span>{error}</span>
+          <span>{displayError}</span>
         </div>
       )}
 

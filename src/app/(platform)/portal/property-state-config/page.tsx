@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
+import { useSupabaseList } from '@/lib/hooks/use-supabase-list'
 import { Hammer, Plus, Trash2, AlertTriangle, MapPin } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -52,8 +53,6 @@ function formatRange(startIso: string, endIso: string | null): string {
 export default function PropertyStateConfigPage() {
   const venueId = useVenueId()
   const supabase = createClient()
-  const [rows, setRows] = useState<OperationalState[]>([])
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -65,28 +64,26 @@ export default function PropertyStateConfigPage() {
   const [newDescription, setNewDescription] = useState('')
   const [newAffected, setNewAffected] = useState('')
 
-  const fetchRows = useCallback(async () => {
-    if (!venueId) return
-    setLoading(true)
-    try {
-      const { data, error: fetchErr } = await supabase
-        .from('venue_operational_state')
-        .select('id, venue_id, state_type, start_at, end_at, title, description, affected_space, created_at')
-        .eq('venue_id', venueId)
-        .is('deleted_at', null)
-        .order('start_at', { ascending: false })
-      if (fetchErr) throw fetchErr
-      setRows((data ?? []) as OperationalState[])
-      setError(null)
-    } catch (err) {
-      console.error('Failed to load operational state:', err)
-      setError('Failed to load operational state')
-    } finally {
-      setLoading(false)
-    }
+  // 2026-05-01 (review pass 4 follow-up): use the shared list hook.
+  const fetcher = useCallback(async (): Promise<OperationalState[]> => {
+    if (!venueId) return []
+    const { data, error: fetchErr } = await supabase
+      .from('venue_operational_state')
+      .select('id, venue_id, state_type, start_at, end_at, title, description, affected_space, created_at')
+      .eq('venue_id', venueId)
+      .is('deleted_at', null)
+      .order('start_at', { ascending: false })
+    if (fetchErr) throw fetchErr
+    return (data ?? []) as OperationalState[]
   }, [venueId, supabase])
 
-  useEffect(() => { fetchRows() }, [fetchRows])
+  const {
+    rows,
+    loading,
+    error: loadError,
+    reload: fetchRows,
+  } = useSupabaseList<OperationalState>(fetcher, [venueId])
+  const displayError = error ?? loadError
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault()
@@ -190,10 +187,10 @@ export default function PropertyStateConfigPage() {
         </p>
       </header>
 
-      {error && (
+      {displayError && (
         <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
           <AlertTriangle className="w-4 h-4 mt-0.5" />
-          <span>{error}</span>
+          <span>{displayError}</span>
         </div>
       )}
 
