@@ -27,13 +27,11 @@ import { isAutonomousPaused } from '@/lib/services/cost-ceiling'
 interface AutoSendCheck {
   contextType: string
   /**
-   * Confidence score. Accepts EITHER:
-   *   - integer 0–100 (the brain output scale; e.g. 85 means 85%)
-   *   - float 0.0–1.0 (the auto_send_rules.confidence_threshold scale)
-   * The function normalises internally so callers can pass whichever
-   * scale they have without thinking about it. Pre-fix this was a
-   * leaky abstraction — callers had to /100 before passing or the
-   * gate silently never fired. INV-7.3.
+   * Confidence score, integer 0–100. Matches brain output scale and
+   * (post-migration 121) auto_send_rules.confidence_threshold scale.
+   * Pre-migration the DB column was float 0.0–1.0 and we had a
+   * dual-scale heuristic at the function boundary. Migration 121
+   * made it strict — one scale everywhere. INV-7.3.
    */
   confidenceScore: number
   source?: string
@@ -227,16 +225,10 @@ export async function checkAutoSendEligible(
     }
   }
 
-  // Confidence-scale normalization (INV-7.3). Brains return 0–100
-  // integer percentage; auto_send_rules.confidence_threshold stores
-  // 0.0–1.0 float. Accept either scale at the function boundary so
-  // callers don't have to manage the /100 conversion. Heuristic:
-  // anything > 1.5 is treated as a percentage, divided by 100.
-  // Anything <= 1.5 is treated as already on 0.0–1.0 scale.
-  // (1.0 is a valid "100% confident" float; 1.5 chosen as a safe
-  // cliff above the legitimate float range.)
-  const normalisedConfidence =
-    draft.confidenceScore > 1.5 ? draft.confidenceScore / 100 : draft.confidenceScore
+  // Post-migration 121 confidence is one scale (integer 0-100) end-
+  // to-end. The Repair K dual-scale heuristic was removed when the
+  // strict path landed. Single scale = no leaky abstraction; future
+  // callers pass brain output raw.
 
   const rawSource = draft.source ?? 'direct'
   const detectedSource = typeof draft.source === 'string'
@@ -267,12 +259,11 @@ export async function checkAutoSendEligible(
     }
   }
 
-  // Check 2: Confidence threshold. Both sides on 0.0–1.0 scale —
-  // normalisedConfidence is the function-internal canonical form.
-  if (normalisedConfidence < rule.confidenceThreshold) {
+  // Check 2: Confidence threshold. Both sides integer 0-100 (post-121).
+  if (draft.confidenceScore < rule.confidenceThreshold) {
     return {
       eligible: false,
-      reason: `Confidence ${normalisedConfidence.toFixed(2)} below threshold ${rule.confidenceThreshold.toFixed(2)}`,
+      reason: `Confidence ${draft.confidenceScore} below threshold ${rule.confidenceThreshold}`,
     }
   }
 
@@ -331,7 +322,7 @@ export async function checkAutoSendEligible(
   // All checks passed
   return {
     eligible: true,
-    reason: `Auto-send approved: source '${ruleSource}', confidence ${normalisedConfidence.toFixed(2)}, ` +
+    reason: `Auto-send approved: source '${ruleSource}', confidence ${draft.confidenceScore}, ` +
       `count ${todayCount + 1}/${rule.dailyLimit}`,
   }
 }

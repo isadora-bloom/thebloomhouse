@@ -150,7 +150,7 @@ function AutoSendRuleCard({
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-sm font-medium text-sage-700">Confidence Threshold</label>
               <span className="text-sm font-semibold text-sage-900 tabular-nums">
-                {Math.round(rule.confidence_threshold * 100)}%
+                {rule.confidence_threshold}%
               </span>
             </div>
             <input
@@ -158,8 +158,8 @@ function AutoSendRuleCard({
               min={50}
               max={100}
               step={5}
-              value={Math.round(rule.confidence_threshold * 100)}
-              onChange={(e) => onUpdate('confidence_threshold', parseInt(e.target.value) / 100)}
+              value={rule.confidence_threshold}
+              onChange={(e) => onUpdate('confidence_threshold', parseInt(e.target.value))}
               className="w-full h-2 bg-sage-100 rounded-full appearance-none cursor-pointer accent-sage-500"
             />
             <div className="flex justify-between text-[10px] text-sage-400 mt-0.5">
