@@ -40,6 +40,7 @@ import { extractTourTranscript } from '@/lib/services/tour-transcript-extract'
 // snappy. The extraction service is idempotent on its own failures.
 // ---------------------------------------------------------------------------
 interface ExtractionTriggerInput {
+  venueId: string
   tourId: string
   outcome: string | null
   scheduledAt: string | null
@@ -47,7 +48,7 @@ interface ExtractionTriggerInput {
 }
 
 function maybeFireExtraction(input: ExtractionTriggerInput): void {
-  const { tourId, outcome, scheduledAt, transcript } = input
+  const { venueId, tourId, outcome, scheduledAt, transcript } = input
   if (!tourId || !transcript) return
 
   const outcomeComplete = outcome === 'completed' || outcome === 'booked'
@@ -59,9 +60,22 @@ function maybeFireExtraction(input: ExtractionTriggerInput): void {
   if (!outcomeComplete && !(pastEnough && longEnough)) return
 
   // Fire-and-forget. Never block the webhook response on the extractor.
-  extractTourTranscript(tourId).catch((err) => {
-    console.error('[api/omi/webhook] auto-extract failed:', err)
-  })
+  // Cost-ceiling gate: extractTourTranscript fires Sonnet (tier-1)
+  // per tour. Paused venues skip per Playbook 21.4.3. Coordinator
+  // manual regenerate (POST /api/agent/tour-transcript-extract) is
+  // NOT gated — that's a coordinator request, not autonomous fire.
+  void (async () => {
+    const { isAutonomousPaused } = await import('@/lib/services/cost-ceiling')
+    if (await isAutonomousPaused(venueId)) {
+      console.log(`[api/omi/webhook] auto-extract skipped — venue ${venueId} is paused`)
+      return
+    }
+    try {
+      await extractTourTranscript(tourId)
+    } catch (err) {
+      console.error('[api/omi/webhook] auto-extract failed:', err)
+    }
+  })()
 }
 
 interface OmiSegment {
@@ -158,6 +172,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'internal' }, { status: 500 })
       }
       maybeFireExtraction({
+        venueId,
         tourId: boundTour.id as string,
         outcome: (boundTour.outcome as string | null) ?? null,
         scheduledAt: (boundTour.scheduled_at as string | null) ?? null,
@@ -216,6 +231,7 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: 'internal' }, { status: 500 })
         }
         maybeFireExtraction({
+          venueId,
           tourId: nearest.id,
           outcome: nearest.outcome,
           scheduledAt: nearest.scheduledAt,
