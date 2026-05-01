@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { planTierForPriceId } from '@/lib/billing/plans'
 import { getStripe, isStripeConfigured } from '@/lib/stripe'
+import { redact, redactError } from '@/lib/observability/redact'
 import type Stripe from 'stripe'
 
 // ---------------------------------------------------------------------------
@@ -88,7 +89,9 @@ export async function POST(request: NextRequest) {
           const stripe = getStripe()
           event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret)
         } catch (err) {
-          console.warn('[webhook/stripe] constructEvent failed:', err)
+          // Stripe constructEvent errors can echo signature material
+          // and (less commonly) payload fragments. Redact before stdout.
+          console.warn('[webhook/stripe] constructEvent failed:', redactError(err))
           return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
         }
       } else {
@@ -138,7 +141,9 @@ export async function POST(request: NextRequest) {
         }
         // Table may not exist yet (migration 054 not applied) — log and continue,
         // falling back to "update is safe to re-run" semantics.
-        console.warn('[webhook/stripe] Idempotency insert failed (continuing):', idemErr.message)
+        // Redact: idempotency insert errors can include constraint
+        // detail referencing the event payload.
+        console.warn('[webhook/stripe] Idempotency insert failed (continuing):', redact(idemErr.message))
       }
     }
 
@@ -169,7 +174,9 @@ export async function POST(request: NextRequest) {
           .eq('id', venueId)
 
         if (error) {
-          console.error(`[webhook/stripe] Failed to update venue ${venueId}:`, error.message)
+          // Update errors can reference column values including
+          // stripe_customer_id (PII-adjacent). Redact before stdout.
+          console.error(`[webhook/stripe] Failed to update venue ${venueId}:`, redact(error.message))
         } else {
           console.log(`[webhook/stripe] Updated venue ${venueId} to plan: ${planTier}`)
         }
@@ -200,7 +207,7 @@ export async function POST(request: NextRequest) {
           .eq('id', venueId)
 
         if (error) {
-          console.error(`[webhook/stripe] Failed to downgrade venue ${venueId}:`, error.message)
+          console.error(`[webhook/stripe] Failed to downgrade venue ${venueId}:`, redact(error.message))
         } else {
           console.log(`[webhook/stripe] Downgraded venue ${venueId} to starter tier`)
         }
@@ -230,7 +237,10 @@ export async function POST(request: NextRequest) {
     // Always return 200 to acknowledge receipt (Stripe retries on non-2xx)
     return NextResponse.json({ received: true })
   } catch (err) {
-    console.error('[webhook/stripe] Error processing webhook:', err)
+    // Top-level catch can include serialized event payloads with PII.
+    // Redact before stdout — this is the highest-risk surface in the
+    // Stripe webhook for accidental leakage.
+    console.error('[webhook/stripe] Error processing webhook:', redactError(err))
     return NextResponse.json(
       { error: 'Webhook processing failed' },
       { status: 500 }

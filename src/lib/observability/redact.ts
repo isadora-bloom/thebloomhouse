@@ -33,20 +33,38 @@
 // Anthropic error messages like 'invalid email "couple@gmail.com"'.
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi
 
-// US/CA phone numbers in common formats: +1 555-555-5555 / (555)
-// 555-5555 / 5555555555. Will over-match on raw 10-digit IDs — that's
-// acceptable; redacted IDs are still queryable from DB.
-const PHONE_PATTERN = /(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g
+// US/CA phone numbers — TIGHTENED for the original lazy regex which
+// over-matched on UUIDs, order IDs, and timestamps. Now requires:
+//   - explicit US/CA country code (+1 / 1) OR area-code parentheses
+//     (xxx) OR clear separator structure (xxx-xxx-xxxx with dashes
+//     or dots — NOT plain digit runs).
+// Avoids false positives like "INV-2024-0001-2345" or
+// "550e8400-e29b-41d4-a716-446655440000".
+//
+// Three alternatives matched:
+//   (?:\+?1[-.\s]?)?\(\d{3}\)[-.\s]?\d{3}[-.\s]?\d{4}  → with parens
+//   (?:\+?1[-.\s])\d{3}[-.\s]\d{3}[-.\s]\d{4}          → +1-xxx-xxx-xxxx
+//   \b\d{3}[-.]\d{3}[-.]\d{4}\b                        → xxx-xxx-xxxx
+const PHONE_PATTERN = new RegExp(
+  [
+    String.raw`(?:\+?1[-.\s]?)?\(\d{3}\)[-.\s]?\d{3}[-.\s]?\d{4}`,
+    String.raw`(?:\+?1[-.\s])\d{3}[-.\s]\d{3}[-.\s]\d{4}`,
+    String.raw`\b\d{3}[-.]\d{3}[-.]\d{4}\b`,
+  ].join('|'),
+  'g',
+)
 
 // Credit card — 16 digits in groups of 4 with separators. Stripe
 // webhook errors should never include CC numbers (Stripe redacts
 // before they hit our webhook) but defense-in-depth.
-const CREDIT_CARD_PATTERN = /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g
+const CREDIT_CARD_PATTERN = /\b\d{4}[\s-]\d{4}[\s-]\d{4}[\s-]\d{4}\b/g
 
-// Long quoted strings (>= 60 chars) — proxy for transcript content,
-// email body, sage notes. The 60-char threshold means short quoted
-// status strings ("approved", "in_progress") still log normally.
-const LONG_QUOTED_PATTERN = /"([^"]{60,})"/g
+// Long quoted strings (>= 80 chars) — proxy for transcript content,
+// email body, sage notes. Bumped from 60 to 80 to reduce false
+// positives on legitimate UI strings, JSON snippets, etc. The
+// invariant we care about (transcript content, multi-sentence email
+// bodies) reliably exceeds 80 chars.
+const LONG_QUOTED_PATTERN = /"([^"]{80,})"/g
 
 /**
  * Strip common PII shapes from a string. Use on any text that may
@@ -62,7 +80,7 @@ export function redact(text: string): string {
     .replace(CREDIT_CARD_PATTERN, '[REDACTED_CC]')
     .replace(EMAIL_PATTERN, '[REDACTED_EMAIL]')
     .replace(PHONE_PATTERN, '[REDACTED_PHONE]')
-    .replace(LONG_QUOTED_PATTERN, '"[REDACTED_QUOTE_60CHAR+]"')
+    .replace(LONG_QUOTED_PATTERN, '"[REDACTED_QUOTE_80CHAR+]"')
 }
 
 /**

@@ -39,5 +39,8 @@ jobs:
       - name: Unit tests — detectBookingSignal
         run: npx tsx scripts/test-booking-signal.ts
 
+      - name: Unit tests — redact (PII log scrubbing)
+        run: npx tsx scripts/test-redact.ts
+
       - name: White-label check — no hardcoded 'Sage' in couple portal
         run: node scripts/check-no-hardcoded-sage.mjs
