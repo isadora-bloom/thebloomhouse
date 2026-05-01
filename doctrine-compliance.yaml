@@ -1,0 +1,1662 @@
+# Bloom House — Doctrine Compliance Tracker
+# Schema per Bloom Playbook Part 22.2 (Item ID, Status, Owner, Target, Notes)
+#
+# This file IS the canonical compliance state per Part 22.3.
+# Update discipline (Part 22.4):
+#   - Every PR that changes a tracked cell's status updates this file
+#     in the same commit.
+#   - Every new doctrine item ships with a tracker entry.
+#   - Status regressions (enforced → at-risk) are notify-level alerts.
+#   - Quarterly review of doctrine-only items.
+#
+# Statuses: enforced | partial | doctrine-only | at-risk | deprecated
+# Owner default: Isadora
+
+meta:
+  initial_snapshot: "2026-04-30"
+  last_updated: "2026-05-01"
+  cells_total: 150
+  # Snapshot counts captured at initial audit. Live counts drift as
+  # cells move; query this YAML or the audit folder for current state.
+  initial_cells_by_status:
+    enforced: 31
+    partial: 56
+    doctrine-only: 49
+    at-risk: 14
+    critical_severity: 13
+    high_severity: 38
+
+# ---------------------------------------------------------------------
+# CHANGELOG — status moves since initial snapshot, by commit
+# ---------------------------------------------------------------------
+# 2026-04-30 .. 2026-05-01 — initial Tier 0 + early Tier 1 wave.
+#
+# 439d012  Three silent gate failures in autonomous-sender:
+#          INV-7.3 partial→enforced, INV-9 partial→enforced,
+#          INV-15 at-risk→enforced
+# 4606876  Follow-up sequences fix + slider wiring:
+#          ARCH-10.3 at-risk→enforced, STAGE-10.2.14 partial→enforced
+# 22d10fa  Spam early-return + occurred_at:
+#          STAGE-10.2.6 partial→enforced, ANTI-2.6.4 partial→enforced
+# 49911f8  White-label cleanup:
+#          INV-8.5.5 at-risk→enforced, INV-4.4-A partial→enforced
+# 6c0ce51  Provider fallback timeout + model identifier discipline:
+#          OPS-21.5.6-C partial→enforced, OPS-21.5.2 partial→enforced
+# 68e86ac  Demo seed conservative defaults: INV-7.4 counterexample removed
+# 392fe32  T0-5 cost ceiling + alert system:
+#          OPS-21.4.3 doctrine-only→enforced
+# f8784bb  T0-7 engagement_events.direction column:
+#          INV-13 at-risk→enforced, INV-14 partial→enforced,
+#          INV-16 at-risk→enforced, STAGE-10.2.10 at-risk→enforced,
+#          STAGE-10.2.17 at-risk→enforced
+# ff438cd  T0-6 contentTier on callAI + tier-1 OpenAI store:false:
+#          OPS-21.3.5 doctrine-only→partial (OpenAI side enforced;
+#          Anthropic ZDR is org-level config)
+# 6449d1d  Two more drift-prone model strings → CLAUDE_MODEL
+# 92433a9  T0-8 tier-1 PII redaction in logs:
+#          OPS-21.3.3 at-risk→partial (tier-1 catches all redacted;
+#          full coverage waits for T1-G structured logger)
+# 6+xxxxxx T1-A tracker into repo: OPS-22.1 doctrine-only→enforced
+
+# ===================================================================
+# PART 2 — POINT ZERO & FORENSIC RECORD
+# ===================================================================
+
+- id: INV-2.1-A
+  status: enforced
+  owner: Isadora
+  target: candidate_identities table populated, structurally distinct from weddings
+  notes: "Migration 105 enforces. email-pipeline.ts:907-916 only creates wedding at point zero."
+
+- id: INV-2.1-B
+  status: enforced
+  owner: Isadora
+  target: attribution_events.bucket field present
+  notes: "Migration 105:252-323. Code uses 'attribution'/'nurture' labels; playbook uses 'pre_zero'/'post_zero'. Cosmetic vocabulary mismatch — align one."
+
+- id: INV-2.3-A
+  status: enforced
+  owner: Isadora
+  target: Bloom number format <PREFIX>-<NNNN> per venue_config
+  notes: "Migration 032:38 + 068:35-109. Last-resort 'VN' fallback at 068:80."
+
+- id: INV-2.3-B
+  status: at-risk
+  owner: Isadora
+  target: Booked extension preserves number lineage (HM-0847 → HM-0847.B)
+  notes: "weddings has no parent_wedding_id / extension column. No code path produces .B. Booking is status flip on single row, not state-change-visible signal."
+  severity: high
+
+- id: INV-2.4
+  status: partial
+  owner: Isadora
+  target: Forensic record append-only, no UPDATE/DELETE except corrections with audit trail
+  notes: "Convention only — no DB trigger blocking UPDATE on engagement_events. cleanup-ghost-weddings does hard deletes with no audit table."
+  severity: medium
+
+- id: INV-2.5
+  status: at-risk
+  owner: Isadora
+  target: bucket recomputed when inquiry_date moves
+  notes: "candidate-resolver.ts:427-477 recomputeFirstTouch handles is_first_touch but NOT bucket. No trigger or service recomputes bucket on inquiry_date update."
+  severity: high
+
+- id: ANTI-2.6.1
+  status: enforced
+  owner: Isadora
+  target: no inquiry_date = NOW() on row creation
+  notes: "email-pipeline.ts:917-928 uses chooseEventTime fallback. Bandaids: reprocess-orphans/route.ts:164, reprocess-form-relays/route.ts:122, email-pipeline.ts:928 still use NOW() as last-resort fallback."
+  severity: medium
+
+- id: ANTI-2.6.2
+  status: enforced
+  owner: Isadora
+  target: From header never trusted before form-relay + body extraction
+  notes: "Pipeline order verified: form-relay first, body extractor next, From last."
+
+- id: ANTI-2.6.3
+  status: enforced
+  owner: Isadora
+  target: no wedding row created for sub-point-zero candidate
+  notes: "email-pipeline.ts:907-916 gates on point zero. Note: wedding still created for synthetic .invalid emails — see STAGE-10.2.9."
+
+- id: ANTI-2.6.4
+  status: partial
+  owner: Isadora
+  target: created_at not used where occurred_at exists
+  notes: "Three live consumers still read created_at: anomaly-detection.ts:275-279, daily-digest.ts:180-183, insight-tracking.ts:223. On backfilled venues these misbucket all historical events into the import day."
+  severity: medium
+
+- id: ANTI-2.6.5
+  status: partial
+  owner: Isadora
+  target: attribution_events.source authoritative; wedding.source denormalized only
+  notes: "source-quality.ts:81-85 groups bookedCount/avgRevenue/frictionRate by wedding.source (legacy). Only firstTouchLeads reads attribution_events. Same scorecard contains two attribution models silently."
+  severity: high
+
+# ===================================================================
+# PART 3 — TWO LEGS
+# ===================================================================
+
+- id: INV-3.4-A
+  status: enforced
+  owner: Isadora
+  target: 6 brain files exist as separate modules
+  notes: "router/inquiry/client/intel/sage/sage-identity all present in src/lib/services/."
+
+- id: INV-3.4-B
+  status: partial
+  owner: Isadora
+  target: permission wall — inquiry-brain never reads booked-only fields; client-brain never qualifies
+  notes: "Wall enforced via PROMPT TEXT only, no structural barrier. CLIENT_RULES is instruction; no compile-time guard prevents inquiry-brain from receiving a booked weddingId. One prompt-injection failure away from collapse."
+  severity: medium
+
+- id: INV-3.5
+  status: partial
+  owner: Isadora
+  target: same couple absorbed once across pre-booked + booked sheets
+  notes: "merge-people.ts works for within-Bloom dupes. No sheet-import absorption path exists. When merge happens post-facto, booked-leg Bloom number is orphaned."
+  severity: medium
+
+# ===================================================================
+# PART 4 — SPINE & BRAIN
+# ===================================================================
+
+- id: INV-4.4-A
+  status: partial
+  owner: Isadora
+  target: no 'Sage' literal in non-comment, non-default-config code
+  notes: "Most files clean (top bar, floating button, chat, contracts, resources, dashboard ALL render via {aiName}). REMAINING: getting-started/page.tsx:68 uses .replaceAll defensive layer (fragile). NEW finding: task-prompts-sage.ts:67 hardcodes 'You're Sage' in TASK_WELCOME — flows to all venues."
+  severity: medium
+
+- id: INV-4.4-B
+  status: enforced
+  owner: Isadora
+  target: no hardcoded venue prefix/name/colors/floor plan in non-config code
+  notes: "Rixey/rixey hits all in comments, log messages, parser samples, or default email-from regex. Clean."
+
+# ===================================================================
+# PART 5 — OMI & AUDIO CAPTURE
+# ===================================================================
+
+- id: ARCH-5.2.1
+  status: enforced
+  owner: Isadora
+  target: per-venue webhook token in venue_config.omi_webhook_token
+  notes: "Migration 082:30-44; webhook validates token at route.ts:81-102."
+
+- id: ARCH-5.2.2
+  status: enforced
+  owner: Isadora
+  target: real-time segments arrive with omi_session_id
+  notes: "Speaker labels and timestamps received but only .text persisted (concatenated). Segment metadata dropped at webhook boundary — forward-compat gap with 5.4 abstraction."
+  severity: medium
+
+- id: ARCH-5.2.3
+  status: enforced
+  owner: Isadora
+  target: token validation, service-role writes
+  notes: "Service-role with explicit venue_id scoping."
+
+- id: ARCH-5.2.4
+  status: enforced
+  owner: Isadora
+  target: 3 session-matching outcomes (already-bound / auto-match / orphan)
+  notes: "Strongest part of OMI implementation."
+
+- id: ARCH-5.2.5
+  status: enforced
+  owner: Isadora
+  target: auto-trigger extraction on completion rules
+  notes: "Auto-extract NOT fired from manual orphan-attach path — coordinator must hit regenerate API."
+  severity: low
+
+- id: ARCH-5.2.6
+  status: enforced
+  owner: Isadora
+  target: tour-transcript-extract produces all required structured fields
+  notes: "Hardcoded 'Sage' fallback at extract.ts:179, post-tour-brief.ts:225,288 when venue_ai_config.ai_name null."
+
+- id: ARCH-5.2.7
+  status: enforced
+  owner: Isadora
+  target: knowledge_gaps recorded per question, venue-scoped
+
+- id: ARCH-5.2.8
+  status: enforced
+  owner: Isadora
+  target: post-tour-brief produces both coordinator brief + draft
+  notes: "brain_used='sage_post_tour', status='pending', lands in standard /agent/drafts queue."
+
+- id: ARCH-5.2.9
+  status: enforced
+  owner: Isadora
+  target: transcript-voice-learning per-venue scoped
+  notes: "Strictest scoping in OMI codebase. White-label guarantee documented."
+
+- id: ARCH-5.3
+  status: enforced
+  owner: Isadora
+  target: post-tour slider defaults to draft-for-approval
+  notes: "Hardcoded today. auto_send_rules schema has no post_tour context column — Part 7 slider model can't represent flipping post-tour to autonomous later."
+  severity: medium
+
+- id: ARCH-5.4
+  status: at-risk
+  owner: Isadora
+  target: audio-capture abstraction with provider-agnostic interface; OMI as one adapter
+  notes: "MOST CRITICAL OMI GAP. No abstraction layer, no adapter pattern, no normalized transcript-segment format. Schema bakes in OMI (omi_session_id NOT NULL on tour_transcript_orphans). Webhook route does parse+normalize+persist in one ~270-line file. Orphan UI named 'Omi Inbox'. Settings page /settings/omi. Single-vendor risk doctrine violated at schema and route level."
+  severity: high
+
+# ===================================================================
+# PART 6 — SHARED SERVICE PRINCIPLE
+# ===================================================================
+
+- id: DOC-6.3
+  status: partial
+  owner: Isadora
+  target: no sub-tree reaches into another sub-tree's tables; shared services for heat/source/identity
+  notes: "Multiple cross-sub-tree reads exist but services are mostly shared. Source-quality.ts disagrees with attribution.ts on grouping (see ANTI-2.6.5). Phrase-selector cross-venue read (OPS-21.6.3)."
+  severity: medium
+
+# ===================================================================
+# PART 7 — SLIDER MODEL & AUTONOMOUS SENDER
+# ===================================================================
+
+- id: SCHEMA-7.2
+  status: enforced
+  owner: Isadora
+  target: auto_send_rules has all 8 columns
+  notes: "Migration 002:109-118 + 070:25-26 (thread_cap_24h)."
+
+- id: INV-7.3
+  status: partial
+  owner: Isadora
+  target: eligibility check enforces all 5 gates
+  notes: "**CRITICAL: confidence-scale mismatch.** inquiry-brain returns 75-95 integer; autonomous-sender compares against 0.50-1.00 float. `75 >= 0.85` always true. Confidence threshold gate is silently a no-op for every draft. **HIGH: require_new_contact never read** — autonomous-sender.ts has no reference. **HIGH: direction filter missing from eligibility check** (INV-15)."
+  severity: critical
+
+- id: INV-7.4
+  status: enforced
+  owner: Isadora
+  target: every venue defaults to all sliders disabled
+  notes: "Migration 002:114 + onboarding/page.tsx:592-616. Demo seed has enabled=true for 2/4 venues — should mirror prod conservative defaults."
+
+- id: ANTI-7.6.1
+  status: partial
+  owner: Isadora
+  target: no hardcoded autonomy bypassing auto_send_rules
+  notes: "intel/reengagement/[id]/route.ts:86 calls sendEmail directly without consulting rules. follow-up-sequences.ts:255-265 inserts drafts as 'pending' but never calls checkAutoSendEligible — Part 10.3 violation."
+  severity: high
+
+- id: ANTI-7.6.2
+  status: enforced
+  owner: Isadora
+  target: 5-minute delay window not bypassed
+  notes: "Verified — no fast-path."
+
+- id: ANTI-7.6.3
+  status: enforced
+  owner: Isadora
+  target: no implicit graduation
+  notes: "No code flips slider on based on metrics."
+
+- id: ARCH-10.4
+  status: enforced
+  owner: Isadora
+  target: autonomous sender state machine with atomic claim, retries, max-attempts notification
+  notes: "Migration 067 + 070. Atomic claim verified. No exponential backoff. Daily-limit reset uses UTC midnight (PST venue resets at 4pm local)."
+  severity: medium
+
+# ===================================================================
+# PART 8 — IDENTITY RESOLUTION
+# ===================================================================
+
+- id: ARCH-8.2-A
+  status: partial
+  owner: Isadora
+  target: three-tier confidence model live
+  notes: "Tiers exist in identity-resolution.ts. Cannot find a wired auto-merge silent path: only candidate-resolver auto-links; people-level identity collapse waits for coordinator. Need to wire identity-resolution → mergePeople for tier='high'."
+  severity: high
+
+- id: ARCH-8.2-B
+  status: partial
+  owner: Isadora
+  target: match windows configurable in venue_config.identity_match_config
+  notes: "Schema accepts arbitrary JSON. Config keys are flat windows — no per-platform decay."
+
+- id: ANTI-8.4-A
+  status: enforced
+  owner: Isadora
+  target: no cross-venue identity merging
+  notes: "merge-people.ts:79-83 venue-scoped enforced."
+
+- id: ANTI-8.4-B
+  status: enforced
+  owner: Isadora
+  target: no auto-merge on medium/low without coordinator confirmation
+
+- id: ANTI-8.4-C
+  status: enforced
+  owner: Isadora
+  target: pre-zero touches preserved on candidate promotion
+
+- id: ANTI-8.4-D
+  status: enforced
+  owner: Isadora
+  target: no degraded-signal candidate auto-promoted to wedding
+
+- id: ARCH-8.5.1
+  status: partial
+  owner: Isadora
+  target: degraded-signal pool structurally separate from candidate_identities
+  notes: "tangential_signals + candidate_identities exist. Activation gate is presence of fingerprint, not arrival of identified contact. Playbook 8.5.2 reads as latter; current code is former. Need clarification."
+  severity: medium
+
+- id: ARCH-8.5.3
+  status: doctrine-only
+  owner: Isadora
+  target: per-platform time-decay windows configured (Knot long, Pinterest 12+mo, Instagram 1-6mo, GMB days-to-weeks)
+  notes: "Single global TIER_1_NAME_WINDOW_HOURS=72 and TIER_2_WIDE_WINDOW_HOURS=30*24 for all platforms. No per-platform overrides."
+  severity: high
+
+- id: INV-8.5.4
+  status: partial
+  owner: Isadora
+  target: degraded matches surface as confidence-framed context, never auto-merge
+  notes: "Tier 2 routes to AI/coordinator (good). Tier 1 ±72h auto-links (debatable per doctrine). Confidence framing tied to time gap is missing in UI."
+  severity: medium
+
+- id: INV-8.5.5
+  status: at-risk
+  owner: Isadora
+  target: per-couple view shows 'prior anonymous touches' section even when empty (negative-result visibility)
+  notes: "PriorTouchesChip.tsx:51-53 returns null when summary.warmth==='cold' or touches.length===0 — chip silently disappears. Coordinator cannot distinguish 'we looked and found nothing' from 'we didn't look'."
+  severity: high
+
+- id: INV-8.5.6
+  status: partial
+  owner: Isadora
+  target: first-touch source rewrites backwards; source ROI reads current state
+  notes: "recomputeFirstTouch flips is_first_touch — partial. firstTouchLeads count uses attribution_events. But Quality view's bookedCount/avgRevenue/etc still group by wedding.source (legacy). Same row contains two attribution models."
+  severity: high
+
+# ===================================================================
+# PART 10 — EMAIL PIPELINE (19 STAGES)
+# ===================================================================
+
+- id: STAGE-10.2.1
+  status: enforced
+  owner: Isadora
+  target: Date header → ISO; not processing time
+  notes: "Two NOW() fallbacks (lines 928, 1302) when Date header unparseable. Add telemetry."
+
+- id: STAGE-10.2.2
+  status: enforced
+  owner: Isadora
+  target: inbox filter check with per-venue patterns
+
+- id: STAGE-10.2.3
+  status: enforced
+  owner: Isadora
+  target: form-relay parser BEFORE From-header trust
+  notes: "Knot/Zola domain regexes loose (substring match). WW synthetic .invalid email is non-routable."
+  severity: medium
+
+- id: STAGE-10.2.4
+  status: enforced
+  owner: Isadora
+  target: universal body identity extractor runs unconditionally
+  notes: "International phone shape silently dropped. All-caps surname rejected."
+
+- id: STAGE-10.2.5
+  status: enforced
+  owner: Isadora
+  target: router-brain classification into 7 types with structured extraction
+
+- id: STAGE-10.2.6
+  status: partial
+  owner: Isadora
+  target: spam check
+  notes: "Spam classifications still fall through — interaction inserted, intelligence_extractions written, signal_inference attempted. Add early-return for spam."
+  severity: medium
+
+- id: STAGE-10.2.7
+  status: enforced
+  owner: Isadora
+  target: self-loop guard runs AFTER form-relay parser
+
+- id: STAGE-10.2.8
+  status: partial
+  owner: Isadora
+  target: identity resolution dispatched
+  notes: "Only on isNewContact path. Existing-person inbound emails skip resolver entirely until nightly Phase B sweep."
+  severity: medium
+
+- id: STAGE-10.2.9
+  status: at-risk
+  owner: Isadora
+  target: wedding row only at point zero; candidate_identities row otherwise
+  notes: "Pipeline creates wedding for ANY new_inquiry with synthesised or real email — including WW .invalid synthetic and Knot relay. Those weddings have no reachable identifier."
+  severity: high
+
+- id: STAGE-10.2.10
+  status: at-risk
+  owner: Isadora
+  target: engagement_event recorded with explicit direction
+  notes: "**SCHEMA HAS NO direction COLUMN.** Migration 002:51-59 + 089. Invariant 13 cannot be satisfied because column does not exist."
+  severity: critical
+
+- id: STAGE-10.2.11
+  status: enforced
+  owner: Isadora
+  target: brain routing matches classification → correct brain
+
+- id: STAGE-10.2.12
+  status: enforced
+  owner: Isadora
+  target: draft generation with confidence/brain_used/status
+  notes: "Outbound interaction insert at L2462 missing extracted_identity, from_email, from_name."
+
+- id: STAGE-10.2.13
+  status: enforced
+  owner: Isadora
+  target: knowledge gaps recorded per question
+  notes: "Form-relay leads bypass classifier (synthClassification forces questions:[]). /agent/knowledge-gaps systematically under-counts Knot/WW/Zola questions."
+  severity: medium
+
+- id: STAGE-10.2.14
+  status: enforced
+  owner: Isadora
+  target: checkAutoSendEligible() consulted
+  notes: "NOT called from follow-up-sequences.generateFollowUps. Part 10.3 violation."
+  severity: high
+
+- id: STAGE-10.2.15
+  status: enforced
+  owner: Isadora
+  target: auto_send_pending with 5-min delay flushed by cron
+  notes: "Unusually well-implemented. Atomic claim, retry counter, last_error logging, max-attempts notification."
+
+- id: STAGE-10.2.16
+  status: enforced
+  owner: Isadora
+  target: ineligible drafts → pending in approval queue
+
+- id: STAGE-10.2.17
+  status: at-risk
+  owner: Isadora
+  target: heat recomputed (inbound only)
+  notes: "Tied to STAGE-10.2.10. No direction column means recalculateHeatScore has no schema-level guarantee. Latent bug if any future caller writes engagement_events from outbound path."
+  severity: high
+
+- id: STAGE-10.2.18
+  status: partial
+  owner: Isadora
+  target: AI disclosure check appended per venue config
+  notes: "Disclosure appended at SEND TIME, not stored on draft row. Coordinator approves body N; prospect gets body N + disclosure. Mental model diverges."
+  severity: medium
+
+- id: STAGE-10.2.19
+  status: partial
+  owner: Isadora
+  target: stage-boundary telemetry to error_logs
+  notes: "Telemetry FAILURE-only. logPipelineError fires on errors; no logPipelineEvent for successful transitions. Errors page is one-sided view of pipeline health."
+  severity: medium
+
+- id: ARCH-10.3
+  status: at-risk
+  owner: Isadora
+  target: follow-up sequences route through same approval/auto-send path; sliders apply
+  notes: "**BROKEN INSERT** — follow-up-sequences.ts:255-265 uses `body` (column doesn't exist; schema is `draft_body`), `contact_email` (schema is `to_email`), and `context_type='follow_up_3_day'` (CHECK violation). Cron job is no-op in production. Even if insert worked, no checkAutoSendEligible call. 3/7/14 day intervals hardcoded, bypass slider model."
+  severity: critical
+
+# ===================================================================
+# PART 11 — PORTAL
+# ===================================================================
+
+- id: ARCH-11.2-A
+  status: enforced
+  owner: Isadora
+  target: 25 admin config pages exist
+  notes: "All present in src/app/(platform)/portal/."
+
+- id: ARCH-11.2-B
+  status: enforced
+  owner: Isadora
+  target: 43 couple-facing pages exist
+  notes: "All present in src/app/_couple-pages/."
+
+- id: INV-11.3
+  status: enforced
+  owner: Isadora
+  target: every per-venue thing venue-scoped
+  notes: "venue_ai_config.ai_name read everywhere; KB/voice/preferences scoped by venue_id."
+
+- id: ARCH-11.4-A
+  status: enforced
+  owner: Isadora
+  target: /portal/sage-queue exists with same approval pattern
+
+- id: INV-11.4-B
+  status: at-risk
+  owner: Isadora
+  target: Sage-in-portal forbidden-topic classification BEFORE generation
+  notes: "Pipeline is generate → assess confidence → flag/replace. NO pre-classification step. LLM has already produced a response by the time post-hoc 'don't guess' rewrite kicks in. Risks legally exposing content before redaction."
+  severity: high
+
+- id: INV-11.4-C
+  status: at-risk
+  owner: Isadora
+  target: forbidden-topic list per-venue extensible
+  notes: "ESCALATION_KEYWORDS hardcoded global array. checkEscalation() takes no venue_id. List missing pricing changes, contract amendments, force majeure, insurance, vendor disputes, family conflict, medical."
+  severity: high
+
+- id: OPS-11.4-D
+  status: enforced
+  owner: Isadora
+  target: every Sage-in-portal response logged for retroactive review
+
+- id: ARCH-11.5-A
+  status: enforced
+  owner: Isadora
+  target: HoneyBook integration is read-only, one-way
+
+- id: ARCH-11.5-B
+  status: partial
+  owner: Isadora
+  target: HoneyBook events preserved on forensic record as engagement_events
+  notes: "HoneyBook system emails preserved as raw interactions, not as typed engagement_events (contract_signed, payment_received). Continuity discontinuity at absorption cutover."
+  severity: medium
+
+- id: ANTI-11.5-C
+  status: enforced
+  owner: Isadora
+  target: HoneyBook not treated as system of record
+
+# ===================================================================
+# PART 12 — TEMPORAL DISCIPLINE
+# ===================================================================
+
+- id: INV-12.1
+  status: enforced
+  owner: Isadora
+  target: two timestamps per event (event time + processing time)
+
+- id: INV-12.3
+  status: at-risk
+  owner: Isadora
+  target: derived fields recomputed when event times change
+  notes: "Tied to INV-2.5. bucket not recomputed on inquiry_date change."
+  severity: high
+
+# ===================================================================
+# PART 13 — INVARIANTS (DIRECTION DISCIPLINE)
+# ===================================================================
+
+- id: INV-13
+  status: at-risk
+  owner: Isadora
+  target: every engagement event carries explicit direction at write time
+  notes: "**CRITICAL: SCHEMA HAS NO direction COLUMN.** Migration 002:51-59 — engagement_events table never had it; migration 089 added occurred_at but no migration adds direction. Pipeline encodes direction implicitly via event_type semantics (inbound paths fire heat events; outbound emails don't fire engagement_events). Schema-level invariant the playbook demands is impossible."
+  severity: critical
+
+- id: INV-14
+  status: partial
+  owner: Isadora
+  target: heat scores increment only on inbound engagement events
+  notes: "heat-mapping.ts:411-440 sums points across ALL engagement_events for a wedding, no direction filter. Today safe only because pipeline writers happen to fire heat events on inbound paths only. Latent — any future caller writing engagement_events from outbound path silently lifts heat."
+  severity: critical
+
+- id: INV-15
+  status: at-risk
+  owner: Isadora
+  target: autonomous sender / draft router never trigger on outbound
+  notes: "checkAutoSendEligible has NO direction parameter and no direction filter inside the function. Defense relies entirely on call-site discipline (upstream filter in processIncomingEmail). Playbook explicitly requires gate inside the eligibility check, before any other gate. Memory documents the Apr 2026 Ryan Schubert case where outbounds slipped past upstream filter."
+  severity: critical
+
+- id: INV-16
+  status: at-risk
+  owner: Isadora
+  target: direction enforced at READ time by every consumer
+  notes: "Seven identified consumers read engagement_events with no direction filter: heat-mapping.ts:411-414, source-quality.ts:142-146, anomaly-detection.ts:274-279, daily-digest.ts:180-184, insight-tracking.ts:218-225, wedding-journey.ts:280-285, correlation-engine.ts:140-145. All seven fail INV-16 today."
+  severity: critical
+
+# ===================================================================
+# PART 16 — INTERNAL CONTEXT
+# ===================================================================
+
+- id: LIMB-16.2.1-A
+  status: at-risk
+  owner: Isadora
+  target: coordinator absences as manual entry source of truth
+  notes: "ZERO schema for coordinator_availability/absences/bandwidth across all 113 migrations. ZERO settings UI. Entire category doctrine-only."
+  severity: high
+
+- id: LIMB-16.2.1-B
+  status: doctrine-only
+  owner: Isadora
+  target: calendar integration suggestive (propose-and-approve)
+  severity: medium
+
+- id: LIMB-16.2.1-C
+  status: doctrine-only
+  owner: Isadora
+  target: autonomy threshold can lower OR queue-everything during absence
+  severity: high
+
+- id: LIMB-16.2.1-D
+  status: at-risk
+  owner: Isadora
+  target: absences surfaced as context on every conversion/response/velocity drop
+  notes: "anomaly-detection.ts:399 prompts Claude with metric numbers only — no Internal Context joined. LLM hypothesises in abstract. Exact match for ANTI-16.4 #3."
+  severity: high
+
+- id: LIMB-16.2.2
+  status: at-risk
+  owner: Isadora
+  target: property/operational state as structured time-bounded entities
+  notes: "ZERO schema. Lives only in coordinator memory + free-text drafts."
+  severity: high
+
+- id: LIMB-16.2.3
+  status: at-risk
+  owner: Isadora
+  target: pricing history auto-logged on calculator config changes
+  notes: "ZERO schema. venue_config.base_price is single mutable decimal — overwriting leaves zero record. Pricing intelligence USP cannot compute."
+  severity: high
+
+- id: LIMB-16.2.4-A
+  status: at-risk
+  owner: Isadora
+  target: marketing channels per-venue, NO hardcoded channel list
+  notes: "CANONICAL_SOURCES is hardcoded `as const` array of 25 values + DB CHECK constraint on three tables. Adding 'Local NoVa Bridal Magazine' requires code change + migration. Direct violation of ANTI-16.4 #1."
+  severity: high
+
+- id: LIMB-16.2.4-B
+  status: partial
+  owner: Isadora
+  target: manual entry always available, no API requirement
+  notes: "Manually entered source string rejected by weddings.source CHECK — orphan ROI numbers with no funnel side."
+  severity: high
+
+- id: LIMB-16.2.4-C
+  status: at-risk
+  owner: Isadora
+  target: spend records have source field 'manual_entry' or 'integrated:<provider>'
+  notes: "marketing_spend has no source provenance column."
+  severity: medium
+
+- id: LIMB-16.2.5-A
+  status: partial
+  owner: Isadora
+  target: 3 ingestion paths (API / vision / manual)
+  notes: "Storefront-analytics lands in engagement_events not dedicated platform_analytics table."
+  severity: medium
+
+- id: LIMB-16.2.5-B
+  status: enforced
+  owner: Isadora
+  target: vision extraction is primary path
+
+- id: LIMB-16.2.5-C
+  status: enforced
+  owner: Isadora
+  target: no scheduled scraping
+
+- id: LIMB-16.2.6
+  status: at-risk
+  owner: Isadora
+  target: per-coordinator metrics privacy-controlled
+  notes: "/intel/team-compare has NO role gate. consultant_metrics has NO opt-in flag. Privacy-by-default INVERTED. Exact match for ANTI-16.4 #4."
+  severity: high
+
+- id: LIMB-16.3
+  status: at-risk
+  owner: Isadora
+  target: 12-month historical Internal Context backfill on onboarding
+  notes: "Zero onboarding step for spend/pricing/absences/property. Source-quality USP has no signal for first 6-12 months."
+  severity: high
+
+# ===================================================================
+# PART 17 — EXTERNAL CONTEXT
+# ===================================================================
+
+- id: LIMB-17.2.1
+  status: partial
+  owner: Isadora
+  target: macroeconomic indicators ingested
+  notes: "5 FRED series; missing CPI, mortgage rates, S&P, wedding-specific indices, regional employment. National-only — no regional weighting."
+  severity: high
+
+- id: LIMB-17.2.2-A
+  status: enforced
+  owner: Isadora
+  target: weather direct-effect ingested
+  notes: "fetchHistoricalWeather is callable but UNWIRED — no caller in cron, onboarding, or any API. weather_data only has 14 forward days."
+  severity: high
+
+- id: LIMB-17.2.2-B
+  status: doctrine-only
+  owner: Isadora
+  target: weather perception lag (12-month memory cycle) modeled
+  notes: "Completely unmodeled."
+  severity: high
+
+- id: LIMB-17.2.3
+  status: partial
+  owner: Isadora
+  target: Google Trends ingested with per-venue queries
+  notes: "Hardcoded 8 generic terms for all venues. date='today 3-m' (3 months only) — cannot satisfy 12-month backfill."
+  severity: high
+
+- id: LIMB-17.2.4-A
+  status: enforced
+  owner: Isadora
+  target: engagement-cycle calendar hardcoded
+
+- id: LIMB-17.2.4-B
+  status: doctrine-only
+  owner: Isadora
+  target: cultural moments require coordinator confirmation
+  notes: "Entire ingestion path absent. Schema, UI, AI-propose-confirm flow all missing."
+  severity: medium
+
+- id: LIMB-17.2.5
+  status: partial
+  owner: Isadora
+  target: demographic/social trend ingestion
+  notes: "Census basics only (age, income, education). Missing divorce/remarriage/cohabitation/same-sex/interfaith/fertility."
+  severity: high
+
+- id: LIMB-17.2.6
+  status: doctrine-only
+  owner: Isadora
+  target: political/regulatory signal ingestion
+  severity: medium
+
+- id: LIMB-17.2.7
+  status: doctrine-only
+  owner: Isadora
+  target: competitor/supply-side signal ingestion
+  severity: medium
+
+- id: LIMB-17.2.8
+  status: doctrine-only
+  owner: Isadora
+  target: industry-level platform changes ingestion
+  severity: low
+
+- id: LIMB-17.4-A
+  status: at-risk
+  owner: Isadora
+  target: correlation engine produces confidence-scored insights
+  notes: "Engine EXISTS but does not include External Context channels. Correlates inquiries × marketing_metric × tangential_signals (mostly Internal). FRED/weather/Trends not joined. None of playbook 17.4-A exemplar insights producible today."
+  severity: high
+
+- id: LIMB-17.4-B
+  status: partial
+  owner: Isadora
+  target: regional scoping
+  notes: "Metro mapping exists for market_intelligence + search_trends. FRED national-only."
+  severity: medium
+
+- id: LIMB-17.4-C
+  status: at-risk
+  owner: Isadora
+  target: aggressive caching
+  notes: "No TTL/cache layer. Manual POST refresh has no rate limit."
+  severity: medium
+
+- id: LIMB-17.4-D
+  status: partial
+  owner: Isadora
+  target: significance threshold filters noise
+  notes: "Hardcoded |r|≥0.6, not configurable. No multiple-comparisons correction."
+  severity: medium
+
+- id: LIMB-17.5
+  status: enforced
+  owner: Isadora
+  target: no slider model on this limb (read-only)
+
+- id: LIMB-17.6
+  status: doctrine-only
+  owner: Isadora
+  target: 12-month backfill on onboarding
+  notes: "fetchHistoricalWeather dead code. trends.ts hardcoded 3-month window. Without 12mo backfill, macro-correlation surface is empty curves for 12 months."
+  severity: high
+
+# ===================================================================
+# PART 18 — ONBOARDING & BACKFILL
+# ===================================================================
+
+- id: ARCH-18.2
+  status: at-risk
+  owner: Isadora
+  target: 12-month minimum backfill enforced for paid venues
+  notes: "Onboarding is 15-min wizard. Backfill button hardcoded 90 days. Optional on Go Live. No paid-venue gate."
+  severity: critical
+
+- id: ARCH-18.3-A
+  status: partial
+  owner: Isadora
+  target: forensic record backfill across all categories
+  notes: "Backend importers exist for nearly every category. Onboarding UI exposes only Gmail backfill. 6 of 7 categories reachable only via undocumented surfaces."
+  severity: critical
+
+- id: ARCH-18.3-B
+  status: doctrine-only
+  owner: Isadora
+  target: voice DNA seeding from imports
+  notes: "Voice DNA built only from native_capture going forward. Day 1, Sage drafts sound like generic AI. No 'review extracted voice patterns' coordinator step."
+  severity: critical
+
+- id: ARCH-18.3-C
+  status: at-risk
+  owner: Isadora
+  target: Internal Context backfill
+  notes: "Macro-correlation USP cannot fire on Day 1. 5/6 categories zero-touch in onboarding."
+  severity: critical
+
+- id: ARCH-18.3-D
+  status: at-risk
+  owner: Isadora
+  target: External Context backfill
+  notes: "Essentially zero. fetchHistoricalWeather unwired. Trends locked to 3 months. FRED tables don't exist."
+  severity: critical
+
+- id: ARCH-18.4
+  status: doctrine-only
+  owner: Isadora
+  target: structured first-week project flow
+  notes: "Day-by-day shape doesn't exist in product. Activation is single-click. Readiness report is engineer-side bash."
+  severity: high
+
+- id: INV-18.5
+  status: doctrine-only
+  owner: Isadora
+  target: confidence flags on every backfilled row
+  notes: "Schema has NO confidence_flag column anywhere. All importers write rows indistinguishable from native-capture."
+  severity: critical
+
+# ===================================================================
+# PART 19 — INSIGHTS (32 NAMED) + AI ARCHITECTURE
+# ===================================================================
+
+# Tactical (per-couple)
+- id: INS-19.3.1
+  status: enforced
+  owner: Isadora
+  target: cross-platform identity reconciliation with prior-touch timeline strip
+
+- id: INS-19.3.2
+  status: at-risk
+  owner: Isadora
+  target: heat scoring with reasoning (classical compute + LLM narration)
+  notes: "Classical compute correct. NO LLM narration layer. Coordinator sees number + raw event log, never coherent reasoning sentence. suggestNextAction is hardcoded switch/case."
+  severity: high
+
+- id: INS-19.3.3
+  status: partial
+  owner: Isadora
+  target: decay detection with diagnosed cause + grounded re-engagement
+  notes: "Re-engagement recommendations are template strings keyed on days-silent + score, not on diagnosed root cause. Exactly the 'generic check-in' the playbook calls out."
+  severity: high
+
+- id: INS-19.3.4
+  status: doctrine-only
+  owner: Isadora
+  target: negotiation-state recognition
+  severity: medium
+
+- id: INS-19.3.5
+  status: doctrine-only
+  owner: Isadora
+  target: risk flags
+  notes: "No service computes per-couple cancellation risk."
+  severity: medium
+
+- id: INS-19.3.6
+  status: partial
+  owner: Isadora
+  target: hidden context surfacing from tour transcripts
+  severity: medium
+
+- id: INS-19.3.7
+  status: partial
+  owner: Isadora
+  target: vendor + timeline sanity checks
+  severity: medium
+
+- id: INS-19.3.8
+  status: doctrine-only
+  owner: Isadora
+  target: comparable-couple reasoning
+  notes: "Cohort-matching engine missing entirely."
+  severity: high
+
+- id: INS-19.3.9
+  status: doctrine-only
+  owner: Isadora
+  target: preempted answers
+  severity: medium
+
+# Operational
+- id: INS-19.4.1
+  status: partial
+  owner: Isadora
+  target: response-time pulse with hypothesis ranking grounded in context
+  notes: "Hypothesis ranking ungrounded — no Internal/External Context passed to LLM."
+  severity: medium
+
+- id: INS-19.4.2
+  status: partial
+  owner: Isadora
+  target: pipeline shape changes with funnel decomposition
+  severity: medium
+
+- id: INS-19.4.3
+  status: partial
+  owner: Isadora
+  target: capacity surfacing
+  notes: "Capacity × coordinator availability cross-join NOT FOUND."
+  severity: medium
+
+- id: INS-19.4.4
+  status: enforced
+  owner: Isadora
+  target: drop-off detection in post-tour pre-booked
+
+- id: INS-19.4.5
+  status: partial
+  owner: Isadora
+  target: knowledge-gap surfacing with frequency thresholds + KB entry proposal
+  severity: medium
+
+- id: INS-19.4.6
+  status: partial
+  owner: Isadora
+  target: booked-client risk pulse
+  severity: medium
+
+- id: INS-19.4.7
+  status: doctrine-only
+  owner: Isadora
+  target: email-pattern anomalies (opt-in only)
+  severity: low
+
+- id: INS-19.4.8
+  status: doctrine-only
+  owner: Isadora
+  target: vendor-network sentiment signals
+  severity: medium
+
+- id: INS-19.4.9
+  status: partial
+  owner: Isadora
+  target: tour-day environment briefs
+  severity: medium
+
+# Strategic
+- id: INS-19.5.1
+  status: partial
+  owner: Isadora
+  target: source ROI with retroactive first-touch rewriting
+  notes: "intel-brain quotes pre-computed numbers without verification step."
+  severity: low
+
+- id: INS-19.5.2
+  status: doctrine-only
+  owner: Isadora
+  target: pricing elasticity
+  severity: low
+
+- id: INS-19.5.3
+  status: doctrine-only
+  owner: Isadora
+  target: source-mix shifts (counterfactual)
+  severity: medium
+
+- id: INS-19.5.4
+  status: partial
+  owner: Isadora
+  target: seasonality with weather-perception-lag
+  severity: low
+
+- id: INS-19.5.5
+  status: doctrine-only
+  owner: Isadora
+  target: macro-driven booking-mix predictions
+  severity: low
+
+- id: INS-19.5.6
+  status: doctrine-only
+  owner: Isadora
+  target: demographic trend impact
+  severity: low
+
+- id: INS-19.5.7
+  status: doctrine-only
+  owner: Isadora
+  target: competitor shock detection
+  severity: low
+
+- id: INS-19.5.8
+  status: doctrine-only
+  owner: Isadora
+  target: cultural moment exploitation
+  severity: low
+
+- id: INS-19.5.9
+  status: doctrine-only
+  owner: Isadora
+  target: long-horizon limb actions
+  severity: low
+
+# Self-knowledge
+- id: INS-19.6.1
+  status: partial
+  owner: Isadora
+  target: personal-pattern detection (opt-in only)
+  notes: "Day-of-week + coordinator response-time patterns pushed into standard insight feed by default. Privacy-doctrine violation per ANTI-19.9 #5."
+  severity: high
+
+- id: INS-19.6.2
+  status: doctrine-only
+  owner: Isadora
+  target: strength-area identification
+  severity: low
+
+- id: INS-19.6.3
+  status: partial
+  owner: Isadora
+  target: voice consistency check + drift detection
+  notes: "Pattern extraction half exists. Drift-detection half missing."
+  severity: medium
+
+- id: INS-19.6.4
+  status: doctrine-only
+  owner: Isadora
+  target: time-allocation insights
+  severity: low
+
+- id: INS-19.6.5
+  status: doctrine-only
+  owner: Isadora
+  target: bandwidth-pattern recognition
+  severity: low
+
+# AI architecture
+- id: ARCH-19.7.1
+  status: partial
+  owner: Isadora
+  target: context-of-use; inline as default, dashboard as opt-in
+  notes: "InlineInsightBanner exists but is opt-in for embedding. 25+ /intel pages dominate. Anti-pattern 19.9 #3 partial violation."
+  severity: medium
+
+- id: ARCH-19.7.2
+  status: partial
+  owner: Isadora
+  target: push-not-pull for time-sensitive insights
+  notes: "Per-coordinator push channel configuration not implemented."
+  severity: medium
+
+- id: ARCH-19.7.3
+  status: partial
+  owner: Isadora
+  target: confidence-scored insights, never raw correlations
+  notes: "InsightCard hides confidence badge below 0.7. Coordinator can't distinguish directional from high-confidence in 0.4-0.7 band. Anti-pattern 19.9 #4."
+  severity: high
+
+- id: ARCH-19.8-A
+  status: at-risk
+  owner: Isadora
+  target: LLM never produces numbers; classical computes, LLM narrates
+  notes: "Briefings + weekly-digest + intel-brain NLQ all delegate calculation to LLM. task-prompts-intel.ts:33-53 weekly_briefing schema requires LLM to produce kpi_snapshot.inquiries_change_pct as a number. Per playbook 19.9 #1 most dangerous anti-pattern."
+  severity: high
+
+- id: ARCH-19.8-B
+  status: at-risk
+  owner: Isadora
+  target: model-tier mapping enforced
+  notes: "Single hardcoded Sonnet for ALL traffic. Router-brain (Haiku-class), extraction (Haiku-class) all pay 12× Haiku price. callAI takes no tier argument."
+  severity: high
+
+- id: ARCH-19.8-C
+  status: doctrine-only
+  owner: Isadora
+  target: LLM extraction caching on input hash
+  notes: "Zero matches for input_hash/extraction_cache. Re-running extraction re-bills."
+  severity: medium
+
+- id: ARCH-19.8-D
+  status: doctrine-only
+  owner: Isadora
+  target: cohort definition matches the question
+  severity: medium
+
+- id: ANTI-19.9-1
+  status: partial
+  owner: Isadora
+  target: no LLM-produced numbers
+  severity: high
+
+- id: ANTI-19.9-3
+  status: at-risk
+  owner: Isadora
+  target: no insights buried in dashboards
+  severity: high
+
+- id: ANTI-19.9-4
+  status: at-risk
+  owner: Isadora
+  target: confidence indicators on every insight
+  severity: high
+
+- id: ANTI-19.9-5
+  status: at-risk
+  owner: Isadora
+  target: self-knowledge insights opt-in only
+  severity: high
+
+# ===================================================================
+# PART 20 — UI LAYERS, ESSENTIALS, BRAIN DUMP
+# ===================================================================
+
+- id: ARCH-20.2.1
+  status: at-risk
+  owner: Isadora
+  target: inline primitive consistent across surfaces
+  notes: "Heat surfaced 3 different ways: dot in pipeline, pill in leads, flame+text in intel/clients. No shared HeatBadge / RiskFlag primitive component."
+  severity: high
+
+- id: ARCH-20.2.2
+  status: at-risk
+  owner: Isadora
+  target: unified pulse surface exists
+  notes: "Four fragmented feeds (anomalies, market-pulse, notifications, dashboard). No /pulse, no home-pulse, no top-bar drawer. No snooze, no escalate-to-brain-dump."
+  severity: high
+
+- id: ARCH-20.2.3
+  status: partial
+  owner: Isadora
+  target: digest layer covers all categories
+  notes: "Cadence hardcoded. Self-knowledge category absent. Macro signal correlations absent."
+  severity: medium
+
+- id: ARCH-20.2.4
+  status: enforced
+  owner: Isadora
+  target: on-demand exploration (NLQ, source ROI, search)
+
+- id: ARCH-20.3
+  status: doctrine-only
+  owner: Isadora
+  target: 32-insight × 4-layer grid encoded in code
+  notes: "No surface_layer or surface_priority field on intelligence_insights. Pre-condition data model for grid does not exist."
+  severity: high
+
+- id: ARCH-20.4.1
+  status: doctrine-only
+  owner: Isadora
+  target: surface_priority scoring with 5 components
+  severity: medium
+
+- id: ARCH-20.4.2
+  status: doctrine-only
+  owner: Isadora
+  target: 4 positions exist (Essentials/Recommended/Expanded/Everything)
+  notes: "SidebarV2 has Essential/All toggle but it filters NAV, not insights."
+  severity: medium
+
+- id: ARCH-20.4.3
+  status: doctrine-only
+  owner: Isadora
+  target: per-coordinator + per-surface + per-session override
+  severity: medium
+
+- id: ARCH-20.4.4
+  status: doctrine-only
+  owner: Isadora
+  target: slider learns from dismissals/clicks
+  severity: medium
+
+- id: ARCH-20.4.5
+  status: doctrine-only
+  owner: Isadora
+  target: slider does not affect on-demand
+  severity: low
+
+- id: ARCH-20.5.1
+  status: partial
+  owner: Isadora
+  target: brain-dump intake on every meaningful surface
+  notes: "FloatingBrainDump on every coordinator surface (good)."
+
+- id: ARCH-20.5.2
+  status: partial
+  owner: Isadora
+  target: 15+ input-type handlers
+  notes: "~7 of 15 covered. Missing: vendor invoices (PDF), Google Doc/Sheet URL, Pinterest URL, industry article URL, competitor pricing, voice audio, venue asset photo, forwarded email thread parsing."
+  severity: medium
+
+- id: ARCH-20.5.3
+  status: partial
+  owner: Isadora
+  target: two-stage processing with propose-and-confirm
+  notes: "Stage 3 propose-and-confirm bypassed for client_note, operational_note, knowledge_base_import, small CSVs."
+  severity: high
+
+- id: INV-20.5.4-A
+  status: at-risk
+  owner: Isadora
+  target: always propose, never silently file
+  notes: "5 paths violate: client_note, operational_note, knowledge_base_import, small CSVs, vision-extracted reviews/identities. Codebase invents 'additive vs destructive' rule that contradicts playbook."
+  severity: high
+
+- id: ARCH-20.5.4-B
+  status: doctrine-only
+  owner: Isadora
+  target: graduation pattern (3+ confirmations → opt-in prompt)
+  notes: "Worse than absence — silent auto-file with no opt-in step."
+  severity: high
+
+- id: INV-20.5.4-C
+  status: doctrine-only
+  owner: Isadora
+  target: graduation reversibility + confidence floor + audit trail
+  notes: "BrainDumpQueue points to /settings/brain-dump-log which doesn't exist."
+  severity: medium
+
+- id: INV-20.5.4-D
+  status: at-risk
+  owner: Isadora
+  target: non-graduable categories enforced
+  notes: "Per-couple intel paragraphs auto-file to weddings.sage_context_notes (couple's forensic record) without confirmation. Exactly the case playbook 20.5.4-D singles out."
+  severity: high
+
+- id: ARCH-20.5.5
+  status: at-risk
+  owner: Isadora
+  target: Cmd+K shortcut + context-aware pre-fill
+  notes: "No global keyboard shortcut. No context pre-fill. FloatingBrainDump initializes text='' regardless of invocation surface."
+  severity: medium
+
+# ===================================================================
+# PART 21 — ENGINEERING OPERATIONS
+# ===================================================================
+
+- id: OPS-21.1.1-A
+  status: at-risk
+  owner: Isadora
+  target: every Part 13 invariant has automated test
+  notes: "Repo has 8 data-integrity invariants, different naming/numbering than Part 13's 16. No mapping. No unit test runner — Playwright e2e only."
+  severity: high
+
+- id: OPS-21.1.1-B
+  status: at-risk
+  owner: Isadora
+  target: every pipeline stage unit-tested + handoff tests
+  notes: "06_email_pipeline.spec.ts:260-261 explicitly skips end-to-end test. 06b:356 same. No per-stage simulateInput/assertOutput interface."
+  severity: critical
+
+- id: OPS-21.1.1-C
+  status: at-risk
+  owner: Isadora
+  target: every brain has prompt-output regression suite
+  notes: "06c:436-438 skips 3 brain tests. 14:17 'deferred behind nightly AI-stub test' — nightly suite not found. 0 of 6 brains have regression suites."
+  severity: critical
+
+- id: OPS-21.1.1-D
+  status: at-risk
+  owner: Isadora
+  target: autonomous-sender state transitions tested incl. concurrent claim
+  notes: "No FOR UPDATE / SKIP LOCKED / advisory_lock anywhere. No concurrent-claim primitive in code."
+  severity: critical
+
+- id: OPS-21.1.1-E
+  status: doctrine-only
+  owner: Isadora
+  target: brain-dump 15+ classification paths tested
+  severity: high
+
+- id: OPS-21.1.1-F
+  status: partial
+  owner: Isadora
+  target: identity-resolution tier transitions tested
+  severity: medium
+
+- id: OPS-21.1.3
+  status: doctrine-only
+  owner: Isadora
+  target: state-based pipeline test pattern
+  severity: high
+
+- id: OPS-21.2.1
+  status: at-risk
+  owner: Isadora
+  target: structured logging fields on every event
+  notes: "97 console.* calls, free-text logging. Zero correlation_id / trace_id matches in src. Only ai/client.ts has structured JSON line."
+  severity: critical
+
+- id: OPS-21.2.2
+  status: doctrine-only
+  owner: Isadora
+  target: 6 required traces (pipeline/brains/autosender/braindump/OMI/identity)
+  notes: "0 of 6 implemented to spec."
+  severity: critical
+
+- id: OPS-21.2.3
+  status: at-risk
+  owner: Isadora
+  target: 10 metered counters/histograms
+  notes: "2 derivable from api_costs. 8 missing. No p50/p95/p99 latency. No cron_runs table."
+  severity: high
+
+- id: OPS-21.2.4
+  status: doctrine-only
+  owner: Isadora
+  target: 3-tier alerting policy
+  severity: high
+
+- id: OPS-21.2.5
+  status: doctrine-only
+  owner: Isadora
+  target: on-call playbook per paging alert
+  severity: high
+
+- id: OPS-21.3.1
+  status: doctrine-only
+  owner: Isadora
+  target: 4-tier data classification documented
+  notes: "Term collision: 'tier 1' in repo means identity-match confidence, not PII."
+  severity: high
+
+- id: OPS-21.3.2
+  status: enforced
+  owner: Isadora
+  target: encryption at rest + transit + backups
+  notes: "Supabase platform default."
+
+- id: OPS-21.3.3
+  status: at-risk
+  owner: Isadora
+  target: Tier 1 NEVER in logs
+  notes: "97 console.* calls. No central PII filter. Tour transcripts, family-context Sage notes, Stripe webhook bodies all use console.* without redaction."
+  severity: critical
+
+- id: OPS-21.3.4
+  status: doctrine-only
+  owner: Isadora
+  target: 7y retention + 30d cascade + right-to-erasure
+  severity: high
+
+- id: OPS-21.3.5
+  status: doctrine-only
+  owner: Isadora
+  target: LLM zero-retention paths for tier-1 content
+  notes: "Default Anthropic({apiKey}) — 30-day retention. Tour transcripts, family context all sent under default retention."
+  severity: critical
+
+- id: OPS-21.3.6
+  status: at-risk
+  owner: Isadora
+  target: access controls (RLS + service-role discipline)
+  notes: "createServiceClient used by 25+ services with no allowlist. Migration 027 has anon UPDATE USING(true) on 10+ couple tables for demo — global-write to anon."
+  severity: high
+
+- id: OPS-21.3.7
+  status: doctrine-only
+  owner: Isadora
+  target: compliance posture (GDPR/CCPA/SOC2/CAN-SPAM/AI-disclosure)
+  severity: medium
+
+- id: OPS-21.4.1
+  status: enforced
+  owner: Isadora
+  target: cost-per-venue metric per call
+  notes: "api_costs table works. Vision call doesn't pass venueId in some cases."
+
+- id: OPS-21.4.2
+  status: at-risk
+  owner: Isadora
+  target: tier mapping enforced (Haiku/Sonnet/Opus)
+  notes: "Single hardcoded Sonnet for ALL brain calls. Router classification + extraction (both Haiku-class) pay 12× the necessary cost."
+  severity: critical
+
+- id: OPS-21.4.3
+  status: doctrine-only
+  owner: Isadora
+  target: per-venue daily cost ceiling with 80%/100% triggers
+  notes: "Zero matches for cost_ceiling/daily_cost/circuit_breaker. Costs accrue with no kill-switch — runaway loop or test harness can burn unlimited credits."
+  severity: critical
+
+- id: OPS-21.4.4
+  status: at-risk
+  owner: Isadora
+  target: caching mandatory
+  notes: "Zero cache module in src/lib/ai. No prompt-caching breakpoints. Briefings re-extract every cron tick."
+  severity: high
+
+- id: OPS-21.4.5
+  status: doctrine-only
+  owner: Isadora
+  target: cost regression tests in CI
+  severity: high
+
+- id: OPS-21.5.1
+  status: doctrine-only
+  owner: Isadora
+  target: every prompt has version ID, logged on every call
+  notes: "Zero version-tracking in any prompt file. logUsage doesn't log prompt version."
+  severity: high
+
+- id: OPS-21.5.2
+  status: partial
+  owner: Isadora
+  target: model identifiers explicit, no 'latest'
+  notes: "Live brain call model is dated. DB-stored identifiers in re-engagement-drafter ('claude-sonnet'), journey-narrative ('claude-sonnet-4'), post-tour-brief ('claude-sonnet-4') drift from actual."
+  severity: medium
+
+- id: OPS-21.5.3
+  status: doctrine-only
+  owner: Isadora
+  target: drafts in flight not retroactively regenerated; version stored on draft
+  severity: medium
+
+- id: OPS-21.5.4
+  status: doctrine-only
+  owner: Isadora
+  target: regression suite for model upgrades with voice DNA stability check
+  severity: high
+
+- id: OPS-21.5.5
+  status: partial
+  owner: Isadora
+  target: per-venue prompt extensions versioned independently
+  severity: low
+
+- id: OPS-21.5.6-A
+  status: partial
+  owner: Isadora
+  target: Anthropic primary, OpenAI fallback configured
+  notes: "Fallback configured for callAI but NOT callAIVision."
+
+- id: OPS-21.5.6-B
+  status: doctrine-only
+  owner: Isadora
+  target: health checks per provider (rolling 5-min window)
+  severity: medium
+
+- id: OPS-21.5.6-C
+  status: partial
+  owner: Isadora
+  target: per-call timeouts (Sonnet 30s, Haiku 10s) with fallback on timeout
+  notes: "Sonnet timeout implemented. OpenAI fallback has NO timeout — can hang indefinitely."
+  severity: medium
+
+- id: OPS-21.5.6-D
+  status: doctrine-only
+  owner: Isadora
+  target: circuit breaker (20% error / 5-min)
+  severity: medium
+
+- id: OPS-21.5.6-E
+  status: doctrine-only
+  owner: Isadora
+  target: manual override config flag
+  severity: medium
+
+- id: OPS-21.5.6-F
+  status: partial
+  owner: Isadora
+  target: telemetry on every fallback event
+  notes: "Logs go to console only, not to DB. venue_id and brain not in log line."
+  severity: medium
+
+- id: OPS-21.5.6-G
+  status: doctrine-only
+  owner: Isadora
+  target: prompt parity (both providers in lockstep)
+  notes: "Single prompt corpus. GPT-4o-mini gets the Claude-tuned prompt verbatim."
+  severity: high
+
+- id: OPS-21.5.6-H
+  status: enforced
+  owner: Isadora
+  target: output normalization
+
+- id: OPS-21.5.6-I
+  status: doctrine-only
+  owner: Isadora
+  target: continuous shadow testing (5% to fallback)
+  notes: "'A fallback only tested during real outages is a fallback that fails during real outages.'"
+  severity: high
+
+- id: OPS-21.5.6-J
+  status: partial
+  owner: Isadora
+  target: both-down failure mode (queue, no fabrication)
+  notes: "No fabrication (good). But no queue, no coordinator notification, no admin alert."
+  severity: medium
+
+- id: OPS-21.6.1
+  status: partial
+  owner: Isadora
+  target: context composition (necessary, recency-weighted, voice-anchors-LAST)
+  notes: "Voice anchors interleaved through system prompt rather than placed last."
+  severity: medium
+
+- id: OPS-21.6.2
+  status: partial
+  owner: Isadora
+  target: retrieval sources per brain match table
+  severity: medium
+
+- id: OPS-21.6.3
+  status: at-risk
+  owner: Isadora
+  target: NO cross-venue retrieval ever
+  notes: "phrase-selector.ts:64-76 reads phrase_usage WITHOUT venue_id filter — explicit cross-venue rotation. Multi-tenancy violation per playbook 21.6.5."
+  severity: high
+
+- id: OPS-21.6.4
+  status: doctrine-only
+  owner: Isadora
+  target: prompt size discipline (8K/16K/32K) with alerts
+  notes: "Output bounded; input/system prompt size unbounded. No alert."
+  severity: medium
+
+# ===================================================================
+# PART 22 — DOCTRINE COMPLIANCE TRACKER
+# ===================================================================
+
+- id: OPS-22.1
+  status: doctrine-only
+  owner: Isadora
+  target: tracker file exists in repo
+  notes: "**THIS DOCUMENT** addresses this — created 2026-04-30 in audit folder. Move into bloom-house repo when adopted."
+
+- id: OPS-22.2
+  status: partial
+  owner: Isadora
+  target: tracker schema matches Part 22.2 (Item ID/Status/Owner/Target/Notes)
+  notes: "This file follows the schema. Severity field added as extension."
+
+- id: OPS-22.4
+  status: doctrine-only
+  owner: Isadora
+  target: PR discipline (status changes coupled to code changes)
+  notes: "Will be enforced when tracker lives in bloom-house repo."
+
+# ===================================================================
+# PART 23 — PARTNER DATA INTEGRATIONS
+# ===================================================================
+
+- id: ARCH-23.1-A
+  status: doctrine-only
+  owner: Isadora
+  target: enrichment slots as nullable fields on couples/inquiries/attribution_events
+
+- id: ARCH-23.1-B
+  status: doctrine-only
+  owner: Isadora
+  target: 6 slot types present
+
+- id: ARCH-23.1-C
+  status: enforced
+  owner: Isadora
+  target: code reads slots handles null gracefully
+  notes: "Vacuously true — no slots, no consumers."
+
+- id: ARCH-23.3
+  status: doctrine-only
+  owner: Isadora
+  target: per-partner adapter pattern scaffold
+
+- id: ARCH-23.5
+  status: doctrine-only
+  owner: Isadora
+  target: consent + permitted-use tags propagate
+
+# ===================================================================
+# PART 24 — CROSS-VENUE NETWORK
+# ===================================================================
+
+- id: INV-24.1-A
+  status: doctrine-only
+  owner: Isadora
+  target: opt-in default OFF in schema
+
+- id: INV-24.4-A
+  status: doctrine-only
+  owner: Isadora
+  target: minimum cohort size enforced (default 10)
+  notes: "Forward-looking. Existing intel/benchmark/route.ts is intra-org only — fine. Risk if reused for cross-customer."
+
+- id: INV-24.4-B
+  status: doctrine-only
+  owner: Isadora
+  target: subgroup suppression below minimum
+
+- id: INV-24.4-C
+  status: doctrine-only
+  owner: Isadora
+  target: no outlier exposure
+  notes: "intra-org benchmark exposes bestVenueId/weakestVenueId — would be wrong in cross-customer context."
+
+- id: ARCH-24.7-A
+  status: doctrine-only
+  owner: Isadora
+  target: network computations in separate service
+
+- id: ARCH-24.7-B
+  status: doctrine-only
+  owner: Isadora
+  target: separate derived store (aggregated only, not raw forensic records)
+
+- id: INV-24.6
+  status: doctrine-only
+  owner: Isadora
+  target: opt-in / withdrawal / annual-re-consent flow
