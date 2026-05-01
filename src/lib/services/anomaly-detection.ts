@@ -398,20 +398,227 @@ async function queryMetric(
 // ---------------------------------------------------------------------------
 
 /**
+ * Internal Context bundle threaded into the AI hypothesis prompt
+ * (T2-B Phase 2 / LIMB-16.2.1-3). Pre-T2-B the AI prompt had nothing
+ * but the metric numbers — so it always defaulted to funnel-shape
+ * causes regardless of whether a coordinator was on vacation, the
+ * venue was mid-renovation, or pricing had changed. This bundle
+ * provides the real-world causal context the AI should weigh first.
+ */
+interface InternalContextBundle {
+  /** Coordinator absences whose window overlaps the analysis period. */
+  absences: Array<{
+    consultant: string | null
+    reason: string
+    startAt: string
+    endAt: string
+    handoff: string | null
+  }>
+  /** Property-level state windows (renovation, closure, vendor change,
+   *  policy change, force-majeure) overlapping the analysis period. */
+  operationalState: Array<{
+    type: string
+    title: string
+    description: string | null
+    affectedSpace: string | null
+    startAt: string
+    endAt: string | null
+  }>
+  /** Pricing changes (base_price, capacity, calculator config) that
+   *  landed within the analysis window. */
+  pricingChanges: Array<{
+    field: string
+    oldValue: unknown
+    newValue: unknown
+    changedAt: string
+    notes: string | null
+  }>
+  /** Active marketing channels for this venue. Lets the AI consider
+   *  channel-mix shifts in its hypotheses. */
+  marketingChannels: Array<{ key: string; label: string; category: string | null }>
+}
+
+async function loadInternalContextForAnomaly(
+  supabase: ReturnType<typeof createServiceClient>,
+  venueId: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<InternalContextBundle> {
+  const [absRes, stateRes, priceRes, channelRes] = await Promise.all([
+    // Absences whose window OVERLAPS the analysis period.
+    // Overlap = NOT (end < periodStart OR start > periodEnd).
+    supabase
+      .from('coordinator_absences')
+      .select('assigned_consultant_id, reason, start_at, end_at, handoff_notes')
+      .eq('venue_id', venueId)
+      .is('deleted_at', null)
+      .lte('start_at', periodEnd)
+      .gte('end_at', periodStart),
+    // Operational state windows overlapping. end_at IS NULL = ongoing,
+    // implicitly overlaps any periodEnd.
+    supabase
+      .from('venue_operational_state')
+      .select('state_type, start_at, end_at, title, description, affected_space')
+      .eq('venue_id', venueId)
+      .is('deleted_at', null)
+      .lte('start_at', periodEnd)
+      .or(`end_at.is.null,end_at.gte.${periodStart}`),
+    // Pricing changes inside the period.
+    supabase
+      .from('pricing_history')
+      .select('field_name, old_value, new_value, changed_at, notes')
+      .eq('venue_id', venueId)
+      .gte('changed_at', periodStart)
+      .lte('changed_at', periodEnd)
+      .order('changed_at', { ascending: false })
+      .limit(10),
+    // All active marketing channels.
+    supabase
+      .from('marketing_channels')
+      .select('key, label, category')
+      .eq('venue_id', venueId)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(40),
+  ])
+
+  // Resolve consultant names for absences. Best-effort — null on miss.
+  const consultantIds = ((absRes.data ?? []) as Array<{ assigned_consultant_id: string | null }>)
+    .map((a) => a.assigned_consultant_id)
+    .filter((v): v is string => Boolean(v))
+  const nameMap = new Map<string, string>()
+  if (consultantIds.length > 0) {
+    const { data: profiles } = await supabase
+      .from('user_profiles')
+      .select('id, first_name, last_name')
+      .in('id', consultantIds)
+    for (const p of (profiles ?? []) as Array<{ id: string; first_name: string | null; last_name: string | null }>) {
+      const name = [p.first_name, p.last_name].filter(Boolean).join(' ').trim()
+      if (name) nameMap.set(p.id, name)
+    }
+  }
+
+  return {
+    absences: ((absRes.data ?? []) as Array<{
+      assigned_consultant_id: string | null
+      reason: string
+      start_at: string
+      end_at: string
+      handoff_notes: string | null
+    }>).map((a) => ({
+      consultant: a.assigned_consultant_id ? nameMap.get(a.assigned_consultant_id) ?? 'Unknown coordinator' : null,
+      reason: a.reason,
+      startAt: a.start_at,
+      endAt: a.end_at,
+      handoff: a.handoff_notes,
+    })),
+    operationalState: ((stateRes.data ?? []) as Array<{
+      state_type: string
+      title: string
+      description: string | null
+      affected_space: string | null
+      start_at: string
+      end_at: string | null
+    }>).map((s) => ({
+      type: s.state_type,
+      title: s.title,
+      description: s.description,
+      affectedSpace: s.affected_space,
+      startAt: s.start_at,
+      endAt: s.end_at,
+    })),
+    pricingChanges: ((priceRes.data ?? []) as Array<{
+      field_name: string
+      old_value: unknown
+      new_value: unknown
+      changed_at: string
+      notes: string | null
+    }>).map((p) => ({
+      field: p.field_name,
+      oldValue: p.old_value,
+      newValue: p.new_value,
+      changedAt: p.changed_at,
+      notes: p.notes,
+    })),
+    marketingChannels: ((channelRes.data ?? []) as Array<{
+      key: string
+      label: string
+      category: string | null
+    }>),
+  }
+}
+
+function formatInternalContextForPrompt(ctx: InternalContextBundle): string {
+  const parts: string[] = []
+  if (ctx.absences.length > 0) {
+    parts.push('Coordinator absences during this period:')
+    for (const a of ctx.absences) {
+      const who = a.consultant ?? 'Whole venue'
+      const handoff = a.handoff ? ` (handoff: ${a.handoff})` : ''
+      parts.push(`  - ${who} — ${a.reason} (${a.startAt} → ${a.endAt})${handoff}`)
+    }
+  }
+  if (ctx.operationalState.length > 0) {
+    parts.push('Property operational state during this period:')
+    for (const s of ctx.operationalState) {
+      const space = s.affectedSpace ? ` [${s.affectedSpace}]` : ''
+      const desc = s.description ? ` — ${s.description}` : ''
+      const end = s.endAt ?? 'ongoing'
+      parts.push(`  - [${s.type}] ${s.title}${space} (${s.startAt} → ${end})${desc}`)
+    }
+  }
+  if (ctx.pricingChanges.length > 0) {
+    parts.push('Pricing changes during this period:')
+    for (const p of ctx.pricingChanges) {
+      const old = JSON.stringify(p.oldValue)
+      const next = JSON.stringify(p.newValue)
+      const note = p.notes ? ` (${p.notes})` : ''
+      parts.push(`  - ${p.field}: ${old} → ${next} on ${p.changedAt}${note}`)
+    }
+  }
+  if (ctx.marketingChannels.length > 0) {
+    const labels = ctx.marketingChannels.map((c) => `${c.label} [${c.key}]`).join(', ')
+    parts.push(`Active marketing channels: ${labels}`)
+  }
+  if (parts.length === 0) {
+    return 'Internal context: none logged for this period.'
+  }
+  return parts.join('\n')
+}
+
+/**
  * Ask AI to explain a metric anomaly and suggest causes + actions.
+ *
+ * T2-B Phase 2: now threads Internal Context (absences, operational
+ * state, pricing changes, marketing channels) into the prompt so the
+ * hypothesis chain weighs real-world causes BEFORE chasing funnel
+ * shape. Per Playbook LIMB-16.2.1-3 + ARCH-19.4.
  */
 async function getAIExplanation(
   venueId: string,
   metricName: string,
   currentValue: number,
   baselineValue: number,
-  changePercent: number
+  changePercent: number,
+  periodStart: string,
+  periodEnd: string,
 ): Promise<AIExplanation | null> {
   try {
+    const supabase = createServiceClient()
+    const internalCtx = await loadInternalContextForAnomaly(
+      supabase, venueId, periodStart, periodEnd,
+    )
+    const internalCtxBlock = formatInternalContextForPrompt(internalCtx)
+
     const result = await callAIJson<AIExplanation>({
       systemPrompt: `You are a wedding venue operations analyst. When given a metric anomaly,
 provide a concise explanation and 2-3 possible causes ranked by likelihood, each with one
 concrete action the venue team can take this week.
+
+If the venue's Internal Context (coordinator absences, property state changes, pricing
+changes, marketing channels) is provided, weigh those causes BEFORE generic funnel shape
+explanations. A coordinator on vacation explains a response-time drop better than
+"funnel issues" does.
 
 Return JSON with this exact shape:
 {
@@ -434,8 +641,13 @@ Metric: ${metricName} (${METRICS[metricName]?.description ?? metricName})
 Current period value: ${formatMetricValue(metricName, currentValue)}
 Baseline (prior period): ${formatMetricValue(metricName, baselineValue)}
 Change: ${changePercent > 0 ? '+' : ''}${(changePercent * 100).toFixed(1)}%
+Analysis window: ${periodStart} → ${periodEnd}
 
-Provide 2-3 possible causes ranked by likelihood, each with one concrete action.`,
+${internalCtxBlock}
+
+Provide 2-3 possible causes ranked by likelihood, each with one concrete action.
+Weight Internal Context findings heavily — if a coordinator was out, the venue was
+in renovation, or pricing changed, those are more likely than generic funnel causes.`,
 
       maxTokens: 600,
       temperature: 0.3,
@@ -537,7 +749,9 @@ export async function runAnomalyDetection(
       metricName,
       current,
       baseline,
-      changePercent
+      changePercent,
+      periodStart,
+      now,
     )
 
     // Determine alert type based on direction

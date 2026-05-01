@@ -97,6 +97,30 @@ meta:
 #          on status flip into booked/completed; helper formatter wired
 #          through 7 render sites; integration test covers the trigger.
 #          Tightening to require first_payment_received waits for T2-F.
+# (T2-B Phase 2) Internal Context limb rebuild (migrations 131-135):
+#   LIMB-16.2.1-A at-risk→enforced (coordinator_absences table + admin
+#     UI at /portal/absences-config + anomaly hypothesis loader)
+#   LIMB-16.2.1-D at-risk→enforced (anomaly-detection.getAIExplanation
+#     threads loadInternalContextForAnomaly into the prompt with
+#     overlap-aware filtering; system prompt instructs AI to weight
+#     real-world causes BEFORE generic funnel shape)
+#   LIMB-16.2.2 at-risk→enforced (venue_operational_state table with
+#     state_type CHECK enum + nullable end_at for ongoing windows + admin
+#     UI at /portal/property-state-config + anomaly hypothesis loader)
+#   LIMB-16.2.3 at-risk→enforced (pricing_history table + auto-logger
+#     trigger on venue_config base_price + capacity, verified live
+#     with round-trip price bump + recordPricingChange service helper
+#     for non-trigger fields)
+#   LIMB-16.2.4-A at-risk→enforced (marketing_channels per-venue
+#     registry replaces CANONICAL_SOURCES global; admin UI at
+#     /portal/marketing-channels-config with quick-add suggestions for
+#     canonical keys + custom-channel inputs for long-tail; loaded
+#     into anomaly prompt)
+#   LIMB-16.2.4-B partial→enforced (manual entry path complete via
+#     marketing_channels admin UI)
+#   LIMB-16.2.6 at-risk→enforced (consultant_metrics.visibility_config
+#     jsonb added with privacy-by-default semantics; complements Item
+#     9's UI surface deletion)
 # (T2-E)   Audio-capture abstraction Phase 2 (migrations 129 + 130):
 #          ARCH-5.4 at-risk→enforced, ARCH-5.3 enforced (qualitatively
 #          stronger). transcript_segments table for segment-level
@@ -729,11 +753,10 @@ meta:
 # ===================================================================
 
 - id: LIMB-16.2.1-A
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: coordinator absences as manual entry source of truth
-  notes: "ZERO schema for coordinator_availability/absences/bandwidth across all 113 migrations. ZERO settings UI. Entire category doctrine-only."
-  severity: high
+  notes: "T2-B Phase 2 (2026-05-01): migration 132 coordinator_absences table (assigned_consultant_id nullable for venue-wide closures, start_at/end_at, reason, handoff_notes, soft delete) with RLS. Admin UI at /portal/absences-config (CRUD + upcoming/past split + 'Whole venue (closure)' coordinator option + reason suggestions). anomaly-detection.ts loads overlapping absences into the AI hypothesis prompt."
 
 - id: LIMB-16.2.1-B
   status: doctrine-only
@@ -748,39 +771,34 @@ meta:
   severity: high
 
 - id: LIMB-16.2.1-D
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: absences surfaced as context on every conversion/response/velocity drop
-  notes: "anomaly-detection.ts:399 prompts Claude with metric numbers only — no Internal Context joined. LLM hypothesises in abstract. Exact match for ANTI-16.4 #3."
-  severity: high
+  notes: "T2-B Phase 2 (2026-05-01): anomaly-detection.getAIExplanation now takes periodStart + periodEnd and threads loadInternalContextForAnomaly() output into the prompt. The loader fetches absences whose window overlaps the analysis period (lte start_at + gte end_at), formats them into the hypothesis prompt, and the system prompt instructs the AI to weight these BEFORE generic funnel causes. Closes the ANTI-16.4 #3 anti-pattern."
 
 - id: LIMB-16.2.2
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: property/operational state as structured time-bounded entities
-  notes: "ZERO schema. Lives only in coordinator memory + free-text drafts."
-  severity: high
+  notes: "T2-B Phase 2 (2026-05-01): migration 133 venue_operational_state table with state_type CHECK ('renovation' / 'closure' / 'capacity_change' / 'vendor_change' / 'policy_change' / 'force_majeure' / 'other'), start_at + nullable end_at (for ongoing windows), title, description, affected_space, soft delete. RLS via venue scoping. Admin UI at /portal/property-state-config with active vs recent split + 'End now' button for ongoing windows. Loaded into anomaly hypothesis prompt with overlap-aware filter (start <= periodEnd AND (end IS NULL OR end >= periodStart))."
 
 - id: LIMB-16.2.3
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: pricing history auto-logged on calculator config changes
-  notes: "ZERO schema. venue_config.base_price is single mutable decimal — overwriting leaves zero record. Pricing intelligence USP cannot compute."
-  severity: high
+  notes: "T2-B Phase 2 (2026-05-01): migration 134 pricing_history table (venue_id, field_name, old_value/new_value jsonb, changed_by, context, notes, changed_at) with auto-logger trigger trg_venue_config_pricing_history that fires on AFTER UPDATE OF base_price, capacity. Verified live with venue_config round-trip price bump (2 audit rows). Service helper recordPricingChange() at src/lib/services/pricing-history.ts for non-trigger fields (calculator config edits, tier restructuring). Loaded into anomaly hypothesis prompt as a window-bound list."
 
 - id: LIMB-16.2.4-A
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: marketing channels per-venue, NO hardcoded channel list
-  notes: "CANONICAL_SOURCES is hardcoded `as const` array of 25 values + DB CHECK constraint on three tables. Adding 'Local NoVa Bridal Magazine' requires code change + migration. Direct violation of ANTI-16.4 #1."
-  severity: high
+  notes: "Phase 1 (T1-J B-21, migration 123) dropped weddings.source CHECK. Phase 2 (T2-B, 2026-05-01): migration 131 marketing_channels table (per-venue key + label + category + is_active + notes + soft delete) with category CHECK enum + unique (venue_id, lower(key)) partial index. Admin UI at /portal/marketing-channels-config with CRUD + quick-add suggestions for canonical platform keys (the_knot, wedding_wire, zola, instagram, pinterest, google_business, etc.) + custom-channel inputs for long-tail channels (regional bridal magazines, podcasts, partner referrals). Active list loaded into anomaly hypothesis prompt as the venue's current channel mix. normalize-source.ts continues mapping raw inputs onto canonical keys."
 
 - id: LIMB-16.2.4-B
-  status: partial
+  status: enforced
   owner: Isadora
   target: manual entry always available, no API requirement
-  notes: "Manually entered source string rejected by weddings.source CHECK — orphan ROI numbers with no funnel side."
-  severity: high
+  notes: "Phase 1 dropped the CHECK constraint on weddings.source (T1-J B-21 / migration 123). Phase 2 (T2-B) marketing_channels admin UI is the manual-entry surface — coordinators can add any key without an API integration. weddings.source / wedding_touchpoints.source / attribution_events.source_platform accept any string."
 
 - id: LIMB-16.2.4-C
   status: at-risk
@@ -807,11 +825,10 @@ meta:
   target: no scheduled scraping
 
 - id: LIMB-16.2.6
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: per-coordinator metrics privacy-controlled
-  notes: "/intel/team-compare has NO role gate. consultant_metrics has NO opt-in flag. Privacy-by-default INVERTED. Exact match for ANTI-16.4 #4."
-  severity: high
+  notes: "Item 9 / T2-B (62b49fb + migration 135): /intel/team-compare deleted (UI surface privacy violation closed). Migration 135 added consultant_metrics.visibility_config jsonb {visible_to_org, visible_to_consultant, anonymise_in_aggregate, comparable_baseline} with privacy-by-default semantics — code defaults in consultant-metrics.ts lean private (org-wide visibility off, consultant always sees own, aggregates anonymise). Per Playbook LIMB-16.2.6."
 
 - id: LIMB-16.3
   status: at-risk

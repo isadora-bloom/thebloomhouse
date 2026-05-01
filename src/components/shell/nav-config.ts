@@ -29,6 +29,7 @@ import {
   // Sage's Brain
   Sparkles, Mic, GraduationCap, ScrollText,
   BookOpen, Store, Settings, MailX, ShieldAlert, Clock as ClockIcon,
+  Megaphone as MegaphoneIcon, CalendarOff, Hammer,
   Wine, HardHat, Bus, UtensilsCrossed,
   Armchair, Building, Flower2, HeartHandshake,
   Hotel, FileText, CheckSquare, SlidersHorizontal, Phone,
@@ -296,6 +297,9 @@ export const MODE_SAGE: ModeConfig = {
     '/agent/forbidden-topics',
     '/agent/identity-windows',
     '/agent/settings',
+    '/portal/marketing-channels-config',
+    '/portal/absences-config',
+    '/portal/property-state-config',
     '/portal/kb',
     '/portal/section-settings',
     '/portal/venue-usps-config',
@@ -346,6 +350,16 @@ export const MODE_SAGE: ModeConfig = {
       venueOnly: true,
       items: [
         { label: 'Knowledge Base', href: '/portal/kb', icon: BookOpen, daily: true },
+      ],
+    },
+    {
+      title: 'Internal context',
+      subtitle: 'Real-world state the AI weighs before chasing funnel causes',
+      venueOnly: true,
+      items: [
+        { label: 'Marketing channels', href: '/portal/marketing-channels-config', icon: MegaphoneIcon },
+        { label: 'Coordinator absences', href: '/portal/absences-config', icon: CalendarOff },
+        { label: 'Property state', href: '/portal/property-state-config', icon: Hammer },
       ],
     },
     {
