@@ -118,6 +118,7 @@ meta:
 #     risk-flags           T3-H INS-19.3.5 → partial
 #     decay-re-engagement  T3-B INS-19.3.3 → enforced
 #     cohort-match         T3-D INS-19.3.8 + ARCH-19.8-D → enforced
+#     cultural-moments-auto-propose T3-E INS-19.5.8 → partial
 #
 # (T3-B) Decay re-engagement insight (2026-05-01):
 #   INS-19.3.3 partial→enforced. Replaces template-string
@@ -1225,9 +1226,10 @@ meta:
   severity: low
 
 - id: INS-19.5.8
-  status: doctrine-only
+  status: partial
   owner: Isadora
   target: cultural moment exploitation
+  notes: "T3-E (2026-05-01): src/lib/services/insights/cultural-moments-auto-propose.ts auto-proposes cultural_moments from search-trend spike detection. Stronger than the existing 4w-vs-4w >20% baseline (which is fine for dashboards but too noisy for proposing): z-score against a 12-week baseline that EXCLUDES the trailing 2 weeks (no contamination), require either {persistence: |z|>=2.5 for both trailing weeks, same direction} OR {magnitude: |z|>=3.5 single week}. Volatile-baseline floor (std > mean*1.5) blocks emission on already-noisy series. Title is direction-aware (core ↑ = demand spike vs dampener ↑ = sentiment headwind). Fingerprint dedup on (evidence.kind='auto_trend_spike' + evidence.term + evidence.weekStart) — re-running cron doesn't spam queue, and the same national spike caught at multiple metros maps to one moment. Always status='proposed' / proposed_by='ai' (never auto-confirms — coordinator review is the gate per LIMB-17.2.4-B). API at POST /api/intel/cultural-moments/auto-propose with scope='venue' (default) | 'all'. PARTIAL: confirmed moments enter correlation engine but no exploitation surface yet (campaign/inventory recommendation off confirmed moments — Part 19.5.8's full ask)."
   severity: low
 
 - id: INS-19.5.9
