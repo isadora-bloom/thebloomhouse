@@ -25,6 +25,14 @@ import { normalizeSource } from '@/lib/services/normalize-source'
 
 interface AutoSendCheck {
   contextType: string
+  /**
+   * Confidence score on 0.0–1.0 scale. The brains internally compute on a
+   * 0–100 integer scale; callers must normalise to 0.0–1.0 before passing
+   * here so the comparison against `auto_send_rules.confidence_threshold`
+   * (also 0.0–1.0) is correct. Pre-fix, this was passed as 75–95 against a
+   * 0.85 threshold and the gate silently never fired (75 ≥ 0.85 always
+   * true). See Playbook INV-7.3.
+   */
   confidenceScore: number
   source?: string
   /**
@@ -34,6 +42,21 @@ interface AutoSendCheck {
    * provided via email-pipeline.ts.
    */
   threadId?: string
+  /**
+   * Direction of the engagement event that triggered this draft. Per
+   * Playbook Invariant 15, the eligibility check must filter on direction
+   * before any other gate — autonomous-sender NEVER produces drafts in
+   * response to outbound events. Defense-in-depth against upstream
+   * misclassification (e.g., self-loop guard miss). Default 'inbound' for
+   * legacy callers; new callers should pass explicitly.
+   */
+  direction?: 'inbound' | 'outbound'
+  /**
+   * Wedding ID — used for the require_new_contact gate. When the rule is
+   * configured to only auto-send to never-before-seen contacts, we count
+   * prior interactions on the same wedding and reject if any exist.
+   */
+  weddingId?: string
 }
 
 interface AutoSendResult {
@@ -94,6 +117,7 @@ interface AutoSendRule {
   confidenceThreshold: number
   dailyLimit: number
   threadCap24h: number
+  requireNewContact: boolean
   source: string
 }
 
@@ -112,7 +136,7 @@ async function getMatchingRule(
   // Try source-specific rule first
   const { data: sourceRule } = await supabase
     .from('auto_send_rules')
-    .select('enabled, confidence_threshold, daily_limit, thread_cap_24h, source')
+    .select('enabled, confidence_threshold, daily_limit, thread_cap_24h, require_new_contact, source')
     .eq('venue_id', venueId)
     .eq('context', context)
     .eq('source', source)
@@ -124,6 +148,7 @@ async function getMatchingRule(
       confidenceThreshold: sourceRule[0].confidence_threshold as number,
       dailyLimit: sourceRule[0].daily_limit as number,
       threadCap24h: (sourceRule[0].thread_cap_24h as number) ?? 3,
+      requireNewContact: (sourceRule[0].require_new_contact as boolean) ?? true,
       source: sourceRule[0].source as string,
     }
   }
@@ -131,7 +156,7 @@ async function getMatchingRule(
   // Fall back to 'all' rule for this context
   const { data: allRule } = await supabase
     .from('auto_send_rules')
-    .select('enabled, confidence_threshold, daily_limit, thread_cap_24h, source')
+    .select('enabled, confidence_threshold, daily_limit, thread_cap_24h, require_new_contact, source')
     .eq('venue_id', venueId)
     .eq('context', context)
     .eq('source', 'all')
@@ -143,6 +168,7 @@ async function getMatchingRule(
       confidenceThreshold: allRule[0].confidence_threshold as number,
       dailyLimit: allRule[0].daily_limit as number,
       threadCap24h: (allRule[0].thread_cap_24h as number) ?? 3,
+      requireNewContact: (allRule[0].require_new_contact as boolean) ?? true,
       source: allRule[0].source as string,
     }
   }
@@ -159,10 +185,16 @@ async function getMatchingRule(
  * Check whether a draft is eligible for automatic sending.
  *
  * Checks in order:
+ *   0. Direction is 'inbound' (Playbook INV-15: never auto-send in
+ *      response to outbound events; defense-in-depth against upstream
+ *      misclassification).
  *   1. Does a matching auto-send rule exist and is it enabled?
- *   2. Does the confidence score meet the rule's threshold?
- *   3. Has the daily limit been reached for this context?
- *   4. Source-specific matching
+ *   2. Does the confidence score meet the rule's threshold? (0.0–1.0
+ *      scale on both sides — see AutoSendCheck.confidenceScore docstring.)
+ *   3. require_new_contact: if set, fail when the wedding has any prior
+ *      interactions.
+ *   4. Per-thread rolling-24h cap.
+ *   5. Daily limit (venue-wide, per-context).
  *
  * Returns { eligible: boolean, reason: string } explaining the decision.
  */
@@ -170,6 +202,17 @@ export async function checkAutoSendEligible(
   venueId: string,
   draft: AutoSendCheck
 ): Promise<AutoSendResult> {
+  // Check 0: Direction filter (Playbook INV-15). MUST run before any
+  // other gate. Default 'inbound' for legacy callers, but new code must
+  // pass explicitly so a future call site that forgets fails closed.
+  const direction = draft.direction ?? 'inbound'
+  if (direction !== 'inbound') {
+    return {
+      eligible: false,
+      reason: `Auto-send blocked: direction is '${direction}', not 'inbound' (INV-15)`,
+    }
+  }
+
   const rawSource = draft.source ?? 'direct'
   const detectedSource = typeof draft.source === 'string'
     ? detectSource(draft.source)
@@ -199,7 +242,7 @@ export async function checkAutoSendEligible(
     }
   }
 
-  // Check 2: Confidence threshold
+  // Check 2: Confidence threshold. Both sides on 0.0–1.0 scale.
   if (draft.confidenceScore < rule.confidenceThreshold) {
     return {
       eligible: false,
@@ -207,7 +250,35 @@ export async function checkAutoSendEligible(
     }
   }
 
-  // Check 3: Per-thread rolling-24h cap. Belt-and-braces against
+  // Check 3: require_new_contact. When set, only auto-send to contacts
+  // not seen before. If the wedding has ANY prior interaction, fail —
+  // coordinator wanted to handle returning contacts manually.
+  if (rule.requireNewContact && draft.weddingId) {
+    const supabase = createServiceClient()
+    const { count, error: priorErr } = await supabase
+      .from('interactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('wedding_id', draft.weddingId)
+    if (priorErr) {
+      console.error('[auto-sender] require_new_contact lookup failed:', priorErr.message)
+      // Fail closed: if we can't verify, do not auto-send.
+      return {
+        eligible: false,
+        reason: 'require_new_contact gate failed: unable to count prior interactions',
+      }
+    }
+    // The current interaction itself may already be in the count when this
+    // runs after interaction insert. Threshold of >1 (more than just this
+    // one) means a prior touch existed.
+    if ((count ?? 0) > 1) {
+      return {
+        eligible: false,
+        reason: `require_new_contact: wedding has ${count} prior interactions; rule allows new contacts only`,
+      }
+    }
+  }
+
+  // Check 4: Per-thread rolling-24h cap. Belt-and-braces against
   // auto-responder loops — venue-wide `daily_limit` can hide a runaway
   // single thread. Skipped when threadId is absent (tests / synthetic
   // paths). Ordered BEFORE the daily cap so the deny reason is specific
@@ -222,7 +293,7 @@ export async function checkAutoSendEligible(
     }
   }
 
-  // Check 4: Daily limit (venue-wide, per-context, calendar-day)
+  // Check 5: Daily limit (venue-wide, per-context, calendar-day)
   const todayCount = await getTodayAutoSendCount(venueId, draft.contextType)
   if (todayCount >= rule.dailyLimit) {
     return {

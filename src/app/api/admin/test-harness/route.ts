@@ -153,6 +153,8 @@ export async function POST(request: NextRequest) {
         confidenceScore: number
         source?: string
         threadId?: string
+        direction?: 'inbound' | 'outbound'
+        weddingId?: string
       }
       const result = await checkAutoSendEligible(venueId, opts)
       return NextResponse.json({ ok: true, result })
