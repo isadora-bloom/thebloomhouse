@@ -373,10 +373,17 @@ INSERT INTO learned_preferences (id, venue_id, preference_type, pattern, confide
 -- ============================================
 -- 15. AUTO SEND RULES
 -- ============================================
+-- Per Playbook INV-7.4: every venue defaults to all sliders DISABLED.
+-- The demo seed previously planted enabled=true rules for Hawthorne and
+-- Crestwood, which contradicted the doctrine — anyone re-seeding a real
+-- venue from this template would inherit autonomous-on by accident. The
+-- rule SHAPES (confidence threshold, daily limit) are demo-realistic;
+-- only the `enabled` flag is conservative-by-default. A coordinator can
+-- still flip them on from /agent/settings to demo the autonomous flow.
 INSERT INTO auto_send_rules (id, venue_id, context, source, enabled, confidence_threshold, daily_limit) VALUES
-  ('b3000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', 'inquiry', 'the_knot', true, 0.90, 3);
+  ('b3000001-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222201', 'inquiry', 'the_knot', false, 0.90, 3);
 INSERT INTO auto_send_rules (id, venue_id, context, source, enabled, confidence_threshold, daily_limit) VALUES
-  ('b3000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222202', 'inquiry', NULL, true, 0.85, 5);
+  ('b3000001-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222202', 'inquiry', NULL, false, 0.85, 5);
 INSERT INTO auto_send_rules (id, venue_id, context, source, enabled, confidence_threshold, daily_limit) VALUES
   ('b3000001-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222203', 'inquiry', NULL, false, 0.95, 2);
 INSERT INTO auto_send_rules (id, venue_id, context, enabled) VALUES
