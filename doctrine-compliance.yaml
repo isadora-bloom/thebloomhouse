@@ -97,6 +97,16 @@ meta:
 #          on status flip into booked/completed; helper formatter wired
 #          through 7 render sites; integration test covers the trigger.
 #          Tightening to require first_payment_received waits for T2-F.
+# (T2-A foundation) 5-day onboarding project (migrations 136 + 137):
+#   ARCH-18.4 doctrine-only→partial (orchestration row + service +
+#     page scaffold; CRM adapters and full automation are follow-up)
+#   INV-18.5 doctrine-only→enforced (confidence_flag column on
+#     weddings / people / interactions / engagement_events /
+#     marketing_spend with CHECK enum; importers stamp at write time)
+#   Sits beside the existing 15-min wizard at /onboarding per
+#   coordinator approval. /onboarding/project is the new enterprise
+#   path with Day 1-5 structure (OAuth+backfill / channels+pricing /
+#   CRM ingestion / voice DNA / KB+readiness gate).
 # (T2-B Phase 2) Internal Context limb rebuild (migrations 131-135):
 #   LIMB-16.2.1-A at-risk→enforced (coordinator_absences table + admin
 #     UI at /portal/absences-config + anomaly hypothesis loader)
@@ -986,18 +996,16 @@ meta:
   severity: critical
 
 - id: ARCH-18.4
-  status: doctrine-only
+  status: partial
   owner: Isadora
   target: structured first-week project flow
-  notes: "Day-by-day shape doesn't exist in product. Activation is single-click. Readiness report is engineer-side bash."
-  severity: high
+  notes: "T2-A foundation (2026-05-01): migration 136 onboarding_projects orchestration table (status, current_day, per-day completion timestamps, readiness_state, coordinator_notes jsonb) with partial unique index for one-active-per-venue. src/lib/services/onboarding-project.ts owns PROJECT_PLAN (5 days, 11 steps) + startProject / recordStepCompletion / advanceDay / recordReadinessEvaluation / activateLive / pauseProject / resumeProject. Page at /onboarding/project renders the day-by-day scaffold with progress bar, per-step Mark-done, advance-day gate (all steps for current day must be complete), pause/resume, Go Live gate (requires status=go_live_pending AND readiness_passed_at). Sits beside the existing 15-min wizard at /onboarding (both audiences supported). REMAINING: per-step automation hooks (currently coordinator marks each manually); service-side readiness evaluation (the existing scripts/onboarding-readiness.ts runs CLI-side; refactoring it into a library that records into onboarding_projects.readiness_state is the next chunk); CRM adapter templates for HoneyBook / Dubsado / Aisle Planner (Day 3)."
 
 - id: INV-18.5
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: confidence flags on every backfilled row
-  notes: "Schema has NO confidence_flag column anywhere. All importers write rows indistinguishable from native-capture."
-  severity: critical
+  notes: "T2-A (2026-05-01): migration 137 added confidence_flag column to weddings, people, interactions, engagement_events, marketing_spend with CHECK enum ('live' / 'imported_high' / 'imported_medium' / 'imported_low' / 'manual'). Indexed on (venue_id, confidence_flag). Importers should stamp the appropriate flag at write time; downstream surfaces (anomaly detection, source quality) can down-weight or label backfilled data. Per Playbook B-39."
 
 # ===================================================================
 # PART 19 — INSIGHTS (32 NAMED) + AI ARCHITECTURE

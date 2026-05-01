@@ -30,6 +30,7 @@ import {
   Sparkles, Mic, GraduationCap, ScrollText,
   BookOpen, Store, Settings, MailX, ShieldAlert, Clock as ClockIcon,
   Megaphone as MegaphoneIcon, CalendarOff, Hammer,
+  Rocket, Calendar,
   Wine, HardHat, Bus, UtensilsCrossed,
   Armchair, Building, Flower2, HeartHandshake,
   Hotel, FileText, CheckSquare, SlidersHorizontal, Phone,
@@ -360,6 +361,15 @@ export const MODE_SAGE: ModeConfig = {
         { label: 'Marketing channels', href: '/portal/marketing-channels-config', icon: MegaphoneIcon },
         { label: 'Coordinator absences', href: '/portal/absences-config', icon: CalendarOff },
         { label: 'Property state', href: '/portal/property-state-config', icon: Hammer },
+      ],
+    },
+    {
+      title: 'Onboarding',
+      subtitle: 'Quick wizard or 5-day enterprise project',
+      venueOnly: true,
+      items: [
+        { label: 'Quick (15 min)', href: '/onboarding', icon: Rocket },
+        { label: '5-day project', href: '/onboarding/project', icon: Calendar },
       ],
     },
     {
