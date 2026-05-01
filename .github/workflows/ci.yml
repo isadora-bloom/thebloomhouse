@@ -66,5 +66,8 @@ jobs:
       - name: Unit tests — OMI audio-capture adapter (T2-E Phase 2)
         run: npx tsx scripts/test-audio-capture-omi.ts
 
+      - name: Unit tests — External Context loaders + Bonferroni threshold (T2-C)
+        run: npx tsx scripts/test-external-context.ts
+
       - name: White-label check — no hardcoded 'Sage' in couple portal
         run: node scripts/check-no-hardcoded-sage.mjs

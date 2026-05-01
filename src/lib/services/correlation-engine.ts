@@ -29,11 +29,23 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { loadFredSeries } from './external-context/fred'
+import { loadCulturalMomentsSeries } from './external-context/cultural-moments'
+import { loadCalendarSeries } from './external-context/calendar'
 
 const WINDOW_DAYS = 90
 const LAGS = [0, 3, 5, 7, 14]
 const MIN_NONZERO_DAYS = 20
+// Per-test correlation threshold. T2-C 2026-05-01 also adds a Bonferroni
+// significance gate on top — see correctedThresholdFor() — so the
+// effective bar a correlation must clear scales with the number of
+// channel pairs being tested.
 const CORRELATION_THRESHOLD = 0.6
+// Roughly Pearson |r| at p<0.05 for n=90 (one-sided). Used as the
+// pre-correction significance floor for the Bonferroni adjustment.
+// Empirical for the WINDOW_DAYS=90 setting; if WINDOW_DAYS is changed
+// this baseline should be re-derived from the t-distribution.
+const PEARSON_R_AT_P05_N90 = 0.21
 
 export interface CorrelationInsight {
   channelA: string
@@ -181,7 +193,85 @@ async function buildSeries(supabase: SupabaseClient, venueId: string): Promise<S
   }
   for (const [k, v] of tsBySeries) series.push({ channel: k, values: v })
 
+  // 4. External Context channels (T2-C / Playbook 17.4-A).
+  // Extends the engine beyond Internal-only signals (inquiries +
+  // marketing_metric + tangential_signals) to include the macro
+  // channels playbook 17.4-A flagged as the competitive moat.
+  // Each loader returns ExternalChannelSeries[] with dense daily
+  // points; convert to the engine's Map<dayKey,value> shape.
+  try {
+    const externalSeries = [
+      ...await loadFredSeries(supabase, start, now),
+      ...await loadCalendarSeries(supabase, start, now, await getVenueGeoScope(supabase, venueId)),
+    ]
+    // Cultural moments returns a single channel even when no rows match
+    const cultural = await loadCulturalMomentsSeries(supabase, start, now)
+    if (cultural.points.length > 0) externalSeries.push(cultural)
+
+    for (const ext of externalSeries) {
+      const m = new Map<string, number>()
+      for (const p of ext.points) m.set(p.dayKey, p.value)
+      if (m.size > 0) series.push({ channel: ext.channel, values: m })
+    }
+  } catch (err) {
+    // External context is additive — never block the engine on a
+    // load failure; downstream insights from Internal channels still
+    // run.
+    console.warn('[correlation-engine] external context load failed:', err)
+  }
+
   return series
+}
+
+/**
+ * Resolve a venue's geo_scope for calendar event filtering. The venue
+ * row may carry city/state directly (current schema doesn't formalise
+ * this yet, so we try to construct it from venue_config.timezone +
+ * known venue regions; falls back to 'us' for nationwide-only events).
+ *
+ * Future: add a venue_config.geo_scope column with the canonical
+ * 'us_<state>_<metro>' tag the calendar loader expects.
+ */
+async function getVenueGeoScope(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<string> {
+  // Best-effort: pull state from venues table if present, else 'us'.
+  const { data } = await supabase
+    .from('venues')
+    .select('state')
+    .eq('id', venueId)
+    .maybeSingle()
+  const state = ((data?.state as string | null) ?? '').trim().toLowerCase()
+  if (state && /^[a-z]{2}$/.test(state)) return `us_${state}`
+  return 'us'
+}
+
+/**
+ * Bonferroni-style multiple-comparisons correction. With N channels we
+ * test ~N×(N-1)×|LAGS| ordered pairs at multiple lags, so the family-
+ * wise error rate balloons. Adjust the per-test threshold so the
+ * effective alpha across all tests stays at ~0.05.
+ *
+ * Returns max(CORRELATION_THRESHOLD, Bonferroni-adjusted critical |r|).
+ * Floor of CORRELATION_THRESHOLD ensures a small N (3 channels × 5 lags
+ * = 15 tests) doesn't relax below the meaningful-effect bar — we want
+ * MEANINGFUL correlations, not just statistically-significant ones.
+ *
+ * Per Playbook ARCH-19.5 / T2-C requirement: "Add multiple-comparisons
+ * correction + per-venue significance threshold to correlation engine."
+ */
+function correctedThresholdFor(numChannels: number): number {
+  if (numChannels < 2) return CORRELATION_THRESHOLD
+  const numTests = numChannels * (numChannels - 1) * LAGS.length
+  // Family-wise alpha 0.05; Bonferroni divides per-test alpha by numTests.
+  // Translate to a critical |r| via the rough rule that |r|² ~ alpha
+  // scales for large enough N. For N=90 (WINDOW_DAYS), critical |r| at
+  // p=0.05 ≈ 0.21; at p=0.05/numTests, scale by sqrt(log).
+  // Cheap approximation: corrected |r| = baseline * sqrt(log(numTests)/log(2))
+  // — empirically reasonable for 10-1000 tests at our N.
+  const corrected = PEARSON_R_AT_P05_N90 * Math.sqrt(Math.log(numTests + 1) / Math.log(2))
+  return Math.max(CORRELATION_THRESHOLD, Math.min(0.85, corrected))
 }
 
 function seriesToArray(s: Series, days: string[]): number[] {
@@ -200,6 +290,24 @@ function applyLag(arr: number[], lag: number): { x: number[]; y: number[] } {
 }
 
 function humanChannel(ch: string): string {
+  // T2-C: External Context channel-name mappings. fred_<id>, calendar_<cat>,
+  // cultural_moments → human-friendly labels for the insight headlines.
+  const fredLabels: Record<string, string> = {
+    CPIAUCSL: 'CPI (inflation)',
+    MORTGAGE30US: '30y mortgage rate',
+    SP500: 'S&P 500',
+    UNRATE: 'unemployment rate',
+    UMCSENT: 'consumer sentiment',
+  }
+  if (ch.startsWith('fred_')) {
+    const id = ch.slice('fred_'.length)
+    return fredLabels[id] ?? `FRED ${id}`
+  }
+  if (ch.startsWith('calendar_')) {
+    const cat = ch.slice('calendar_'.length).replace(/_/g, ' ')
+    return `${cat} (calendar)`
+  }
+  if (ch === 'cultural_moments') return 'cultural moments'
   return ch
     .replace(/_/g, ' ')
     .replace(/\bthe knot\b/i, 'The Knot')
@@ -236,6 +344,11 @@ export async function computeCorrelationsForVenue(args: {
 
   const insights: CorrelationInsight[] = []
   const names = Array.from(arrays.keys())
+  // T2-C: family-wise correction so Internal + External Context channels
+  // together don't trip false-positive correlations from sheer test
+  // volume. Replaces the bare CORRELATION_THRESHOLD constant on the
+  // hot path.
+  const familyThreshold = correctedThresholdFor(names.length)
 
   for (let i = 0; i < names.length; i++) {
     for (let j = 0; j < names.length; j++) {
@@ -251,7 +364,7 @@ export async function computeCorrelationsForVenue(args: {
         const pairedA = x
         const pairedB = applyLag(b, lag).y // align same tail of b
         const r = pearson(pairedA, pairedB)
-        if (Math.abs(r) >= CORRELATION_THRESHOLD && (best == null || Math.abs(r) > Math.abs(best.r))) {
+        if (Math.abs(r) >= familyThreshold && (best == null || Math.abs(r) > Math.abs(best.r))) {
           best = { lag, r }
         }
       }

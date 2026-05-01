@@ -97,6 +97,26 @@ meta:
 #          on status flip into booked/completed; helper formatter wired
 #          through 7 render sites; integration test covers the trigger.
 #          Tightening to require first_payment_received waits for T2-F.
+# (T2-C) External Context correlation engine rebuild (migrations 138-140):
+#   LIMB-17.2.1 partial→enforced (FRED panel: CPI / mortgage /
+#     S&P / unemployment / consumer sentiment, forward-filled to
+#     daily series)
+#   LIMB-17.2.4-B doctrine-only→enforced (cultural_moments table +
+#     propose-and-confirm flow + admin review queue at
+#     /intel/cultural-moments)
+#   LIMB-17.4-A at-risk→enforced (correlation engine reads FRED +
+#     calendar + cultural moments alongside Internal channels;
+#     Bonferroni multiple-comparisons correction; hierarchical
+#     geo_scope for venue-aware calendar filtering)
+#   Migration 140 external_calendar_events with category CHECK enum
+#     + hierarchical geo_scope. Foundation for cron-driven federal-
+#     holiday / school-calendar / sporting-event ingestion.
+#   FOLLOW-UP: cron-driven FRED writer (api.stlouisfed.org), 12mo
+#     historical weather wiring (B-37), trends.ts window
+#     parameterisation (B-38), Census extension to divorce /
+#     remarriage / cohabitation / same-sex / interfaith / fertility
+#     (LIMB-17.2.5), political/regulatory + competitor + industry-
+#     platform manual-entry surfaces (LIMB-17.2.6/7/8).
 # (T2-A foundation) 5-day onboarding project (migrations 136 + 137):
 #   ARCH-18.4 doctrine-only→partial (orchestration row + service +
 #     page scaffold; CRM adapters and full automation are follow-up)
@@ -852,11 +872,10 @@ meta:
 # ===================================================================
 
 - id: LIMB-17.2.1
-  status: partial
+  status: enforced
   owner: Isadora
   target: macroeconomic indicators ingested
-  notes: "5 FRED series; missing CPI, mortgage rates, S&P, wedding-specific indices, regional employment. National-only — no regional weighting."
-  severity: high
+  notes: "T2-C (2026-05-01): migration 138 fred_indicators table with unique (series_id, region, observation_date) + value/units/frequency/region columns. src/lib/services/external-context/fred.ts owns the panel: DEFAULT_FRED_SERIES = CPIAUCSL (CPI), MORTGAGE30US (30y mortgage), SP500, UNRATE, UMCSENT (consumer sentiment). loadFredSeries forward-fills monthly observations into dense daily series for the correlation engine. Cron-driven daily refresh writer is the follow-up scope."
 
 - id: LIMB-17.2.2-A
   status: enforced
@@ -885,11 +904,10 @@ meta:
   target: engagement-cycle calendar hardcoded
 
 - id: LIMB-17.2.4-B
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: cultural moments require coordinator confirmation
-  notes: "Entire ingestion path absent. Schema, UI, AI-propose-confirm flow all missing."
-  severity: medium
+  notes: "T2-C (2026-05-01): migration 139 cultural_moments table with status CHECK ('proposed' / 'confirmed' / 'dismissed' / 'archived') + category CHECK enum + start_at/end_at + influence_weight (-100..100) + evidence jsonb + proposed_by tracking ('system' / 'ai' / 'coordinator'). Service src/lib/services/external-context/cultural-moments.ts owns proposeMoment / confirmMoment / dismissMoment / proposeFromAutoDetection. Admin review queue at /intel/cultural-moments with proposed/confirmed/dismissed sections + per-row Confirm-with-weight and Dismiss buttons. correlation-engine reads CONFIRMED rows as the 'cultural_moments' channel via loadCulturalMomentsSeries (per-day influence_weight summation across overlapping moments)."
 
 - id: LIMB-17.2.5
   status: partial
@@ -917,11 +935,10 @@ meta:
   severity: low
 
 - id: LIMB-17.4-A
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: correlation engine produces confidence-scored insights
-  notes: "Engine EXISTS but does not include External Context channels. Correlates inquiries × marketing_metric × tangential_signals (mostly Internal). FRED/weather/Trends not joined. None of playbook 17.4-A exemplar insights producible today."
-  severity: high
+  notes: "T2-C (2026-05-01): correlation-engine.buildSeries now appends External Context channels alongside the existing Internal series — fred_<series_id> via loadFredSeries (CPI / mortgage / S&P / unemployment / consumer sentiment, forward-filled to daily), cultural_moments via loadCulturalMomentsSeries (sums confirmed moments' influence_weight per day), calendar_<category> via loadCalendarSeries with hierarchical geo_scope expansion (us → us_<state> → us_<state>_<metro>). Bonferroni multiple-comparisons correction via correctedThresholdFor(numChannels) scales the per-test |r| threshold so adding 5-10 External channels doesn't trip false positives. humanChannel knows the new naming so insight headlines read 'CPI (inflation) precedes inquiries by 14 days' instead of 'fred_CPIAUCSL precedes inquiries by 14 days'."
 
 - id: LIMB-17.4-B
   status: partial

@@ -224,6 +224,7 @@ export const MODE_INTEL: ModeConfig = {
       subtitle: 'What couples are searching for',
       items: [
         { label: 'Trends', href: '/intel/trends', icon: TrendsIcon },
+        { label: 'Cultural Moments', href: '/intel/cultural-moments', icon: Sparkles },
         { label: 'Marketing Reach', href: '/intel/reach', icon: BarChart3 },
         { label: 'Tours', href: '/intel/tours', icon: MapPinIcon },
         { label: 'Capacity', href: '/intel/capacity', icon: CalendarRange },
