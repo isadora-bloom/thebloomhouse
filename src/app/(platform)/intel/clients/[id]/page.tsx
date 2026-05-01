@@ -46,6 +46,7 @@ import {
 import { cn } from '@/lib/utils'
 import { WeddingJourney } from '@/components/agent/wedding-journey'
 import { SourceBadgeEditable } from '@/components/agent/source-badge-editable'
+import { formatBloomNumber } from '@/lib/bloom-number/format'
 import { CandidateSignalEvidence } from '@/components/agent/candidate-signal-evidence'
 import { JourneyNarrative } from '@/components/agent/journey-narrative'
 import { TourInsightsPanel } from '@/components/agent/tour-insights-panel'
@@ -76,6 +77,7 @@ interface WeddingDetail {
   heat_score: number
   temperature_tier: string
   notes: string | null
+  code_extension: string | null
   created_at: string
   updated_at: string
 }
@@ -833,7 +835,7 @@ export default function ClientProfilePage() {
               </h1>
               {clientCode && (
                 <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-sage-50 border border-sage-200 text-sm font-mono font-semibold text-sage-700">
-                  {clientCode}
+                  {formatBloomNumber(clientCode, wedding.code_extension)}
                 </span>
               )}
             </div>

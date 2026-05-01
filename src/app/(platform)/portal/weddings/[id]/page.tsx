@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+import { formatBloomNumber } from '@/lib/bloom-number/format'
 import Link from 'next/link'
 import {
   ArrowLeft,
@@ -58,6 +59,7 @@ interface WeddingRow {
   notes: string | null
   assigned_consultant_id: string | null
   event_code: string | null
+  code_extension: string | null
   couple_invited_at: string | null
   couple_registered_at: string | null
   created_at: string
@@ -2124,7 +2126,7 @@ export default function WeddingProfilePage() {
                 {/* Client code */}
                 {clientCode && (
                   <span className="inline-flex items-center px-2.5 py-0.5 rounded-md bg-sage-50 border border-sage-200 text-xs font-mono font-semibold text-sage-700">
-                    {clientCode}
+                    {formatBloomNumber(clientCode, wedding.code_extension)}
                   </span>
                 )}
                 {/* Days until */}

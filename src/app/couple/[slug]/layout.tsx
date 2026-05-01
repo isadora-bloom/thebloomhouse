@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getFontUrl, getFontVars } from '@/config/fonts'
 import { CoupleShell } from '@/components/couple/couple-shell'
 import { FloatingSage } from '@/components/couple/floating-sage'
+import { formatBloomNumber } from '@/lib/bloom-number/format'
 
 /**
  * Layout for path-based couple portal: /couple/[slug]/...
@@ -54,7 +55,7 @@ async function getVenueBranding(slug: string) {
   // to the currently authenticated couple's wedding_id.
   const { data: demoWedding } = await supabase
     .from('weddings')
-    .select('id')
+    .select('id, code_extension')
     .eq('venue_id', venue.id)
     .in('status', ['booked', 'completed'])
     .order('wedding_date', { ascending: true })
@@ -69,7 +70,10 @@ async function getVenueBranding(slug: string) {
       .eq('venue_id', venue.id)
       .eq('wedding_id', demoWedding.id)
       .maybeSingle()
-    clientCode = codeRow?.code ?? null
+    const baseCode = codeRow?.code ?? null
+    clientCode = baseCode
+      ? formatBloomNumber(baseCode, demoWedding.code_extension)
+      : null
   }
 
   // Fetch wedding date for the Final Review sidebar badge

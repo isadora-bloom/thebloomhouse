@@ -8,6 +8,7 @@ import { VenueChip } from '@/components/intel/venue-chip'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { PriorTouchesChip } from '@/components/agent/PriorTouchesChip'
 import { GmailConnectionStatus } from '@/components/agent/gmail-connection-status'
+import { formatBloomNumber } from '@/lib/bloom-number/format'
 import {
   Mail,
   RefreshCw,
@@ -98,6 +99,7 @@ interface Interaction {
   classification?: 'inquiry' | 'client' | 'vendor'
   is_read?: boolean
   client_code?: string | null
+  code_extension?: string | null
   venue_name?: string | null
   pending_draft?: PendingDraft | null
 }
@@ -835,7 +837,7 @@ function ThreadView({
           </h2>
           {interaction.client_code && (
             <span className="inline-flex items-center px-2 py-0.5 rounded bg-sage-50 border border-sage-200 text-xs font-mono font-semibold text-sage-600">
-              {interaction.client_code}
+              {formatBloomNumber(interaction.client_code, interaction.code_extension ?? null)}
             </span>
           )}
         </div>
@@ -1317,6 +1319,7 @@ export default function InboxPage() {
           people!interactions_person_id_fkey ( first_name, last_name, email ),
           weddings!interactions_wedding_id_fkey (
             status,
+            code_extension,
             people ( first_name, last_name, email, role ),
             client_codes ( code )
           )
@@ -1404,6 +1407,7 @@ export default function InboxPage() {
           classification: classifyInteraction(weddingStatus, row.direction),
           is_read: row.direction === 'outbound',
           client_code: clientCode,
+          code_extension: (wedding?.code_extension as string | null | undefined) ?? null,
           venue_name: venueName,
         }
       })

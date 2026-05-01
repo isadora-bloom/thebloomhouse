@@ -92,6 +92,11 @@ meta:
 # 9aabd88  Item 8 Phase 1 — drop weddings.source CHECK constraint (migration 123):
 #          LIMB-16.2.4-A at-risk→partial. Phase 2 marketing_channels
 #          table still pending.
+# (T1-C)   Bloom number .B graduation (migration 124 + formatBloomNumber):
+#          INV-2.3-B at-risk→enforced. Trigger stamps code_extension='B'
+#          on status flip into booked/completed; helper formatter wired
+#          through 7 render sites; integration test covers the trigger.
+#          Tightening to require first_payment_received waits for T2-F.
 
 # ===================================================================
 # PART 2 — POINT ZERO & FORENSIC RECORD
@@ -116,11 +121,10 @@ meta:
   notes: "Migration 032:38 + 068:35-109. Last-resort 'VN' fallback at 068:80."
 
 - id: INV-2.3-B
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: Booked extension preserves number lineage (HM-0847 → HM-0847.B)
-  notes: "weddings has no parent_wedding_id / extension column. No code path produces .B. Booking is status flip on single row, not state-change-visible signal."
-  severity: high
+  notes: "Migration 124 added weddings.code_extension + BEFORE UPDATE OF status trigger that stamps 'B' on transition into booked/completed (idempotent, no-op once set). Backfilled 82 historical booked rows. formatBloomNumber helper at src/lib/bloom-number/format.ts; render sites updated: agent/leads, agent/inbox, agent/pipeline, agent/codes, intel/clients/[id], portal/weddings/[id], couple/[slug]/layout. Lookup on /agent/codes strips .X suffix so coordinators can paste rendered form. Closes T1-C 2026-05-01. Tightening graduation rule to (contract_signed AND first_payment_received) waits for T2-F HoneyBook lifecycle events."
 
 - id: INV-2.4
   status: partial

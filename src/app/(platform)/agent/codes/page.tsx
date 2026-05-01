@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
+import { formatBloomNumber } from '@/lib/bloom-number/format'
 import {
   Hash,
   Search,
@@ -33,6 +34,7 @@ interface ClientCode {
   wedding_date?: string | null
   wedding_status?: string
   heat_score?: number
+  code_extension?: string | null
   venue_name?: string | null
 }
 
@@ -232,6 +234,7 @@ export default function ClientCodesPage() {
             wedding_date,
             status,
             heat_score,
+            code_extension,
             people!people_wedding_id_fkey ( role, first_name, last_name )
           )
         `)
@@ -265,6 +268,7 @@ export default function ClientCodesPage() {
           wedding_date: wedding?.wedding_date,
           wedding_status: wedding?.status,
           heat_score: wedding?.heat_score,
+          code_extension: (wedding?.code_extension as string | null | undefined) ?? null,
           venue_name: venueName,
         }
       })
@@ -309,10 +313,13 @@ export default function ClientCodesPage() {
         lookupVenueIds = (members ?? []).map((r) => r.venue_id as string)
       }
 
+      // Strip optional .X graduation suffix (e.g. HM-0847.B → HM-0847) so
+      // a coordinator can paste the rendered form and still hit the row.
+      const baseLookupCode = lookupCode.trim().toUpperCase().replace(/\.[A-Z]$/, '')
       let lookupQuery = supabase
         .from('client_codes')
         .select('wedding_id')
-        .eq('code', lookupCode.trim().toUpperCase())
+        .eq('code', baseLookupCode)
       if (lookupVenueIds && lookupVenueIds.length > 0) {
         lookupQuery = lookupQuery.in('venue_id', lookupVenueIds)
       }
@@ -515,7 +522,7 @@ export default function ClientCodesPage() {
                     >
                       <td className="px-4 py-3">
                         <span className="text-sm font-mono font-bold text-sage-900">
-                          {cc.code}
+                          {formatBloomNumber(cc.code, cc.code_extension)}
                         </span>
                       </td>
                       <td className="px-4 py-3">
@@ -544,7 +551,7 @@ export default function ClientCodesPage() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            handleCopy(cc.code, cc.id)
+                            handleCopy(formatBloomNumber(cc.code, cc.code_extension), cc.id)
                           }}
                           className="p-1.5 rounded-lg text-sage-400 hover:text-sage-600 hover:bg-sage-50 transition-colors"
                           title="Copy code"

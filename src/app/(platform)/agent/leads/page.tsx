@@ -6,6 +6,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
+import { formatBloomNumber } from '@/lib/bloom-number/format'
 import {
   Flame,
   ArrowUpDown,
@@ -33,6 +34,7 @@ interface Lead {
   updated_at: string
   wedding_date: string | null
   guest_count_estimate: number | null
+  code_extension: string | null
   // Joined
   partner1_name: string | null
   partner2_name: string | null
@@ -341,6 +343,7 @@ export default function LeadsPage() {
           updated_at,
           wedding_date,
           guest_count_estimate,
+          code_extension,
           venues:venue_id ( name ),
           people!people_wedding_id_fkey ( role, first_name, last_name ),
           client_codes!client_codes_wedding_id_fkey ( code )
@@ -381,6 +384,7 @@ export default function LeadsPage() {
           updated_at: row.updated_at,
           wedding_date: row.wedding_date,
           guest_count_estimate: row.guest_count_estimate,
+          code_extension: row.code_extension ?? null,
           partner1_name: p1
             ? [p1.first_name, p1.last_name].filter(Boolean).join(' ')
             : null,
@@ -658,7 +662,7 @@ export default function LeadsPage() {
                           </span>
                           {lead.client_code && (
                             <span className="text-xs font-mono text-sage-500">
-                              {lead.client_code}
+                              {formatBloomNumber(lead.client_code, lead.code_extension)}
                             </span>
                           )}
                           {showVenueChip && <VenueChip venueName={lead.venue_name} />}

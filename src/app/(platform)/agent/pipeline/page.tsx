@@ -6,6 +6,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
+import { formatBloomNumber } from '@/lib/bloom-number/format'
 import {
   DndContext,
   DragOverlay,
@@ -53,6 +54,7 @@ interface PipelineWedding {
   partner1_name: string | null
   partner2_name: string | null
   client_code: string | null
+  code_extension: string | null
   venue_name: string | null
 }
 
@@ -215,7 +217,7 @@ function PipelineCardContent({ wedding, onNameClick, showVenueChip }: { wedding:
           {source.label}
         </span>
         {wedding.client_code && (
-          <span className="text-xs font-mono text-sage-500">{wedding.client_code}</span>
+          <span className="text-xs font-mono text-sage-500">{formatBloomNumber(wedding.client_code, wedding.code_extension)}</span>
         )}
         {wedding.guest_count_estimate && (
           <span className="inline-flex items-center gap-1 text-[10px] text-sage-500">
@@ -406,6 +408,7 @@ export default function PipelinePage() {
           temperature_tier,
           inquiry_date,
           updated_at,
+          code_extension,
           venues:venue_id ( name ),
           people!people_wedding_id_fkey ( role, first_name, last_name ),
           client_codes!client_codes_wedding_id_fkey ( code )
@@ -459,6 +462,7 @@ export default function PipelinePage() {
               ? [p2.first_name, p2.last_name].filter(Boolean).join(' ')
               : null,
             client_code: clientCode,
+            code_extension: (row.code_extension as string | null | undefined) ?? null,
             venue_name: venueName,
           }
         }
