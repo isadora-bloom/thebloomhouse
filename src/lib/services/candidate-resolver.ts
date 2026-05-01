@@ -418,6 +418,77 @@ async function fetchSignalsForCandidate(
 }
 
 /**
+ * Recompute attribution_events.bucket for every live row on a wedding.
+ * Bucket logic mirrors the INSERT-time rule at line 550:
+ *   signal_date >= inquiry_date → 'nurture' (post-point-zero touch)
+ *   signal_date <  inquiry_date → 'attribution' (pre-point-zero touch)
+ *
+ * Migration 118 also installs a Postgres trigger that runs the same
+ * recompute on every weddings UPDATE OF inquiry_date — that's the
+ * primary defense (can never be forgotten by a code path). This
+ * service-side helper exists so callers that mutate inquiry_date can
+ * also recompute is_first_touch in the same atomic flow (the trigger
+ * handles bucket only; first-touch is service-side because it joins
+ * tangential_signals.signal_date which the trigger function does too
+ * but for is_first_touch the rule is "earliest signal_date among
+ * bucket='attribution'" which depends on bucket being already-correct).
+ *
+ * Per Playbook INV-2.5 + Part 12.3 (recomputation when event times change).
+ */
+export async function recomputeBucketsForWedding(
+  supabase: SupabaseClient,
+  weddingId: string,
+): Promise<{ error?: string }> {
+  const { data: wed, error: wedErr } = await supabase
+    .from('weddings')
+    .select('inquiry_date')
+    .eq('id', weddingId)
+    .single()
+  if (wedErr) return { error: `recompute buckets fetch wedding: ${wedErr.message}` }
+  const inquiryTs = wed.inquiry_date
+    ? new Date(wed.inquiry_date as string).getTime()
+    : null
+
+  const { data: events, error: evErr } = await supabase
+    .from('attribution_events')
+    .select('id, signal_id, bucket')
+    .eq('wedding_id', weddingId)
+    .is('reverted_at', null)
+  if (evErr) return { error: `recompute buckets fetch events: ${evErr.message}` }
+  const rows = (events ?? []) as Array<{ id: string; signal_id: string | null; bucket: string }>
+  if (rows.length === 0) return {}
+
+  const sigIds = rows.map((r) => r.signal_id).filter((v): v is string => Boolean(v))
+  const dateMap = new Map<string, string | null>()
+  if (sigIds.length > 0) {
+    const { data: sigs } = await supabase
+      .from('tangential_signals')
+      .select('id, signal_date')
+      .in('id', sigIds)
+    for (const s of (sigs ?? []) as Array<{ id: string; signal_date: string | null }>) {
+      dateMap.set(s.id, s.signal_date)
+    }
+  }
+
+  for (const r of rows) {
+    const sigDate = r.signal_id ? dateMap.get(r.signal_id) ?? null : null
+    const sigTs = sigDate ? new Date(sigDate).getTime() : null
+    const expectedBucket =
+      inquiryTs !== null && sigTs !== null && sigTs >= inquiryTs
+        ? 'nurture'
+        : 'attribution'
+    if (r.bucket !== expectedBucket) {
+      const { error: updErr } = await supabase
+        .from('attribution_events')
+        .update({ bucket: expectedBucket })
+        .eq('id', r.id)
+      if (updErr) return { error: `recompute bucket update ${r.id}: ${updErr.message}` }
+    }
+  }
+  return {}
+}
+
+/**
  * Recompute is_first_touch across all live attribution_events for one
  * wedding. The earliest pre-inquiry signal_date among bucket='attribution'
  * rows wins. Run after every new attribution_event lands so the flag
