@@ -279,6 +279,10 @@ ${email.body.slice(0, 3000)}${contextBlock}`
     temperature: 0.1,
     venueId,
     taskType: 'email_classification',
+    // Haiku tier per Playbook 19.8 — small label set (7 classification
+    // values), bounded structured output, high volume. Sonnet was
+    // 12x the cost for the same answer. OPS-21.4.2 enforcement.
+    tier: 'haiku',
   })
 
   // Normalize and validate

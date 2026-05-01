@@ -15,6 +15,18 @@ let openaiClient: OpenAI | null = null
 // which drifted from the actual model and made post-hoc audits lie —
 // OPS-21.5.2 partial.
 export const CLAUDE_MODEL = 'claude-sonnet-4-20250514'
+// Haiku tier for classification + small-label extraction. Per Playbook
+// 19.8 model-tier guidance: classifications, small-rubric scoring,
+// embedding generation, structured-output extraction with bounded
+// schemas. ~12× cheaper than Sonnet — biggest single cost lever.
+// Wedgewood-scale (80+ venues × thousands of classifier calls/day)
+// makes the right tier mapping the difference between profitable and
+// not. OPS-21.4.2.
+export const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
+// Opus tier for one-off premium synthesis (voice DNA corpus analysis,
+// cross-domain strategic insight composition). Slow and expensive;
+// reserved for low-volume / high-stakes work.
+export const OPUS_MODEL = 'claude-opus-4-20250514'
 export const OPENAI_FALLBACK_MODEL = 'gpt-4o-mini'
 // Complex NLQ/Sage/briefing calls need headroom beyond the default 10s
 const CLAUDE_TIMEOUT_MS = 30_000
@@ -63,6 +75,26 @@ function getOpenAI(): OpenAI {
  */
 export type ContentTier = 1 | 2 | 3 | 4
 
+/**
+ * Model tier per Playbook 19.8 + OPS-21.4.2:
+ *   haiku  — classification, small-label extraction, scoring rubrics.
+ *            Default for router-brain, brain-dump stage-1 classifier,
+ *            structured signal extraction with bounded schemas.
+ *   sonnet — nuanced generation (drafts, briefings, NLQ narration,
+ *            transcript extraction). Default for inquiry-brain,
+ *            client-brain, sage-brain, intel-brain, post-tour brief,
+ *            transcript-voice-learning. Default tier when unspecified.
+ *   opus   — one-off premium synthesis (voice DNA corpus analysis,
+ *            cross-domain strategic insights). Slow + expensive;
+ *            reserved for low-volume work where output quality
+ *            directly drives a coordinator decision.
+ *
+ * Mapping discipline: a higher tier than necessary is a defect (a
+ * Sonnet call where Haiku suffices burns 12× the cost). The audit
+ * surfaces tier-mismatches via api_costs.model rollups.
+ */
+export type ModelTier = 'haiku' | 'sonnet' | 'opus'
+
 interface CallAIOptions {
   systemPrompt: string
   userPrompt: string
@@ -80,6 +112,25 @@ interface CallAIOptions {
    * tier-1 content. Playbook OPS-21.3.5.
    */
   contentTier?: ContentTier
+  /**
+   * Model tier (see ModelTier). Default 'sonnet'. Set 'haiku' for
+   * classification + small-label extraction (router-brain, brain-dump
+   * stage-1, structured extraction). Set 'opus' for premium one-off
+   * synthesis. Higher tier than necessary = budget bleed.
+   */
+  tier?: ModelTier
+}
+
+function modelForTier(tier: ModelTier | undefined): string {
+  switch (tier) {
+    case 'haiku':
+      return HAIKU_MODEL
+    case 'opus':
+      return OPUS_MODEL
+    case 'sonnet':
+    default:
+      return CLAUDE_MODEL
+  }
 }
 
 interface CallAIResult {
@@ -151,9 +202,11 @@ async function callAnthropic(options: CallAIOptions): Promise<CallAIResult> {
     venueId,
     taskType = 'general',
     contentTier = 2,
+    tier,
   } = options
 
   const anthropic = getAnthropic()
+  const model = modelForTier(tier)
 
   // Tier-1 content (tour transcripts, family context, payment-adjacent
   // emails) MUST land at zero-retention. Anthropic's per-request
@@ -165,7 +218,7 @@ async function callAnthropic(options: CallAIOptions): Promise<CallAIResult> {
   // OPS-21.3.5.
   const response = await withTimeout(
     anthropic.messages.create({
-      model: CLAUDE_MODEL,
+      model,
       max_tokens: maxTokens,
       temperature,
       system: systemPrompt,
@@ -178,9 +231,9 @@ async function callAnthropic(options: CallAIOptions): Promise<CallAIResult> {
   const text = response.content[0].type === 'text' ? response.content[0].text : ''
   const inputTokens = response.usage.input_tokens
   const outputTokens = response.usage.output_tokens
-  const cost = calculateCost(CLAUDE_MODEL, inputTokens, outputTokens)
+  const cost = calculateCost(model, inputTokens, outputTokens)
 
-  logUsage(venueId, taskType, inputTokens, outputTokens, cost, CLAUDE_MODEL, 'anthropic', contentTier)
+  logUsage(venueId, taskType, inputTokens, outputTokens, cost, model, 'anthropic', contentTier)
 
   return { text, inputTokens, outputTokens, cost }
 }
@@ -255,12 +308,14 @@ async function callOpenAIFallback(options: CallAIOptions): Promise<CallAIResult>
 export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
   const taskType = options.taskType ?? 'general'
   const started = Date.now()
+  const requestedModel = modelForTier(options.tier)
 
   try {
     const result = await callAnthropic(options)
     console.log(
       JSON.stringify({
-        model: CLAUDE_MODEL,
+        model: requestedModel,
+        tier: options.tier ?? 'sonnet',
         fallback: false,
         taskType,
         durationMs: Date.now() - started,
@@ -276,7 +331,8 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
     // OPS-21.3.3.
     console.warn(
       JSON.stringify({
-        model: CLAUDE_MODEL,
+        model: requestedModel,
+        tier: options.tier ?? 'sonnet',
         fallback: false,
         taskType,
         durationMs: claudeDuration,

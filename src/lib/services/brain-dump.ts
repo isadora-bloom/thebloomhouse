@@ -141,13 +141,17 @@ Rules:
 
 Classify and extract according to the schema. Respond with JSON only.`
 
-  // Tier 1: brain-dump submissions can carry per-couple intel
+  // Tier 1 content: brain-dump submissions can carry per-couple intel
   // paragraphs ("Just spoke with Maddie's mom on the phone — she's
   // the financial decision maker, prefers email, wants the contract
   // before approving the deposit"), client-confidence notes, family
   // context, payment-adjacent observations. OpenAI fallback uses
   // store:false; api_costs records the tier tag for the ZDR audit.
   // OPS-21.3.5.
+  //
+  // Haiku tier per Playbook 19.8 — Stage 1 is classification (one of
+  // ~15 input categories). Specialised extractors run downstream and
+  // can use Sonnet if their work is more nuanced. OPS-21.4.2.
   const parsed = await callAIJson<BrainDumpParseResult>({
     systemPrompt,
     userPrompt,
@@ -155,6 +159,7 @@ Classify and extract according to the schema. Respond with JSON only.`
     taskType: 'brain_dump_classify',
     maxTokens: 800,
     contentTier: 1,
+    tier: 'haiku',
   })
 
   return parsed

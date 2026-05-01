@@ -17,6 +17,15 @@ export const CLAUDE_COSTS = {
     input: 3.0,
     output: 15.0,
   },
+  // Haiku 4.5 — current Haiku tier as of 2026-05-01. ~12× cheaper than
+  // Sonnet on input, ~12× on output. Use for classification, small-
+  // label extraction, scoring rubrics. Per Playbook 19.8.
+  'claude-haiku-4-5-20251001': {
+    input: 0.25,
+    output: 1.25,
+  },
+  // Haiku 3 — kept for any DB-stored audit row that referenced this
+  // version. New calls should use Haiku 4.5.
   'claude-haiku-3-20240307': {
     input: 0.25,
     output: 1.25,

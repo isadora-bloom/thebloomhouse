@@ -380,6 +380,10 @@ Be precise. Only extract what is explicitly stated or clearly implied. Do not gu
     temperature: 0.1,
     venueId,
     taskType: 'signal_extraction',
+    // Haiku tier per Playbook 19.8 — bounded structured extraction
+    // with a fixed schema. Sonnet was overkill for this workload.
+    // OPS-21.4.2.
+    tier: 'haiku',
   })
 
   // Normalize the extracted date if present
