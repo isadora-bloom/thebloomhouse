@@ -301,17 +301,15 @@ export const SAGE_TASK_PROMPTS: Record<SageTaskType, string> = {
   budget_advice: TASK_BUDGET_ADVICE,
 }
 
+import { substituteAiName } from '@/lib/white-label'
+
 /**
  * Returns the task prompt for a given Sage task type, with per-venue
- * substitutions applied. Currently substitutes {AI_NAME} so prompts
- * can reference the venue's AI by its configured name (Sage / Ivy /
- * etc.) rather than hardcoding "Sage" — INV-4.4-A.
+ * substitutions applied. Uses the shared substituteAiName helper so
+ * the {AI_NAME} grammar is consistent with seed-data templates in
+ * UI components (getting-started cards / tips). INV-4.4-A.
  */
 export function getSageTaskPrompt(taskType: string, aiName?: string): string {
   const raw = SAGE_TASK_PROMPTS[taskType as SageTaskType] ?? TASK_COUPLE_QUESTION
-  // aiName is optional only because legacy callers may not pass it; once
-  // every callsite is wired this can become required. Default to 'Sage'
-  // for those callers — matches venue_ai_config default.
-  const name = aiName && aiName.trim().length > 0 ? aiName : 'Sage'
-  return raw.replace(/\{AI_NAME\}/g, name)
+  return substituteAiName(raw, aiName)
 }

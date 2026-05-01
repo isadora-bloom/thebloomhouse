@@ -15,6 +15,7 @@ import {
   PartyPopper,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { substituteAiName } from '@/lib/white-label'
 
 // TODO: Get from auth session
 // ---------------------------------------------------------------------------
@@ -545,14 +546,14 @@ export default function GettingStartedPage() {
                       'font-semibold text-[15px] leading-tight',
                       done ? 'text-emerald-700' : 'text-gray-800'
                     )}>
-                      {card.title.replaceAll('{AI_NAME}', aiName)}
+                      {substituteAiName(card.title, aiName)}
                     </h3>
                   </div>
                 </div>
 
                 {/* Description */}
                 <p className="text-sm text-gray-500 leading-relaxed mb-4">
-                  {card.description.replaceAll('{AI_NAME}', aiName)}
+                  {substituteAiName(card.description, aiName)}
                 </p>
 
                 {/* Action Button */}
@@ -619,7 +620,7 @@ export default function GettingStartedPage() {
                       {i + 1}
                     </span>
                   </div>
-                  <span className="text-sm text-gray-600 leading-relaxed">{tip.replaceAll('{AI_NAME}', aiName)}</span>
+                  <span className="text-sm text-gray-600 leading-relaxed">{substituteAiName(tip, aiName)}</span>
                 </li>
               ))}
             </ul>

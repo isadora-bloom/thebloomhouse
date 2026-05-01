@@ -254,7 +254,10 @@ export async function checkAndEnforceCeiling(
           spendCents,
           utilisation,
           reason,
+          // Subroute per Repair N — POST /api/agent/cost-ceiling/resume
+          // accepts no body; auth context determines venue.
           resumeUrl: '/api/agent/cost-ceiling/resume',
+          resumeMethod: 'POST',
         }),
       })
     }

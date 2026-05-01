@@ -217,6 +217,40 @@ export async function generateFollowUps(venueId: string): Promise<number> {
   const supabase = createServiceClient()
   let generated = 0
 
+  // Batch the lastOutbound lookup that the per-follow-up code below
+  // relies on for "Re: <subject>" thread continuity. Pre-fix this was
+  // a per-iteration .single() query — N+1 against interactions for a
+  // venue with N follow-ups due. One query + in-memory grouping
+  // collapses to a single round-trip.
+  const wedIds = dueFollowUps.map((f) => f.weddingId)
+  const { data: outboundRows } = await supabase
+    .from('interactions')
+    .select('wedding_id, subject, gmail_thread_id, source, timestamp')
+    .in('wedding_id', wedIds)
+    .eq('direction', 'outbound')
+    .order('timestamp', { ascending: false })
+  // Group: keep only the most recent outbound per wedding_id (the
+  // ORDER BY DESC means the first hit per wedding wins).
+  const lastOutboundByWedding = new Map<string, {
+    subject: string | null
+    gmail_thread_id: string | null
+    source: string | null
+  }>()
+  for (const row of (outboundRows ?? []) as Array<{
+    wedding_id: string
+    subject: string | null
+    gmail_thread_id: string | null
+    source: string | null
+  }>) {
+    if (!lastOutboundByWedding.has(row.wedding_id)) {
+      lastOutboundByWedding.set(row.wedding_id, {
+        subject: row.subject,
+        gmail_thread_id: row.gmail_thread_id,
+        source: row.source,
+      })
+    }
+  }
+
   for (const followUp of dueFollowUps) {
     try {
       // Skip follow-up if the couple is actively engaged.
@@ -259,17 +293,10 @@ export async function generateFollowUps(venueId: string): Promise<number> {
         daysSinceLastContact: followUp.daysSinceLastContact,
       })
 
-      // Subject: derive a "Re: <previous>" by reading the most recent
-      // outbound interaction. generateFollowUp does not return a subject
-      // (the body is templated) so we synthesise one from the thread.
-      const { data: lastOutbound } = await supabase
-        .from('interactions')
-        .select('subject, gmail_thread_id, source')
-        .eq('wedding_id', followUp.weddingId)
-        .eq('direction', 'outbound')
-        .order('timestamp', { ascending: false })
-        .limit(1)
-        .single()
+      // Subject: derive a "Re: <previous>" from the batched lookup
+      // above. generateFollowUp does not return a subject (body is
+      // templated) so we synthesise from the thread.
+      const lastOutbound = lastOutboundByWedding.get(followUp.weddingId)
 
       const followUpSubject = lastOutbound?.subject
         ? `Re: ${(lastOutbound.subject as string).replace(/^Re:\s*/i, '')}`

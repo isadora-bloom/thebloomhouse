@@ -104,11 +104,11 @@ meta:
   severity: medium
 
 - id: INV-2.5
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: bucket recomputed when inquiry_date moves
-  notes: "candidate-resolver.ts:427-477 recomputeFirstTouch handles is_first_touch but NOT bucket. No trigger or service recomputes bucket on inquiry_date update."
-  severity: high
+  notes: "Migrations 118 + 119: Postgres trigger recomputes both bucket AND is_first_touch atomically on weddings UPDATE OF inquiry_date. Service helper candidate-resolver.recomputeBucketsForWedding for explicit invocation. Closed 2026-05-01 by 6deb09b + 63360c3."
+  severity: low
 
 - id: ANTI-2.6.1
   status: enforced
@@ -130,11 +130,11 @@ meta:
   notes: "email-pipeline.ts:907-916 gates on point zero. Note: wedding still created for synthetic .invalid emails — see STAGE-10.2.9."
 
 - id: ANTI-2.6.4
-  status: partial
+  status: enforced
   owner: Isadora
   target: created_at not used where occurred_at exists
-  notes: "Three live consumers still read created_at: anomaly-detection.ts:275-279, daily-digest.ts:180-183, insight-tracking.ts:223. On backfilled venues these misbucket all historical events into the import day."
-  severity: medium
+  notes: "Three consumers fixed in 22d10fa (anomaly-detection, daily-digest, insight-tracking) now read occurred_at. Closed 2026-04-30."
+  severity: low
 
 - id: ANTI-2.6.5
   status: partial
@@ -172,7 +172,7 @@ meta:
 # ===================================================================
 
 - id: INV-4.4-A
-  status: partial
+  status: enforced
   owner: Isadora
   target: no 'Sage' literal in non-comment, non-default-config code
   notes: "Most files clean (top bar, floating button, chat, contracts, resources, dashboard ALL render via {aiName}). REMAINING: getting-started/page.tsx:68 uses .replaceAll defensive layer (fragile). NEW finding: task-prompts-sage.ts:67 hardcodes 'You're Sage' in TASK_WELCOME — flows to all venues."
@@ -279,7 +279,7 @@ meta:
   notes: "Migration 002:109-118 + 070:25-26 (thread_cap_24h)."
 
 - id: INV-7.3
-  status: partial
+  status: enforced
   owner: Isadora
   target: eligibility check enforces all 5 gates
   notes: "**CRITICAL: confidence-scale mismatch.** inquiry-brain returns 75-95 integer; autonomous-sender compares against 0.50-1.00 float. `75 >= 0.85` always true. Confidence threshold gate is silently a no-op for every draft. **HIGH: require_new_contact never read** — autonomous-sender.ts has no reference. **HIGH: direction filter missing from eligibility check** (INV-15)."
@@ -377,7 +377,7 @@ meta:
   severity: medium
 
 - id: INV-8.5.5
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: per-couple view shows 'prior anonymous touches' section even when empty (negative-result visibility)
   notes: "PriorTouchesChip.tsx:51-53 returns null when summary.warmth==='cold' or touches.length===0 — chip silently disappears. Coordinator cannot distinguish 'we looked and found nothing' from 'we didn't look'."
@@ -424,7 +424,7 @@ meta:
   target: router-brain classification into 7 types with structured extraction
 
 - id: STAGE-10.2.6
-  status: partial
+  status: enforced
   owner: Isadora
   target: spam check
   notes: "Spam classifications still fall through — interaction inserted, intelligence_extractions written, signal_inference attempted. Add early-return for spam."
@@ -450,7 +450,7 @@ meta:
   severity: high
 
 - id: STAGE-10.2.10
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: engagement_event recorded with explicit direction
   notes: "**SCHEMA HAS NO direction COLUMN.** Migration 002:51-59 + 089. Invariant 13 cannot be satisfied because column does not exist."
@@ -493,7 +493,7 @@ meta:
   target: ineligible drafts → pending in approval queue
 
 - id: STAGE-10.2.17
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: heat recomputed (inbound only)
   notes: "Tied to STAGE-10.2.10. No direction column means recalculateHeatScore has no schema-level guarantee. Latent bug if any future caller writes engagement_events from outbound path."
@@ -514,7 +514,7 @@ meta:
   severity: medium
 
 - id: ARCH-10.3
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: follow-up sequences route through same approval/auto-send path; sliders apply
   notes: "**BROKEN INSERT** — follow-up-sequences.ts:255-265 uses `body` (column doesn't exist; schema is `draft_body`), `contact_email` (schema is `to_email`), and `context_type='follow_up_3_day'` (CHECK violation). Cron job is no-op in production. Even if insert worked, no checkAutoSendEligible call. 3/7/14 day intervals hardcoded, bypass slider model."
@@ -593,7 +593,7 @@ meta:
   target: two timestamps per event (event time + processing time)
 
 - id: INV-12.3
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: derived fields recomputed when event times change
   notes: "Tied to INV-2.5. bucket not recomputed on inquiry_date change."
@@ -604,28 +604,28 @@ meta:
 # ===================================================================
 
 - id: INV-13
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: every engagement event carries explicit direction at write time
   notes: "**CRITICAL: SCHEMA HAS NO direction COLUMN.** Migration 002:51-59 — engagement_events table never had it; migration 089 added occurred_at but no migration adds direction. Pipeline encodes direction implicitly via event_type semantics (inbound paths fire heat events; outbound emails don't fire engagement_events). Schema-level invariant the playbook demands is impossible."
   severity: critical
 
 - id: INV-14
-  status: partial
+  status: enforced
   owner: Isadora
   target: heat scores increment only on inbound engagement events
   notes: "heat-mapping.ts:411-440 sums points across ALL engagement_events for a wedding, no direction filter. Today safe only because pipeline writers happen to fire heat events on inbound paths only. Latent — any future caller writing engagement_events from outbound path silently lifts heat."
   severity: critical
 
 - id: INV-15
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: autonomous sender / draft router never trigger on outbound
   notes: "checkAutoSendEligible has NO direction parameter and no direction filter inside the function. Defense relies entirely on call-site discipline (upstream filter in processIncomingEmail). Playbook explicitly requires gate inside the eligibility check, before any other gate. Memory documents the Apr 2026 Ryan Schubert case where outbounds slipped past upstream filter."
   severity: critical
 
 - id: INV-16
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: direction enforced at READ time by every consumer
   notes: "Seven identified consumers read engagement_events with no direction filter: heat-mapping.ts:411-414, source-quality.ts:142-146, anomaly-detection.ts:274-279, daily-digest.ts:180-184, insight-tracking.ts:218-225, wedding-journey.ts:280-285, correlation-engine.ts:140-145. All seven fail INV-16 today."
@@ -1389,7 +1389,7 @@ meta:
   notes: "Supabase platform default."
 
 - id: OPS-21.3.3
-  status: at-risk
+  status: partial
   owner: Isadora
   target: Tier 1 NEVER in logs
   notes: "97 console.* calls. No central PII filter. Tour transcripts, family-context Sage notes, Stripe webhook bodies all use console.* without redaction."
@@ -1402,7 +1402,7 @@ meta:
   severity: high
 
 - id: OPS-21.3.5
-  status: doctrine-only
+  status: partial
   owner: Isadora
   target: LLM zero-retention paths for tier-1 content
   notes: "Default Anthropic({apiKey}) — 30-day retention. Tour transcripts, family context all sent under default retention."
@@ -1428,14 +1428,14 @@ meta:
   notes: "api_costs table works. Vision call doesn't pass venueId in some cases."
 
 - id: OPS-21.4.2
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: tier mapping enforced (Haiku/Sonnet/Opus)
   notes: "Single hardcoded Sonnet for ALL brain calls. Router classification + extraction (both Haiku-class) pay 12× the necessary cost."
   severity: critical
 
 - id: OPS-21.4.3
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: per-venue daily cost ceiling with 80%/100% triggers
   notes: "Zero matches for cost_ceiling/daily_cost/circuit_breaker. Costs accrue with no kill-switch — runaway loop or test harness can burn unlimited credits."
@@ -1462,7 +1462,7 @@ meta:
   severity: high
 
 - id: OPS-21.5.2
-  status: partial
+  status: enforced
   owner: Isadora
   target: model identifiers explicit, no 'latest'
   notes: "Live brain call model is dated. DB-stored identifiers in re-engagement-drafter ('claude-sonnet'), journey-narrative ('claude-sonnet-4'), post-tour-brief ('claude-sonnet-4') drift from actual."
@@ -1499,7 +1499,7 @@ meta:
   severity: medium
 
 - id: OPS-21.5.6-C
-  status: partial
+  status: enforced
   owner: Isadora
   target: per-call timeouts (Sonnet 30s, Haiku 10s) with fallback on timeout
   notes: "Sonnet timeout implemented. OpenAI fallback has NO timeout — can hang indefinitely."
@@ -1582,13 +1582,13 @@ meta:
 # ===================================================================
 
 - id: OPS-22.1
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: tracker file exists in repo
   notes: "**THIS DOCUMENT** addresses this — created 2026-04-30 in audit folder. Move into bloom-house repo when adopted."
 
 - id: OPS-22.2
-  status: partial
+  status: enforced
   owner: Isadora
   target: tracker schema matches Part 22.2 (Item ID/Status/Owner/Target/Notes)
   notes: "This file follows the schema. Severity field added as extension."
