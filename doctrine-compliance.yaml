@@ -97,6 +97,30 @@ meta:
 #          on status flip into booked/completed; helper formatter wired
 #          through 7 render sites; integration test covers the trigger.
 #          Tightening to require first_payment_received waits for T2-F.
+# (T3 foundation) Insight architecture (migration 144 + insights/):
+#   Migration 144: surface_layer + surface_priority + cache_key +
+#   last_classical_signature + llm_model_used + prompt_version_used
+#   columns on intelligence_insights; widened insight_type CHECK with
+#   T3 subtypes (heat_narration / negotiation_state / cohort_match /
+#   risk_flag / pricing_elasticity / source_mix_counterfactual /
+#   decay_re_engagement); partial unique index on (venue_id,
+#   insight_type, context_id, cache_key) for idempotent upsert.
+#
+#   src/lib/services/insights/:
+#     types.ts      — SurfaceLayer / ClassicalEvidence / InsightNarration
+#     numbers-guard — assertNoNewNumbers (Tier 3 audit gate)
+#     confidence    — sample-size + effect-size aware confidenceFor
+#                     + buildCacheKey (FNV-1a 32-bit, order-stable)
+#     persist       — lookupCachedInsight + persistInsight (handles
+#                     numbers-guard + upsert)
+#     heat-narration   T3-A INS-19.3.2 → partial
+#     negotiation-state T3-C INS-19.3.4 → partial
+#     risk-flags       T3-H INS-19.3.5 → partial
+#
+#   FOLLOW-UP: wire each insight into its consumer surface (/agent/
+#   leads heat badge, /intel/clients/[id] phase badge + risk panel,
+#   inquiry-brain phase-aware prompt). Build T3-B / T3-D / T3-F /
+#   T3-G / T3-I as additional services on the same foundation.
 # (T2-C) External Context correlation engine rebuild (migrations 138-140):
 #   LIMB-17.2.1 partial→enforced (FRED panel: CPI / mortgage /
 #     S&P / unemployment / consumer sentiment, forward-filled to
@@ -1035,11 +1059,10 @@ meta:
   target: cross-platform identity reconciliation with prior-touch timeline strip
 
 - id: INS-19.3.2
-  status: at-risk
+  status: partial
   owner: Isadora
   target: heat scoring with reasoning (classical compute + LLM narration)
-  notes: "Classical compute correct. NO LLM narration layer. Coordinator sees number + raw event log, never coherent reasoning sentence. suggestNextAction is hardcoded switch/case."
-  severity: high
+  notes: "T3-A foundation (2026-05-01): src/lib/services/insights/heat-narration.ts produces 1-2 sentence reasoning grounded in the wedding's heat score + top contributing events. Cache-keyed on (score + tier + top event signature) so unchanged data doesn't re-narrate. Numbers-guard rejects narrations that invent figures. Deterministic fallback when LLM unavailable. STATUS-PARTIAL: generator + persistence shipped, numbers-guard verified by unit tests, but not yet wired into /agent/leads / /agent/pipeline / lead-detail consumer surfaces — that's the follow-up."
 
 - id: INS-19.3.3
   status: partial
@@ -1049,17 +1072,16 @@ meta:
   severity: high
 
 - id: INS-19.3.4
-  status: doctrine-only
+  status: partial
   owner: Isadora
   target: negotiation-state recognition
-  severity: medium
+  notes: "T3-C foundation (2026-05-01): src/lib/services/insights/negotiation-state.ts classifies wedding into 5 phases (early_research / active_evaluation / late_decision / negotiation / pending_contract) via Sonnet classifier with deterministic status-based fallback. Cache-keyed on (status + most_recent_inbound + count) so it auto-refreshes on new inbound. STATUS-PARTIAL: classifier + cache shipped, but not yet wired into /intel/clients/[id] phase badge or inquiry-brain prompt assembly — both are follow-up."
 
 - id: INS-19.3.5
-  status: doctrine-only
+  status: partial
   owner: Isadora
   target: risk flags
-  notes: "No service computes per-couple cancellation risk."
-  severity: medium
+  notes: "T3-H foundation (2026-05-01): src/lib/services/insights/risk-flags.ts runs 7 deterministic risk rules (missing_contract, missing_timeline, missing_vendors, overdue_response, heat_dropping, friction_present, silent_after_tour) + Haiku sentiment overlay on the last 3 inbounds. Composite risk_score 0-100 (severity-weighted sum). Sonnet narrates the top flags into a 1-sentence summary; numbers-guard restricts the narration to risk_score + flag count + per-flag severities. STATUS-PARTIAL: generator shipped, but not yet wired into /agent/leads or /pulse risk drawer — that's the follow-up."
 
 - id: INS-19.3.6
   status: partial
