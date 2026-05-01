@@ -25,7 +25,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { callAI } from '@/lib/ai/client'
+import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import type { TranscriptExtraction } from './tour-transcript-extract'
 
 // ---------------------------------------------------------------------------
@@ -363,7 +363,9 @@ export async function generatePostTourBrief(
       tour_brief_text: briefMarkdown,
       tour_brief_followup_draft: draftBody,
       tour_brief_confidence: confidence,
-      tour_brief_model: 'claude-sonnet-4',
+      // Persist the exact model used so audits track the actual model
+      // string instead of a frozen family label that drifts. OPS-21.5.2.
+      tour_brief_model: CLAUDE_MODEL,
     })
     .eq('id', tourId)
 

@@ -6,10 +6,24 @@ import { calculateCost as calculateModelCost } from '@/lib/ai/cost-tracker'
 let anthropicClient: Anthropic | null = null
 let openaiClient: OpenAI | null = null
 
-const CLAUDE_MODEL = 'claude-sonnet-4-20250514'
-const OPENAI_FALLBACK_MODEL = 'gpt-4o-mini'
+// Live brain-call model identifiers. Exported so any DB-stored
+// `model_used` audit trail (drafts, briefings, journey-narratives,
+// post-tour briefs, re-engagement actions) can persist the exact
+// constant used for the call rather than a stale hand-typed string.
+// Pre-fix several services stored 'claude-sonnet' or 'claude-sonnet-4',
+// which drifted from the actual model and made post-hoc audits lie —
+// OPS-21.5.2 partial.
+export const CLAUDE_MODEL = 'claude-sonnet-4-20250514'
+export const OPENAI_FALLBACK_MODEL = 'gpt-4o-mini'
 // Complex NLQ/Sage/briefing calls need headroom beyond the default 10s
 const CLAUDE_TIMEOUT_MS = 30_000
+// OpenAI fallback timeout. Symmetric with Claude — if the primary failed
+// and we're already in a degraded state, the fallback must not be allowed
+// to hang the request indefinitely. Pre-fix callOpenAIFallback was
+// unwrapped, so a stuck OpenAI call would block until the Vercel
+// function timeout — much later than the 30s we already promised. See
+// OPS-21.5.6-C.
+const OPENAI_TIMEOUT_MS = 30_000
 
 function getAnthropic(): Anthropic {
   if (!anthropicClient) {
@@ -144,15 +158,23 @@ async function callOpenAIFallback(options: CallAIOptions): Promise<CallAIResult>
 
   const openai = getOpenAI()
 
-  const response = await openai.chat.completions.create({
-    model: OPENAI_FALLBACK_MODEL,
-    max_completion_tokens: maxTokens,
-    temperature,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-  })
+  // Wrap the fallback in withTimeout to mirror the primary's bound.
+  // Without this, a hung OpenAI call after a Claude failure blocks the
+  // request until the Vercel function timeout, well past the 30s
+  // budget. OPS-21.5.6-C.
+  const response = await withTimeout(
+    openai.chat.completions.create({
+      model: OPENAI_FALLBACK_MODEL,
+      max_completion_tokens: maxTokens,
+      temperature,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+    OPENAI_TIMEOUT_MS,
+    'OpenAI fallback call'
+  )
 
   const text = response.choices[0]?.message?.content ?? ''
   const inputTokens = response.usage?.prompt_tokens ?? 0

@@ -21,7 +21,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { callAI } from '@/lib/ai/client'
+import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 
 const STALENESS_DELTA = 2
 const GEN_LOCK_TTL_MS = 60_000 // 60s — generation that takes longer than this is assumed crashed
@@ -448,7 +448,10 @@ export async function generateOrFetch(
         narrative_text: generated.text,
         signal_count_at_generation: generated.signal_count,
         attribution_count_at_generation: generated.attribution_count,
-        model: 'claude-sonnet-4',
+        // Persist the exact model used so audits stay in lockstep with
+        // the live brain-call constant. Pre-fix this was 'claude-sonnet-4'
+        // and drifted every Sonnet bump. OPS-21.5.2.
+        model: CLAUDE_MODEL,
         generated_at: new Date().toISOString(),
         generated_by: force ? 'coordinator' : 'auto',
         generating_at: null, // release the lock

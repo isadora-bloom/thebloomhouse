@@ -25,7 +25,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { callAI } from '@/lib/ai/client'
+import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 
 export type ReEngagementChannel = 'email' | 'manual_paste'
 
@@ -150,13 +150,14 @@ export async function draftReEngagementMessage(
   const text = (response.text ?? '').trim()
   if (!text) return null
 
-  // We don't get the model name back from callAI's CallAIResult;
-  // the client logs it via api_costs. Hardcode the family for the
-  // drafter — Sonnet 4 by current default. If the AI client switches
-  // models this just becomes a label mismatch, not a behavior bug.
+  // Persist the exact CLAUDE_MODEL the AI client used so the audit
+  // trail stays in lockstep with the actual model. Pre-fix this stored
+  // 'claude-sonnet' (no version, no date), which silently drifted
+  // every time we bumped Sonnet generations and made the audit lie.
+  // OPS-21.5.2.
   return {
     draft_text: text,
-    model: 'claude-sonnet',
+    model: CLAUDE_MODEL,
     platform: c.source_platform,
   }
 }
