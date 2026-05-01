@@ -4,7 +4,7 @@ import { generateSageResponse } from '@/lib/services/sage-brain'
 import { extractPlanningDecisions, savePlanningNotes, extractAndSaveAINotes } from '@/lib/services/planning-extraction'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { runEscalationCheck } from '@/lib/services/escalation-detector'
-import { callAIVision } from '@/lib/ai/client'
+import { callAIVision, CLAUDE_MODEL } from '@/lib/ai/client'
 import { rateLimit, secondsUntil } from '@/lib/rate-limit'
 import { getCoupleAuth, getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
 
@@ -267,7 +267,7 @@ export async function POST(request: NextRequest) {
         wedding_id: weddingId || null,
         role: 'assistant',
         content: finalResponse,
-        model_used: 'claude-sonnet-4-20250514',
+        model_used: CLAUDE_MODEL,
         tokens_used: sageResult.tokensUsed,
         cost: sageResult.cost,
         confidence_score: confidence,

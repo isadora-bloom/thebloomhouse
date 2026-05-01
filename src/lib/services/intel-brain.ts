@@ -12,7 +12,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { callAI, callAIJson } from '@/lib/ai/client'
+import { callAI, callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -475,7 +475,7 @@ export async function answerNaturalLanguageQuery(
       user_id: userId,
       query_text: query,
       response_text: aiResult.text,
-      model_used: 'claude-sonnet-4-20250514',
+      model_used: CLAUDE_MODEL,
       tokens_used: aiResult.inputTokens + aiResult.outputTokens,
       cost: aiResult.cost,
     })
