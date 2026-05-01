@@ -18,6 +18,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { normalizeSource } from '@/lib/services/normalize-source'
+import { isAutonomousPaused } from '@/lib/services/cost-ceiling'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -202,7 +203,19 @@ export async function checkAutoSendEligible(
   venueId: string,
   draft: AutoSendCheck
 ): Promise<AutoSendResult> {
-  // Check 0: Direction filter (Playbook INV-15). MUST run before any
+  // Check 0a: Cost-ceiling circuit breaker (Playbook OPS-21.4.3).
+  // When the cost-ceiling cron has flipped autonomous_paused=true on
+  // venue_config, no auto-sends. Drafts already in the queue stay for
+  // manual approval. Coordinator resumes via /api/agent/cost-ceiling/resume
+  // or the next-UTC-midnight reset.
+  if (await isAutonomousPaused(venueId)) {
+    return {
+      eligible: false,
+      reason: 'Auto-send blocked: venue autonomous behavior is paused (cost ceiling reached or coordinator override)',
+    }
+  }
+
+  // Check 0b: Direction filter (Playbook INV-15). MUST run before any
   // other gate. Default 'inbound' for legacy callers, but new code must
   // pass explicitly so a future call site that forgets fails closed.
   const direction = draft.direction ?? 'inbound'

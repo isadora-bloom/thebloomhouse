@@ -2060,6 +2060,16 @@ export async function flushPendingAutoSends(venueId: string): Promise<number> {
   const supabase = createServiceClient()
   let sentCount = 0
 
+  // Cost-ceiling circuit breaker (OPS-21.4.3). If autonomous_paused
+  // flipped between draft creation and now, refuse to flush — drafts
+  // remain queued and the coordinator either approves manually or
+  // resumes the venue. Eligibility check at draft-time also blocks
+  // new auto_send_pending creation; this catches the in-flight case.
+  const { isAutonomousPaused } = await import('@/lib/services/cost-ceiling')
+  if (await isAutonomousPaused(venueId)) {
+    return 0
+  }
+
   // Find unread auto_send_pending notifications for this venue
   const { data: pendingNotifs } = await supabase
     .from('admin_notifications')

@@ -29,6 +29,10 @@ import { syncMeetings as syncZoomMeetings } from '@/lib/services/zoom'
 import { syncAllVenues as syncOpenPhoneAllVenues } from '@/lib/services/openphone'
 import { runDataIntegritySweepAllVenues } from '@/lib/services/data-integrity'
 import { sweepReEngagementConversions } from '@/lib/services/re-engagement'
+import {
+  enforceCeilingsAllVenues,
+  clearStaleAutonomousPauses,
+} from '@/lib/services/cost-ceiling'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -62,6 +66,12 @@ const VALID_JOBS = [
   'phase_b_sweep',
   'data_integrity_sweep',
   're_engagement_attribution',
+  // Cost-ceiling circuit breaker (Playbook OPS-21.4.3). cost_ceiling_check
+  // runs hourly to flip autonomous_paused on venues at 100% and notify at
+  // 80%. cost_ceiling_reset runs at the UTC day boundary to clear stale
+  // pauses (separate jobs so vercel.json can give them different cadences).
+  'cost_ceiling_check',
+  'cost_ceiling_reset',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -215,6 +225,20 @@ async function runJob(job: JobName): Promise<unknown> {
       // (2+) → leave for coordinator. Closed window with no
       // match → counted, no attribution. Idempotent; rerun-safe.
       return sweepReEngagementAttribution()
+
+    case 'cost_ceiling_check':
+      // Hourly. Sums today's api_costs per venue, fires 80% notify
+      // alert and 100% autonomous-pause + alert. Idempotent within
+      // a day via cost_ceiling_warned_at and the autonomous_paused
+      // flag itself. Playbook OPS-21.4.3.
+      return enforceCeilingsAllVenues()
+
+    case 'cost_ceiling_reset':
+      // Hourly (cheap). Clears autonomous_paused for any venue
+      // whose paused_at is in a prior UTC day AND whose current
+      // spend is back under ceiling. Coordinators who can't wait
+      // for the natural reset use POST /api/agent/cost-ceiling/resume.
+      return clearStaleAutonomousPauses()
   }
 }
 
