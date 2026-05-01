@@ -56,7 +56,16 @@ meta:
 # 92433a9  T0-8 tier-1 PII redaction in logs:
 #          OPS-21.3.3 at-risk→partial (tier-1 catches all redacted;
 #          full coverage waits for T1-G structured logger)
-# 6+xxxxxx T1-A tracker into repo: OPS-22.1 doctrine-only→enforced
+# 99bedf1  T1-A tracker into repo:
+#          OPS-22.1 doctrine-only→enforced, OPS-22.2 partial→enforced
+# 55a5668  T1-H model tier mapping (Haiku for classification +
+#          extraction): OPS-21.4.2 at-risk→enforced for router-brain
+#          + brain-dump stage-1 + signal-extraction (remaining brains
+#          stay Sonnet by default)
+# 6deb09b  T1-B bucket recompute on inquiry_date change:
+#          INV-2.5 at-risk→enforced, INV-12.3 partial→enforced (for
+#          inquiry_date specifically; other event-time changes
+#          follow the same pattern in future PRs)
 
 # ===================================================================
 # PART 2 — POINT ZERO & FORENSIC RECORD
