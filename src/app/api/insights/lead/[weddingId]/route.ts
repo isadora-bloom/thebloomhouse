@@ -21,6 +21,7 @@ import { getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
 import { generateHeatNarration } from '@/lib/services/insights/heat-narration'
 import { generateNegotiationState } from '@/lib/services/insights/negotiation-state'
 import { generateRiskFlags } from '@/lib/services/insights/risk-flags'
+import { generateDecayReEngagement } from '@/lib/services/insights/decay-re-engagement'
 
 export async function GET(
   request: NextRequest,
@@ -59,13 +60,16 @@ export async function GET(
   // Force regeneration when ?refresh=1.
   const force = request.nextUrl.searchParams.get('refresh') === '1'
 
-  // Run the 3 generators in parallel. Each one is independently
+  // Run the 4 generators in parallel. Each one is independently
   // cache-fast-path — if the cache is fresh it returns without
-  // calling Claude.
-  const [heat, negotiation, risk] = await Promise.allSettled([
+  // calling Claude. Decay self-gates and returns null when the lead
+  // shows no decay signal, so the panel only renders the card when
+  // there's something useful to say.
+  const [heat, negotiation, risk, decay] = await Promise.allSettled([
     generateHeatNarration(supabase, venueId, weddingId, force),
     generateNegotiationState(supabase, venueId, weddingId, force),
     generateRiskFlags(supabase, venueId, weddingId, force),
+    generateDecayReEngagement(supabase, venueId, weddingId, force),
   ])
 
   return NextResponse.json({
@@ -75,10 +79,12 @@ export async function GET(
     heat: heat.status === 'fulfilled' ? heat.value : null,
     negotiation: negotiation.status === 'fulfilled' ? negotiation.value : null,
     risk: risk.status === 'fulfilled' ? risk.value : null,
+    decay: decay.status === 'fulfilled' ? decay.value : null,
     errors: [
       ...(heat.status === 'rejected' ? [{ insight: 'heat', error: String(heat.reason) }] : []),
       ...(negotiation.status === 'rejected' ? [{ insight: 'negotiation', error: String(negotiation.reason) }] : []),
       ...(risk.status === 'rejected' ? [{ insight: 'risk', error: String(risk.reason) }] : []),
+      ...(decay.status === 'rejected' ? [{ insight: 'decay', error: String(decay.reason) }] : []),
     ],
   })
 }

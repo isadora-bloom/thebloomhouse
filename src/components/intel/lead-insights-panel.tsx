@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Flame, MessageCircle, AlertTriangle, RefreshCw, Loader2 } from 'lucide-react'
+import { Flame, MessageCircle, AlertTriangle, TrendingDown, RefreshCw, Loader2 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Lead insights panel — renders the 3 T3 generators (heat narration,
@@ -47,6 +47,18 @@ interface RiskInsight {
   cached: boolean
 }
 
+interface DecayInsight {
+  cause: string
+  cause_label: string
+  reasoning: string
+  recommendation: string
+  decline_magnitude: number
+  days_since_last_inbound: number | null
+  unresolved_questions: string[]
+  confidence: number
+  cached: boolean
+}
+
 interface InsightsResponse {
   weddingId: string
   venueId: string
@@ -54,6 +66,7 @@ interface InsightsResponse {
   heat: HeatInsight | null
   negotiation: NegotiationInsight | null
   risk: RiskInsight | null
+  decay: DecayInsight | null
   errors: Array<{ insight: string; error: string }>
 }
 
@@ -146,6 +159,12 @@ export function LeadInsightsPanel({ weddingId, variant = 'full' }: LeadInsightsP
             Risk {data.risk.risk_score}
           </span>
         )}
+        {data.decay && (
+          <span className="inline-flex items-center gap-1 text-amber-700">
+            <TrendingDown className="w-3 h-3" />
+            {data.decay.cause_label}
+          </span>
+        )}
       </div>
     )
   }
@@ -195,6 +214,46 @@ export function LeadInsightsPanel({ weddingId, variant = 'full' }: LeadInsightsP
             </span>
           </div>
           <p className="text-sm text-sage-700">{data.negotiation.reasoning}</p>
+        </div>
+      )}
+
+      {data.decay && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50/40 p-3 space-y-1">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <TrendingDown className="w-4 h-4 text-amber-700" />
+              <span className="text-sm font-medium text-sage-900">
+                Decay: {data.decay.cause_label}
+              </span>
+              {data.decay.decline_magnitude > 0 && (
+                <span className="text-xs text-sage-500">
+                  ({data.decay.decline_magnitude}pt drop
+                  {data.decay.days_since_last_inbound !== null
+                    ? `, ${data.decay.days_since_last_inbound}d silent`
+                    : ''})
+                </span>
+              )}
+            </div>
+            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${confidenceColor(data.decay.confidence)}`}>
+              {confidenceLabel(data.decay.confidence)} conf
+            </span>
+          </div>
+          <p className="text-sm text-sage-700">{data.decay.reasoning}</p>
+          {data.decay.recommendation && (
+            <p className="text-xs text-sage-700 italic">→ {data.decay.recommendation}</p>
+          )}
+          {data.decay.unresolved_questions.length > 0 && (
+            <details className="pt-1">
+              <summary className="text-xs text-sage-500 cursor-pointer hover:text-sage-700">
+                Unresolved question{data.decay.unresolved_questions.length === 1 ? '' : 's'} ({data.decay.unresolved_questions.length})
+              </summary>
+              <ul className="mt-2 space-y-1 text-xs text-sage-600 list-disc pl-4">
+                {data.decay.unresolved_questions.map((q, idx) => (
+                  <li key={idx}>{q}</li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       )}
 

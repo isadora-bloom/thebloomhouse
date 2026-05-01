@@ -113,13 +113,30 @@ meta:
 #                     + buildCacheKey (FNV-1a 32-bit, order-stable)
 #     persist       — lookupCachedInsight + persistInsight (handles
 #                     numbers-guard + upsert)
-#     heat-narration   T3-A INS-19.3.2 → partial
-#     negotiation-state T3-C INS-19.3.4 → partial
-#     risk-flags       T3-H INS-19.3.5 → partial
+#     heat-narration       T3-A INS-19.3.2 → partial
+#     negotiation-state    T3-C INS-19.3.4 → partial
+#     risk-flags           T3-H INS-19.3.5 → partial
+#     decay-re-engagement  T3-B INS-19.3.3 → enforced
+#
+# (T3-B) Decay re-engagement insight (2026-05-01):
+#   INS-19.3.3 partial→enforced. Replaces template-string
+#   re-engagement (suggestNextAction switch) with a real diagnostic.
+#   Classical evidence: peak vs current heat, days-since-last-inbound,
+#   unresolved-question scan against last outbound (string-overlap
+#   heuristic). Sonnet diagnostic classifies cause into 6 buckets
+#   (missing_info / waiting_on_partner / researching_alternatives /
+#   cooling_on_venue / logistics_block / unknown) and composes a
+#   cause-grounded recommendation. Numbers-guard restricts narration
+#   to {current score, peak, decline magnitude, days silent,
+#   unresolved-question count}. Surface gating: only fires when
+#   decline >=15pt OR silence >=14d. Wired into /api/insights/lead/
+#   [weddingId] (Promise.allSettled with heat + negotiation + risk)
+#   and LeadInsightsPanel (compact chip + full card with unresolved-
+#   question expander).
 #
 #   FOLLOW-UP: wire each insight into its consumer surface (/agent/
 #   leads heat badge, /intel/clients/[id] phase badge + risk panel,
-#   inquiry-brain phase-aware prompt). Build T3-B / T3-D / T3-F /
+#   inquiry-brain phase-aware prompt). Build T3-D / T3-E / T3-F /
 #   T3-G / T3-I as additional services on the same foundation.
 # (T2-C) External Context correlation engine rebuild (migrations 138-140):
 #   LIMB-17.2.1 partial→enforced (FRED panel: CPI / mortgage /
@@ -1065,11 +1082,10 @@ meta:
   notes: "T3-A (2026-05-01): src/lib/services/insights/heat-narration.ts produces 1-2 sentence reasoning grounded in the wedding's heat score + top contributing events. Cache-keyed on (score + tier + top event signature). Numbers-guard rejects narrations that invent figures. Deterministic fallback when LLM unavailable. /api/insights/lead/[weddingId] aggregates heat + negotiation + risk in parallel. LeadInsightsPanel component wired into /intel/clients/[id] — coordinator sees the narration, confidence badge, and recommended action inline."
 
 - id: INS-19.3.3
-  status: partial
+  status: enforced
   owner: Isadora
   target: decay detection with diagnosed cause + grounded re-engagement
-  notes: "Re-engagement recommendations are template strings keyed on days-silent + score, not on diagnosed root cause. Exactly the 'generic check-in' the playbook calls out."
-  severity: high
+  notes: "T3-B (2026-05-01): src/lib/services/insights/decay-re-engagement.ts diagnoses cause (missing_info / waiting_on_partner / researching_alternatives / cooling_on_venue / logistics_block / unknown) via classical evidence (peak vs current heat, days-since-last-inbound, unresolved-question scan against last outbound) + Sonnet diagnostic, then composes a cause-specific recommendation. Numbers-guard restricts narration to {current score, peak score, decline magnitude, days silent, unresolved-question count}. Surface gating: only fires when decline >=15pt OR silence >=14d (no false-positive 'everything fine' rows). Cache-keyed on (current score + peak + decline + days silent + unresolved count). Deterministic fallback picks cause from heuristics when LLM unavailable. Wired into /api/insights/lead/[weddingId] (Promise.allSettled with heat + negotiation + risk) and LeadInsightsPanel (full card with unresolved-question expander + compact-variant chip)."
 
 - id: INS-19.3.4
   status: partial
