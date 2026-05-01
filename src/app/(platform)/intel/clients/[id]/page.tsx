@@ -47,6 +47,7 @@ import { cn } from '@/lib/utils'
 import { WeddingJourney } from '@/components/agent/wedding-journey'
 import { SourceBadgeEditable } from '@/components/agent/source-badge-editable'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
+import { LeadInsightsPanel } from '@/components/intel/lead-insights-panel'
 import { CandidateSignalEvidence } from '@/components/agent/candidate-signal-evidence'
 import { JourneyNarrative } from '@/components/agent/journey-narrative'
 import { TourInsightsPanel } from '@/components/agent/tour-insights-panel'
@@ -876,6 +877,11 @@ export default function ClientProfilePage() {
           when the wedding has no Phase B candidates so the page
           doesn't show an empty bar. */}
       <JourneyNarrative weddingId={weddingId} />
+
+      {/* T3 lead insights — heat narration, negotiation phase, risk
+          flags. Single fetch via /api/insights/lead/[id]; each
+          generator's cache fast-paths repeat reads. */}
+      <LeadInsightsPanel weddingId={weddingId} />
 
       {/* Main Layout: 2/3 + 1/3 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

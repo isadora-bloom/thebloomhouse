@@ -1059,10 +1059,10 @@ meta:
   target: cross-platform identity reconciliation with prior-touch timeline strip
 
 - id: INS-19.3.2
-  status: partial
+  status: enforced
   owner: Isadora
   target: heat scoring with reasoning (classical compute + LLM narration)
-  notes: "T3-A foundation (2026-05-01): src/lib/services/insights/heat-narration.ts produces 1-2 sentence reasoning grounded in the wedding's heat score + top contributing events. Cache-keyed on (score + tier + top event signature) so unchanged data doesn't re-narrate. Numbers-guard rejects narrations that invent figures. Deterministic fallback when LLM unavailable. STATUS-PARTIAL: generator + persistence shipped, numbers-guard verified by unit tests, but not yet wired into /agent/leads / /agent/pipeline / lead-detail consumer surfaces — that's the follow-up."
+  notes: "T3-A (2026-05-01): src/lib/services/insights/heat-narration.ts produces 1-2 sentence reasoning grounded in the wedding's heat score + top contributing events. Cache-keyed on (score + tier + top event signature). Numbers-guard rejects narrations that invent figures. Deterministic fallback when LLM unavailable. /api/insights/lead/[weddingId] aggregates heat + negotiation + risk in parallel. LeadInsightsPanel component wired into /intel/clients/[id] — coordinator sees the narration, confidence badge, and recommended action inline."
 
 - id: INS-19.3.3
   status: partial
@@ -1075,13 +1075,13 @@ meta:
   status: partial
   owner: Isadora
   target: negotiation-state recognition
-  notes: "T3-C foundation (2026-05-01): src/lib/services/insights/negotiation-state.ts classifies wedding into 5 phases (early_research / active_evaluation / late_decision / negotiation / pending_contract) via Sonnet classifier with deterministic status-based fallback. Cache-keyed on (status + most_recent_inbound + count) so it auto-refreshes on new inbound. STATUS-PARTIAL: classifier + cache shipped, but not yet wired into /intel/clients/[id] phase badge or inquiry-brain prompt assembly — both are follow-up."
+  notes: "T3-C (2026-05-01): src/lib/services/insights/negotiation-state.ts classifies wedding into 5 phases (early_research / active_evaluation / late_decision / negotiation / pending_contract) via Sonnet classifier with deterministic status-based fallback. Cache-keyed on (status + most_recent_inbound + count) so it auto-refreshes on new inbound. Phase badge wired into /intel/clients/[id] via LeadInsightsPanel. STATUS-PARTIAL: phase is read by coordinator but NOT yet fed into inquiry-brain prompt assembly — that's the follow-up."
 
 - id: INS-19.3.5
-  status: partial
+  status: enforced
   owner: Isadora
   target: risk flags
-  notes: "T3-H foundation (2026-05-01): src/lib/services/insights/risk-flags.ts runs 7 deterministic risk rules (missing_contract, missing_timeline, missing_vendors, overdue_response, heat_dropping, friction_present, silent_after_tour) + Haiku sentiment overlay on the last 3 inbounds. Composite risk_score 0-100 (severity-weighted sum). Sonnet narrates the top flags into a 1-sentence summary; numbers-guard restricts the narration to risk_score + flag count + per-flag severities. STATUS-PARTIAL: generator shipped, but not yet wired into /agent/leads or /pulse risk drawer — that's the follow-up."
+  notes: "T3-H (2026-05-01): src/lib/services/insights/risk-flags.ts runs 7 deterministic risk rules (missing_contract, missing_timeline, missing_vendors, overdue_response, heat_dropping, friction_present, silent_after_tour) + Haiku sentiment overlay on the last 3 inbounds. Composite risk_score 0-100 (severity-weighted sum, capped). Sonnet narrates top flags into a 1-sentence summary; numbers-guard restricts narration to risk_score + flag count + per-flag severities. Wired into /intel/clients/[id] via LeadInsightsPanel with expandable evidence list."
 
 - id: INS-19.3.6
   status: partial
