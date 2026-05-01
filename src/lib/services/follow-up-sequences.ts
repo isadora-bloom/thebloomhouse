@@ -14,6 +14,8 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { generateFollowUp } from './inquiry-brain'
+import { checkAutoSendEligible } from './autonomous-sender'
+import { createNotification } from './admin-notifications'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -155,12 +157,18 @@ export async function checkFollowUpsDue(
 
     const daysSinceContact = daysSince(lastOutbound.timestamp as string)
 
-    // Count follow-up drafts already generated for this wedding
+    // Count follow-up drafts already generated for this wedding.
+    // Pre-114, this used `LIKE 'follow_up_%'` on context_type — but that
+    // column has a CHECK constraint allowing only 'inquiry' / 'client',
+    // so the broken insert path could never produce a row matching that
+    // pattern and the count was always 0 (which would have caused
+    // re-generation of step 1 every cron tick once the insert was fixed).
+    // Migration 114 adds drafts.follow_up_step; we count via that.
     const { count: followUpCount } = await supabase
       .from('drafts')
       .select('id', { count: 'exact', head: true })
       .eq('wedding_id', weddingId)
-      .like('context_type', 'follow_up_%')
+      .not('follow_up_step', 'is', null)
 
     const sent = followUpCount ?? 0
 
@@ -251,25 +259,129 @@ export async function generateFollowUps(venueId: string): Promise<number> {
         daysSinceLastContact: followUp.daysSinceLastContact,
       })
 
-      // Insert the draft
-      const { error } = await supabase.from('drafts').insert({
-        venue_id: venueId,
-        wedding_id: followUp.weddingId,
-        contact_email: followUp.contactEmail,
-        context_type: followUp.followUpType,
-        status: 'pending',
-        body: result.draft,
-        confidence_score: result.confidence,
-        ai_cost: result.cost,
-        tokens_used: result.tokensUsed,
-      })
+      // Subject: derive a "Re: <previous>" by reading the most recent
+      // outbound interaction. generateFollowUp does not return a subject
+      // (the body is templated) so we synthesise one from the thread.
+      const { data: lastOutbound } = await supabase
+        .from('interactions')
+        .select('subject, gmail_thread_id, source')
+        .eq('wedding_id', followUp.weddingId)
+        .eq('direction', 'outbound')
+        .order('timestamp', { ascending: false })
+        .limit(1)
+        .single()
 
-      if (error) {
+      const followUpSubject = lastOutbound?.subject
+        ? `Re: ${(lastOutbound.subject as string).replace(/^Re:\s*/i, '')}`
+        : 'Following up on your inquiry'
+      const threadId = (lastOutbound?.gmail_thread_id as string) ?? undefined
+      const detectedSource = (lastOutbound?.source as string) ?? 'direct'
+
+      // Insert the draft. Pre-fix this used wrong column names
+      // (`body`, `contact_email`) and a context_type that violated the
+      // CHECK constraint (`follow_up_3_day` is not in the allowed
+      // 'inquiry'/'client' set), so the cron has been silently failing
+      // every run. Now: context_type='inquiry' (matches doctrine —
+      // follow-ups go through the same approval path as inbound
+      // replies, sliders apply); follow_up_step records which sequence
+      // step this draft represents.
+      const { data: draft, error } = await supabase
+        .from('drafts')
+        .insert({
+          venue_id: venueId,
+          wedding_id: followUp.weddingId,
+          to_email: followUp.contactEmail,
+          subject: followUpSubject,
+          draft_body: result.draft,
+          status: 'pending',
+          context_type: 'inquiry',
+          brain_used: 'inquiry',
+          follow_up_step: followUp.followUpType,
+          confidence_score: result.confidence,
+          cost: result.cost,
+          tokens_used: result.tokensUsed,
+          auto_sent: false,
+        })
+        .select('id')
+        .single()
+
+      if (error || !draft) {
         console.error(
           `[follow-ups] Failed to insert draft for wedding ${followUp.weddingId}:`,
-          error.message
+          error?.message
         )
         continue
+      }
+
+      const draftId = draft.id as string
+
+      // Per Playbook 10.3: "No follow-up bypasses the slider model."
+      // Run the same eligibility check the inbound pipeline runs and
+      // fall into the same auto_send_pending + 5-min cancellation
+      // window flow when the venue has the slider enabled. When the
+      // venue has the slider off (the default), drafts simply remain
+      // 'pending' for coordinator approval — same shape as before.
+      try {
+        const eligibility = await checkAutoSendEligible(venueId, {
+          contextType: 'inquiry',
+          // Brains return integer percentage; auto_send_rules threshold
+          // is on 0.0-1.0 scale. Normalise (matches email-pipeline call).
+          confidenceScore: result.confidence / 100,
+          source: detectedSource,
+          threadId,
+          // Follow-ups are coordinator-initiated synthetic events
+          // simulating an inbound nudge — direction='inbound' for the
+          // INV-15 gate.
+          direction: 'inbound',
+          weddingId: followUp.weddingId,
+        })
+
+        if (eligibility.eligible) {
+          const sendAt = new Date(Date.now() + 5 * 60 * 1000).toISOString()
+
+          const { error: pendingErr } = await supabase
+            .from('drafts')
+            .update({
+              status: 'auto_send_pending',
+              auto_sent: false,
+              auto_send_source: detectedSource,
+              auto_send_attempts: 0,
+            })
+            .eq('id', draftId)
+            .select('id')
+            .single()
+
+          if (!pendingErr) {
+            await createNotification({
+              venueId,
+              weddingId: followUp.weddingId,
+              type: 'auto_send_pending',
+              title: `Auto-sending follow-up to ${followUp.contactEmail} in 5 minutes`,
+              body: JSON.stringify({
+                draftId,
+                toEmail: followUp.contactEmail,
+                subject: followUpSubject,
+                threadId,
+                sendAt,
+                confidenceScore: result.confidence,
+                source: detectedSource,
+                followUpStep: followUp.followUpType,
+              }),
+            })
+          } else {
+            console.error(
+              `[follow-ups] Failed to mark draft ${draftId} as auto_send_pending:`,
+              pendingErr.message
+            )
+            // Falls through with status='pending' for manual approval.
+          }
+        }
+      } catch (eligErr) {
+        console.error(
+          `[follow-ups] Eligibility check failed for wedding ${followUp.weddingId}:`,
+          eligErr
+        )
+        // Draft stays in 'pending' for manual approval — fail-safe.
       }
 
       generated++
@@ -356,12 +468,15 @@ export async function getFollowUpStatus(
 
   const maxFollowUps = (aiConfig?.max_follow_ups as number) ?? INQUIRY_SEQUENCE.length
 
-  // Count follow-up drafts for this wedding
+  // Count follow-up drafts for this wedding via follow_up_step (114).
+  // Pre-fix this filtered context_type LIKE 'follow_up_%' but that
+  // pattern can never match — the CHECK constraint allows only
+  // 'inquiry' / 'client'. See generateFollowUps for the same fix.
   const { count: followUpCount } = await supabase
     .from('drafts')
     .select('id', { count: 'exact', head: true })
     .eq('wedding_id', weddingId)
-    .like('context_type', 'follow_up_%')
+    .not('follow_up_step', 'is', null)
 
   const sent = followUpCount ?? 0
   const currentStep = sent // 0 = no follow-ups sent yet
