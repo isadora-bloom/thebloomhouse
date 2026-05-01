@@ -45,6 +45,23 @@ function getOpenAI(): OpenAI {
   return openaiClient
 }
 
+/**
+ * Sensitivity tier of the content this call carries. Per Playbook 21.3.1
+ * + 21.3.5:
+ *   1 = highly sensitive (tour transcripts, family context, payments,
+ *       contracts, third-party mentions). Zero-retention required where
+ *       the provider supports it.
+ *   2 = PII (couple names, emails, phones, wedding dates). Default.
+ *   3 = operational (KB content, marketing material, source attribution
+ *       metadata). No PII; standard retention is fine.
+ *   4 = aggregate / anonymised.
+ *
+ * Callers that handle tier-1 content MUST tag explicitly. Default is 2
+ * because most brain calls carry couple PII; tier 1 is the strict
+ * upgrade for transcripts and family-context paths.
+ */
+export type ContentTier = 1 | 2 | 3 | 4
+
 interface CallAIOptions {
   systemPrompt: string
   userPrompt: string
@@ -52,6 +69,16 @@ interface CallAIOptions {
   temperature?: number
   venueId?: string
   taskType?: string
+  /**
+   * Sensitivity tier (see ContentTier). Default 2. When set to 1, the
+   * OpenAI fallback runs with `store: false`. Anthropic per-request
+   * zero-retention is not supported on the standard API — ZDR is an
+   * account-level setting that must be enabled by Anthropic for the
+   * org before tier-1 calls are compliant. The contentTier column on
+   * api_costs records the tag so an audit can verify which calls carry
+   * tier-1 content. Playbook OPS-21.3.5.
+   */
+  contentTier?: ContentTier
 }
 
 interface CallAIResult {
@@ -72,7 +99,8 @@ async function logUsage(
   outputTokens: number,
   cost: number,
   model: string,
-  service: 'anthropic' | 'openai' = 'anthropic'
+  service: 'anthropic' | 'openai' = 'anthropic',
+  contentTier: ContentTier = 2,
 ) {
   try {
     const supabase = createServiceClient()
@@ -84,6 +112,7 @@ async function logUsage(
       output_tokens: outputTokens,
       cost,
       context: taskType,
+      content_tier: contentTier,
     })
   } catch {
     // Fire and forget — never block AI calls for logging
@@ -120,10 +149,19 @@ async function callAnthropic(options: CallAIOptions): Promise<CallAIResult> {
     temperature = 0.3,
     venueId,
     taskType = 'general',
+    contentTier = 2,
   } = options
 
   const anthropic = getAnthropic()
 
+  // Tier-1 content (tour transcripts, family context, payment-adjacent
+  // emails) MUST land at zero-retention. Anthropic's per-request
+  // no-store header is not supported on the standard API — ZDR is an
+  // account-level setting the org must have enabled. We log the tier
+  // tag so post-hoc audits can verify the org-level config matched
+  // the calls that carried tier-1 content. If an audit shows
+  // tier=1 calls hit Anthropic without org-level ZDR, that's the gap.
+  // OPS-21.3.5.
   const response = await withTimeout(
     anthropic.messages.create({
       model: CLAUDE_MODEL,
@@ -141,7 +179,7 @@ async function callAnthropic(options: CallAIOptions): Promise<CallAIResult> {
   const outputTokens = response.usage.output_tokens
   const cost = calculateCost(CLAUDE_MODEL, inputTokens, outputTokens)
 
-  logUsage(venueId, taskType, inputTokens, outputTokens, cost, CLAUDE_MODEL, 'anthropic')
+  logUsage(venueId, taskType, inputTokens, outputTokens, cost, CLAUDE_MODEL, 'anthropic', contentTier)
 
   return { text, inputTokens, outputTokens, cost }
 }
@@ -154,9 +192,17 @@ async function callOpenAIFallback(options: CallAIOptions): Promise<CallAIResult>
     temperature = 0.3,
     venueId,
     taskType = 'general',
+    contentTier = 2,
   } = options
 
   const openai = getOpenAI()
+
+  // Tier-1 → store: false. OpenAI's Chat Completions API supports
+  // per-request opt-out from logging; using it on tier-1 fallback
+  // calls satisfies OPS-21.3.5 the per-request side. This is the
+  // first line of defense — even if Anthropic is down and we drop to
+  // OpenAI for a sensitive call, no copy persists at OpenAI.
+  const store = contentTier === 1 ? false : undefined
 
   // Wrap the fallback in withTimeout to mirror the primary's bound.
   // Without this, a hung OpenAI call after a Claude failure blocks the
@@ -167,6 +213,11 @@ async function callOpenAIFallback(options: CallAIOptions): Promise<CallAIResult>
       model: OPENAI_FALLBACK_MODEL,
       max_completion_tokens: maxTokens,
       temperature,
+      // Only include `store` when explicitly false — the SDK treats
+      // undefined as "use account default" which keeps tier-2+ calls
+      // logged for OpenAI's normal trust+safety window. Tier-1 forces
+      // the opt-out.
+      ...(store === false ? { store: false as const } : {}),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -181,7 +232,7 @@ async function callOpenAIFallback(options: CallAIOptions): Promise<CallAIResult>
   const outputTokens = response.usage?.completion_tokens ?? 0
   const cost = calculateCost(OPENAI_FALLBACK_MODEL, inputTokens, outputTokens)
 
-  logUsage(venueId, taskType, inputTokens, outputTokens, cost, OPENAI_FALLBACK_MODEL, 'openai')
+  logUsage(venueId, taskType, inputTokens, outputTokens, cost, OPENAI_FALLBACK_MODEL, 'openai', contentTier)
 
   return { text, inputTokens, outputTokens, cost }
 }
@@ -278,12 +329,17 @@ export async function callAIVision(options: {
   maxTokens?: number
   venueId?: string
   taskType?: string
+  contentTier?: ContentTier
 }): Promise<CallAIResult> {
-  const model = 'claude-sonnet-4-20250514'
   const anthropic = getAnthropic()
+  const contentTier = options.contentTier ?? 2
 
+  // Vision callers handle screenshots — frequently coordinator dashboards
+  // (storefront analytics) which are tier 3, but also tier-1 cases like
+  // contract images or family photos. Pass contentTier through so the
+  // audit trail tags it correctly.
   const response = await anthropic.messages.create({
-    model,
+    model: CLAUDE_MODEL,
     max_tokens: options.maxTokens ?? 2000,
     system: options.systemPrompt,
     messages: [{
@@ -298,9 +354,9 @@ export async function callAIVision(options: {
   const text = response.content[0].type === 'text' ? response.content[0].text : ''
   const inputTokens = response.usage.input_tokens
   const outputTokens = response.usage.output_tokens
-  const cost = calculateCost(model, inputTokens, outputTokens)
+  const cost = calculateCost(CLAUDE_MODEL, inputTokens, outputTokens)
 
-  logUsage(options.venueId, options.taskType ?? 'vision', inputTokens, outputTokens, cost, model)
+  logUsage(options.venueId, options.taskType ?? 'vision', inputTokens, outputTokens, cost, CLAUDE_MODEL, 'anthropic', contentTier)
 
   return { text, inputTokens, outputTokens, cost }
 }

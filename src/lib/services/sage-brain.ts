@@ -417,7 +417,12 @@ export async function generateSageResponse(
     ? `${messages}\n\nCouple: ${message}`
     : `Couple: ${message}`
 
-  // Generate response
+  // Generate response. Tier 1: sage-brain's intelligence context can
+  // include family-context Sage notes (sage_context_notes records
+  // health, finances, family dynamics) and the wedding's planning
+  // state (vendors, budget, dates). All tier-1 PII per Playbook
+  // 21.3.1. OpenAI fallback uses store:false; api_costs records the
+  // tier tag for the ZDR audit. OPS-21.3.5.
   const result = await callAI({
     systemPrompt,
     userPrompt,
@@ -425,6 +430,7 @@ export async function generateSageResponse(
     temperature: 0.4,
     venueId,
     taskType: taskType ?? 'sage_chat',
+    contentTier: 1,
   })
 
   const confidence = assessConfidence(result.text, kbMatch)

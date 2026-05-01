@@ -112,6 +112,10 @@ async function extractFromTranscript(
       temperature: 0.2,
       venueId,
       taskType: 'transcript_voice_mining',
+      // Tier 1: tour transcript content (couples mention budget, family,
+      // health, finances during tours). OpenAI fallback uses store:false.
+      // OPS-21.3.5.
+      contentTier: 1,
     })
 
     return (result.phrases ?? [])

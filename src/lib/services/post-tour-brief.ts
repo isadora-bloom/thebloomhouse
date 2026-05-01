@@ -304,6 +304,11 @@ export async function generatePostTourBrief(
       temperature: 0.4,
       venueId,
       taskType: 'post_tour_brief',
+      // Tour transcript content + extracted family/financial context
+      // is tier-1 PII per Playbook 21.3.1. OpenAI fallback gets
+      // store:false; api_costs.content_tier records the tag for the
+      // ZDR audit. OPS-21.3.5.
+      contentTier: 1,
     })
     briefMarkdown = briefResult.text.trim()
   } catch (err) {
@@ -331,6 +336,9 @@ export async function generatePostTourBrief(
       temperature: 0.5,
       venueId,
       taskType: 'post_tour_followup_draft',
+      // Same tier-1 reasoning as the brief above — the draft is composed
+      // FROM the same transcript-derived intelligence.
+      contentTier: 1,
     })
     const text = draftResult.text.trim()
     if (text === 'NO_DRAFT' || text.length < 40) {

@@ -200,6 +200,9 @@ Return valid JSON with no prose, no markdown, no commentary.`
       temperature: 0.2,
       venueId,
       taskType: 'tour_transcript_extract',
+      // Tier 1: raw tour transcript = the most sensitive text Bloom
+      // ever sends to an LLM provider. OPS-21.3.5.
+      contentTier: 1,
     })
     parsed = sanitizeExtraction(raw)
   } catch (err) {

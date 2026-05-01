@@ -141,12 +141,20 @@ Rules:
 
 Classify and extract according to the schema. Respond with JSON only.`
 
+  // Tier 1: brain-dump submissions can carry per-couple intel
+  // paragraphs ("Just spoke with Maddie's mom on the phone — she's
+  // the financial decision maker, prefers email, wants the contract
+  // before approving the deposit"), client-confidence notes, family
+  // context, payment-adjacent observations. OpenAI fallback uses
+  // store:false; api_costs records the tier tag for the ZDR audit.
+  // OPS-21.3.5.
   const parsed = await callAIJson<BrainDumpParseResult>({
     systemPrompt,
     userPrompt,
     venueId,
     taskType: 'brain_dump_classify',
     maxTokens: 800,
+    contentTier: 1,
   })
 
   return parsed
