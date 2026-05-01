@@ -43,6 +43,19 @@ export type SchedulingEventKind =
   | 'final_walkthrough'
   | 'pre_wedding_event'   // drop-offs, rehearsals
   | 'planning_meeting'    // onboarding, planning calls, post-booking consults
+  // T2-F / ARCH-11.5-B: HoneyBook lifecycle events. These fire from
+  // HoneyBook system mail and PRESERVE the source-system tag in the
+  // event_type itself so a future Bloom-replaces-HoneyBook migration
+  // can query "every booking that originated from HoneyBook" as one
+  // forensic-record set. honeybook_contract_signed and
+  // honeybook_payment_received are the HoneyBook-tagged equivalents
+  // of contract_signed / payment_received (non-HoneyBook scheduling
+  // tools keep the unprefixed kinds). honeybook_refund and
+  // honeybook_amendment are NEW behaviours with no pre-T2-F equivalent.
+  | 'honeybook_contract_signed'
+  | 'honeybook_payment_received'
+  | 'honeybook_refund'
+  | 'honeybook_amendment'
 
 export interface SchedulingEvent {
   source: SchedulingToolSource
@@ -480,9 +493,38 @@ function parseAcuity(from: string, subject: string, body: string): SchedulingEve
 
 // HoneyBook — sender: *.honeybook.com. Body references the couple by name
 // and typically includes "Proposal Signed" / "Contract Signed" / "Payment
-// received" in subject. Invitee email sometimes in body, sometimes only
-// the name. For the name-only case we return null and let classifier
-// handle it.
+// received" / "Refund issued" / "Amendment" in subject. Invitee email
+// sometimes in body, sometimes only the name. For the name-only case we
+// return null and let classifier handle it.
+//
+// T2-F (2026-05-01): emits HoneyBook-tagged lifecycle kinds
+// (honeybook_contract_signed / _payment_received / _refund / _amendment)
+// instead of generic contract_signed / payment_received so the forensic
+// record preserves the source-system attribution per ARCH-11.5-B. Refund
+// and amendment are NEW kinds with no pre-T2-F equivalent. Detection
+// order matters: most specific keywords first (refund + amendment can
+// otherwise match the broader signed/payment patterns).
+
+const HONEYBOOK_REFUND = /refund(?:ed|s|\s+issued|\s+processed)?|chargeback|cancellation\s+(?:processed|approved|issued)/i
+const HONEYBOOK_AMENDMENT = /amendment|addendum|updated\s+(?:proposal|contract|project)|contract\s+(?:update|change|modification)/i
+const HONEYBOOK_PAYMENT = /payment\s+(?:received|completed|processed|made|deposited)|invoice\s+paid|deposit\s+received|paid\s+in\s+full|retainer\s+received/i
+const HONEYBOOK_SIGNED = /contract\s+signed|proposal\s+signed|signed\s+the\s+(?:contract|proposal|agreement)|accepted\s+the\s+(?:contract|proposal|agreement)|booking\s+confirmed/i
+
+function classifyHoneyBookSubjectBody(subject: string, body: string): SchedulingEventKind {
+  // Search BOTH subject and body since some templates put the keyword
+  // in the body line ("Hi! Madison just signed the proposal...") with
+  // a generic subject.
+  const haystack = `${subject}\n${body.slice(0, 500)}`
+  if (HONEYBOOK_REFUND.test(haystack))    return 'honeybook_refund'
+  if (HONEYBOOK_AMENDMENT.test(haystack)) return 'honeybook_amendment'
+  if (HONEYBOOK_PAYMENT.test(haystack))   return 'honeybook_payment_received'
+  if (HONEYBOOK_SIGNED.test(haystack))    return 'honeybook_contract_signed'
+  // No lifecycle keyword matched — default to contract_sent (proposal
+  // sent / quote shared / project created). Stays as the GENERIC kind
+  // because there's no Bloom-relevant lifecycle distinction here yet.
+  return 'contract_sent'
+}
+
 function parseHoneyBook(from: string, subject: string, body: string): SchedulingEvent | null {
   const fromLower = from.toLowerCase()
   if (!/honeybook\.com/.test(fromLower)) return null
@@ -494,10 +536,7 @@ function parseHoneyBook(from: string, subject: string, body: string): Scheduling
   const inviteeName = extractLabelled(body, ['client', 'name', 'project', 'for'])
     ?.replace(/\s*\([^)]*@[^)]*\)\s*$/, '').trim() || null
 
-  const subjectLower = subject.toLowerCase()
-  let kind: SchedulingEventKind = 'contract_sent'
-  if (/signed|accepted/.test(subjectLower)) kind = 'contract_signed'
-  else if (/payment|invoice|paid|deposit/.test(subjectLower)) kind = 'payment_received'
+  const kind = classifyHoneyBookSubjectBody(subject, body)
 
   return {
     source: 'honeybook',
@@ -603,6 +642,17 @@ export function eventKindToEngagementType(kind: SchedulingEventKind): string {
     case 'final_walkthrough':  return 'final_walkthrough'
     case 'pre_wedding_event':  return 'pre_wedding_event'
     case 'planning_meeting':   return 'planning_meeting'
+    // T2-F lifecycle: HoneyBook source-tagged events. The literal
+    // honeybook_* event_type preserves forensic source attribution
+    // (ARCH-11.5-B). Downstream consumers normalize via
+    // normalizeEventTypeForScoring() to bucket signed+payment
+    // alongside the generic contract_signed for heat / attribution
+    // / signal-inference. Refund + amendment have no unprefixed
+    // equivalent — they're new behaviours.
+    case 'honeybook_contract_signed':  return 'honeybook_contract_signed'
+    case 'honeybook_payment_received': return 'honeybook_payment_received'
+    case 'honeybook_refund':           return 'honeybook_refund'
+    case 'honeybook_amendment':        return 'honeybook_amendment'
   }
 }
 
@@ -624,6 +674,37 @@ export function eventKindToStatus(kind: SchedulingEventKind): string | null {
     case 'final_walkthrough':  return 'booked'
     case 'pre_wedding_event':  return 'booked'
     case 'planning_meeting':   return 'booked'
+    // T2-F lifecycle: signed + payment behave like the generic
+    // equivalents (status → booked, with rank guard preventing
+    // downgrade). Refund deliberately returns null — coordinator
+    // decides whether the refund should flip the wedding to 'lost'
+    // (some refunds are partial, some are followed by re-booking).
+    // Amendment is purely informational, no status change.
+    case 'honeybook_contract_signed':  return 'booked'
+    case 'honeybook_payment_received': return 'booked'
+    case 'honeybook_refund':           return null
+    case 'honeybook_amendment':        return null
+  }
+}
+
+/**
+ * Map an engagement_event.event_type string → its un-prefixed equivalent
+ * for downstream scoring / filtering. Per Playbook ARCH-11.5-B, source-
+ * tagged event types preserve forensic lineage but should NOT force every
+ * heat-mapping / attribution / signal-inference filter to learn the
+ * prefixed form. Consumers call normalize before comparing.
+ *
+ *   honeybook_contract_signed  → contract_signed
+ *   honeybook_payment_received → contract_signed   (payment ≡ signed for scoring)
+ *   honeybook_refund           → honeybook_refund  (no equivalent — passes through)
+ *   honeybook_amendment        → honeybook_amendment (passes through)
+ *   <anything else>            → <unchanged>
+ */
+export function normalizeEventTypeForScoring(eventType: string): string {
+  switch (eventType) {
+    case 'honeybook_contract_signed':  return 'contract_signed'
+    case 'honeybook_payment_received': return 'contract_signed'
+    default:                            return eventType
   }
 }
 

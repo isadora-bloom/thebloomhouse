@@ -182,6 +182,14 @@ export function engagementToTouchType(eventType: string, source?: string | null)
     case 'tour_cancelled':        return null // would muddy a "did the tour happen" count
     case 'contract_sent':         return 'proposal_sent'
     case 'contract_signed':       return 'contract_signed'
+    // T2-F: HoneyBook lifecycle bookings count as funnel contract_signed
+    // touchpoints (signed + payment both ≡ booked moment). Refund + amendment
+    // are NOT funnel steps — refund is a state collapse the coordinator
+    // decides what to do with; amendment is informational.
+    case 'honeybook_contract_signed':  return 'contract_signed'
+    case 'honeybook_payment_received': return 'contract_signed'
+    case 'honeybook_refund':           return null
+    case 'honeybook_amendment':        return null
     // Already-booked Calendly event types — not part of acquisition funnel
     case 'final_walkthrough':     return null
     case 'pre_wedding_event':     return null

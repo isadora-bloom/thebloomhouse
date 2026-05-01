@@ -85,6 +85,15 @@ const DEFAULT_POINTS: Record<string, number> = {
   not_interested_signal: -25,
   daily_decay: -1,
   marked_lost: -100,
+  // T2-F: HoneyBook lifecycle events. Signed + payment mirror the
+  // generic contract_signed (50 pts) — the source-tag is for forensic
+  // record, not a different scoring weight. Refund is a sharp negative
+  // (the booking effectively collapsed); amendment is informational +5
+  // (some movement on the wedding, but not a full new touch).
+  honeybook_contract_signed: 50,
+  honeybook_payment_received: 50,
+  honeybook_refund: -60,
+  honeybook_amendment: 5,
 }
 
 // ---------------------------------------------------------------------------
@@ -1314,6 +1323,17 @@ function suggestNextAction(latestEvent: string | undefined, score: number): stri
       return 'Check in — ask if they have questions about the contract'
     case 'contract_viewed':
       return 'Call to discuss any questions about the contract'
+    // T2-F: HoneyBook lifecycle. Signed + payment land at booked status —
+    // recommend the next post-booking touch. Refund is a state collapse —
+    // surface to coordinator. Amendment is informational — no action.
+    case 'honeybook_contract_signed':
+      return 'Booked via HoneyBook — kick off planning onboarding'
+    case 'honeybook_payment_received':
+      return 'Payment cleared — confirm next planning step'
+    case 'honeybook_refund':
+      return 'Refund issued via HoneyBook — call the couple before changing wedding state'
+    case 'honeybook_amendment':
+      return 'Contract amended via HoneyBook — review the change with the couple'
     case 'email_opened':
     case 'email_clicked':
       return 'They are engaged — send a timely follow-up'

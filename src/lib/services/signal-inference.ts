@@ -221,6 +221,12 @@ export async function applySignalInference(
     if (e.event_type === 'tour_scheduled' && iid) seen.tour_scheduled.add(iid)
     if (e.event_type === 'contract_sent' && iid) seen.contract_sent.add(iid)
     if (e.event_type === 'contract_signed' && iid) seen.contract_signed.add(iid)
+    // T2-F: HoneyBook lifecycle equivalents. signed + payment both
+    // count as contract_signed dedup signals so signal-inference
+    // doesn't re-fire a contract_signed event from a generic email
+    // body when the HoneyBook system already recorded the booking.
+    if (e.event_type === 'honeybook_contract_signed' && iid) seen.contract_signed.add(iid)
+    if (e.event_type === 'honeybook_payment_received' && iid) seen.contract_signed.add(iid)
     if (e.event_type === 'email_reply_received' && iid) seen.reply_received.add(iid)
     if (e.event_type === 'high_specificity') seen.specificity_fired = true
     if (e.event_type === 'sustained_engagement') seen.sustained_fired = true

@@ -97,6 +97,14 @@ meta:
 #          on status flip into booked/completed; helper formatter wired
 #          through 7 render sites; integration test covers the trigger.
 #          Tightening to require first_payment_received waits for T2-F.
+# (T2-F)   HoneyBook lifecycle engagement events (ARCH-11.5-B
+#          partial→enforced): 4 source-tagged kinds (signed / payment
+#          / refund / amendment) with regex precedence (refund >
+#          amendment > payment > signed). normalizeEventTypeForScoring
+#          un-prefixes signed + payment for heat / attribution / signal-
+#          inference. Refund triggers friction_tag append, amendment is
+#          informational. Heat points: signed/payment 50, refund -60,
+#          amendment +5.
 # (T2-D)   Per-platform identity match windows:
 #          ARCH-8.5.3 doctrine-only→enforced, ARCH-8.2-B partial→enforced.
 #          identity-windows.ts owns DEFAULT_PER_PLATFORM_WINDOWS (Knot
@@ -645,11 +653,10 @@ meta:
   target: HoneyBook integration is read-only, one-way
 
 - id: ARCH-11.5-B
-  status: partial
+  status: enforced
   owner: Isadora
   target: HoneyBook events preserved on forensic record as engagement_events
-  notes: "HoneyBook system emails preserved as raw interactions, not as typed engagement_events (contract_signed, payment_received). Continuity discontinuity at absorption cutover."
-  severity: medium
+  notes: "T2-F (2026-05-01): scheduling-tool-parsers.parseHoneyBook now emits 4 source-tagged lifecycle kinds (honeybook_contract_signed / _payment_received / _refund / _amendment) via expanded regex precedence (refund > amendment > payment > signed). eventKindToEngagementType writes the literal honeybook_* event_type (preserves source attribution per Playbook 11.5 absorption trajectory). normalizeEventTypeForScoring() un-prefixes signed + payment so heat-mapping / signal-inference / touchpoints continue to bucket them as contract_signed for funnel + scoring. Refund triggers a friction_tag append ('honeybook_refund_received') without auto-flipping wedding status — coordinator decides. Amendment is informational. Heat points table has honeybook_contract_signed=50, honeybook_payment_received=50, honeybook_refund=-60, honeybook_amendment=+5. Touchpoints map signed/payment to 'contract_signed' touch_type for /intel/sources funnel; refund/amendment are not funnel steps. POSITIVE_KINDS includes honeybook_contract_signed + honeybook_payment_received so HoneyBook bookings without a prior Bloom inquiry manifest a wedding. recommendedAction switch covers all 4 lifecycle types."
 
 - id: ANTI-11.5-C
   status: enforced

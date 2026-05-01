@@ -1378,6 +1378,12 @@ export async function processIncomingEmail(
     'tour_scheduled',
     'contract_sent', 'contract_signed', 'payment_received',
     'final_walkthrough', 'pre_wedding_event', 'planning_meeting',
+    // T2-F: HoneyBook lifecycle. Signed + payment manifest a wedding
+    // when none exists (HoneyBook contract signed = booked couple
+    // with no prior Bloom inquiry on file). Refund + amendment do
+    // NOT manifest — they imply an existing wedding the coordinator
+    // is amending or refunding.
+    'honeybook_contract_signed', 'honeybook_payment_received',
   ])
   if (schedulingEvent && !weddingId) {
     const extras = schedulingEvent.extras
@@ -1623,6 +1629,13 @@ export async function processIncomingEmail(
       const TOUR_HAPPENED_KINDS = new Set([
         'tour_completed', 'tour_cancelled', 'final_walkthrough',
         'pre_wedding_event', 'planning_meeting', 'contract_signed',
+        // T2-F: HoneyBook lifecycle "happened" events use eventDatetime
+        // (when the contract was actually signed / payment cleared /
+        // refund issued / amendment took effect) rather than email
+        // arrival. Pre-fix this would have stamped occurred_at to the
+        // moment Bloom processed the HoneyBook notification.
+        'honeybook_contract_signed', 'honeybook_payment_received',
+        'honeybook_refund', 'honeybook_amendment',
       ])
       const useEventDatetime = TOUR_HAPPENED_KINDS.has(schedulingEvent.kind)
       const schedulingOccurredAt = useEventDatetime
@@ -1699,6 +1712,31 @@ export async function processIncomingEmail(
           } catch (err) {
             console.warn('[pipeline] status-change touchpoint failed:', err)
           }
+        }
+      }
+
+      // T2-F: HoneyBook refund side effect. Append a friction tag so
+      // coordinators see the signal in the kanban friction view and
+      // /intel/sources reflects it as a friction hit. Status is NOT
+      // auto-flipped to 'lost' (some refunds are partial / followed by
+      // re-booking). Coordinator decides via the existing 'lost' flow
+      // if appropriate. Idempotent — never duplicates the tag.
+      if (schedulingEvent.kind === 'honeybook_refund' && weddingId) {
+        try {
+          const { data: w } = await supabase
+            .from('weddings')
+            .select('friction_tags')
+            .eq('id', weddingId)
+            .maybeSingle()
+          const existing = Array.isArray(w?.friction_tags) ? (w!.friction_tags as string[]) : []
+          if (!existing.includes('honeybook_refund_received')) {
+            await supabase
+              .from('weddings')
+              .update({ friction_tags: [...existing, 'honeybook_refund_received'] })
+              .eq('id', weddingId)
+          }
+        } catch (err) {
+          console.warn('[pipeline] honeybook_refund friction-tag write failed:', err)
         }
       }
     } catch (err) {
