@@ -87,5 +87,8 @@ jobs:
       - name: Unit tests — T3-G source-mix counterfactual (concave curve + pair selection)
         run: npx tsx scripts/test-source-mix-counterfactual.ts
 
+      - name: Unit tests — T3-I self-knowledge (coordinator override + strength-area cohort)
+        run: npx tsx scripts/test-t3i-self-knowledge.ts
+
       - name: White-label check — no hardcoded 'Sage' in couple portal
         run: node scripts/check-no-hardcoded-sage.mjs

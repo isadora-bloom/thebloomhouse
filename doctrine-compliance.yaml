@@ -121,6 +121,11 @@ meta:
 #     cultural-moments-auto-propose T3-E INS-19.5.8 → partial
 #     pricing-elasticity   T3-F INS-19.5.2 → enforced
 #     source-mix-counterfactual T3-G INS-19.5.3 → enforced
+#     coordinator-override-pattern T3-I (a) INS-19.6.4 → partial
+#     strength-area-cohort  T3-I (b) INS-19.6.2 → enforced
+#
+# (Migration 145) widens insight_type CHECK with coordinator_override_pattern
+#   + strength_area_cohort. Same DROP+ADD pattern as 144.
 #
 # (T3-B) Decay re-engagement insight (2026-05-01):
 #   INS-19.3.3 partial→enforced. Replaces template-string
@@ -1251,9 +1256,10 @@ meta:
   severity: high
 
 - id: INS-19.6.2
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: strength-area identification
+  notes: "T3-I (b) (2026-05-01): src/lib/services/insights/strength-area-cohort.ts identifies the venue's strongest + weakest guest-count band by conversion rate. 5 bands (0-50, 51-100, 101-150, 151-200, 200+). Conversion uses TERMINAL-status only (booked + completed + lost) — no in-flight contamination. Hard guards: >=20 total resolved venue-wide (skip newly-onboarded), >=5 resolved per band before qualifying for ranking, >=2 qualifying bands required, >=10pp gap between strongest and weakest before surfacing (no noise-driven 'strongest band' claim). Sonnet narrates with venue-relative framing (prompt forbids industry-norm language). Numbers-guard locks to {per-band conversion %, per-band N, gap pp, total resolved, window_days}. Wired into GET /api/insights/venue. scripts/test-t3i-self-knowledge.ts covers band edges (50→0-50, 51→51-100, 200→151-200, 201→200+) + qualification flag + in-flight-status exclusion."
   severity: low
 
 - id: INS-19.6.3
@@ -1264,9 +1270,10 @@ meta:
   severity: medium
 
 - id: INS-19.6.4
-  status: doctrine-only
+  status: partial
   owner: Isadora
   target: time-allocation insights
+  notes: "T3-I (a) (2026-05-01): src/lib/services/insights/coordinator-override-pattern.ts surfaces the AI/coordinator collaboration health — recent 4-week draft accept/edit/reject mix vs prior 4-week, with day-of-week rejection anomaly detection (>=20pp diverge from week mean, >=5 per-DoW sample). Hard guards: >=20 draft_feedback rows in recent window before computing rates; null returns (no surface) when boring (no significant drift, no DoW anomaly). Numbers-guard locks narration to {total drafts, approved/edited/rejected percentages, drift pp, anomaly day stats}. Neutral framing per prompt (frames as 'drafts being edited' not 'coordinator rejects'). PARTIAL because the playbook's 'time-allocation' ask covers more than draft-action mix (also weekly task breakdown vs peer benchmark — defers to a future T3 + coordinator time-tracking data source). What's enforced: draft-collaboration drift + DoW anomaly. Wired into GET /api/insights/venue."
   severity: low
 
 - id: INS-19.6.5
