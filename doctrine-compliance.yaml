@@ -119,6 +119,7 @@ meta:
 #     decay-re-engagement  T3-B INS-19.3.3 → enforced
 #     cohort-match         T3-D INS-19.3.8 + ARCH-19.8-D → enforced
 #     cultural-moments-auto-propose T3-E INS-19.5.8 → partial
+#     pricing-elasticity   T3-F INS-19.5.2 → enforced
 #
 # (T3-B) Decay re-engagement insight (2026-05-01):
 #   INS-19.3.3 partial→enforced. Replaces template-string
@@ -1190,9 +1191,10 @@ meta:
   severity: low
 
 - id: INS-19.5.2
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: pricing elasticity
+  notes: "T3-F (2026-05-01): src/lib/services/insights/pricing-elasticity.ts computes elasticity = (delta_conversion / pre_conversion) / (delta_price / old_price) for the most-recent base_price change in pricing_history. Conversion uses TERMINAL-status weddings only (booked + completed + lost) — no in-flight contamination. Hard guards return null gracefully when preconditions fail: pre_n or post_n < 8, post window < 60 days, change < 60 days ago, adjacent base_price change within ±60 days, malformed price values, < 0.5% price change. Confound detection: marketing_spend pre-vs-post delta >= 20% flags is_confound, which forces classification → 'inconclusive' regardless of elasticity sign (belt-and-suspenders: prompt tells LLM, code enforces). Pure classifier classifyElasticity tested in scripts/test-pricing-elasticity.ts (17 assertions covering all hard guards + magnitude bands + sign awareness + confound override). Wired into GET /api/insights/venue. Surface_layer pulse for elastic, on_demand for everything else (informational unless action-required)."
   severity: low
 
 - id: INS-19.5.3

@@ -1,0 +1,50 @@
+/**
+ * GET /api/insights/venue
+ *
+ * Venue-scoped T3 insights aggregator. Currently runs T3-F (pricing
+ * elasticity). T3-G (source-mix counterfactual) and T3-I (long-tail
+ * strategic) will join the Promise.allSettled fan-out.
+ *
+ * Auth: getPlatformAuth — coordinator must be signed in. Demo mode
+ * bypasses (matches the lead-scoped endpoint's pattern).
+ */
+
+import { NextRequest, NextResponse } from 'next/server'
+import { createServiceClient } from '@/lib/supabase/service'
+import { getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
+import { generatePricingElasticity } from '@/lib/services/insights/pricing-elasticity'
+
+export async function GET(request: NextRequest) {
+  const supabase = createServiceClient()
+  const demo = await isDemoMode()
+
+  let venueId: string | null = null
+  if (demo) {
+    // In demo, derive venueId from query param so the demo can call
+    // for any of the Crestwood venues.
+    venueId = request.nextUrl.searchParams.get('venueId')
+    if (!venueId) {
+      return NextResponse.json({ error: 'venueId required in demo' }, { status: 400 })
+    }
+  } else {
+    const platform = await getPlatformAuth()
+    if (!platform) {
+      return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+    }
+    venueId = platform.venueId
+  }
+
+  const force = request.nextUrl.searchParams.get('refresh') === '1'
+
+  const [pricing] = await Promise.allSettled([
+    generatePricingElasticity(supabase, venueId, force),
+  ])
+
+  return NextResponse.json({
+    venueId,
+    pricing: pricing.status === 'fulfilled' ? pricing.value : null,
+    errors: [
+      ...(pricing.status === 'rejected' ? [{ insight: 'pricing', error: String(pricing.reason) }] : []),
+    ],
+  })
+}

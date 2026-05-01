@@ -81,5 +81,8 @@ jobs:
       - name: Unit tests — T3-E cultural-moments auto-propose (z-score spike)
         run: npx tsx scripts/test-cultural-moments-auto-propose.ts
 
+      - name: Unit tests — T3-F pricing-elasticity classifier (confound + sample-size guards)
+        run: npx tsx scripts/test-pricing-elasticity.ts
+
       - name: White-label check — no hardcoded 'Sage' in couple portal
         run: node scripts/check-no-hardcoded-sage.mjs
