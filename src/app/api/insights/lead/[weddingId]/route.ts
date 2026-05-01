@@ -22,6 +22,7 @@ import { generateHeatNarration } from '@/lib/services/insights/heat-narration'
 import { generateNegotiationState } from '@/lib/services/insights/negotiation-state'
 import { generateRiskFlags } from '@/lib/services/insights/risk-flags'
 import { generateDecayReEngagement } from '@/lib/services/insights/decay-re-engagement'
+import { generateCohortMatch } from '@/lib/services/insights/cohort-match'
 
 export async function GET(
   request: NextRequest,
@@ -65,11 +66,12 @@ export async function GET(
   // calling Claude. Decay self-gates and returns null when the lead
   // shows no decay signal, so the panel only renders the card when
   // there's something useful to say.
-  const [heat, negotiation, risk, decay] = await Promise.allSettled([
+  const [heat, negotiation, risk, decay, cohort] = await Promise.allSettled([
     generateHeatNarration(supabase, venueId, weddingId, force),
     generateNegotiationState(supabase, venueId, weddingId, force),
     generateRiskFlags(supabase, venueId, weddingId, force),
     generateDecayReEngagement(supabase, venueId, weddingId, force),
+    generateCohortMatch(supabase, venueId, weddingId, force),
   ])
 
   return NextResponse.json({
@@ -80,11 +82,13 @@ export async function GET(
     negotiation: negotiation.status === 'fulfilled' ? negotiation.value : null,
     risk: risk.status === 'fulfilled' ? risk.value : null,
     decay: decay.status === 'fulfilled' ? decay.value : null,
+    cohort: cohort.status === 'fulfilled' ? cohort.value : null,
     errors: [
       ...(heat.status === 'rejected' ? [{ insight: 'heat', error: String(heat.reason) }] : []),
       ...(negotiation.status === 'rejected' ? [{ insight: 'negotiation', error: String(negotiation.reason) }] : []),
       ...(risk.status === 'rejected' ? [{ insight: 'risk', error: String(risk.reason) }] : []),
       ...(decay.status === 'rejected' ? [{ insight: 'decay', error: String(decay.reason) }] : []),
+      ...(cohort.status === 'rejected' ? [{ insight: 'cohort', error: String(cohort.reason) }] : []),
     ],
   })
 }

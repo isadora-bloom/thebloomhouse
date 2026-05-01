@@ -117,6 +117,7 @@ meta:
 #     negotiation-state    T3-C INS-19.3.4 → partial
 #     risk-flags           T3-H INS-19.3.5 → partial
 #     decay-re-engagement  T3-B INS-19.3.3 → enforced
+#     cohort-match         T3-D INS-19.3.8 + ARCH-19.8-D → enforced
 #
 # (T3-B) Decay re-engagement insight (2026-05-01):
 #   INS-19.3.3 partial→enforced. Replaces template-string
@@ -1112,11 +1113,10 @@ meta:
   severity: medium
 
 - id: INS-19.3.8
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: comparable-couple reasoning
-  notes: "Cohort-matching engine missing entirely."
-  severity: high
+  notes: "T3-D (2026-05-01): src/lib/services/insights/cohort-match.ts finds the K=10 most-similar past weddings at the same venue (last 3 years, status in booked/completed/lost). Similarity uses z-scored numeric distance (guest_count, planning_horizon) + categorical match (season, source, day_of_week), each weighted; null dims drop and weights renormalise (no fake-zero similarity). Cohort includes BOTH booked and lost members so conversion rate isn't selection-biased. N>=3 hard floor — sub-3 cohorts return null rather than surfacing. Sonnet diagnostic classifies pattern (high_converting / low_converting / mixed / sparse_signal) and composes a recommendation grounded in what differentiated booked from lost. Numbers-guard restricts narration to {n_total, n_booked, n_lost, conversion_pct, median_booking_value, median_days_to_book}. Wired into /api/insights/lead/[weddingId] and LeadInsightsPanel (compact chip + full card with median value + days-to-book). Unit-tested helpers cover season derivation, planning-horizon arithmetic, mean/std under tiny samples, median over even/odd lengths, dimSimilarity null-handling, combineSimilarity weight renormalisation."
 
 - id: INS-19.3.9
   status: doctrine-only
@@ -1313,9 +1313,10 @@ meta:
   severity: medium
 
 - id: ARCH-19.8-D
-  status: doctrine-only
+  status: enforced
   owner: Isadora
   target: cohort definition matches the question
+  notes: "T3-D (2026-05-01): cohort-match.ts defines cohort as same-venue + terminal-status (booked/completed/lost) + 3-year recency, then ranks by feature-weighted similarity. The classical similarity scoring (guest_count + season + planning_horizon + source + day_of_week) is the cohort definition; question = 'how does my track record with leads like this one read'. Same-venue isolation eliminates cross-customer leakage; recency cap eliminates market-drift; both-outcome inclusion eliminates selection bias. ANTI-pattern caught: would have been to take only booked leads (would always show 100% conversion), or to extend the recency cap to all-time (would always overweight veteran venues). Pattern reusable for T3-G source-mix counterfactual."
   severity: medium
 
 - id: ANTI-19.9-1

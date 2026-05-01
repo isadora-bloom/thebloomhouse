@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Flame, MessageCircle, AlertTriangle, TrendingDown, RefreshCw, Loader2 } from 'lucide-react'
+import { Flame, MessageCircle, AlertTriangle, TrendingDown, Users, RefreshCw, Loader2 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Lead insights panel — renders the 3 T3 generators (heat narration,
@@ -59,6 +59,20 @@ interface DecayInsight {
   cached: boolean
 }
 
+interface CohortInsight {
+  pattern: 'high_converting' | 'low_converting' | 'mixed' | 'sparse_signal'
+  reasoning: string
+  recommendation: string
+  n_total: number
+  n_booked: number
+  n_lost: number
+  conversion_pct: number
+  median_booking_value: number | null
+  median_days_to_book: number | null
+  confidence: number
+  cached: boolean
+}
+
 interface InsightsResponse {
   weddingId: string
   venueId: string
@@ -67,6 +81,7 @@ interface InsightsResponse {
   negotiation: NegotiationInsight | null
   risk: RiskInsight | null
   decay: DecayInsight | null
+  cohort: CohortInsight | null
   errors: Array<{ insight: string; error: string }>
 }
 
@@ -163,6 +178,12 @@ export function LeadInsightsPanel({ weddingId, variant = 'full' }: LeadInsightsP
           <span className="inline-flex items-center gap-1 text-amber-700">
             <TrendingDown className="w-3 h-3" />
             {data.decay.cause_label}
+          </span>
+        )}
+        {data.cohort && (
+          <span className="inline-flex items-center gap-1 text-sage-700">
+            <Users className="w-3 h-3" />
+            {data.cohort.n_booked}/{data.cohort.n_total} booked
           </span>
         )}
       </div>
@@ -299,6 +320,40 @@ export function LeadInsightsPanel({ weddingId, variant = 'full' }: LeadInsightsP
                 ))}
               </ul>
             </details>
+          )}
+        </div>
+      )}
+
+      {data.cohort && (
+        <div className={`rounded-lg border p-3 space-y-1 ${
+          data.cohort.pattern === 'low_converting' ? 'border-amber-200 bg-amber-50/40'
+          : data.cohort.pattern === 'high_converting' ? 'border-emerald-200 bg-emerald-50/30'
+          : 'border-sage-200 bg-warm-white'
+        }`}>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-sage-700" />
+              <span className="text-sm font-medium text-sage-900">
+                Look-alike cohort: {data.cohort.n_booked}/{data.cohort.n_total} booked ({data.cohort.conversion_pct}%)
+              </span>
+            </div>
+            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${confidenceColor(data.cohort.confidence)}`}>
+              {confidenceLabel(data.cohort.confidence)} conf
+            </span>
+          </div>
+          <p className="text-sm text-sage-700">{data.cohort.reasoning}</p>
+          {data.cohort.recommendation && (
+            <p className="text-xs text-sage-700 italic">→ {data.cohort.recommendation}</p>
+          )}
+          {(data.cohort.median_booking_value !== null || data.cohort.median_days_to_book !== null) && (
+            <div className="flex flex-wrap gap-3 pt-1 text-[11px] text-sage-500">
+              {data.cohort.median_booking_value !== null && (
+                <span>Median value: ${data.cohort.median_booking_value.toLocaleString()}</span>
+              )}
+              {data.cohort.median_days_to_book !== null && (
+                <span>Median days-to-book: {data.cohort.median_days_to_book}</span>
+              )}
+            </div>
           )}
         </div>
       )}
