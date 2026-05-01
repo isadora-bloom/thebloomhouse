@@ -60,6 +60,9 @@ jobs:
       - name: Unit tests — HoneyBook lifecycle events (T2-F)
         run: npx tsx scripts/test-honeybook-lifecycle.ts
 
+      - name: Unit tests — heat-map dedup patterns (2026-05-01 fix)
+        run: npx tsx scripts/test-heatmap-fix.ts
+
       - name: Unit tests — OMI audio-capture adapter (T2-E Phase 2)
         run: npx tsx scripts/test-audio-capture-omi.ts
 

@@ -45,17 +45,59 @@ export const TOUR_CONFIRMATION_PATTERNS: RegExp[] = [
 ]
 
 export const TOUR_REQUEST_PATTERNS: RegExp[] = [
-  /(would |we'd |i'd |love to |want to )?(tour|come (see|visit)|schedule a (tour|visit|viewing))/i,
-  /available (to|for a) (tour|visit)/i,
-  /can we (come |visit|tour|see)/i,
+  // 2026-05-01: tightened — the original `(would|we'd|i'd|...)?` made
+  // every prefix optional, so a bare 'tour' word matched. "Please cancel
+  // our tour" was a false-positive tour_request. Now an explicit intent
+  // token is required.
+  /(?:would|we'd|i'd|love to|want to|we want to|we'd love to|we would like to|i would like to) (?:to )?(?:tour|come (?:see|visit)|schedule a (?:tour|visit|viewing))/i,
+  /available (?:to|for a) (?:tour|visit)/i,
+  /can we (?:come|visit|tour|see)/i,
   /set up a tour/i,
-  /book a (tour|visit|viewing)/i,
-  /tour (availability|dates|times?)/i,
-  /(when|what|times?|days?) (is|are) (the |your )?(tour|visits?) available/i,
-  /come and (see|visit|tour)/i,
+  /book a (?:tour|visit|viewing)/i,
+  /tour (?:availability|dates|times?)/i,
+  /(?:when|what|times?|days?) (?:is|are) (?:the |your )?(?:tour|visits?) available/i,
+  /come and (?:see|visit|tour)/i,
   /swing by/i,
   /visit the venue/i,
-  /check out (your|the) venue/i,
+  /check out (?:your|the) venue/i,
+]
+
+// Negative-intent patterns. Couple is signaling they will not be moving
+// forward — going elsewhere, pausing, declining the proposal, no longer
+// interested. Fires not_interested_signal (-25 heat) + a coordinator
+// alert. The patterns are conservative — false-positives cost the
+// venue real attention and an unnecessary "lead at risk" alert, so
+// each pattern requires explicit rejection language, not ambiguous
+// hesitation. Per heat-mapping DEFAULT_POINTS.not_interested_signal.
+export const NOT_INTERESTED_PATTERNS: RegExp[] = [
+  /(?:going|went|going to go) (?:with )?another (?:venue|option|place)/i,
+  /going (?:in )?a different direction/i,
+  /(?:decided|chose|chosen) (?:to go )?(?:with|on) another (?:venue|option|place)/i,
+  /(?:we |we've |we have )(?:decided |chosen )?(?:to )?go (?:in )?a different (?:direction|way)/i,
+  /(?:we |we've |we have )(?:decided not to|won't be) (?:moving|move) forward/i,
+  /(?:we |we've |we have )(?:decided to )?(?:pause|hold off)/i,
+  /(?:put|putting).{0,15}on hold/i,
+  /no longer (?:interested|considering)/i,
+  /not (?:going to be |)?(?:moving forward|booking|proceeding)/i,
+  /(?:thanks|thank you).{0,40}(?:we['']?ve found|going with another|going elsewhere)/i,
+  /(?:please )?(?:remove|removing) (?:us|our (?:names?|inquiry|interest)|me) from (?:your |the )?(?:list|consideration|inquir)/i,
+  /(?:please )?(?:cancel|withdraw) (?:our|my|this) (?:inquiry|consideration|interest)/i,
+  /(?:we['']ve|we have) (?:found|booked) (?:another|a different) venue/i,
+  /(?:found|chose|chosen) (?:our )?venue (?:elsewhere|already)/i,
+]
+
+// Tour-cancellation patterns. When a couple writes "we need to cancel
+// our tour" / "can't make it" / "won't be coming" — fires tour_cancelled
+// alongside the existing scheduling-tool parser path so cancellations
+// in plain email bodies don't silently miss the heat-score downgrade.
+// Excludes ambiguous reschedule patterns (those have their own kind).
+export const TOUR_CANCEL_PATTERNS: RegExp[] = [
+  /(?:we |we'd |we will |i |we're going to )?(?:need|have) to cancel (?:our|the|my) tour/i,
+  // "won't be able to make/attend [the] tour", "can't make/attend [the] tour"
+  /(?:we |i )(?:can'?t|cannot|won'?t be (?:able )?(?:to))(?: )(?:make|attend|come (?:to|for) the)(?: the | a | )?(?:tour|visit|appointment)/i,
+  /(?:tour|visit|appointment) (?:is|has been) cancell?ed/i,
+  /(?:please )?cancel (?:our|the|my|this) (?:tour|visit|appointment)/i,
+  /(?:we |we're |we are )(?:going to |will )?have to cancel/i,
 ]
 
 export const PROPOSAL_SENT_PATTERNS: RegExp[] = [
@@ -203,9 +245,31 @@ export async function applySignalInference(
     return { newEvents: 0, newStatus: null, fired: [] }
   }
 
+  // 2026-05-01 (heat-map fix): tour_requested + tour_scheduled are
+  // FIRE-ONCE-PER-WEDDING by doctrine — a couple "asks for a tour" once,
+  // and the venue "schedules" them once, even if the underlying
+  // conversation continues for months and every reply mentions the
+  // tour. Pre-fix the seen map was keyed by interaction_id which only
+  // skipped the SAME interaction's id; a new interaction with the same
+  // text pattern fired a fresh +15. Result on Courtney Heiner: 4×
+  // tour_requested events from Mar 7 / Mar 14 / Mar 24 / Apr 26 replies,
+  // each adding +15 to a heat score that should have been ~75.
+  //
+  // contract_sent + contract_signed stay per-interaction because the
+  // venue may legitimately send multiple proposals (revised contract
+  // on price changes, addendum on date moves) — each is a real signal.
+  // reply_received also stays per-interaction (every reply is a real
+  // engagement event).
+  //
+  // Negative-intent signals (not_interested_signal, tour_cancelled)
+  // fire-once-per-wedding for the same reason — once the couple says
+  // they're going elsewhere, repeating the message doesn't make it
+  // -50, and hearing "I cancelled" twice doesn't deserve -30.
   const seen = {
-    tour_requested: new Set<string>(),
-    tour_scheduled: new Set<string>(),
+    tour_requested_fired: false,
+    tour_scheduled_fired: false,
+    tour_cancelled_fired: false,
+    not_interested_fired: false,
     contract_sent: new Set<string>(),
     contract_signed: new Set<string>(),
     specificity_fired: false,
@@ -215,10 +279,10 @@ export async function applySignalInference(
   }
   for (const e of (existingEvents ?? []) as Array<{ event_type: string; metadata: Record<string, unknown> | null }>) {
     const iid = (e.metadata?.interaction_id as string | undefined) ?? null
-    // Dedup by (event_type, interaction_id) for per-interaction events,
-    // and by event_type alone for fire-once-per-wedding events.
-    if (e.event_type === 'tour_requested' && iid) seen.tour_requested.add(iid)
-    if (e.event_type === 'tour_scheduled' && iid) seen.tour_scheduled.add(iid)
+    if (e.event_type === 'tour_requested') seen.tour_requested_fired = true
+    if (e.event_type === 'tour_scheduled') seen.tour_scheduled_fired = true
+    if (e.event_type === 'tour_cancelled') seen.tour_cancelled_fired = true
+    if (e.event_type === 'not_interested_signal') seen.not_interested_fired = true
     if (e.event_type === 'contract_sent' && iid) seen.contract_sent.add(iid)
     if (e.event_type === 'contract_signed' && iid) seen.contract_signed.add(iid)
     // T2-F: HoneyBook lifecycle equivalents. signed + payment both
@@ -274,34 +338,88 @@ export async function applySignalInference(
   }
   if (events.length > 0) fired.push(`${events.length} reply`)
 
-  // 2. Tour request (inbound)
-  for (const i of inbound) {
-    if (seen.tour_requested.has(i.id)) continue
-    const hay = `${i.subject ?? ''}\n${stripQuotedReply(i.full_body ?? i.body_preview ?? '')}`
-    if (TOUR_REQUEST_PATTERNS.some((r) => r.test(hay))) {
-      events.push({
-        eventType: 'tour_requested',
-        metadata: { interaction_id: i.id, source: 'signal_inference_tour_request' },
-        occurredAt: i.timestamp,
-      })
-      fired.push('tour_requested')
-      break
+  // 2. Tour request (inbound) — fire-once-per-wedding (2026-05-01 fix)
+  if (!seen.tour_requested_fired) {
+    for (const i of inbound) {
+      const hay = `${i.subject ?? ''}\n${stripQuotedReply(i.full_body ?? i.body_preview ?? '')}`
+      if (TOUR_REQUEST_PATTERNS.some((r) => r.test(hay))) {
+        events.push({
+          eventType: 'tour_requested',
+          metadata: { interaction_id: i.id, source: 'signal_inference_tour_request' },
+          occurredAt: i.timestamp,
+        })
+        fired.push('tour_requested')
+        seen.tour_requested_fired = true
+        break
+      }
     }
   }
 
-  // 3. Tour confirmation (outbound → advances to tour_scheduled)
-  for (const i of outbound) {
-    if (seen.tour_scheduled.has(i.id)) continue
-    const hay = `${i.subject ?? ''}\n${stripQuotedReply(i.full_body ?? i.body_preview ?? '')}`
-    if (TOUR_CONFIRMATION_PATTERNS.some((r) => r.test(hay))) {
-      events.push({
-        eventType: 'tour_scheduled',
-        metadata: { interaction_id: i.id, source: 'signal_inference_tour_confirm' },
-        occurredAt: i.timestamp,
-      })
-      fired.push('tour_scheduled')
-      if (!isTerminal && currentStatus === 'inquiry') targetStatus = 'tour_scheduled'
-      break
+  // 3. Tour confirmation (outbound → advances to tour_scheduled).
+  // Fire-once-per-wedding (2026-05-01 fix). The Calendly / scheduling-
+  // tool path also fires tour_scheduled when an actual booking event
+  // hits — this signal-inference fallback only fires on plain-email
+  // confirmations where no scheduling-tool fired.
+  if (!seen.tour_scheduled_fired) {
+    for (const i of outbound) {
+      const hay = `${i.subject ?? ''}\n${stripQuotedReply(i.full_body ?? i.body_preview ?? '')}`
+      if (TOUR_CONFIRMATION_PATTERNS.some((r) => r.test(hay))) {
+        events.push({
+          eventType: 'tour_scheduled',
+          metadata: { interaction_id: i.id, source: 'signal_inference_tour_confirm' },
+          occurredAt: i.timestamp,
+        })
+        fired.push('tour_scheduled')
+        seen.tour_scheduled_fired = true
+        if (!isTerminal && currentStatus === 'inquiry') targetStatus = 'tour_scheduled'
+        break
+      }
+    }
+  }
+
+  // 3a. Tour cancellation (inbound) — fires tour_cancelled (-15) +
+  // sets a flag the caller will use to drop a coordinator alert.
+  // 2026-05-01: closes the gap where a couple writes "we need to
+  // cancel our tour" in plain email but no scheduling-tool email
+  // fires (Calendly cancel email is the primary path; this is the
+  // belt-and-braces text-pattern path). Fire-once-per-wedding.
+  let firedTourCancelled = false
+  if (!seen.tour_cancelled_fired) {
+    for (const i of inbound) {
+      const hay = `${i.subject ?? ''}\n${stripQuotedReply(i.full_body ?? i.body_preview ?? '')}`
+      if (TOUR_CANCEL_PATTERNS.some((r) => r.test(hay))) {
+        events.push({
+          eventType: 'tour_cancelled',
+          metadata: { interaction_id: i.id, source: 'signal_inference_tour_cancel' },
+          occurredAt: i.timestamp,
+        })
+        fired.push('tour_cancelled')
+        seen.tour_cancelled_fired = true
+        firedTourCancelled = true
+        break
+      }
+    }
+  }
+
+  // 3b. Not-interested signal (inbound). Couple is signaling they
+  // won't be moving forward — going elsewhere, declining, pausing.
+  // Fires not_interested_signal (-25) + coordinator alert. Fire-
+  // once-per-wedding.
+  let firedNotInterested = false
+  if (!seen.not_interested_fired) {
+    for (const i of inbound) {
+      const hay = `${i.subject ?? ''}\n${stripQuotedReply(i.full_body ?? i.body_preview ?? '')}`
+      if (NOT_INTERESTED_PATTERNS.some((r) => r.test(hay))) {
+        events.push({
+          eventType: 'not_interested_signal',
+          metadata: { interaction_id: i.id, source: 'signal_inference_not_interested' },
+          occurredAt: i.timestamp,
+        })
+        fired.push('not_interested_signal')
+        seen.not_interested_fired = true
+        firedNotInterested = true
+        break
+      }
     }
   }
 
@@ -430,6 +548,32 @@ export async function applySignalInference(
       })
     } catch (err) {
       console.warn('[signal-inference] status-change touchpoint failed:', err)
+    }
+  }
+
+  // Coordinator alerts on negative-intent signals (2026-05-01 heat-map
+  // fix). When a tour is cancelled or a couple signals they're not
+  // moving forward, drop a 'lead_at_risk' notification so the
+  // coordinator sees it on /agent/notifications. Idempotent via
+  // createNotification's 5-minute dedup window per
+  // (venue, wedding, type).
+  if (firedTourCancelled || firedNotInterested) {
+    try {
+      const { createNotification } = await import('@/lib/services/admin-notifications')
+      const reason = firedTourCancelled ? 'tour cancelled' : 'declined to move forward'
+      const heatDelta = firedTourCancelled ? '-15' : '-25'
+      await createNotification({
+        venueId,
+        weddingId,
+        type: 'lead_at_risk',
+        title: `Lead at risk: ${reason}`,
+        body:
+          `Signal-inference detected the couple ${reason} on this thread. ` +
+          `Heat dropped by ${heatDelta} points. Open the lead and decide next steps ` +
+          `(re-engagement, mark lost, or close out).`,
+      })
+    } catch (err) {
+      console.warn('[signal-inference] lead_at_risk notification failed:', err)
     }
   }
 

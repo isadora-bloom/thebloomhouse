@@ -1289,21 +1289,37 @@ export async function processIncomingEmail(
     const sharedMeta = { interaction_id: interactionId, subject: email.subject }
     const heatEvents: Array<{ eventType: string; metadata: Record<string, unknown> }> = []
 
-    if (extracted.mentionsTourRequest) {
+    // 2026-05-01 heat-map fix: tour_requested + high_commitment_signal +
+    // family_mentioned + high_specificity are FIRE-ONCE-PER-WEDDING. The
+    // classifier re-emits the booleans on every inbound reply (a reply
+    // discussing tour logistics still has mentionsTourRequest=true), so
+    // pre-fix a couple's 4-reply coordination thread fired 4× +15
+    // tour_requested events. Fetch existing events once and skip the
+    // firing if the type already exists for this wedding.
+    const { data: priorHeatRows } = await supabase
+      .from('engagement_events')
+      .select('event_type')
+      .eq('venue_id', venueId)
+      .eq('wedding_id', weddingId)
+      .in('event_type', ['tour_requested', 'high_commitment_signal', 'family_mentioned', 'high_specificity'])
+    const priorHeatTypes = new Set(((priorHeatRows ?? []) as Array<{ event_type: string }>).map((r) => r.event_type))
+
+    if (extracted.mentionsTourRequest && !priorHeatTypes.has('tour_requested')) {
       heatEvents.push({ eventType: 'tour_requested', metadata: sharedMeta })
     }
-    if (extracted.commitmentLevel === 'decided') {
+    if (extracted.commitmentLevel === 'decided' && !priorHeatTypes.has('high_commitment_signal')) {
       heatEvents.push({
         eventType: 'high_commitment_signal',
         metadata: { ...sharedMeta, commitmentLevel: extracted.commitmentLevel },
       })
     }
-    if (extracted.mentionsFamilyAttending) {
+    if (extracted.mentionsFamilyAttending && !priorHeatTypes.has('family_mentioned')) {
       heatEvents.push({ eventType: 'family_mentioned', metadata: sharedMeta })
     }
     if (
       typeof extracted.specificityScore === 'number' &&
-      extracted.specificityScore >= 0.7
+      extracted.specificityScore >= 0.7 &&
+      !priorHeatTypes.has('high_specificity')
     ) {
       heatEvents.push({
         eventType: 'high_specificity',
@@ -1364,9 +1380,63 @@ export async function processIncomingEmail(
   // "Rixey Manor Venue Tour" booked for last week is a completed tour;
   // we mark it tour_completed instead of tour_scheduled so the leads
   // surface reflects what already happened.
+  //
+  // 2026-05-01 heat-map fix: cancellation guard. If we have a wedding
+  // and a tour_cancelled event already exists for it whose
+  // metadata.event_datetime matches this scheduling event's
+  // eventDatetime, the auto-promotion to tour_completed is wrong —
+  // the tour was cancelled, not held. Pre-fix a Calendly cancel email
+  // arrived Apr 3 firing tour_cancelled (-15), then the original
+  // booking email's tour_scheduled (eventDatetime=Apr 5) was re-
+  // processed Apr 5+, time-aware-promoted to tour_completed (+20),
+  // and the wedding's heat netted +5 instead of -15.
+  // Cancellation guard flag — when set, the scheduling-event handler
+  // below skips the engagement_event + status-advance writes. The
+  // cancellation event has already fired for this tour instance; re-
+  // processing the original booking email shouldn't double-write.
+  let suppressBecauseCancelled = false
   if (schedulingEvent) {
     const adjustedKind = timeAwareTourKind(schedulingEvent.kind, schedulingEvent.eventDatetime)
-    if (adjustedKind !== schedulingEvent.kind) {
+    if (
+      adjustedKind === 'tour_completed' &&
+      weddingId &&
+      schedulingEvent.eventDatetime
+    ) {
+      const { data: cancelRows } = await supabase
+        .from('engagement_events')
+        .select('metadata, occurred_at')
+        .eq('venue_id', venueId)
+        .eq('wedding_id', weddingId)
+        .eq('event_type', 'tour_cancelled')
+        .limit(20)
+      const evtDt = schedulingEvent.eventDatetime
+      const cancelMatchesThisTour = ((cancelRows ?? []) as Array<{
+        metadata: Record<string, unknown> | null
+        occurred_at: string | null
+      }>).some((row) => {
+        const mdDt = (row.metadata?.event_datetime as string | undefined) ?? null
+        if (mdDt) {
+          if (mdDt === evtDt) return true
+          const a = Date.parse(mdDt)
+          const b = Date.parse(evtDt)
+          if (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 6 * 60 * 60 * 1000) return true
+        }
+        // Fallback: occurred_at on the cancel row close to this tour's
+        // eventDatetime is also strong evidence of "this tour was
+        // cancelled" (TOUR_HAPPENED_KINDS stamps occurred_at to the
+        // tour's scheduled time, not email arrival).
+        if (row.occurred_at) {
+          const a = Date.parse(row.occurred_at)
+          const b = Date.parse(evtDt)
+          if (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 6 * 60 * 60 * 1000) return true
+        }
+        return false
+      })
+      if (cancelMatchesThisTour) {
+        suppressBecauseCancelled = true
+      }
+    }
+    if (!suppressBecauseCancelled && adjustedKind !== schedulingEvent.kind) {
       schedulingEvent = { ...schedulingEvent, kind: adjustedKind }
     }
   }
@@ -1610,7 +1680,7 @@ export async function processIncomingEmail(
     }
   }
 
-  if (schedulingEvent && weddingId) {
+  if (schedulingEvent && weddingId && !suppressBecauseCancelled) {
     try {
       const eventType = eventKindToEngagementType(schedulingEvent.kind)
       // 2026-04-30 corrected: which timestamp depends on what the
@@ -1737,6 +1807,29 @@ export async function processIncomingEmail(
           }
         } catch (err) {
           console.warn('[pipeline] honeybook_refund friction-tag write failed:', err)
+        }
+      }
+
+      // 2026-05-01 heat-map fix: coordinator alert when a scheduling-
+      // tool emits tour_cancelled (Calendly / Acuity / HoneyBook /
+      // Dubsado cancel email). Mirrors the signal-inference text-
+      // pattern alert. Idempotent via createNotification's 5-minute
+      // dedup window per (venue, wedding, type).
+      if (schedulingEvent.kind === 'tour_cancelled' && weddingId) {
+        try {
+          const { createNotification } = await import('@/lib/services/admin-notifications')
+          await createNotification({
+            venueId,
+            weddingId,
+            type: 'lead_at_risk',
+            title: 'Lead at risk: tour cancelled',
+            body:
+              `${schedulingEvent.source} reported a tour cancellation. ` +
+              `Heat dropped by 15 points. Open the lead and decide next steps ` +
+              `(reschedule attempt, re-engagement sequence, or close out).`,
+          })
+        } catch (err) {
+          console.warn('[pipeline] tour_cancelled notification failed:', err)
         }
       }
     } catch (err) {
