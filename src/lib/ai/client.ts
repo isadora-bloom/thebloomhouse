@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { createServiceClient } from '@/lib/supabase/service'
 import { calculateCost as calculateModelCost } from '@/lib/ai/cost-tracker'
+import { redactError } from '@/lib/observability/redact'
 
 let anthropicClient: Anthropic | null = null
 let openaiClient: OpenAI | null = null
@@ -268,13 +269,18 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
     return result
   } catch (claudeErr) {
     const claudeDuration = Date.now() - started
+    // Anthropic 4xx errors echo the prompt content in error.message
+    // (e.g. "input length exceeded: 'Hi, my email is alice@... (snip)'").
+    // For tier-1 calls (transcripts, sage chat with family context),
+    // that prompt content can include PII. Redact before stdout.
+    // OPS-21.3.3.
     console.warn(
       JSON.stringify({
         model: CLAUDE_MODEL,
         fallback: false,
         taskType,
         durationMs: claudeDuration,
-        error: claudeErr instanceof Error ? claudeErr.message : String(claudeErr),
+        error: redactError(claudeErr),
       })
     )
 
@@ -297,13 +303,15 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
       )
       return result
     } catch (openaiErr) {
+      // OpenAI 4xx errors can also echo prompt content. Same redaction
+      // discipline as the Anthropic side. OPS-21.3.3.
       console.error(
         JSON.stringify({
           model: OPENAI_FALLBACK_MODEL,
           fallback: true,
           taskType,
           durationMs: Date.now() - fallbackStarted,
-          error: openaiErr instanceof Error ? openaiErr.message : String(openaiErr),
+          error: redactError(openaiErr),
         })
       )
       throw new Error('AI unavailable: both Claude and OpenAI fallback failed.')

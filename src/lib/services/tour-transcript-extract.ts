@@ -30,6 +30,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
+import { redactError } from '@/lib/observability/redact'
 import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
 
 // ---------------------------------------------------------------------------
@@ -206,9 +207,11 @@ Return valid JSON with no prose, no markdown, no commentary.`
     })
     parsed = sanitizeExtraction(raw)
   } catch (err) {
+    // Tier-1 redaction: error messages echo prompt content which is
+    // the raw tour transcript. OPS-21.3.3.
     console.error(
       '[tour-transcript-extract] AI call failed:',
-      err instanceof Error ? err.message : err
+      redactError(err)
     )
     return null
   }

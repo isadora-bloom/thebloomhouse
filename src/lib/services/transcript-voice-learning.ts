@@ -24,6 +24,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // Public constants & types
@@ -129,7 +130,9 @@ async function extractFromTranscript(
   } catch (err) {
     // AI failures must never throw — log and continue. The next tour's
     // transcript might still succeed; partial progress is better than none.
-    console.error(`[transcript-voice] AI extraction failed for venue ${venueId}:`, err)
+    // Tier-1 redaction: error messages echo prompt content which is the
+    // raw transcript. OPS-21.3.3.
+    console.error(`[transcript-voice] AI extraction failed for venue ${venueId}:`, redactError(err))
     return []
   }
 }

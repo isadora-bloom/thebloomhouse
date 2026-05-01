@@ -26,6 +26,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
+import { redactError } from '@/lib/observability/redact'
 import type { TranscriptExtraction } from './tour-transcript-extract'
 
 // ---------------------------------------------------------------------------
@@ -312,9 +313,12 @@ export async function generatePostTourBrief(
     })
     briefMarkdown = briefResult.text.trim()
   } catch (err) {
+    // Tier-1 catch: error messages from Anthropic 4xx echo prompt
+    // content which includes the tour transcript. Redact before
+    // stdout per OPS-21.3.3.
     console.error(
       '[post-tour-brief] brief AI call failed:',
-      err instanceof Error ? err.message : err
+      redactError(err)
     )
     return null
   }
@@ -347,9 +351,10 @@ export async function generatePostTourBrief(
       draftBody = text
     }
   } catch (err) {
+    // Same tier-1 redaction as brief catch above. OPS-21.3.3.
     console.error(
       '[post-tour-brief] draft AI call failed:',
-      err instanceof Error ? err.message : err
+      redactError(err)
     )
     draftBody = null
   }
