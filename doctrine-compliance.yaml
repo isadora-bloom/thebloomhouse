@@ -97,6 +97,21 @@ meta:
 #          on status flip into booked/completed; helper formatter wired
 #          through 7 render sites; integration test covers the trigger.
 #          Tightening to require first_payment_received waits for T2-F.
+# (T2-E)   Audio-capture abstraction Phase 2 (migrations 129 + 130):
+#          ARCH-5.4 at-risk→enforced, ARCH-5.3 enforced (qualitatively
+#          stronger). transcript_segments table for segment-level
+#          rows (multi-provider normalised: speaker /
+#          speaker_normalised / is_user / start_ms / end_ms / text /
+#          metadata). audio-capture adapter pattern: types.ts +
+#          omi-adapter.ts + orchestrator.ts. persistAudioSegments
+#          handles the 3-way binding provider-agnostically.
+#          promoteOrphanSegments rewrites segment rows on attach.
+#          OMI webhook route refactored to thin shim. UI renamed
+#          /agent/omi-inbox → /agent/audio-inbox + /settings/omi →
+#          /settings/audio-capture with legacy redirects. Migration
+#          130 extends auto_send_rules.context + drafts.context_type
+#          CHECK to allow 'post_tour' so coordinators tune post-tour
+#          autonomy independently.
 # (T2-F)   HoneyBook lifecycle engagement events (ARCH-11.5-B
 #          partial→enforced): 4 source-tagged kinds (signed / payment
 #          / refund / amendment) with regex precedence (refund >
@@ -329,15 +344,13 @@ meta:
   status: enforced
   owner: Isadora
   target: post-tour slider defaults to draft-for-approval
-  notes: "Hardcoded today. auto_send_rules schema has no post_tour context column — Part 7 slider model can't represent flipping post-tour to autonomous later."
-  severity: medium
+  notes: "Migration 130 (T2-E Phase 2, 2026-05-01) extends auto_send_rules.context CHECK to include 'post_tour' as a third slider context (alongside 'inquiry' and 'client'). drafts.context_type CHECK extended to match. Coordinators can now tune post-tour autonomy independently from client-message autonomy — necessary because post-tour briefs carry tier-1 transcript intelligence + family context, materially different risk profile."
 
 - id: ARCH-5.4
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: audio-capture abstraction with provider-agnostic interface; OMI as one adapter
-  notes: "MOST CRITICAL OMI GAP. No abstraction layer, no adapter pattern, no normalized transcript-segment format. Schema bakes in OMI (omi_session_id NOT NULL on tour_transcript_orphans). Webhook route does parse+normalize+persist in one ~270-line file. Orphan UI named 'Omi Inbox'. Settings page /settings/omi. Single-vendor risk doctrine violated at schema and route level."
-  severity: high
+  notes: "T2-E Phase 2 (2026-05-01): src/lib/services/audio-capture/ owns the abstraction. types.ts defines AudioCaptureAdapter interface + NormalizedSegment shape. adapters/omi-adapter.ts implements it. orchestrator.ts persistAudioSegments handles the 3-way binding (existing tour, auto-match window, orphan) provider-agnostically + writes to transcript_segments (migration 129). promoteOrphanSegments rewrites segment rows when coordinator attaches an orphan. Webhook route (src/app/api/omi/webhook/route.ts) is a thin shim: token auth → adapter.parseSegments → orchestrator.persistAudioSegments → optional extraction trigger. UI renamed: /agent/omi-inbox → /agent/audio-inbox + /settings/omi → /settings/audio-capture (legacy paths redirect). Adding a new provider (iPhone upload, Otter, AssemblyAI, Deepgram) = one new file under adapters/ + a new route. Schema work in Phase 1 (migration 122) renamed omi_session_id → session_id + audio_provider; Phase 2 added segment-level table. Closes 2026-05-01."
 
 # ===================================================================
 # PART 6 — SHARED SERVICE PRINCIPLE

@@ -1,44 +1,32 @@
 /**
  * /api/omi/webhook?token=<uuid>
  *
- * Phase 7 Task 61. Receives Omi real-time transcript segments.
+ * T2-E Phase 2 (2026-05-01): the route is now a thin shim. Auth +
+ * provider selection happens here; segment normalisation is owned by
+ * the OMI adapter (src/lib/services/audio-capture/adapters/omi-adapter.ts);
+ * persistence + binding (tour vs orphan) is owned by the orchestrator
+ * (src/lib/services/audio-capture/orchestrator.ts). Adding a new
+ * provider — iPhone upload, Otter, AssemblyAI, Deepgram — = drop a
+ * new adapter in adapters/ and add a route that delegates to the
+ * orchestrator.
  *
- * Auth model: per-venue token, not session auth. Omi posts from the wearable
- * (or the Omi backend on its behalf) without any user session. The token in
- * the query string is the only thing tying a segment to a venue, so we look
- * it up against venue_config.omi_webhook_token.
+ * Auth model: per-venue token, not session auth. OMI posts from the
+ * wearable (or the OMI backend on its behalf) without any user
+ * session. The token in the query string is the only thing tying a
+ * segment to a venue.
  *
- * Payload shape (per Omi developer docs, same shape used in the Ground app):
- *   {
- *     session_id: string,
- *     segments: [
- *       { text: string, is_user?: boolean, speaker?: string, start?: number, end?: number }
- *     ]
- *   }
- *
- * Matching flow:
- *   1. Already-bound session  → append to that tour's transcript.
- *   2. Unbound + auto-match   → find nearest pending/completed tour within
- *                               venue_config.omi_match_window_hours of now();
- *                               bind session + append transcript.
- *   3. Otherwise              → upsert into tour_transcript_orphans for the
- *                               coordinator to triage at /agent/omi-inbox.
- *
- * White-label: the response body never names a venue. Every DB write is
- * service-role so RLS can't surprise us, but all queries are explicitly
- * scoped to the venue_id resolved from the token.
+ * Cost-ceiling gate: extractTourTranscript fires Sonnet (tier-1) per
+ * tour. Paused venues skip per Playbook 21.4.3. Coordinator manual
+ * regenerate (POST /api/agent/tour-transcript-extract) is NOT gated
+ * — that's a coordinator request, not autonomous fire.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { extractTourTranscript } from '@/lib/services/tour-transcript-extract'
+import { omiAdapter } from '@/lib/services/audio-capture/adapters/omi-adapter'
+import { persistAudioSegments } from '@/lib/services/audio-capture/orchestrator'
 
-// ---------------------------------------------------------------------------
-// Task 62 auto-trigger: once enough transcript has accrued AND the tour
-// looks "complete" (outcome in completed/booked OR scheduled_at > 1h ago),
-// kick off the AI extraction fire-and-forget so the webhook response stays
-// snappy. The extraction service is idempotent on its own failures.
-// ---------------------------------------------------------------------------
 interface ExtractionTriggerInput {
   venueId: string
   tourId: string
@@ -59,11 +47,6 @@ function maybeFireExtraction(input: ExtractionTriggerInput): void {
 
   if (!outcomeComplete && !(pastEnough && longEnough)) return
 
-  // Fire-and-forget. Never block the webhook response on the extractor.
-  // Cost-ceiling gate: extractTourTranscript fires Sonnet (tier-1)
-  // per tour. Paused venues skip per Playbook 21.4.3. Coordinator
-  // manual regenerate (POST /api/agent/tour-transcript-extract) is
-  // NOT gated — that's a coordinator request, not autonomous fire.
   void (async () => {
     const { isAutonomousPaused } = await import('@/lib/services/cost-ceiling')
     if (await isAutonomousPaused(venueId)) {
@@ -76,20 +59,6 @@ function maybeFireExtraction(input: ExtractionTriggerInput): void {
       console.error('[api/omi/webhook] auto-extract failed:', err)
     }
   })()
-}
-
-interface OmiSegment {
-  text?: unknown
-  is_user?: unknown
-  speaker?: unknown
-  speaker_id?: unknown
-  start?: unknown
-  end?: unknown
-}
-
-interface OmiPayload {
-  session_id?: unknown
-  segments?: unknown
 }
 
 export async function POST(request: NextRequest) {
@@ -121,169 +90,61 @@ export async function POST(request: NextRequest) {
       ? cfg.omi_match_window_hours
       : 6
 
-    const body = (await request.json().catch(() => null)) as OmiPayload | null
-    if (!body || typeof body.session_id !== 'string' || !Array.isArray(body.segments)) {
+    const rawPayload = await request.json().catch(() => null)
+    if (!rawPayload) {
       return NextResponse.json({ error: 'bad_payload' }, { status: 400 })
     }
 
-    const sessionId = body.session_id
-    const segments = body.segments as OmiSegment[]
-    const segmentText = segments
-      .map((s) => (typeof s.text === 'string' ? s.text : ''))
-      .filter((t) => t.length > 0)
-      .join(' ')
-      .trim()
-
-    // An empty ping (no text yet) is still a legit Omi event; just ack it
-    // without writing anything. Prevents empty transcript appends that
-    // would show up as stray spaces.
-    if (!segmentText) {
+    // Adapter parses → normalised segments. Orchestrator persists.
+    const sessionId = omiAdapter.extractSessionId(rawPayload)
+    if (!sessionId) {
+      return NextResponse.json({ error: 'bad_payload' }, { status: 400 })
+    }
+    const segments = omiAdapter.parseSegments(rawPayload)
+    if (segments.length === 0) {
+      // Empty ping (no text yet) is still a legit OMI event; ack it
+      // without writing. Prevents empty transcript appends.
       return NextResponse.json({ session: 'empty', received: true })
     }
 
-    const nowIso = new Date().toISOString()
+    const result = await persistAudioSegments({
+      supabase: service,
+      venueId,
+      sessionId,
+      audioProvider: omiAdapter.providerKey,
+      segments,
+      autoMatchEnabled,
+      matchWindowHours: windowHours,
+    })
 
-    // ---------- 1. Already-bound session? ------------------------------------
-    const { data: boundTour, error: boundErr } = await service
-      .from('tours')
-      .select('id, transcript, outcome, scheduled_at')
-      .eq('venue_id', venueId)
-      .eq('session_id', sessionId)
-      .maybeSingle()
-
-    if (boundErr) {
-      console.error('[api/omi/webhook] bound tour lookup error:', boundErr.message)
-      return NextResponse.json({ error: 'internal' }, { status: 500 })
-    }
-
-    if (boundTour?.id) {
-      const current = typeof boundTour.transcript === 'string' ? boundTour.transcript : ''
-      const nextTranscript = current ? `${current} ${segmentText}` : segmentText
-      const { error: updErr } = await service
+    if (result.matchedTourId) {
+      // Re-read the bound tour to fire extraction with current state.
+      const { data: tour } = await service
         .from('tours')
-        .update({
-          transcript: nextTranscript,
-          transcript_received_at: nowIso,
-        })
-        .eq('id', boundTour.id)
-        .eq('venue_id', venueId)
-      if (updErr) {
-        console.error('[api/omi/webhook] tour append error:', updErr.message)
-        return NextResponse.json({ error: 'internal' }, { status: 500 })
-      }
+        .select('outcome, scheduled_at, transcript')
+        .eq('id', result.matchedTourId)
+        .maybeSingle()
       maybeFireExtraction({
         venueId,
-        tourId: boundTour.id as string,
-        outcome: (boundTour.outcome as string | null) ?? null,
-        scheduledAt: (boundTour.scheduled_at as string | null) ?? null,
-        transcript: nextTranscript,
+        tourId: result.matchedTourId,
+        outcome: (tour?.outcome as string | null) ?? null,
+        scheduledAt: (tour?.scheduled_at as string | null) ?? null,
+        transcript: typeof tour?.transcript === 'string' ? tour.transcript : '',
       })
-      return NextResponse.json({ matched_tour_id: boundTour.id, session: 'existing' })
+      return NextResponse.json({
+        matched_tour_id: result.matchedTourId,
+        session: result.session,
+        segments_written: result.segmentsWritten,
+      })
     }
-
-    // ---------- 2. Auto-match to nearest pending/completed tour --------------
-    if (autoMatchEnabled) {
-      const nowMs = Date.now()
-      const windowMs = windowHours * 60 * 60 * 1000
-      const lowerIso = new Date(nowMs - windowMs).toISOString()
-      const upperIso = new Date(nowMs + windowMs).toISOString()
-
-      const { data: candidates, error: candErr } = await service
-        .from('tours')
-        .select('id, scheduled_at, transcript, session_id, outcome')
-        .eq('venue_id', venueId)
-        .in('outcome', ['pending', 'completed'])
-        .is('session_id', null)
-        .gte('scheduled_at', lowerIso)
-        .lte('scheduled_at', upperIso)
-
-      if (candErr) {
-        console.error('[api/omi/webhook] candidate lookup error:', candErr.message)
-        return NextResponse.json({ error: 'internal' }, { status: 500 })
-      }
-
-      const nearest = (candidates ?? [])
-        .map((t) => ({
-          id: t.id as string,
-          transcript: (typeof t.transcript === 'string' ? t.transcript : '') as string,
-          outcome: (t.outcome as string | null) ?? null,
-          scheduledAt: (t.scheduled_at as string | null) ?? null,
-          delta: Math.abs(
-            new Date((t.scheduled_at as string) || nowIso).getTime() - nowMs
-          ),
-        }))
-        .sort((a, b) => a.delta - b.delta)[0]
-
-      if (nearest) {
-        const current = nearest.transcript
-        const nextTranscript = current ? `${current} ${segmentText}` : segmentText
-        const { error: bindErr } = await service
-          .from('tours')
-          .update({
-            session_id: sessionId,
-            audio_provider: 'omi',
-            transcript: nextTranscript,
-            transcript_received_at: nowIso,
-          })
-          .eq('id', nearest.id)
-          .eq('venue_id', venueId)
-        if (bindErr) {
-          console.error('[api/omi/webhook] tour bind error:', bindErr.message)
-          return NextResponse.json({ error: 'internal' }, { status: 500 })
-        }
-        maybeFireExtraction({
-          venueId,
-          tourId: nearest.id,
-          outcome: nearest.outcome,
-          scheduledAt: nearest.scheduledAt,
-          transcript: nextTranscript,
-        })
-        return NextResponse.json({ matched_tour_id: nearest.id, session: 'new_match' })
-      }
+    if (result.orphanId) {
+      return NextResponse.json({
+        orphan_id: result.orphanId,
+        session: result.session,
+        segments_written: result.segmentsWritten,
+      })
     }
-
-    // ---------- 3. Orphan it ------------------------------------------------
-    // Read existing orphan (if any) so we can append rather than overwrite.
-    const { data: existingOrphan } = await service
-      .from('tour_transcript_orphans')
-      .select('id, transcript, segments_count')
-      .eq('venue_id', venueId)
-      .eq('session_id', sessionId)
-      .maybeSingle()
-
-    const currentOrphanText = typeof existingOrphan?.transcript === 'string'
-      ? existingOrphan.transcript
-      : ''
-    const currentCount = typeof existingOrphan?.segments_count === 'number'
-      ? existingOrphan.segments_count
-      : 0
-    const nextOrphanText = currentOrphanText
-      ? `${currentOrphanText} ${segmentText}`
-      : segmentText
-
-    const { data: orphan, error: orphanErr } = await service
-      .from('tour_transcript_orphans')
-      .upsert(
-        {
-          venue_id: venueId,
-          session_id: sessionId,
-          audio_provider: 'omi',
-          transcript: nextOrphanText,
-          segments_count: currentCount + segments.length,
-          last_segment_at: nowIso,
-          status: 'pending',
-        },
-        { onConflict: 'venue_id,session_id' }
-      )
-      .select('id')
-      .single()
-
-    if (orphanErr || !orphan) {
-      console.error('[api/omi/webhook] orphan upsert error:', orphanErr?.message)
-      return NextResponse.json({ error: 'internal' }, { status: 500 })
-    }
-
-    return NextResponse.json({ orphan_id: orphan.id, session: 'orphan' })
+    return NextResponse.json({ session: result.session })
   } catch (err) {
     console.error('[api/omi/webhook] unexpected error:', err)
     return NextResponse.json({ error: 'internal' }, { status: 500 })

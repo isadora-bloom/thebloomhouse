@@ -123,7 +123,7 @@ export const MODE_AGENT: ModeConfig = {
     {
       title: 'Other inboxes',
       items: [
-        { label: 'Omi Inbox', href: '/agent/omi-inbox', icon: Inbox },
+        { label: 'Audio Inbox', href: '/agent/audio-inbox', icon: Inbox },
       ],
     },
     {
@@ -425,7 +425,7 @@ export const MODE_SAGE: ModeConfig = {
       subtitle: 'Gmail, Omi, integrations',
       venueOnly: true,
       items: [
-        { label: 'Omi', href: '/settings/omi', icon: Inbox },
+        { label: 'Audio Capture', href: '/settings/audio-capture', icon: Inbox },
         { label: 'OpenPhone (SMS)', href: '/settings/openphone', icon: Phone },
       ],
     },
