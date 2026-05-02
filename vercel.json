@@ -49,6 +49,10 @@
       "schedule": "15 8 * * *"
     },
     {
+      "path": "/api/cron?job=essentials_suggest",
+      "schedule": "30 8 * * *"
+    },
+    {
       "path": "/api/cron?job=inbox_filter_learning",
       "schedule": "0 9 * * *"
     },

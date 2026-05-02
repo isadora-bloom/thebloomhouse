@@ -16,6 +16,10 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { callAI } from '@/lib/ai/client'
 import { sendEmail as sendGmail } from '@/lib/services/gmail'
 import { sendEmail as sendTransactionalEmail } from '@/lib/services/email'
+import {
+  enabledCategories,
+  type DigestPreferences,
+} from '@/lib/services/digest-preferences'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -87,11 +91,27 @@ function daysBetween(dateStr: string): number {
 /**
  * Gathers the last 24 hours of venue activity and generates a structured
  * digest with an AI-written summary paragraph.
+ *
+ * Per-user category filtering (T5-γ.5): when `categoryFilter` is provided,
+ * sections that map to opted-out categories are suppressed:
+ *   - alerts             → 'anomaly'
+ *   - briefing_highlight → 'correlation' / 'market' (macro context)
+ * Sections that are always-on (action_needed, yesterday, upcoming,
+ * performance) reflect operational reality every coordinator should see
+ * regardless of category prefs.
+ *
+ * `coordinatorNameOverride` lets the per-user dispatcher personalise the
+ * greeting with the recipient's first name instead of the venue-level
+ * coordinator_name fallback.
  */
-export async function generateDigest(venueId: string): Promise<Digest> {
+export async function generateDigest(
+  venueId: string,
+  options?: { categoryFilter?: Set<string>; coordinatorNameOverride?: string },
+): Promise<Digest> {
   const supabase = createServiceClient()
   const since = hoursAgo(24)
   const todayStr = today()
+  const categoryFilter = options?.categoryFilter
 
   // ---- Venue + coordinator info ----
   const { data: venue } = await supabase
@@ -107,7 +127,10 @@ export async function generateDigest(venueId: string): Promise<Digest> {
     .single()
 
   const venueName = (venue?.name as string) ?? 'Your Venue'
-  const coordinatorName = (config?.coordinator_name as string) ?? 'Team'
+  const coordinatorName =
+    options?.coordinatorNameOverride ??
+    (config?.coordinator_name as string) ??
+    'Team'
 
   // ---- Gather all data in parallel ----
   const [
@@ -272,11 +295,18 @@ export async function generateDigest(venueId: string): Promise<Digest> {
   // For v1, we leave this as 0 — would need a join or separate query
   const avgResponseTime = 0
 
-  // Alerts
-  const alerts = (alertsResult.data ?? []).map(
-    (a) =>
-      `[${a.alert_type}] ${a.metric_name}: ${(a.ai_explanation as string) ?? 'No details'}`
-  )
+  // Alerts. Per-user category filter: anomaly alerts only surface when
+  // the recipient opted into 'anomaly' / 'data_anomaly'. When no filter
+  // is provided (legacy venue-broadcast path), alerts are always
+  // included.
+  const includeAnomalyAlerts =
+    !categoryFilter || categoryFilter.has('anomaly') || categoryFilter.has('data_anomaly')
+  const alerts = includeAnomalyAlerts
+    ? (alertsResult.data ?? []).map(
+        (a) =>
+          `[${a.alert_type}] ${a.metric_name}: ${(a.ai_explanation as string) ?? 'No details'}`
+      )
+    : []
 
   const sections: DigestSections = {
     action_needed: {
@@ -303,7 +333,18 @@ export async function generateDigest(venueId: string): Promise<Digest> {
   }
 
   // ---- Briefing highlight: pull 1-2 recommendations from the latest weekly briefing ----
-  try {
+  // Per-user category filter: macro/correlation context is only surfaced
+  // when the recipient opted into 'correlation' / 'market'. Pricing-only
+  // recipients still see operational sections above; this enrichment
+  // requires explicit opt-in via include_macro_correlations.
+  const includeBriefingHighlight =
+    !categoryFilter ||
+    categoryFilter.has('correlation') ||
+    categoryFilter.has('market') ||
+    categoryFilter.has('weather') ||
+    categoryFilter.has('seasonal')
+  if (includeBriefingHighlight) {
+    try {
     const sevenDaysAgo = hoursAgo(7 * 24)
     const { data: briefing } = await supabase
       .from('ai_briefings')
@@ -345,8 +386,9 @@ export async function generateDigest(venueId: string): Promise<Digest> {
         sections.briefing_highlight = recommendations.join(' | ')
       }
     }
-  } catch {
-    // Briefing highlight is enrichment — don't block the digest
+    } catch {
+      // Briefing highlight is enrichment — don't block the digest
+    }
   }
 
   // ---- AI summary ----
@@ -593,12 +635,17 @@ export function formatDigestHtml(digest: Digest): string {
 }
 
 // ---------------------------------------------------------------------------
-// 3. sendDigestEmail
+// 3. sendDigestEmail (legacy venue-broadcast path)
 // ---------------------------------------------------------------------------
 
 /**
- * Generates the digest, formats to HTML, and "sends" via the venue's
- * briefing_email. For now, logs the output (swap for Resend/SES later).
+ * Legacy venue-broadcast send. Generates a single digest with no
+ * per-user category filter and ships it to `venues.briefing_email`.
+ * Kept for venues that have NOT yet created a digest_preferences row
+ * (rollout fallback) so dropping the per-user shape doesn't silently
+ * regress their morning email.
+ *
+ * For preference-aware per-user dispatch see sendDigestEmailForUser.
  */
 export async function sendDigestEmail(
   venueId: string
@@ -659,22 +706,120 @@ export async function sendDigestEmail(
 }
 
 // ---------------------------------------------------------------------------
+// 3b. sendDigestEmailForUser — per-user, category-aware (T5-γ.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-user dispatch (T5-γ.5). Honors enabledCategories from the
+ * coordinator's digest_preferences row and sends to THAT coordinator's
+ * email (auth.users.email), not the venue-level briefing_email.
+ *
+ * Two coordinators on the same venue with different category prefs
+ * (e.g. one wants self_knowledge, the other doesn't) end up receiving
+ * different digests rather than a single venue-broadcast.
+ *
+ * Sender priority: venue-authenticated Gmail (so the digest arrives
+ * from the venue's own inbox) → Resend transactional fallback. This
+ * mirrors the legacy sendDigestEmail flow.
+ */
+export async function sendDigestEmailForUser(
+  prefs: DigestPreferences,
+  recipientEmail: string,
+  recipientName?: string,
+): Promise<{ sent: boolean; to: string }> {
+  const venueId = prefs.venue_id
+  if (!recipientEmail) {
+    console.warn(
+      `[daily-digest] No recipient email for user ${prefs.user_id} on venue ${venueId}`,
+    )
+    return { sent: false, to: '' }
+  }
+
+  try {
+    const categoryFilter = enabledCategories(prefs)
+    const digest = await generateDigest(venueId, {
+      categoryFilter,
+      coordinatorNameOverride: recipientName,
+    })
+    const html = formatDigestHtml(digest)
+    const subject = `${digest.venue_name} — Daily Digest for ${digest.date}`
+
+    // Email channel must be on. If a coordinator turned off email but
+    // left in_app on, we still build the digest above (so /pulse-style
+    // surfaces could read it) but we don't ship it via mail.
+    if (!prefs.channel_email) {
+      console.log(
+        `[daily-digest] channel_email=off for user ${prefs.user_id}, skipping email send`,
+      )
+      return { sent: false, to: recipientEmail }
+    }
+
+    // Try venue-authenticated Gmail first.
+    const messageId = await sendGmail(venueId, recipientEmail, subject, html)
+    if (messageId) {
+      console.log(
+        `[daily-digest] Sent via Gmail to ${recipientEmail} (user ${prefs.user_id}, messageId: ${messageId})`,
+      )
+      return { sent: true, to: recipientEmail }
+    }
+
+    // Resend fallback.
+    console.warn(
+      `[daily-digest] Gmail not connected for venue ${venueId}, falling back to transactional email for ${recipientEmail}`,
+    )
+    const fallback = await sendTransactionalEmail({
+      to: recipientEmail,
+      subject,
+      html,
+    })
+
+    if (fallback.ok) {
+      console.log(
+        `[daily-digest] Sent via Resend to ${recipientEmail} (user ${prefs.user_id}, id: ${fallback.id ?? 'n/a'})`,
+      )
+      return { sent: true, to: recipientEmail }
+    }
+
+    console.error(
+      `[daily-digest] Transactional fallback failed for user ${prefs.user_id} on venue ${venueId}: ${fallback.error}`,
+    )
+    return { sent: false, to: recipientEmail }
+  } catch (err) {
+    console.error(
+      `[daily-digest] Per-user dispatch failed for user ${prefs.user_id} on venue ${venueId}:`,
+      err,
+    )
+    return { sent: false, to: recipientEmail }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 4. sendAllDigests
 // ---------------------------------------------------------------------------
 
 /**
- * Sends a daily digest to active venues. PREFERENCE-AWARE per T4-H:
- * filters venues to those with at least one coordinator whose
- * digest_preferences pass shouldSendToday (cadence + send_dow + 23h
- * gate). Pre-fix this fired for every venue with briefing_email
- * regardless of preferences.
+ * Sends a daily digest to active venues. PREFERENCE-AWARE + per-user
+ * since T5-γ.5:
+ *   1. eligibleVenuesToday returns the digest_preferences rows whose
+ *      cadence + send_dow + 23h-gate fire today.
+ *   2. For each eligible preference row, we resolve the coordinator's
+ *      auth email and dispatch a category-filtered digest to THAT
+ *      coordinator (not the venue's briefing_email).
+ *   3. Two coordinators on the same venue with different category
+ *      prefs receive different digests — the include_self_knowledge
+ *      opt-out is honored per-recipient.
  *
- * Legacy fallback: venues with briefing_email but NO digest_preferences
- * row at all keep getting a daily digest so the rollout doesn't
- * silently drop coordinators. Once they visit /settings/digest-
- * preferences once (defaults are weekly Mon), they migrate naturally.
+ * Legacy venue-broadcast fallback: venues with briefing_email but NO
+ * digest_preferences row keep getting one venue-level digest so the
+ * rollout doesn't silently drop coordinators. They migrate naturally
+ * the first time anyone on the team visits /settings/digest-preferences
+ * (defaults are weekly Mon).
  *
  * Cost-ceiling gate still applies — paused venues are skipped.
+ *
+ * Returned shape: keyed by `${venueId}:${userId}` for per-user sends and
+ * by `${venueId}` for legacy venue-broadcast sends. Mixing the two keeps
+ * the caller's logging path simple (one map per cron run).
  */
 export async function sendAllDigests(): Promise<
   Record<string, { sent: boolean; to: string }>
@@ -707,9 +852,86 @@ export async function sendAllDigests(): Promise<
   if (skipped.length > 0) {
     console.log(`[daily-digest] Skipping ${skipped.length} paused venue(s); running ${active.length}`)
   }
+  const activeSet = new Set(active)
 
   const results: Record<string, { sent: boolean; to: string }> = {}
+
+  // ---- Per-user dispatch path ----
+  // Resolve auth emails for every user with an eligible preference row.
+  // We listUsers() once and build a userId → { email, firstName? } map.
+  const userIdsToResolve = Array.from(new Set(userPrefs.map((p) => p.user_id)))
+  const userInfoMap = new Map<string, { email: string | null; firstName: string | null }>()
+  if (userIdsToResolve.length > 0) {
+    try {
+      // Pull names from user_profiles (auth.users doesn't store first_name).
+      const { data: profiles } = await supabase
+        .from('user_profiles')
+        .select('id, first_name')
+        .in('id', userIdsToResolve)
+      const nameById = new Map<string, string | null>()
+      for (const p of (profiles ?? []) as Array<{ id: string; first_name: string | null }>) {
+        nameById.set(p.id, p.first_name)
+      }
+
+      // auth.users.email lives on the auth schema and isn't directly
+      // queryable from PostgREST — the admin API is the supported route.
+      // listUsers paginates at 50/page; we walk through all pages until
+      // we have everyone we need or run out.
+      const wanted = new Set(userIdsToResolve)
+      let page = 1
+      const PER_PAGE = 200
+      while (wanted.size > 0 && page < 50) {
+        const { data: pageData, error } = await supabase.auth.admin.listUsers({
+          page,
+          perPage: PER_PAGE,
+        })
+        if (error) {
+          console.warn('[daily-digest] auth.admin.listUsers failed:', error.message)
+          break
+        }
+        const users = pageData?.users ?? []
+        if (users.length === 0) break
+        for (const u of users) {
+          if (wanted.has(u.id)) {
+            userInfoMap.set(u.id, {
+              email: u.email ?? null,
+              firstName: nameById.get(u.id) ?? null,
+            })
+            wanted.delete(u.id)
+          }
+        }
+        if (users.length < PER_PAGE) break
+        page += 1
+      }
+    } catch (err) {
+      console.error('[daily-digest] Failed to resolve user emails:', err)
+    }
+  }
+
+  const sentPrefs: DigestPreferences[] = []
+  for (const prefs of userPrefs) {
+    if (!activeSet.has(prefs.venue_id)) continue  // cost-ceiling skipped
+    const info = userInfoMap.get(prefs.user_id)
+    if (!info?.email) {
+      console.warn(
+        `[daily-digest] No auth email resolved for user ${prefs.user_id} on venue ${prefs.venue_id}; skipping per-user dispatch`,
+      )
+      continue
+    }
+    const key = `${prefs.venue_id}:${prefs.user_id}`
+    try {
+      const result = await sendDigestEmailForUser(prefs, info.email, info.firstName ?? undefined)
+      results[key] = result
+      if (result.sent) sentPrefs.push(prefs)
+    } catch (err) {
+      console.error(`[daily-digest] Per-user dispatch failed for ${key}:`, err)
+      results[key] = { sent: false, to: info.email }
+    }
+  }
+
+  // ---- Legacy venue-broadcast path ----
   for (const id of active) {
+    if (!legacyVenues.includes(id)) continue
     try {
       results[id] = await sendDigestEmail(id)
     } catch (err) {
@@ -718,12 +940,10 @@ export async function sendAllDigests(): Promise<
     }
   }
 
-  // Stamp last_sent_at on the preferences rows that drove dispatch.
-  // Legacy venues skip — there's no row to stamp.
-  const sentVenueIds = new Set(Object.entries(results).filter(([, r]) => r.sent).map(([id]) => id))
-  const stamped = userPrefs.filter((p) => sentVenueIds.has(p.venue_id))
-  if (stamped.length > 0) {
-    await markPreferencesSent(stamped)
+  // Stamp last_sent_at on the preferences rows whose user-dispatch
+  // succeeded. Legacy venues have no row to stamp.
+  if (sentPrefs.length > 0) {
+    await markPreferencesSent(sentPrefs)
   }
 
   return results

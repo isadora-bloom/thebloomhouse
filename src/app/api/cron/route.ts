@@ -34,6 +34,7 @@ import {
   enforceCeilingsAllVenues,
   clearStaleAutonomousPauses,
 } from '@/lib/services/cost-ceiling'
+import { runEssentialsSuggester } from '@/lib/services/essentials-suggester'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -82,6 +83,11 @@ const VALID_JOBS = [
   // pauses (separate jobs so vercel.json can give them different cadences).
   'cost_ceiling_check',
   'cost_ceiling_reset',
+  // T5-γ.3 (2026-05-02). Essentials slider suggestion engine. Reads
+  // essentials_action_log nightly and fires per-user notifications when
+  // a coordinator has dismissed 5+ high-density cards on the same
+  // surface in the last 30 days.
+  'essentials_suggest',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -265,6 +271,17 @@ async function runJob(job: JobName): Promise<unknown> {
       // spend is back under ceiling. Coordinators who can't wait
       // for the natural reset use POST /api/agent/cost-ceiling/resume.
       return clearStaleAutonomousPauses()
+
+    case 'essentials_suggest':
+      // T5-γ.3 (2026-05-02). Daily. Reads essentials_action_log and
+      // fires a per-user 'essentials_suggestion' admin_notification
+      // when a coordinator has dismissed 5+ high-density cards (level
+      // 'expanded' or 'everything') on the same surface in the last
+      // 30 days. Idempotent — the 30d suppression window prevents
+      // re-firing the same suggestion every day. Closes the loop on
+      // the slider learning telemetry that was being written but
+      // never read (Pattern A).
+      return runEssentialsSuggester(createServiceClient())
   }
 }
 
