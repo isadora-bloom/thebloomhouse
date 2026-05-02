@@ -113,6 +113,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron?job=external_calendar_refresh",
+      "schedule": "0 4 * * *"
+    },
+    {
       "path": "/api/cron/replay-paused-skipped",
       "schedule": "5 0 * * *"
     },

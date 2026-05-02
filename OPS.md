@@ -42,7 +42,7 @@ don't drift the same way.
 | `fred_indicators` | cron | `fred_daily_refresh` → `fred-fetch.ts:144` upsert | daily 03:00 UTC | `cron_runs.fred_daily_refresh` + sanity-count freshness alert in handler |
 | `weather_data` | cron | `weather_forecast` → `weather.ts:371` upsert | daily 05:00 UTC | `cron_runs.weather_forecast` |
 | `search_trends` | cron | `trends_refresh` → `trends.ts:227` upsert | weekly Mon 03:00 UTC | `cron_runs.trends_refresh` |
-| `external_calendar_events` | **NONE (gap)** | only readers in `external-context/calendar.ts` + `intel-brain.ts` | n/a | n/a |
+| `external_calendar_events` | cron | `external_calendar_refresh` → `external-context/calendar-writer.ts:populateUSCalendarEvents` upsert (federal + religious + sporting + industry + cultural) | daily 04:00 UTC, rolling 365-day window | `cron_runs.external_calendar_refresh` + structured `external_calendar_refresh` log lines with by-category counts |
 | `intelligence_insights` | live + cron | `quality-signals.ts`, `correlation-engine.ts`, `data-integrity.ts`, `insights/persist.ts`, all `insights/*.ts` generators | varies — per insight type | `cron_runs.{anomaly_detection,correlation_analysis,data_integrity_sweep,quality_signals_refresh,intelligence_analysis}` |
 | `wedding_journey_narratives` | cron | written by `journey-narrative.ts` triggered by intelligence pipelines | varies | logs |
 | `tour_brief_*` (on `tours`) | cron | `post-tour-brief.ts` triggered after tour completes | within 24h of tour | logs |
@@ -94,6 +94,7 @@ don't drift the same way.
 | `30 4 * * *` | `backtrace_scan` | `admin_notifications` (writes), reads `interactions` + `weddings` | daily re-scan for newly-discoverable scheduling-tool relays after Gmail catches up. |
 | `45 4 * * *` | `phase_b_sweep` | `tangential_signals`, `candidate_identities`, `attribution_events`, `wedding_touchpoints` | daily catch-up resolver: re-cluster orphan signals, re-resolve unmatched candidates. AI-skip mode. |
 | `0 4 * * *` | `anomaly_detection` | `anomaly_alerts`, `intelligence_insights` (data_anomaly type) | daily anomaly hypothesis sweep across inquiries / bookings / sources / drop-offs. |
+| `0 4 * * *` | `external_calendar_refresh` | `external_calendar_events` | populate US-nationwide federal / religious / sporting / industry / cultural calendar events for the next 365 days. Idempotent UPSERT. |
 | `0 4 * * 2` | `venue_health_compute` | `venue_health`, `venue_health_history` | weekly venue-health snapshot. |
 | `0 5 * * *` | `data_integrity_sweep` | `intelligence_insights` (data_anomaly + self_healed) | run the 8 invariants on every venue. |
 | `0 5 * * 2` | `quality_signals_refresh` | `intelligence_insights` | weekly two-email-drop-off insights per venue. |
@@ -131,14 +132,16 @@ ad-hoc debugging, or simply unscheduled by intent:
 
 ## P1 follow-ups (call-outs from this audit)
 
-### `external_calendar_events` has zero writers
-Reader exists (`lib/services/external-context/calendar.ts`) feeding the
-correlation engine's calendar channel. No insert/upsert anywhere in
-`src/`, `supabase/functions/`, `supabase/migrations/`, or `scripts/`.
-The calendar channel correlations + intel-brain `external_calendar_events`
-references will permanently see zero rows. Either (a) add a coordinator UI
-to write them, (b) add a cron sourcing from a public calendar API, or
-(c) document explicitly that this channel is "future hardware".
+### ~~`external_calendar_events` has zero writers~~ — closed by Stream V (T5-followup)
+Daily cron `external_calendar_refresh` at 04:00 UTC writes US-nationwide
+federal + religious + sporting + industry + cultural events for a
+rolling 365-day window via `populateUSCalendarEvents` in
+`lib/services/external-context/calendar-writer.ts`. Migration 169 added
+the unique index `uq_ece_scope_title_start` and the `created_by_writer`
+provenance column. State-level (`us_<STATE>`) rollout + coordinator-curated
+local events (regional bridal expos, town festivals) remain follow-ups.
+Religious / lunar drift table is hardcoded for 2024-2030 — extend before
+2029.
 
 ### `notifications` has zero writers
 Migration 017 created the table for the couple-portal notification fan-out.
