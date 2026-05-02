@@ -26,6 +26,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { redactError } from '@/lib/observability/redact'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -219,29 +221,39 @@ Window: ${payload.oldest_event_at?.slice(0, 10) ?? '?'} → ${payload.newest_eve
 Compose the JSON narration.`
 
   let narration: InsightNarration | null = null
-  try {
-    const result = await callAI({
-      systemPrompt,
-      userPrompt,
-      maxTokens: 280,
-      temperature: 0.4,
-      venueId,
-      taskType: 'heat_narration',
-      tier: 'sonnet',
-      promptVersion: HEAT_NARRATION_PROMPT_VERSION,
-    })
-    const parsed = JSON.parse(
-      result.text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim(),
-    ) as Partial<InsightNarration>
-    if (parsed.title && parsed.body) {
-      narration = {
-        title: parsed.title,
-        body: parsed.body,
-        action: parsed.action ?? null,
+  // Cost-ceiling gate (T5-α.2). Per OPS-21.4.3, when a venue's daily
+  // ceiling is hit autonomous behavior pauses — including proactive
+  // insights. The deterministic fallback below still runs so the
+  // coordinator sees *some* reasoning even when paused.
+  const gate = await gateForBrainCall(venueId)
+  if (gate.ok) {
+    try {
+      const result = await callAI({
+        systemPrompt,
+        userPrompt,
+        maxTokens: 280,
+        temperature: 0.4,
+        venueId,
+        taskType: 'heat_narration',
+        tier: 'sonnet',
+        promptVersion: HEAT_NARRATION_PROMPT_VERSION,
+      })
+      const parsed = JSON.parse(
+        result.text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim(),
+      ) as Partial<InsightNarration>
+      if (parsed.title && parsed.body) {
+        narration = {
+          title: parsed.title,
+          body: parsed.body,
+          action: parsed.action ?? null,
+        }
       }
+    } catch (err) {
+      // redactError strips PII (couple email, phone, long quoted
+      // strings) before stdout; Anthropic 4xx echoes prompt content
+      // into err.message which contains tier-1 couple PII. OPS-21.3.3.
+      console.warn('[heat-narration] LLM call failed:', redactError(err))
     }
-  } catch (err) {
-    console.warn('[heat-narration] LLM call failed:', err instanceof Error ? err.message : err)
   }
 
   // Deterministic fallback when LLM unavailable. Numbers-guard tolerant

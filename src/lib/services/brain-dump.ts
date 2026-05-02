@@ -30,6 +30,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { createNotification } from '@/lib/services/admin-notifications'
 import {
   patternSignature,
@@ -145,6 +146,20 @@ Rules:
   const userPrompt = `Observation: """${rawText}"""
 
 Classify and extract according to the schema. Respond with JSON only.`
+
+  // Cost-ceiling gate (T5-α.2). Brain-dump is coordinator-initiated
+  // (they typed an observation and clicked submit) — refusing the
+  // call would lose their input silently. The audit guidance is
+  // "log a warning but still allow user-initiated calls". The
+  // ceiling is still respected because callAIJson logs to api_costs
+  // regardless; if the venue is over-ceiling the next CRON sweep
+  // catches it. OPS-21.4.3.
+  const gate = await gateForBrainCall(venueId)
+  if (!gate.ok) {
+    console.warn(
+      `[brain-dump] proceeding despite cost-ceiling pause for venue ${venueId} (user-initiated)`,
+    )
+  }
 
   // Tier 1 content: brain-dump submissions can carry per-couple intel
   // paragraphs ("Just spoke with Maddie's mom on the phone — she's

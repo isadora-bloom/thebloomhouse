@@ -16,6 +16,7 @@ import { generatePricingElasticity } from '@/lib/services/insights/pricing-elast
 import { generateSourceMixCounterfactual } from '@/lib/services/insights/source-mix-counterfactual'
 import { generateCoordinatorOverridePattern } from '@/lib/services/insights/coordinator-override-pattern'
 import { generateStrengthAreaCohort } from '@/lib/services/insights/strength-area-cohort'
+import { gateForBrainCall, nextUtcMidnightIso } from '@/lib/services/cost-ceiling'
 
 export async function GET(request: NextRequest) {
   const supabase = createServiceClient()
@@ -38,6 +39,17 @@ export async function GET(request: NextRequest) {
   }
 
   const force = request.nextUrl.searchParams.get('refresh') === '1'
+
+  // Cost-ceiling gate (T5-α.2): same 429 short-circuit as the
+  // lead-scoped endpoint. See lead/[weddingId]/route.ts for the
+  // rationale.
+  const gate = await gateForBrainCall(venueId)
+  if (!gate.ok) {
+    return NextResponse.json(
+      { error: 'autonomous_paused', resume_at: nextUtcMidnightIso() },
+      { status: 429 },
+    )
+  }
 
   const [pricing, sourceMix, coordinatorOverride, strengthArea] = await Promise.allSettled([
     generatePricingElasticity(supabase, venueId, force),

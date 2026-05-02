@@ -14,6 +14,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { redact } from '@/lib/observability/redact'
 import type { PersistInsightArgs } from './types'
 import { checkNarrationNumbers } from './numbers-guard'
 
@@ -142,7 +143,11 @@ export async function persistInsight(
     .single()
 
   if (error) {
-    console.error('[insights/persist] upsert failed:', error.message)
+    // Postgres error.message can include row content (e.g. unique
+    // violation echoes the conflicting row's column values, which here
+    // includes title + body — both narration text composed over
+    // couple PII). Redact before stdout per OPS-21.3.3.
+    console.error('[insights/persist] upsert failed:', redact(error.message))
     return { ok: false }
   }
 

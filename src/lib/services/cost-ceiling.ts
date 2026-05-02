@@ -143,6 +143,69 @@ export async function isAutonomousPaused(venueId: string): Promise<boolean> {
 }
 
 /**
+ * Gate check for "brain calls" — any LLM-spending request path,
+ * including:
+ *   - T3 named-insight generators (heat-narration, decay-re-engagement,
+ *     cohort-match, etc.) called from /api/insights/lead and
+ *     /api/insights/venue
+ *   - User-initiated regenerate flows (force=true)
+ *   - Coordinator-driven AI calls (brain-dump, post-tour-brief regens)
+ *
+ * Per Playbook OPS-21.4.3, when 100% of the daily ceiling is reached,
+ * "no proactive insights" should fire — and the user-facing endpoints
+ * are exactly the surface that turns the ceiling from a budget cap
+ * into a notification when unguarded.
+ *
+ * Why no per-coordinator rate limit (yet):
+ *   - The cost ceiling itself IS the budget cap. A coordinator
+ *     hammering Refresh on a healthy venue eats into the $5/day
+ *     ceiling, but the ceiling stops them at $5 — that's the design.
+ *   - Adding a per-minute rate limit here would add a second gate
+ *     with its own state (Redis or DB-backed counter), which we'd
+ *     have to keep in sync with the cost ceiling. Belt-and-suspenders
+ *     becomes a parallel system to debug.
+ *   - If hammering becomes a real-world problem (e.g. one coordinator
+ *     consistently burning 30% of the ceiling on Refresh clicks), the
+ *     right intervention is per-(venueId, taskType) rate-limit on
+ *     the api_costs table — already-instrumented, no new state.
+ *
+ * Returns:
+ *   { ok: true } when the venue is active.
+ *   { ok: false, reason: 'autonomous_paused' } when paused.
+ *
+ * Fail-open behaviour: if the lookup fails (DB blip), we treat the
+ * venue as active and let the call through. The autonomous_paused
+ * lookup itself is read-only and well-indexed; if it's failing,
+ * blocking every insight generation does more harm than letting
+ * the request through.
+ */
+export async function gateForBrainCall(
+  venueId: string,
+): Promise<{ ok: true } | { ok: false; reason: 'autonomous_paused' }> {
+  const paused = await isAutonomousPaused(venueId)
+  if (paused) return { ok: false, reason: 'autonomous_paused' }
+  return { ok: true }
+}
+
+/**
+ * Returns the next UTC midnight as an ISO timestamp. Used by the
+ * /api/insights endpoints when returning a 429 so the client can
+ * show "auto-resumes at <time>" in its banner.
+ *
+ * The autonomous-pause flag actually clears via the
+ * clearStaleAutonomousPauses cron at the next UTC day boundary
+ * AND only if current spend is back under ceiling — so this is the
+ * EARLIEST plausible resume time, not the guaranteed one. The 429
+ * response surfaces it as a hint, not a contract.
+ */
+export function nextUtcMidnightIso(): string {
+  const now = new Date()
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+  ).toISOString()
+}
+
+/**
  * Filter a list of venue IDs down to those whose autonomous behavior
  * is NOT paused. Used by cron-driven AI services (anomaly detection,
  * digests, intelligence engine, follow-ups, re-engagement) to skip

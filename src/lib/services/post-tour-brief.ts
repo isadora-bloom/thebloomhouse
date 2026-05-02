@@ -26,6 +26,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
 import type { TranscriptExtraction } from './tour-transcript-extract'
 
@@ -270,6 +271,17 @@ export async function generatePostTourBrief(
 
   const venueId = tour.venue_id as string
   const weddingId = (tour.wedding_id as string | null) ?? null
+
+  // Cost-ceiling gate (T5-α.2). Both the brief AND the follow-up
+  // draft are tier-1 Sonnet calls; if the venue's daily ceiling is
+  // tripped we skip silently — cron-style "no proactive insights"
+  // per OPS-21.4.3. Coordinator can resume + regenerate via
+  // POST /api/agent/post-tour-brief once the ceiling resets.
+  const gate = await gateForBrainCall(venueId)
+  if (!gate.ok) {
+    console.log(`[post-tour-brief] skipped — venue ${venueId} cost-ceiling paused`)
+    return null
+  }
 
   // 2. Load venue, ai config, review phrases, wedding (parallel)
   const [

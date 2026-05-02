@@ -50,6 +50,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { redactError } from '@/lib/observability/redact'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -389,26 +391,34 @@ ${qualityFlag}
 Diagnose + recommend.`
 
   let result: CounterfactualDiagnostic | null = null
-  try {
-    const raw = await callAIJson<CounterfactualDiagnostic>({
-      systemPrompt,
-      userPrompt,
-      maxTokens: 320,
-      temperature: 0.3,
-      venueId,
-      taskType: 'source_mix_counterfactual',
-      tier: 'sonnet',
-      promptVersion: SOURCE_MIX_COUNTERFACTUAL_PROMPT_VERSION,
-    })
-    if (raw && typeof raw.reasoning === 'string') {
-      result = {
-        reasoning: raw.reasoning.trim() || 'Reallocation projection computed.',
-        recommendation: (raw.recommendation ?? '').trim() || 'Move the recommended amount and watch for 2 bookings to confirm before scaling.',
-        confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+  // Cost-ceiling gate (T5-α.2). Deterministic fallback below covers
+  // paused case.
+  const gate = await gateForBrainCall(venueId)
+  if (gate.ok) {
+    try {
+      const raw = await callAIJson<CounterfactualDiagnostic>({
+        systemPrompt,
+        userPrompt,
+        maxTokens: 320,
+        temperature: 0.3,
+        venueId,
+        taskType: 'source_mix_counterfactual',
+        tier: 'sonnet',
+        promptVersion: SOURCE_MIX_COUNTERFACTUAL_PROMPT_VERSION,
+      })
+      if (raw && typeof raw.reasoning === 'string') {
+        result = {
+          reasoning: raw.reasoning.trim() || 'Reallocation projection computed.',
+          recommendation: (raw.recommendation ?? '').trim() || 'Move the recommended amount and watch for 2 bookings to confirm before scaling.',
+          confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+        }
       }
+    } catch (err) {
+      // PII redaction — prompt is venue-aggregate spend/booking data;
+      // unlikely to carry PII but Anthropic 4xx still echoes prompt
+      // text and we standardise the catch shape across T3. OPS-21.3.3.
+      console.warn('[source-mix-counterfactual] LLM diagnostic failed:', redactError(err))
     }
-  } catch (err) {
-    console.warn('[source-mix-counterfactual] LLM diagnostic failed:', err instanceof Error ? err.message : err)
   }
 
   // Deterministic fallback.

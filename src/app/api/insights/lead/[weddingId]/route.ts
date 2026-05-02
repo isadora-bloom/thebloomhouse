@@ -23,6 +23,7 @@ import { generateNegotiationState } from '@/lib/services/insights/negotiation-st
 import { generateRiskFlags } from '@/lib/services/insights/risk-flags'
 import { generateDecayReEngagement } from '@/lib/services/insights/decay-re-engagement'
 import { generateCohortMatch } from '@/lib/services/insights/cohort-match'
+import { gateForBrainCall, nextUtcMidnightIso } from '@/lib/services/cost-ceiling'
 
 export async function GET(
   request: NextRequest,
@@ -60,6 +61,25 @@ export async function GET(
 
   // Force regeneration when ?refresh=1.
   const force = request.nextUrl.searchParams.get('refresh') === '1'
+
+  // Cost-ceiling gate (T5-α.2): if the venue has tripped its daily
+  // ceiling and autonomous behavior is paused, refuse the
+  // user-initiated insight generation request entirely. Pre-fix a
+  // coordinator hammering Refresh on a paused venue could fire 5
+  // Sonnet calls per click — the ceiling became a notification, not
+  // a budget cap. OPS-21.4.3.
+  //
+  // 429 with resume_at hint so client banner can render
+  // "auto-resumes at <next UTC midnight>". The flag actually clears
+  // via clearStaleAutonomousPauses cron + spend-under-ceiling check;
+  // the hint is plausible-earliest, not guaranteed.
+  const gate = await gateForBrainCall(venueId)
+  if (!gate.ok) {
+    return NextResponse.json(
+      { error: 'autonomous_paused', resume_at: nextUtcMidnightIso() },
+      { status: 429 },
+    )
+  }
 
   // Run the 4 generators in parallel. Each one is independently
   // cache-fast-path — if the cache is fresh it returns without

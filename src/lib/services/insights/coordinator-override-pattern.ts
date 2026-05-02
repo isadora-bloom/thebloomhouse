@@ -34,6 +34,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { redactError } from '@/lib/observability/redact'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -346,26 +348,33 @@ ${dowBlock}
 Diagnose the pattern + recommend a specific next step.`
 
   let result: CoordinatorDiagnostic | null = null
-  try {
-    const raw = await callAIJson<CoordinatorDiagnostic>({
-      systemPrompt,
-      userPrompt,
-      maxTokens: 280,
-      temperature: 0.3,
-      venueId,
-      taskType: 'coordinator_override_pattern',
-      tier: 'sonnet',
-      promptVersion: COORDINATOR_OVERRIDE_PROMPT_VERSION,
-    })
-    if (raw && typeof raw.reasoning === 'string') {
-      result = {
-        reasoning: raw.reasoning.trim() || 'Coordinator-AI draft mix shifted in the recent window.',
-        recommendation: (raw.recommendation ?? '').trim() || 'Review last week\'s rejected drafts to identify the prompt or context pattern.',
-        confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+  // Cost-ceiling gate (T5-α.2). Drift-word fallback below covers paused.
+  const gate = await gateForBrainCall(venueId)
+  if (gate.ok) {
+    try {
+      const raw = await callAIJson<CoordinatorDiagnostic>({
+        systemPrompt,
+        userPrompt,
+        maxTokens: 280,
+        temperature: 0.3,
+        venueId,
+        taskType: 'coordinator_override_pattern',
+        tier: 'sonnet',
+        promptVersion: COORDINATOR_OVERRIDE_PROMPT_VERSION,
+      })
+      if (raw && typeof raw.reasoning === 'string') {
+        result = {
+          reasoning: raw.reasoning.trim() || 'Coordinator-AI draft mix shifted in the recent window.',
+          recommendation: (raw.recommendation ?? '').trim() || 'Review last week\'s rejected drafts to identify the prompt or context pattern.',
+          confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+        }
       }
+    } catch (err) {
+      // PII redaction — prompt carries draft-feedback aggregates; not
+      // tier-1 PII shape but we keep the catch shape consistent across
+      // T3. OPS-21.3.3.
+      console.warn('[coordinator-override-pattern] LLM diagnostic failed:', redactError(err))
     }
-  } catch (err) {
-    console.warn('[coordinator-override-pattern] LLM diagnostic failed:', err instanceof Error ? err.message : err)
   }
 
   if (!result) {

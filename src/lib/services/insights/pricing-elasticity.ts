@@ -52,6 +52,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { redactError } from '@/lib/observability/redact'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -513,27 +515,34 @@ Confound checks:
 Diagnose + recommend.`
 
   let result: ElasticityDiagnostic | null = null
-  try {
-    const raw = await callAIJson<ElasticityDiagnostic>({
-      systemPrompt,
-      userPrompt,
-      maxTokens: 320,
-      temperature: 0.3,
-      venueId,
-      taskType: 'pricing_elasticity',
-      tier: 'sonnet',
-      promptVersion: PRICING_ELASTICITY_PROMPT_VERSION,
-    })
-    if (raw && CLASSIFICATION_LABEL[raw.classification as ElasticityClassification]) {
-      result = {
-        classification: raw.classification as ElasticityClassification,
-        reasoning: (raw.reasoning ?? '').trim() || 'Classification derived from elasticity calculation.',
-        recommendation: (raw.recommendation ?? '').trim() || 'Watch the next 30 days of conversions before acting.',
-        confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+  // Cost-ceiling gate (T5-α.2). Pure classifier fallback covers the
+  // paused case.
+  const gate = await gateForBrainCall(venueId)
+  if (gate.ok) {
+    try {
+      const raw = await callAIJson<ElasticityDiagnostic>({
+        systemPrompt,
+        userPrompt,
+        maxTokens: 320,
+        temperature: 0.3,
+        venueId,
+        taskType: 'pricing_elasticity',
+        tier: 'sonnet',
+        promptVersion: PRICING_ELASTICITY_PROMPT_VERSION,
+      })
+      if (raw && CLASSIFICATION_LABEL[raw.classification as ElasticityClassification]) {
+        result = {
+          classification: raw.classification as ElasticityClassification,
+          reasoning: (raw.reasoning ?? '').trim() || 'Classification derived from elasticity calculation.',
+          recommendation: (raw.recommendation ?? '').trim() || 'Watch the next 30 days of conversions before acting.',
+          confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+        }
       }
+    } catch (err) {
+      // PII redaction — prompt carries pricing context + coordinator
+      // notes (which can include free-text PII). OPS-21.3.3.
+      console.warn('[pricing-elasticity] LLM diagnostic failed:', redactError(err))
     }
-  } catch (err) {
-    console.warn('[pricing-elasticity] LLM diagnostic failed:', err instanceof Error ? err.message : err)
   }
 
   // Deterministic fallback when LLM unavailable. Uses pure classifier.

@@ -30,6 +30,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { redactError } from '@/lib/observability/redact'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -467,29 +469,36 @@ ${sampleCohort}
 Diagnose the pattern + recommend an action.`
 
   let result: CohortDiagnostic | null = null
-  try {
-    const raw = await callAIJson<CohortDiagnostic>({
-      systemPrompt,
-      userPrompt,
-      maxTokens: 320,
-      temperature: 0.3,
-      venueId,
-      taskType: 'cohort_match',
-      tier: 'sonnet',
-      promptVersion: COHORT_MATCH_PROMPT_VERSION,
-    })
-    if (raw && ['high_converting', 'low_converting', 'mixed', 'sparse_signal'].includes(raw.pattern)) {
-      result = {
-        pattern: raw.pattern,
-        reasoning: (raw.reasoning ?? '').trim() || 'Cohort pattern inferred from outcome split.',
-        recommendation: (raw.recommendation ?? '').trim() || 'Treat this as a fresh lead.',
-        confidence: typeof raw.confidence === 'number'
-          ? Math.max(0, Math.min(1, raw.confidence))
-          : 0.5,
+  // Cost-ceiling gate (T5-α.2). Conversion-rate fallback below covers
+  // the paused case.
+  const gate = await gateForBrainCall(venueId)
+  if (gate.ok) {
+    try {
+      const raw = await callAIJson<CohortDiagnostic>({
+        systemPrompt,
+        userPrompt,
+        maxTokens: 320,
+        temperature: 0.3,
+        venueId,
+        taskType: 'cohort_match',
+        tier: 'sonnet',
+        promptVersion: COHORT_MATCH_PROMPT_VERSION,
+      })
+      if (raw && ['high_converting', 'low_converting', 'mixed', 'sparse_signal'].includes(raw.pattern)) {
+        result = {
+          pattern: raw.pattern,
+          reasoning: (raw.reasoning ?? '').trim() || 'Cohort pattern inferred from outcome split.',
+          recommendation: (raw.recommendation ?? '').trim() || 'Treat this as a fresh lead.',
+          confidence: typeof raw.confidence === 'number'
+            ? Math.max(0, Math.min(1, raw.confidence))
+            : 0.5,
+        }
       }
+    } catch (err) {
+      // PII redaction — prompt carries cohort wedding details + current
+      // lead profile (guest count, season, source). OPS-21.3.3.
+      console.warn('[cohort-match] LLM diagnostic failed:', redactError(err))
     }
-  } catch (err) {
-    console.warn('[cohort-match] LLM diagnostic failed:', err instanceof Error ? err.message : err)
   }
 
   // Deterministic fallback — pick pattern from conversion rate.

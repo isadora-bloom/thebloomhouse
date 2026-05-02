@@ -37,6 +37,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { redactError } from '@/lib/observability/redact'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -286,26 +288,33 @@ Gap:                        ${classical.gap_pp}pp
 Diagnose + recommend.`
 
   let result: StrengthDiagnostic | null = null
-  try {
-    const raw = await callAIJson<StrengthDiagnostic>({
-      systemPrompt,
-      userPrompt,
-      maxTokens: 300,
-      temperature: 0.3,
-      venueId,
-      taskType: 'strength_area_cohort',
-      tier: 'sonnet',
-      promptVersion: STRENGTH_AREA_PROMPT_VERSION,
-    })
-    if (raw && typeof raw.reasoning === 'string') {
-      result = {
-        reasoning: raw.reasoning.trim() || 'Strength-area gap detected between bands.',
-        recommendation: (raw.recommendation ?? '').trim() || `Lean into the ${classical.strongest!.label} segment in marketing + tour positioning.`,
-        confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+  // Cost-ceiling gate (T5-α.2). Per-band stats fallback below covers
+  // paused.
+  const gate = await gateForBrainCall(venueId)
+  if (gate.ok) {
+    try {
+      const raw = await callAIJson<StrengthDiagnostic>({
+        systemPrompt,
+        userPrompt,
+        maxTokens: 300,
+        temperature: 0.3,
+        venueId,
+        taskType: 'strength_area_cohort',
+        tier: 'sonnet',
+        promptVersion: STRENGTH_AREA_PROMPT_VERSION,
+      })
+      if (raw && typeof raw.reasoning === 'string') {
+        result = {
+          reasoning: raw.reasoning.trim() || 'Strength-area gap detected between bands.',
+          recommendation: (raw.recommendation ?? '').trim() || `Lean into the ${classical.strongest!.label} segment in marketing + tour positioning.`,
+          confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+        }
       }
+    } catch (err) {
+      // PII redaction — prompt carries band aggregates; standardised
+      // catch shape across T3. OPS-21.3.3.
+      console.warn('[strength-area-cohort] LLM diagnostic failed:', redactError(err))
     }
-  } catch (err) {
-    console.warn('[strength-area-cohort] LLM diagnostic failed:', err instanceof Error ? err.message : err)
   }
 
   if (!result) {

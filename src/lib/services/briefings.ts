@@ -13,6 +13,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { detectTrendDeviations } from './trends'
 import { getWeatherForDateRange } from './weather'
 import { getLatestIndicators, calculateDemandScore } from './economics'
@@ -325,7 +326,19 @@ Be decisive in your recommendations.`
  */
 export async function generateWeeklyBriefing(
   venueId: string
-): Promise<BriefingContent> {
+): Promise<BriefingContent | null> {
+  // Cost-ceiling gate (T5-α.2). Cron path already filters paused
+  // venues via filterActiveVenues; this is belt-and-suspenders for
+  // the race where pause flips between filter and call, plus
+  // covers the /api/intel/briefings POST path which doesn't filter.
+  // Skip silently per audit guidance — caller treats null as "no
+  // briefing this run". OPS-21.4.3.
+  const gate = await gateForBrainCall(venueId)
+  if (!gate.ok) {
+    console.log(`[briefings] weekly briefing skipped — venue ${venueId} cost-ceiling paused`)
+    return null
+  }
+
   const fromDate = daysAgo(7)
   const toDate = today()
 
@@ -509,7 +522,15 @@ Generate the weekly briefing.`,
  */
 export async function generateMonthlyBriefing(
   venueId: string
-): Promise<MonthlyBriefingContent> {
+): Promise<MonthlyBriefingContent | null> {
+  // Cost-ceiling gate (T5-α.2). Same belt-and-suspenders pattern as
+  // generateWeeklyBriefing. OPS-21.4.3.
+  const gate = await gateForBrainCall(venueId)
+  if (!gate.ok) {
+    console.log(`[briefings] monthly briefing skipped — venue ${venueId} cost-ceiling paused`)
+    return null
+  }
+
   const currentFrom = daysAgo(30)
   const currentTo = today()
   const priorFrom = daysAgo(60)
