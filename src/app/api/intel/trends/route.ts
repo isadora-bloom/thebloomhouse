@@ -74,6 +74,36 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // Per LIMB-17.4-C: rate-limit manual refresh to once per hour per
+  // venue. Pre-fix the POST was unlimited — coordinator could spam
+  // it and burn SerpAPI quota / get the venue's API key throttled by
+  // the upstream. Cooldown derived from the most-recent search_trends
+  // row's created_at: SerpAPI returns weekly data, so refreshing
+  // sub-hourly is wasted spend regardless.
+  const supabase = await createServerSupabaseClient()
+  const COOLDOWN_MS = 60 * 60 * 1000
+  const { data: lastFetch } = await supabase
+    .from('search_trends')
+    .select('created_at')
+    .eq('venue_id', auth.venueId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const lastFetchedAt = (lastFetch?.created_at as string | undefined)
+    ? Date.parse(lastFetch!.created_at as string)
+    : null
+  if (lastFetchedAt && Date.now() - lastFetchedAt < COOLDOWN_MS) {
+    const retryAfterSec = Math.ceil((COOLDOWN_MS - (Date.now() - lastFetchedAt)) / 1000)
+    return NextResponse.json(
+      {
+        error: 'rate_limited',
+        message: 'Trends were refreshed recently; SerpAPI returns weekly data so faster refresh is wasted spend.',
+        retry_after_seconds: retryAfterSec,
+      },
+      { status: 429, headers: { 'Retry-After': String(retryAfterSec) } },
+    )
+  }
+
   try {
     const rowsUpserted = await fetchTrendsForVenue(auth.venueId)
     return NextResponse.json({ success: true, rowsUpserted })

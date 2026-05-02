@@ -746,11 +746,10 @@ meta:
   target: /portal/sage-queue exists with same approval pattern
 
 - id: INV-11.4-B
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: Sage-in-portal forbidden-topic classification BEFORE generation
-  notes: "Pipeline is generate → assess confidence → flag/replace. NO pre-classification step. LLM has already produced a response by the time post-hoc 'don't guess' rewrite kicks in. Risks legally exposing content before redaction."
-  severity: high
+  notes: "T1-J B-20 (already shipped): /api/portal/sage route checks checkEscalationForVenue(message, venueId) BEFORE calling generateSageResponse. On match: skips LLM generation entirely, saves user message, inserts canned escalation response, drops sage_uncertain_queue row with reason='forbidden_topic', fires admin_notifications, and returns the canned response with forbiddenTopic key. Coordinator answers manually via the queue UI. No tokens burned, no problematic content generated. Per-venue list via venue_forbidden_topics (migration 125) merged with global ESCALATION_KEYWORDS. Doctrine cell was stale; promoted to enforced after audit. INV-11.4-C cell tracks the per-venue extensibility separately (also enforced)."
 
 - id: INV-11.4-C
   status: enforced
@@ -997,10 +996,10 @@ meta:
   severity: medium
 
 - id: LIMB-17.4-C
-  status: at-risk
+  status: partial
   owner: Isadora
   target: aggressive caching
-  notes: "No TTL/cache layer. Manual POST refresh has no rate limit."
+  notes: "POST /api/intel/trends now rate-limited to 1 refresh per hour per venue (2026-05-01) — derived from search_trends.created_at of last row, returns 429 + Retry-After header on cooldown. Closes the SerpAPI spend leak (coordinator could previously spam refresh and burn quota / get throttled). PARTIAL: still no in-memory TTL cache for the GET path (every request hits Supabase). Bigger cache architecture (OPS-21.4.4) is the cousin cell — fix together."
   severity: medium
 
 - id: LIMB-17.4-D
@@ -1338,9 +1337,10 @@ meta:
   severity: high
 
 - id: ANTI-19.9-3
-  status: at-risk
+  status: partial
   owner: Isadora
   target: no insights buried in dashboards
+  notes: "T3 lead-level insights (heat narration / decay / negotiation / cohort / risk) surface on the lead-detail work surface (/intel/clients/[id]) via LeadInsightsPanel — not buried in /intel/dashboard. T3 venue-level insights (pricing-elasticity / source-mix / coordinator-override / strength-area) surface via /api/insights/venue and through /intel/insights with the new T3-aware filter (TYPE_OPTIONS extended in 2026-05-01 patch) so coordinators can find them. PARTIAL: /agent/leads list still doesn't show inline insight badges per row — coordinator has to click into lead detail. Adding a batch /api/insights/leads endpoint + compact-variant chips on the leads list is a follow-up UI build, not a doctrinal violation."
   severity: high
 
 - id: ANTI-19.9-4

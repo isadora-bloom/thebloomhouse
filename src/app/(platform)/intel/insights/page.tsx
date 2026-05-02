@@ -23,6 +23,18 @@ const TYPE_OPTIONS = [
   { value: 'trend', label: 'Trend' },
   { value: 'risk', label: 'Risk' },
   { value: 'opportunity', label: 'Opportunity' },
+  // T3 named insights (migration 144 + 145). ANTI-19.9-3: surface
+  // these in the filter so coordinators can find them, otherwise
+  // they're effectively buried behind the lead detail panel.
+  { value: 'heat_narration', label: 'Heat narration (T3-A)' },
+  { value: 'decay_re_engagement', label: 'Decay re-engagement (T3-B)' },
+  { value: 'negotiation_state', label: 'Negotiation state (T3-C)' },
+  { value: 'cohort_match', label: 'Cohort match (T3-D)' },
+  { value: 'pricing_elasticity', label: 'Pricing elasticity (T3-F)' },
+  { value: 'source_mix_counterfactual', label: 'Source-mix counterfactual (T3-G)' },
+  { value: 'risk_flag', label: 'Risk flags (T3-H)' },
+  { value: 'coordinator_override_pattern', label: 'Coordinator override pattern (T3-I)' },
+  { value: 'strength_area_cohort', label: 'Strength-area cohort (T3-I)' },
 ]
 
 const CATEGORY_OPTIONS = [
@@ -38,6 +50,9 @@ const CATEGORY_OPTIONS = [
   { value: 'competitive', label: 'Competitive' },
   { value: 'weather', label: 'Weather' },
   { value: 'market', label: 'Market' },
+  // T3 categories
+  { value: 'agent_quality', label: 'Agent quality (T3-I)' },
+  { value: 'venue_strategy', label: 'Venue strategy (T3-I)' },
 ]
 
 const PRIORITY_OPTIONS = [
