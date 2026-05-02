@@ -35,6 +35,8 @@ import {
   clearStaleAutonomousPauses,
 } from '@/lib/services/cost-ceiling'
 import { runEssentialsSuggester } from '@/lib/services/essentials-suggester'
+import { populateUSCalendarEvents } from '@/lib/services/external-context/calendar-writer'
+import { logEvent } from '@/lib/observability/logger'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -93,6 +95,12 @@ const VALID_JOBS = [
   // a coordinator has dismissed 5+ high-density cards on the same
   // surface in the last 30 days.
   'essentials_suggest',
+  // T5-followup (2026-05-02). Populates external_calendar_events with
+  // US-nationwide federal / religious / cultural / industry events that
+  // shift wedding-inquiry behavior. Closes the empty calendar
+  // correlation channel flagged by Stream T's cron-coverage audit.
+  // Runs daily, idempotent; rolling 365-day window.
+  'external_calendar_refresh',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -295,7 +303,75 @@ async function runJob(job: JobName): Promise<unknown> {
       // the slider learning telemetry that was being written but
       // never read (Pattern A).
       return runEssentialsSuggester(createServiceClient())
+
+    case 'external_calendar_refresh':
+      // T5-followup (2026-05-02). Populates external_calendar_events
+      // for the next 365 days starting today. Idempotent UPSERT on
+      // (geo_scope, title, start_date) so daily re-runs don't
+      // duplicate. Stream T's cron-coverage audit (T5-ε.3) found this
+      // table has zero writers anywhere — the correlation engine's
+      // calendar channel + intel-brain venue context were both
+      // permanently empty. populateUSCalendarEvents covers federal
+      // holidays, major religious observances (computus + lunar
+      // table), Super Bowl, peak-season industry anchors, and the
+      // wedding-inquiry-relevant cultural calendar (Valentine's,
+      // Mother's Day, etc.). geo_scope='us' only — state-level
+      // rollout is a follow-up.
+      return runExternalCalendarRefresh()
   }
+}
+
+/**
+ * T5-followup. Daily writer for external_calendar_events covering the
+ * next 365 days. Stream T's audit flagged this table as having zero
+ * writers; without the cron, the correlation engine's calendar channel
+ * never surfaces patterns like "Mother's Day → +14d inquiry lift" or
+ * "Memorial Day weekend → tour spike". Idempotent — repeated runs
+ * upsert onto (geo_scope, title, start_date).
+ */
+async function runExternalCalendarRefresh(): Promise<{
+  rows_total: number
+  rows_inserted: number
+  rows_updated: number
+  rows_failed: number
+  by_category: Record<string, number>
+  warnings: string[]
+}> {
+  const supabase = createServiceClient()
+  const today = new Date()
+  // Anchor at UTC midnight so re-runs within the same day produce
+  // identical windows.
+  const start = new Date(Date.UTC(
+    today.getUTCFullYear(),
+    today.getUTCMonth(),
+    today.getUTCDate(),
+  ))
+  const end = new Date(start)
+  end.setUTCDate(start.getUTCDate() + 365)
+
+  const result = await populateUSCalendarEvents(supabase, {
+    startDate: start,
+    endDate: end,
+  })
+
+  logEvent({
+    level: result.rows_failed > 0 ? 'error' : 'info',
+    msg: 'external-calendar-refresh.complete',
+    event_type: 'external_calendar_refresh',
+    outcome: result.rows_failed > 0 ? 'fail' : 'ok',
+    data: {
+      rows_total: result.rows_total,
+      rows_inserted: result.rows_inserted,
+      rows_updated: result.rows_updated,
+      rows_failed: result.rows_failed,
+      by_category: result.by_category,
+      warnings: result.warnings,
+      window_start: start.toISOString().slice(0, 10),
+      window_end: end.toISOString().slice(0, 10),
+    },
+  })
+
+  return result
 }
 
 /**
