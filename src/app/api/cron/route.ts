@@ -203,7 +203,15 @@ async function runJob(job: JobName): Promise<unknown> {
       // pair of channels (inquiries, marketing_metric series, tangential
       // signals per platform). Writes named insights into
       // intelligence_insights where |r| >= 0.6 and both series have >= 20
-      // non-zero days. Pure stats — no AI call. Runs weekly.
+      // non-zero days. Pure stats — no AI call.
+      // T5-followup-AA (2026-05-02): cadence bumped weekly → daily
+      // (`0 5 * * *`). Investor-demo question "has the latest Fed move
+      // shown up here?" now gets a same-day answer instead of "next
+      // Tuesday." Slot chosen so FRED (03:00 UTC) + external_calendar
+      // (04:00 UTC) refresh first so upstream channels are fresh.
+      // Cost-ceiling gate inside computeCorrelationsAllVenues already
+      // filters paused venues — no extra activity gate needed because
+      // the engine is sub-cent per venue per run.
       return computeCorrelationsAllVenues(createServiceClient())
 
     case 'zoom_poll':

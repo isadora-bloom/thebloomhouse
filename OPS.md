@@ -103,7 +103,7 @@ don't drift the same way.
 | `0 6 * * *` | `heat_decay` | `weddings.heat_score`, `engagement_events`, `lead_score_history`, `lost_deals` | daily decay + cooling warnings + auto-mark-lost. |
 | `0 6 * * 2` | `transcript_voice_mining` | `review_language`, `voice_preferences` (mined patterns) | weekly tour-transcript-vs-review mining for booked + 5-star couples. |
 | `0 7 * * *` | `daily_digest` | `admin_notifications` (fan-out), reads `weddings` + `tours` + `intelligence_insights` | per-user daily digest email + push. |
-| `0 7 * * 2` | `correlation_analysis` | `intelligence_insights` (correlation type) | weekly Pearson correlation across internal channels + FRED + cultural moments + calendar. |
+| `0 5 * * *` | `correlation_analysis` | `intelligence_insights` (correlation type) | daily Pearson correlation across internal channels + FRED + cultural moments + calendar. T5-followup-AA (2026-05-02): bumped weekly→daily so investor-demo questions like "has the latest Fed move shown up here?" get a same-day answer. Engine is pure stats (no LLM cost); upstream FRED (03:00 UTC) + external-calendar (04:00 UTC) refresh first. |
 | `0 8 1 * *` | `monthly_briefing` | `ai_briefings` | LLM-narrated monthly business brief. |
 | `0 8 * * 1` | `weekly_briefing` | `ai_briefings`, `admin_notifications` | LLM-narrated weekly business brief. |
 | `15 8 * * *` | `cultural_moments_auto_propose` | `cultural_moments` | nightly trend-spike → propose cultural moment per venue with `google_trends_metro`. |

@@ -61,6 +61,22 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
   + follow-up draft composer. Tier-1 content (transcript-derived
   family/financial intelligence).
 
+### heat-narration (`heat-narration.prompt.v1.1`)
+- **v1.1** (2026-05-02) — T5-followup-AA. Trajectory bucket
+  (rising / falling / plateau / volatile / unknown) added to the
+  user prompt + system prompt instructions so the LLM grounds
+  prose in heat direction over the last ~14 days, not just the
+  static score. Prompted action selection now keys on (tier ×
+  trajectory) — same warm score reads "stabilise with a clarifying
+  call" when volatile vs "send a tour follow-up" when steady.
+  Cache key gains a `trajectory` field so a wedding climbing 40→55→70
+  and a wedding crashing 100→85→70 don't collapse onto the same
+  cached prose. ONE more cache-miss vector by design — the platform
+  underreports volatility today. 4 buckets (+ unknown) is enough.
+- **v1.0** (2026-05-01) — Initial versioning baseline. T3-A heat
+  narration generator. Sonnet-tier; deterministic fallback runs when
+  cost ceiling pauses the venue.
+
 ### voice-dna-extract (`voice-dna-extract.prompt.v1.0`)
 - **v1.0** (2026-05-02) — T5-θ.3. Extracts greetings, signoffs, pet
   phrases, punctuation tics, voice rules, and sentence rhythm from a
