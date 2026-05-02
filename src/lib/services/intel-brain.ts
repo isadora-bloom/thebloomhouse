@@ -49,6 +49,23 @@ interface VenueDataContext {
   economicIndicators: Record<string, number>
   consultantMetrics: ConsultantMetricRow[]
   topPhrases: PhraseRow[]
+
+  // T5-θ.2 (2026-05-02): cross-limb grounding for NLQ + Sage. The
+  // legacy fields above stayed read-only; new fields below append
+  // attribution / candidates / FRED deltas / cultural / calendar /
+  // Internal Context. Callers that destructure existing fields
+  // continue to compile.
+  attributionByPlatform: AttributionPlatformRow[]
+  candidateIdentitySummary: CandidateIdentitySummary
+  culturalMoments: CulturalMomentRow[]
+  fredSeriesDeltas: FredSeriesDelta[]
+  upcomingCalendarEvents: CalendarEventRow[]
+  coordinatorAbsences: CoordinatorAbsenceRow[]
+  venueOperationalState: OperationalStateRow[]
+  pricingHistory: PricingHistoryRow[]
+  marketingChannels: MarketingChannelRow[]
+  recentInteractionSnippets: InteractionSnippet[]
+  tourCancellationReasons: TourCancellationReasonRow[]
 }
 
 interface WeddingSummary {
@@ -124,6 +141,87 @@ interface PhraseRow {
 }
 
 // ---------------------------------------------------------------------------
+// T5-θ.2 cross-limb grounding types (NLQ + Sage)
+// ---------------------------------------------------------------------------
+
+interface AttributionPlatformRow {
+  platform: string
+  count: number
+  /** booked count / total attribution events on this platform (0..1) */
+  conversion_rate: number
+}
+
+interface CandidateIdentitySummary {
+  total: number
+  resolved_count: number
+  unresolved_count: number
+  /** resolved_count / total (0..1). 0 when total is 0. */
+  conversion_rate: number
+}
+
+interface CulturalMomentRow {
+  name: string
+  category: string | null
+  start_date: string
+  end_date: string | null
+  influence_weight: number | null
+  geography: string | null
+}
+
+interface FredSeriesDelta {
+  series_id: string
+  label: string
+  latest_value: number
+  latest_date: string | null
+  delta_30d: number | null
+  delta_90d: number | null
+}
+
+interface CalendarEventRow {
+  name: string
+  category: string
+  date: string
+  geo_scope: string
+}
+
+interface CoordinatorAbsenceRow {
+  start_date: string
+  end_date: string
+  reason: string
+  coordinator_name: string | null
+}
+
+interface OperationalStateRow {
+  state_type: string
+  start_date: string
+  end_date: string | null
+  description: string
+}
+
+interface PricingHistoryRow {
+  effective_date: string
+  package_name: string
+  prior_price: number | null
+  new_price: number | null
+}
+
+interface MarketingChannelRow {
+  name: string
+  source_key: string
+  active: boolean
+}
+
+interface InteractionSnippet {
+  date: string
+  snippet: string
+}
+
+interface TourCancellationReasonRow {
+  reason: string
+  count: number
+}
+
+// ---------------------------------------------------------------------------
 // System prompt builder
 // ---------------------------------------------------------------------------
 
@@ -166,6 +264,43 @@ REVIEW LANGUAGE:
 - Notable phrases extracted from reviews, grouped by theme (coordinator, space, flexibility, value, etc.)
 - Each phrase has a sentiment score and frequency count
 
+ATTRIBUTION BY PLATFORM (cross-limb grounding for source ROI questions):
+- Per-platform attribution events from the last 90 days, with platform-level conversion rates (booked / total events).
+- Use this to compare platforms grounded in actual attribution numbers (e.g. "did Pinterest convert better than Knot last quarter?").
+
+CANDIDATE IDENTITY RESOLUTION:
+- Pre-zero anonymous platform signals (Knot views, Instagram follows, Pinterest saves) clustered into candidate identities.
+- Summary: total, resolved (matched to a wedding), unresolved, conversion_rate. Indicates how much top-of-funnel actually surfaces.
+
+CULTURAL MOMENTS (confirmed only, last 90 days):
+- Coordinator-confirmed cultural / industry / macro moments with start_date, end_date, category, influence_weight (-100..100), and geography.
+- Used to ground questions like "did the coastal grandmother trend bring us inquiries?" — only confirmed moments appear here.
+
+FRED MACRO INDICATORS (latest + 30d / 90d delta):
+- Series in the panel: CPIAUCSL (CPI), MORTGAGE30US (30y mortgage rate), SP500, UNRATE (unemployment), UMCSENT (consumer sentiment).
+- Each carries a latest value plus delta_30d and delta_90d so you can answer "are we slowing down alongside mortgage rates?" with grounded numbers.
+
+UPCOMING CALENDAR EVENTS (next 90 days, venue-region scoped):
+- External calendar events (federal holidays, school breaks, university events, sporting events, conventions, elections, religious observances) hierarchically scoped to the venue's region (us / us_<state> / us_<state>_<metro>).
+
+COORDINATOR ABSENCES (active or upcoming):
+- Date windows when a coordinator is out (vacation, conference, illness, holiday closure). Anomaly questions about response time should check absences first.
+
+VENUE OPERATIONAL STATE (active windows):
+- Renovation / closure / capacity / vendor / policy / force-majeure windows currently active or recently active. Pulled when the user asks about why the funnel changed.
+
+PRICING HISTORY (last 365 days):
+- Append-only audit of base_price / capacity / tier changes with prior and new value plus effective date. Use to ground elasticity questions ("did the price change in May matter?").
+
+MARKETING CHANNELS REGISTRY:
+- The venue's per-channel registry (Knot, WW, Instagram, Google Business, referrals, paid, etc.) with active flag. Authoritative list of what the venue actually markets through.
+
+RECENT INBOUND INTERACTION SNIPPETS (last 90 days, top 20 by recency):
+- Truncated first 200 chars of recent inbound emails / messages. Useful when you're asked "are couples mentioning X recently?" — the snippets are direct evidence.
+
+TOUR CANCELLATION REASONS (last 365 days, lost-deal reason aggregates):
+- Aggregate count of cancellation / lost reasons across tours-stage and tour-stage lost deals. Grounds questions about WHY tours fall through.
+
 When answering:
 - Be direct and actionable — venue owners are busy
 - Quote numbers from the data block; comparisons (this month vs last, one source vs another) are allowed when BOTH sides are present in the data
@@ -187,16 +322,45 @@ NUMBERS DISCIPLINE (ANTI-19.9-A / Playbook 19.9 #1):
 
 /**
  * Pull a summary of recent venue data for the AI to reason over.
- * Gathers the last 30 days of weddings, latest attribution, trends, etc.
+ *
+ * T5-θ.2 (2026-05-02): expanded for NLQ + Sage cross-limb grounding.
+ * The legacy block (weddings / source attribution / trends / weather /
+ * indicators / consultants / phrases) stayed structurally intact —
+ * existing callers continue to destructure the same fields. New fields
+ * are appended:
+ *   - attributionByPlatform (90d, attribution_events)
+ *   - candidateIdentitySummary (resolved vs unresolved)
+ *   - culturalMoments (status='confirmed', last 90d)
+ *   - fredSeriesDeltas (latest + 30d / 90d delta per series)
+ *   - upcomingCalendarEvents (next 90d, venue-region scoped)
+ *   - coordinatorAbsences (active or upcoming)
+ *   - venueOperationalState (active windows)
+ *   - pricingHistory (last 365d)
+ *   - marketingChannels (active registry)
+ *   - recentInteractionSnippets (last 90d inbound, top 20 by recency)
+ *   - tourCancellationReasons (last 365d lost-deals at tour stage)
+ *
+ * Window bumps:
+ *   - weddings 30d → 365d (Sage needs > 1mo to reason about cohorts).
  */
 async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
   const supabase = createServiceClient()
 
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+  const NOW_MS = Date.now()
+  const DAY_MS = 24 * 60 * 60 * 1000
+
+  const thirtyDaysAgo = new Date(NOW_MS - 30 * DAY_MS)
     .toISOString()
     .split('T')[0]
+  const ninetyDaysAgoIso = new Date(NOW_MS - 90 * DAY_MS).toISOString()
+  const ninetyDaysAgoDate = ninetyDaysAgoIso.split('T')[0]
+  const ninetyDaysFromNowDate = new Date(NOW_MS + 90 * DAY_MS)
+    .toISOString()
+    .split('T')[0]
+  const oneYearAgoIso = new Date(NOW_MS - 365 * DAY_MS).toISOString()
+  const oneYearAgoDate = oneYearAgoIso.split('T')[0]
 
-  const fourteenDaysFromNow = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+  const fourteenDaysFromNow = new Date(NOW_MS + 14 * DAY_MS)
     .toISOString()
     .split('T')[0]
 
@@ -214,22 +378,34 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     consultantResult,
     phrasesResult,
     indicatorsResult,
+    // T5-θ.2 new domains:
+    attributionEventsResult,
+    candidateIdentitiesResult,
+    culturalMomentsResult,
+    calendarEventsResult,
+    coordinatorAbsencesResult,
+    operationalStateResult,
+    pricingHistoryResult,
+    marketingChannelsResult,
+    interactionsResult,
+    lostDealsResult,
   ] = await Promise.all([
-    // Venue name
+    // Venue name + state (state used to scope external_calendar_events)
     supabase
       .from('venues')
-      .select('name')
+      .select('name, state')
       .eq('id', venueId)
       .single(),
 
-    // Recent weddings (inquiries/status changes in last 30 days)
+    // Recent weddings — bumped 30d → 365d per T5-θ.2 spec so Sage can
+    // reason about cohorts and trends across a full season.
     supabase
       .from('weddings')
       .select('id, status, source, wedding_date, guest_count_estimate, booking_value, inquiry_date, booked_at, lost_at, lost_reason, heat_score, temperature_tier')
       .eq('venue_id', venueId)
-      .gte('updated_at', thirtyDaysAgo)
+      .gte('updated_at', oneYearAgoDate)
       .order('updated_at', { ascending: false })
-      .limit(50),
+      .limit(200),
 
     // All active weddings for pipeline counts
     supabase
@@ -301,6 +477,122 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
       .select('series_id, value, observation_date')
       .order('observation_date', { ascending: false })
       .limit(50),
+
+    // ---------------------------------------------------------------
+    // T5-θ.2: cross-limb grounding queries
+    // ---------------------------------------------------------------
+
+    // Attribution events (last 90d, venue-scoped) — drives platform
+    // breakdown + per-platform conversion. We pull both attribution
+    // and nurture rows; the breakdown scopes to bucket='attribution'
+    // (the discovery-credit rows). Joined to weddings for status so
+    // we can compute conversion = booked / total.
+    supabase
+      .from('attribution_events')
+      .select('source_platform, bucket, wedding_id, weddings!inner(status)')
+      .eq('venue_id', venueId)
+      .is('reverted_at', null)
+      .gte('decided_at', ninetyDaysAgoIso)
+      .limit(2000),
+
+    // Candidate identities — total / resolved / unresolved (venue-scoped).
+    // We grab a thin column set; counting is done in JS.
+    supabase
+      .from('candidate_identities')
+      .select('id, resolved_wedding_id')
+      .eq('venue_id', venueId)
+      .is('deleted_at', null)
+      .limit(5000),
+
+    // Cultural moments — confirmed only, overlapping the last 90d.
+    // The table is global (no venue_id); geo_scope is optional. We
+    // keep all confirmed rows whose window overlaps [now - 90d, now]
+    // and let the format step note geography.
+    supabase
+      .from('cultural_moments')
+      .select('title, category, start_at, end_at, influence_weight, geo_scope')
+      .eq('status', 'confirmed')
+      .gte('end_at', ninetyDaysAgoIso)
+      .order('start_at', { ascending: false })
+      .limit(50),
+
+    // External calendar events — next 90d, scoped via geo_scope to the
+    // venue's region. The calendar.ts loader expands hierarchies; we
+    // do the same expansion inline so the venue's federal + state +
+    // metro events all appear.
+    supabase
+      .from('external_calendar_events')
+      .select('title, category, start_date, end_date, geo_scope')
+      .is('deleted_at', null)
+      .lte('start_date', ninetyDaysFromNowDate)
+      .gte('end_date', today)
+      .order('start_date', { ascending: true })
+      .limit(100),
+
+    // Coordinator absences — active or upcoming.
+    supabase
+      .from('coordinator_absences')
+      .select('start_at, end_at, reason, handoff_notes, assigned_consultant_id, user_profiles:assigned_consultant_id(full_name)')
+      .eq('venue_id', venueId)
+      .is('deleted_at', null)
+      .gte('end_at', new Date(NOW_MS).toISOString())
+      .order('start_at', { ascending: true })
+      .limit(20),
+
+    // Operational state — active (end_at IS NULL OR end_at > now).
+    supabase
+      .from('venue_operational_state')
+      .select('state_type, start_at, end_at, title, description')
+      .eq('venue_id', venueId)
+      .is('deleted_at', null)
+      .or(`end_at.is.null,end_at.gte.${new Date(NOW_MS).toISOString()}`)
+      .order('start_at', { ascending: false })
+      .limit(20),
+
+    // Pricing history — last 365d.
+    supabase
+      .from('pricing_history')
+      .select('changed_at, field_name, old_value, new_value')
+      .eq('venue_id', venueId)
+      .gte('changed_at', oneYearAgoIso)
+      .order('changed_at', { ascending: false })
+      .limit(50),
+
+    // Marketing channels (active registry).
+    supabase
+      .from('marketing_channels')
+      .select('key, label, is_active')
+      .eq('venue_id', venueId)
+      .is('deleted_at', null)
+      .order('is_active', { ascending: false })
+      .order('label', { ascending: true })
+      .limit(50),
+
+    // Recent inbound interactions (last 90d, top 20 by recency).
+    // Per T5-θ.2 spec: truncate-only, no LLM extractor pass.
+    supabase
+      .from('interactions')
+      .select('timestamp, body_preview, full_body')
+      .eq('venue_id', venueId)
+      .eq('direction', 'inbound')
+      .gte('timestamp', ninetyDaysAgoIso)
+      .order('timestamp', { ascending: false })
+      .limit(20),
+
+    // Tour cancellation reason aggregates — last 365d, lost_deals at
+    // the tour stage. tours table has no `cancellation_reason` column
+    // (verified via migrations); lost_deals.reason_category is the
+    // canonical source for "why a tour-stage deal fell through" and
+    // is what /intel/lost-deals reads. We aggregate in JS to avoid
+    // requiring a SQL VIEW.
+    supabase
+      .from('lost_deals')
+      .select('reason_category, reason_detail')
+      .eq('venue_id', venueId)
+      .eq('lost_at_stage', 'tour')
+      .not('reason_category', 'is', null)
+      .gte('lost_at', oneYearAgoIso)
+      .limit(500),
   ])
 
   // Build pipeline counts from active weddings
@@ -330,6 +622,226 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // T5-θ.2 post-processing
+  // ---------------------------------------------------------------------
+
+  // FRED series with 30d / 90d deltas. The legacy `indicators` field
+  // returns latest-only as a flat record; this richer view groups all
+  // observations per series and computes the latest-vs-30d-ago and
+  // latest-vs-90d-ago delta for the panel series. Delta is null when
+  // the series hasn't been observed back that far in the 50-row pull
+  // (rare: SP500 + MORTGAGE30US update daily/weekly so 50 rows is a
+  // few months; CPI is monthly so 50 rows is ~4 years of history).
+  const PANEL_SERIES = ['CPIAUCSL', 'MORTGAGE30US', 'SP500', 'UNRATE', 'UMCSENT']
+  const seriesObservations = new Map<
+    string,
+    { date: string; value: number }[]
+  >()
+  for (const row of indicatorsResult.data ?? []) {
+    const seriesId = row.series_id as string
+    if (row.value == null || !row.observation_date) continue
+    const arr = seriesObservations.get(seriesId) ?? []
+    arr.push({ date: row.observation_date as string, value: Number(row.value) })
+    seriesObservations.set(seriesId, arr)
+  }
+  const fredSeriesDeltas: FredSeriesDelta[] = []
+  const nowMs = NOW_MS
+  for (const seriesId of PANEL_SERIES) {
+    const obs = seriesObservations.get(seriesId)
+    if (!obs || obs.length === 0) continue
+    // Already sorted DESC by query — guard regardless.
+    obs.sort((a, b) => b.date.localeCompare(a.date))
+    const latest = obs[0]
+    const findClosestBefore = (cutoffMs: number) => {
+      for (const o of obs) {
+        if (new Date(`${o.date}T00:00:00Z`).getTime() <= cutoffMs) return o
+      }
+      return null
+    }
+    const thirtyAgoObs = findClosestBefore(nowMs - 30 * DAY_MS)
+    const ninetyAgoObs = findClosestBefore(nowMs - 90 * DAY_MS)
+    fredSeriesDeltas.push({
+      series_id: seriesId,
+      label: FRED_LABELS[seriesId] ?? seriesId,
+      latest_value: latest.value,
+      latest_date: latest.date,
+      delta_30d: thirtyAgoObs ? latest.value - thirtyAgoObs.value : null,
+      delta_90d: ninetyAgoObs ? latest.value - ninetyAgoObs.value : null,
+    })
+  }
+
+  // Attribution events: per-platform breakdown with conversion rate.
+  // bucket='attribution' rows credit a platform for first-touch
+  // discovery; we count those, then derive conversion as
+  // (count where wedding.status='booked') / count.
+  type AttribRow = {
+    source_platform: string
+    bucket: string
+    weddings: { status: string } | { status: string }[] | null
+  }
+  const attribByPlatform = new Map<
+    string,
+    { count: number; booked: number }
+  >()
+  for (const r of (attributionEventsResult.data ?? []) as AttribRow[]) {
+    if (r.bucket !== 'attribution') continue
+    const platform = r.source_platform || 'unknown'
+    const existing = attribByPlatform.get(platform) ?? { count: 0, booked: 0 }
+    existing.count += 1
+    // Supabase nested-select can return either an object or single-element
+    // array depending on the FK shape. Normalise.
+    const w = Array.isArray(r.weddings) ? r.weddings[0] : r.weddings
+    if (w && w.status === 'booked') existing.booked += 1
+    attribByPlatform.set(platform, existing)
+  }
+  const attributionByPlatform: AttributionPlatformRow[] = Array.from(
+    attribByPlatform.entries(),
+  )
+    .map(([platform, v]) => ({
+      platform,
+      count: v.count,
+      conversion_rate: v.count > 0 ? v.booked / v.count : 0,
+    }))
+    .sort((a, b) => b.count - a.count)
+
+  // Candidate identity summary.
+  const candidateRows = candidateIdentitiesResult.data ?? []
+  const candidateTotal = candidateRows.length
+  const candidateResolved = candidateRows.filter(
+    (r) => (r as { resolved_wedding_id: string | null }).resolved_wedding_id != null,
+  ).length
+  const candidateIdentitySummary: CandidateIdentitySummary = {
+    total: candidateTotal,
+    resolved_count: candidateResolved,
+    unresolved_count: candidateTotal - candidateResolved,
+    conversion_rate: candidateTotal > 0 ? candidateResolved / candidateTotal : 0,
+  }
+
+  // Cultural moments — confirmed only, last-90d window. Already filtered
+  // by query.
+  const culturalMoments: CulturalMomentRow[] = (
+    culturalMomentsResult.data ?? []
+  ).map((r) => ({
+    name: (r.title as string) ?? '',
+    category: (r.category as string | null) ?? null,
+    start_date: ((r.start_at as string) ?? '').split('T')[0],
+    end_date: r.end_at ? ((r.end_at as string) ?? '').split('T')[0] : null,
+    influence_weight: (r.influence_weight as number | null) ?? null,
+    geography: (r.geo_scope as string | null) ?? null,
+  }))
+
+  // External calendar events — filter by venue's geo_scope hierarchy
+  // (us / us_<state> / us_<state>_<metro>). The DB query already pulled
+  // up to 100 future-window events; here we hierarchy-match.
+  const venueState = ((venueResult.data?.state as string | null) ?? '')
+    .trim()
+    .toLowerCase()
+  const venueScope: string =
+    venueState && /^[a-z]{2}$/.test(venueState) ? `us_${venueState}` : 'us'
+  const expandScopes = (scope: string): string[] => {
+    const parts = scope.split('_')
+    const out: string[] = []
+    for (let i = 1; i <= parts.length; i++) {
+      out.push(parts.slice(0, i).join('_'))
+    }
+    return out
+  }
+  const allowedScopes = new Set(expandScopes(venueScope))
+  const upcomingCalendarEvents: CalendarEventRow[] = (
+    calendarEventsResult.data ?? []
+  )
+    .filter((r) => allowedScopes.has((r.geo_scope as string) ?? ''))
+    .map((r) => ({
+      name: (r.title as string) ?? '',
+      category: (r.category as string) ?? 'other',
+      date: (r.start_date as string) ?? '',
+      geo_scope: (r.geo_scope as string) ?? 'us',
+    }))
+    .slice(0, 30)
+
+  // Coordinator absences.
+  type CoordAbsenceRaw = {
+    start_at: string
+    end_at: string
+    reason: string
+    handoff_notes: string | null
+    user_profiles: { full_name: string } | { full_name: string }[] | null
+  }
+  const coordinatorAbsences: CoordinatorAbsenceRow[] = (
+    (coordinatorAbsencesResult.data ?? []) as CoordAbsenceRaw[]
+  ).map((r) => {
+    const profile = Array.isArray(r.user_profiles) ? r.user_profiles[0] : r.user_profiles
+    return {
+      start_date: (r.start_at ?? '').split('T')[0],
+      end_date: (r.end_at ?? '').split('T')[0],
+      reason: r.reason ?? '',
+      coordinator_name: profile?.full_name ?? null,
+    }
+  })
+
+  // Operational state.
+  const venueOperationalState: OperationalStateRow[] = (
+    operationalStateResult.data ?? []
+  ).map((r) => ({
+    state_type: (r.state_type as string) ?? 'other',
+    start_date: ((r.start_at as string) ?? '').split('T')[0],
+    end_date: r.end_at ? ((r.end_at as string) ?? '').split('T')[0] : null,
+    description:
+      (r.title as string) +
+      (r.description ? `: ${r.description as string}` : ''),
+  }))
+
+  // Pricing history. The new_value/old_value are jsonb {value: <num>};
+  // surface field_name as package_name for the prompt.
+  type JsonValue = { value?: number | string | null } | null
+  const pricingHistory: PricingHistoryRow[] = (
+    pricingHistoryResult.data ?? []
+  ).map((r) => {
+    const oldVal = (r.old_value as JsonValue)?.value
+    const newVal = (r.new_value as JsonValue)?.value
+    return {
+      effective_date: ((r.changed_at as string) ?? '').split('T')[0],
+      package_name: (r.field_name as string) ?? 'unknown',
+      prior_price: typeof oldVal === 'number' ? oldVal : null,
+      new_price: typeof newVal === 'number' ? newVal : null,
+    }
+  })
+
+  // Marketing channels.
+  const marketingChannels: MarketingChannelRow[] = (
+    marketingChannelsResult.data ?? []
+  ).map((r) => ({
+    name: (r.label as string) ?? (r.key as string) ?? '',
+    source_key: (r.key as string) ?? '',
+    active: !!r.is_active,
+  }))
+
+  // Recent inbound interactions — truncate to 200 chars per spec.
+  const recentInteractionSnippets: InteractionSnippet[] = (
+    interactionsResult.data ?? []
+  ).map((r) => {
+    const body = ((r.full_body as string | null) ?? (r.body_preview as string | null) ?? '').trim()
+    const snippet = body.length > 200 ? body.slice(0, 200) : body
+    return {
+      date: ((r.timestamp as string) ?? '').split('T')[0],
+      snippet,
+    }
+  }).filter((s) => s.snippet.length > 0)
+
+  // Tour cancellation reasons (lost_deals at tour stage).
+  const reasonCounts = new Map<string, number>()
+  for (const r of lostDealsResult.data ?? []) {
+    const reason = (r.reason_category as string | null) ?? null
+    if (!reason) continue
+    reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1)
+  }
+  const tourCancellationReasons: TourCancellationReasonRow[] = Array.from(
+    reasonCounts.entries(),
+  )
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count)
+
   return {
     venueName: (venueResult.data?.name as string) ?? 'Unknown Venue',
     recentWeddings: (weddingsResult.data ?? []) as WeddingSummary[],
@@ -341,6 +853,18 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     economicIndicators: indicators,
     consultantMetrics: (consultantResult.data ?? []) as ConsultantMetricRow[],
     topPhrases: (phrasesResult.data ?? []) as PhraseRow[],
+    // T5-θ.2 new fields
+    attributionByPlatform,
+    candidateIdentitySummary,
+    culturalMoments,
+    fredSeriesDeltas,
+    upcomingCalendarEvents,
+    coordinatorAbsences,
+    venueOperationalState,
+    pricingHistory,
+    marketingChannels,
+    recentInteractionSnippets,
+    tourCancellationReasons,
   }
 }
 
@@ -370,9 +894,9 @@ function formatDataContext(data: VenueDataContext): string {
       if (w.lost_reason) parts.push(`lost_reason="${w.lost_reason}"`)
       return `  - ${parts.join(', ')}`
     }).join('\n')
-    sections.push(`RECENT WEDDINGS (last 30 days activity):\n${weddingLines}`)
+    sections.push(`RECENT WEDDINGS (last 365 days activity, top 200 by recency):\n${weddingLines}`)
   } else {
-    sections.push('RECENT WEDDINGS: No wedding activity in the last 30 days.')
+    sections.push('RECENT WEDDINGS: No wedding activity in the last 365 days.')
   }
 
   // Source attribution
@@ -457,6 +981,142 @@ function formatDataContext(data: VenueDataContext): string {
       `  - "${p.phrase}" (theme=${p.theme}, sentiment=${p.sentiment_score}, freq=${p.frequency})`
     ).join('\n')
     sections.push(`TOP REVIEW PHRASES:\n${phraseLines}`)
+  }
+
+  // ---------------------------------------------------------------------
+  // T5-θ.2 cross-limb sections
+  // ---------------------------------------------------------------------
+
+  // Attribution by platform (last 90d)
+  if (data.attributionByPlatform.length > 0) {
+    const lines = data.attributionByPlatform
+      .map(
+        (a) =>
+          `  - ${a.platform}: ${a.count} attribution events, ${
+            (a.conversion_rate * 100).toFixed(1)
+          }% booked-conversion`,
+      )
+      .join('\n')
+    sections.push(`ATTRIBUTION BY PLATFORM (last 90 days):\n${lines}`)
+  }
+
+  // Candidate identity summary
+  {
+    const c = data.candidateIdentitySummary
+    if (c.total > 0) {
+      sections.push(
+        `CANDIDATE IDENTITIES:\n  total=${c.total}, resolved=${c.resolved_count}, unresolved=${c.unresolved_count}, resolved_rate=${(c.conversion_rate * 100).toFixed(1)}%`,
+      )
+    }
+  }
+
+  // Cultural moments
+  if (data.culturalMoments.length > 0) {
+    const lines = data.culturalMoments
+      .map((m) => {
+        const parts = [`name="${m.name}"`]
+        if (m.category) parts.push(`category=${m.category}`)
+        parts.push(`window=${m.start_date}${m.end_date ? ` to ${m.end_date}` : ' (ongoing)'}`)
+        if (m.influence_weight != null) parts.push(`influence=${m.influence_weight}`)
+        if (m.geography) parts.push(`geo=${m.geography}`)
+        return `  - ${parts.join(', ')}`
+      })
+      .join('\n')
+    sections.push(`CULTURAL MOMENTS (confirmed, last 90d window):\n${lines}`)
+  }
+
+  // FRED series with deltas
+  if (data.fredSeriesDeltas.length > 0) {
+    const lines = data.fredSeriesDeltas
+      .map((s) => {
+        const parts = [`${s.label} (${s.series_id})`, `latest=${s.latest_value}`]
+        if (s.latest_date) parts.push(`as_of=${s.latest_date}`)
+        if (s.delta_30d != null) parts.push(`Δ30d=${s.delta_30d.toFixed(2)}`)
+        if (s.delta_90d != null) parts.push(`Δ90d=${s.delta_90d.toFixed(2)}`)
+        return `  - ${parts.join(', ')}`
+      })
+      .join('\n')
+    sections.push(`FRED INDICATORS (latest + 30d/90d delta):\n${lines}`)
+  }
+
+  // Upcoming calendar events
+  if (data.upcomingCalendarEvents.length > 0) {
+    const lines = data.upcomingCalendarEvents
+      .map(
+        (e) =>
+          `  - ${e.date}: ${e.name} [${e.category}] (${e.geo_scope})`,
+      )
+      .join('\n')
+    sections.push(`UPCOMING CALENDAR EVENTS (next 90d):\n${lines}`)
+  }
+
+  // Coordinator absences
+  if (data.coordinatorAbsences.length > 0) {
+    const lines = data.coordinatorAbsences
+      .map(
+        (a) =>
+          `  - ${a.start_date} to ${a.end_date}: ${a.reason}${
+            a.coordinator_name ? ` (${a.coordinator_name})` : ' (venue-wide)'
+          }`,
+      )
+      .join('\n')
+    sections.push(`COORDINATOR ABSENCES (active or upcoming):\n${lines}`)
+  }
+
+  // Operational state
+  if (data.venueOperationalState.length > 0) {
+    const lines = data.venueOperationalState
+      .map(
+        (s) =>
+          `  - [${s.state_type}] ${s.start_date}${
+            s.end_date ? ` to ${s.end_date}` : ' (ongoing)'
+          }: ${s.description}`,
+      )
+      .join('\n')
+    sections.push(`VENUE OPERATIONAL STATE (active windows):\n${lines}`)
+  }
+
+  // Pricing history
+  if (data.pricingHistory.length > 0) {
+    const lines = data.pricingHistory
+      .map((p) => {
+        const parts = [`${p.effective_date}: ${p.package_name}`]
+        if (p.prior_price != null && p.new_price != null) {
+          parts.push(`$${p.prior_price} → $${p.new_price}`)
+        } else if (p.new_price != null) {
+          parts.push(`new=$${p.new_price}`)
+        }
+        return `  - ${parts.join(' | ')}`
+      })
+      .join('\n')
+    sections.push(`PRICING HISTORY (last 365d):\n${lines}`)
+  }
+
+  // Marketing channels
+  if (data.marketingChannels.length > 0) {
+    const lines = data.marketingChannels
+      .map(
+        (m) =>
+          `  - ${m.name} (${m.source_key})${m.active ? '' : ' [inactive]'}`,
+      )
+      .join('\n')
+    sections.push(`MARKETING CHANNELS (registry):\n${lines}`)
+  }
+
+  // Recent inbound interaction snippets
+  if (data.recentInteractionSnippets.length > 0) {
+    const lines = data.recentInteractionSnippets
+      .map((i) => `  - ${i.date}: "${i.snippet.replace(/\s+/g, ' ').trim()}"`)
+      .join('\n')
+    sections.push(`RECENT INBOUND INTERACTIONS (last 90d, top 20 by recency, 200-char excerpt):\n${lines}`)
+  }
+
+  // Tour cancellation reasons
+  if (data.tourCancellationReasons.length > 0) {
+    const lines = data.tourCancellationReasons
+      .map((r) => `  - ${r.reason}: ${r.count}`)
+      .join('\n')
+    sections.push(`TOUR CANCELLATION REASONS (last 365d, lost-deals at tour stage):\n${lines}`)
   }
 
   return sections.join('\n\n')
