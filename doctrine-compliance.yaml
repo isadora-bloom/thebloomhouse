@@ -14,7 +14,7 @@
 
 meta:
   initial_snapshot: "2026-04-30"
-  last_updated: "2026-05-01"
+  last_updated: "2026-05-02"
   cells_total: 150
   # Snapshot counts captured at initial audit. Live counts drift as
   # cells move; query this YAML or the audit folder for current state.
@@ -269,6 +269,114 @@ meta:
 #          pre-classification BEFORE generateSageResponse; sage_uncertain_queue
 #          gains reason column to disambiguate forbidden_topic from
 #          low_confidence escalations.
+#
+# 2026-05-02 — T5 grading sweep (audits/2026-05-T4-postlaunch waves 1-3):
+#   Closed against the 87-finding 4-character audit (engineer / first-time
+#   user / seasoned-user / yc-partner). Grading rule honored: cells only
+#   promote to enforced when there's a CONSUMER reading the data, not just
+#   a writer. See audits/2026-05-T4-postlaunch/grading-sweep-report.md.
+#
+#   3063519  T5-α.1: draft_feedback schema/writer drift fixed (migration
+#            156 + writers + readers). Voice-DNA + override-pattern reads
+#            now return real data. (No specific cell — bug fix on a hidden
+#            corruption beneath OPS-21.5.1 + INS-19.6.4.)
+#   9e8611d  T5-α.2 + α.3: T3 gates + redactError on T3 catches.
+#            OPS-21.4.3 quality upgraded (T3 paths now gated alongside cron).
+#            OPS-21.3.3 partial→partial with stronger coverage (T3 catches
+#            now redact; full sweep still pending elsewhere).
+#   c1725f7  T5-β white-label sweep (51 files + migration 162):
+#            INV-4.4-A enforced→enforced (quality upgraded — useAiName
+#            hook + DEFAULT_PERSONALITY refactor + slug fallback fix +
+#            sage-brain.ts:416 conversation-history fix). Stays enforced
+#            because cell already was, but the quality of enforcement
+#            improved across 51 files.
+#   33b00e7  T5-θ.1: LLM-narrated cross-limb correlation surface
+#            (/intel/macro-correlations + correlation-narration service +
+#            migration 157). LIMB-17.4-A partial→enforced.
+#   5954193  T5-θ.2: gatherVenueData expansion (intel-brain.ts +670 lines,
+#            8 new domains incl. attribution_events / candidate_identities
+#            / FRED / cultural_moments / external_calendar / Internal
+#            Context summaries / interactions excerpts / tour cancellation
+#            aggregates). System prompt enumerates them.
+#            ARCH-20.2.4 stays enforced (quality upgraded). ARCH-19.7.1
+#            partial→partial (NLQ now far stronger; dashboard dominance
+#            unchanged).
+#   5f628d4  T5-θ.4: demo seed for Internal + External Context
+#            (1057 rows across 10 tables, confidence_flag='manual').
+#            Source-quality scorecard's Funnel + CAC + anomaly Internal-
+#            Context paths now demo-able on Hawthorne. ARCH-18.3-C stays
+#            enforced (the seed exercises it).
+#   faae7d4  T5-ε.1: FRED daily writer fix (cron now writes
+#            fred_indicators); T5-ε.2: cultural-moments auto-propose cron.
+#            LIMB-17.2.1 enforced→enforced (quality upgraded — daily writer
+#            now exists). INS-19.5.8 partial→partial (cron present; cell
+#            stays partial because exploitation surface still missing).
+#            ARCH-18.3-D enforced→enforced (FRED cadence now satisfied).
+#   9a8c0a0  T5-δ.1+δ.2+ι.1: temporal recompute triggers (migrations
+#            158+159) + fire-once unique index. INV-2.5 enforced→enforced
+#            (quality upgraded — heat_score / journey / tour brief / T3
+#            cache_keys all invalidate on inquiry_date change). INV-12.3
+#            enforced→enforced (quality upgraded — wedding_date and
+#            guest_count changes now propagate too).
+#   c92f052  T5-γ.1+γ.4+γ.7+ι.6: confidence_flag wired to 5 surfaces +
+#            PriorTouchesBadge mounted on lead detail + brain-dump-log
+#            entries tab + cohort thresholds raised. INV-18.5
+#            enforced→enforced (quality upgraded — consumers now exist).
+#            INS-19.3.1 enforced→enforced (quality upgraded — badge now
+#            renders on lead detail). INS-19.3.8 enforced→enforced
+#            (quality upgraded — MIN_COHORT_SIZE=5, MIN_QUALIFYING_BANDS=3
+#            for High conf). INV-20.5.4-C doctrine-only→partial
+#            (brain-dump-log /settings page now shows 30d entries).
+#   c316a74  T5-ζ.1+ζ.2: HeatBadge primitive consolidation on lead detail
+#            + RiskFlag mounted on inbox / leads / pipeline.
+#            ARCH-20.2.1 enforced→enforced (quality upgraded — lead-detail
+#            no longer forks). ANTI-19.9-3 partial→partial with stronger
+#            coverage (RiskFlag now visible on every triage surface).
+#            INS-19.3.5 enforced→enforced (quality upgraded — surfaced
+#            beyond lead detail).
+#   d628d6d  T5-η+ι.7: paused banner + replay queue + correlation_id
+#            extension + persistInsight honest telemetry + /pulse priority
+#            carve-out. OPS-21.2.1 partial→partial (quality upgraded — 4
+#            more tables in lineage). ARCH-20.2.2 partial→partial
+#            (quality upgraded — paused banner + sticky surfaces;
+#            full unified-pulse stays partial because top-bar drawer +
+#            home-pulse widget remain follow-up). OPS-21.4.3 enforced→
+#            enforced (replay queue and paused banner round out the
+#            UX gap).
+#   28169a0  T5-γ.2+γ.6: pricing-elasticity reads source_provenance
+#            (LIMB-16.2.4-C consumer landed) + self_knowledge UI in
+#            /agent/settings (ANTI-19.9-5 stays enforced; INS-19.6.4
+#            partial→partial with stronger coverage — toggle now exists).
+#            INS-19.5.2 enforced→enforced (quality upgraded — confound
+#            check now provenance-aware).
+#   a18b4a2  T5-γ.3+γ.5: essentials suggester cron (migration 163) +
+#            per-user daily digest. ARCH-20.4.4 doctrine-only→partial
+#            (slider now reads action log + suggests level changes).
+#            ARCH-20.2.3 partial→partial (digest is per-user category-
+#            aware now; cadence configurability still pending).
+#   0ca5c58  T5-ι.2+ι.3+ι.4+ι.5: audio race fix + brain-dump URL/PDF
+#            + per-thread auto-send cap (migration 164). ARCH-5.4
+#            enforced→enforced (quality upgraded — atomic appends).
+#            ARCH-20.5.2 partial→partial (URL + PDF handlers landed).
+#            INV-20.5.4-A partial→partial (URL + PDF go through propose-
+#            and-confirm). INV-7.3 enforced→enforced (per-thread 24h cap
+#            now enforced inside checkAutoSendEligible).
+#   567b588  T5-schema-gap: weddings.estimated_guests + inquiry-brain
+#            extraction (migration 165). Bug fix on temporal trigger +
+#            new extraction.
+#   c51245b  T5-schema-gap: tours.cancellation_reason writer + intel-
+#            brain rewire (migration 166). Closes one of the
+#            seasoned-user.md HIGH 5 gaps.
+#   860f9fd  T5-schema-gap: per-venue cultural_moments confirmation
+#            (migration 167). Tightens LIMB-17.2.4-B isolation.
+#   b94b84d  T5-ε.3: cron-writer coverage audit + OPS.md (163 tables,
+#            28 crons, 5 follow-ups surfaced). No schema or doctrine
+#            cell transitions; documentation that hardens future
+#            schema work against the FRED-style writes-wrong-table drift.
+#   5748582  T5-θ.3: Voice DNA Gmail-backfill extraction service +
+#            Day-4 onboarding wire-up (migration 168).
+#            ARCH-18.3-B doctrine-only→partial. Closes yc-partner.md
+#            HIGH 9. Confirmation review step is the follow-up.
 
 # ===================================================================
 # PART 2 — POINT ZERO & FORENSIC RECORD
@@ -309,7 +417,7 @@ meta:
   status: enforced
   owner: Isadora
   target: bucket recomputed when inquiry_date moves
-  notes: "Migrations 118 + 119: Postgres trigger recomputes both bucket AND is_first_touch atomically on weddings UPDATE OF inquiry_date. Service helper candidate-resolver.recomputeBucketsForWedding for explicit invocation. Closed 2026-05-01 by 6deb09b + 63360c3."
+  notes: "Migrations 118 + 119: Postgres trigger recomputes both bucket AND is_first_touch atomically on weddings UPDATE OF inquiry_date. Service helper candidate-resolver.recomputeBucketsForWedding for explicit invocation. Closed 2026-05-01 by 6deb09b + 63360c3. T5-δ.1+δ.2 (2026-05-02): quality upgraded — migration 158 extends the recompute to ALL derived state on inquiry_date / wedding_date / guest_count change. BEFORE trigger sets weddings.heat_recompute_pending=true; AFTER trigger nulls intelligence_insights.last_classical_signature for context_id=NEW.id, stamps wedding_journey_narratives.stale_since, stamps tour_brief_stale_since on the wedding's tours. */5 cron drains pending heat recomputes (cap 100/tick). T3 cache_keys (heat-narration, cohort-match, negotiation-state, risk-flags, decay-re-engagement) include the wedding's inquiry_date day stamp as belt-and-braces. Closes engineer.md CRITICAL 5 + seasoned-user.md CRITICAL 3."
   severity: low
 
 - id: ANTI-2.6.1
@@ -376,7 +484,7 @@ meta:
   status: enforced
   owner: Isadora
   target: no 'Sage' literal in non-comment, non-default-config code
-  notes: "Most files clean (top bar, floating button, chat, contracts, resources, dashboard ALL render via {aiName}). REMAINING: getting-started/page.tsx:68 uses .replaceAll defensive layer (fragile). NEW finding: task-prompts-sage.ts:67 hardcodes 'You're Sage' in TASK_WELCOME — flows to all venues."
+  notes: "Most files clean (top bar, floating button, chat, contracts, resources, dashboard ALL render via {aiName}). REMAINING: getting-started/page.tsx:68 uses .replaceAll defensive layer (fragile). NEW finding: task-prompts-sage.ts:67 hardcodes 'You're Sage' in TASK_WELCOME — flows to all venues. T5-β (2026-05-02, c1725f7 + d11da9b + b06cad8 + migration 162): white-label sweep across 51 files closing the largest finding class in the audit (60+ instances per first-time-user.md). Three sub-mechanisms addressed: (a) DEFAULT_PERSONALITY refactored — ai_name + ai_email no longer have brand defaults; field-level required-or-throw with venue-name fallback (migration 162 backfills venue_ai_config rows for any missing). (b) Hardcoded UI copy replaced via useAiName() hook + venue-scope-context. ~30 surfaces fixed (sage/page, sage-queue, settings/sage-identity, settings/personality, agent/knowledge-gaps, intel/anomalies, intel/reviews, portal/availability, portal/venue-usps-config, portal/messages, _couple-pages/contracts, etc.). (c) sage-brain.ts:416 conversation-history fix — Couple/Sage role labels in the message stream replaced with venue's ai_name. (d) _couple-pages/layout.tsx 'hawthorne-manor' fallback replaced with explicit 404. (e) personality-builder.ts 'sage@hawthornemanor.com' literal removed. CI: scripts/check-no-hardcoded-sage.mjs scope extended to all of src/components + src/app/(platform). Closes engineer.md CRITICAL 15 / 23, first-time-user.md CRITICAL 1 / 2 / 4 + 11 HIGH findings, yc-partner.md MEDIUM 16. Cell stays enforced (was enforced before but with a noted gap); the gap is now closed."
   severity: medium
 
 - id: INV-4.4-B
@@ -454,7 +562,7 @@ meta:
   status: enforced
   owner: Isadora
   target: audio-capture abstraction with provider-agnostic interface; OMI as one adapter
-  notes: "T2-E Phase 2 (2026-05-01): src/lib/services/audio-capture/ owns the abstraction. types.ts defines AudioCaptureAdapter interface + NormalizedSegment shape. adapters/omi-adapter.ts implements it. orchestrator.ts persistAudioSegments handles the 3-way binding (existing tour, auto-match window, orphan) provider-agnostically + writes to transcript_segments (migration 129). promoteOrphanSegments rewrites segment rows when coordinator attaches an orphan. Webhook route (src/app/api/omi/webhook/route.ts) is a thin shim: token auth → adapter.parseSegments → orchestrator.persistAudioSegments → optional extraction trigger. UI renamed: /agent/omi-inbox → /agent/audio-inbox + /settings/omi → /settings/audio-capture (legacy paths redirect). Adding a new provider (iPhone upload, Otter, AssemblyAI, Deepgram) = one new file under adapters/ + a new route. Schema work in Phase 1 (migration 122) renamed omi_session_id → session_id + audio_provider; Phase 2 added segment-level table. Closes 2026-05-01."
+  notes: "T2-E Phase 2 (2026-05-01): src/lib/services/audio-capture/ owns the abstraction. types.ts defines AudioCaptureAdapter interface + NormalizedSegment shape. adapters/omi-adapter.ts implements it. orchestrator.ts persistAudioSegments handles the 3-way binding (existing tour, auto-match window, orphan) provider-agnostically + writes to transcript_segments (migration 129). promoteOrphanSegments rewrites segment rows when coordinator attaches an orphan. Webhook route (src/app/api/omi/webhook/route.ts) is a thin shim: token auth → adapter.parseSegments → orchestrator.persistAudioSegments → optional extraction trigger. UI renamed: /agent/omi-inbox → /agent/audio-inbox + /settings/omi → /settings/audio-capture (legacy paths redirect). Adding a new provider (iPhone upload, Otter, AssemblyAI, Deepgram) = one new file under adapters/ + a new route. Schema work in Phase 1 (migration 122) renamed omi_session_id → session_id + audio_provider; Phase 2 added segment-level table. T5-ι.2 (2026-05-02, 1f40430): orchestrator race fixed. Pre-fix the read-modify-write at orchestrator.ts:131-157 lost transcript text when two webhook deliveries for the same session_id arrived in milliseconds — both read transcript='', both wrote, the second clobbered. Post-fix: migration 164 adds the SQL primitives for atomic appends; orchestrator.ts uses single-statement UPDATE ... SET transcript = COALESCE(transcript, '') || $newText (and tour-bound branch likewise). Per-segment forensic record was always intact; the rolled-up text is now safe too. Closes engineer.md HIGH 9."
 
 # ===================================================================
 # PART 6 — SHARED SERVICE PRINCIPLE
@@ -481,7 +589,7 @@ meta:
   status: enforced
   owner: Isadora
   target: eligibility check enforces all 5 gates
-  notes: "**CRITICAL: confidence-scale mismatch.** inquiry-brain returns 75-95 integer; autonomous-sender compares against 0.50-1.00 float. `75 >= 0.85` always true. Confidence threshold gate is silently a no-op for every draft. **HIGH: require_new_contact never read** — autonomous-sender.ts has no reference. **HIGH: direction filter missing from eligibility check** (INV-15)."
+  notes: "**CRITICAL: confidence-scale mismatch.** inquiry-brain returns 75-95 integer; autonomous-sender compares against 0.50-1.00 float. `75 >= 0.85` always true. Confidence threshold gate is silently a no-op for every draft. **HIGH: require_new_contact never read** — autonomous-sender.ts has no reference. **HIGH: direction filter missing from eligibility check** (INV-15). T5-ι.5 (2026-05-02, 1f40430): per-thread 24h cap landed — checkAutoSendEligible accepts threadId already; new check counts auto-sent drafts on this thread in last 24h and rejects if > N (configurable per auto_send_rules.thread_cap_24h, migration 164). Closes engineer.md MEDIUM 16 + the longstanding bloom-auto-send-cap-audit.md gap."
   severity: critical
 
 - id: INV-7.4
@@ -790,7 +898,7 @@ meta:
   status: enforced
   owner: Isadora
   target: derived fields recomputed when event times change
-  notes: "Tied to INV-2.5. bucket not recomputed on inquiry_date change."
+  notes: "Tied to INV-2.5. bucket not recomputed on inquiry_date change. T5-δ.1+δ.2 (2026-05-02): closes the broader class. Migration 158 triggers recompute heat_score (via pending flag + cron drain), invalidate T3 cache (last_classical_signature null-out), stamp narrative + tour-brief stale_since on wedding_date / guest_count / inquiry_date change. Pattern C from synthesis-and-plan.md addressed at the root."
   severity: high
 
 # ===================================================================
@@ -881,7 +989,7 @@ meta:
   status: enforced
   owner: Isadora
   target: spend records have source field 'manual_entry' or 'integrated:<provider>'
-  notes: "Migration 146 (2026-05-01): adds marketing_spend.source_provenance text NOT NULL DEFAULT 'manual_entry' with CHECK enum (manual_entry / csv_import / brain_dump_text / screenshot_ocr / integrated_meta / integrated_google / integrated_knot / integrated_ww / integrated_other). upsertSpendRows now requires explicit provenance arg; /api/intel/spend route maps mode→provenance (rows=manual_entry, csv=csv_import, text=brain_dump_text). data-import.ts CSV path stamps csv_import. Index on (venue_id, source_provenance). Drives data-quality weighting downstream — pricing-elasticity confound detector and source-mix counterfactual can damp confidence on brain_dump_text rows in a future patch."
+  notes: "Migration 146 (2026-05-01): adds marketing_spend.source_provenance text NOT NULL DEFAULT 'manual_entry' with CHECK enum (manual_entry / csv_import / brain_dump_text / screenshot_ocr / integrated_meta / integrated_google / integrated_knot / integrated_ww / integrated_other). upsertSpendRows now requires explicit provenance arg; /api/intel/spend route maps mode→provenance (rows=manual_entry, csv=csv_import, text=brain_dump_text). data-import.ts CSV path stamps csv_import. Index on (venue_id, source_provenance). Drives data-quality weighting downstream — pricing-elasticity confound detector and source-mix counterfactual can damp confidence on brain_dump_text rows in a future patch. T5-γ.2 (2026-05-02, d00c5e5): consumer landed. pricing-elasticity.ts now reads source_provenance and damps confidence when >50% of marketing_spend rows in the analysis window are brain_dump_text or screenshot_ocr. Pattern A (ship-without-consumer) closed for this cell. Closes yc-partner.md HIGH 6."
   severity: medium
 
 - id: LIMB-16.2.5-A
@@ -921,7 +1029,7 @@ meta:
   status: enforced
   owner: Isadora
   target: macroeconomic indicators ingested
-  notes: "T2-C (2026-05-01): migration 138 fred_indicators table with unique (series_id, region, observation_date) + value/units/frequency/region columns. src/lib/services/external-context/fred.ts owns the panel: DEFAULT_FRED_SERIES = CPIAUCSL (CPI), MORTGAGE30US (30y mortgage), SP500, UNRATE, UMCSENT (consumer sentiment). loadFredSeries forward-fills monthly observations into dense daily series for the correlation engine. Cron-driven daily refresh writer is the follow-up scope."
+  notes: "T2-C (2026-05-01): migration 138 fred_indicators table with unique (series_id, region, observation_date) + value/units/frequency/region columns. src/lib/services/external-context/fred.ts owns the panel: DEFAULT_FRED_SERIES = CPIAUCSL (CPI), MORTGAGE30US (30y mortgage), SP500, UNRATE, UMCSENT (consumer sentiment). loadFredSeries forward-fills monthly observations into dense daily series for the correlation engine. T5-ε.1 (2026-05-02, faae7d4): cron-driven daily writer landed. Pre-fix the daily 'economic_indicators' cron called fetchAllEconomicIndicators (legacy table the correlation engine never reads); post-fix the new 'fred_daily_refresh' job calls fetchAllDefaultFredSeries which writes fred_indicators. Freshness sanity assertion logs loudly if zero rows have fetched_at within the last hour. Migrated direct readers off legacy economic_indicators (intel-brain.ts NLQ context, me-or-market.ts econTrend, /intel/dashboard demand-score, /intel/market-pulse indicators + 24mo confidence history). USP #4's primary signal channel is now on a recurring heartbeat. Closes yc-partner.md CRITICAL 1."
 
 - id: LIMB-17.2.2-A
   status: enforced
@@ -953,7 +1061,7 @@ meta:
   status: enforced
   owner: Isadora
   target: cultural moments require coordinator confirmation
-  notes: "T2-C (2026-05-01): migration 139 cultural_moments table with status CHECK ('proposed' / 'confirmed' / 'dismissed' / 'archived') + category CHECK enum + start_at/end_at + influence_weight (-100..100) + evidence jsonb + proposed_by tracking ('system' / 'ai' / 'coordinator'). Service src/lib/services/external-context/cultural-moments.ts owns proposeMoment / confirmMoment / dismissMoment / proposeFromAutoDetection. Admin review queue at /intel/cultural-moments with proposed/confirmed/dismissed sections + per-row Confirm-with-weight and Dismiss buttons. correlation-engine reads CONFIRMED rows as the 'cultural_moments' channel via loadCulturalMomentsSeries (per-day influence_weight summation across overlapping moments)."
+  notes: "T2-C (2026-05-01): migration 139 cultural_moments table with status CHECK ('proposed' / 'confirmed' / 'dismissed' / 'archived') + category CHECK enum + start_at/end_at + influence_weight (-100..100) + evidence jsonb + proposed_by tracking ('system' / 'ai' / 'coordinator'). Service src/lib/services/external-context/cultural-moments.ts owns proposeMoment / confirmMoment / dismissMoment / proposeFromAutoDetection. Admin review queue at /intel/cultural-moments with proposed/confirmed/dismissed sections + per-row Confirm-with-weight and Dismiss buttons. correlation-engine reads CONFIRMED rows as the 'cultural_moments' channel via loadCulturalMomentsSeries (per-day influence_weight summation across overlapping moments). T5-schema-gap (2026-05-02, 860f9fd, migration 167): per-venue confirmation isolation. Pre-fix one venue confirming a moment leaked status to other venues that share the same moment row; post-fix migration 167 adds venue_cultural_moment_state (per-venue confirm/dismiss) so each venue independently decides. correlation-engine + correlation-narration + intel-brain rewired to read per-venue state. Tightens multi-tenancy."
 
 - id: LIMB-17.2.5
   status: partial
@@ -981,10 +1089,10 @@ meta:
   severity: low
 
 - id: LIMB-17.4-A
-  status: partial
+  status: enforced
   owner: Isadora
   target: correlation engine produces confidence-scored insights
-  notes: "T2-C (2026-05-01): correlation-engine.buildSeries appends External Context channels (fred_<series_id> via loadFredSeries, cultural_moments via loadCulturalMomentsSeries, calendar_<category> via loadCalendarSeries with hierarchical geo_scope). Proper Bonferroni multiple-comparisons correction via bonferroniCriticalR (Acklam inverse normal + Cornish-Fisher t-correction + r=t/√(df+t²)) replaces the pre-pass-5 heuristic. humanChannel maps the new ids to readable labels. STATUS-PARTIAL (review pass 5 honesty downgrade): code path is wired and the math is correct, but no live run on real venue data has produced an exemplar insight yet. The cron-driven FRED writer is still missing (fred_indicators is empty) so External Context channels can't fire until that follow-up lands. Promote to enforced once FRED data is flowing AND a smoke test on a venue with 90+ days of inquiries surfaces at least one correlation insight."
+  notes: "T2-C (2026-05-01): correlation-engine.buildSeries appends External Context channels (fred_<series_id> via loadFredSeries, cultural_moments via loadCulturalMomentsSeries, calendar_<category> via loadCalendarSeries with hierarchical geo_scope). Proper Bonferroni multiple-comparisons correction via bonferroniCriticalR (Acklam inverse normal + Cornish-Fisher t-correction + r=t/√(df+t²)) replaces the pre-pass-5 heuristic. humanChannel maps the new ids to readable labels. T5-θ.1 + T5-ε.1 (2026-05-02): partial→enforced. faae7d4 wired the FRED daily writer (cron now writes fred_indicators not legacy economic_indicators) so the External Context channels actually carry data. 33b00e7 added /intel/macro-correlations + correlation-narration.ts (migration 157) — Sonnet narrates the top-N correlations with FRED + cultural moments + weather + calendar context, gated by cost-ceiling + numbers-guard. The coordinator-readable cross-limb story (USP #4) now exists. Note: a live exemplar insight on real Rixey data is the smoke-test gate; demo seed (T5-θ.4) covers the Hawthorne side."
 
 - id: LIMB-17.4-B
   status: partial
@@ -1037,10 +1145,10 @@ meta:
   severity: critical
 
 - id: ARCH-18.3-B
-  status: doctrine-only
+  status: partial
   owner: Isadora
   target: voice DNA seeding from imports
-  notes: "Voice DNA built only from native_capture going forward. Day 1, Sage drafts sound like generic AI. No 'review extracted voice patterns' coordinator step."
+  notes: "Voice DNA built only from native_capture going forward. Day 1, Sage drafts sound like generic AI. No 'review extracted voice patterns' coordinator step. T5-θ.3 (2026-05-02, 5748582 + migration 168): doctrine-only→partial. Voice DNA Gmail-backfill seed path landed. Service src/lib/services/voice-dna-extract.ts samples up to 100 most-recent outbound interactions (venue-owned Gmail + anti-Sage filter), batches 8 emails per Sonnet call, aggregates greeting/signoff/phrase counts, and persists: top-N greetings + signoffs as voice_preferences rows (preference_type='approved_phrase'), distilled rules as 'rule' rows, punctuation + sentence rhythm as 'dimension' rows. Top 30 phrases → phrase_usage; top 15 distinctive → review_language. Tags every row confidence_flag='imported_high' (migration 168). gateForBrainCall + redactError + correlation_id + taskType='voice_dna_extract' for cost-tracking. Wired as Day-4 onboarding-project step handleVoiceDnaExtract with 409-conflict overwrite flow. Closes yc-partner.md HIGH 9. PARTIAL stays: 'review extracted voice patterns' confirmation step (voice_dna_confirm key) is the follow-up — coordinator currently sees the counts but doesn't approve/reject each anchor before it goes live."
   severity: critical
 
 - id: ARCH-18.3-C
@@ -1053,7 +1161,7 @@ meta:
   status: enforced
   owner: Isadora
   target: External Context backfill
-  notes: "All 4 External Context categories now have backfill paths: (1) weather: fetchHistoricalWeather wired into /api/onboarding/backfill?category=weather (existing function, NOAA CDO monthly summaries). (2) search_trends: fetchTrendsForVenue extended with dateRange parameter; onboarding triggers 'today 12-m' (vs the recurring 'today 3-m'). Pre-fix the SerpAPI date arg was hardcoded 3-m; venues had max 13 weeks of trend data on Day 1. (3) FRED: src/lib/services/external-context/fred-fetch.ts is the missing writer — fetches each DEFAULT_FRED_SERIES from api.stlouisfed.org/fred/series/observations + upserts into fred_indicators. 800ms throttle for FRED's 120/min rate limit. Backfill route triggers fetchAllDefaultFredSeries. (4) cultural_moments: backfill = coordinator-curated via /intel/cultural-moments propose-and-confirm flow (already shipped T2-C). Coverage tracked in onboarding_backfill_progress with category='cultural_moments' (counts confirmed-status rows). Each external category appears in BackfillChecklist with a 'Run backfill' trigger button."
+  notes: "All 4 External Context categories now have backfill paths: (1) weather: fetchHistoricalWeather wired into /api/onboarding/backfill?category=weather (existing function, NOAA CDO monthly summaries). (2) search_trends: fetchTrendsForVenue extended with dateRange parameter; onboarding triggers 'today 12-m' (vs the recurring 'today 3-m'). Pre-fix the SerpAPI date arg was hardcoded 3-m; venues had max 13 weeks of trend data on Day 1. (3) FRED: src/lib/services/external-context/fred-fetch.ts is the missing writer — fetches each DEFAULT_FRED_SERIES from api.stlouisfed.org/fred/series/observations + upserts into fred_indicators. 800ms throttle for FRED's 120/min rate limit. Backfill route triggers fetchAllDefaultFredSeries. (4) cultural_moments: backfill = coordinator-curated via /intel/cultural-moments propose-and-confirm flow (already shipped T2-C). Coverage tracked in onboarding_backfill_progress with category='cultural_moments' (counts confirmed-status rows). Each external category appears in BackfillChecklist with a 'Run backfill' trigger button. T5-ε.1 (2026-05-02, faae7d4): the recurring-cron half landed too — pre-fix FRED was onboarding-only (one-shot heartbeat); post-fix daily 'fred_daily_refresh' cron writes fred_indicators. The 12-month onboarding backfill no longer ages out the moment a venue is past Day 1."
 
 - id: ARCH-18.4
   status: partial
@@ -1065,7 +1173,7 @@ meta:
   status: enforced
   owner: Isadora
   target: confidence flags on every backfilled row
-  notes: "T2-A (2026-05-01): migration 137 added confidence_flag column to weddings, people, interactions, engagement_events, marketing_spend with CHECK enum ('live' / 'imported_high' / 'imported_medium' / 'imported_low' / 'manual'). Indexed on (venue_id, confidence_flag). Importers should stamp the appropriate flag at write time; downstream surfaces (anomaly detection, source quality) can down-weight or label backfilled data. Per Playbook B-39."
+  notes: "T2-A (2026-05-01): migration 137 added confidence_flag column to weddings, people, interactions, engagement_events, marketing_spend with CHECK enum ('live' / 'imported_high' / 'imported_medium' / 'imported_low' / 'manual'). Indexed on (venue_id, confidence_flag). Importers should stamp the appropriate flag at write time; downstream surfaces (anomaly detection, source quality) can down-weight or label backfilled data. Per Playbook B-39. T5-γ.1 (2026-05-02, 0820e79): consumer landed. Five surfaces now read confidence_flag: (1) cohort-match.ts filters cohort to live + imported_high and discloses fidelity mix in narration; (2) LeadInsightsPanel cohort card shows 'based on N high-fidelity + M backfilled-low'; (3) /agent/leads optional 'imported' badge column; (4) /agent/inbox interaction badge for imported_low / manual; (5) anomaly-detection down-weights low-confidence engagement_events. Closes engineer.md CRITICAL 6 + first-time-user.md CRITICAL 3. Cell already enforced for write-side; consumer landing makes the doctrine round-trip real."
 
 # ===================================================================
 # PART 19 — INSIGHTS (32 NAMED) + AI ARCHITECTURE
@@ -1076,6 +1184,7 @@ meta:
   status: enforced
   owner: Isadora
   target: cross-platform identity reconciliation with prior-touch timeline strip
+  notes: "T5-γ.4 (2026-05-02, 0820e79): consumer landed for the lead-detail surface. PriorTouchesBadge defined at inline-primitives.tsx:139 was previously unused (audit yc-partner HIGH 5 + seasoned-user HIGH 7); now mounted in LeadInsightsPanel via /api/insights/lead/[weddingId]/prior-touches. Coordinator opening a lead sees 'X prior touches across N platforms' or honest empty state. Same component renders in /agent/inbox via the existing PriorTouchesChip. Closes the moat-invisible-on-demo gap."
 
 - id: INS-19.3.2
   status: enforced
@@ -1099,7 +1208,7 @@ meta:
   status: enforced
   owner: Isadora
   target: risk flags
-  notes: "T3-H (2026-05-01): src/lib/services/insights/risk-flags.ts runs 7 deterministic risk rules (missing_contract, missing_timeline, missing_vendors, overdue_response, heat_dropping, friction_present, silent_after_tour) + Haiku sentiment overlay on the last 3 inbounds. Composite risk_score 0-100 (severity-weighted sum, capped). Sonnet narrates top flags into a 1-sentence summary; numbers-guard restricts narration to risk_score + flag count + per-flag severities. Wired into /intel/clients/[id] via LeadInsightsPanel with expandable evidence list."
+  notes: "T3-H (2026-05-01): src/lib/services/insights/risk-flags.ts runs 7 deterministic risk rules (missing_contract, missing_timeline, missing_vendors, overdue_response, heat_dropping, friction_present, silent_after_tour) + Haiku sentiment overlay on the last 3 inbounds. Composite risk_score 0-100 (severity-weighted sum, capped). Sonnet narrates top flags into a 1-sentence summary; numbers-guard restricts narration to risk_score + flag count + per-flag severities. Wired into /intel/clients/[id] via LeadInsightsPanel with expandable evidence list. T5-ζ.2 (2026-05-02, 755fe1b): consumer breadth expanded. New batch endpoint /api/insights/risk-flags accepts weddingIds[] and returns latest risk_flag insight per lead. RiskFlagChip primitive mounted on /agent/inbox + /agent/leads + /agent/pipeline so a coordinator triaging never misses the signal that previously only lived on the lead-detail page. Closes seasoned-user.md MEDIUM 14."
 
 - id: INS-19.3.6
   status: partial
@@ -1117,7 +1226,7 @@ meta:
   status: enforced
   owner: Isadora
   target: comparable-couple reasoning
-  notes: "T3-D (2026-05-01): src/lib/services/insights/cohort-match.ts finds the K=10 most-similar past weddings at the same venue (last 3 years, status in booked/completed/lost). Similarity uses z-scored numeric distance (guest_count, planning_horizon) + categorical match (season, source, day_of_week), each weighted; null dims drop and weights renormalise (no fake-zero similarity). Cohort includes BOTH booked and lost members so conversion rate isn't selection-biased. N>=3 hard floor — sub-3 cohorts return null rather than surfacing. Sonnet diagnostic classifies pattern (high_converting / low_converting / mixed / sparse_signal) and composes a recommendation grounded in what differentiated booked from lost. Numbers-guard restricts narration to {n_total, n_booked, n_lost, conversion_pct, median_booking_value, median_days_to_book}. Wired into /api/insights/lead/[weddingId] and LeadInsightsPanel (compact chip + full card with median value + days-to-book). Unit-tested helpers cover season derivation, planning-horizon arithmetic, mean/std under tiny samples, median over even/odd lengths, dimSimilarity null-handling, combineSimilarity weight renormalisation."
+  notes: "T3-D (2026-05-01): src/lib/services/insights/cohort-match.ts finds the K=10 most-similar past weddings at the same venue (last 3 years, status in booked/completed/lost). Similarity uses z-scored numeric distance (guest_count, planning_horizon) + categorical match (season, source, day_of_week), each weighted; null dims drop and weights renormalise (no fake-zero similarity). Cohort includes BOTH booked and lost members so conversion rate isn't selection-biased. N>=3 hard floor — sub-3 cohorts return null rather than surfacing. Sonnet diagnostic classifies pattern (high_converting / low_converting / mixed / sparse_signal) and composes a recommendation grounded in what differentiated booked from lost. Numbers-guard restricts narration to {n_total, n_booked, n_lost, conversion_pct, median_booking_value, median_days_to_book}. Wired into /api/insights/lead/[weddingId] and LeadInsightsPanel (compact chip + full card with median value + days-to-book). Unit-tested helpers cover season derivation, planning-horizon arithmetic, mean/std under tiny samples, median over even/odd lengths, dimSimilarity null-handling, combineSimilarity weight renormalisation. T5-γ.1 + T5-ι.6 (2026-05-02, 0820e79): cohort filtered to confidence_flag in (live, imported_high) by default with disclosure when low-fidelity members are included. MIN_COHORT_SIZE raised 3→5 and MIN_QUALIFYING_BANDS=3 required for High confidence; below that the badge force-downgrades to Low. Closes engineer.md CRITICAL 6 + HIGH 12 + MEDIUM 17 (the 'confident on N=3 backfilled-low cohort' bug)."
 
 - id: INS-19.3.9
   status: doctrine-only
@@ -1193,7 +1302,7 @@ meta:
   status: enforced
   owner: Isadora
   target: pricing elasticity
-  notes: "T3-F (2026-05-01): src/lib/services/insights/pricing-elasticity.ts computes elasticity = (delta_conversion / pre_conversion) / (delta_price / old_price) for the most-recent base_price change in pricing_history. Conversion uses TERMINAL-status weddings only (booked + completed + lost) — no in-flight contamination. Hard guards return null gracefully when preconditions fail: pre_n or post_n < 8, post window < 60 days, change < 60 days ago, adjacent base_price change within ±60 days, malformed price values, < 0.5% price change. Confound detection: marketing_spend pre-vs-post delta >= 20% flags is_confound, which forces classification → 'inconclusive' regardless of elasticity sign (belt-and-suspenders: prompt tells LLM, code enforces). Pure classifier classifyElasticity tested in scripts/test-pricing-elasticity.ts (17 assertions covering all hard guards + magnitude bands + sign awareness + confound override). Wired into GET /api/insights/venue. Surface_layer pulse for elastic, on_demand for everything else (informational unless action-required)."
+  notes: "T3-F (2026-05-01): src/lib/services/insights/pricing-elasticity.ts computes elasticity = (delta_conversion / pre_conversion) / (delta_price / old_price) for the most-recent base_price change in pricing_history. Conversion uses TERMINAL-status weddings only (booked + completed + lost) — no in-flight contamination. Hard guards return null gracefully when preconditions fail: pre_n or post_n < 8, post window < 60 days, change < 60 days ago, adjacent base_price change within ±60 days, malformed price values, < 0.5% price change. Confound detection: marketing_spend pre-vs-post delta >= 20% flags is_confound, which forces classification → 'inconclusive' regardless of elasticity sign (belt-and-suspenders: prompt tells LLM, code enforces). Pure classifier classifyElasticity tested in scripts/test-pricing-elasticity.ts (17 assertions covering all hard guards + magnitude bands + sign awareness + confound override). Wired into GET /api/insights/venue. Surface_layer pulse for elastic, on_demand for everything else (informational unless action-required). T5-γ.2 (2026-05-02, d00c5e5): confound check now reads marketing_spend.source_provenance — when >50% of in-window spend rows are brain_dump_text or screenshot_ocr provenance, the data-quality flag damps confidence and the narration calls it out. Closes yc-partner.md HIGH 6 (LIMB-16.2.4-C consumer landed)."
   severity: low
 
 - id: INS-19.5.3
@@ -1231,7 +1340,7 @@ meta:
   status: partial
   owner: Isadora
   target: cultural moment exploitation
-  notes: "T3-E (2026-05-01): src/lib/services/insights/cultural-moments-auto-propose.ts auto-proposes cultural_moments from search-trend spike detection. Stronger than the existing 4w-vs-4w >20% baseline (which is fine for dashboards but too noisy for proposing): z-score against a 12-week baseline that EXCLUDES the trailing 2 weeks (no contamination), require either {persistence: |z|>=2.5 for both trailing weeks, same direction} OR {magnitude: |z|>=3.5 single week}. Volatile-baseline floor (std > mean*1.5) blocks emission on already-noisy series. Title is direction-aware (core ↑ = demand spike vs dampener ↑ = sentiment headwind). Fingerprint dedup on (evidence.kind='auto_trend_spike' + evidence.term + evidence.weekStart) — re-running cron doesn't spam queue, and the same national spike caught at multiple metros maps to one moment. Always status='proposed' / proposed_by='ai' (never auto-confirms — coordinator review is the gate per LIMB-17.2.4-B). API at POST /api/intel/cultural-moments/auto-propose with scope='venue' (default) | 'all'. PARTIAL: confirmed moments enter correlation engine but no exploitation surface yet (campaign/inventory recommendation off confirmed moments — Part 19.5.8's full ask)."
+  notes: "T3-E (2026-05-01): src/lib/services/insights/cultural-moments-auto-propose.ts auto-proposes cultural_moments from search-trend spike detection. Stronger than the existing 4w-vs-4w >20% baseline (which is fine for dashboards but too noisy for proposing): z-score against a 12-week baseline that EXCLUDES the trailing 2 weeks (no contamination), require either {persistence: |z|>=2.5 for both trailing weeks, same direction} OR {magnitude: |z|>=3.5 single week}. Volatile-baseline floor (std > mean*1.5) blocks emission on already-noisy series. Title is direction-aware (core ↑ = demand spike vs dampener ↑ = sentiment headwind). Fingerprint dedup on (evidence.kind='auto_trend_spike' + evidence.term + evidence.weekStart) — re-running cron doesn't spam queue, and the same national spike caught at multiple metros maps to one moment. Always status='proposed' / proposed_by='ai' (never auto-confirms — coordinator review is the gate per LIMB-17.2.4-B). API at POST /api/intel/cultural-moments/auto-propose with scope='venue' (default) | 'all'. T5-ε.2 (2026-05-02, faae7d4): cron landed. New job 'cultural_moments_auto_propose' at 15 8 * * * (avoids 0 8 * * 1 weekly_briefing collision) iterates every venue with google_trends_metro and calls autoProposeFromTrendSpikes. Per-venue try/catch isolates failures. Closes yc-partner.md CRITICAL 3 (the propose-and-confirm queue no longer requires manual triggering). PARTIAL stays: confirmed moments enter correlation engine but no campaign/inventory exploitation surface yet — Part 19.5.8's full ask."
   severity: low
 
 - id: INS-19.5.9
@@ -1266,7 +1375,7 @@ meta:
   status: partial
   owner: Isadora
   target: time-allocation insights
-  notes: "T3-I (a) (2026-05-01): src/lib/services/insights/coordinator-override-pattern.ts surfaces the AI/coordinator collaboration health — recent 4-week draft accept/edit/reject mix vs prior 4-week, with day-of-week rejection anomaly detection (>=20pp diverge from week mean, >=5 per-DoW sample). Hard guards: >=20 draft_feedback rows in recent window before computing rates; null returns (no surface) when boring (no significant drift, no DoW anomaly). Numbers-guard locks narration to {total drafts, approved/edited/rejected percentages, drift pp, anomaly day stats}. Neutral framing per prompt (frames as 'drafts being edited' not 'coordinator rejects'). PARTIAL because the playbook's 'time-allocation' ask covers more than draft-action mix (also weekly task breakdown vs peer benchmark — defers to a future T3 + coordinator time-tracking data source). What's enforced: draft-collaboration drift + DoW anomaly. Wired into GET /api/insights/venue."
+  notes: "T3-I (a) (2026-05-01): src/lib/services/insights/coordinator-override-pattern.ts surfaces the AI/coordinator collaboration health — recent 4-week draft accept/edit/reject mix vs prior 4-week, with day-of-week rejection anomaly detection (>=20pp diverge from week mean, >=5 per-DoW sample). Hard guards: >=20 draft_feedback rows in recent window before computing rates; null returns (no surface) when boring (no significant drift, no DoW anomaly). Numbers-guard locks narration to {total drafts, approved/edited/rejected percentages, drift pp, anomaly day stats}. Neutral framing per prompt (frames as 'drafts being edited' not 'coordinator rejects'). T5-α.1 (2026-05-02, 3063519): hidden bug fixed — pre-fix the readers were filtering on draft_feedback.feedback_type but writers were inserting feedback_type as well… both into a column that didn't exist (schema column is action). Postgres rejected every insert wholesale; readers returned zero rows since launch. Migration 156 added metadata jsonb; writers now insert action + stash subject/category in metadata; readers filter on action and metadata->>email_category. The insight can finally fire on real data. T5-γ.6 (d00c5e5): toggle UI landed at /agent/settings (paired with ANTI-19.9-5). PARTIAL because the playbook's 'time-allocation' ask covers more than draft-action mix (weekly task breakdown vs peer benchmark — defers to a future T3 + coordinator time-tracking data source)."
   severity: low
 
 - id: INS-19.6.5
@@ -1280,7 +1389,7 @@ meta:
   status: partial
   owner: Isadora
   target: context-of-use; inline as default, dashboard as opt-in
-  notes: "InlineInsightBanner exists but is opt-in for embedding. 25+ /intel pages dominate. Anti-pattern 19.9 #3 partial violation."
+  notes: "InlineInsightBanner exists but is opt-in for embedding. 25+ /intel pages dominate. Anti-pattern 19.9 #3 partial violation. T5-θ.2 (2026-05-02, 5954193) + T5-ζ.2 (755fe1b): NLQ data-gather expanded across 8 new domains (attribution_events, candidate_identities, cultural_moments, fred_indicators, external_calendar_events, Internal Context summaries, interactions excerpts, tour cancellation aggregates) — Sage can now answer cross-limb historical questions instead of hedging. RiskFlagChip + PriorTouchesBadge + HeatBadge mounted at the work surfaces (inbox / leads / pipeline / lead detail) per T5-ζ. PARTIAL stays: dashboards still dominate the page count; many insights still require the coordinator to navigate to /intel/* rather than landing inline on /agent/*."
   severity: medium
 
 - id: ARCH-19.7.2
@@ -1335,7 +1444,7 @@ meta:
   status: partial
   owner: Isadora
   target: no insights buried in dashboards
-  notes: "T3 lead-level insights (heat narration / decay / negotiation / cohort / risk) surface on the lead-detail work surface (/intel/clients/[id]) via LeadInsightsPanel — not buried in /intel/dashboard. T3 venue-level insights (pricing-elasticity / source-mix / coordinator-override / strength-area) surface via /api/insights/venue and through /intel/insights with the new T3-aware filter (TYPE_OPTIONS extended in 2026-05-01 patch) so coordinators can find them. PARTIAL: /agent/leads list still doesn't show inline insight badges per row — coordinator has to click into lead detail. Adding a batch /api/insights/leads endpoint + compact-variant chips on the leads list is a follow-up UI build, not a doctrinal violation."
+  notes: "T3 lead-level insights (heat narration / decay / negotiation / cohort / risk) surface on the lead-detail work surface (/intel/clients/[id]) via LeadInsightsPanel — not buried in /intel/dashboard. T3 venue-level insights (pricing-elasticity / source-mix / coordinator-override / strength-area) surface via /api/insights/venue and through /intel/insights with the new T3-aware filter (TYPE_OPTIONS extended in 2026-05-01 patch) so coordinators can find them. T5-ζ.2 + T5-γ.4 (2026-05-02, 755fe1b + 0820e79): batch endpoint + chip mounts landed. /api/insights/risk-flags accepts weddingIds[] and returns latest risk_flag insight per lead. RiskFlagChip mounted on /agent/inbox + /agent/leads + /agent/pipeline. PriorTouchesBadge mounted on lead detail (was previously defined-only). Closes seasoned-user.md MEDIUM 14 + yc-partner.md HIGH 5. PARTIAL stays: heat / decay / cohort / negotiation chips still not on leads-list rows — that's the broader follow-up."
   severity: high
 
 - id: ANTI-19.9-4
@@ -1349,7 +1458,7 @@ meta:
   status: enforced
   owner: Isadora
   target: self-knowledge insights opt-in only
-  notes: "Migration 148 (2026-05-01): adds venues.self_knowledge_insights_enabled boolean NOT NULL DEFAULT false. coordinator-override-pattern.ts (T3-I a) now checks selfKnowledgeOptedIn() before any compute and returns null when off — no LLM call, no surface row, no row in intelligence_insights. Default-OFF means existing venues see no behavior change; future opt-in surface (admin toggle) gates the surveillance-flavored coordinator-behavior insight. strength-area-cohort stays default-on because it's venue-track-record (no per-coordinator surveillance), not self-knowledge in the surveillance sense."
+  notes: "Migration 148 (2026-05-01): adds venues.self_knowledge_insights_enabled boolean NOT NULL DEFAULT false. coordinator-override-pattern.ts (T3-I a) now checks selfKnowledgeOptedIn() before any compute and returns null when off — no LLM call, no surface row, no row in intelligence_insights. Default-OFF means existing venues see no behavior change; future opt-in surface (admin toggle) gates the surveillance-flavored coordinator-behavior insight. strength-area-cohort stays default-on because it's venue-track-record (no per-coordinator surveillance), not self-knowledge in the surveillance sense. T5-γ.6 (2026-05-02, d00c5e5): the missing toggle UI landed. /agent/settings now has a self-knowledge insights opt-in checkbox with transparency copy ('When enabled, Bloom may surface insights about your own draft-editing patterns'). Closes seasoned-user.md CRITICAL 4 — the gate now has a way to be opened."
 
 # ===================================================================
 # PART 20 — UI LAYERS, ESSENTIALS, BRAIN DUMP
@@ -1359,26 +1468,27 @@ meta:
   status: enforced
   owner: Isadora
   target: inline primitive consistent across surfaces
-  notes: "src/lib/heat/tier-colors.ts (2026-05-01): single TIER_STYLES map (label / color / bg / text / dotBg / border per tier) consumed by src/components/intel/heat-badge.tsx HeatBadge primitive with 4 variants (pill / dot / inline / large). All 3 surfaces (/agent/leads, /agent/pipeline, /intel/clients/[id]) refactored — pre-fix each had its own switch/const that drifted (cold rendered 3 different blue shades). heatColor + heatBg in /intel/clients/[id] now thin styleForTier wrappers; HEAT_TIERS const in /agent/leads dropped; heatDotColor in /agent/pipeline dropped. Future heat surfaces import HeatBadge — no more parallel maps."
+  notes: "src/lib/heat/tier-colors.ts (2026-05-01): single TIER_STYLES map (label / color / bg / text / dotBg / border per tier) consumed by src/components/intel/heat-badge.tsx HeatBadge primitive with 4 variants (pill / dot / inline / large). All 3 surfaces (/agent/leads, /agent/pipeline, /intel/clients/[id]) refactored — pre-fix each had its own switch/const that drifted (cold rendered 3 different blue shades). heatColor + heatBg in /intel/clients/[id] now thin styleForTier wrappers; HEAT_TIERS const in /agent/leads dropped; heatDotColor in /agent/pipeline dropped. Future heat surfaces import HeatBadge — no more parallel maps. T5-ζ.1 (2026-05-02, 755fe1b): lead-detail bespoke renders eliminated. Audit (seasoned-user.md HIGH 8) caught that /intel/clients/[id]/page.tsx had 5 separate inline heat-rendering sites at lines 847/1103/1107/1113/1131/1144 bypassing the primitive. All 5 now use <HeatBadge variant=...>; new variant added to the primitive for the page-header use case. The cell stays enforced; quality of enforcement upgraded."
 
 - id: ARCH-20.2.2
   status: partial
   owner: Isadora
   target: unified pulse surface exists
-  notes: "src/lib/services/pulse-aggregator.ts (2026-05-01) aggregates admin_notifications (unread) + anomaly_alerts (unacknowledged) + intelligence_insights (status='new', priority in critical/high) into a flat PulseItem[] sorted by (priority, recency desc). Source-aware priority mapping: escalation → critical; brain_dump_*_confirm + auto_send_pending + sage_uncertain → high; severity=critical → critical, severity=warning → high. /api/pulse endpoint backs the new /pulse page (src/app/(platform)/pulse/page.tsx) — coordinator's single inbox with source-filter pills (notifications / anomalies / insights / all) + priority-color pills. Demo mode bypass for the demo venue. 16 unit assertions on the aggregator pure helpers. PARTIAL because: snooze + escalate-to-brain-dump UX are follow-up features that build on this aggregator (not in this commit); top-bar drawer + home-pulse widget also pending."
+  notes: "src/lib/services/pulse-aggregator.ts (2026-05-01) aggregates admin_notifications (unread) + anomaly_alerts (unacknowledged) + intelligence_insights (status='new', priority in critical/high) into a flat PulseItem[] sorted by (priority, recency desc). Source-aware priority mapping: escalation → critical; brain_dump_*_confirm + auto_send_pending + sage_uncertain → high; severity=critical → critical, severity=warning → high. /api/pulse endpoint backs the new /pulse page (src/app/(platform)/pulse/page.tsx) — coordinator's single inbox with source-filter pills (notifications / anomalies / insights / all) + priority-color pills. Demo mode bypass for the demo venue. 16 unit assertions on the aggregator pure helpers. T5-η.1 + T5-ι.7 (2026-05-02, f39decf): paused-banner gap closed. /pulse renders a sticky banner (cannot be snoozed) when venue_config.autonomous_paused = true showing since-when + ceiling utilisation + what got skipped + Resume + Replay buttons. Critical-priority insights bypass the sinceDays floor and stay visible until status='acted_on' or 'dismissed'. cost_ceiling_paused notification now routes to critical priority (not medium fallback). Closes engineer.md HIGH 10 + seasoned-user.md HIGH 6 + LOW 18. PARTIAL stays: top-bar drawer + home-pulse widget + escalate-to-brain-dump UX still pending; pulse_snoozes audit page still pending (seasoned-user MEDIUM 16)."
   severity: high
 
 - id: ARCH-20.2.3
   status: partial
   owner: Isadora
   target: digest layer covers all categories
-  notes: "Cadence hardcoded. Self-knowledge category absent. Macro signal correlations absent."
+  notes: "Cadence hardcoded. Self-knowledge category absent. Macro signal correlations absent. T5-γ.5 (2026-05-02, be680e4): per-user digest landed. Pre-fix daily-digest.ts:603 sent one digest per venue to the venue-level briefing_email — coordinator's enabledCategories preferences were ignored (engineer.md HIGH 11). Post-fix sendAllDigests resolves auth emails for every active preferences row + ships a category-filtered digest per coordinator individually. generateDigest accepts categoryFilter + coordinatorName; sendDigestEmailForUser is the new per-user entry point. Anomaly alerts and macro/correlation briefing highlights honor per-user opt-out. Legacy venue-broadcast path (briefing_email + no preferences row) kept intact. Closes engineer.md HIGH 11. PARTIAL stays: cadence still hardcoded; self-knowledge category coverage pending; digest format not configurable per coordinator."
   severity: medium
 
 - id: ARCH-20.2.4
   status: enforced
   owner: Isadora
   target: on-demand exploration (NLQ, source ROI, search)
+  notes: "T5-θ.2 (2026-05-02, 5954193): NLQ ground truth materially upgraded. gatherVenueData adds Phase B (attribution_events / candidate_identities / tangential_signals), Cultural Moments, FRED indicators, External Calendar, Internal Context summaries (absences / operational state / pricing / channels), interactions body excerpts (90d), tour cancellation aggregates. Window extended from 30 days → 365 days for weddings. System prompt at intel-brain.ts:130-181 now enumerates each new domain. The 'Did Pinterest leads convert better than Knot in Q1?' / 'Most common tour cancellation reason in 2026?' / 'Did Memorial Day weekend hurt our tour conversion?' questions are now answerable. Closes engineer.md HIGH 5/9 + yc-partner.md CRITICAL 4 + HIGH 12 + seasoned-user.md HIGH 5/9."
 
 - id: ARCH-20.3
   status: doctrine-only
@@ -1407,9 +1517,10 @@ meta:
   severity: medium
 
 - id: ARCH-20.4.4
-  status: doctrine-only
+  status: partial
   owner: Isadora
   target: slider learns from dismissals/clicks
+  notes: "T5-γ.3 (2026-05-02): doctrine-only→partial. essentials-suggester.ts cron (08:30 UTC daily, vercel.json + /api/cron) reads essentials_action_log per (user, surface), counts dismissed_at_expanded events over 30d, and fires a per-user admin_notification when count >= 5 with 30d suppression window. admin_notifications.user_id (migration 163) is the per-coordinator routing column. Closes Pattern A on this cell — the writer (use-essentials-level.ts) and reader (essentials-suggester) are now both real. PARTIAL because the slider doesn't yet auto-adjust; coordinator manually accepts the suggestion via the notification."
   severity: medium
 
 - id: ARCH-20.4.5
@@ -1428,7 +1539,7 @@ meta:
   status: partial
   owner: Isadora
   target: 15+ input-type handlers
-  notes: "~7 of 15 covered. Missing: vendor invoices (PDF), Google Doc/Sheet URL, Pinterest URL, industry article URL, competitor pricing, voice audio, venue asset photo, forwarded email thread parsing."
+  notes: "~7 of 15 covered. Missing: vendor invoices (PDF), Google Doc/Sheet URL, Pinterest URL, industry article URL, competitor pricing, voice audio, venue asset photo, forwarded email thread parsing. T5-ι.3 + T5-ι.4 (2026-05-02, 1f40430): URL + PDF handlers landed. New brain-dump-url.ts detects URL-only input and routes per host: Pinterest (fetch og:image + caption), Google Doc (defer with auth-flow note), generic (fetch og:title + og:description). Surfaces a propose-and-confirm with the URL summary + 'fetch as KB?' prompt. New brain-dump-pdf.ts adds application/pdf to the fast-path: pdf-parse extracts text, then routes through the classifier (e.g., vendor invoice PDF gets 'I see a $4,200 florist invoice — log to spend?' rather than the previous 'I see you attached a file — what should I do?'). Closes seasoned-user.md HIGH 10 + 11. PARTIAL stays: industry article URL, competitor pricing, voice audio, venue asset photo, forwarded email thread parsing still missing — covered by future T5-ι follow-ups."
   severity: medium
 
 - id: ARCH-20.5.3
@@ -1442,7 +1553,7 @@ meta:
   status: partial
   owner: Isadora
   target: always propose, never silently file
-  notes: "2026-05-01: 4 of the 5 violating paths fixed. (1) client_note → propose-and-confirm via /api/brain-dump/[id]/resolve Case D (round 3 commit). (2) knowledge_base_import → resolve Case E + dedup against existing (venue_id, question) pairs. (3) operational_note → resolve Case F. (4) small CSVs (<= LARGE_CSV_ROW_THRESHOLD) → direct-import path removed; ALL CSVs now route through preview-and-confirm via storagePath flow regardless of size. The 'additive vs destructive' carve-out the codebase had invented is gone — every brain-dump intent now requires coordinator confirmation. PARTIAL: vision-extracted reviews + identities (the 5th path) still need audit. The resolve route already has Case B for vision reviews + storefront_analytics, so the propose path may already exist for those — needs verification."
+  notes: "2026-05-01: 4 of the 5 violating paths fixed. (1) client_note → propose-and-confirm via /api/brain-dump/[id]/resolve Case D (round 3 commit). (2) knowledge_base_import → resolve Case E + dedup against existing (venue_id, question) pairs. (3) operational_note → resolve Case F. (4) small CSVs (<= LARGE_CSV_ROW_THRESHOLD) → direct-import path removed; ALL CSVs now route through preview-and-confirm via storagePath flow regardless of size. The 'additive vs destructive' carve-out the codebase had invented is gone — every brain-dump intent now requires coordinator confirmation. T5-ι.3 + T5-ι.4 (2026-05-02, 1f40430): URL + PDF input types now also route through propose-and-confirm — they don't silently file. PARTIAL stays: vision-extracted reviews + identities (the 5th path) still need audit."
   severity: high
 
 - id: ARCH-20.5.4-B
@@ -1453,10 +1564,10 @@ meta:
   severity: high
 
 - id: INV-20.5.4-C
-  status: doctrine-only
+  status: partial
   owner: Isadora
   target: graduation reversibility + confidence floor + audit trail
-  notes: "BrainDumpQueue points to /settings/brain-dump-log which doesn't exist."
+  notes: "T5-γ.7 (2026-05-02): doctrine-only→partial. /settings/brain-dump-log now has a Recent entries (30d) tab backed by /api/brain-dump/entries returning {parsed_intent, routed_to, status} per row from brain_dump_entries. Coordinator can audit 'what did Sage do with each thing I dropped in over the last month?'. Closes seasoned-user.md HIGH 12. PARTIAL: the page lists entries but there's no per-entry undo or graduation-reversal flow yet — the audit-trail half is real, the reversibility half is the follow-up."
   severity: medium
 
 - id: INV-20.5.4-D
@@ -1470,7 +1581,7 @@ meta:
   status: enforced
   owner: Isadora
   target: Cmd+K shortcut + context-aware pre-fill
-  notes: "FloatingBrainDump (2026-05-01): global Cmd+K / Ctrl+K listener on window opens the modal from any platform surface. Skips when input/textarea/contenteditable already has focus (no hijack of in-flight typing). Context-aware pre-fill via pathPrefillHint(pathname) — recognises /intel/clients/<uuid>, /agent/leads, /agent/pipeline, /agent/learning, /intel/sources, /intel/cultural-moments and stamps the textarea with an anchoring prefix ('About this client: ', 'About a lead: ', etc.) so the brain-dump classifier has context when the coordinator's note doesn't name the subject. Pre-fill only fires when textarea is empty (doesn't stomp in-flight text). Button title now advertises the shortcut."
+  notes: "FloatingBrainDump (2026-05-01): global Cmd+K / Ctrl+K listener on window opens the modal from any platform surface. Skips when input/textarea/contenteditable already has focus (no hijack of in-flight typing). Context-aware pre-fill via pathPrefillHint(pathname) — recognises /intel/clients/<uuid>, /agent/leads, /agent/pipeline, /agent/learning, /intel/sources, /intel/cultural-moments and stamps the textarea with an anchoring prefix ('About this client: ', 'About a lead: ', etc.) so the brain-dump classifier has context when the coordinator's note doesn't name the subject. Pre-fill only fires when textarea is empty (doesn't stomp in-flight text). Button title now advertises the shortcut. T5-β.2 (d11da9b 2026-05-02): FloatingBrainDump simplified to use the new useAiName hook — placeholder text + button title now resolve via venue's ai_name, not hardcoded 'Sage'."
   severity: medium
 
 # ===================================================================
@@ -1527,7 +1638,7 @@ meta:
   status: partial
   owner: Isadora
   target: structured logging fields on every event
-  notes: "T1-G foundation 2026-05-01: src/lib/observability/logger.ts emits one JSON line per call with required fields (level, msg, venue_id, correlation_id, actor, event_type, outcome, latency_ms, ts) and routes by level (console.log/.warn/.error). PII redaction wraps msg + data via redactObject. processIncomingEmail mints correlationId at entry and threads through classifyEmail / generateInquiryDraft / generateClientDraft. Migration 128 adds api_costs.correlation_id + drafts.correlation_id (+ partial indexes). callAI/callAIJson/callAIVision accept correlationId; logUsage stamps it. Pipeline.start + pipeline.ignored milestones now emit structured events. REMAINING (follow-up): full sweep of the ~318 console.* call sites across src/lib (autonomous-sender, candidate-clusterer, sage-route, cron entries, etc.). Foundation lets the sweep proceed incrementally without coordination."
+  notes: "T1-G foundation 2026-05-01: src/lib/observability/logger.ts emits one JSON line per call with required fields (level, msg, venue_id, correlation_id, actor, event_type, outcome, latency_ms, ts) and routes by level (console.log/.warn/.error). PII redaction wraps msg + data via redactObject. processIncomingEmail mints correlationId at entry and threads through classifyEmail / generateInquiryDraft / generateClientDraft. Migration 128 adds api_costs.correlation_id + drafts.correlation_id (+ partial indexes). callAI/callAIJson/callAIVision accept correlationId; logUsage stamps it. Pipeline.start + pipeline.ignored milestones now emit structured events. T5-η.3 (2026-05-02, f39decf): correlation_id extended to 4 more tables. Migration 160 adds correlation_id to engagement_events / interactions / admin_notifications / intelligence_insights with partial indexes. Writers updated: recordEngagementEvent(sBatch), createNotification, persistInsight, email-pipeline interaction inserts. Lead + venue insight API routes mint a correlationId per request and thread through all 9 generators. LeadInsightsPanel mints crypto.randomUUID per Refresh click and passes via ?correlationId=. Closes engineer.md CRITICAL 1 + HIGH 7. REMAINING: full sweep of the ~318 console.* call sites across src/lib still pending; foundation lets it proceed incrementally."
   severity: high
 
 - id: OPS-21.2.2
@@ -1541,7 +1652,7 @@ meta:
   status: partial
   owner: Isadora
   target: 10 metered counters/histograms
-  notes: "Migration 151 (2026-05-01): cron_runs (per cron-tick row with started_at / ended_at / duration_ms / status / error_class / error_message + structured metadata jsonb) + metered_events (generic counter+histogram store: counter_name + venue_id + value + dimension jsonb + observed_at). RLS scoped to user's venue / org (org-admins see org-wide; service-role bypasses). src/lib/observability/metrics.ts ships recordCounter / recordHistogram / trackCronRun helpers + classifyError (timeout / rate_limit / auth / not_found / network / unknown bucketing). /api/cron route now wraps every job in trackCronRun — every cron tick lands in cron_runs. 14 unit assertions on classifyError. PARTIAL because: (a) recordCounter / recordHistogram exist but only the cron_runs path is wired; need to add counter calls in autonomous-sender (success / failure / rate_limited), pipeline (per-stage latency histograms), insights (cache hit/miss). (b) p50/p95/p99 read-side aggregation function not yet built — that's the metrics-aggregate.ts follow-up."
+  notes: "Migration 151 (2026-05-01): cron_runs (per cron-tick row with started_at / ended_at / duration_ms / status / error_class / error_message + structured metadata jsonb) + metered_events (generic counter+histogram store: counter_name + venue_id + value + dimension jsonb + observed_at). RLS scoped to user's venue / org (org-admins see org-wide; service-role bypasses). src/lib/observability/metrics.ts ships recordCounter / recordHistogram / trackCronRun helpers + classifyError (timeout / rate_limit / auth / not_found / network / unknown bucketing). /api/cron route now wraps every job in trackCronRun — every cron tick lands in cron_runs. 14 unit assertions on classifyError. T5-η.4 (2026-05-02, f39decf): persistInsight telemetry honest. Pre-fix returned hardcoded state='inserted' even on update — every audit query filtering on state='updated' returned zero by definition. Post-fix: persistInsight uses the updated_at-vs-created_at trick (atomic with the upsert, no race) to return real 'inserted' / 'updated'. Closes engineer.md HIGH 8. PARTIAL stays: (a) recordCounter / recordHistogram still only wired in cron_runs path; (b) p50/p95/p99 read-side aggregation pending."
   severity: high
 
 - id: OPS-21.2.4
@@ -1573,7 +1684,7 @@ meta:
   status: partial
   owner: Isadora
   target: Tier 1 NEVER in logs
-  notes: "97 console.* calls. No central PII filter. Tour transcripts, family-context Sage notes, Stripe webhook bodies all use console.* without redaction."
+  notes: "97 console.* calls. No central PII filter. Tour transcripts, family-context Sage notes, Stripe webhook bodies all use console.* without redaction. T5-α.3 (2026-05-02, 9e8611d): T3 catches all redact. Pre-fix every T3 generator's catch block logged err.message verbatim — Anthropic 4xx echoes prompt content, prompts contain couple PII. Post-fix all 9 T3 generators + persist.ts route err through redactError(err) before stdout. CI guard scripts/check-no-raw-err-logs-in-t3.mjs prevents regression. PARTIAL stays: full src/lib console.* sweep beyond T3 still pending (OPS-21.2.1 cousin cell). Closes engineer.md CRITICAL 4."
   severity: critical
 
 - id: OPS-21.3.4
@@ -1619,7 +1730,7 @@ meta:
   status: enforced
   owner: Isadora
   target: per-venue daily cost ceiling with 80%/100% triggers
-  notes: "Zero matches for cost_ceiling/daily_cost/circuit_breaker. Costs accrue with no kill-switch — runaway loop or test harness can burn unlimited credits."
+  notes: "Zero matches for cost_ceiling/daily_cost/circuit_breaker. Costs accrue with no kill-switch — runaway loop or test harness can burn unlimited credits. T0-5 392fe32 closed the cron-side enforcement. T5-α.2+α.3 (2026-05-02, 9e8611d): T3 paths gated. New gateForBrainCall(venueId) helper in cost-ceiling.ts wraps every callAI/callAIJson site outside cron. All 9 T3 generators (heat-narration, decay-re-engagement, negotiation-state, risk-flags x2, cohort-match, pricing-elasticity, source-mix-counterfactual, coordinator-override-pattern, strength-area-cohort) check before spend; deterministic fallback surfaces classical numbers when paused. /api/insights/lead and /api/insights/venue return 429 with resume_at BEFORE the Promise.allSettled fan-out so a paused venue's Refresh click spends zero tokens. post-tour-brief and briefings.ts (weekly + monthly) skip silently. CI guard scripts/check-no-raw-err-logs-in-t3.mjs prevents regression. T5-η.1+η.2 (f39decf): /pulse renders sticky paused banner (cannot be snoozed) showing since-when + ceiling utilisation + skipped work + Resume + Replay buttons. Migration 161 paused_period_skipped table records every (venue, work_type, tick) filterActiveVenues drops; daily 00:05 UTC sweeper emits paused_period_recap notification once pause clears; POST /api/agent/cost-ceiling/replay re-fires skipped work types. Closes engineer.md CRITICAL 2 / 3 + HIGH 10 + LOW 25 + seasoned-user.md HIGH 6 + MEDIUM 15."
   severity: critical
 
 - id: OPS-21.4.4
@@ -1639,7 +1750,7 @@ meta:
   status: enforced
   owner: Isadora
   target: every prompt has version ID, logged on every call
-  notes: "T1-E (2026-05-01): each brain (inquiry / client / sage / router / intel / post-tour-brief) exports BRAIN_PROMPT_VERSION = '<module>.prompt.v1.0'. callAI / callAIJson / callAIVision accept promptVersion option, logUsage writes it to api_costs.prompt_version (migration 127). Drafts inserted by email-pipeline / follow-up-sequences / post-tour-brief stamp drafts.prompt_version_used. PROMPTS-CHANGELOG.md at repo root tracks revision history. Bump rule: <MAJOR>.<MINOR> with MAJOR for contract breaks, MINOR for wording refinements."
+  notes: "T1-E (2026-05-01): each brain (inquiry / client / sage / router / intel / post-tour-brief) exports BRAIN_PROMPT_VERSION = '<module>.prompt.v1.0'. callAI / callAIJson / callAIVision accept promptVersion option, logUsage writes it to api_costs.prompt_version (migration 127). Drafts inserted by email-pipeline / follow-up-sequences / post-tour-brief stamp drafts.prompt_version_used. PROMPTS-CHANGELOG.md at repo root tracks revision history. Bump rule: <MAJOR>.<MINOR> with MAJOR for contract breaks, MINOR for wording refinements. T5-schema-gap notes (2026-05-02): two prompt-related schema bugs caught in this sweep. (a) draft_feedback writers were silently failing for the file's lifetime — migration 156 + writer/reader fix landed in 3063519, the voice loop telemetry can finally accumulate. (b) weddings.estimated_guests + tours.cancellation_reason gaps closed via migrations 165+166 so router-brain + inquiry-brain can extract structured data Sage can later cite."
 
 - id: OPS-21.5.2
   status: enforced
