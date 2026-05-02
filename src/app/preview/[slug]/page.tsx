@@ -159,7 +159,9 @@ export default function SagePreviewPage() {
     }
   }
 
-  const aiName = venue?.aiName || 'Sage'
+  // T5-β.2: neutral fallback rather than "Sage" so an unconfigured
+  // venue's preview page doesn't render with another venue's brand.
+  const aiName = venue?.aiName || 'your AI assistant'
   const primaryColor = venue?.primaryColor || '#7D8471'
 
   // Error state

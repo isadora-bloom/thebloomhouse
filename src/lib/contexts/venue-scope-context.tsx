@@ -28,6 +28,16 @@ export interface VenueScope {
   groupId: string | null
   /** Group name when level='group', resolved server-side. */
   groupName: string | null
+  /**
+   * Per-venue AI assistant name from venue_ai_config.ai_name. Resolved
+   * server-side at the same time as venueName. Coordinator-facing pages
+   * read this instead of hardcoding "Sage" so white-label venues
+   * (Oakwood: "Ivy", etc.) render correctly. T5-β.2.
+   * Falls back to a neutral noun when the config row is missing —
+   * outbound paths use requireAiName() and throw, but the UI stays
+   * helpful even mid-onboarding.
+   */
+  aiName: string
 }
 
 const VenueScopeContext = createContext<VenueScope | null>(null)
@@ -40,6 +50,7 @@ export function VenueScopeProvider({
   level,
   groupId,
   groupName,
+  aiName,
   children,
 }: {
   venueId: string
@@ -49,6 +60,7 @@ export function VenueScopeProvider({
   level?: 'venue' | 'group' | 'company'
   groupId?: string | null
   groupName?: string | null
+  aiName?: string | null
   children: ReactNode
 }) {
   return (
@@ -61,6 +73,7 @@ export function VenueScopeProvider({
         level: level ?? 'venue',
         groupId: groupId ?? null,
         groupName: groupName ?? null,
+        aiName: (aiName && aiName.trim()) || 'your AI assistant',
       }}
     >
       {children}

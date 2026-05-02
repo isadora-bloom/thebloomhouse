@@ -28,6 +28,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { requireAiName } from '@/lib/ai/personality-builder'
 import type { TranscriptExtraction } from './tour-transcript-extract'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
@@ -225,9 +226,15 @@ export async function fetchCachedTourBrief(tourId: string): Promise<PostTourBrie
     .select('name')
     .eq('id', t.venue_id)
     .maybeSingle()
+  // Cached read path: ai_name is required (we wrote this row only after
+  // the live path resolved a real name). T5-β.1.
+  const cachedAiName = requireAiName(
+    cfg as { ai_name?: string | null } | null,
+    t.venue_id
+  )
   return {
     tourId: t.id,
-    aiName: ((cfg as { ai_name: string | null } | null)?.ai_name ?? 'Sage'),
+    aiName: cachedAiName,
     venueName: ((ven as { name: string | null } | null)?.name ?? 'this venue'),
     brief: t.tour_brief_text,
     suggestedFollowUpDraft: t.tour_brief_followup_draft,
@@ -301,7 +308,10 @@ export async function generatePostTourBrief(
   ])
 
   const venueName = (venue?.name as string | null) ?? 'the venue'
-  const aiName = (aiConfig?.ai_name as string | null) ?? 'Sage'
+  const aiName = requireAiName(
+    aiConfig as { ai_name?: string | null } | null,
+    venueId
+  )
 
   // 3. Compose the markdown brief
   const extractionJson = JSON.stringify(extraction, null, 2)

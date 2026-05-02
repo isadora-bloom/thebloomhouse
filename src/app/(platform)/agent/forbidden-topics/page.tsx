@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { useSupabaseList } from '@/lib/hooks/use-supabase-list'
 import { ShieldAlert, Plus, Trash2, AlertTriangle } from 'lucide-react'
@@ -42,6 +43,7 @@ const CATEGORY_OPTIONS = [
 
 export default function ForbiddenTopicsPage() {
   const venueId = useVenueId()
+  const aiName = useAiName()
   const supabase = createClient()
   const [newKeyword, setNewKeyword] = useState('')
   const [newCategory, setNewCategory] = useState('')
@@ -132,7 +134,7 @@ export default function ForbiddenTopicsPage() {
         </div>
         <p className="text-sm text-sage-600 max-w-2xl">
           Keywords listed here are checked on every inbound couple message and
-          Sage chat. A match skips automation and routes the message to the
+          {' '}{aiName} chat. A match skips automation and routes the message to the
           coordinator queue. The platform also enforces a global default list
           (legal/refund/lawsuit/etc.) that applies to every venue — these are
           venue-specific additions.

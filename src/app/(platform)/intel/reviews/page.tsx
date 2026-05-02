@@ -16,6 +16,7 @@ import {
   MapPin,
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createBrowserClient } from '@supabase/ssr'
 import { VenueChip } from '@/components/intel/venue-chip'
 
@@ -286,11 +287,13 @@ function PhraseCard({
   onApprove,
   approvingId,
   showVenue,
+  aiName,
 }: {
   phrase: ReviewPhrase
   onApprove: (id: string, context: 'sage' | 'marketing') => void
   approvingId: string | null
   showVenue: boolean
+  aiName: string
 }) {
   const themeColor = getThemeColor(phrase.theme)
 
@@ -339,7 +342,7 @@ function PhraseCard({
           ) : (
             <Sparkles className="w-3.5 h-3.5" />
           )}
-          {phrase.approved_for_sage ? 'Sage Approved' : 'Approve for Sage'}
+          {phrase.approved_for_sage ? `${aiName} Approved` : `Approve for ${aiName}`}
         </button>
 
         <button
@@ -504,6 +507,7 @@ function SourceReviewCard({
 
 export default function ReviewAnalysisPage() {
   const scope = useScope()
+  const aiName = useAiName()
   const [pageView, setPageView] = useState<PageView>('phrases')
   const [phrases, setPhrases] = useState<ReviewPhrase[]>([])
   const [loading, setLoading] = useState(true)
@@ -691,7 +695,7 @@ export default function ReviewAnalysisPage() {
 
   const tabs: { key: FilterTab; label: string; count: number }[] = [
     { key: 'all', label: 'All', count: totalCount },
-    { key: 'sage', label: 'Approved for Sage', count: sageCount },
+    { key: 'sage', label: `Approved for ${aiName}`, count: sageCount },
     { key: 'marketing', label: 'Approved for Marketing', count: marketingCount },
   ]
 
@@ -828,7 +832,7 @@ export default function ReviewAnalysisPage() {
             {searchQuery
               ? `No phrases match "${searchQuery}". Try a different search term.`
               : activeTab !== 'all'
-                ? 'Review phrases and approve them to build your Sage vocabulary and marketing library.'
+                ? `Review phrases and approve them to build your ${aiName} vocabulary and marketing library.`
                 : 'Paste a guest review to extract memorable, quotable language using AI.'}
           </p>
           {!searchQuery && activeTab === 'all' && (
@@ -850,6 +854,7 @@ export default function ReviewAnalysisPage() {
               onApprove={handleApprove}
               approvingId={approvingId}
               showVenue={scope.level !== 'venue'}
+              aiName={aiName}
             />
           ))}
         </div>

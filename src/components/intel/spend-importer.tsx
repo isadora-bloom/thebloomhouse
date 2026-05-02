@@ -15,6 +15,7 @@
 
 import { useState } from 'react'
 import { DollarSign, Upload, FileText, Plus, Trash2, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 
 type Mode = 'rows' | 'csv' | 'text'
 
@@ -42,6 +43,7 @@ function thisMonth(): string {
 }
 
 export function SpendImporter({ onImported }: { onImported?: () => void }) {
+  const aiName = useAiName()
   const [mode, setMode] = useState<Mode>('rows')
   const [rows, setRows] = useState<DraftRow[]>([{ ...emptyRow(), month: thisMonth() }])
   const [csv, setCsv] = useState('')
@@ -204,7 +206,7 @@ export function SpendImporter({ onImported }: { onImported?: () => void }) {
           <textarea
             rows={4}
             className="w-full px-3 py-2 border border-sage-200 rounded text-sm"
-            placeholder='Describe what you spent — "$500 on Instagram in March for the spring campaign" — and Sage will extract the rows.'
+            placeholder={`Describe what you spent — "$500 on Instagram in March for the spring campaign" — and ${aiName} will extract the rows.`}
             value={text}
             onChange={(e) => setText(e.target.value)}
           />

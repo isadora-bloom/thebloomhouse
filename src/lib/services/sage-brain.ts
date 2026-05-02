@@ -13,7 +13,11 @@
  */
 
 import { callAI } from '@/lib/ai/client'
-import { buildPersonalityPrompt, type PersonalityData } from '@/lib/ai/personality-builder'
+import {
+  buildPersonalityPrompt,
+  requireAiName,
+  type PersonalityData,
+} from '@/lib/ai/personality-builder'
 import { buildSageIntelligenceContext } from './sage-intelligence'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
@@ -341,8 +345,11 @@ export async function generateSageResponse(
   // {AI_NAME} substitution honors the venue's configured name. Pre-fix
   // task-prompts-sage hardcoded "Sage" in TASK_WELCOME, so every venue
   // welcomed couples as if they were Rixey — INV-4.4-A violation.
-  const aiNameForTask = (personalityData.config as Record<string, unknown>)
-    ?.ai_name as string | undefined
+  // T5-β.1: ai_name is required — throw rather than default to "Sage".
+  const aiNameForTask = requireAiName(
+    personalityData.config as { ai_name?: string | null },
+    venueId
+  )
   const personalityPrompt = buildPersonalityPrompt(personalityData)
   const taskPrompt = getSageTaskPrompt(taskType ?? 'couple_question', aiNameForTask)
 
@@ -411,9 +418,11 @@ export async function generateSageResponse(
     .filter(Boolean)
     .join('\n\n')
 
-  // Build messages array with conversation history
+  // Build messages array with conversation history. The assistant role
+  // label MUST use the venue's configured ai_name — feeding the literal
+  // "Sage:" into the transcript would brand-leak across venues (T5-β.3).
   const messages = conversationHistory
-    .map((msg) => `${msg.role === 'user' ? 'Couple' : 'Sage'}: ${msg.content}`)
+    .map((msg) => `${msg.role === 'user' ? 'Couple' : aiNameForTask}: ${msg.content}`)
     .join('\n\n')
 
   const userPrompt = messages
@@ -446,8 +455,9 @@ export async function generateSageResponse(
     cost: result.cost,
     kbMatch,
     // Reuses aiNameForTask extracted up-front so the SageResponse name
-    // matches what the task prompt was built with.
-    aiName: aiNameForTask || 'Sage',
+    // matches what the task prompt was built with. requireAiName
+    // throws on empty so this is always non-null. T5-β.1.
+    aiName: aiNameForTask,
     coupleFirstName: weddingContext?.coupleName?.split(' ')[0] ?? null,
   }
 }

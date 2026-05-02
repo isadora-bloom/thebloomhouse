@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { BrainDumpClarifications } from '@/components/agent/brain-dump-clarifications'
@@ -89,7 +90,9 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSetting[] = [
   {
     key: 'draft_pending',
     label: 'Draft Pending Approval',
-    description: 'When Sage generates a draft that needs your review',
+    // T5-β.2: literal "Sage" rendered through aiName at consumer site
+    // (line ~966 reads {setting.description}). Caller substitutes here.
+    description: 'When the AI assistant generates a draft that needs your review',
     icon: FileCheck,
     in_app: true,
     email: true,
@@ -633,6 +636,7 @@ function SettingsSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function NotificationsPage() {
+  const aiName = useAiName()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
   // Notification settings (venue_config) require a specific venue; fall back to first venue in scope when not at venue level
@@ -859,7 +863,7 @@ export default function NotificationsPage() {
             Notifications
           </h1>
           <p className="text-sage-600">
-            Configure how and when you get alerted about new inquiries, AI draft approvals, pipeline changes, and Sage questions. Set thresholds so you only see what matters.
+            Configure how and when you get alerted about new inquiries, AI draft approvals, pipeline changes, and {aiName} questions. Set thresholds so you only see what matters.
           </p>
         </div>
         <button

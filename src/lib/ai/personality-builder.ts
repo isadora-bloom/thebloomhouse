@@ -132,13 +132,22 @@ function renderTourBookingBlock(
 // ---------------------------------------------------------------------------
 // Defaults (DEFAULT_SEASONAL_CONTENT imported from @/config/phrase-library)
 // ---------------------------------------------------------------------------
+//
+// IMPORTANT (T5-β.1): brand-identity fields (ai_name, ai_email, owner_name)
+// are NOT defaulted here. Letting them default silently caused every venue
+// to ship as "Sage" / "sage@hawthornemanor.com" / "Isadora" — a critical
+// white-label leak. Brand identity must come from venue_ai_config; if it's
+// missing, callers throw.
+//
+// What stays defaulted: warmth/formality/playfulness/brevity/enthusiasm
+// sliders + style toggles + behavior modes. These are personality dials,
+// not brand identity, and a sensible default keeps the prompt coherent
+// while a venue is still tuning their voice.
 
-const DEFAULT_PERSONALITY: PersonalityConfig = {
-  ai_name: 'Sage',
-  ai_emoji: '',
-  ai_email: 'sage@hawthornemanor.com',
-  owner_name: 'Isadora',
-  owner_title: 'Owner',
+const DEFAULT_PERSONALITY_DIALS: Omit<
+  PersonalityConfig,
+  'ai_name' | 'ai_email' | 'ai_emoji' | 'owner_name' | 'owner_title'
+> = {
   warmth_level: 7,
   formality_level: 4,
   playfulness_level: 5,
@@ -156,6 +165,45 @@ const DEFAULT_PERSONALITY: PersonalityConfig = {
   signature_expressions: [],
   signature_greeting: null,
   signature_closer: null,
+}
+
+/**
+ * Resolve a venue's required AI name from venue_ai_config. Throws with a
+ * clear, actionable error when the column is null or empty so brand-identity
+ * leaks (every venue speaking as "Sage") become a noisy failure rather than
+ * a silent default. Use this at the single load site for every brain path.
+ */
+export function requireAiName(
+  config: { ai_name?: string | null } | null | undefined,
+  venueId: string
+): string {
+  const name = (config?.ai_name as string | null | undefined)?.trim()
+  if (!name) {
+    throw new Error(
+      `[personality-builder] venue_ai_config.ai_name is required but missing for venue ${venueId}. ` +
+        `Run setup/onboarding to insert venue_ai_config, or backfill via migration 162.`
+    )
+  }
+  return name
+}
+
+/**
+ * Resolve a venue's outbound AI email from venue_ai_config. Required for
+ * any path that emits outbound mail (proposal generation, signoff). Throws
+ * if missing — we will not silently send as sage@hawthornemanor.com from
+ * another venue's account.
+ */
+export function requireAiEmail(
+  config: { ai_email?: string | null } | null | undefined,
+  venueId: string
+): string {
+  const email = (config?.ai_email as string | null | undefined)?.trim()
+  if (!email) {
+    throw new Error(
+      `[personality-builder] venue_ai_config.ai_email is required for outbound paths but missing for venue ${venueId}.`
+    )
+  }
+  return email
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +241,11 @@ const FORMALITY_DESCRIPTIONS: Record<number, string> = {
 // ---------------------------------------------------------------------------
 
 export function buildPersonalityPrompt(data: PersonalityData): string {
-  const config: PersonalityConfig = { ...DEFAULT_PERSONALITY, ...data.config }
+  // Brand-identity fields come from data.config without a fallback — a
+  // missing ai_name is a hard error (see requireAiName). Personality dials
+  // (warmth, formality, etc.) layer over DEFAULT_PERSONALITY_DIALS so a
+  // half-tuned venue still produces a coherent prompt. T5-β.1.
+  const config: PersonalityConfig = { ...DEFAULT_PERSONALITY_DIALS, ...data.config }
   const venue = data.venue ?? {}
   const venueConfig = data.venue_config ?? {}
   const usps = data.usps ?? []
@@ -202,10 +254,23 @@ export function buildPersonalityPrompt(data: PersonalityData): string {
   const voicePrefs = data.voice_preferences
   const reviewVocab = data.review_vocabulary
 
-  // Extract values with defaults
-  const aiName = config.ai_name ?? 'Sage'
+  // ai_name is required. Throw rather than default to "Sage" — every
+  // venue must speak in its own brand voice. Callers who hit this should
+  // run onboarding or backfill via migration 162.
+  const trimmedName = (config.ai_name as string | undefined)?.trim()
+  if (!trimmedName) {
+    const venueLabel = venue.name ?? venueConfig.business_name ?? '(unknown venue)'
+    throw new Error(
+      `[personality-builder] ai_name is required to build a venue personality prompt; got empty for ${venueLabel}. ` +
+        `Insert a venue_ai_config row via onboarding or backfill via migration 162.`
+    )
+  }
+  const aiName = trimmedName
   const aiEmoji = config.ai_emoji ?? ''
-  const aiEmail = config.ai_email ?? ''
+  // ai_email is allowed to be empty here because non-outbound paths
+  // (chat, drafts pre-review) just need the name. Outbound senders MUST
+  // use requireAiEmail() at their own boundary.
+  const aiEmail = (config.ai_email as string | undefined)?.trim() ?? ''
 
   const venueName = venue.name ?? venueConfig.business_name ?? 'the venue'
   const website = ''

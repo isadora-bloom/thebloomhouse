@@ -19,6 +19,7 @@
 
 import { useState, useEffect } from 'react'
 import { Trash2, Plus, Shield, PenLine, MailX } from 'lucide-react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 
 interface Filter {
   id: string
@@ -37,6 +38,7 @@ const PATTERN_TYPE_LABELS: Record<Filter['pattern_type'], string> = {
 }
 
 export default function InboxFiltersPage() {
+  const aiName = useAiName()
   const [filters, setFilters] = useState<Filter[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -97,7 +99,7 @@ export default function InboxFiltersPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Remove this filter? Emails matching it will start flowing back into Sage.')) return
+    if (!confirm(`Remove this filter? Emails matching it will start flowing back into ${aiName}.`)) return
     try {
       const res = await fetch(`/api/agent/inbox-filters?id=${encodeURIComponent(id)}`, {
         method: 'DELETE',
@@ -119,10 +121,10 @@ export default function InboxFiltersPage() {
         <div>
           <h1 className="text-2xl font-serif text-sage-900">Inbox Filters</h1>
           <p className="text-sm text-sage-600 mt-1">
-            Control which senders Sage processes. "Ignore" drops mail before
+            Control which senders {aiName} processes. &quot;Ignore&quot; drops mail before
             the classifier runs — no AI cost, no interaction stored.
-            "No draft" still classifies and stores (so the intelligence layer
-            learns from it), but Sage won't reply.
+            &quot;No draft&quot; still classifies and stores (so the intelligence layer
+            learns from it), but {aiName} won&apos;t reply.
           </p>
         </div>
       </header>
@@ -216,10 +218,10 @@ export default function InboxFiltersPage() {
           />
           <FilterGroup
             title="Learned rules"
-            subtitle="Auto-added by the nightly learner when a domain consistently produces no draft. Remove any you want Sage to start replying to again."
+            subtitle={`Auto-added by the nightly learner when a domain consistently produces no draft. Remove any you want ${aiName} to start replying to again.`}
             items={learned}
             onDelete={handleDelete}
-            empty="No learned rules yet. The nightly job will start promoting domains after Sage has seen 5+ non-draft inbound emails from them."
+            empty={`No learned rules yet. The nightly job will start promoting domains after ${aiName} has seen 5+ non-draft inbound emails from them.`}
           />
         </>
       )}

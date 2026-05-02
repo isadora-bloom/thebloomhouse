@@ -399,6 +399,35 @@ export async function activateLive(
     return { ok: false, error: 'readiness gate has not passed yet' }
   }
 
+  // T5-β.1: white-label gate. A venue cannot Go Live without an
+  // ai_name in venue_ai_config — otherwise every brain path silently
+  // shipped as "Sage" / "sage@hawthornemanor.com" for the new venue.
+  // The 5-day project flow doesn't have a Day-1 ai_name capture step
+  // yet, so we backstop here.
+  const { data: aiCfg } = await supabase
+    .from('venue_ai_config')
+    .select('ai_name')
+    .eq('venue_id', row.venue_id as string)
+    .maybeSingle()
+  const aiName = (aiCfg?.ai_name as string | null | undefined)?.trim()
+  if (!aiName) {
+    // Backfill from venues.name to keep the activation path moving;
+    // coordinator can rename via /settings/personality afterwards.
+    const { data: ven } = await supabase
+      .from('venues')
+      .select('name')
+      .eq('id', row.venue_id as string)
+      .maybeSingle()
+    const fallbackName = `${(ven?.name as string | null | undefined)?.trim() || 'Venue'} Concierge`
+    const { error: aiErr } = await supabase
+      .from('venue_ai_config')
+      .upsert(
+        { venue_id: row.venue_id as string, ai_name: fallbackName, updated_at: new Date().toISOString() },
+        { onConflict: 'venue_id' },
+      )
+    if (aiErr) return { ok: false, error: `failed to seed venue_ai_config.ai_name: ${aiErr.message}` }
+  }
+
   // Paid-venue backfill gate. Free / starter venues (requires_backfill
   // = false) skip this check.
   const { data: venue } = await supabase

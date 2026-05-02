@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { GEAR_GROUPS } from '@/components/shell/nav-config'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 
 /**
  * Org admin landing — index for `/org`. Shows the groups of admin
@@ -11,13 +12,14 @@ import { GEAR_GROUPS } from '@/components/shell/nav-config'
  * renders all groups; the underlying pages themselves check roles.
  */
 export default function OrgAdminIndex() {
+  const aiName = useAiName()
   return (
     <div className="space-y-6">
       <header className="space-y-2">
         <h1 className="font-heading text-3xl font-bold text-sage-900">Org admin</h1>
         <p className="text-sage-600 max-w-2xl">
           Team, billing, groups, and portfolio-wide analytics. This is where you manage the
-          organisation as a whole. For venue-level Sage configuration, switch to Sage&apos;s Brain.
+          organisation as a whole. For venue-level {aiName} configuration, switch to {aiName}&apos;s Brain.
         </p>
       </header>
 

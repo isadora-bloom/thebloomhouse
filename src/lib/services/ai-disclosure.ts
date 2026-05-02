@@ -21,7 +21,10 @@ export const AI_DISCLOSURE_MARKER_V2 = '[sage-ai-disclosure-v2]'
 const ALL_MARKERS = [AI_DISCLOSURE_MARKER_V1, AI_DISCLOSURE_MARKER_V2]
 
 export interface DisclosureContext {
-  /** Per-venue Sage name (venue_config.ai_name). Defaults to "Sage". */
+  /** Per-venue AI name (venue_ai_config.ai_name). When missing, the
+   *  footer still renders without a name rather than leaking "Sage" —
+   *  legal disclosure can never be skipped, but it also must not
+   *  brand-leak (T5-β.1). */
   sageName?: string | null
   /** Venue display name. Defaults to "the venue". */
   venueName?: string | null
@@ -30,15 +33,19 @@ export interface DisclosureContext {
 }
 
 function buildFooter(ctx: DisclosureContext): string {
-  const name = (ctx.sageName && ctx.sageName.trim()) || 'Sage'
+  const trimmedName = ctx.sageName?.trim() ?? ''
   const venue = (ctx.venueName && ctx.venueName.trim()) || 'the venue'
   const role = (ctx.role && ctx.role.trim()) || 'AI assistant'
   // Defensive: if someone overrode role with a value that doesn't mention
   // AI, fall back to "AI assistant" in the footer so disclosure stays clear.
   const safeRole = /\bAI\b/i.test(role) ? role : 'AI assistant'
+  // T5-β.1: when the per-venue name is missing, omit the name entirely
+  // ("drafted by ${venue}'s AI assistant") rather than defaulting to
+  // "Sage". Disclosure stays clear; brand-identity stays correct.
+  const subject = trimmedName ? `${trimmedName}, ${venue}'s ${safeRole}` : `${venue}'s ${safeRole}`
   return `
 ––
-Replies on this thread are drafted by ${name}, ${venue}'s ${safeRole}, and reviewed by a human from the team before anything important is confirmed. Reply here any time to reach the team directly.
+Replies on this thread are drafted by ${subject}, and reviewed by a human from the team before anything important is confirmed. Reply here any time to reach the team directly.
 ${AI_DISCLOSURE_MARKER_V2}`.trimEnd()
 }
 

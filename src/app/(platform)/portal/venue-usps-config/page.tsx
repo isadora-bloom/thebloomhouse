@@ -16,6 +16,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { Sparkles, Save, Plus, Trash2, Loader2 } from 'lucide-react'
 
 interface USP {
@@ -26,6 +27,7 @@ interface USP {
 }
 
 export default function VenueUSPsConfigPage() {
+  const aiName = useAiName()
   const venueId = useVenueId()
   const [venueName, setVenueName] = useState('')
   const [usps, setUsps] = useState<USP[]>([])
@@ -146,9 +148,9 @@ export default function VenueUSPsConfigPage() {
           {venueName ? `${venueName} · What makes us different` : 'Venue USPs'}
         </h1>
         <p className="text-sm text-sage-600 mt-1">
-          Short statements Sage weaves into inquiry and client replies. Keep
+          Short statements {aiName} weaves into inquiry and client replies. Keep
           each one punchy — 8–15 words. Reorder by dragging or editing in
-          place; the order here is the order Sage cycles through.
+          place; the order here is the order {aiName} cycles through.
         </p>
       </div>
 
@@ -158,7 +160,7 @@ export default function VenueUSPsConfigPage() {
         <div className="space-y-3">
           {usps.length === 0 && (
             <p className="text-sm text-sage-500 italic">
-              No USPs yet. Add one to start shaping Sage's voice.
+              No USPs yet. Add one to start shaping {aiName}&apos;s voice.
             </p>
           )}
           {usps.map((u, i) => (

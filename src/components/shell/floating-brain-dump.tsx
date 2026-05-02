@@ -88,7 +88,11 @@ function pathPrefillHint(pathname: string | null): string {
 export function FloatingBrainDump() {
   const venueId = useVenueId()
   const pathname = usePathname()
-  const [aiName, setAiName] = useState<string>('Sage')
+  // Initial render uses a neutral noun phrase — never "Sage" — so a fresh
+  // session for an unconfigured venue doesn't flash another venue's brand.
+  // The async useEffect below replaces this with the real ai_name as soon
+  // as venue_ai_config resolves. T5-β.2.
+  const [aiName, setAiName] = useState<string>('your AI assistant')
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
   const [file, setFile] = useState<File | null>(null)
@@ -114,7 +118,8 @@ export function FloatingBrainDump() {
     return () => window.removeEventListener('keydown', onKey)
   }, [pathname])
 
-  // Resolve the venue's AI assistant name once. Fallback to Sage on miss.
+  // Resolve the venue's AI assistant name once. Initial useState above
+  // already keeps this from rendering as "Sage" before the row resolves.
   useEffect(() => {
     if (!venueId) return
     const supabase = getSupabase()

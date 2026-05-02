@@ -15,6 +15,7 @@ import {
   RefreshCcw,
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { UpgradeGate } from '@/components/ui/upgrade-gate'
 
 // ---------------------------------------------------------------------------
@@ -116,6 +117,7 @@ export default function AnomaliesPage() {
 
 function AnomaliesInner() {
   const scope = useScope()
+  const aiName = useAiName()
 
   const [rows, setRows] = useState<AnomalyRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -380,7 +382,7 @@ function AnomaliesInner() {
                     Explanation
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">
-                    Sage Action
+                    {aiName} Action
                   </th>
                   <SortableHeader
                     label="Status"
@@ -488,7 +490,7 @@ function AnomaliesInner() {
                                         )}
                                         {c.action && (
                                           <p className="text-sm text-sage-700">
-                                            <span className="font-medium">Sage suggests:</span>{' '}
+                                            <span className="font-medium">{aiName} suggests:</span>{' '}
                                             {c.action}
                                           </p>
                                         )}

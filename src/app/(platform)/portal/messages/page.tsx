@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createBrowserClient } from '@supabase/ssr'
 import { VenueChip } from '@/components/intel/venue-chip'
 import {
@@ -121,7 +122,7 @@ function formatDateSeparator(dateStr: string): string {
   })
 }
 
-function senderConfig(role: string): {
+function senderConfig(role: string, aiName: string): {
   label: string
   className: string
   icon: React.ComponentType<{ className?: string }>
@@ -144,7 +145,7 @@ function senderConfig(role: string): {
       }
     case 'sage':
       return {
-        label: 'Sage AI',
+        label: `${aiName} AI`,
         className: 'bg-gold-100 text-gold-700',
         icon: MessageSquare,
         bubbleClass: 'bg-gold-50 border border-gold-200 text-sage-900 mr-auto',
@@ -197,6 +198,7 @@ function MessagesSkeleton() {
 
 export default function MessagesPage() {
   const scope = useScope()
+  const aiName = useAiName()
   const showVenueChip = scope.level !== 'venue'
   const [threads, setThreads] = useState<WeddingThread[]>([])
   const [messages, setMessages] = useState<Message[]>([])
@@ -552,7 +554,7 @@ export default function MessagesPage() {
 
                       {/* Messages in group */}
                       {group.messages.map((msg) => {
-                        const config = senderConfig(msg.sender_role)
+                        const config = senderConfig(msg.sender_role, aiName)
                         const SenderIcon = config.icon
                         const isCoordinator = msg.sender_role === 'coordinator'
 

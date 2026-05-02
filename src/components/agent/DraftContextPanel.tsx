@@ -95,7 +95,9 @@ export function DraftContextPanel({ venueId }: Props) {
     return null
   }
 
-  const aiName = summary.aiName || 'Sage'
+  // T5-β.2: never default to "Sage". Use a neutral noun phrase so a
+  // misconfigured venue's draft summary doesn't show another venue's brand.
+  const aiName = summary.aiName || 'your AI assistant'
   const hasAnySignal =
     summary.demandSummary ||
     summary.topTrend ||

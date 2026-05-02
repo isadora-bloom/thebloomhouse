@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import {
@@ -217,7 +218,8 @@ const DATA_TYPE_META: Record<
   knowledge_base: {
     label: 'Knowledge Base',
     icon: BookOpen,
-    description: 'FAQ entries for Sage AI assistant',
+    // T5-β.2: aiName substituted at consumer (uses {typeMeta.description.replace(/\bthe venue AI assistant\b/g, aiName)}).
+    description: 'FAQ entries for the venue AI assistant',
     color: 'text-indigo-600 bg-indigo-50 border-indigo-200',
     expects: 'Columns: Category, Question, Answer, Keywords',
   },
@@ -323,6 +325,7 @@ function FileIcon({ name }: { name: string }) {
 // ---------------------------------------------------------------------------
 
 export default function QuickAddPage() {
+  const aiName = useAiName()
   const scope = useScope()
 
   // State
@@ -753,7 +756,7 @@ export default function QuickAddPage() {
                       <typeMeta.icon className="w-4 h-4 text-sage-400 shrink-0" />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-sage-700">{typeMeta.label}</p>
-                        <p className="text-xs text-sage-400">{typeMeta.description}</p>
+                        <p className="text-xs text-sage-400">{typeMeta.description.replace(/\bthe venue AI assistant\b/g, aiName)}</p>
                       </div>
                       {WEDDING_REQUIRED_TYPES.includes(type) && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 text-rose-600">
@@ -1104,7 +1107,7 @@ export default function QuickAddPage() {
                               <div className="flex-1 min-w-0">
                                 <span className="block">{typeMeta.label}</span>
                                 <span className="block text-[10px] text-sage-400 truncate">
-                                  {typeMeta.description}
+                                  {typeMeta.description.replace(/\bthe venue AI assistant\b/g, aiName)}
                                 </span>
                               </div>
                             </button>

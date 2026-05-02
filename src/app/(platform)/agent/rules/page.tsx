@@ -559,7 +559,9 @@ export default function RulesEditorPage() {
     (p) => !existingBannedTexts.has(p.toLowerCase())
   )
 
-  const aiName = aiConfig?.ai_name || 'Sage'
+  // T5-β.2: neutral fallback rather than "Sage" so a fresh venue's
+  // rules page doesn't label another venue's brand.
+  const aiName = aiConfig?.ai_name || 'your AI assistant'
 
   return (
     <div className="space-y-8">

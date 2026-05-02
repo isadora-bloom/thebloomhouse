@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { usePlanTier } from '@/lib/hooks/use-plan-tier'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { ChevronDown } from 'lucide-react'
 import {
@@ -15,6 +16,19 @@ import {
   type NavSection,
   type NavItem,
 } from './nav-config'
+
+/**
+ * T5-β.2 white-label substitution. nav-config.ts is a static module so
+ * its strings are baked at build time; we apply the venue's ai_name at
+ * render time instead. Replaces the literal "Sage" — not "Sage Green"
+ * (color) since the tokens "Sage's" / "Sage Queue" / "Couple-facing
+ * Sage" all match `\bSage\b`. The CSS class `text-sage-...` is safe
+ * because the regex requires a word break before "Sage".
+ */
+function brandedLabel(text: string | undefined, aiName: string): string | undefined {
+  if (!text) return text
+  return text.replace(/\bSage\b/g, aiName)
+}
 
 /**
  * SidebarV2 — mode-aware nav. Reads the active mode from the URL
@@ -79,6 +93,7 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
   const pathname = usePathname()
   const { tier: planTier } = usePlanTier()
   const venueId = useVenueId()
+  const aiName = useAiName()
   const activeMode = modeForPath(pathname)
   const mode: ModeConfig | undefined = MODES.find((m) => m.mode === activeMode) ?? MODES[0]
 
@@ -163,7 +178,7 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
         <Link href="/" className="font-heading text-lg font-bold text-sage-900">
           Bloom
         </Link>
-        <p className="text-[11px] text-sage-500 mt-0.5">{mode.description}</p>
+        <p className="text-[11px] text-sage-500 mt-0.5">{brandedLabel(mode.description, aiName)}</p>
       </div>
 
       {/* Essential / All toggle. Sits below the brand block; persists
@@ -206,7 +221,7 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
                 onClick={() => toggle(s.title)}
                 className="w-full flex items-center justify-between px-2 text-[10px] uppercase tracking-wider text-sage-500 font-semibold mb-2 hover:text-sage-700"
               >
-                <span>{s.title}</span>
+                <span>{brandedLabel(s.title, aiName)}</span>
                 <ChevronDown
                   className={cn(
                     'w-3 h-3 transition-transform',
@@ -215,7 +230,7 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
                 />
               </button>
               {s.subtitle && !isCollapsed && view === 'all' && (
-                <p className="text-[11px] text-sage-400 px-2 mb-1">{s.subtitle}</p>
+                <p className="text-[11px] text-sage-400 px-2 mb-1">{brandedLabel(s.subtitle, aiName)}</p>
               )}
               {!isCollapsed && (
                 <ul className="space-y-0.5">
@@ -243,7 +258,7 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
                           )}
                         >
                           <Icon className="w-4 h-4 shrink-0" />
-                          <span className="flex-1 truncate">{item.label}</span>
+                          <span className="flex-1 truncate">{brandedLabel(item.label, aiName)}</span>
                           {badgeText && (
                             <span
                               className={cn(

@@ -143,6 +143,14 @@ export default function SageIdentityPage() {
 
   async function handleSave() {
     if (!venueId) return
+    // T5-β.1: refuse to save an empty ai_name. The previous fallback
+    // to SAGE_DEFAULTS.ai_name = 'Sage' meant a venue could blank the
+    // field and silently brand-leak as Hawthorne's Sage. Surface a
+    // clear error and keep editing.
+    if (!form.ai_name.trim()) {
+      setError('Give your AI assistant a name (any short word will do — e.g. Ivy, Aria, Sage).')
+      return
+    }
     setSaving(true)
     setError(null)
     setSaved(false)
@@ -174,7 +182,7 @@ export default function SageIdentityPage() {
       const { error: upErr } = await supabase
         .from('venue_ai_config')
         .update({
-          ai_name: form.ai_name.trim() || SAGE_DEFAULTS.ai_name,
+          ai_name: form.ai_name.trim(), // guarded above (T5-β.1)
           ai_role: form.ai_role,
           ai_purposes: form.ai_purposes,
           ai_custom_purpose: form.ai_custom_purpose.trim() || null,

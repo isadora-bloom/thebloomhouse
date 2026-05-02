@@ -16,8 +16,9 @@ import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 //
 // Gating: intelligence plan tier (mirrors every other /api/intel/* route).
 // White-label: aiName comes from venue_ai_config.ai_name, venueName from
-// venues.name. Only when the config row is missing do we fall back to the
-// literal string 'Sage'.
+// venues.name. If the config row is missing we 400 — this UI panel is
+// brand-identity for the venue and rendering "Sage" for an Oakwood
+// coordinator would be a white-label leak (T5-β).
 // ---------------------------------------------------------------------------
 
 interface ReviewPhraseOut {
@@ -216,7 +217,20 @@ export async function GET(req: NextRequest) {
   const sessions = sessionsRes.data ?? []
   const phraseUsage = phraseUsageRes.data ?? []
 
-  const aiName = (configRow?.ai_name as string | undefined) ?? 'Sage'
+  // ai_name is required for the voice-dna panel; without it the whole
+  // surface is a venue-brand identity card with the wrong name baked in.
+  // T5-β: surface a useful error rather than rendering "Sage" universally.
+  const resolvedAiName = (configRow?.ai_name as string | undefined)?.trim()
+  if (!resolvedAiName) {
+    return NextResponse.json(
+      {
+        error:
+          'ai_name not configured for this venue. Run onboarding or set venue_ai_config.ai_name before viewing the voice DNA panel.',
+      },
+      { status: 400 }
+    )
+  }
+  const aiName = resolvedAiName
   const venueName = (venueRow?.name as string | undefined) ?? ''
 
   // ----- Dimensions (fall back to personality-builder defaults) ----------

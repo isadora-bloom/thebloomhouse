@@ -543,7 +543,10 @@ export default function EmailLearningPage() {
     }
   }
 
-  const aiName = aiConfig?.ai_name || 'Sage'
+  // T5-β.2: never default to "Sage" — that would mislabel another
+  // venue's training surface. Use a neutral placeholder when the
+  // venue hasn't named their AI yet.
+  const aiName = aiConfig?.ai_name || 'your AI assistant'
   const aiEmoji = aiConfig?.ai_emoji || ''
 
   // Build voice dimension display (merge AI config defaults with trained overrides)

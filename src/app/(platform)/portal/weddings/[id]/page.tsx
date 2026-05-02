@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import Link from 'next/link'
 import {
   ArrowLeft,
@@ -513,6 +514,7 @@ function OverviewTab({
 }
 
 function PlanningNotesTab({ notes }: { notes: PlanningNoteRow[] }) {
+  const aiName = useAiName()
   const grouped = useMemo(() => {
     const map: Record<string, PlanningNoteRow[]> = {}
     for (const note of notes) {
@@ -540,7 +542,7 @@ function PlanningNotesTab({ notes }: { notes: PlanningNoteRow[] }) {
       <div className="text-center py-12">
         <StickyNote className="w-10 h-10 text-sage-300 mx-auto mb-3" />
         <p className="text-sm text-sage-500">No planning notes extracted yet.</p>
-        <p className="text-xs text-sage-400 mt-1">Notes are automatically extracted from Sage conversations.</p>
+        <p className="text-xs text-sage-400 mt-1">Notes are automatically extracted from {aiName} conversations.</p>
       </div>
     )
   }
@@ -1025,15 +1027,16 @@ function CommunicationsTab({
   messages: MessageRow[]
   sageConversations: SageConversationRow[]
 }) {
+  const aiName = useAiName()
   const sortedMessages = [...messages].sort((a, b) => b.created_at.localeCompare(a.created_at))
   const sageMessages = sageConversations.filter((s) => s.role === 'user')
 
   return (
     <div className="space-y-6">
-      {/* Sage conversation summary */}
+      {/* AI conversation summary */}
       <div>
         <h4 className="text-xs font-semibold uppercase tracking-wider text-sage-500 mb-3">
-          Sage Conversations
+          {aiName} Conversations
           <span className="ml-2 text-sage-400 font-normal">({sageConversations.length} messages)</span>
         </h4>
         {sageMessages.length > 0 ? (
@@ -1049,7 +1052,7 @@ function CommunicationsTab({
             )}
           </div>
         ) : (
-          <p className="text-sm text-sage-400 italic">No Sage conversations yet.</p>
+          <p className="text-sm text-sage-400 italic">No {aiName} conversations yet.</p>
         )}
       </div>
 

@@ -32,6 +32,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 import { redactError } from '@/lib/observability/redact'
 import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
+import { requireAiName } from '@/lib/ai/personality-builder'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -177,7 +178,10 @@ export async function extractTourTranscript(
   ])
 
   const venueName = (venue?.name as string | null) ?? 'the venue'
-  const aiName = (aiConfig?.ai_name as string | null) ?? 'Sage'
+  const aiName = requireAiName(
+    aiConfig as { ai_name?: string | null } | null,
+    venueId
+  )
 
   // 3. Run AI extraction
   const systemPrompt = `You are ${aiName}, assisting coordinators at ${venueName}. You analyse wedding venue tour transcripts and return a single JSON object with exactly these fields:
