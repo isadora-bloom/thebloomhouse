@@ -1471,10 +1471,10 @@ meta:
   severity: high
 
 - id: ARCH-20.5.5
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: Cmd+K shortcut + context-aware pre-fill
-  notes: "No global keyboard shortcut. No context pre-fill. FloatingBrainDump initializes text='' regardless of invocation surface."
+  notes: "FloatingBrainDump (2026-05-01): global Cmd+K / Ctrl+K listener on window opens the modal from any platform surface. Skips when input/textarea/contenteditable already has focus (no hijack of in-flight typing). Context-aware pre-fill via pathPrefillHint(pathname) — recognises /intel/clients/<uuid>, /agent/leads, /agent/pipeline, /agent/learning, /intel/sources, /intel/cultural-moments and stamps the textarea with an anchoring prefix ('About this client: ', 'About a lead: ', etc.) so the brain-dump classifier has context when the coordinator's note doesn't name the subject. Pre-fill only fires when textarea is empty (doesn't stomp in-flight text). Button title now advertises the shortcut."
   severity: medium
 
 # ===================================================================

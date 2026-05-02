@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
 import { createBrowserClient } from '@supabase/ssr'
 import { Brain, X, Loader2, Send, CheckCircle2, AlertCircle, Upload } from 'lucide-react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
@@ -61,13 +62,57 @@ function getSupabase() {
   )
 }
 
+/**
+ * Pre-fill hint derived from the current pathname (ARCH-20.5.5).
+ * Captures what the coordinator was looking at when they opened the
+ * dump so the LLM classifier has context — e.g., "About this client:"
+ * if they were on a wedding detail page. Pre-fix the text always
+ * initialised empty regardless of where Cmd+K fired from.
+ */
+function pathPrefillHint(pathname: string | null): string {
+  if (!pathname) return ''
+  // Capture wedding id from /intel/clients/<uuid> or
+  // /agent/leads/<uuid>; the dump's classifier resolves the client
+  // by name normally, but a path-derived hint anchors the parser
+  // when the coordinator's note doesn't name the couple.
+  const clientMatch = pathname.match(/\/(?:intel\/clients|agent\/clients)\/([0-9a-f-]{36})/i)
+  if (clientMatch) return 'About this client: '
+  if (pathname.startsWith('/agent/leads')) return 'About a lead: '
+  if (pathname.startsWith('/agent/pipeline')) return 'About the pipeline: '
+  if (pathname.startsWith('/agent/learning')) return 'Voice/style note: '
+  if (pathname.startsWith('/intel/sources')) return 'Marketing-spend or source note: '
+  if (pathname.startsWith('/intel/cultural-moments')) return 'Cultural moment to add: '
+  return ''
+}
+
 export function FloatingBrainDump() {
   const venueId = useVenueId()
+  const pathname = usePathname()
   const [aiName, setAiName] = useState<string>('Sage')
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [state, setState] = useState<SubmitState>({ kind: 'idle' })
+
+  // Global Cmd+K / Ctrl+K opens the brain-dump from any work surface
+  // with a context-aware pre-fill (ARCH-20.5.5). Skipped when an
+  // input/textarea/contenteditable already has focus — coordinators
+  // typing in another field shouldn't be hijacked.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const isShortcut = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'
+      if (!isShortcut) return
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName?.toLowerCase()
+      const isEditable = tag === 'input' || tag === 'textarea' || target?.isContentEditable
+      if (isEditable) return
+      e.preventDefault()
+      setText((cur) => (cur ? cur : pathPrefillHint(pathname)))
+      setOpen(true)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [pathname])
 
   // Resolve the venue's AI assistant name once. Fallback to Sage on miss.
   useEffect(() => {
@@ -214,10 +259,17 @@ export function FloatingBrainDump() {
   return (
     <>
       <button
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          // Pre-fill with the path-derived hint so the LLM classifier
+          // has context. Only fires when the textarea is empty (don't
+          // stomp on a coordinator's in-progress draft from another
+          // open + close + reopen cycle). ARCH-20.5.5.
+          setText((cur) => (cur ? cur : pathPrefillHint(pathname)))
+          setOpen(true)
+        }}
         className="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full shadow-lg flex items-center justify-center bg-sage-600 hover:bg-sage-700 text-white transition-transform hover:scale-105"
-        title={`Tell ${aiName} something`}
-        aria-label={`Tell ${aiName} something`}
+        title={`Tell ${aiName} something (Cmd+K)`}
+        aria-label={`Tell ${aiName} something (keyboard shortcut: Cmd K)`}
       >
         <Brain className="w-6 h-6" />
       </button>
