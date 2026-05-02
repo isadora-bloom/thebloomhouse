@@ -37,7 +37,7 @@ import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
 import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
-import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
+import { parseFuzzyDate, parseGuestCount, validateEstimatedGuests } from '@/lib/services/fuzzy-date'
 import { chooseEventTime, parseEventTime } from '@/lib/services/event-time'
 import { detectFormRelay, type FormRelayLead } from '@/lib/services/form-relay-parsers'
 import {
@@ -997,6 +997,18 @@ export async function processIncomingEmail(
   const parsedEventDate = parsedEventDateObj?.iso ?? null
   const parsedGuestCount = parseGuestCount(extracted.guestCount)
 
+  // T5-schema-gap (migration 165): land the lead-side estimate in
+  // weddings.estimated_guests. Prefer the dedicated `estimatedGuests`
+  // field when the classifier returned one; fall back to the legacy
+  // guestCount path so emails processed before the prompt bump still
+  // populate the column. validateEstimatedGuests gates the result on
+  // the column's CHECK constraint (1..1000) so a hallucinated 50000
+  // never reaches the DB.
+  const parsedEstimatedGuests =
+    validateEstimatedGuests(
+      (extracted as { estimatedGuests?: unknown }).estimatedGuests
+    ) ?? validateEstimatedGuests(extracted.guestCount) ?? null
+
   // Post-zero identifier gate (B-17 / Constitution Part-Zero): a wedding
   // row encodes a couple that has REACHED Point Zero — name plus a
   // reachable identifier. Synthetic per-prospect tokens
@@ -1047,6 +1059,11 @@ export async function processIncomingEmail(
         wedding_date: parsedEventDate,
         wedding_date_precision: parsedEventDateObj?.precision ?? null,
         guest_count_estimate: parsedGuestCount,
+        // T5-schema-gap (165): explicit lead-side estimate. Sits alongside
+        // guest_count_estimate (legacy / mixed-purpose). Both populated on
+        // create so the trigger watch list and capacity-aware narration
+        // stay in sync from row birth.
+        estimated_guests: parsedEstimatedGuests,
         heat_score: 0,
         temperature_tier: 'cool',
       })
@@ -1244,7 +1261,7 @@ export async function processIncomingEmail(
     // wasn't already known. Never overwrite a manually-entered value.
     const { data: existingWedding } = await supabase
       .from('weddings')
-      .select('wedding_date, guest_count_estimate')
+      .select('wedding_date, guest_count_estimate, estimated_guests')
       .eq('id', weddingId)
       .single()
     const patch: Record<string, unknown> = {}
@@ -1254,6 +1271,16 @@ export async function processIncomingEmail(
     }
     if (existingWedding && !existingWedding.guest_count_estimate && parsedGuestCount) {
       patch.guest_count_estimate = parsedGuestCount
+    }
+    // T5-schema-gap (165): backfill estimated_guests on the same
+    // never-overwrite contract. If the coordinator already typed a
+    // value (NOT NULL), the LLM never wins — same rule as the dates.
+    if (
+      existingWedding &&
+      (existingWedding as { estimated_guests?: number | null }).estimated_guests == null &&
+      parsedEstimatedGuests
+    ) {
+      patch.estimated_guests = parsedEstimatedGuests
     }
     if (Object.keys(patch).length > 0) {
       await supabase.from('weddings').update(patch).eq('id', weddingId)

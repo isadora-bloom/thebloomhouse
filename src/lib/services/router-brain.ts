@@ -14,8 +14,11 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 
-/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
-export const BRAIN_PROMPT_VERSION = 'router-brain.prompt.v1.0'
+/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1.
+ *  v1.1 (T5-schema-gap, migration 165): added estimatedGuests extraction
+ *  field with explicit guidance for ranges, approximate phrasing, and
+ *  the "do not infer numbers from adjectives" gate. */
+export const BRAIN_PROMPT_VERSION = 'router-brain.prompt.v1.1'
 import {
   SPAM_KEYWORDS,
   checkSpam,
@@ -42,6 +45,18 @@ export interface ClassificationResult {
     partnerName?: string
     eventDate?: string
     guestCount?: number
+    /**
+     * T5-schema-gap: explicit lead-side headcount estimate. Lands in
+     * `weddings.estimated_guests` (migration 165). Range 1-1000 enforced
+     * downstream; the prompt instructs Claude to leave NULL when the
+     * couple uses qualitative language like "small wedding" or
+     * "intimate" — we don't infer numbers from adjectives.
+     *
+     * Maintained alongside `guestCount` (legacy field, same shape) for
+     * backwards compatibility with the form-relay synth path that already
+     * writes guestCount. Both feed `parseGuestCount` and `validateEstimatedGuests`.
+     */
+    estimatedGuests?: number
     source?: string
     questions: string[]
     urgencyLevel: 'low' | 'medium' | 'high'
@@ -198,7 +213,17 @@ const CLASSIFICATION_SYSTEM_PROMPT = `You are an email classification engine for
    - senderName: The name of the person emailing (from the email body or signature, not just the from address)
    - partnerName: If they mention a partner/fiance name
    - eventDate: Any mentioned wedding date (return as ISO string YYYY-MM-DD if specific, or descriptive like "Fall 2026" if vague)
-   - guestCount: Estimated guest count if mentioned
+   - guestCount: Estimated guest count if mentioned (kept for legacy callers; same data as estimatedGuests)
+   - estimatedGuests: Lead-side headcount estimate. Extract an integer when the email says any of:
+       * "150 guests" / "around 200" / "about 100" / "120-130 people" / "150 attendees" / "100 head"
+       * Numerical range ("120-150 people", "100 to 130") -> take the MIDPOINT and round to the nearest whole number
+       * Approximate words ("around 150", "roughly 100") -> use the integer they gave
+       * Mixed phrasing ("80 to 100 of our closest friends") -> take the midpoint
+     Leave NULL when the couple uses qualitative language only:
+       * "small wedding" / "large wedding" / "intimate" / "big" / "tiny" -> NULL (do NOT infer numbers from adjectives)
+       * "we don't know yet" / "still figuring out the list" -> NULL
+     Range gate: integers must be 1-1000. If the value is outside that, return NULL.
+     The same number can be returned in both guestCount and estimatedGuests when present.
    - source: If identifiable (the_knot, wedding_wire, google, instagram, referral, website, zola, other)
    - questions: Array of specific questions they're asking (extract each distinct question)
    - urgencyLevel: "low" (general browsing), "medium" (actively planning, has a date), "high" (date is soon, needs quick response, or explicitly says urgent)
@@ -228,6 +253,7 @@ Return JSON matching this exact structure:
     "partnerName": string | null,
     "eventDate": string | null,
     "guestCount": number | null,
+    "estimatedGuests": number | null,
     "source": string | null,
     "questions": string[],
     "urgencyLevel": "low" | "medium" | "high",

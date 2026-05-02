@@ -69,6 +69,10 @@ interface WeddingDetail {
   wedding_date: string | null
   wedding_date_precision: 'day' | 'month' | 'season' | 'year' | null
   guest_count_estimate: number | null
+  // T5-schema-gap (migration 165): explicit lead-side headcount estimate.
+  // Distinct from guest_count_estimate (legacy / mixed-purpose) and from
+  // the couple-portal RSVP count (which lives in the guest_list table).
+  estimated_guests: number | null
   booking_value: number | null
   assigned_consultant_id: string | null
   inquiry_date: string | null
@@ -885,12 +889,32 @@ export default function ClientProfilePage() {
               </div>
               <p className="text-sm font-semibold text-sage-900">{fmtDateWithPrecision(wedding.wedding_date, wedding.wedding_date_precision)}</p>
             </div>
+            {/* T5-schema-gap (migration 165): "Headcount" surface backed by
+                weddings.estimated_guests with a fallback to the legacy
+                guest_count_estimate column. When neither is captured we
+                say so plainly instead of rendering a "--" that looks like
+                bad data — the platform shouldn't pretend a guess. */}
             <div className="bg-surface border border-border rounded-xl p-4 shadow-sm">
               <div className="flex items-center gap-2 mb-1">
                 <Users className="w-4 h-4 text-sage-400" />
-                <span className="text-xs text-sage-500">Guest Count</span>
+                <span className="text-xs text-sage-500">Headcount</span>
               </div>
-              <p className="text-sm font-semibold text-sage-900">{wedding.guest_count_estimate ?? '--'}</p>
+              {(() => {
+                const headcount = wedding.estimated_guests ?? wedding.guest_count_estimate
+                if (headcount != null) {
+                  return (
+                    <p className="text-sm font-semibold text-sage-900">{headcount}</p>
+                  )
+                }
+                return (
+                  <p
+                    className="text-xs italic text-sage-400"
+                    title="No guest count captured yet from the inquiry-brain extraction or coordinator entry."
+                  >
+                    not yet captured
+                  </p>
+                )
+              })()}
             </div>
             <div className="bg-surface border border-border rounded-xl p-4 shadow-sm">
               <div className="flex items-center gap-2 mb-1">

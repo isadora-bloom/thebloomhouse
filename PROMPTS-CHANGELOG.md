@@ -23,7 +23,12 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
 ## Per-brain history
 
-### inquiry-brain (`inquiry-brain.prompt.v1.0`)
+### inquiry-brain (`inquiry-brain.prompt.v1.1`)
+- **v1.1** (2026-05-02) — T5-schema-gap (migration 165). EXTRACTED
+  DATA context block now emits a "Headcount status: KNOWN | NOT YET
+  CAPTURED" line so Sage knows whether to ask for guest count. Paired
+  with `task-prompts-inquiry.ts` "GATHER PERSONALIZATION DETAILS"
+  edit that says don't infer a number from "small / intimate / large".
 - **v1.0** (2026-05-01) — Initial versioning baseline. Captures the
   4-layer assembly (UNIVERSAL_RULES + personality + task prompt +
   learning block) as it stands at T1-E land.
@@ -37,7 +42,12 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
   with KB context + intelligence-context block. Tier-1 content (couple
   PII, family context).
 
-### router-brain (`router-brain.prompt.v1.0`)
+### router-brain (`router-brain.prompt.v1.1`)
+- **v1.1** (2026-05-02) — T5-schema-gap (migration 165). Added
+  `estimatedGuests` extraction field with explicit guidance for
+  ranges (take midpoint), approximate phrasing ("around 150"), the
+  1-1000 range gate, and the do-not-infer-from-adjectives rule for
+  "small / intimate / large". Lands in `weddings.estimated_guests`.
 - **v1.0** (2026-05-01) — Initial versioning baseline. Email
   classification on Haiku (per OPS-21.4.2) with the 7-class label set.
 

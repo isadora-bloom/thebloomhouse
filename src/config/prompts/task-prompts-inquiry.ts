@@ -41,7 +41,12 @@ Your output should ONLY be the email draft itself (subject line + body).
 5. **GATHER PERSONALIZATION DETAILS**
    - Season of their wedding
    - Colors or aesthetic mentioned
-   - Guest count
+   - Guest count — HONOR the EXTRACTED DATA "Headcount status" line:
+     * KNOWN -> mirror the number naturally if it fits ("a 150-guest celebration"),
+       but do NOT ask them to confirm or restate it
+     * NOT YET CAPTURED -> you MAY ask once if it fits the flow, but never as
+       a checklist item, and never infer a number from "small" / "intimate" /
+       "large" — leave qualitative descriptors qualitative
    - Indoor/outdoor preference
    - Vibe words ("romantic," "moody," "elegant," etc.)
    - Any personal details (how they met, etc.)

@@ -201,3 +201,28 @@ export function parseGuestCount(raw: unknown): number | null {
   const single = s.match(/\d+/)
   return single ? parseInt(single[0], 10) : null
 }
+
+/**
+ * Validator for `weddings.estimated_guests` (T5-schema-gap, migration 165).
+ *
+ * Accepts a parsed number (from the LLM extraction or `parseGuestCount`)
+ * and returns it only when:
+ *   - it is a finite integer (after rounding)
+ *   - it is in [1, 1000]
+ *
+ * Returns null otherwise so the caller can store NULL and let the column's
+ * CHECK constraint stay quiet. We round to nearest int because the LLM may
+ * return midpoints from ranges like "120-130" -> 125 cleanly, but a stray
+ * "1.5" or "100.7" should still land as a valid integer rather than
+ * tripping the CHECK with a non-integer literal.
+ */
+export function validateEstimatedGuests(raw: unknown): number | null {
+  let n: number | null = null
+  if (typeof raw === 'number') n = raw
+  else if (typeof raw === 'string') n = parseGuestCount(raw)
+
+  if (n === null || !Number.isFinite(n)) return null
+  const rounded = Math.round(n)
+  if (rounded < 1 || rounded > 1000) return null
+  return rounded
+}

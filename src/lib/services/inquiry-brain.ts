@@ -26,8 +26,12 @@ import { resolveSageIdentity, renderOpenerConstraints } from '@/lib/services/sag
  * Prompt revision identifier — bump when the system prompt or task
  * prompt structure changes. Logged to api_costs.prompt_version on
  * every call. Per Playbook OPS-21.5.1 / T1-E. See PROMPTS-CHANGELOG.md.
+ *
+ * v1.1 (T5-schema-gap, migration 165): added explicit "Headcount status"
+ * line to the EXTRACTED DATA context block so Sage knows whether to ask
+ * for headcount or skip it. Pairs with weddings.estimated_guests.
  */
-export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.0'
+export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.1'
 import { selectPhrase } from '@/lib/ai/phrase-selector'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
@@ -409,7 +413,19 @@ export async function generateInquiryDraft(
 
   contextBlock += `\n\n## EXTRACTED DATA:\n- Questions detected: ${extractedData.questions.length > 0 ? extractedData.questions.join('; ') : 'None specific'}`
   if (extractedData.eventDate) contextBlock += `\n- Event date: ${extractedData.eventDate}`
-  if (extractedData.guestCount) contextBlock += `\n- Guest count: ${extractedData.guestCount}`
+
+  // T5-schema-gap (migration 165): explicit headcount signal so the
+  // task prompt's qualification gate ("don't auto-ask for headcount
+  // when it's known") has a deterministic value to read. When the
+  // estimate is captured we tell Sage NOT to ask for it again on this
+  // reply; when it's missing we tell Sage it's a soft qualifier she
+  // MAY ask about, but only if it fits naturally — not a checklist item.
+  if (extractedData.guestCount) {
+    contextBlock += `\n- Guest count: ${extractedData.guestCount}`
+    contextBlock += `\n- Headcount status: KNOWN (do not ask the couple for it again — they already told us)`
+  } else {
+    contextBlock += `\n- Headcount status: NOT YET CAPTURED (you MAY ask once if it fits the conversation; do not infer a number from words like "small" or "intimate")`
+  }
   if (season !== 'unknown') contextBlock += `\n- Season: ${season}`
 
   // Source-specific personalisation. Form relays strip context from the
