@@ -127,6 +127,10 @@
     {
       "path": "/api/cron?job=post_event_feedback_check",
       "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/cron?job=prune_expired_pulse_snoozes",
+      "schedule": "15 0 * * *"
     }
   ]
 }

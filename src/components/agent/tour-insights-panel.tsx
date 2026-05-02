@@ -14,7 +14,7 @@
 
 import { useEffect, useState } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
-import { Telescope, Sparkles, RefreshCw, Loader2 } from 'lucide-react'
+import { Telescope, Sparkles, RefreshCw, Loader2, AlertTriangle } from 'lucide-react'
 
 interface TourLite {
   id: string
@@ -24,6 +24,13 @@ interface TourLite {
   tour_brief_text: string | null
   tour_brief_confidence: 'high' | 'medium' | 'low' | null
   tour_brief_followup_draft: string | null
+  // T5-followup-W (seasoned MED 17): stamped non-null by the
+  // weddings_temporal_change_recompute_after trigger (migration
+  // 158/165) when the parent wedding's inquiry_date / wedding_date /
+  // estimated_guests changes. Pre-this-fix the column was written but
+  // no UI surface read it, so coordinators saw briefs anchored to the
+  // old date with no warning. Cleared on regenerate.
+  tour_brief_stale_since: string | null
 }
 
 interface Props {
@@ -61,7 +68,7 @@ export function TourInsightsPanel({ weddingId }: Props) {
       setLoading(true)
       const { data } = await sb
         .from('tours')
-        .select('id, scheduled_at, outcome, tour_brief_generated_at, tour_brief_text, tour_brief_confidence, tour_brief_followup_draft')
+        .select('id, scheduled_at, outcome, tour_brief_generated_at, tour_brief_text, tour_brief_confidence, tour_brief_followup_draft, tour_brief_stale_since')
         .eq('wedding_id', weddingId)
         .order('scheduled_at', { ascending: false })
       if (!cancelled) {
@@ -99,7 +106,15 @@ export function TourInsightsPanel({ weddingId }: Props) {
           tour_brief_followup_draft: json.brief!.suggestedFollowUpDraft,
           tour_brief_confidence: json.brief!.confidence,
           tour_brief_generated_at: new Date().toISOString(),
+          // Clear the stale marker locally so the badge disappears
+          // immediately. The service-side regenerate has already
+          // cleared it in the DB (post-tour-brief.ts).
+          tour_brief_stale_since: null,
         } : t))
+      } else {
+        // Common reason: cost-ceiling gate is closed (gateForBrainCall
+        // returned !ok). The endpoint returns 200 with brief: null.
+        alert('Brief could not be regenerated. The venue may be at its daily AI cost ceiling — try again after the next reset.')
       }
     } finally {
       setGeneratingId(null)
@@ -128,6 +143,15 @@ export function TourInsightsPanel({ weddingId }: Props) {
                     AI · {t.tour_brief_confidence} confidence
                   </span>
                 )}
+                {t.tour_brief_stale_since && t.tour_brief_text && (
+                  <span
+                    className="text-[10px] px-2 py-0.5 rounded-full border bg-amber-50 text-amber-800 border-amber-200 inline-flex items-center gap-1"
+                    title={`Tour anchors changed ${new Date(t.tour_brief_stale_since).toLocaleString()}. Regenerate to refresh.`}
+                  >
+                    <AlertTriangle className="w-3 h-3" />
+                    Stale
+                  </span>
+                )}
               </div>
               <button
                 onClick={() => regenerate(t.id)}
@@ -139,6 +163,14 @@ export function TourInsightsPanel({ weddingId }: Props) {
                 {t.tour_brief_text ? 'Regenerate' : 'Generate'}
               </button>
             </div>
+            {t.tour_brief_stale_since && t.tour_brief_text && (
+              <div className="mb-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 flex items-start gap-2">
+                <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                <span>
+                  Brief is stale — the wedding&apos;s anchors (date, headcount) were updated after this brief was generated. Regenerate to refresh.
+                </span>
+              </div>
+            )}
             {t.tour_brief_text ? (
               <>
                 <p className="text-xs text-sage-800 leading-relaxed whitespace-pre-wrap">{t.tour_brief_text}</p>

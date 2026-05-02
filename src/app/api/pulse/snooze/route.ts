@@ -1,6 +1,11 @@
 /**
  * /api/pulse/snooze (T4-C).
  *
+ * GET    → list all active snoozes/dismissals for the caller's venue.
+ *          Returns rows whose snoozed_until is in the future (active
+ *          snoozes) OR whose action='dismissed' AND created_at falls
+ *          within the 90-day TTL (eng LOW 24). Expired snoozes are
+ *          excluded server-side so the audit page never shows zombies.
  * POST   body: { itemKey, action, snoozedUntilIso?, reason? }
  *        → upsert a snooze/dismiss for the caller's venue.
  * DELETE ?itemKey=... → un-snooze (delete the row); item re-surfaces.
@@ -13,6 +18,38 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 
 const VALID_ITEM_KEY = /^(notif|anomaly|insight):[0-9a-f-]{36}$/i
+
+const DISMISS_TTL_MS = 90 * 86_400_000
+
+export async function GET() {
+  const auth = await getPlatformAuth()
+  if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
+  const supabase = createServiceClient()
+  const { data, error } = await supabase
+    .from('pulse_snoozes')
+    .select('id, item_key, action, snoozed_until, reason, created_at')
+    .eq('venue_id', auth.venueId)
+    .order('created_at', { ascending: false })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  const nowIso = new Date().toISOString()
+  const dismissCutoffIso = new Date(Date.now() - DISMISS_TTL_MS).toISOString()
+  const rows = ((data ?? []) as Array<{
+    id: string
+    item_key: string
+    action: string
+    snoozed_until: string | null
+    reason: string | null
+    created_at: string
+  }>).filter((r) => {
+    if (r.action === 'dismissed') return r.created_at >= dismissCutoffIso
+    if (r.action === 'snoozed') return r.snoozed_until !== null && r.snoozed_until > nowIso
+    return false
+  })
+
+  return NextResponse.json({ snoozes: rows })
+}
 
 export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()

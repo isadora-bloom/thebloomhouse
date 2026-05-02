@@ -24,6 +24,13 @@
  * ceiling pause state) and lets critical-priority insights bypass the
  * sinceDays floor so a 30-day-old risk-flag still appears as long as
  * it hasn't been acted on.
+ *
+ * T5-followup-W (2026-05-02): same priority-aware split applied to
+ * `anomaly_alerts` (severity='critical' bypasses the floor;
+ * severity='info' decays after 14d; severity='warning' uses the
+ * standard floor) and to pulse-snooze dismissals (forever-dismissals
+ * now decay after 90 days unless re-dismissed). Closes
+ * eng-MED-18 + eng-LOW-24.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -162,18 +169,29 @@ export async function aggregatePulseFull(
   const sinceIso = new Date(Date.now() - sinceDays * 86_400_000).toISOString()
 
   // Pull active snoozes + dismissals up front so we can filter
-  // PulseItem candidates without a per-item query (T4-C). dismissed
-  // = forever-hidden; snoozed_until > now() = currently hidden;
-  // expired snoozes fall off the filter naturally.
+  // PulseItem candidates without a per-item query (T4-C).
+  //
+  // T5-followup-W (2026-05-02): dismissals now decay. Pre-fix the
+  // dismiss action was forever — a coordinator who dismissed a
+  // pulse item in February would never see that surface re-fire, even
+  // if the underlying condition came back six months later. New rule:
+  // dismissals stay sticky for 90 days from `created_at`; after that
+  // they fall off the hidden set and the item re-surfaces (the
+  // coordinator can re-dismiss; that bumps `created_at` via the
+  // upsert). snoozed_until > now() filter is unchanged.
   const { data: snoozeRows } = await supabase
     .from('pulse_snoozes')
-    .select('item_key, action, snoozed_until')
+    .select('item_key, action, snoozed_until, created_at')
     .eq('venue_id', venueId)
   const nowIso = new Date().toISOString()
+  const ninetyDaysAgoIso = new Date(Date.now() - 90 * 86_400_000).toISOString()
   const hiddenKeys = new Set<string>()
-  for (const r of ((snoozeRows ?? []) as Array<{ item_key: string; action: string; snoozed_until: string | null }>)) {
+  for (const r of ((snoozeRows ?? []) as Array<{ item_key: string; action: string; snoozed_until: string | null; created_at: string }>)) {
     if (r.action === 'dismissed') {
-      hiddenKeys.add(r.item_key)
+      // 90-day TTL on dismissals (eng LOW 24).
+      if (r.created_at >= ninetyDaysAgoIso) {
+        hiddenKeys.add(r.item_key)
+      }
     } else if (r.action === 'snoozed' && r.snoozed_until && r.snoozed_until > nowIso) {
       hiddenKeys.add(r.item_key)
     }
@@ -203,16 +221,60 @@ export async function aggregatePulseFull(
     })
   }
 
-  // Anomalies (unacknowledged).
-  const { data: anomalies } = await supabase
+  // Anomalies (unacknowledged). T5-followup-W (eng MED 18) — split by
+  // severity so the floor matches the alert's importance:
+  //   - critical : bypass sinceDays floor (a critical anomaly that
+  //                hasn't been acknowledged stays on /pulse until
+  //                someone acks it; aging out silently is the bug).
+  //   - warning  : standard sinceDays floor (the existing default).
+  //   - info     : 14-day hard cap, INDEPENDENT of sinceDays. Info-tier
+  //                alerts decay so the feed doesn't drown in low-signal
+  //                noise; if sinceDays > 14 the floor is actually
+  //                tightened, not relaxed.
+  // Three queries instead of one to keep index selectivity right; the
+  // dedupe-by-id pass below is idempotent (same alert can't appear
+  // twice — they have distinct severities).
+  const fourteenDaysAgoIso = new Date(Date.now() - 14 * 86_400_000).toISOString()
+  const infoFloorIso = sinceIso > fourteenDaysAgoIso ? sinceIso : fourteenDaysAgoIso
+
+  const { data: criticalAnomalies } = await supabase
     .from('anomaly_alerts')
     .select('id, alert_type, metric_name, severity, ai_explanation, current_value, baseline_value, acknowledged, created_at')
     .eq('venue_id', venueId)
     .eq('acknowledged', false)
+    .eq('severity', 'critical')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  const { data: warningAnomalies } = await supabase
+    .from('anomaly_alerts')
+    .select('id, alert_type, metric_name, severity, ai_explanation, current_value, baseline_value, acknowledged, created_at')
+    .eq('venue_id', venueId)
+    .eq('acknowledged', false)
+    .eq('severity', 'warning')
     .gte('created_at', sinceIso)
     .order('created_at', { ascending: false })
     .limit(limit)
-  for (const a of ((anomalies ?? []) as AnomalyRow[])) {
+
+  const { data: infoAnomalies } = await supabase
+    .from('anomaly_alerts')
+    .select('id, alert_type, metric_name, severity, ai_explanation, current_value, baseline_value, acknowledged, created_at')
+    .eq('venue_id', venueId)
+    .eq('acknowledged', false)
+    .eq('severity', 'info')
+    .gte('created_at', infoFloorIso)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  const allAnomalies = [
+    ...((criticalAnomalies ?? []) as AnomalyRow[]),
+    ...((warningAnomalies ?? []) as AnomalyRow[]),
+    ...((infoAnomalies ?? []) as AnomalyRow[]),
+  ]
+  const seenAnomalyIds = new Set<string>()
+  for (const a of allAnomalies) {
+    if (seenAnomalyIds.has(a.id)) continue
+    seenAnomalyIds.add(a.id)
     const verb = a.current_value !== null && a.baseline_value !== null
       ? `${a.current_value} (baseline ${a.baseline_value})`
       : ''
