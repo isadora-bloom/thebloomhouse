@@ -323,72 +323,70 @@ export async function routeBrainDump(args: {
     })
   }
 
-  // Knowledge base import: additive, low-risk. Insert each Q/A row
-  // directly into knowledge_base so Sage picks them up on the next draft.
-  // No confirmation prompt — adding reference content is the additive side
-  // of the destructive/additive rule.
+  // Knowledge base import: PROPOSE-AND-CONFIRM. Pre-fix this auto-
+  // inserted Q/A rows on the rationale "additive, low-risk", but
+  // Playbook INV-20.5.4-A says always propose, never silently file —
+  // even additive. The LLM occasionally extracts garbage Q/A pairs
+  // from FAQ pages (header/footer text, navigation labels) and those
+  // become permanent KB entries Sage will quote in real drafts.
   if (parsed.intent === 'knowledge_base_import' && parsed.knowledgeBase?.rows?.length) {
     const rows = parsed.knowledgeBase.rows
       .filter((r) => r.question?.trim() && r.answer?.trim())
       .map((r) => ({
-        venue_id: venueId,
         question: r.question.trim(),
         answer: r.answer.trim(),
         category: (r.category ?? 'general').trim().toLowerCase().replace(/\s+/g, '_').slice(0, 40),
-        priority: 50,
-        is_active: true,
-        source: 'csv',
       }))
 
     if (rows.length > 0) {
-      // Dedupe against existing (venue_id, question) pairs so re-uploading
-      // the same CSV doesn't multiply rows. knowledge_base has no unique
-      // constraint, so we query first.
-      const { data: existing } = await supabase
-        .from('knowledge_base')
-        .select('question')
-        .eq('venue_id', venueId)
-        .in('question', rows.map((r) => r.question))
-      const existingSet = new Set((existing ?? []).map((r) => (r.question as string)))
-      const toInsert = rows.filter((r) => !existingSet.has(r.question))
-
-      if (toInsert.length > 0) {
-        const { error } = await supabase.from('knowledge_base').insert(toInsert)
-        if (!error) {
-          routedTo.push({
-            table: 'knowledge_base',
-            id: null,
-            action: `insert:${toInsert.length}`,
-          })
-        }
-      }
-      if (existingSet.size > 0) {
-        routedTo.push({
-          table: 'knowledge_base',
-          id: null,
-          action: `deduped:${existingSet.size}`,
+      await createNotification({
+        venueId,
+        type: 'brain_dump_kb_import_confirm',
+        title: `Confirm ${rows.length} Q/A row${rows.length === 1 ? '' : 's'} for the knowledge base`,
+        body: JSON.stringify({ entryId, rowCount: rows.length, sample: rows.slice(0, 3) }),
+      })
+      await supabase
+        .from('brain_dump_entries')
+        .update({
+          parse_status: 'needs_clarification',
+          clarification_question: `Add ${rows.length} Q/A row${rows.length === 1 ? '' : 's'} to the knowledge base?`,
+          parsed_at: new Date().toISOString(),
+          parse_result: { ...(parsed as unknown as Record<string, unknown>), proposed_kb_rows: rows },
         })
+        .eq('id', entryId)
+      return {
+        routedTo: [],
+        needsClarification: true,
+        clarificationQuestion: `Add ${rows.length} Q/A row${rows.length === 1 ? '' : 's'} to the knowledge base?`,
       }
     }
   }
 
-  // Operational note: route to knowledge_gaps as a venue-level entry.
-  // The question column holds the observation — keeps it surfaced in
-  // /agent/knowledge-gaps where coordinators already triage.
+  // Operational note: PROPOSE-AND-CONFIRM. Pre-fix auto-routed to
+  // knowledge_gaps; same propose-and-confirm reasoning as client_note
+  // and kb_import — coordinator confirms before the observation
+  // becomes a permanent gap entry.
   if (parsed.intent === 'operational_note') {
     const noteBody = parsed.note || rawText
-    const { data: inserted } = await supabase
-      .from('knowledge_gaps')
-      .insert({
-        venue_id: venueId,
-        question: noteBody,
-        category: 'operational',
-        status: 'open',
+    await createNotification({
+      venueId,
+      type: 'brain_dump_operational_note_confirm',
+      title: 'Confirm operational note',
+      body: JSON.stringify({ entryId, noteBody, rawText }),
+    })
+    await supabase
+      .from('brain_dump_entries')
+      .update({
+        parse_status: 'needs_clarification',
+        clarification_question: 'File this as an operational note in knowledge_gaps?',
+        parsed_at: new Date().toISOString(),
+        parse_result: { ...(parsed as unknown as Record<string, unknown>), proposed_operational_note: { noteBody } },
       })
-      .select('id')
-      .single()
-    if (inserted?.id) {
-      routedTo.push({ table: 'knowledge_gaps', id: inserted.id as string, action: 'insert' })
+      .eq('id', entryId)
+    return {
+      routedTo: [],
+      needsClarification: true,
+      clarificationQuestion: 'File this as an operational note in knowledge_gaps?',
     }
   }
 

@@ -1443,10 +1443,10 @@ meta:
   severity: high
 
 - id: INV-20.5.4-A
-  status: at-risk
+  status: partial
   owner: Isadora
   target: always propose, never silently file
-  notes: "5 paths violate: client_note, operational_note, knowledge_base_import, small CSVs, vision-extracted reviews/identities. Codebase invents 'additive vs destructive' rule that contradicts playbook."
+  notes: "2026-05-01: 4 of the 5 violating paths fixed. (1) client_note → propose-and-confirm via /api/brain-dump/[id]/resolve Case D (round 3 commit). (2) knowledge_base_import → resolve Case E + dedup against existing (venue_id, question) pairs. (3) operational_note → resolve Case F. (4) small CSVs (<= LARGE_CSV_ROW_THRESHOLD) → direct-import path removed; ALL CSVs now route through preview-and-confirm via storagePath flow regardless of size. The 'additive vs destructive' carve-out the codebase had invented is gone — every brain-dump intent now requires coordinator confirmation. PARTIAL: vision-extracted reviews + identities (the 5th path) still need audit. The resolve route already has Case B for vision reviews + storefront_analytics, so the propose path may already exist for those — needs verification."
   severity: high
 
 - id: ARCH-20.5.4-B

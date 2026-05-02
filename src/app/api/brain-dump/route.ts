@@ -222,49 +222,30 @@ export async function POST(request: NextRequest) {
       const dataRows = rows.slice(1)
       const detection = detectCsvShape(headerRow)
 
-      // Direct-import paths (confidence >= 70).
+      // ALL CSVs go through propose-and-confirm (INV-20.5.4-A).
+      // Pre-fix small CSVs (<= LARGE_CSV_ROW_THRESHOLD rows) direct-
+      // imported on the rationale "low row count, low risk" — but
+      // the playbook is explicit: even small/additive imports
+      // require coordinator confirmation. The "additive vs
+      // destructive" carve-out the codebase invented contradicted
+      // the doctrine. LARGE_CSV_ROW_THRESHOLD is now only used to
+      // label the confirmation prompt ('large' vs 'small').
       if (detection.confidence >= 70 && detection.shape !== 'unknown') {
-        // Large CSVs always go through confirm-first per the Phase 2.5 spec.
-        if (dataRows.length > LARGE_CSV_ROW_THRESHOLD) {
-          const q = `This looks like ${humanShape(detection.shape)} data with ${dataRows.length} rows. Confirm the import from the Notifications page.`
-          await supabase.from('brain_dump_entries').update({
-            parse_status: 'needs_clarification',
-            clarification_question: q,
-            parse_result: { shape: detection.shape, columns: detection.columns, rowCount: dataRows.length, storagePath: attachment.path },
-            parsed_at: new Date().toISOString(),
-          }).eq('id', entry.id)
-          return NextResponse.json({
-            entryId: entry.id,
-            intent: `${detection.shape}_preview`,
-            confidence: detection.confidence,
-            needsClarification: true,
-            clarificationQuestion: q,
-            previewRows: dataRows.length,
-          })
-        }
-
-        // Small CSVs with a known shape: import directly.
-        const summary = await runCsvImport({
-          supabase,
-          venueId: auth.venueId,
-          detection,
-          headerRow,
-          dataRows,
-        })
+        const sizeLabel = dataRows.length > LARGE_CSV_ROW_THRESHOLD ? '' : '(small) '
+        const q = `This looks like ${sizeLabel}${humanShape(detection.shape)} data with ${dataRows.length} rows. Confirm the import from the Notifications page.`
         await supabase.from('brain_dump_entries').update({
-          parse_status: 'confirmed',
-          parse_result: { shape: detection.shape, summary },
-          routed_to: [{ table: routedTable(detection.shape), action: `direct_import:${summary.inserted}`, id: null }],
+          parse_status: 'needs_clarification',
+          clarification_question: q,
+          parse_result: { shape: detection.shape, columns: detection.columns, rowCount: dataRows.length, storagePath: attachment.path },
           parsed_at: new Date().toISOString(),
-          resolved_at: new Date().toISOString(),
         }).eq('id', entry.id)
         return NextResponse.json({
           entryId: entry.id,
-          intent: detection.shape,
+          intent: `${detection.shape}_preview`,
           confidence: detection.confidence,
-          needsClarification: false,
-          importSummary: summary,
-          routedTo: [{ table: routedTable(detection.shape), action: `direct_import:${summary.inserted}`, id: null }],
+          needsClarification: true,
+          clarificationQuestion: q,
+          previewRows: dataRows.length,
         })
       }
 

@@ -187,7 +187,75 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ id, status: 'confirmed', appendedTo: proposedNote.weddingId })
   }
 
-  // Case E: plain clarification — just stamp the status and the answer.
+  // Case E: proposed knowledge_base rows. Per INV-20.5.4-A, even
+  // additive content is propose-and-confirm. Insert with venue
+  // auth check + dedup against existing (venue_id, question) pairs.
+  const proposedKbRows = pr['proposed_kb_rows'] as
+    | Array<{ question: string; answer: string; category: string }>
+    | undefined
+  if (Array.isArray(proposedKbRows) && proposedKbRows.length > 0) {
+    const rows = proposedKbRows.map((r) => ({
+      venue_id: auth.venueId,
+      question: r.question,
+      answer: r.answer,
+      category: r.category,
+      priority: 50,
+      is_active: true,
+      source: 'brain_dump_confirmed',
+    }))
+    // Dedup against existing (venue_id, question) pairs.
+    const { data: existing } = await supabase
+      .from('knowledge_base')
+      .select('question')
+      .eq('venue_id', auth.venueId)
+      .in('question', rows.map((r) => r.question))
+    const existingSet = new Set(((existing ?? []) as Array<{ question: string }>).map((r) => r.question))
+    const toInsert = rows.filter((r) => !existingSet.has(r.question))
+    let inserted = 0
+    if (toInsert.length > 0) {
+      const { error: writeErr } = await supabase.from('knowledge_base').insert(toInsert)
+      if (writeErr) {
+        return NextResponse.json({ error: writeErr.message }, { status: 500 })
+      }
+      inserted = toInsert.length
+    }
+    await supabase.from('brain_dump_entries').update({
+      parse_status: 'confirmed',
+      clarification_answer: body.answer?.trim() ?? null,
+      resolved_at: new Date().toISOString(),
+      parse_result: { ...pr, confirmed_at: new Date().toISOString(), inserted, deduped: existingSet.size },
+      routed_to: [{ table: 'knowledge_base', id: null, action: `insert:${inserted},deduped:${existingSet.size}` }],
+    }).eq('id', id)
+    return NextResponse.json({ id, status: 'confirmed', inserted, deduped: existingSet.size })
+  }
+
+  // Case F: proposed operational note → knowledge_gaps row.
+  const proposedOpNote = pr['proposed_operational_note'] as { noteBody?: string } | undefined
+  if (proposedOpNote?.noteBody) {
+    const { data: insertedRow, error: writeErr } = await supabase
+      .from('knowledge_gaps')
+      .insert({
+        venue_id: auth.venueId,
+        question: proposedOpNote.noteBody,
+        category: 'operational',
+        status: 'open',
+      })
+      .select('id')
+      .single()
+    if (writeErr) {
+      return NextResponse.json({ error: writeErr.message }, { status: 500 })
+    }
+    await supabase.from('brain_dump_entries').update({
+      parse_status: 'confirmed',
+      clarification_answer: body.answer?.trim() ?? null,
+      resolved_at: new Date().toISOString(),
+      parse_result: { ...pr, confirmed_at: new Date().toISOString() },
+      routed_to: [{ table: 'knowledge_gaps', id: insertedRow.id, action: 'insert' }],
+    }).eq('id', id)
+    return NextResponse.json({ id, status: 'confirmed', knowledge_gap_id: insertedRow.id })
+  }
+
+  // Case G: plain clarification — just stamp the status and the answer.
   const updates: Record<string, unknown> = {
     parse_status: 'confirmed',
     resolved_at: new Date().toISOString(),
