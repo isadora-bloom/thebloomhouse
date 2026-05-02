@@ -6,6 +6,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
+import { RiskFlagChip, useBatchRiskFlags, type RiskSummary } from '@/components/intel/risk-flag-chip'
 import { PriorTouchesChip } from '@/components/agent/PriorTouchesChip'
 import { GmailConnectionStatus } from '@/components/agent/gmail-connection-status'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
@@ -279,12 +280,14 @@ function EmailListItem({
   onClick,
   showVenueChip,
   searchTerm,
+  risk,
 }: {
   interaction: Interaction
   isSelected: boolean
   onClick: () => void
   showVenueChip: boolean
   searchTerm: string
+  risk?: RiskSummary | null
 }) {
   const cls = interaction.classification ?? 'inquiry'
   const badge = classificationBadge(cls)
@@ -319,9 +322,19 @@ function EmailListItem({
             {highlightMatch(senderText, searchTerm)}
           </span>
         </div>
-        <span className="text-xs text-sage-400 shrink-0">
-          {timeAgo(interaction.timestamp)}
-        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Risk-flag chip (T5-ζ.2). Hidden if no cached risk_flag
+              insight or zero flags. Stop click propagation so tapping
+              the chip's tooltip area doesn't open the thread. */}
+          {risk && risk.flag_count > 0 && (
+            <span onClick={(e) => e.stopPropagation()}>
+              <RiskFlagChip summary={risk} />
+            </span>
+          )}
+          <span className="text-xs text-sage-400">
+            {timeAgo(interaction.timestamp)}
+          </span>
+        </div>
       </div>
       <p
         className={`text-sm truncate mb-1 ${
@@ -1929,6 +1942,18 @@ export default function InboxPage() {
     return true
   })
 
+  // ---- Risk flags batch fetch (T5-ζ.2) ----
+  // One POST per page load, keyed on the underlying interaction set's
+  // wedding IDs (deduped by the hook). Filter/tab/search changes do
+  // NOT refetch — we look up per-row from the same map.
+  const allWeddingIds = useMemo(
+    () => interactions.map((i) => i.wedding_id),
+    [interactions],
+  )
+  const riskFlags = useBatchRiskFlags(allWeddingIds, {
+    venueId: scope.venueId ?? null,
+  })
+
   // ---- Stats ----
   const totalCount = interactions.length
   const unreadCount = interactions.filter((i) => !i.is_read).length
@@ -2132,6 +2157,7 @@ export default function InboxPage() {
                     onClick={() => loadThread(interaction)}
                     showVenueChip={showVenueChip}
                     searchTerm={isSearching ? sanitizedQuery : ''}
+                    risk={interaction.wedding_id ? riskFlags[interaction.wedding_id] : null}
                   />
                   {interaction.pending_draft && (
                     <InlineDraftApproval

@@ -12,7 +12,6 @@ import {
   Calendar,
   Users,
   DollarSign,
-  Flame,
   Clock,
   ArrowUpRight,
   ArrowDownRight,
@@ -50,6 +49,7 @@ import { SourceBadgeEditable } from '@/components/agent/source-badge-editable'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import { LeadInsightsPanel } from '@/components/intel/lead-insights-panel'
 import { styleForTier } from '@/lib/heat/tier-colors'
+import { HeatBadge } from '@/components/intel/heat-badge'
 import { CandidateSignalEvidence } from '@/components/agent/candidate-signal-evidence'
 import { JourneyNarrative } from '@/components/agent/journey-narrative'
 import { TourInsightsPanel } from '@/components/agent/tour-insights-panel'
@@ -247,16 +247,11 @@ function statusConfig(status: string): { bg: string; text: string; label: string
   }
 }
 
-// Heat color now sourced from src/lib/heat/tier-colors via styleForTier
-// (HeatBadge primitive uses the same map). Pre-fix this switch drifted
-// from /agent/leads + /agent/pipeline. ARCH-20.2.1.
-function heatColor(tier: string): string {
-  return styleForTier(tier).text
-}
-
-function heatBg(tier: string): string {
-  return styleForTier(tier).dotBg
-}
+// Heat rendering moved to <HeatBadge> primitive (ARCH-20.2.1 / T5-ζ.1).
+// The remaining bare uses of styleForTier in this file are the
+// score-history sparkline + progress bar, where we need a raw
+// background-color class on a non-badge element. They use the same
+// canonical TIER_STYLES map under the hood.
 
 function fmt$(v: number): string {
   return `$${v.toLocaleString()}`
@@ -847,10 +842,11 @@ export default function ClientProfilePage() {
                   setWedding((prev) => prev ? { ...prev, source: newSource } : prev)
                 }}
               />
-              <span className={cn('flex items-center gap-1 text-sm font-bold', heatColor(wedding.temperature_tier))}>
-                <Flame className="w-4 h-4" />
-                {wedding.heat_score} {wedding.temperature_tier}
-              </span>
+              <HeatBadge
+                tier={wedding.temperature_tier}
+                score={wedding.heat_score}
+                variant="inline"
+              />
             </div>
           </div>
 
@@ -1103,20 +1099,25 @@ export default function ClientProfilePage() {
           {/* Heat Score */}
           <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
             <h2 className="font-heading text-base font-semibold text-sage-900 mb-4 flex items-center gap-2">
-              <Flame className={cn('w-5 h-5', heatColor(wedding.temperature_tier))} />
+              <HeatBadge
+                tier={wedding.temperature_tier}
+                score={wedding.heat_score}
+                variant="header-icon"
+              />
               Heat Score
             </h2>
             <div className="flex items-center gap-3 mb-4">
-              <div className={cn('text-4xl font-bold', heatColor(wedding.temperature_tier))}>
-                {wedding.heat_score}
-              </div>
+              <HeatBadge
+                tier={wedding.temperature_tier}
+                score={wedding.heat_score}
+                variant="score-only"
+              />
               <div>
-                <span className={cn(
-                  'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold text-white capitalize',
-                  heatBg(wedding.temperature_tier)
-                )}>
-                  {wedding.temperature_tier}
-                </span>
+                <HeatBadge
+                  tier={wedding.temperature_tier}
+                  score={wedding.heat_score}
+                  variant="tier-pill"
+                />
               </div>
             </div>
 
@@ -1131,7 +1132,7 @@ export default function ClientProfilePage() {
                     return (
                       <div
                         key={i}
-                        className={cn('flex-1 rounded-sm', heatBg(s.temperature_tier))}
+                        className={cn('flex-1 rounded-sm', styleForTier(s.temperature_tier).dotBg)}
                         style={{ height: `${Math.max(height, 4)}%` }}
                         title={`${fmtDate(s.calculated_at)}: ${s.score}`}
                       />
@@ -1144,7 +1145,7 @@ export default function ClientProfilePage() {
             {/* Score bar */}
             <div className="h-2 bg-sage-100 rounded-full overflow-hidden">
               <div
-                className={cn('h-full rounded-full transition-all', heatBg(wedding.temperature_tier))}
+                className={cn('h-full rounded-full transition-all', styleForTier(wedding.temperature_tier).dotBg)}
                 style={{ width: `${Math.min(wedding.heat_score, 100)}%` }}
               />
             </div>
