@@ -1304,10 +1304,10 @@ meta:
   severity: high
 
 - id: ARCH-19.8-A
-  status: at-risk
+  status: partial
   owner: Isadora
   target: LLM never produces numbers; classical computes, LLM narrates
-  notes: "Briefings + weekly-digest + intel-brain NLQ all delegate calculation to LLM. task-prompts-intel.ts:33-53 weekly_briefing schema requires LLM to produce kpi_snapshot.inquiries_change_pct as a number. Per playbook 19.9 #1 most dangerous anti-pattern."
+  notes: "T3 (2026-05-01): all 9 named insight generators enforce numbers-guard via persistInsight + checkNarrationNumbers — narrations rejected if they contain a number not in classical.numbers. Tightened tolerateRoundPercents to {0%,100%} only (no LLM-smuggled 25/50/75). Weekly briefing (briefings.ts) now pre-computes prior-week metrics + change percentages classically and passes deltas as INPUT to the LLM (the doctrine cell's exact callout — kpi_snapshot.inquiries_change_pct — was the LLM-produced anti-pattern; now classical). System prompt explicitly forbids new percentage/average/projection computation. Dead task-prompts-intel.ts kpi_snapshot template removed. PARTIAL because: (a) intel-brain NLQ still delegates math to the LLM (separate path); (b) numbers-guard isn't applied POST-generation to briefing output (only to T3 named insights), so the prompt-level discipline is the only check on briefing prose."
   severity: high
 
 - id: ARCH-19.8-B

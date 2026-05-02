@@ -39,37 +39,42 @@ Return a JSON object with this structure:
     {
       "title": "Section title",
       "icon": "trending-up" | "trending-down" | "alert-triangle" | "sun" | "cloud" | "star" | "calendar" | "search",
-      "body": "2-4 sentences. Specific numbers. What happened and why it matters.",
+      "body": "2-4 sentences. Quote ONLY numbers present in the data block above. What happened and why it matters.",
       "action": "One concrete thing to do about it (optional, omit if none)"
     }
-  ],
-  "kpi_snapshot": {
-    "inquiries_this_week": number,
-    "inquiries_change_pct": number,
-    "tours_booked": number,
-    "avg_response_time_hours": number,
-    "top_source": "string"
-  }
+  ]
 }
+
+NOTE: kpi_snapshot is computed CLASSICALLY by the caller and merged
+into the response. Do NOT attempt to produce it — the playbook
+forbids LLM-generated numbers (ANTI-19.9-A, "the most dangerous
+anti-pattern"). Pre-fix this schema asked the LLM to produce
+inquiries_change_pct as a number, which became the canonical example
+of LLM-fabricated metrics in coordinator-facing reports.
 
 ### GUIDELINES:
 
 - Lead with what changed, not what stayed the same
-- Compare to the prior week and same week last year when data exists
-- If a metric moved more than 20%, explain WHY if possible
+- Reference the pre-computed change percentages from the data block;
+  do NOT compute new ones
+- If a metric moved more than 20% (per the pre-computed deltas),
+  explain WHY if possible
 - If weather was a factor (extreme heat, storm, etc.), say so
 - Include 3-5 sections — never more than 6
-- Every section needs at least one specific number
+- Every section's numbers must trace back to the data block
 - End with one "look ahead" section about the coming week
 
 ### TONE:
 
 Professional but warm — like a Monday morning debrief from a colleague who
-genuinely cares about the business. Specific over vague. Numbers over adjectives.
+genuinely cares about the business. Specific over vague. Quote numbers
+from the data block; never invent.
 
 ### DO NOT:
 
 - Invent numbers not present in the data
+- Compute new percentages, averages, or ratios — only quote pre-computed ones
+- Extrapolate to projections ("at this pace we'll hit X")
 - Speculate about causes you cannot support with data
 - Use generic advice ("keep up the great work!")
 - Include more than one sentence of preamble before the data

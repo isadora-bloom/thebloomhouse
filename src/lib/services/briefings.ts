@@ -275,7 +275,7 @@ async function getWeddingMetrics(
 // System prompts
 // ---------------------------------------------------------------------------
 
-const WEEKLY_SYSTEM_PROMPT = `You are the intelligence analyst for a wedding venue. Generate a concise, actionable weekly briefing. Be specific with numbers. Recommendations should be concrete actions the venue can take THIS WEEK. Tone: professional but warm, like a trusted advisor.
+const WEEKLY_SYSTEM_PROMPT = `You are the intelligence analyst for a wedding venue. Generate a concise, actionable weekly briefing. Recommendations should be concrete actions the venue can take THIS WEEK. Tone: professional but warm, like a trusted advisor.
 
 Return a JSON object with these exact fields:
 - summary: string (2-3 sentence executive summary of the week)
@@ -289,7 +289,17 @@ The user prompt also includes a PLATFORM SIGNAL HEALTH section with new candidat
   - When high-funnel non-converting > 5, add a recommendation about re-engaging them (the /intel/sources cohort panel surfaces who).
   - When conflicts > 0, add a recommendation to clear the candidate review queue.
 
-Be direct and specific. Use actual numbers from the data provided. Do not hedge or use vague language.`
+NUMBERS DISCIPLINE (anti-pattern guard, ANTI-19.9-A / playbook 19.9 #1):
+- Every number you reference must come from the user prompt VERBATIM.
+- Do NOT compute new percentages, averages, ratios, or comparisons.
+  Pre-computed deltas (inquiries_change_pct etc.) are provided — quote
+  those directly when discussing change.
+- Do NOT extrapolate ("at this pace we'll hit X"). The user prompt
+  carries the source numbers; if a projection isn't there, omit it.
+- If the data lacks a number you'd like to reference, write the
+  observation without the number rather than inventing one.
+
+Be direct and specific. Quote provided numbers. Do not hedge or use vague language.`
 
 const MONTHLY_SYSTEM_PROMPT = `You are the intelligence analyst for a wedding venue. Generate a strategic monthly briefing. Focus on big-picture trends, month-over-month momentum, and longer-term strategic recommendations. Tone: professional but warm, like a trusted advisor delivering a board-level summary.
 
@@ -301,7 +311,9 @@ Return a JSON object with these exact fields:
 - recommendations: string[] (2-4 actionable tactical recommendations)
 - strategic_recommendations: string[] (2-3 bigger-picture strategic recommendations for the coming month)
 
-Use actual numbers. Compare current month to prior month where data allows. Be decisive in your recommendations.`
+NUMBERS DISCIPLINE (ANTI-19.9-A): every number you reference must come from the user prompt. Do NOT compute percentages, averages, ratios, or projections — only quote numbers + deltas pre-computed in the data block. If a number you'd like is missing, write the observation without it rather than inventing.
+
+Be decisive in your recommendations.`
 
 // ---------------------------------------------------------------------------
 // 1. generateWeeklyBriefing
@@ -317,15 +329,34 @@ export async function generateWeeklyBriefing(
   const fromDate = daysAgo(7)
   const toDate = today()
 
-  // Gather all data sources in parallel
-  const [metrics, deviations, weather, indicators, alerts, phaseB] = await Promise.all([
+  // Gather all data sources in parallel. Pre-compute the PRIOR week
+  // alongside the current week so the LLM sees deltas as INPUT
+  // (not as something it has to compute → invent → trip ANTI-19.9-A).
+  // The 14-7 day prior window is the canonical comparison.
+  const priorFrom = daysAgo(14)
+  const priorTo = daysAgo(7)
+  const [metrics, priorMetrics, deviations, weather, indicators, alerts, phaseB] = await Promise.all([
     getWeddingMetrics(venueId, fromDate, toDate),
+    getWeddingMetrics(venueId, priorFrom, priorTo),
     detectTrendDeviations(venueId),
     getWeatherForDateRange(venueId, today(), daysFromNow(14)),
     getLatestIndicators(),
     getActiveAlerts(venueId),
     getPhaseBWeeklyState(venueId),
   ])
+
+  // Classical compute: deltas + change percentages. The LLM never
+  // computes these. ANTI-19.9-A.
+  function pctChange(current: number, prior: number): number {
+    if (prior === 0) return current === 0 ? 0 : 100
+    return Math.round(((current - prior) / prior) * 1000) / 10
+  }
+  const deltas = {
+    inquiries_change_pct: pctChange(metrics.new_inquiries, priorMetrics.new_inquiries),
+    tours_change_pct: pctChange(metrics.tours_scheduled, priorMetrics.tours_scheduled),
+    bookings_change_pct: pctChange(metrics.bookings, priorMetrics.bookings),
+    revenue_change_pct: pctChange(metrics.revenue_booked, priorMetrics.revenue_booked),
+  }
 
   const demandScore = calculateDemandScore(indicators)
 
@@ -367,12 +398,25 @@ export async function generateWeeklyBriefing(
     systemPrompt: WEEKLY_SYSTEM_PROMPT,
     userPrompt: `Weekly data for the venue (last 7 days):
 
-METRICS:
+METRICS (current week):
 - New inquiries: ${metrics.new_inquiries}
 - Tours scheduled: ${metrics.tours_scheduled}
 - Bookings confirmed: ${metrics.bookings}
 - Lost deals: ${metrics.lost_deals}
 - Revenue booked: $${metrics.revenue_booked.toLocaleString()}
+
+PRIOR WEEK (for comparison):
+- New inquiries: ${priorMetrics.new_inquiries}
+- Tours scheduled: ${priorMetrics.tours_scheduled}
+- Bookings confirmed: ${priorMetrics.bookings}
+- Lost deals: ${priorMetrics.lost_deals}
+- Revenue booked: $${priorMetrics.revenue_booked.toLocaleString()}
+
+PRE-COMPUTED CHANGES (use these — do NOT compute your own):
+- Inquiries: ${deltas.inquiries_change_pct >= 0 ? '+' : ''}${deltas.inquiries_change_pct}%
+- Tours: ${deltas.tours_change_pct >= 0 ? '+' : ''}${deltas.tours_change_pct}%
+- Bookings: ${deltas.bookings_change_pct >= 0 ? '+' : ''}${deltas.bookings_change_pct}%
+- Revenue: ${deltas.revenue_change_pct >= 0 ? '+' : ''}${deltas.revenue_change_pct}%
 
 DEMAND SCORE: ${demandScore.score}/100 (${demandScore.outlook})
 
