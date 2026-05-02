@@ -42,7 +42,8 @@ export interface DayStep {
   /** Action key the UI handler matches against. */
   actionKey: 'oauth_gmail' | 'backfill_email' | 'seed_channels' | 'reconstruct_pricing'
     | 'import_crm' | 'orphan_triage' | 'voice_dna_seed' | 'voice_dna_extract'
-    | 'kb_seed' | 'readiness_check' | 'manual'
+    | 'kb_seed' | 'readiness_check' | 'manual' | 'pricing_history_ui'
+    | 'crm_import_ui'
   /** External admin surface where the coordinator does the actual
    *  work for this step. Page renders this as a "Go to surface" link
    *  so coordinators don't have to memorise where each piece lives.
@@ -100,26 +101,35 @@ export const PROJECT_PLAN: DayPlan[] = [
         key: 'pricing_history',
         label: 'Reconstruct pricing history',
         description:
-          'Walk back through any pricing changes from the last 12 months. base_price + capacity edits auto-log via the migration 134 trigger; calculator-config or tier-restructure changes need manual entry until the coordinator UI lands.',
-        actionKey: 'reconstruct_pricing',
-        linkHref: '/agent/settings',
-        linkLabel: 'Open agent settings',
+          'Walk back through pricing changes from the last 12 months. base_price + capacity edits auto-log via the migration 134 trigger; package-level + tier-restructure changes need manual entry on the reconstruction UI. Day-3 sub-step completes once 5+ rows are logged.',
+        actionKey: 'pricing_history_ui',
+        linkHref: '/onboarding/pricing-history',
+        linkLabel: 'Open pricing-history reconstruction',
       },
     ],
   },
   {
     day: 3,
     title: 'CRM ingestion',
-    subtitle: 'Import HoneyBook, Dubsado, or Aisle Planner exports + triage orphans.',
+    subtitle: 'Import historical pricing + lead history from your existing CRM.',
     steps: [
       {
-        key: 'crm_export',
-        label: 'Upload CRM export',
+        key: 'pricing_history_reconstruct',
+        label: 'Import pricing history',
         description:
-          'Drop the CRM export in the imports surface. Adapter templates handle HoneyBook / Dubsado / Aisle Planner — coming as part of the T2-A follow-up; until they land, use the existing CSV importer.',
-        actionKey: 'import_crm',
-        linkHref: '/agent/imports',
-        linkLabel: 'Open imports',
+          'Walk through historical package + pricing changes on the reconstruction UI. Single-row form for ad-hoc entries; CSV bulk upload for batches. Sub-step completes once pricing_history has 5+ coordinator-entered rows.',
+        actionKey: 'pricing_history_ui',
+        linkHref: '/onboarding/pricing-history',
+        linkLabel: 'Open pricing-history reconstruction',
+      },
+      {
+        key: 'crm_export',
+        label: 'Import lead history from CRM',
+        description:
+          'Upload a HoneyBook / Dubsado / Aisle Planner export, or use the Generic CSV adapter with a custom column-mapping JSON. Imported rows are tagged confidence_flag=imported_medium so live pipeline data stays distinguishable. Sub-step completes once weddings has 1+ row tagged imported_medium.',
+        actionKey: 'crm_import_ui',
+        linkHref: '/onboarding/crm-import',
+        linkLabel: 'Open CRM import',
       },
       {
         key: 'orphan_triage',
@@ -487,4 +497,56 @@ export async function resumeProject(
     .from('onboarding_projects')
     .update({ status: 'in_progress' })
     .eq('id', projectId)
+}
+
+/**
+ * Day-3 completion gate (T5-followup-Y / Pattern I closure).
+ *
+ * Day 3 advances when BOTH:
+ *   - pricing_history has >= 5 manual rows (manual_form / manual_csv)
+ *   - weddings has >= 1 row tagged confidence_flag='imported_medium'
+ *     (CRM-import output)
+ *
+ * Used by the /onboarding/project page to decide whether the
+ * "Advance to next day" button enables once Day-3 sub-steps are
+ * marked done. The advanceDay function itself stays gate-agnostic
+ * (so coordinator can override by skipping a sub-step + advancing
+ * manually) — this helper just powers the UI affordance.
+ */
+export interface Day3Readiness {
+  ready: boolean
+  pricingRowCount: number
+  importedWeddingCount: number
+  pricingThreshold: 5
+  weddingsThreshold: 1
+}
+
+export async function evaluateDay3Readiness(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<Day3Readiness> {
+  // Manual pricing-history rows. Filter on source_provenance to skip
+  // trigger-fired rows (which would otherwise let a venue with one
+  // base_price bump count as "5 manual rows").
+  const { count: pricingCount } = await supabase
+    .from('pricing_history')
+    .select('id', { count: 'exact', head: true })
+    .eq('venue_id', venueId)
+    .in('source_provenance', ['manual_form', 'manual_csv'])
+
+  const { count: weddingsCount } = await supabase
+    .from('weddings')
+    .select('id', { count: 'exact', head: true })
+    .eq('venue_id', venueId)
+    .eq('confidence_flag', 'imported_medium')
+
+  const pricingRowCount = pricingCount ?? 0
+  const importedWeddingCount = weddingsCount ?? 0
+  return {
+    ready: pricingRowCount >= 5 && importedWeddingCount >= 1,
+    pricingRowCount,
+    importedWeddingCount,
+    pricingThreshold: 5,
+    weddingsThreshold: 1,
+  }
 }
