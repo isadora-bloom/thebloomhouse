@@ -38,6 +38,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { redactError } from '@/lib/observability/redact'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -338,27 +340,34 @@ ${classical.last_inbound_excerpt ?? '(empty)'}
 Diagnose the cause + recommend a specific re-engagement action.`
 
   let result: DiagnosticResult | null = null
-  try {
-    const raw = await callAIJson<DiagnosticResult>({
-      systemPrompt,
-      userPrompt,
-      maxTokens: 280,
-      temperature: 0.3,
-      venueId,
-      taskType: 'decay_re_engagement',
-      tier: 'sonnet',
-      promptVersion: DECAY_RE_ENGAGEMENT_PROMPT_VERSION,
-    })
-    if (raw && CAUSE_LABEL[raw.cause as DecayCause]) {
-      result = {
-        cause: raw.cause as DecayCause,
-        reasoning: (raw.reasoning ?? '').trim() || 'Cause inferred from decay shape.',
-        recommendation: (raw.recommendation ?? '').trim() || 'Send a follow-up grounded in their last message.',
-        confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+  // Cost-ceiling gate (T5-α.2). Deterministic fallback below covers the
+  // paused case so coordinator still sees a diagnostic.
+  const gate = await gateForBrainCall(venueId)
+  if (gate.ok) {
+    try {
+      const raw = await callAIJson<DiagnosticResult>({
+        systemPrompt,
+        userPrompt,
+        maxTokens: 280,
+        temperature: 0.3,
+        venueId,
+        taskType: 'decay_re_engagement',
+        tier: 'sonnet',
+        promptVersion: DECAY_RE_ENGAGEMENT_PROMPT_VERSION,
+      })
+      if (raw && CAUSE_LABEL[raw.cause as DecayCause]) {
+        result = {
+          cause: raw.cause as DecayCause,
+          reasoning: (raw.reasoning ?? '').trim() || 'Cause inferred from decay shape.',
+          recommendation: (raw.recommendation ?? '').trim() || 'Send a follow-up grounded in their last message.',
+          confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+        }
       }
+    } catch (err) {
+      // PII redaction: prompt includes inbound excerpt + couple context.
+      // OPS-21.3.3.
+      console.warn('[decay-re-engagement] LLM diagnostic failed:', redactError(err))
     }
-  } catch (err) {
-    console.warn('[decay-re-engagement] LLM diagnostic failed:', err instanceof Error ? err.message : err)
   }
 
   // Deterministic fallback — pick from cause heuristics when LLM

@@ -24,6 +24,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { redactError } from '@/lib/observability/redact'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -345,7 +347,9 @@ Don't hedge — when uncertain, output negative: false.`
     })
     return result
   } catch (err) {
-    console.warn('[risk-flags] sentiment scan failed:', err instanceof Error ? err.message : err)
+    // PII redaction — prompt carries recent inbound subjects + bodies.
+    // OPS-21.3.3.
+    console.warn('[risk-flags] sentiment scan failed:', redactError(err))
     return null
   }
 }
@@ -369,8 +373,18 @@ export async function generateRiskFlags(
 
   const aiName = await loadAiName(supabase, venueId)
 
-  // Sentiment overlay (LLM). Adds a flag if negative.
-  const sentiment = await sentimentScan(supabase, venueId, weddingId, aiName)
+  // Cost-ceiling gate (T5-α.2). One gate check covers both the
+  // sentiment overlay AND the narration LLM call below — both are
+  // tier-1 brain spends. When paused, the rule-based classical flags
+  // still surface (no LLM dependency); just no LLM-driven sentiment
+  // overlay or narration polish.
+  const gate = await gateForBrainCall(venueId)
+
+  // Sentiment overlay (LLM). Adds a flag if negative. Skipped when
+  // ceiling-paused so we don't spend Haiku on a paused venue.
+  const sentiment = gate.ok
+    ? await sentimentScan(supabase, venueId, weddingId, aiName)
+    : null
   if (sentiment?.negative) {
     classical.flags.push({
       code: 'sentiment_negative',
@@ -451,7 +465,10 @@ Compose the JSON.`
       : null,
   }
 
-  if (classical.flags.length > 0) {
+  // Same cost-ceiling gate from above — skip narration polish when
+  // paused; the deterministic narration assembled above (FLAG_LABEL +
+  // count) is still surfaced.
+  if (classical.flags.length > 0 && gate.ok) {
     try {
       const result = await callAIJson<InsightNarration>({
         systemPrompt,
@@ -471,7 +488,9 @@ Compose the JSON.`
         }
       }
     } catch (err) {
-      console.warn('[risk-flags] narration LLM failed:', err instanceof Error ? err.message : err)
+      // PII redaction — prompt carries flag evidence which can include
+      // friction-tag text + interaction snippets. OPS-21.3.3.
+      console.warn('[risk-flags] narration LLM failed:', redactError(err))
     }
   }
 

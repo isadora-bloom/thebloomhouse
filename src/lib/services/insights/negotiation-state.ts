@@ -29,6 +29,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { redactError } from '@/lib/observability/redact'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence } from './types'
@@ -244,26 +246,32 @@ ${excerptsBlock || '  (no body content)'}
 Classify the phase.`
 
   let result: ClassifierResult | null = null
-  try {
-    const raw = await callAIJson<ClassifierResult>({
-      systemPrompt,
-      userPrompt,
-      maxTokens: 220,
-      temperature: 0.2,
-      venueId,
-      taskType: 'negotiation_state',
-      tier: 'sonnet',
-      promptVersion: NEGOTIATION_STATE_PROMPT_VERSION,
-    })
-    if (raw && PHASE_LABEL[raw.phase as NegotiationPhase]) {
-      result = {
-        phase: raw.phase as NegotiationPhase,
-        reasoning: (raw.reasoning ?? '').trim() || 'Phase inferred from recent inbound shape.',
-        confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+  // Cost-ceiling gate (T5-α.2). Status-mapped fallback below.
+  const gate = await gateForBrainCall(venueId)
+  if (gate.ok) {
+    try {
+      const raw = await callAIJson<ClassifierResult>({
+        systemPrompt,
+        userPrompt,
+        maxTokens: 220,
+        temperature: 0.2,
+        venueId,
+        taskType: 'negotiation_state',
+        tier: 'sonnet',
+        promptVersion: NEGOTIATION_STATE_PROMPT_VERSION,
+      })
+      if (raw && PHASE_LABEL[raw.phase as NegotiationPhase]) {
+        result = {
+          phase: raw.phase as NegotiationPhase,
+          reasoning: (raw.reasoning ?? '').trim() || 'Phase inferred from recent inbound shape.',
+          confidence: typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+        }
       }
+    } catch (err) {
+      // PII redaction — prompt carries recent inbound subjects + excerpts.
+      // OPS-21.3.3.
+      console.warn('[negotiation-state] classifier failed:', redactError(err))
     }
-  } catch (err) {
-    console.warn('[negotiation-state] classifier failed:', err instanceof Error ? err.message : err)
   }
 
   // Deterministic fallback — map status to a phase when LLM
