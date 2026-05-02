@@ -210,7 +210,10 @@ async function buildSeries(supabase: SupabaseClient, venueId: string): Promise<S
     const [fredResult, calendarResult, cultural] = await Promise.all([
       loadFredSeries(supabase, start, now),
       loadCalendarSeries(supabase, start, now, venueGeoScope),
-      loadCulturalMomentsSeries(supabase, start, now),
+      // Migration 167: cultural moments are now per-venue confirmed.
+      // Pass venueId so the engine reads moments THIS venue elevated,
+      // not every confirmed moment globally.
+      loadCulturalMomentsSeries(supabase, start, now, venueId),
     ])
     const externalSeries = [...fredResult, ...calendarResult]
     // Cultural moments returns a single channel even when no rows match.

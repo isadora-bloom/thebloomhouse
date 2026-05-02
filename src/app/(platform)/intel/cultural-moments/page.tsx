@@ -3,6 +3,7 @@
 import { useState, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useSupabaseList } from '@/lib/hooks/use-supabase-list'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import {
   Sparkles,
   Plus,
@@ -24,10 +25,15 @@ import {
 // classification is too noisy + a wrong moment poisons every downstream
 // correlation.
 //
-// Three lifecycle states:
-//   - proposed   → coordinator reviews, sets influence_weight, confirms
-//   - confirmed  → enters External Context, correlation engine reads it
-//   - dismissed  → audit trail of "not a real moment"
+// Migration 167 (2026-05-02): cultural_moments is GLOBAL but each venue
+// confirms/dismisses INDEPENDENTLY in venue_cultural_moment_state. The
+// queue surfaces:
+//   - "Awaiting your decision" — proposed globally (or other venues
+//     decided but you haven't yet)
+//   - "Confirmed by your venue" — your venue's correlation engine reads it
+//   - "Dismissed by your venue" — your venue ignores it
+// The cultural_moments.status column is the GLOBAL rollup ("any venue
+// confirmed once") and shows up as a small pill, not the source of truth.
 // ---------------------------------------------------------------------------
 
 interface Moment {
@@ -44,6 +50,17 @@ interface Moment {
   proposed_by: 'system' | 'ai' | 'coordinator'
   reviewed_at: string | null
   created_at: string
+  // Per-venue state — null when this venue hasn't decided.
+  venue_state: 'confirmed' | 'dismissed' | 'snoozed' | null
+  venue_decided_at: string | null
+  venue_note: string | null
+}
+
+interface VenueStateRow {
+  cultural_moment_id: string
+  state: 'confirmed' | 'dismissed' | 'snoozed'
+  decided_at: string
+  note: string | null
 }
 
 const CATEGORY_OPTIONS = [
@@ -65,6 +82,7 @@ function formatRange(startIso: string, endIso: string | null): string {
 
 export default function CulturalMomentsPage() {
   const supabase = createClient()
+  const venueId = useVenueId()
   const [error, setError] = useState<string | null>(null)
   const [showProposeForm, setShowProposeForm] = useState(false)
 
@@ -78,16 +96,38 @@ export default function CulturalMomentsPage() {
   const [submitting, setSubmitting] = useState(false)
 
   // 2026-05-01 (review pass 4 follow-up): use the shared list hook.
+  // 2026-05-02 (migration 167): also pull this venue's state rows so each
+  // moment knows whether THIS venue confirmed/dismissed/snoozed.
   const fetcher = useCallback(async (): Promise<Moment[]> => {
-    const { data, error: fetchErr } = await supabase
-      .from('cultural_moments')
-      .select('id, status, title, description, start_at, end_at, category, evidence, influence_weight, geo_scope, proposed_by, reviewed_at, created_at')
-      .neq('status', 'archived')
-      .order('created_at', { ascending: false })
-      .limit(200)
-    if (fetchErr) throw fetchErr
-    return (data ?? []) as Moment[]
-  }, [supabase])
+    const [{ data: momentRows, error: momentErr }, { data: stateRows, error: stateErr }] =
+      await Promise.all([
+        supabase
+          .from('cultural_moments')
+          .select('id, status, title, description, start_at, end_at, category, evidence, influence_weight, geo_scope, proposed_by, reviewed_at, created_at')
+          .neq('status', 'archived')
+          .order('created_at', { ascending: false })
+          .limit(200),
+        supabase
+          .from('venue_cultural_moment_state')
+          .select('cultural_moment_id, state, decided_at, note')
+          .eq('venue_id', venueId),
+      ])
+    if (momentErr) throw momentErr
+    if (stateErr) throw stateErr
+    const stateById = new Map<string, VenueStateRow>()
+    for (const row of (stateRows ?? []) as VenueStateRow[]) {
+      stateById.set(row.cultural_moment_id, row)
+    }
+    return ((momentRows ?? []) as Omit<Moment, 'venue_state' | 'venue_decided_at' | 'venue_note'>[]).map((r) => {
+      const s = stateById.get(r.id)
+      return {
+        ...r,
+        venue_state: s?.state ?? null,
+        venue_decided_at: s?.decided_at ?? null,
+        venue_note: s?.note ?? null,
+      }
+    })
+  }, [supabase, venueId])
 
   const {
     rows: moments,
@@ -152,43 +192,88 @@ export default function CulturalMomentsPage() {
     }
   }
 
+  // Migration 167: per-venue confirm. Upserts the per-venue decision
+  // and ALSO bumps the global cultural_moments.status to 'confirmed' so
+  // the admin-summary view shows "at least one venue elevated this."
+  // influence_weight remains a single global field (last-write-wins);
+  // a future migration can split it per-venue if real conflicts emerge.
   async function handleConfirm(id: string, weight: number) {
     if (weight < -100 || weight > 100) {
       setError('Influence weight out of range (-100 to 100)')
       return
     }
     try {
-      const { error: updErr } = await supabase
+      const decidedAt = new Date().toISOString()
+      const { error: stateErr } = await supabase
+        .from('venue_cultural_moment_state')
+        .upsert(
+          {
+            venue_id: venueId,
+            cultural_moment_id: id,
+            state: 'confirmed',
+            decided_at: decidedAt,
+          },
+          { onConflict: 'venue_id,cultural_moment_id' },
+        )
+      if (stateErr) throw stateErr
+      const { error: globalErr } = await supabase
         .from('cultural_moments')
         .update({
           status: 'confirmed',
           influence_weight: weight,
-          reviewed_at: new Date().toISOString(),
+          reviewed_at: decidedAt,
         })
         .eq('id', id)
-      if (updErr) throw updErr
+      if (globalErr) throw globalErr
       await fetchMoments()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Confirm failed')
     }
   }
 
+  // Migration 167: per-venue dismiss. Does NOT mutate the global
+  // cultural_moments.status — other venues may still want to use the
+  // moment. (Global archival when ALL venues dismiss is a separate
+  // admin path; out of scope.)
   async function handleDismiss(id: string) {
     try {
-      const { error: updErr } = await supabase
-        .from('cultural_moments')
-        .update({ status: 'dismissed', reviewed_at: new Date().toISOString() })
-        .eq('id', id)
-      if (updErr) throw updErr
+      const { error: stateErr } = await supabase
+        .from('venue_cultural_moment_state')
+        .upsert(
+          {
+            venue_id: venueId,
+            cultural_moment_id: id,
+            state: 'dismissed',
+            decided_at: new Date().toISOString(),
+          },
+          { onConflict: 'venue_id,cultural_moment_id' },
+        )
+      if (stateErr) throw stateErr
       await fetchMoments()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Dismiss failed')
     }
   }
 
-  const proposed = useMemo(() => moments.filter((m) => m.status === 'proposed'), [moments])
-  const confirmed = useMemo(() => moments.filter((m) => m.status === 'confirmed'), [moments])
-  const dismissed = useMemo(() => moments.filter((m) => m.status === 'dismissed'), [moments])
+  // Bucket by per-venue decision, falling back to global lifecycle for
+  // the "awaiting your decision" pile. Migration 167.
+  //   - awaiting       → no venue_state row + global status != dismissed
+  //                      (covers "proposed globally", "another venue
+  //                      confirmed but you haven't decided", etc.)
+  //   - venueConfirmed → this venue's correlation engine reads it
+  //   - venueDismissed → this venue ignores it
+  const awaiting = useMemo(
+    () => moments.filter((m) => m.venue_state === null && m.status !== 'dismissed'),
+    [moments],
+  )
+  const venueConfirmed = useMemo(
+    () => moments.filter((m) => m.venue_state === 'confirmed'),
+    [moments],
+  )
+  const venueDismissed = useMemo(
+    () => moments.filter((m) => m.venue_state === 'dismissed'),
+    [moments],
+  )
 
   if (loading) return <div className="p-8"><p className="text-sage-500 text-sm">Loading…</p></div>
 
@@ -305,30 +390,32 @@ export default function CulturalMomentsPage() {
       )}
 
       <Section
-        title="Proposed (review queue)"
+        title="Awaiting your decision"
         icon={<Clock className="w-4 h-4 text-amber-600" />}
-        rows={proposed}
+        rows={awaiting}
         onConfirm={handleConfirm}
         onDismiss={handleDismiss}
         showActions
-        emptyMessage="No moments awaiting review."
+        emptyMessage="No moments awaiting your decision."
       />
       <Section
-        title="Confirmed (in correlation engine)"
+        title="Confirmed by your venue (in correlation engine)"
         icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}
-        rows={confirmed}
+        rows={venueConfirmed}
         onConfirm={handleConfirm}
         onDismiss={handleDismiss}
         showWeight
-        emptyMessage="No confirmed moments yet."
+        showActions
+        emptyMessage="Your venue has not confirmed any moments yet."
       />
       <Section
-        title="Dismissed"
+        title="Dismissed by your venue"
         icon={<XCircle className="w-4 h-4 text-sage-400" />}
-        rows={dismissed.slice(0, 20)}
+        rows={venueDismissed.slice(0, 20)}
         onConfirm={handleConfirm}
         onDismiss={handleDismiss}
-        emptyMessage="No dismissed moments."
+        showActions
+        emptyMessage="Your venue has not dismissed any moments."
       />
     </div>
   )
@@ -377,6 +464,12 @@ interface MomentRowProps {
 
 function MomentRow({ row, showActions, showWeight, onConfirm, onDismiss }: MomentRowProps) {
   const [weight, setWeight] = useState<string>(String(row.influence_weight ?? 0))
+  // Migration 167: a moment is "globally proposed" when no venue has
+  // confirmed yet (cultural_moments.status === 'proposed'). Once any
+  // venue confirms, the global status flips to 'confirmed' even though
+  // YOUR venue may not have decided yet — that's the "other venues
+  // confirmed but you haven't" case.
+  const otherVenueConfirmed = row.status === 'confirmed' && row.venue_state === null
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
@@ -393,6 +486,36 @@ function MomentRow({ row, showActions, showWeight, onConfirm, onDismiss }: Momen
           {row.geo_scope && (
             <span className="font-mono text-[10px] text-sage-500">{row.geo_scope}</span>
           )}
+          {/* Migration 167: explicit per-venue vs global pill so the
+              coordinator immediately sees whose decision this is. */}
+          {row.venue_state === 'confirmed' && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-[10px] font-medium text-emerald-700 uppercase">
+              your venue confirmed
+            </span>
+          )}
+          {row.venue_state === 'dismissed' && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-[10px] font-medium text-rose-700 uppercase">
+              your venue dismissed
+            </span>
+          )}
+          {row.venue_state === 'snoozed' && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-[10px] font-medium text-amber-700 uppercase">
+              snoozed
+            </span>
+          )}
+          {row.venue_state === null && row.status === 'proposed' && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sky-50 text-[10px] font-medium text-sky-700 uppercase">
+              globally proposed
+            </span>
+          )}
+          {otherVenueConfirmed && (
+            <span
+              className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-50 text-[10px] font-medium text-violet-700 uppercase"
+              title="Another venue has confirmed this moment. Decide for yours."
+            >
+              other venues confirmed — decide for yours
+            </span>
+          )}
           {showWeight && row.influence_weight !== null && (
             <span className={`font-mono text-xs ${row.influence_weight > 0 ? 'text-emerald-700' : row.influence_weight < 0 ? 'text-red-700' : 'text-sage-500'}`}>
               {row.influence_weight > 0 ? '+' : ''}{row.influence_weight}
@@ -401,6 +524,9 @@ function MomentRow({ row, showActions, showWeight, onConfirm, onDismiss }: Momen
         </div>
         <p className="text-xs text-sage-500 mt-0.5">{formatRange(row.start_at, row.end_at)}</p>
         {row.description && <p className="text-sm text-sage-700 mt-1">{row.description}</p>}
+        {row.venue_note && (
+          <p className="text-xs text-sage-500 mt-1 italic">Note: {row.venue_note}</p>
+        )}
       </div>
       {showActions && (
         <div className="flex items-center gap-1">
