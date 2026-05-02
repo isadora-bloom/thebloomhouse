@@ -504,16 +504,18 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
       .is('deleted_at', null)
       .limit(5000),
 
-    // Cultural moments — confirmed only, overlapping the last 90d.
-    // The table is global (no venue_id); geo_scope is optional. We
-    // keep all confirmed rows whose window overlaps [now - 90d, now]
-    // and let the format step note geography.
+    // Cultural moments — venue-confirmed only, overlapping the last 90d.
+    // Migration 167: cultural_moments stays global, but each venue has
+    // its own confirmation/dismissal state in venue_cultural_moment_state.
+    // We query through the per-venue state so Sage's brain only sees
+    // moments THIS venue elevated (Hawthorne's confirmed list != Crestwood's).
     supabase
-      .from('cultural_moments')
-      .select('title, category, start_at, end_at, influence_weight, geo_scope')
-      .eq('status', 'confirmed')
-      .gte('end_at', ninetyDaysAgoIso)
-      .order('start_at', { ascending: false })
+      .from('venue_cultural_moment_state')
+      .select('cultural_moments!inner(title, category, start_at, end_at, influence_weight, geo_scope)')
+      .eq('venue_id', venueId)
+      .eq('state', 'confirmed')
+      .gte('cultural_moments.end_at', ninetyDaysAgoIso)
+      .order('cultural_moments(start_at)', { ascending: false })
       .limit(50),
 
     // External calendar events — next 90d, scoped via geo_scope to the
@@ -718,18 +720,49 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     conversion_rate: candidateTotal > 0 ? candidateResolved / candidateTotal : 0,
   }
 
-  // Cultural moments — confirmed only, last-90d window. Already filtered
-  // by query.
+  // Cultural moments — VENUE-confirmed only, last-90d window. Migration
+  // 167 split state per-venue, so the query joins venue_cultural_moment_state
+  // -> cultural_moments. The supabase JS embed returns the nested shape
+  // { cultural_moments: { ... } | [...] } depending on the FK
+  // direction. We tolerate both for safety.
+  type NestedMomentRow = {
+    cultural_moments:
+      | {
+          title?: string
+          category?: string | null
+          start_at?: string
+          end_at?: string | null
+          influence_weight?: number | null
+          geo_scope?: string | null
+        }
+      | Array<{
+          title?: string
+          category?: string | null
+          start_at?: string
+          end_at?: string | null
+          influence_weight?: number | null
+          geo_scope?: string | null
+        }>
+      | null
+  }
   const culturalMoments: CulturalMomentRow[] = (
-    culturalMomentsResult.data ?? []
-  ).map((r) => ({
-    name: (r.title as string) ?? '',
-    category: (r.category as string | null) ?? null,
-    start_date: ((r.start_at as string) ?? '').split('T')[0],
-    end_date: r.end_at ? ((r.end_at as string) ?? '').split('T')[0] : null,
-    influence_weight: (r.influence_weight as number | null) ?? null,
-    geography: (r.geo_scope as string | null) ?? null,
-  }))
+    (culturalMomentsResult.data ?? []) as unknown as NestedMomentRow[]
+  )
+    .map((r) => {
+      const m = Array.isArray(r.cultural_moments)
+        ? r.cultural_moments[0]
+        : r.cultural_moments
+      if (!m) return null
+      return {
+        name: m.title ?? '',
+        category: m.category ?? null,
+        start_date: (m.start_at ?? '').split('T')[0],
+        end_date: m.end_at ? (m.end_at ?? '').split('T')[0] : null,
+        influence_weight: m.influence_weight ?? null,
+        geography: m.geo_scope ?? null,
+      } satisfies CulturalMomentRow
+    })
+    .filter((x): x is CulturalMomentRow => x !== null)
 
   // External calendar events — filter by venue's geo_scope hierarchy
   // (us / us_<state> / us_<state>_<metro>). The DB query already pulled

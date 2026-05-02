@@ -281,7 +281,9 @@ async function loadSeriesForChannels(
     }
     if (wantsCultural) {
       tasks.push(
-        loadCulturalMomentsSeries(supabase, start, now).then((s) => {
+        // Migration 167: per-venue confirmation — pass venueId so
+        // narration matches the engine's per-venue reading.
+        loadCulturalMomentsSeries(supabase, start, now, venueId).then((s) => {
           out.set(s.channel, s.points.map((p) => ({ dayKey: p.dayKey, value: p.value })))
         }).catch((err) => {
           console.warn('[correlation-narration] cultural load failed:', redactError(err))

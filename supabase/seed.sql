@@ -2164,3 +2164,21 @@ INSERT INTO fred_indicators (id, series_id, region, observation_date, value, uni
 -- ============================================================================
 -- T5-θ.4 demo Internal + External Context seed — DONE
 -- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- 59. VENUE_CULTURAL_MOMENT_STATE (per-venue confirmation, migration 167)
+-- ----------------------------------------------------------------------------
+-- Migration 167 split global cultural_moments confirmation per-venue. The
+-- migration's idempotent backfill block already inserts one venue_cultural
+-- _moment_state row per (demo venue × demo cultural_moment), preserving the
+-- demo behavior where every demo venue sees the 6 confirmed moments. We
+-- mirror that here so a fresh seed.sql apply (independent of migrations,
+-- e.g. a partial reseed) leaves the demo in the same shape.
+INSERT INTO venue_cultural_moment_state (venue_id, cultural_moment_id, state, decided_at, note)
+SELECT v.id, cm.id, 'confirmed', COALESCE(cm.reviewed_at, cm.created_at), 'demo seed backfill'
+FROM venues v
+CROSS JOIN cultural_moments cm
+WHERE v.is_demo = true
+  AND cm.status = 'confirmed'
+  AND cm.id::text LIKE 'cb010001-%'
+ON CONFLICT (venue_id, cultural_moment_id) DO NOTHING;
