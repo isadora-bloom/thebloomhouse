@@ -8,6 +8,7 @@ export interface Notification {
   id: string
   venue_id: string
   wedding_id: string | null
+  user_id: string | null
   type: string
   title: string
   body: string | null
@@ -45,6 +46,7 @@ const FOREVER_DEDUP_TYPES = new Set<string>([
 export async function createNotification(options: {
   venueId: string
   weddingId?: string
+  userId?: string
   type: string
   title: string
   body?: string
@@ -66,6 +68,9 @@ export async function createNotification(options: {
     //  - Everything else dedups on a 5-minute window so accidental
     //    double-fires don't spam but coordinator notifications can
     //    recur day-to-day.
+    //  - When userId is set we dedup on (venue_id, user_id, type) so
+    //    per-user notifications don't collide with venue-broadcast ones
+    //    of the same type.
     let dupeQuery = supabase
       .from('admin_notifications')
       .select('id')
@@ -82,12 +87,17 @@ export async function createNotification(options: {
       dupeQuery = dupeQuery.eq('wedding_id', options.weddingId)
     }
 
+    if (options.userId) {
+      dupeQuery = dupeQuery.eq('user_id', options.userId)
+    }
+
     const { data: existing } = await dupeQuery
     if (existing && existing.length > 0) return
 
     const insertPayload: Record<string, unknown> = {
       venue_id: options.venueId,
       wedding_id: options.weddingId ?? null,
+      user_id: options.userId ?? null,
       type: options.type,
       title: options.title,
       body: options.body ?? null,
