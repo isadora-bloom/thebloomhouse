@@ -87,14 +87,20 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (draft) {
+      // T5-α.1 fix: schema columns are action / original_body /
+      // rejection_reason / metadata (jsonb). Previous writer used
+      // non-existent feedback_type + original_subject + email_category
+      // so every cancel here was silently dropping zero rows.
       await supabase.from('draft_feedback').insert({
         venue_id: draft.venue_id,
         draft_id: draftId,
-        feedback_type: 'rejected',
-        original_subject: (draft.subject as string) ?? '',
+        action: 'rejected',
         original_body: (draft.draft_body as string) ?? '',
         rejection_reason: 'cancelled_auto_send',
-        email_category: (draft.context_type as string) ?? 'inquiry',
+        metadata: {
+          original_subject: (draft.subject as string) ?? '',
+          email_category: (draft.context_type as string) ?? 'inquiry',
+        },
       })
     }
 

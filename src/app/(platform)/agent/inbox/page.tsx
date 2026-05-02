@@ -2253,10 +2253,17 @@ export default function InboxPage() {
                     onDeleteDraft={async (draftId: string) => {
                       // Hard delete. Log the feedback event first so
                       // training data survives.
+                      // T5-α.1: schema CHECK constraint only allows
+                      // approved/edited/rejected for `action`. Map
+                      // delete to rejected + signal in metadata so the
+                      // insert actually lands instead of silently
+                      // failing the CHECK.
                       await supabase.from('draft_feedback').insert({
                         venue_id: selectedInteraction?.venue_id,
                         draft_id: draftId,
-                        action: 'deleted',
+                        action: 'rejected',
+                        rejection_reason: 'deleted_by_coordinator',
+                        metadata: { delete_reason: 'hard_delete' },
                       })
                       await supabase.from('drafts').delete().eq('id', draftId)
                       setThreadDraft(null)

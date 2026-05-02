@@ -133,7 +133,8 @@ interface DraftRow {
 interface DraftFeedbackRow {
   id: string
   draft_id: string
-  feedback_type: string
+  // T5-α.1: actual column is `action`, not `feedback_type`.
+  action: string
   rejection_reason: string | null
   created_at: string
 }
@@ -657,7 +658,7 @@ export default function ClientProfilePage() {
           .limit(50),
         supabase
           .from('draft_feedback')
-          .select('id, draft_id, feedback_type, rejection_reason, created_at')
+          .select('id, draft_id, action, rejection_reason, created_at')
           .eq('venue_id', VENUE_ID)
           .in('draft_id', [weddingId]) // Placeholder — we'll filter in JS after fetching drafts
           .order('created_at', { ascending: false })
@@ -705,7 +706,7 @@ export default function ClientProfilePage() {
         const draftIds = fetchedDrafts.map((d) => d.id)
         const { data: feedbackData } = await supabase
           .from('draft_feedback')
-          .select('id, draft_id, feedback_type, rejection_reason, created_at')
+          .select('id, draft_id, action, rejection_reason, created_at')
           .in('draft_id', draftIds)
           .order('created_at', { ascending: false })
           .limit(50)

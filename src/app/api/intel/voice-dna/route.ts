@@ -155,9 +155,13 @@ export async function GET(req: NextRequest) {
     const [approved, banned, edits, rejects, goodEx] = await Promise.all([
       service.from('review_language').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('approved_for_sage', true),
       service.from('voice_preferences').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('preference_type', 'banned_phrase'),
-      service.from('draft_feedback').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('feedback_type', 'edited').gte('created_at', sinceIso),
-      service.from('draft_feedback').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('feedback_type', 'rejected').gte('created_at', sinceIso),
-      service.from('draft_feedback').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('feedback_type', 'approved').gte('created_at', sinceIso),
+      // T5-α.1 fix: column is `action` (text NOT NULL CHECK
+      // approved/edited/rejected), not `feedback_type`. Pre-fix
+      // queries returned 0 because the Postgres filter targeted a
+      // non-existent column.
+      service.from('draft_feedback').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('action', 'edited').gte('created_at', sinceIso),
+      service.from('draft_feedback').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('action', 'rejected').gte('created_at', sinceIso),
+      service.from('draft_feedback').select('id', { count: 'exact', head: true }).eq('venue_id', venueId).eq('action', 'approved').gte('created_at', sinceIso),
     ])
     return NextResponse.json({
       context: {

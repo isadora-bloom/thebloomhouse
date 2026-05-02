@@ -51,6 +51,22 @@ export interface FeedbackStats {
 // Store feedback
 // ---------------------------------------------------------------------------
 
+// T5-α.1 schema reality check (2026-05-01):
+//   draft_feedback columns are: id, venue_id, draft_id, action,
+//   original_body, edited_body, rejection_reason, coordinator_edits,
+//   created_at, metadata (jsonb, added in migration 156).
+//
+// Earlier writers in this file used `feedback_type`, `original_subject`,
+// `edited_subject`, `email_category` — none of which exist in the
+// schema. Postgres rejected every insert. Result: zero feedback rows
+// were ever persisted from the lifetime of this code. There's no
+// backfill possible.
+//
+// We keep the originalSubject / editedSubject / emailCategory params
+// on the public API (callers still pass them) and stash them in
+// metadata for forensics, even though the learning-context retrieval
+// helpers below don't read them out today.
+
 /**
  * Record an approved draft as a good example for future AI generation.
  */
@@ -68,10 +84,12 @@ export async function storeApproval(
     .insert({
       venue_id: venueId,
       draft_id: draftId,
-      feedback_type: 'approved',
-      original_subject: originalSubject,
+      action: 'approved',
       original_body: originalBody,
-      email_category: emailCategory,
+      metadata: {
+        original_subject: originalSubject,
+        email_category: emailCategory,
+      },
     })
     .select('id')
     .single()
@@ -100,13 +118,15 @@ export async function storeEdit(
     .insert({
       venue_id: venueId,
       draft_id: draftId,
-      feedback_type: 'edited',
-      original_subject: originalSubject,
+      action: 'edited',
       original_body: originalBody,
-      edited_subject: editedSubject,
       edited_body: editedBody,
       coordinator_edits: coordinatorEdits,
-      email_category: emailCategory,
+      metadata: {
+        original_subject: originalSubject,
+        edited_subject: editedSubject,
+        email_category: emailCategory,
+      },
     })
     .select('id')
     .single()
@@ -133,11 +153,13 @@ export async function storeRejection(
     .insert({
       venue_id: venueId,
       draft_id: draftId,
-      feedback_type: 'rejected',
-      original_subject: originalSubject,
+      action: 'rejected',
       original_body: originalBody,
       rejection_reason: rejectionReason,
-      email_category: emailCategory,
+      metadata: {
+        original_subject: originalSubject,
+        email_category: emailCategory,
+      },
     })
     .select('id')
     .single()
@@ -149,6 +171,15 @@ export async function storeRejection(
 // ---------------------------------------------------------------------------
 // Retrieve learning data
 // ---------------------------------------------------------------------------
+
+// T5-α.1: email_category lives in metadata jsonb (migration 156).
+// Filter via metadata->>email_category rather than a top-level column.
+
+interface FeedbackMetadata {
+  original_subject?: string | null
+  edited_subject?: string | null
+  email_category?: string | null
+}
 
 /**
  * Get recent approved/edited drafts as examples for the AI.
@@ -162,26 +193,27 @@ async function getGoodExamples(
 
   const { data } = await supabase
     .from('draft_feedback')
-    .select('original_subject, original_body, edited_subject, edited_body, feedback_type')
+    .select('original_body, edited_body, action, metadata')
     .eq('venue_id', venueId)
-    .eq('email_category', category)
-    .in('feedback_type', ['approved', 'edited'])
+    .filter('metadata->>email_category', 'eq', category)
+    .in('action', ['approved', 'edited'])
     .order('created_at', { ascending: false })
     .limit(limit)
 
   if (!data) return []
 
   return data.map((row) => {
+    const meta = (row.metadata ?? {}) as FeedbackMetadata
     // If edited, use the edited version as the "good" example
-    if (row.feedback_type === 'edited' && row.edited_body) {
+    if (row.action === 'edited' && row.edited_body) {
       return {
-        subject: row.edited_subject ?? row.original_subject ?? '',
-        body: row.edited_body,
+        subject: meta.edited_subject ?? meta.original_subject ?? '',
+        body: row.edited_body as string,
       }
     }
     return {
-      subject: row.original_subject ?? '',
-      body: row.original_body ?? '',
+      subject: meta.original_subject ?? '',
+      body: (row.original_body as string) ?? '',
     }
   })
 }
@@ -200,8 +232,8 @@ async function getRejectionReasons(
     .from('draft_feedback')
     .select('rejection_reason')
     .eq('venue_id', venueId)
-    .eq('email_category', category)
-    .eq('feedback_type', 'rejected')
+    .filter('metadata->>email_category', 'eq', category)
+    .eq('action', 'rejected')
     .not('rejection_reason', 'is', null)
     .order('created_at', { ascending: false })
     .limit(limit)
@@ -226,8 +258,8 @@ async function getEditPatterns(
     .from('draft_feedback')
     .select('original_body, edited_body')
     .eq('venue_id', venueId)
-    .eq('email_category', category)
-    .eq('feedback_type', 'edited')
+    .filter('metadata->>email_category', 'eq', category)
+    .eq('action', 'edited')
     .order('created_at', { ascending: false })
     .limit(limit)
 
@@ -315,14 +347,14 @@ export async function getFeedbackStats(venueId: string, days = 30): Promise<Feed
 
   const { data } = await supabase
     .from('draft_feedback')
-    .select('feedback_type')
+    .select('action')
     .eq('venue_id', venueId)
     .gte('created_at', since)
 
   const rows = data ?? []
-  const approved = rows.filter((r) => r.feedback_type === 'approved').length
-  const edited = rows.filter((r) => r.feedback_type === 'edited').length
-  const rejected = rows.filter((r) => r.feedback_type === 'rejected').length
+  const approved = rows.filter((r) => r.action === 'approved').length
+  const edited = rows.filter((r) => r.action === 'edited').length
+  const rejected = rows.filter((r) => r.action === 'rejected').length
   const total = approved + edited + rejected
 
   return {

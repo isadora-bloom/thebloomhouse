@@ -2625,14 +2625,20 @@ export async function approveDraft(draftId: string, userId: string): Promise<voi
     })
     .eq('id', draftId)
 
-  // Create feedback record for learning
+  // Create feedback record for learning. Schema reality (per migration
+  // 002 + 156): action / original_body / edited_body / rejection_reason
+  // / coordinator_edits / metadata (jsonb). Subject + email category go
+  // in metadata. T5-α.1 fix: previous writer used non-existent columns
+  // and silently failed.
   await supabase.from('draft_feedback').insert({
     venue_id: draft.venue_id,
     draft_id: draftId,
-    feedback_type: 'approved',
-    original_subject: draft.subject ?? '',
+    action: 'approved',
     original_body: draft.draft_body ?? '',
-    email_category: draft.context_type ?? 'inquiry',
+    metadata: {
+      original_subject: draft.subject ?? '',
+      email_category: draft.context_type ?? 'inquiry',
+    },
   })
 
   // Track coordinator action for metrics
@@ -2691,15 +2697,18 @@ export async function rejectDraft(
     })
     .eq('id', draftId)
 
-  // Create feedback record for learning
+  // Create feedback record for learning. T5-α.1 fix: schema columns
+  // are action / original_body / rejection_reason / metadata (jsonb).
   await supabase.from('draft_feedback').insert({
     venue_id: draft.venue_id,
     draft_id: draftId,
-    feedback_type: 'rejected',
-    original_subject: draft.subject ?? '',
+    action: 'rejected',
     original_body: draft.draft_body ?? '',
     rejection_reason: reason ?? null,
-    email_category: draft.context_type ?? 'inquiry',
+    metadata: {
+      original_subject: draft.subject ?? '',
+      email_category: draft.context_type ?? 'inquiry',
+    },
   })
 
   // Track coordinator action for metrics
@@ -2747,15 +2756,20 @@ export async function editAndApproveDraft(
     })
     .eq('id', draftId)
 
-  // Create feedback record with both original and edited
+  // Create feedback record with both original and edited. T5-α.1 fix:
+  // schema columns are action / original_body / edited_body / metadata
+  // (jsonb). Previous writer used non-existent feedback_type +
+  // original_subject + email_category and silently failed every time.
   await supabase.from('draft_feedback').insert({
     venue_id: draft.venue_id,
     draft_id: draftId,
-    feedback_type: 'edited',
-    original_subject: draft.subject ?? '',
+    action: 'edited',
     original_body: originalBody,
     edited_body: editedBody,
-    email_category: draft.context_type ?? 'inquiry',
+    metadata: {
+      original_subject: draft.subject ?? '',
+      email_category: draft.context_type ?? 'inquiry',
+    },
   })
 
   // Track coordinator action for metrics
