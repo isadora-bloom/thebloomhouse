@@ -152,6 +152,11 @@ export async function adjudicateAmbiguousMatch(args: {
     return { match_wedding_id: null, confidence: 0, reasoning: 'no candidate weddings' }
   }
   const userPrompt = buildUserPrompt(candidate, candidates)
+  // Haiku tier per Playbook OPS-21.4.2 / 19.8: candidate identity
+  // adjudication is a structured classification with bounded schema
+  // (match_wedding_id + confidence + short reasoning). Sonnet was
+  // overkill — this hits per-inquiry-resolution at scale and the
+  // 12× cost diff vs Haiku adds up. ARCH-19.8-B.
   const response = await callAIJson<AIResponse>({
     systemPrompt: SYSTEM_PROMPT,
     userPrompt,
@@ -159,6 +164,7 @@ export async function adjudicateAmbiguousMatch(args: {
     temperature: 0.1,
     venueId,
     taskType: 'tier2_adjudicator',
+    tier: 'haiku',
   })
   return {
     match_wedding_id: response.match_wedding_id,

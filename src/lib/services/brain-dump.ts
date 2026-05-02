@@ -215,35 +215,50 @@ export async function routeBrainDump(args: {
     return { routedTo: [], needsClarification: true, clarificationQuestion: q }
   }
 
-  // Client note: append to weddings.sage_context_notes.
+  // Client note: PROPOSE-AND-CONFIRM. Per couple's intel paragraph
+  // is part of their forensic record (Playbook INV-20.5.4-D —
+  // non-graduable category). Auto-filing means the brain-dump
+  // parser's interpretation of "what the coordinator meant" lands
+  // on the wedding's permanent record without coordinator review,
+  // which is exactly the case the playbook calls out as a
+  // propose-and-confirm violation.
+  //
+  // Pre-fix: this path called weddings.update() directly. Now: route
+  // to needs_clarification with the proposed note in parse_result;
+  // /api/brain-dump/[id]/resolve writes the note on confirm.
   if (parsed.intent === 'client_note' && parsed.clientMatch?.weddingId) {
     const noteBody = parsed.note || rawText
-    const { data: wRow } = await supabase
-      .from('weddings')
-      .select('sage_context_notes')
-      .eq('id', parsed.clientMatch.weddingId)
-      .single()
-    const existing = Array.isArray(wRow?.sage_context_notes)
-      ? (wRow!.sage_context_notes as Array<Record<string, unknown>>)
-      : []
-    const nextNotes = [
-      ...existing,
-      {
-        body: noteBody,
-        source: 'brain_dump',
-        added_at: new Date().toISOString(),
-        entry_id: entryId,
-      },
-    ]
-    await supabase
-      .from('weddings')
-      .update({ sage_context_notes: nextNotes })
-      .eq('id', parsed.clientMatch.weddingId)
-    routedTo.push({
-      table: 'weddings',
-      id: parsed.clientMatch.weddingId,
-      action: 'append_sage_context_note',
+    const proposed = {
+      kind: 'client_note',
+      weddingId: parsed.clientMatch.weddingId,
+      noteBody,
+      coupleLabel: (parsed.clientMatch as { coupleLabel?: string }).coupleLabel ?? null,
+    }
+    await createNotification({
+      venueId,
+      type: 'brain_dump_client_note_confirm',
+      title: `Confirm client note${proposed.coupleLabel ? ` for ${proposed.coupleLabel}` : ''}`,
+      body: JSON.stringify({
+        entryId,
+        weddingId: proposed.weddingId,
+        noteBody,
+        rawText,
+      }),
     })
+    await supabase
+      .from('brain_dump_entries')
+      .update({
+        parse_status: 'needs_clarification',
+        clarification_question: `Add this note to ${proposed.coupleLabel ?? 'the couple'}'s record?`,
+        parsed_at: new Date().toISOString(),
+        parse_result: { ...(parsed as unknown as Record<string, unknown>), proposed_client_note: proposed },
+      })
+      .eq('id', entryId)
+    return {
+      routedTo: [],
+      needsClarification: true,
+      clarificationQuestion: `Add this note to ${proposed.coupleLabel ?? 'the couple'}'s record?`,
+    }
   }
 
   // Availability: DESTRUCTIVE — never auto-apply. Create confirmation

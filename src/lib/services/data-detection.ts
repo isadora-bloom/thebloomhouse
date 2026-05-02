@@ -346,6 +346,9 @@ Social posts always have platform names and engagement metrics.`,
     temperature: 0.1,
     venueId,
     taskType: 'data_detection',
+    // Haiku tier per OPS-21.4.2: 24-class classification with bounded
+    // schema (type + confidence + description). ARCH-19.8-B.
+    tier: 'haiku',
   })
 
   return {
@@ -484,6 +487,9 @@ Rules:
     temperature: 0.1,
     venueId,
     taskType: 'column_mapping',
+    // Haiku tier per OPS-21.4.2: bounded structured-output extraction
+    // (source name → target name dict). ARCH-19.8-B.
+    tier: 'haiku',
   })
 
   return mapping

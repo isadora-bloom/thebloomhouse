@@ -42,11 +42,25 @@ export interface ImportResult {
  * rows are dropped (a coordinator typing 0 almost always meant "don't
  * record this" — they can delete the row instead).
  */
+export type SpendProvenance =
+  | 'manual_entry'
+  | 'csv_import'
+  | 'brain_dump_text'
+  | 'screenshot_ocr'
+  | 'integrated_meta'
+  | 'integrated_google'
+  | 'integrated_knot'
+  | 'integrated_ww'
+  | 'integrated_other'
+
 export async function upsertSpendRows(args: {
   venueId: string
   rows: SpendRow[]
+  /** How these rows were sourced. Persisted to marketing_spend.source_provenance
+   *  per LIMB-16.2.4-C — drives data-quality weighting downstream. */
+  provenance: SpendProvenance
 }): Promise<ImportResult> {
-  const { venueId, rows } = args
+  const { venueId, rows, provenance } = args
   const supabase = createServiceClient()
   const result: ImportResult = { inserted: 0, updated: 0, skipped: 0, rows: [], errors: [] }
 
@@ -74,6 +88,7 @@ export async function upsertSpendRows(args: {
       month: normalisedMonth,
       amount: row.amount,
       notes: row.notes ?? row.campaign ?? null,
+      source_provenance: provenance,
     }
 
     // Check if a row exists for dedup.

@@ -138,7 +138,56 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
   }
 
-  // Case C: plain clarification — just stamp the status and the answer.
+  // Case D: proposed client note for couple's forensic record. Per
+  // Playbook INV-20.5.4-D, per-couple intel paragraphs are non-
+  // graduable and require explicit confirmation before filing to
+  // weddings.sage_context_notes. Pre-fix the brain-dump auto-filed;
+  // now we propose, the coordinator confirms here.
+  const proposedNote = pr['proposed_client_note'] as
+    | { kind?: string; weddingId?: string; noteBody?: string; coupleLabel?: string | null }
+    | undefined
+  if (proposedNote?.kind === 'client_note' && proposedNote.weddingId && proposedNote.noteBody) {
+    // Re-fetch existing notes inside the confirm to avoid stomping on
+    // a parallel note that landed between propose and confirm.
+    const { data: wRow } = await supabase
+      .from('weddings')
+      .select('sage_context_notes, venue_id')
+      .eq('id', proposedNote.weddingId)
+      .single()
+    if (!wRow || wRow.venue_id !== auth.venueId) {
+      return NextResponse.json({ error: 'Wedding not found or out of scope' }, { status: 404 })
+    }
+    const existing = Array.isArray(wRow.sage_context_notes)
+      ? (wRow.sage_context_notes as Array<Record<string, unknown>>)
+      : []
+    const nextNotes = [
+      ...existing,
+      {
+        body: proposedNote.noteBody,
+        source: 'brain_dump',
+        added_at: new Date().toISOString(),
+        entry_id: id,
+        confirmed_by: auth.userId,
+      },
+    ]
+    const { error: writeErr } = await supabase
+      .from('weddings')
+      .update({ sage_context_notes: nextNotes })
+      .eq('id', proposedNote.weddingId)
+    if (writeErr) {
+      return NextResponse.json({ error: writeErr.message }, { status: 500 })
+    }
+    await supabase.from('brain_dump_entries').update({
+      parse_status: 'confirmed',
+      clarification_answer: body.answer?.trim() ?? null,
+      resolved_at: new Date().toISOString(),
+      parse_result: { ...pr, confirmed_at: new Date().toISOString() },
+      routed_to: [{ table: 'weddings', id: proposedNote.weddingId, action: 'append_sage_context_note' }],
+    }).eq('id', id)
+    return NextResponse.json({ id, status: 'confirmed', appendedTo: proposedNote.weddingId })
+  }
+
+  // Case E: plain clarification — just stamp the status and the answer.
   const updates: Record<string, unknown> = {
     parse_status: 'confirmed',
     resolved_at: new Date().toISOString(),

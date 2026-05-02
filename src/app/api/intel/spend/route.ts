@@ -42,13 +42,18 @@ export async function POST(request: NextRequest) {
 
   let rows: SpendRow[] = []
   const errors: string[] = []
+  // Provenance per LIMB-16.2.4-C: we know which mode each call came in
+  // through, so we set it here rather than letting the writer guess.
+  let provenance: 'manual_entry' | 'csv_import' | 'brain_dump_text' = 'manual_entry'
 
   if (body.mode === 'rows' && Array.isArray(body.rows)) {
     rows = body.rows
+    provenance = 'manual_entry'
   } else if (body.mode === 'csv' && typeof body.csv === 'string') {
     const parsed = parseSpendCsv(body.csv)
     rows = parsed.rows
     errors.push(...parsed.errors)
+    provenance = 'csv_import'
   } else if (body.mode === 'text' && typeof body.text === 'string') {
     const extracted = await extractSpendFromText({
       venueId: auth.venueId,
@@ -56,6 +61,7 @@ export async function POST(request: NextRequest) {
     })
     rows = extracted.rows
     errors.push(...extracted.errors)
+    provenance = 'brain_dump_text'
   } else {
     return NextResponse.json(
       { error: 'mode must be "rows" | "csv" | "text" with matching payload' },
@@ -71,7 +77,7 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  const result = await upsertSpendRows({ venueId: auth.venueId, rows })
+  const result = await upsertSpendRows({ venueId: auth.venueId, rows, provenance })
   return NextResponse.json({
     preview: false,
     inserted: result.inserted,

@@ -385,6 +385,8 @@ export async function importAdvertisingSpend(
         month: month || new Date().toISOString().split('T')[0],
         amount,
         notes: row.notes || null,
+        // LIMB-16.2.4-C: data-import is the CSV / brain-dump bulk path.
+        source_provenance: 'csv_import',
       })
 
       if (error) {

@@ -880,10 +880,10 @@ meta:
   notes: "Phase 1 dropped the CHECK constraint on weddings.source (T1-J B-21 / migration 123). Phase 2 (T2-B) marketing_channels admin UI is the manual-entry surface — coordinators can add any key without an API integration. weddings.source / wedding_touchpoints.source / attribution_events.source_platform accept any string."
 
 - id: LIMB-16.2.4-C
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: spend records have source field 'manual_entry' or 'integrated:<provider>'
-  notes: "marketing_spend has no source provenance column."
+  notes: "Migration 146 (2026-05-01): adds marketing_spend.source_provenance text NOT NULL DEFAULT 'manual_entry' with CHECK enum (manual_entry / csv_import / brain_dump_text / screenshot_ocr / integrated_meta / integrated_google / integrated_knot / integrated_ww / integrated_other). upsertSpendRows now requires explicit provenance arg; /api/intel/spend route maps mode→provenance (rows=manual_entry, csv=csv_import, text=brain_dump_text). data-import.ts CSV path stamps csv_import. Index on (venue_id, source_provenance). Drives data-quality weighting downstream — pricing-elasticity confound detector and source-mix counterfactual can damp confidence on brain_dump_text rows in a future patch."
   severity: medium
 
 - id: LIMB-16.2.5-A
@@ -1311,10 +1311,10 @@ meta:
   severity: high
 
 - id: ARCH-19.8-B
-  status: at-risk
+  status: partial
   owner: Isadora
   target: model-tier mapping enforced
-  notes: "Single hardcoded Sonnet for ALL traffic. Router-brain (Haiku-class), extraction (Haiku-class) all pay 12× Haiku price. callAI takes no tier argument."
+  notes: "T1-H + T3 era (2026-05-01): callAI options now include tier arg (sonnet/haiku/opus) per OPS-21.4.2. Haiku-tier mapped on classification + bounded-extraction paths: router-brain (T1-H), brain-dump stage-1 classifier (T1-H), signal-extraction (T1-H), risk-flags sentiment overlay (T3-H), candidate-ai-adjudicator (ARCH-19.8-B), data-detection.ts type-classifier + column-mapping (ARCH-19.8-B). Strategic / synthesis paths (anomaly-detection, briefings, T3 narration generators) correctly remain Sonnet. PARTIAL because remaining classification paths haven't been audited line-by-line — there's likely 5-10 more callAIJson calls that are bounded-schema classification still defaulting to Sonnet. Cost lever per Wedgewood-scale OPS-21.4.2."
   severity: high
 
 - id: ARCH-19.8-C
@@ -1466,10 +1466,10 @@ meta:
   severity: medium
 
 - id: INV-20.5.4-D
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: non-graduable categories enforced
-  notes: "Per-couple intel paragraphs auto-file to weddings.sage_context_notes (couple's forensic record) without confirmation. Exactly the case playbook 20.5.4-D singles out."
+  notes: "brain-dump.ts client_note path (2026-05-01): pre-fix called weddings.update() directly to append to sage_context_notes — auto-filing the parser's interpretation onto the couple's forensic record without coordinator review (the exact violation Playbook 20.5.4-D calls out). Now: parses, builds {kind: 'client_note', weddingId, noteBody, coupleLabel} into parse_result.proposed_client_note, fires admin_notifications type='brain_dump_client_note_confirm', returns needsClarification: true. /api/brain-dump/[id]/resolve has a new Case D that re-fetches existing notes (avoids stomping on parallel edits) and appends with confirmed_by=auth.userId only after coordinator confirm. Availability + spend paths already used this pattern; client_note now matches."
   severity: high
 
 - id: ARCH-20.5.5
