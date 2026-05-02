@@ -32,7 +32,10 @@ import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 
-export const HEAT_NARRATION_PROMPT_VERSION = 'heat-narration.prompt.v1.0'
+// T5-followup-AA (2026-05-02): bumped to v1.1 — trajectory bucket
+// added to the prompt so the LLM grounds its prose in rising / falling
+// / plateau / volatile direction, not just the static score.
+export const HEAT_NARRATION_PROMPT_VERSION = 'heat-narration.prompt.v1.1'
 
 interface HeatEventForNarration {
   event_type: string
@@ -40,6 +43,19 @@ interface HeatEventForNarration {
   occurred_at: string | null
   metadata: Record<string, unknown>
 }
+
+/** Trajectory bucket of the wedding's heat over the last ~14 days.
+ *  Same heat_score with different trajectories (e.g. "rising fast"
+ *  vs "recovering from a stall") deserves different prose. T5-followup-AA.
+ *  Buckets:
+ *    rising   — monotonic up across the last 7 days (or near-monotonic with a single
+ *               down-tick smaller than half the avg up-step)
+ *    falling  — monotonic down across the last 7 days (mirror of rising)
+ *    plateau  — stddev of last 14 days < PLATEAU_STDDEV
+ *    volatile — anything else
+ *  unknown    — fewer than 2 history rows so trajectory cannot be inferred
+ */
+export type HeatTrajectory = 'rising' | 'falling' | 'plateau' | 'volatile' | 'unknown'
 
 interface ClassicalHeatPayload {
   weddingId: string
@@ -51,6 +67,11 @@ interface ClassicalHeatPayload {
    *  in the cache_key is belt-and-braces for manual refresh paths
    *  that bypass the signature compare. */
   inquiry_date_day: string | null
+  /** T5-followup-AA. Same score, different trajectory → different
+   *  narration. ONE more cache-miss vector by design — the platform
+   *  underreports volatility today. 4 buckets is enough; we don't
+   *  over-bucket. */
+  trajectory: HeatTrajectory
   top_events: Array<{
     event_type: string
     points: number
@@ -59,6 +80,80 @@ interface ClassicalHeatPayload {
   total_events: number
   newest_event_at: string | null
   oldest_event_at: string | null
+}
+
+const TRAJECTORY_LOOKBACK_DAYS = 14
+const PLATEAU_STDDEV = 5
+
+/**
+ * Classify the wedding's heat trajectory from its recent score history.
+ * Pulls up to TRAJECTORY_LOOKBACK_DAYS of `lead_score_history` rows and
+ * walks them oldest-first.
+ *
+ * Rules (in order):
+ *   - <2 rows: 'unknown' (no slope to talk about).
+ *   - stddev of all observed scores < PLATEAU_STDDEV: 'plateau'.
+ *   - last-7-day window monotonic up (allow ONE downtick smaller than
+ *     half the avg up-step): 'rising'.
+ *   - last-7-day window monotonic down (mirror): 'falling'.
+ *   - else: 'volatile'.
+ *
+ * Pure read; no writes.
+ */
+export async function classifyHeatTrajectory(
+  supabase: SupabaseClient,
+  venueId: string,
+  weddingId: string,
+  lookbackDays: number = TRAJECTORY_LOOKBACK_DAYS,
+): Promise<HeatTrajectory> {
+  const since = new Date(Date.now() - lookbackDays * 86400e3).toISOString()
+  const { data: rows } = await supabase
+    .from('lead_score_history')
+    .select('score, calculated_at')
+    .eq('venue_id', venueId)
+    .eq('wedding_id', weddingId)
+    .gte('calculated_at', since)
+    .order('calculated_at', { ascending: true })
+    .limit(200)
+
+  const scores = (rows ?? [])
+    .map((r) => Number((r as { score: number | null }).score ?? NaN))
+    .filter((n) => Number.isFinite(n))
+  if (scores.length < 2) return 'unknown'
+
+  const mean = scores.reduce((a, b) => a + b, 0) / scores.length
+  const variance =
+    scores.reduce((acc, s) => acc + (s - mean) * (s - mean), 0) / scores.length
+  const stddev = Math.sqrt(variance)
+  if (stddev < PLATEAU_STDDEV) return 'plateau'
+
+  // Last-7-day slice for monotonicity tests.
+  const sevenDayCutoff = Date.now() - 7 * 86400e3
+  const recent = (rows ?? []).filter((r) => {
+    const t = new Date((r as { calculated_at: string | null }).calculated_at ?? 0).getTime()
+    return Number.isFinite(t) && t >= sevenDayCutoff
+  }).map((r) => Number((r as { score: number | null }).score ?? NaN))
+   .filter((n) => Number.isFinite(n))
+  if (recent.length >= 2) {
+    const ups: number[] = []
+    const downs: number[] = []
+    for (let i = 1; i < recent.length; i++) {
+      const d = recent[i] - recent[i - 1]
+      if (d > 0) ups.push(d)
+      else if (d < 0) downs.push(-d)
+    }
+    const avgUp = ups.length ? ups.reduce((a, b) => a + b, 0) / ups.length : 0
+    const avgDown = downs.length ? downs.reduce((a, b) => a + b, 0) / downs.length : 0
+    // 'rising': mostly ups; at most one downtick AND it must be small
+    // (< half the avg up-step) so a one-off jitter doesn't disqualify.
+    if (ups.length >= 1 && (downs.length === 0 || (downs.length === 1 && downs[0] < avgUp * 0.5))) {
+      return 'rising'
+    }
+    if (downs.length >= 1 && (ups.length === 0 || (ups.length === 1 && ups[0] < avgDown * 0.5))) {
+      return 'falling'
+    }
+  }
+  return 'volatile'
 }
 
 /**
@@ -84,6 +179,9 @@ async function loadClassicalHeatEvidence(
     ? new Date(wedding.inquiry_date as string).toISOString().slice(0, 10)
     : null
 
+  // Trajectory lookup runs in parallel with the events query below.
+  const trajectoryPromise = classifyHeatTrajectory(supabase, venueId, weddingId)
+
   const { data: events, count: totalEvents } = await supabase
     .from('engagement_events')
     .select('event_type, points, occurred_at, metadata, created_at', { count: 'exact' })
@@ -108,12 +206,14 @@ async function loadClassicalHeatEvidence(
 
   const newest = list[0]?.occurred_at ?? null
   const oldest = list[list.length - 1]?.occurred_at ?? null
+  const trajectory = await trajectoryPromise
 
   const payload: ClassicalHeatPayload = {
     weddingId,
     heat_score: (wedding.heat_score as number) ?? 0,
     temperature_tier: (wedding.temperature_tier as string) ?? 'cool',
     inquiry_date_day: inquiryDateDay,
+    trajectory,
     top_events: topEvents,
     total_events: totalEvents ?? list.length,
     newest_event_at: newest,
@@ -179,6 +279,13 @@ export async function generateHeatNarration(
     // trigger-driven signature null somehow misses (e.g. cache_key was
     // never reached during write). Belt-and-braces with migration 158.
     inquiryDateDay: payload.inquiry_date_day ?? '',
+    // T5-followup-AA (2026-05-02). Same score, different trajectory →
+    // different narration (e.g. "rising fast" vs "recovering from a
+    // stall"). The trajectory bucket adds ONE more cache-miss vector
+    // by design. 4 buckets (+ 'unknown' for cold-start) is enough; we
+    // don't over-bucket. Without this, a wedding climbing 40→55→70 and
+    // a wedding crashing 100→85→70 collapse onto the same cached prose.
+    trajectory: payload.trajectory,
     // Include occurred_at-day in the fingerprint so two events of the
     // same type+points but different days don't collapse into a stale
     // cache hit. Pre-fix the cache key dropped occurred_at, which made
@@ -214,10 +321,18 @@ export async function generateHeatNarration(
 coordinator WHY a particular lead's heat score is what it is. Output JSON with:
   - title: a short headline (max ~60 chars). Refer to the lead via the
     score + tier (e.g. "Strong lead — sustained engagement + tour completion").
-  - body: 1-2 sentences. Ground every claim in the events listed below.
+  - body: 1-2 sentences. Ground every claim in the events listed below
+    AND in the heat trajectory (see "Trajectory" in user prompt). When the
+    trajectory is rising / falling / plateau / volatile, that direction MUST
+    be referenced — same score with different trajectory should read very
+    differently (e.g. "climbing fast" vs "recovering from a stall" vs "stable
+    at warm" vs "swinging week-to-week").
   - action: one specific next step the coordinator can take this week,
-    matched to the heat tier (hot → push to contract; warm → tour follow-up;
-    cool → re-engage). null if no clear action (informational only).
+    matched to the heat tier AND trajectory (hot+rising → push to contract;
+    hot+falling → urgent re-engagement; warm+plateau → tour follow-up;
+    warm+volatile → stabilise with a clarifying call; cool+rising → nurture;
+    cool+falling → re-engage; unknown → tier-default action). null if no
+    clear action (informational only).
 
 CRITICAL RULES:
 - Never invent numbers. The ONLY numbers you may reference are the heat
@@ -232,6 +347,7 @@ CRITICAL RULES:
   const userPrompt = `LEAD HEAT NARRATION
 
 Composite score: ${payload.heat_score} (${payload.temperature_tier})
+Trajectory (last ~14 days): ${payload.trajectory}
 Total engagement events on file: ${payload.total_events}
 
 Top contributing events (sorted by impact):
@@ -239,7 +355,9 @@ ${eventsBlock}
 
 Window: ${payload.oldest_event_at?.slice(0, 10) ?? '?'} → ${payload.newest_event_at?.slice(0, 10) ?? '?'}
 
-Compose the JSON narration.`
+Compose the JSON narration. Reference the trajectory direction in the body
+so a coordinator scanning a list of leads can tell at a glance which way
+this lead is moving.`
 
   let narration: InsightNarration | null = null
   // Cost-ceiling gate (T5-α.2). Per OPS-21.4.3, when a venue's daily
@@ -279,11 +397,20 @@ Compose the JSON narration.`
 
   // Deterministic fallback when LLM unavailable. Numbers-guard tolerant
   // because every number used here comes from the classical payload.
+  // T5-followup-AA: trajectory-aware so the fallback prose reflects
+  // direction, matching the bucketing we feed into the cache_key.
   if (!narration) {
     const verb = payload.heat_score >= 80 ? 'Strong'
       : payload.heat_score >= 60 ? 'Warm'
       : payload.heat_score >= 40 ? 'Cool'
       : 'Quiet'
+    const trajPhrase: Record<HeatTrajectory, string> = {
+      rising: 'climbing',
+      falling: 'cooling',
+      plateau: 'holding steady',
+      volatile: 'swinging week-to-week',
+      unknown: 'newly tracked',
+    }
     const positiveEvents = payload.top_events.filter((e) => e.points > 0)
     const negativeEvents = payload.top_events.filter((e) => e.points < 0)
     const summary = positiveEvents.length > 0
@@ -292,12 +419,29 @@ Compose the JSON narration.`
     const concern = negativeEvents.length > 0
       ? `; offset by ${negativeEvents[0].event_type}`
       : ''
-    narration = {
-      title: `${verb} lead — ${payload.heat_score} (${payload.temperature_tier})`,
-      body: `Heat score ${payload.heat_score} based on ${payload.total_events} engagement events. ${summary}${concern}.`,
-      action: payload.heat_score >= 60
+    // Action picks based on (tier × trajectory) so the same warm-tier
+    // lead reads as "stabilise with a clarifying call" when volatile vs
+    // "send a tour follow-up" when steady.
+    let action: string
+    if (payload.trajectory === 'falling') {
+      action = payload.heat_score >= 60
+        ? 'Heat is dropping — send a re-engagement note this week.'
+        : 'Queue a re-engagement nudge before the lead goes cold.'
+    } else if (payload.trajectory === 'volatile') {
+      action = 'Stabilise with a clarifying call to confirm interest.'
+    } else if (payload.trajectory === 'rising') {
+      action = payload.heat_score >= 60
+        ? 'Momentum is building — push toward proposal or contract.'
+        : 'Nurture the upward trend with a personal follow-up.'
+    } else {
+      action = payload.heat_score >= 60
         ? 'Send a tour follow-up or proposal this week.'
-        : 'Watch for re-engagement; queue a check-in if quiet for 14+ days.',
+        : 'Watch for re-engagement; queue a check-in if quiet for 14+ days.'
+    }
+    narration = {
+      title: `${verb} lead — ${payload.heat_score} (${payload.temperature_tier}, ${trajPhrase[payload.trajectory]})`,
+      body: `Heat score ${payload.heat_score} based on ${payload.total_events} engagement events; ${trajPhrase[payload.trajectory]} over the last ~14 days. ${summary}${concern}.`,
+      action,
     }
   }
 

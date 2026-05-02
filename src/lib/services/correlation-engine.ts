@@ -94,32 +94,107 @@ function enumerateDays(start: Date, end: Date): string[] {
 
 /**
  * Convert a marketing_metric label into an ISO day. Accepts 'Oct',
- * '2025-10', '2025-10-15', 'Oct 2025', etc. Returns null if the label
- * cannot be resolved to a concrete day (abstract buckets are skipped
- * rather than guessed).
+ * '2025-10', '2025-10-15', 'Oct 2025', '5/2', '05/02', '5/2/2025', etc.
+ * Returns null if the label cannot be resolved to a concrete day
+ * (abstract buckets are skipped rather than guessed).
+ *
+ * T5-followup-AA (2026-05-02): year-boundary correctness. The previous
+ * implementation parsed unyearned labels by picking the most-recent
+ * past occurrence of that month — which is correct mid-year but flips
+ * incorrectly on year-boundary imports for `M/D` labels (a January
+ * import seeing "12/15" should reach back to December of last year,
+ * not project forward to December of THIS year). The fix: after
+ * deriving a candidate date, if the candidate is more than 6 months
+ * in the FUTURE relative to "now", subtract a year. Mirror case is
+ * already handled by the past-bias rule. Mid-year `5/2` style labels
+ * are unaffected because they fall well within the ±6-month band.
+ *
+ * `now` is parameterised so unit tests can pin a date.
  */
-function labelToDay(label: string): string | null {
+export function labelToDay(label: string, now: Date = new Date()): string | null {
   const s = label.trim()
   if (!s) return null
-  // ISO day
+  // ISO day — already absolute, no boundary heuristic needed.
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
-  // ISO month → first day of month
+  // ISO month → first day of month — also already absolute.
   const iso = s.match(/^(\d{4})-(\d{2})$/)
   if (iso) return `${iso[1]}-${iso[2]}-01`
-  // Month name → first day of month, nearest-year heuristic (most-recent past)
+  // Slash forms: M/D, MM/DD, M/D/YYYY, MM/DD/YYYY.
+  const slash = s.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/)
+  if (slash) {
+    const m = Number(slash[1])
+    const d = Number(slash[2])
+    if (m < 1 || m > 12 || d < 1 || d > 31) return null
+    let yyyy: number
+    if (slash[3]) {
+      yyyy = Number(slash[3])
+      if (yyyy < 100) yyyy += 2000 // two-digit year heuristic; venues don't pre-date 2000
+    } else {
+      yyyy = now.getUTCFullYear()
+    }
+    const candidate = `${yyyy.toString().padStart(4, '0')}-${m.toString().padStart(2, '0')}-${d.toString().padStart(2, '0')}`
+    return slash[3] ? candidate : pinToNearestYear(candidate, now)
+  }
+  // Month name → first day of month, nearest-year heuristic (most-recent past).
   const months: Record<string, string> = {
     jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
     jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
   }
   const key = s.slice(0, 3).toLowerCase()
   if (months[key]) {
-    const now = new Date()
+    // Year explicit (e.g. "Oct 2025") — trust it.
+    const yearMatch = s.match(/(\d{4})/)
+    if (yearMatch) {
+      return `${yearMatch[1]}-${months[key]}-01`
+    }
+    // Default to most-recent past occurrence — same as before — then
+    // pinToNearestYear corrects for year-boundary imports both ways.
     const targetMonth = Number(months[key])
     const currentMonth = now.getUTCMonth() + 1
-    const year = targetMonth > currentMonth ? now.getUTCFullYear() - 1 : now.getUTCFullYear()
-    return `${year}-${months[key]}-01`
+    const baseYear = targetMonth > currentMonth ? now.getUTCFullYear() - 1 : now.getUTCFullYear()
+    const candidate = `${baseYear}-${months[key]}-01`
+    return pinToNearestYear(candidate, now)
   }
   return null
+}
+
+/**
+ * Year-boundary corrector for unyearned date labels.
+ *
+ * If the candidate date is more than 6 months FUTURE relative to `now`,
+ * subtract a year (a label like "12/15" seen from January is last
+ * December, not next December).
+ *
+ * If the candidate date is more than 6 months PAST relative to `now`,
+ * the past-bias rule already chose this — but if the source data is
+ * marketing-metric activity that's almost-always recent, an "Oct"
+ * label seen from August would resolve to LAST October by the past-
+ * bias rule. That's correct (a Q3 platform export of last fall's
+ * traffic). We don't pull this case forward — would mis-attribute
+ * historical traffic to a future month that hasn't happened yet.
+ *
+ * Net: only the future-by-more-than-6-months case is corrected here,
+ * which closes the year-boundary import bug without stripping legitimate
+ * mid-year cross-year-boundary labels.
+ *
+ * Internal helper. Exported as `labelToDay` only.
+ */
+function pinToNearestYear(isoDay: string, now: Date): string {
+  const candidate = new Date(`${isoDay}T00:00:00Z`)
+  if (!Number.isFinite(candidate.getTime())) return isoDay
+  const sixMonthsMs = 183 * 86400e3
+  const delta = candidate.getTime() - now.getTime()
+  if (delta > sixMonthsMs) {
+    // Pull a year back.
+    const adjusted = new Date(candidate)
+    adjusted.setUTCFullYear(adjusted.getUTCFullYear() - 1)
+    return adjusted.toISOString().slice(0, 10)
+  }
+  // Past-direction case is intentionally NOT pulled forward — see
+  // function-level comment. Marketing-metric exports legitimately
+  // describe last-year-this-month and we don't want to pretend
+  // last-October's data is THIS October's data.
+  return isoDay
 }
 
 interface Series {
