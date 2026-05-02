@@ -50,6 +50,18 @@ interface VoiceDnaResponse {
   daysLearning: number
   sampleCount: number
   trainingSessionCount: number
+  /** Outbound interactions seen by Sage — i.e. coordinator-written +
+   *  Sage-drafted-and-sent emails. Powers the "trained on N emails"
+   *  signal in the hero header (T5-followup-Z). */
+  emailsSeen: number
+  /** Next milestone the venue is working towards. Computed from the
+   *  same signals the rest of the page already shows (T5-followup-Z).
+   *  null when the venue has cleared every milestone (mature voice). */
+  nextMilestone: {
+    label: string
+    progress: number    // 0..1
+    detail: string
+  } | null
   dimensions: {
     warmth: number
     formality: number
@@ -176,6 +188,9 @@ export async function GET(req: NextRequest) {
   }
 
   // ----- Fetch all the raw data in parallel -------------------------------
+  // T5-followup-Z: also count outbound interactions ("emails seen by Sage")
+  // so the daysLearning header can render real progress signals + the next
+  // milestone instead of a bare day count.
   const [
     venueRes,
     configRes,
@@ -183,6 +198,7 @@ export async function GET(req: NextRequest) {
     preferencesRes,
     sessionsRes,
     phraseUsageRes,
+    outboundCountRes,
   ] = await Promise.all([
     service.from('venues').select('id, name').eq('id', venueId).maybeSingle(),
     service
@@ -208,6 +224,11 @@ export async function GET(req: NextRequest) {
       .from('phrase_usage')
       .select('phrase_text')
       .eq('venue_id', venueId),
+    service
+      .from('interactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('venue_id', venueId)
+      .eq('direction', 'outbound'),
   ])
 
   const venueRow = venueRes.data
@@ -382,12 +403,29 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const emailsSeen = outboundCountRes.count ?? 0
+  const trainingCount = sessions.filter((s) => s.completed_at).length
+
+  // T5-followup-Z: pick the next milestone in a fixed ladder using
+  // signals already surfaced on the page. Each rung is something the
+  // platform actually computes — no invented metrics. Coordinators
+  // see "Next milestone: <human label>" instead of a bare day count.
+  const nextMilestone = computeNextMilestone({
+    emailsSeen,
+    sampleCount: phrases.length,
+    trainingCount,
+    editPairsCount: editPairs.length,
+    dimensions,
+  })
+
   const response: VoiceDnaResponse = {
     aiName,
     venueName,
     daysLearning,
     sampleCount: phrases.length,
-    trainingSessionCount: sessions.filter((s) => s.completed_at).length,
+    trainingSessionCount: trainingCount,
+    emailsSeen,
+    nextMilestone,
     dimensions,
     phrasesByTheme: sageByTheme,
     marketingByTheme,
@@ -396,4 +434,76 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json(response)
+}
+
+/**
+ * Voice-DNA milestone ladder (T5-followup-Z).
+ *
+ * Five rungs, each tied to an existing platform signal. Returns the
+ * first unmet rung as the "next milestone" with a fractional progress
+ * estimate. When every rung is met returns null (mature voice).
+ *
+ * Rungs are intentionally cheap to evaluate from the data we already
+ * fetch — no new aggregations, no LLM inference.
+ */
+function computeNextMilestone(args: {
+  emailsSeen: number
+  sampleCount: number
+  trainingCount: number
+  editPairsCount: number
+  dimensions: { warmth: number; formality: number; playfulness: number; brevity: number; enthusiasm: number }
+}): { label: string; progress: number; detail: string } | null {
+  const { emailsSeen, sampleCount, trainingCount, editPairsCount, dimensions } = args
+
+  // Rung 1: at least 25 outbound emails so Sage has variety to learn from.
+  if (emailsSeen < 25) {
+    return {
+      label: 'See 25 outbound emails',
+      progress: emailsSeen / 25,
+      detail: `${emailsSeen} of 25 outbound emails seen so far.`,
+    }
+  }
+
+  // Rung 2: at least one personality slider tweaked away from default.
+  // This is what tone calibration looks like in the real schema.
+  const tweaked = dimensions.warmth !== 7 || dimensions.formality !== 4 ||
+    dimensions.playfulness !== 5 || dimensions.brevity !== 6 || dimensions.enthusiasm !== 6
+  if (!tweaked) {
+    return {
+      label: 'Calibrate tone',
+      progress: 0,
+      detail: 'Move at least one tone slider away from the default to confirm Sage matches your voice.',
+    }
+  }
+
+  // Rung 3: at least 10 phrases approved-for-sage.
+  if (sampleCount < 10) {
+    return {
+      label: 'Approve 10 review phrases',
+      progress: sampleCount / 10,
+      detail: `${sampleCount} of 10 phrases approved for Sage to use.`,
+    }
+  }
+
+  // Rung 4: at least 1 voice-training game completed.
+  if (trainingCount < 1) {
+    return {
+      label: 'Complete a voice training game',
+      progress: 0,
+      detail: 'One full game teaches Sage your edit patterns much faster than passive learning.',
+    }
+  }
+
+  // Rung 5: at least 5 edit-pair patterns mined from coordinator edits.
+  if (editPairsCount < 5) {
+    return {
+      label: 'Build 5 edit-pair patterns',
+      progress: editPairsCount / 5,
+      detail: `${editPairsCount} of 5 banned-vs-approved patterns learned from your edits.`,
+    }
+  }
+
+  // All rungs cleared — mature voice. Caller renders the maturity
+  // badge instead of a "next milestone" line.
+  return null
 }

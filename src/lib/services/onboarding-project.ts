@@ -42,7 +42,8 @@ export interface DayStep {
   /** Action key the UI handler matches against. */
   actionKey: 'oauth_gmail' | 'backfill_email' | 'seed_channels' | 'reconstruct_pricing'
     | 'import_crm' | 'orphan_triage' | 'voice_dna_seed' | 'voice_dna_extract'
-    | 'kb_seed' | 'readiness_check' | 'manual'
+    | 'kb_seed' | 'readiness_check' | 'sage_identity' | 'forbidden_topics'
+    | 'tone_preferences' | 'manual'
   /** External admin surface where the coordinator does the actual
    *  work for this step. Page renders this as a "Go to surface" link
    *  so coordinators don't have to memorise where each piece lives.
@@ -59,25 +60,52 @@ export interface DayStep {
 export const PROJECT_PLAN: DayPlan[] = [
   {
     day: 1,
-    title: 'Connect + Backfill',
-    subtitle: 'Get Gmail wired up and pull 12 months of inquiry history.',
+    title: 'Connect + Configure',
+    subtitle: 'Wire Gmail in, set Sage\'s identity + tone + safety rails, then pull 12 months of history.',
     steps: [
       {
         key: 'gmail_oauth',
         label: 'Connect the inquiry Gmail account',
         description:
-          'OAuth into the Gmail account that receives venue inquiries. Bloom subscribes to the inbox and starts ingesting new messages immediately.',
+          'OAuth into the Gmail account that receives venue inquiries. Bloom subscribes to the inbox and starts ingesting new messages immediately. Auto-detects completion when a gmail_connections row goes status=active.',
         actionKey: 'oauth_gmail',
-        linkHref: '/settings/gmail-connection',
+        linkHref: '/agent/settings',
         linkLabel: 'Open Gmail connection',
+      },
+      {
+        key: 'sage_identity',
+        label: "Set Sage's name + sending email",
+        description:
+          'Pick the AI assistant name (white-label or Sage default) and the email address it sends from. Without these every draft ships with the brand-leak fallback. Auto-detects completion when venue_ai_config has both ai_name and ai_email set.',
+        actionKey: 'sage_identity',
+        linkHref: '/settings/sage-identity',
+        linkLabel: 'Open Sage identity',
+      },
+      {
+        key: 'forbidden_topics',
+        label: 'Configure forbidden topics',
+        description:
+          'Per-venue topic keywords that escalate instead of getting drafted (e.g., specific competitor names, sensitive policies, in-flight legal matters). Adds to the global ESCALATION_KEYWORDS set. Auto-detects completion when at least one venue_forbidden_topics row exists for the venue.',
+        actionKey: 'forbidden_topics',
+        linkHref: '/agent/forbidden-topics',
+        linkLabel: 'Open forbidden topics',
+      },
+      {
+        key: 'tone_preferences',
+        label: 'Set tone preferences',
+        description:
+          'Warmth / formality / playfulness / brevity / enthusiasm sliders that shape every Sage draft. Defaults are middling; coordinators dial them in for the venue voice. Auto-detects completion when venue_ai_config has at least one personality slider set away from the default.',
+        actionKey: 'tone_preferences',
+        linkHref: '/settings/personality',
+        linkLabel: 'Open personality',
       },
       {
         key: 'backfill_12mo',
         label: 'Run 12-month email backfill',
         description:
-          'Pull the last 12 months of inquiry messages, classify, and stamp confidence_flag=imported_low so downstream surfaces know these are backfilled. (Programmatic trigger landing as part of the T2-A follow-up; coordinator runs the legacy backfill button on the Gmail settings page for now.)',
+          'Pull the last 12 months of inquiry messages, classify, and stamp confidence_flag=imported_low so downstream surfaces know these are backfilled. Run from the Gmail backfill control on Agent settings.',
         actionKey: 'backfill_email',
-        linkHref: '/settings/gmail-connection',
+        linkHref: '/agent/settings',
         linkLabel: 'Trigger backfill',
       },
     ],
@@ -464,6 +492,100 @@ export async function activateLive(
     .eq('id', projectId)
   if (error) return { ok: false, error: error.message }
   return { ok: true }
+}
+
+/**
+ * T5-followup-Z: detect Day-1 step completion from underlying state.
+ *
+ * Day-1 sub-steps are quick coordinator actions on other surfaces
+ * (Gmail OAuth, Sage identity, forbidden topics, tone). Rather than
+ * relying on the coordinator to come back and "Mark done" after each
+ * one, we read the live state and auto-mark any step whose downstream
+ * row exists.
+ *
+ * Returns a set of step keys that are auto-detected as complete based
+ * on real DB state. Caller merges this into the existing
+ * coordinator_notes.day_1 map so the UI shows green checks without
+ * forcing the coordinator to revisit each tile.
+ *
+ * Defensive: any query failure short-circuits to "not complete" for
+ * that step. We never falsely mark a step done — the coordinator can
+ * always click Mark done manually as a fallback.
+ */
+export async function detectDay1Completion(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<Set<string>> {
+  const done = new Set<string>()
+
+  // gmail_oauth — at least one gmail_connections row with status='active'.
+  try {
+    const { data, error } = await supabase
+      .from('gmail_connections')
+      .select('id')
+      .eq('venue_id', venueId)
+      .eq('status', 'active')
+      .limit(1)
+    if (!error && data && data.length > 0) done.add('gmail_oauth')
+  } catch { /* swallow */ }
+
+  // sage_identity — venue_ai_config has both ai_name AND ai_email set.
+  // ai_name has a fallback default ('Sage') so we require ai_email
+  // specifically — coordinator must have made an explicit choice to
+  // count this as configured.
+  try {
+    const { data, error } = await supabase
+      .from('venue_ai_config')
+      .select('ai_name, ai_email')
+      .eq('venue_id', venueId)
+      .maybeSingle()
+    const aiName = (data as { ai_name?: string | null } | null)?.ai_name
+    const aiEmail = (data as { ai_email?: string | null } | null)?.ai_email
+    if (!error && aiName && aiName.trim() && aiEmail && aiEmail.trim()) {
+      done.add('sage_identity')
+    }
+  } catch { /* swallow */ }
+
+  // forbidden_topics — at least one venue_forbidden_topics row.
+  try {
+    const { data, error } = await supabase
+      .from('venue_forbidden_topics')
+      .select('id')
+      .eq('venue_id', venueId)
+      .limit(1)
+    if (!error && data && data.length > 0) done.add('forbidden_topics')
+  } catch { /* swallow — table may not exist on early-stage venues */ }
+
+  // tone_preferences — venue_ai_config has at least one slider set
+  // away from the platform defaults (warmth=7, formality=4,
+  // playfulness=5, brevity=6, enthusiasm=6 per migration 001).
+  try {
+    const { data, error } = await supabase
+      .from('venue_ai_config')
+      .select('warmth_level, formality_level, playfulness_level, brevity_level, enthusiasm_level')
+      .eq('venue_id', venueId)
+      .maybeSingle()
+    if (!error && data) {
+      const row = data as Record<string, number | null>
+      const defaults = {
+        warmth_level: 7,
+        formality_level: 4,
+        playfulness_level: 5,
+        brevity_level: 6,
+        enthusiasm_level: 6,
+      }
+      const tweaked = Object.entries(defaults).some(
+        ([k, def]) => row[k] != null && row[k] !== def,
+      )
+      if (tweaked) done.add('tone_preferences')
+    }
+  } catch { /* swallow */ }
+
+  // backfill_12mo — relies on coordinator marking done after running
+  // the backfill button. We don't have a clean auto-signal for this
+  // (sync runs touch many counters); rely on the coordinator action.
+
+  return done
 }
 
 /**
