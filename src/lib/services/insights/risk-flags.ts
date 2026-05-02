@@ -93,6 +93,9 @@ interface ClassicalRiskPayload {
   weddingId: string
   status: string
   wedding_date: string | null
+  /** ISO yyyy-mm-dd of inquiry_date — INV-2.5 / T5-delta.1 belt-and-
+   *  braces invalidation when coordinator corrects inquiry date. */
+  inquiry_date_day: string | null
   flags: RiskFlag[]
   /** 0..100 composite. Severity-weighted sum, capped at 100. */
   risk_score: number
@@ -107,7 +110,7 @@ async function classicalRiskPass(
 ): Promise<ClassicalRiskPayload | null> {
   const { data: wedding } = await supabase
     .from('weddings')
-    .select('id, status, wedding_date, friction_tags, heat_score, lost_at')
+    .select('id, status, wedding_date, inquiry_date, friction_tags, heat_score, lost_at')
     .eq('id', weddingId)
     .eq('venue_id', venueId)
     .maybeSingle()
@@ -277,10 +280,15 @@ async function classicalRiskPass(
   const rawScore = flags.reduce((sum, f) => sum + f.severity * 12, 0)
   const riskScore = Math.min(100, rawScore)
 
+  const inquiryDateDay = wedding.inquiry_date
+    ? new Date(wedding.inquiry_date as string).toISOString().slice(0, 10)
+    : null
+
   return {
     weddingId,
     status,
     wedding_date: weddingDate,
+    inquiry_date_day: inquiryDateDay,
     flags,
     risk_score: riskScore,
   }
@@ -397,6 +405,10 @@ export async function generateRiskFlags(
   const cacheKey = buildCacheKey({
     weddingId,
     status: classical.status,
+    // T5-delta.1 (2026-05-02). inquiry_date in the fingerprint —
+    // belt-and-braces with migration 158's signature null-out trigger
+    // when coordinator corrects the inquiry date.
+    inquiryDateDay: classical.inquiry_date_day ?? '',
     flags: classical.flags.map((f) => `${f.code}:${f.severity}`).sort(),
     risk_score: classical.risk_score,
   })

@@ -75,6 +75,9 @@ interface ClassicalDecayPayload {
   last_inbound_excerpt: string | null
   last_outbound_at: string | null
   unresolved_questions: string[]
+  /** ISO yyyy-mm-dd of the wedding's inquiry_date. INV-2.5 / T5-delta.1
+   *  belt-and-braces invalidation. */
+  inquiry_date_day: string | null
 }
 
 interface DiagnosticResult {
@@ -118,7 +121,7 @@ async function loadClassicalDecayEvidence(
 ): Promise<ClassicalDecayPayload | null> {
   const { data: wedding } = await supabase
     .from('weddings')
-    .select('id, status, heat_score, lost_at')
+    .select('id, status, heat_score, lost_at, inquiry_date')
     .eq('id', weddingId)
     .eq('venue_id', venueId)
     .maybeSingle()
@@ -208,6 +211,10 @@ async function loadClassicalDecayEvidence(
   const allQuestions = extractQuestions(inboundBody)
   const unresolvedQuestions = allQuestions.filter((q) => !questionLikelyAddressed(q, outboundBody))
 
+  const inquiryDateDay = wedding.inquiry_date
+    ? new Date(wedding.inquiry_date as string).toISOString().slice(0, 10)
+    : null
+
   return {
     weddingId,
     current_score: currentScore,
@@ -218,6 +225,7 @@ async function loadClassicalDecayEvidence(
     last_inbound_excerpt: inboundExcerpt || null,
     last_outbound_at: outboundRow?.timestamp ?? null,
     unresolved_questions: unresolvedQuestions,
+    inquiry_date_day: inquiryDateDay,
   }
 }
 
@@ -258,6 +266,9 @@ export async function generateDecayReEngagement(
 
   const cacheKey = buildCacheKey({
     weddingId,
+    // T5-delta.1 (2026-05-02). inquiry_date in the fingerprint —
+    // belt-and-braces with migration 158's signature null-out trigger.
+    inquiryDateDay: classical.inquiry_date_day ?? '',
     score: classical.current_score,
     peak: classical.peak_score,
     decline: classical.decline_magnitude,
