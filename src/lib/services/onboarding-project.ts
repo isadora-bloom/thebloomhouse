@@ -366,16 +366,29 @@ export async function recordReadinessEvaluation(
 }
 
 /**
+ * Minimum 12-month-backfill score required for paid venues to Go Live.
+ * 80 = all required Internal Context categories complete OR skipped
+ * with reason. Pre-fix: paid venues could Go Live with zero historical
+ * context, hiding the macro-correlation USP for the first 6-12mo
+ * (ARCH-18.2).
+ */
+export const MIN_BACKFILL_SCORE_FOR_PAID = 80
+
+/**
  * Flip the project to live. Refuses unless status='go_live_pending'
- * AND readiness_passed_at IS NOT NULL.
+ * AND readiness_passed_at IS NOT NULL. For PAID venues
+ * (venues.requires_backfill=true) additionally requires
+ * onboarding_backfill_progress score >= MIN_BACKFILL_SCORE_FOR_PAID
+ * — closes the gap where paid venues Go Live'd with zero historical
+ * Internal/External Context (ARCH-18.2 / 18.3-C / 18.3-D / LIMB-16.3).
  */
 export async function activateLive(
   supabase: SupabaseClient,
   projectId: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true } | { ok: false; error: string; backfillScore?: number; missingCategories?: string[] }> {
   const { data: row } = await supabase
     .from('onboarding_projects')
-    .select('status, readiness_passed_at')
+    .select('status, readiness_passed_at, venue_id')
     .eq('id', projectId)
     .maybeSingle()
   if (!row) return { ok: false, error: 'project not found' }
@@ -385,6 +398,34 @@ export async function activateLive(
   if (!row.readiness_passed_at) {
     return { ok: false, error: 'readiness gate has not passed yet' }
   }
+
+  // Paid-venue backfill gate. Free / starter venues (requires_backfill
+  // = false) skip this check.
+  const { data: venue } = await supabase
+    .from('venues')
+    .select('requires_backfill')
+    .eq('id', row.venue_id as string)
+    .maybeSingle()
+  if (venue?.requires_backfill) {
+    // Lazy-load to avoid circular import (this module is imported at
+    // service-init time; onboarding-backfill imports nothing from
+    // here so the cycle is one-way).
+    const { computeBackfillScore } = await import('./onboarding-backfill')
+    const { score, coverages, categoriesRequired } = await computeBackfillScore(supabase, row.venue_id as string)
+    if (score < MIN_BACKFILL_SCORE_FOR_PAID) {
+      const missing = coverages
+        .filter((c) => categoriesRequired.includes(c.category))
+        .filter((c) => c.status !== 'complete' && c.status !== 'skipped')
+        .map((c) => c.category)
+      return {
+        ok: false,
+        error: `12-month backfill incomplete (score ${score}/100; need >= ${MIN_BACKFILL_SCORE_FOR_PAID}). Required categories not yet complete: ${missing.join(', ') || 'none'}.`,
+        backfillScore: score,
+        missingCategories: missing,
+      }
+    }
+  }
+
   const { error } = await supabase
     .from('onboarding_projects')
     .update({

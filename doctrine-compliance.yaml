@@ -908,11 +908,10 @@ meta:
   notes: "Item 9 / T2-B (62b49fb + migration 135): /intel/team-compare deleted (UI surface privacy violation closed). Migration 135 added consultant_metrics.visibility_config jsonb {visible_to_org, visible_to_consultant, anonymise_in_aggregate, comparable_baseline} with privacy-by-default semantics — code defaults in consultant-metrics.ts lean private (org-wide visibility off, consultant always sees own, aggregates anonymise). Per Playbook LIMB-16.2.6."
 
 - id: LIMB-16.3
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: 12-month historical Internal Context backfill on onboarding
-  notes: "Zero onboarding step for spend/pricing/absences/property. Source-quality USP has no signal for first 6-12 months."
-  severity: high
+  notes: "Migration 149 (2026-05-01): onboarding_backfill_progress per-venue per-category coverage tracking. src/lib/services/onboarding-backfill.ts orchestrator queries each canonical Internal Context table (interactions, marketing_spend, pricing_history, coordinator_absences, venue_operational_state, marketing_channels) for date-range coverage and classifies as not_started / partial (<12mo) / complete (>=12mo) / skipped (coordinator opt-out with reason). Migration 150 added marketing_channels.activated_at so historical activation dates can be entered. /onboarding/project Day 4+ shows BackfillChecklist component with score + per-category status + skip-with-reason flow + admin-page deep links. Source-quality USP can fire on Day 1 once score reaches the gate threshold."
 
 # ===================================================================
 # PART 17 — EXTERNAL CONTEXT
@@ -1025,11 +1024,10 @@ meta:
 # ===================================================================
 
 - id: ARCH-18.2
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: 12-month minimum backfill enforced for paid venues
-  notes: "Onboarding is 15-min wizard. Backfill button hardcoded 90 days. Optional on Go Live. No paid-venue gate."
-  severity: critical
+  notes: "venues.requires_backfill (migration 149, default false; backfilled true for plan_tier IN (intelligence, pro, enterprise)) is the paid-venue gate. activateLive() in onboarding-project.ts now: (1) checks readiness gate (existing), (2) for requires_backfill venues, calls computeBackfillScore() and rejects with score + missing-categories detail if score < 80. /api/onboarding/project/activate is the new wrapper route — pre-fix the page did a direct supabase.update bypassing both gates. Free / starter venues skip the backfill gate (skip-mode preserved as 'skipped' status with audit-trail reason)."
 
 - id: ARCH-18.3-A
   status: partial
@@ -1046,18 +1044,16 @@ meta:
   severity: critical
 
 - id: ARCH-18.3-C
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: Internal Context backfill
-  notes: "Macro-correlation USP cannot fire on Day 1. 5/6 categories zero-touch in onboarding."
-  severity: critical
+  notes: "BackfillChecklist + onboarding-backfill orchestrator now cover all 6 Internal Context categories (email_history / marketing_spend / pricing_history / coordinator_absences / venue_operational_state / marketing_channels). Each has either an auto-trigger (email_history via /api/agent/sync existing 90-day backfill) OR an admin-page deep link (marketing-channels-config, absences-config, property-state-config, agent/settings for pricing). Coverage is computed from canonical-table date ranges so the orchestrator can't lie about completion. Coordinator can mark optional categories (absences, property_state) as 'skipped' with a reason. Status surfaces on /onboarding/project Day 4+. Macro-correlation USP unblocked once required categories reach >=80%."
 
 - id: ARCH-18.3-D
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: External Context backfill
-  notes: "Essentially zero. fetchHistoricalWeather unwired. Trends locked to 3 months. FRED tables don't exist."
-  severity: critical
+  notes: "All 4 External Context categories now have backfill paths: (1) weather: fetchHistoricalWeather wired into /api/onboarding/backfill?category=weather (existing function, NOAA CDO monthly summaries). (2) search_trends: fetchTrendsForVenue extended with dateRange parameter; onboarding triggers 'today 12-m' (vs the recurring 'today 3-m'). Pre-fix the SerpAPI date arg was hardcoded 3-m; venues had max 13 weeks of trend data on Day 1. (3) FRED: src/lib/services/external-context/fred-fetch.ts is the missing writer — fetches each DEFAULT_FRED_SERIES from api.stlouisfed.org/fred/series/observations + upserts into fred_indicators. 800ms throttle for FRED's 120/min rate limit. Backfill route triggers fetchAllDefaultFredSeries. (4) cultural_moments: backfill = coordinator-curated via /intel/cultural-moments propose-and-confirm flow (already shipped T2-C). Coverage tracked in onboarding_backfill_progress with category='cultural_moments' (counts confirmed-status rows). Each external category appears in BackfillChecklist with a 'Run backfill' trigger button."
 
 - id: ARCH-18.4
   status: partial

@@ -85,20 +85,28 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+export type TrendsDateRange = 'today 3-m' | 'today 12-m' | 'today 5-y'
+
 /**
  * Fetch Google Trends data for a single term in a geo region via SerpAPI.
  * Returns parsed timeline data or an empty array if the key is missing or the request fails.
+ *
+ * dateRange defaults to 'today 3-m' (the cron-driven refresh window).
+ * Onboarding backfill passes 'today 12-m' to seed the venue's first
+ * 12 months of trends — drives the LIMB-17.4 macro-correlation USP
+ * on Day 1 (ARCH-18.3-D).
  */
 async function fetchSerpAPITrends(
   term: string,
   geo: string,
-  apiKey: string
+  apiKey: string,
+  dateRange: TrendsDateRange = 'today 3-m',
 ): Promise<{ week: string; interest: number }[]> {
   const params = new URLSearchParams({
     engine: 'google_trends',
     q: term,
     geo,
-    date: 'today 3-m',
+    date: dateRange,
     api_key: apiKey,
   })
 
@@ -154,8 +162,16 @@ async function fetchSerpAPITrends(
 /**
  * Fetch Google Trends data for a single venue's metro area and upsert into search_trends.
  * Returns the count of rows upserted.
+ *
+ * dateRange:
+ *   'today 3-m'  (default) — recurring refresh; pulls last 13 weeks
+ *   'today 12-m' — onboarding backfill; pulls last 52 weeks (ARCH-18.3-D)
  */
-export async function fetchTrendsForVenue(venueId: string): Promise<number> {
+export async function fetchTrendsForVenue(
+  venueId: string,
+  opts: { dateRange?: TrendsDateRange } = {},
+): Promise<number> {
+  const dateRange = opts.dateRange ?? 'today 3-m'
   // Reads SERPAPI_API_KEY (the name used in Vercel + .env.local). An
   // earlier draft of this file read SERPAPI_KEY, which silently disabled
   // trend ingestion in production for everyone because the real env var
@@ -194,7 +210,7 @@ export async function fetchTrendsForVenue(venueId: string): Promise<number> {
     // Throttle between requests
     if (i > 0) await sleep(THROTTLE_MS)
 
-    const points = await fetchSerpAPITrends(term, metro, apiKey)
+    const points = await fetchSerpAPITrends(term, metro, apiKey, dateRange)
     if (points.length === 0) continue
 
     // Build upsert rows

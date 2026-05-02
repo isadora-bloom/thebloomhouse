@@ -15,6 +15,7 @@ import {
   ChevronRight,
 } from 'lucide-react'
 import { PROJECT_PLAN, TOTAL_DAYS, type DayStep } from '@/lib/services/onboarding-project'
+import { BackfillChecklist } from '@/components/onboarding/backfill-checklist'
 
 // ---------------------------------------------------------------------------
 // 5-day onboarding project flow (T2-A / Playbook Part 18).
@@ -187,10 +188,24 @@ export default function OnboardingProjectPage() {
     }
     setBusy(true)
     try {
-      await supabase
-        .from('onboarding_projects')
-        .update({ status: 'live', completed_at: new Date().toISOString() })
-        .eq('id', project.id)
+      // Routes through /api/onboarding/project/activate so the
+      // server-side activateLive() gate runs (readiness check +
+      // paid-venue backfill score >= 80). Pre-fix this called a
+      // direct supabase.update which bypassed both gates entirely.
+      const res = await fetch('/api/onboarding/project/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: project.id }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        const score = body.backfill_score ?? null
+        const missing = (body.missing_categories ?? []) as string[]
+        const detail = score !== null
+          ? ` Backfill score ${score}/100${missing.length ? '. Required not yet complete: ' + missing.join(', ') : ''}.`
+          : ''
+        throw new Error((body.error ?? `HTTP ${res.status}`) + detail)
+      }
       await fetchProject()
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to Go Live'
@@ -311,6 +326,14 @@ export default function OnboardingProjectPage() {
           )
         })}
       </div>
+
+      {/* Backfill checklist — visible from Day 4 onward (when there's
+         enough state to evaluate) and through go_live_pending. Paid
+         venues need >= 80% to Go Live; activateLive enforces it
+         server-side. ARCH-18.2 / 18.3-C / 18.3-D / LIMB-16.3. */}
+      {(project.status === 'in_progress' || project.status === 'go_live_pending') && project.current_day >= 4 && (
+        <BackfillChecklist venueId={project.venue_id} />
+      )}
 
       {project.status === 'go_live_pending' && (
         <div className="rounded-lg border-2 border-sage-300 bg-sage-50 p-6 space-y-3">
