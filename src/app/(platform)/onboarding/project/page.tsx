@@ -227,6 +227,28 @@ export default function OnboardingProjectPage() {
     setBusy(true)
     try {
       const cur = project.current_day
+
+      // T5-followup-Y / Pattern I closure: Day-3 advance gate.
+      // pricing_history needs >= 5 manual rows AND weddings needs
+      // >= 1 imported_medium row (CRM-import output). Coordinator
+      // can override by re-running advance after acknowledging,
+      // but the default UX nudges them to finish the imports first.
+      if (cur === 3) {
+        const res = await fetch('/api/onboarding/day3-readiness')
+        if (res.ok) {
+          const r = await res.json()
+          if (!r.ready) {
+            const proceed = window.confirm(
+              `Day 3 sub-steps not yet at the recommended thresholds:\n` +
+              `  • pricing_history manual rows: ${r.pricingRowCount}/${r.pricingThreshold}\n` +
+              `  • weddings imported via CRM: ${r.importedWeddingCount}/${r.weddingsThreshold}\n\n` +
+              `Advance anyway? (You can come back to /onboarding/pricing-history and /onboarding/crm-import later.)`
+            )
+            if (!proceed) { setBusy(false); return }
+          }
+        }
+      }
+
       if (cur >= TOTAL_DAYS) {
         await supabase
           .from('onboarding_projects')
