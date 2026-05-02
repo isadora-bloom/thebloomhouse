@@ -1627,10 +1627,10 @@ meta:
   severity: critical
 
 - id: OPS-21.4.4
-  status: at-risk
+  status: partial
   owner: Isadora
   target: caching mandatory
-  notes: "Zero cache module in src/lib/ai. No prompt-caching breakpoints. Briefings re-extract every cron tick."
+  notes: "src/lib/ai/cache.ts (2026-05-01): in-memory TTL cache with single-flight de-duplication for AI responses. aiCacheKey hashes (systemPrompt + userPrompt + model + temperature + promptVersion) via FNV-1a 32-bit (same algorithm as insights/confidence.ts buildCacheKey for consistency). withAiCache wrapper covers the cron-misconfig + concurrent-coordinator double-fire cases — two parallel callers for the same key share one Anthropic call. 5-min default TTL aligned with Anthropic's prompt-cache window. LRU eviction at MAX_ENTRIES=256 (touch-order). Process-local Map (no Redis) — right trade-off for serverless functions where shared cache infra would dwarf the savings. 22 unit assertions (key sensitivity, TTL expiry, LRU eviction, singleflight de-dup, post-expiry re-run). PARTIAL: caller adoption pending — withAiCache exists but isn't wired into briefings / daily-digest / coordinator-refresh paths yet. T3 named insights have their own DB-backed cache via persistInsight + lookupCachedInsight (different layer)."
   severity: high
 
 - id: OPS-21.4.5
