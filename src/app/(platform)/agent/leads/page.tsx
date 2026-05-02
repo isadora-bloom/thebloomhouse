@@ -6,6 +6,8 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
+import { HeatBadge } from '@/components/intel/heat-badge'
+import { TIER_STYLES, styleForTier, type HeatTier } from '@/lib/heat/tier-colors'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import {
   Flame,
@@ -50,38 +52,17 @@ type SortDir = 'asc' | 'desc'
 // Constants
 // ---------------------------------------------------------------------------
 
-const HEAT_TIERS: {
-  key: TierFilter
-  label: string
-  color: string
-  bg: string
-  text: string
-}[] = [
-  { key: 'all', label: 'All', color: '', bg: '', text: '' },
-  { key: 'hot', label: 'Hot', color: '#EF4444', bg: 'bg-red-50', text: 'text-red-700' },
-  { key: 'warm', label: 'Warm', color: '#F59E0B', bg: 'bg-amber-50', text: 'text-amber-700' },
-  { key: 'cool', label: 'Cool', color: '#3B82F6', bg: 'bg-blue-50', text: 'text-blue-700' },
-  { key: 'cold', label: 'Cold', color: '#1E40AF', bg: 'bg-blue-100', text: 'text-blue-800' },
-  {
-    key: 'frozen',
-    label: 'Frozen',
-    color: '#6B7280',
-    bg: 'bg-gray-50',
-    text: 'text-gray-600',
-  },
+// Heat tier styles now sourced from src/lib/heat/tier-colors (the
+// single-source HeatBadge primitive uses the same map). Pre-fix this
+// page redeclared the tier styles inline, drifting from /agent/pipeline
+// and /intel/clients/[id] over time. ARCH-20.2.1.
+const HEAT_TIER_FILTERS: { key: TierFilter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  ...(Object.keys(TIER_STYLES) as HeatTier[]).map((k) => ({
+    key: k as TierFilter,
+    label: TIER_STYLES[k].label,
+  })),
 ]
-
-function getTierConfig(tier: string) {
-  return (
-    HEAT_TIERS.find((t) => t.key === tier) ?? {
-      key: tier,
-      label: tier,
-      color: '#6B7280',
-      bg: 'bg-gray-50',
-      text: 'text-gray-600',
-    }
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -233,20 +214,23 @@ function HeatDistributionBar({ leads }: { leads: Lead[] }) {
 
       {/* Legend */}
       <div className="flex items-center gap-4 mt-3 flex-wrap">
-        {HEAT_TIERS.filter((t) => t.key !== 'all').map((tier) => (
-          <div key={tier.key} className="flex items-center gap-1.5">
-            <span
-              className="w-3 h-3 rounded-full"
-              style={{ backgroundColor: tier.color }}
-            />
-            <span className="text-xs text-sage-600">
-              {tier.label}{' '}
-              <span className="font-medium text-sage-800">
-                ({counts[tier.key] ?? 0})
+        {HEAT_TIER_FILTERS.filter((t) => t.key !== 'all').map((tier) => {
+          const style = styleForTier(tier.key)
+          return (
+            <div key={tier.key} className="flex items-center gap-1.5">
+              <span
+                className="w-3 h-3 rounded-full"
+                style={{ backgroundColor: style.color }}
+              />
+              <span className="text-xs text-sage-600">
+                {tier.label}{' '}
+                <span className="font-medium text-sage-800">
+                  ({counts[tier.key] ?? 0})
+                </span>
               </span>
-            </span>
-          </div>
-        ))}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -470,7 +454,7 @@ export default function LeadsPage() {
   // ---- Summary ----
   const tierCounts = useMemo(() => {
     const c: Record<string, number> = {}
-    for (const t of HEAT_TIERS) {
+    for (const t of HEAT_TIER_FILTERS) {
       if (t.key === 'all') continue
       c[t.key] = leads.filter((l) => l.temperature_tier === t.key).length
     }
@@ -523,7 +507,9 @@ export default function LeadsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">
         {/* Tier tabs */}
         <div className="flex items-center gap-1 bg-sage-50 rounded-lg p-1">
-          {HEAT_TIERS.map((tier) => (
+          {HEAT_TIER_FILTERS.map((tier) => {
+            const style = tier.key !== 'all' ? styleForTier(tier.key) : null
+            return (
             <button
               key={tier.key}
               onClick={() => setTierFilter(tier.key)}
@@ -533,10 +519,10 @@ export default function LeadsPage() {
                   : 'text-sage-600 hover:text-sage-800'
               }`}
             >
-              {tier.key !== 'all' && (
+              {style && (
                 <span
                   className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: tier.color }}
+                  style={{ backgroundColor: style.color }}
                 />
               )}
               {tier.label}
@@ -552,7 +538,8 @@ export default function LeadsPage() {
                 </span>
               )}
             </button>
-          ))}
+            )
+          })}
         </div>
 
         {/* Search */}
@@ -644,7 +631,7 @@ export default function LeadsPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {filteredLeads.map((lead) => {
-                  const tier = getTierConfig(lead.temperature_tier)
+                  const tierStyle = styleForTier(lead.temperature_tier)
                   const source = sourceBadge(lead.source)
                   const daysSinceInquiry = daysSince(lead.inquiry_date)
 
@@ -681,24 +668,16 @@ export default function LeadsPage() {
                       {/* Heat Score */}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <span
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold ${tier.bg} ${tier.text}`}
-                          >
-                            <Flame className="w-3 h-3" />
-                            {lead.heat_score}
-                          </span>
+                          <HeatBadge tier={lead.temperature_tier} score={lead.heat_score} variant="pill" />
                         </div>
                       </td>
 
                       {/* Tier */}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
-                          <span
-                            className="w-2.5 h-2.5 rounded-full"
-                            style={{ backgroundColor: tier.color }}
-                          />
+                          <HeatBadge tier={lead.temperature_tier} score={lead.heat_score} variant="dot" />
                           <span className="text-sm text-sage-700 capitalize">
-                            {lead.temperature_tier}
+                            {tierStyle.label}
                           </span>
                         </div>
                       </td>

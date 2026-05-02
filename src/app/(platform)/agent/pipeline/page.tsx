@@ -6,6 +6,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
+import { HeatBadge } from '@/components/intel/heat-badge'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import {
   DndContext,
@@ -104,22 +105,10 @@ function sourceBadge(source: string | null): { bg: string; text: string; label: 
   }
 }
 
-function heatDotColor(tier: string): string {
-  switch (tier) {
-    case 'hot':
-      return 'bg-red-500'
-    case 'warm':
-      return 'bg-amber-500'
-    case 'cool':
-      return 'bg-blue-500'
-    case 'cold':
-      return 'bg-blue-800'
-    case 'frozen':
-      return 'bg-gray-400'
-    default:
-      return 'bg-sage-300'
-  }
-}
+// Heat tier → color now lives in src/lib/heat/tier-colors via the
+// HeatBadge primitive (ARCH-20.2.1). Pre-fix this switch was a fork
+// of the same logic in /agent/leads + /intel/clients/[id], with
+// drifted shades (cold=bg-blue-800 here, cold=text-blue-800 there).
 
 function daysInStage(updatedAt: string): number {
   const diff = Date.now() - new Date(updatedAt).getTime()
@@ -202,10 +191,7 @@ function PipelineCardContent({ wedding, onNameClick, showVenueChip }: { wedding:
           </h4>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <span
-            className={`w-2.5 h-2.5 rounded-full ${heatDotColor(wedding.temperature_tier)}`}
-            title={`${wedding.temperature_tier} (${wedding.heat_score})`}
-          />
+          <HeatBadge tier={wedding.temperature_tier} score={wedding.heat_score} variant="dot" />
         </div>
       </div>
 

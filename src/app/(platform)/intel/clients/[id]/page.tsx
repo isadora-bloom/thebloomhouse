@@ -48,6 +48,7 @@ import { WeddingJourney } from '@/components/agent/wedding-journey'
 import { SourceBadgeEditable } from '@/components/agent/source-badge-editable'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import { LeadInsightsPanel } from '@/components/intel/lead-insights-panel'
+import { styleForTier } from '@/lib/heat/tier-colors'
 import { CandidateSignalEvidence } from '@/components/agent/candidate-signal-evidence'
 import { JourneyNarrative } from '@/components/agent/journey-narrative'
 import { TourInsightsPanel } from '@/components/agent/tour-insights-panel'
@@ -244,26 +245,15 @@ function statusConfig(status: string): { bg: string; text: string; label: string
   }
 }
 
+// Heat color now sourced from src/lib/heat/tier-colors via styleForTier
+// (HeatBadge primitive uses the same map). Pre-fix this switch drifted
+// from /agent/leads + /agent/pipeline. ARCH-20.2.1.
 function heatColor(tier: string): string {
-  switch (tier) {
-    case 'hot': return 'text-red-500'
-    case 'warm': return 'text-amber-500'
-    case 'cool': return 'text-blue-500'
-    case 'cold': return 'text-blue-800'
-    case 'frozen': return 'text-gray-400'
-    default: return 'text-sage-400'
-  }
+  return styleForTier(tier).text
 }
 
 function heatBg(tier: string): string {
-  switch (tier) {
-    case 'hot': return 'bg-red-500'
-    case 'warm': return 'bg-amber-500'
-    case 'cool': return 'bg-blue-500'
-    case 'cold': return 'bg-blue-800'
-    case 'frozen': return 'bg-gray-400'
-    default: return 'bg-sage-300'
-  }
+  return styleForTier(tier).dotBg
 }
 
 function fmt$(v: number): string {

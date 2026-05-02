@@ -641,11 +641,10 @@ meta:
   severity: medium
 
 - id: STAGE-10.2.9
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: wedding row only at point zero; candidate_identities row otherwise
-  notes: "Pipeline creates wedding for ANY new_inquiry with synthesised or real email — including WW .invalid synthetic and Knot relay. Those weddings have no reachable identifier."
-  severity: high
+  notes: "T1-J B-17 + Constitution Part-Zero (already shipped): email-pipeline.ts:1004-1018 gates wedding creation on `!subZeroIdentifier`, where subZeroIdentifier = (no fromEmail OR isSyntheticAddress(fromEmail) OR isRelayAddress(fromEmail)). isSyntheticAddress matches /\\.invalid$/i (RFC 2606 reserved TLD covers WW authsolic-{hash}@weddingwire.bloom-relay.invalid). isRelayAddress matches KNOWN_RELAY_DOMAINS (theknot.com / weddingwire.com / zola.com / herecomestheguide.com / dubsado.com etc., including subdomain matches). When the gate trips, the inquiry routes to candidate_identities (line 1192-) with the body identity extractor's name candidate so the resolver can promote it to a wedding when a real identifier surfaces on a future signal. Doctrine cell was stale; promoted to enforced after audit."
 
 - id: STAGE-10.2.10
   status: enforced
@@ -1361,11 +1360,10 @@ meta:
 # ===================================================================
 
 - id: ARCH-20.2.1
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: inline primitive consistent across surfaces
-  notes: "Heat surfaced 3 different ways: dot in pipeline, pill in leads, flame+text in intel/clients. No shared HeatBadge / RiskFlag primitive component."
-  severity: high
+  notes: "src/lib/heat/tier-colors.ts (2026-05-01): single TIER_STYLES map (label / color / bg / text / dotBg / border per tier) consumed by src/components/intel/heat-badge.tsx HeatBadge primitive with 4 variants (pill / dot / inline / large). All 3 surfaces (/agent/leads, /agent/pipeline, /intel/clients/[id]) refactored — pre-fix each had its own switch/const that drifted (cold rendered 3 different blue shades). heatColor + heatBg in /intel/clients/[id] now thin styleForTier wrappers; HEAT_TIERS const in /agent/leads dropped; heatDotColor in /agent/pipeline dropped. Future heat surfaces import HeatBadge — no more parallel maps."
 
 - id: ARCH-20.2.2
   status: at-risk
