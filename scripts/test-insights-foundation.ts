@@ -192,5 +192,111 @@ const multi = checkNarrationNumbers(
 if (multi.length >= 2) pass++
 else { fail++; console.error(`FAIL: expected >=2 violations: ${JSON.stringify(multi)}`) }
 
+// ---------------------------------------------------------------------------
+// Invented-confidence detection (T5-followup-X)
+// ---------------------------------------------------------------------------
+
+// Quantitative confidence claim — % present, claim word present.
+// Should violate even though the % token might match classical.numbers
+// (when tolerateConfidenceClaims is left default=false). Here 87% is
+// NOT in classical, so both the bare-number guard AND the
+// invented-confidence guard fire — at least one violation expected.
+const qConf = checkNarrationNumbers(
+  "I'm 87% confident this lead will book.",
+  classical,
+)
+if (qConf.some((v) => v.kind === 'invented_confidence' || v.kind === 'absolute_certainty')) {
+  pass++
+} else {
+  fail++
+  console.error(`FAIL: 87% confident should trip invented_confidence: ${JSON.stringify(qConf)}`)
+}
+
+// Quantitative confidence claim with classical-present number STILL
+// trips when tolerateConfidenceClaims is the default. This is the
+// "even if the math allows it, don't dress it as certainty" case.
+const qConfWithClassical = checkNarrationNumbers(
+  "We are 100% confident based on the data.",
+  classical,
+)
+// 100% might pass the bare-number guard (stock-phrase tolerance), but
+// the absolute-certainty pattern should fire on "100% confident".
+if (qConfWithClassical.some((v) => v.kind === 'absolute_certainty' || v.kind === 'invented_confidence')) {
+  pass++
+} else {
+  fail++
+  console.error(`FAIL: "100% confident" should trip absolute_certainty: ${JSON.stringify(qConfWithClassical)}`)
+}
+
+// Opt-in: when caller passes tolerateConfidenceClaims=true and the
+// number IS in classical.numbers, the quantitative pattern should NOT
+// fire. Absolute-certainty patterns still fire (they're never tolerated).
+const tolerated = checkNarrationNumbers(
+  '65% likely based on the cohort match.',
+  classical, // 65 is in classical.numbers
+  { tolerateConfidenceClaims: true },
+)
+assertEq(tolerated.length, 0, '65% likely passes when tolerateConfidenceClaims=true and classical has 65')
+
+// Qualitative absolute claims always reject.
+const guaranteed = checkNarrationNumbers(
+  'This wedding is guaranteed to book by Friday.',
+  classical,
+)
+if (guaranteed.some((v) => v.kind === 'absolute_certainty' && /guarantee/i.test(v.token))) {
+  pass++
+} else {
+  fail++
+  console.error(`FAIL: "guaranteed" should trip absolute_certainty: ${JSON.stringify(guaranteed)}`)
+}
+
+const definitely = checkNarrationNumbers(
+  'They will definitely book this venue.',
+  classical,
+)
+if (definitely.some((v) => v.kind === 'absolute_certainty')) pass++
+else { fail++; console.error(`FAIL: "will definitely" should trip absolute_certainty: ${JSON.stringify(definitely)}`) }
+
+const noDoubt = checkNarrationNumbers(
+  'No doubt this couple is a perfect fit.',
+  classical,
+)
+if (noDoubt.some((v) => v.kind === 'absolute_certainty' && /no\s+doubt/i.test(v.token))) {
+  pass++
+} else {
+  fail++
+  console.error(`FAIL: "no doubt" should trip absolute_certainty: ${JSON.stringify(noDoubt)}`)
+}
+
+const wereSure = checkNarrationNumbers(
+  "We're sure they will pick this venue.",
+  classical,
+)
+if (wereSure.some((v) => v.kind === 'absolute_certainty')) pass++
+else { fail++; console.error(`FAIL: "we're sure" should trip absolute_certainty: ${JSON.stringify(wereSure)}`) }
+
+// Hedged language passes — this is the must-not-break case.
+const hedged = checkNarrationNumbers(
+  'This couple is likely to book; the cohort match suggests strong fit. They may tour Tuesday.',
+  classical,
+)
+assertEq(hedged.length, 0, 'hedged language ("likely", "suggests", "may") passes')
+
+const hedged2 = checkNarrationNumbers(
+  'Tends to convert within two weeks. Could indicate a price-sensitive segment.',
+  classical,
+)
+assertEq(hedged2.length, 0, '"tends to" + "could indicate" passes')
+
+// Stock phrase still allowed: "100% committed" without certainty noun.
+// "100% committed" doesn't match any of the absolute-certainty patterns
+// (committed isn't in the list; "I'm committed" isn't either) so it
+// should pass.
+const stockCommit = checkNarrationNumbers(
+  'Couple is 100% committed to the venue.',
+  classical,
+)
+assertEq(stockCommit.length, 0, '"100% committed" stock phrase still passes')
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

@@ -36,6 +36,7 @@ import {
 } from '@/lib/services/cost-ceiling'
 import { runEssentialsSuggester } from '@/lib/services/essentials-suggester'
 import { populateUSCalendarEvents } from '@/lib/services/external-context/calendar-writer'
+import { refreshVoiceDnaForAllVenues } from '@/lib/services/voice-dna-extract'
 import { logEvent } from '@/lib/observability/logger'
 
 // ---------------------------------------------------------------------------
@@ -101,6 +102,14 @@ const VALID_JOBS = [
   // correlation channel flagged by Stream T's cron-coverage audit.
   // Runs daily, idempotent; rolling 365-day window.
   'external_calendar_refresh',
+  // T5-followup-X (2026-05-02). Monthly voice-DNA refresh. The Stream-S
+  // seed at Day 4 of onboarding is one-shot; without this cron, new
+  // outbound emails accumulating over the months never propagate to
+  // voice anchors. Runs incrementally over the last 30 days of NEW
+  // outbound (since voice_dna_last_refresh_at), inserts new phrases /
+  // increments frequencies on existing ones, never deletes seed rows.
+  // Per-venue cost-ceiling gating per Stream B; gated venues skip.
+  'voice_dna_refresh',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -318,6 +327,20 @@ async function runJob(job: JobName): Promise<unknown> {
       // Mother's Day, etc.). geo_scope='us' only — state-level
       // rollout is a follow-up.
       return runExternalCalendarRefresh()
+
+    case 'voice_dna_refresh':
+      // T5-followup-X (2026-05-02). Monthly. For each venue with a
+      // prior voice-DNA seed (voice_preferences rows tagged
+      // confidence_flag='imported_high'), pulls the last 30 days of
+      // NEW outbound emails (since voice_dna_last_refresh_at) and runs
+      // the voice-DNA extractor incrementally. INSERTS rows for newly-
+      // discovered patterns; INCREMENTS score/frequency on existing
+      // matches. Never DELETEs seed rows (one-way ratchet).
+      //
+      // Per-venue cost-ceiling gate inside the service so paused venues
+      // skip without affecting healthy ones. Anti-Sage filter preserved
+      // (sampleCoordinatorEmails drops auto_sent drafts).
+      return refreshVoiceDnaForAllVenues(createServiceClient())
   }
 }
 

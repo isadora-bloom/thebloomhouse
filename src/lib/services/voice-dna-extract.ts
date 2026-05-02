@@ -126,6 +126,11 @@ async function sampleCoordinatorEmails(
   supabase: SupabaseClient,
   venueId: string,
   limit: number,
+  /** When provided, only emails with created_at > sinceIso are sampled.
+   *  Used by the monthly refresh path so each tick only sees NEW outbound
+   *  emails since the last refresh. Pre-existing one-shot callers leave
+   *  it undefined → full backfill window. */
+  sinceIso?: string,
 ): Promise<SampleRow[]> {
   // Pull venue-owned Gmail addresses. Used as the from_email allowlist.
   const { data: connections } = await supabase
@@ -140,7 +145,7 @@ async function sampleCoordinatorEmails(
       .filter(Boolean) as string[],
   )
 
-  const { data: rows, error } = await supabase
+  let q = supabase
     .from('interactions')
     .select('id, full_body, body_preview, subject, from_email, gmail_thread_id, created_at')
     .eq('venue_id', venueId)
@@ -148,6 +153,10 @@ async function sampleCoordinatorEmails(
     .eq('direction', 'outbound')
     .order('created_at', { ascending: false })
     .limit(Math.max(limit * 2, limit + 50)) // over-pull so post-filter still hits limit
+  if (sinceIso) {
+    q = q.gt('created_at', sinceIso)
+  }
+  const { data: rows, error } = await q
 
   if (error) {
     return []
@@ -768,4 +777,473 @@ export async function extractVoiceDnaFromBackfill(
     alreadyImported: priorImport,
     correlationId,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Monthly refresh path (T5-followup-X, 2026-05-02)
+// ---------------------------------------------------------------------------
+
+/**
+ * Default sample ceiling for the monthly refresh. Half the seed limit
+ * because the refresh window (last ~30 days of NEW outbound) is a tenth
+ * the size of a fresh-import backfill (rolling all-time, capped at 100)
+ * — but we still want enough volume to surface NEW patterns. 50 keeps
+ * cost per-venue at well under $0.30 (Sonnet, ~7 batches × ~$0.04).
+ */
+export const REFRESH_SAMPLE_LIMIT = 50
+
+/** Lower-bound sample count to bother running an LLM call for the
+ *  refresh. If the venue produced fewer than 5 new outbound emails since
+ *  the last refresh, the signal is too weak — skip without spend. */
+export const REFRESH_MIN_SAMPLES = 5
+
+/** How far back to look on the FIRST refresh after seeding (when
+ *  voice_dna_last_refresh_at is NULL). 30 days mirrors the cadence; the
+ *  seed itself already covered all earlier history. */
+const REFRESH_DEFAULT_LOOKBACK_DAYS = 30
+
+export type RefreshOutcome =
+  | {
+      ok: true
+      rowsAdded: number
+      rowsUpdated: number
+      samplesProcessed: number
+      newPhrasesAdded: number
+      correlationId: string
+    }
+  | {
+      ok: false
+      reason: 'gated' | 'gmail_not_connected' | 'no_seed' | 'insufficient_samples' | 'extraction_failed'
+      sampledCount?: number
+      correlationId: string
+    }
+
+/**
+ * Persist incrementally — INSERT new rows for newly-discovered phrases,
+ * INCREMENT score/sample_count/frequency on existing rows that match
+ * a previously-seeded pattern. Never DELETEs seed rows.
+ *
+ * Returns separate counters for added vs updated so the cron telemetry
+ * can show "voice DNA learned 3 new phrases, reinforced 12 existing
+ * patterns this month."
+ */
+async function persistVoiceAnchorsIncremental(
+  supabase: SupabaseClient,
+  venueId: string,
+  agg: AggregatedVoice,
+  sampleIdsRef: string,
+): Promise<{ rowsAdded: number; rowsUpdated: number; newPhrasesAdded: number }> {
+  let rowsAdded = 0
+  let rowsUpdated = 0
+  let newPhrasesAdded = 0
+
+  // Helper: incremental upsert into voice_preferences. Looks up by
+  // (venue_id, preference_type, content). If exists → increment
+  // score/sample_count by deltaCount. Else → insert with deltaCount.
+  async function bumpVoicePreference(
+    preference_type: 'approved_phrase' | 'rule' | 'dimension',
+    content: string,
+    deltaCount: number,
+  ): Promise<void> {
+    try {
+      const { data: existing } = await supabase
+        .from('voice_preferences')
+        .select('id, score, sample_count')
+        .eq('venue_id', venueId)
+        .eq('preference_type', preference_type)
+        .eq('content', content)
+        .maybeSingle()
+      if (existing) {
+        const { error } = await supabase
+          .from('voice_preferences')
+          .update({
+            score: ((existing.score as number | null) ?? 0) + deltaCount,
+            sample_count: ((existing.sample_count as number | null) ?? 0) + deltaCount,
+            // Never overwrite the seed source_reference — the new
+            // sample ids land in source_reference only on first insert.
+          })
+          .eq('id', existing.id as string)
+        if (!error) rowsUpdated++
+      } else {
+        const { error } = await supabase
+          .from('voice_preferences')
+          .insert({
+            venue_id: venueId,
+            preference_type,
+            content,
+            score: deltaCount,
+            sample_count: deltaCount,
+            source_type: 'conversation',
+            source_reference: sampleIdsRef,
+            confidence_flag: 'imported_high',
+          })
+        if (!error) rowsAdded++
+      }
+    } catch { /* swallow — partial writes preferred over hard fail */ }
+  }
+
+  // Greetings
+  for (const g of topByCount(agg.greeting_counts, 5)) {
+    await bumpVoicePreference('approved_phrase', `GREETING: ${g.text}`, g.count)
+  }
+  // Signoffs
+  for (const s of topByCount(agg.signoff_counts, 5)) {
+    await bumpVoicePreference('approved_phrase', `SIGNOFF: ${s.text}`, s.count)
+  }
+  // Voice rules — limited per refresh to avoid drift
+  for (const r of agg.rules.slice(0, 6)) {
+    await bumpVoicePreference('rule', r, 1)
+  }
+  // Punctuation tics
+  for (const t of agg.punctuation_tics.slice(0, 4)) {
+    await bumpVoicePreference('dimension', `PUNCTUATION: ${t}`, 1)
+  }
+  // Sentence rhythm — no incremental representation; skip on refresh.
+  // The seed row stays authoritative until an explicit overwrite re-run.
+
+  // Phrases → phrase_usage. The seed inserts one row per top phrase
+  // tagged 'voice_dna_backfill'; refresh bumps a "frequency" by inserting
+  // additional rows tagged 'voice_dna_refresh' so we don't conflate the
+  // initial seed cohort with later refresh cohorts. The phrase-selector
+  // reader filters by contact_email so these aggregate rows stay
+  // invisible to the legacy code path (per migration 168 comments).
+  const topPhrases = topByCount(agg.pet_phrase_counts, TOP_PHRASES)
+  for (const p of topPhrases) {
+    try {
+      const { error } = await supabase
+        .from('phrase_usage')
+        .insert({
+          venue_id: venueId,
+          contact_email: null,
+          phrase_category: 'voice_dna_refresh',
+          phrase_text: p.text,
+          confidence_flag: 'imported_high',
+        })
+      if (!error) rowsAdded++
+    } catch { /* swallow */ }
+  }
+
+  // review_language — increment frequency on existing matches; insert
+  // new rows for previously-unseen phrases. The seed-vs-refresh
+  // distinction is captured in the source_reference (which carries the
+  // sample-batch id) but BOTH carry confidence_flag='imported_high'
+  // because they're both backfill-derived signal.
+  for (const p of topPhrases.slice(0, 15)) {
+    try {
+      const { data: existing } = await supabase
+        .from('review_language')
+        .select('id, frequency')
+        .eq('venue_id', venueId)
+        .eq('phrase', p.text)
+        .eq('confidence_flag', 'imported_high')
+        .maybeSingle()
+      if (existing) {
+        const { error } = await supabase
+          .from('review_language')
+          .update({ frequency: ((existing.frequency as number | null) ?? 0) + p.count })
+          .eq('id', existing.id as string)
+        if (!error) rowsUpdated++
+      } else {
+        const { error } = await supabase
+          .from('review_language')
+          .insert({
+            venue_id: venueId,
+            phrase: p.text,
+            theme: 'other',
+            sentiment_score: 0.5,
+            frequency: p.count,
+            approved_for_sage: false,
+            approved_for_marketing: false,
+            source_type: 'manual',
+            source_reference: sampleIdsRef,
+            confidence_flag: 'imported_high',
+          })
+        if (!error) {
+          rowsAdded++
+          newPhrasesAdded++
+        }
+      }
+    } catch { /* swallow */ }
+  }
+
+  return { rowsAdded, rowsUpdated, newPhrasesAdded }
+}
+
+/**
+ * Monthly voice-DNA refresh — runs once per venue per cron tick.
+ *
+ * - Looks up voice_dna_last_refresh_at on venue_ai_config; uses it as
+ *   the lower bound for sampling new outbound emails. NULL → falls back
+ *   to (now - 30 days) since the seed already covered all earlier
+ *   history.
+ * - Cost-ceiling gate per-venue. Gated venues skip the refresh
+ *   (returns reason='gated'). The cost ceiling is the load-bearing
+ *   safety check for the cross-venue cron.
+ * - Skip-if-not-applicable: venues without a Gmail connection, without
+ *   a prior seed (hasPriorImport=false), or without enough new samples
+ *   are no-ops.
+ * - On success, stamps voice_dna_last_refresh_at = now() so the next
+ *   month's run picks up where this one left off. Stamping happens
+ *   regardless of how many phrases were extracted, as long as the
+ *   sampling pass DID see new emails — otherwise a venue with weak
+ *   signal would re-process the same emails next month.
+ *
+ * White-label safety: every query is venue_id-scoped; the
+ * sampleCoordinatorEmails anti-Sage filter is preserved.
+ */
+export async function refreshVoiceDnaIncremental(
+  supabase: SupabaseClient,
+  venueId: string,
+  opts: { correlationId?: string; actor?: string; sampleLimit?: number } = {},
+): Promise<RefreshOutcome> {
+  const correlationId = opts.correlationId ?? newCorrelationId()
+  const log = createLogger({
+    venueId,
+    correlationId,
+    actor: opts.actor ?? 'system',
+  })
+  const sampleLimit = opts.sampleLimit ?? REFRESH_SAMPLE_LIMIT
+
+  // Per-venue cost-ceiling gate. Each venue's run is independent so
+  // gated venues skip without blocking healthy ones.
+  const gate = await gateForBrainCall(venueId)
+  if (!gate.ok) {
+    log.warn('voice_dna_refresh.gated', {
+      event_type: 'voice_dna_refresh',
+      outcome: 'skip',
+      data: { reason: gate.reason },
+    })
+    return { ok: false, reason: 'gated', correlationId }
+  }
+
+  // Skip-if-not-applicable: no live Gmail connection means there's
+  // nothing to sample.
+  const { count: connectionCount } = await supabase
+    .from('gmail_connections')
+    .select('id', { count: 'exact', head: true })
+    .eq('venue_id', venueId)
+    .eq('status', 'active')
+  if ((connectionCount ?? 0) === 0) {
+    log.info('voice_dna_refresh.no_gmail', {
+      event_type: 'voice_dna_refresh',
+      outcome: 'skip',
+      data: { reason: 'gmail_not_connected' },
+    })
+    return { ok: false, reason: 'gmail_not_connected', correlationId }
+  }
+
+  // Refresh requires a prior seed (per the spec: only refresh venues
+  // that have voice_preferences rows tagged confidence_flag='imported_high').
+  const seeded = await hasPriorImport(supabase, venueId)
+  if (!seeded) {
+    log.info('voice_dna_refresh.no_seed', {
+      event_type: 'voice_dna_refresh',
+      outcome: 'skip',
+      data: { reason: 'no_seed' },
+    })
+    return { ok: false, reason: 'no_seed', correlationId }
+  }
+
+  // Lower-bound timestamp for sampling: prefer the recorded
+  // voice_dna_last_refresh_at; fall back to (now - 30 days). The seed
+  // covered all earlier history, so this never re-processes the seed
+  // corpus.
+  const { data: configRow } = await supabase
+    .from('venue_ai_config')
+    .select('voice_dna_last_refresh_at')
+    .eq('venue_id', venueId)
+    .maybeSingle()
+  const lastRefresh = (configRow?.voice_dna_last_refresh_at as string | null) ?? null
+  const sinceIso = lastRefresh ?? new Date(
+    Date.now() - REFRESH_DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString()
+
+  const started = Date.now()
+  const samples = await sampleCoordinatorEmails(supabase, venueId, sampleLimit, sinceIso)
+  if (samples.length < REFRESH_MIN_SAMPLES) {
+    log.info('voice_dna_refresh.insufficient_samples', {
+      event_type: 'voice_dna_refresh',
+      outcome: 'skip',
+      data: { sampled_count: samples.length, floor: REFRESH_MIN_SAMPLES, since: sinceIso },
+    })
+    // We DO stamp last_refresh_at here too — otherwise a venue that
+    // produced 4 new outbound emails this month would re-sample those
+    // same 4 next month and never advance. Stamping advances the
+    // window pointer regardless of LLM activity.
+    await supabase
+      .from('venue_ai_config')
+      .update({ voice_dna_last_refresh_at: new Date().toISOString() })
+      .eq('venue_id', venueId)
+    return {
+      ok: false,
+      reason: 'insufficient_samples',
+      sampledCount: samples.length,
+      correlationId,
+    }
+  }
+
+  // Extract — same batch shape as the seed path so cost-per-email is
+  // consistent.
+  const batches = batchSamples(samples, 8)
+  const agg = emptyAgg()
+  let successfulBatches = 0
+  for (const batch of batches) {
+    const out = await extractBatch(venueId, batch, correlationId, log)
+    if (out) {
+      mergeBatch(agg, out)
+      successfulBatches++
+    }
+  }
+
+  if (successfulBatches === 0) {
+    log.error('voice_dna_refresh.no_batches_succeeded', {
+      event_type: 'voice_dna_refresh',
+      outcome: 'fail',
+      data: { sampled_count: samples.length, batch_count: batches.length },
+    })
+    return { ok: false, reason: 'extraction_failed', sampledCount: samples.length, correlationId }
+  }
+
+  const sampleIdsRef = `interactions:${samples.slice(0, 3).map((s) => s.id).join(',')}+${Math.max(samples.length - 6, 0)}_more+${samples.slice(-3).map((s) => s.id).join(',')}`.slice(0, 250)
+
+  let writeResult = { rowsAdded: 0, rowsUpdated: 0, newPhrasesAdded: 0 }
+  try {
+    writeResult = await persistVoiceAnchorsIncremental(supabase, venueId, agg, sampleIdsRef)
+  } catch (err) {
+    log.error('voice_dna_refresh.persist_failed', {
+      event_type: 'voice_dna_refresh',
+      outcome: 'fail',
+      data: { error: redactError(err) },
+    })
+  }
+
+  // Advance the refresh pointer.
+  await supabase
+    .from('venue_ai_config')
+    .update({ voice_dna_last_refresh_at: new Date().toISOString() })
+    .eq('venue_id', venueId)
+
+  log.info('voice_dna_refresh.complete', {
+    event_type: 'voice_dna_refresh',
+    outcome: 'ok',
+    latency_ms: Date.now() - started,
+    data: {
+      sampled_count: samples.length,
+      rows_added: writeResult.rowsAdded,
+      rows_updated: writeResult.rowsUpdated,
+      new_phrases_added: writeResult.newPhrasesAdded,
+      successful_batches: successfulBatches,
+      batch_count: batches.length,
+      since: sinceIso,
+    },
+  })
+
+  return {
+    ok: true,
+    rowsAdded: writeResult.rowsAdded,
+    rowsUpdated: writeResult.rowsUpdated,
+    samplesProcessed: samples.length,
+    newPhrasesAdded: writeResult.newPhrasesAdded,
+    correlationId,
+  }
+}
+
+/**
+ * Cron entry — iterate every venue with a prior seed and run the
+ * incremental refresh. Each venue runs independently; per-venue
+ * failures are caught + logged so one bad venue doesn't break the
+ * cross-venue tick.
+ *
+ * Returns a per-venue summary suitable for the cron telemetry payload.
+ */
+export async function refreshVoiceDnaForAllVenues(
+  supabase: SupabaseClient,
+): Promise<{
+  venuesChecked: number
+  venuesRefreshed: number
+  venuesSkipped: number
+  venuesFailed: number
+  totalRowsAdded: number
+  totalRowsUpdated: number
+  totalSamplesProcessed: number
+  perVenue: Array<{
+    venueId: string
+    outcome: 'ok' | 'skip' | 'fail'
+    reason?: string
+    rowsAdded?: number
+    rowsUpdated?: number
+    samplesProcessed?: number
+    correlationId: string
+  }>
+}> {
+  // Find venues with at least one prior seed row. We can't filter on
+  // voice_preferences directly via venues table, so do two queries:
+  // pull seeded venue_ids first, then iterate.
+  const { data: seededRows } = await supabase
+    .from('voice_preferences')
+    .select('venue_id')
+    .eq('confidence_flag', 'imported_high')
+
+  const seededVenueIds = Array.from(new Set(
+    ((seededRows ?? []) as Array<{ venue_id: string }>).map((r) => r.venue_id),
+  ))
+
+  const summary = {
+    venuesChecked: seededVenueIds.length,
+    venuesRefreshed: 0,
+    venuesSkipped: 0,
+    venuesFailed: 0,
+    totalRowsAdded: 0,
+    totalRowsUpdated: 0,
+    totalSamplesProcessed: 0,
+    perVenue: [] as Array<{
+      venueId: string
+      outcome: 'ok' | 'skip' | 'fail'
+      reason?: string
+      rowsAdded?: number
+      rowsUpdated?: number
+      samplesProcessed?: number
+      correlationId: string
+    }>,
+  }
+
+  for (const venueId of seededVenueIds) {
+    try {
+      const result = await refreshVoiceDnaIncremental(supabase, venueId)
+      if (result.ok) {
+        summary.venuesRefreshed++
+        summary.totalRowsAdded += result.rowsAdded
+        summary.totalRowsUpdated += result.rowsUpdated
+        summary.totalSamplesProcessed += result.samplesProcessed
+        summary.perVenue.push({
+          venueId,
+          outcome: 'ok',
+          rowsAdded: result.rowsAdded,
+          rowsUpdated: result.rowsUpdated,
+          samplesProcessed: result.samplesProcessed,
+          correlationId: result.correlationId,
+        })
+      } else {
+        summary.venuesSkipped++
+        summary.perVenue.push({
+          venueId,
+          outcome: 'skip',
+          reason: result.reason,
+          samplesProcessed: result.sampledCount,
+          correlationId: result.correlationId,
+        })
+      }
+    } catch (err) {
+      summary.venuesFailed++
+      console.error(`[voice_dna_refresh] venue ${venueId} failed:`, err instanceof Error ? err.message : err)
+      summary.perVenue.push({
+        venueId,
+        outcome: 'fail',
+        reason: err instanceof Error ? err.message : 'unknown',
+        correlationId: 'unknown',
+      })
+    }
+  }
+
+  return summary
 }

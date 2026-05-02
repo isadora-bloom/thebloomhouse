@@ -117,6 +117,10 @@
       "schedule": "0 4 * * *"
     },
     {
+      "path": "/api/cron?job=voice_dna_refresh",
+      "schedule": "0 6 1 * *"
+    },
+    {
       "path": "/api/cron/replay-paused-skipped",
       "schedule": "5 0 * * *"
     },
