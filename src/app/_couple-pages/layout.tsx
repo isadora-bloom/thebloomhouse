@@ -1,4 +1,5 @@
 import { cookies } from 'next/headers'
+import { notFound } from 'next/navigation'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getFontUrl, getFontVars } from '@/config/fonts'
 import { CoupleShell } from '@/components/couple/couple-shell'
@@ -6,20 +7,34 @@ import { CoupleShell } from '@/components/couple/couple-shell'
 /**
  * Resolve the venue slug from (in priority order):
  * 1. `venue-slug` cookie set by the middleware (production subdomain routing)
- * 2. `?venue=` search param (dev convenience)
- * 3. Fallback to 'hawthorne-manor' for local development
+ * 2. `bloom_demo` cookie → 'hawthorne-manor' (demo seed venue)
+ *
+ * T5-β.4: a missing slug used to silently fall back to 'hawthorne-manor'
+ * for local development. That meant a misconfigured production subdomain
+ * could route real couples into Hawthorne's portal instead of theirs —
+ * a hard-to-detect white-label leak. The fallback now only triggers in
+ * demo mode; everything else 404s loudly.
  */
-async function resolveVenueSlug(): Promise<string> {
+async function resolveVenueSlug(): Promise<string | null> {
   const cookieStore = await cookies()
   const fromCookie = cookieStore.get('venue-slug')?.value
   if (fromCookie) return fromCookie
 
-  // Fallback for development — hardcoded default
-  return 'hawthorne-manor'
+  // Demo mode is the only context where falling back to a known slug is
+  // acceptable. Anywhere else returns null so the caller 404s.
+  if (cookieStore.get('bloom_demo')?.value === 'true') return 'hawthorne-manor'
+
+  return null
 }
 
 async function getVenueBranding() {
   const slug = await resolveVenueSlug()
+  if (!slug) {
+    // T5-β.4: refuse to render the couple portal with no resolved
+    // venue. Was: fall through to 'hawthorne-manor' and serve another
+    // venue's data.
+    notFound()
+  }
   const supabase = createServiceClient()
 
   const { data: venue } = await supabase
@@ -29,15 +44,9 @@ async function getVenueBranding() {
     .single()
 
   if (!venue) {
-    return {
-      venueId: '',
-      venueName: 'Wedding Portal',
-      primaryColor: '#7D8471',
-      secondaryColor: '#5D7A7A',
-      accentColor: '#A6894A',
-      fontPairKey: 'playfair_inter',
-      logoUrl: null as string | null,
-    }
+    // No venue matches the slug from the cookie — same posture: refuse
+    // rather than fall back to a default.
+    notFound()
   }
 
   const { data: config } = await supabase

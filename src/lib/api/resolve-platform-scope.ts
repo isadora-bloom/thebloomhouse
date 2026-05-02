@@ -41,6 +41,14 @@ export interface PlatformScope {
   groupId: string | null
   /** Group display name for ScopeIndicator — fetched inline for group scope. */
   groupName: string | null
+  /**
+   * Per-venue AI assistant name from venue_ai_config.ai_name. Resolved
+   * server-side at the same time as venueName so coordinator-facing UI
+   * can render "Ivy's Brain" / "Aria sees..." etc. without a roundtrip.
+   * Null when the config row is missing — the UI layer in
+   * VenueScopeProvider falls back to a neutral noun phrase. T5-β.2.
+   */
+  aiName: string | null
 }
 
 /**
@@ -74,17 +82,20 @@ const fetchNames = cache(
   async (
     venueId: string,
     orgId: string | null
-  ): Promise<{ venueName: string | null; orgName: string | null }> => {
+  ): Promise<{ venueName: string | null; orgName: string | null; aiName: string | null }> => {
     const service = createServiceClient()
-    const [vRes, oRes] = await Promise.all([
+    const [vRes, oRes, aiRes] = await Promise.all([
       service.from('venues').select('name').eq('id', venueId).maybeSingle(),
       orgId
         ? service.from('organisations').select('name').eq('id', orgId).maybeSingle()
         : Promise.resolve({ data: null }),
+      service.from('venue_ai_config').select('ai_name').eq('venue_id', venueId).maybeSingle(),
     ])
+    const aiName = (aiRes?.data?.ai_name as string | null | undefined)?.trim() || null
     return {
       venueName: (vRes.data?.name as string | undefined) ?? null,
       orgName: (oRes.data?.name as string | undefined) ?? null,
+      aiName,
     }
   }
 )
@@ -171,6 +182,9 @@ async function _resolvePlatformScope(): Promise<PlatformScope | null> {
       level: scopeCookie.level,
       groupId: scopeCookie.groupId,
       groupName: null,
+      // Demo seed venue uses "Sage" — the canonical Hawthorne example.
+      // White-label leak test runs against non-Hawthorne venues only.
+      aiName: 'Sage',
     }
   }
 
@@ -188,7 +202,10 @@ async function _resolvePlatformScope(): Promise<PlatformScope | null> {
   const profileOrgId = (profile?.org_id as string | null) ?? null
   const groupName = await resolveGroupName(scopeCookie.groupId, profileOrgId)
 
-  const build = (venueId: string, names: { venueName: string | null; orgName: string | null }): PlatformScope => ({
+  const build = (
+    venueId: string,
+    names: { venueName: string | null; orgName: string | null; aiName: string | null },
+  ): PlatformScope => ({
     venueId,
     orgId: profileOrgId,
     isDemo: false,
@@ -197,6 +214,7 @@ async function _resolvePlatformScope(): Promise<PlatformScope | null> {
     level: scopeCookie.level,
     groupId: scopeCookie.groupId,
     groupName,
+    aiName: names.aiName,
   })
 
   // 2. Cookie venue — validate it belongs to the user's org before trusting.

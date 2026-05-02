@@ -23,6 +23,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { ArrowLeft, Sparkles, Plus, Trash2, Loader2, Save } from 'lucide-react'
 
 type Season = 'spring' | 'summer' | 'fall' | 'winter'
@@ -42,6 +43,7 @@ const SEASONS: Array<{ key: Season; label: string; emoji: string; hint: string }
 ]
 
 export default function SeasonalContentPage() {
+  const aiName = useAiName()
   const venueId = useVenueId()
   const [rows, setRows] = useState<Record<Season, SeasonalRow>>(() => emptyRows())
   const [loading, setLoading] = useState(true)
@@ -178,7 +180,7 @@ export default function SeasonalContentPage() {
         </h1>
         <p className="text-sm text-sage-600 mt-1">
           Imagery and phrases your AI uses to colour replies and tour invites
-          with seasonal context. Sage and inquiry drafts pull from these rows
+          with seasonal context. {aiName} and inquiry drafts pull from these rows
           when an inquiry references a season or a wedding date falls in one.
         </p>
       </div>

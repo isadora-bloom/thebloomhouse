@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createBrowserClient } from '@supabase/ssr'
 import {
   BookOpen,
@@ -131,6 +132,7 @@ function formatDate(iso: string | null | undefined) {
 // ---------------------------------------------------------------------------
 
 export default function KnowledgeBasePage() {
+  const aiName = useAiName()
   const scope = useScope()
   const venueId = scope.venueId ?? ''
 
@@ -493,7 +495,7 @@ export default function KnowledgeBasePage() {
             Knowledge Base
           </h1>
           <p className="text-sage-600">
-            Manage what Sage knows about your venue
+            Manage what {aiName} knows about your venue
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -580,7 +582,7 @@ export default function KnowledgeBasePage() {
             No knowledge base entries yet.
           </p>
           <p className="text-sage-500 text-sm mb-6">
-            Add your first entry to give Sage venue-specific knowledge.
+            Add your first entry to give {aiName} venue-specific knowledge.
           </p>
           <button
             onClick={openCreateModal}

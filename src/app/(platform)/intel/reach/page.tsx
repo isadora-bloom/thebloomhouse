@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { BarChart3, TrendingUp, Camera, Loader2 } from 'lucide-react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 
 interface ReachGroup {
   source: string
@@ -80,6 +81,7 @@ function Sparkline({ points }: { points: Array<{ label: string; value: number }>
 }
 
 export default function ReachPage() {
+  const aiName = useAiName()
   const [groups, setGroups] = useState<ReachGroup[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -118,7 +120,7 @@ export default function ReachPage() {
           Marketing Reach
         </h1>
         <p className="text-sm text-sage-600 mt-1">
-          Every platform metric Bloom has ingested. Drop screenshots into the &quot;Tell Sage something&quot; button and they land here, grouped by platform.
+          Every platform metric Bloom has ingested. Drop screenshots into the &quot;Tell {aiName} something&quot; button and they land here, grouped by platform.
         </p>
       </div>
 
@@ -135,7 +137,7 @@ export default function ReachPage() {
           <Camera className="w-8 h-8 text-sage-400 mx-auto mb-3" />
           <p className="text-sage-800 font-medium mb-1">No reach data yet.</p>
           <p className="text-sm text-sage-500 max-w-md mx-auto">
-            Drop a screenshot of any platform dashboard (The Knot analytics, Instagram insights, Google Analytics, Pinterest, Facebook, etc.) into the &quot;Tell Sage something&quot; button. Bloom will extract the numbers and track them here.
+            Drop a screenshot of any platform dashboard (The Knot analytics, Instagram insights, Google Analytics, Pinterest, Facebook, etc.) into the &quot;Tell {aiName} something&quot; button. Bloom will extract the numbers and track them here.
           </p>
         </div>
       ) : (

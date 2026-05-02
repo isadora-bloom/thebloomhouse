@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import {
   HelpCircle,
@@ -205,6 +206,7 @@ function ResolveModal({
 
 export default function KnowledgeGapsPage() {
   const VENUE_ID = useVenueId()
+  const aiName = useAiName()
   const [gaps, setGaps] = useState<KnowledgeGap[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -334,7 +336,7 @@ export default function KnowledgeGapsPage() {
           Knowledge Gaps
         </h1>
         <p className="text-sage-600">
-          Questions that Sage couldn&apos;t confidently answer. Resolve each gap by adding the correct answer — it gets saved to your Knowledge Base so Sage never misses it again.
+          Questions that {aiName} couldn&apos;t confidently answer. Resolve each gap by adding the correct answer — it gets saved to your Knowledge Base so {aiName} never misses it again.
         </p>
       </div>
 
@@ -484,7 +486,7 @@ export default function KnowledgeGapsPage() {
           <p className="text-sm text-sage-600 max-w-md mx-auto">
             {searchQuery
               ? `No gaps match "${searchQuery}".`
-              : 'When Sage encounters questions it cannot answer, they appear here for resolution.'}
+              : `When ${aiName} encounters questions it cannot answer, they appear here for resolution.`}
           </p>
         </div>
       ) : (

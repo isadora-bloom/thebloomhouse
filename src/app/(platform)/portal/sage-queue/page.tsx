@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createBrowserClient } from '@supabase/ssr'
 import { VenueChip } from '@/components/intel/venue-chip'
 import {
@@ -121,10 +122,12 @@ function QueueCard({
   item,
   onRespond,
   showVenueChip,
+  aiName,
 }: {
   item: SageQueueItem
   onRespond: (id: string, answer: string, addToKB: boolean) => Promise<void>
   showVenueChip: boolean
+  aiName: string
 }) {
   const [answer, setAnswer] = useState('')
   const [addToKB, setAddToKB] = useState(true)
@@ -178,7 +181,7 @@ function QueueCard({
         <div className="mb-4">
           <h4 className="text-xs font-semibold uppercase tracking-wider text-sage-500 mb-2 flex items-center gap-1">
             <AlertTriangle className="w-3 h-3 text-amber-500" />
-            Sage&apos;s Uncertain Answer
+            {aiName}&apos;s Uncertain Answer
           </h4>
           <p className="text-sage-700 text-sm leading-relaxed bg-amber-50/50 border border-amber-100 rounded-lg p-3 italic">
             {item.sage_answer}
@@ -262,6 +265,7 @@ function ResolvedItem({ item, showVenueChip }: { item: SageQueueItem; showVenueC
 // ---------------------------------------------------------------------------
 
 export default function SageQueuePage() {
+  const aiName = useAiName()
   const scope = useScope()
   const showVenueChip = scope.level !== 'venue'
   const [pendingItems, setPendingItems] = useState<SageQueueItem[]>([])
@@ -404,7 +408,7 @@ export default function SageQueuePage() {
       {/* ---- Header ---- */}
       <div>
         <h1 className="font-heading text-3xl font-bold text-sage-900 mb-1">
-          Sage Queue
+          {aiName} Queue
           {!loading && pendingItems.length > 0 && (
             <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-amber-100 text-amber-700">
               {pendingItems.length} pending
@@ -412,7 +416,7 @@ export default function SageQueuePage() {
           )}
         </h1>
         <p className="text-sage-600">
-          Questions Sage wasn&apos;t confident enough to answer on her own. Review each one, provide the correct answer, and optionally add it to the Knowledge Base so she learns for next time.
+          Questions {aiName} wasn&apos;t confident enough to answer alone. Review each one, provide the correct answer, and optionally add it to the Knowledge Base so {aiName} learns for next time.
         </p>
       </div>
 
@@ -444,14 +448,14 @@ export default function SageQueuePage() {
             Queue is clear
           </h3>
           <p className="text-sm text-sage-600 max-w-md mx-auto">
-            No uncertain questions right now. When Sage encounters a question it
+            No uncertain questions right now. When {aiName} encounters a question it
             can&apos;t answer confidently, it will appear here for your review.
           </p>
         </div>
       ) : (
         <div className="space-y-4">
           {pendingItems.map((item) => (
-            <QueueCard key={item.id} item={item} onRespond={handleRespond} showVenueChip={showVenueChip} />
+            <QueueCard key={item.id} item={item} onRespond={handleRespond} showVenueChip={showVenueChip} aiName={aiName} />
           ))}
         </div>
       )}

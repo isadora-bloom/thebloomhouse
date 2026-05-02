@@ -221,7 +221,10 @@ export default function PersonalityPage() {
   function generatePreviewEmail(): string {
     if (!config) return ''
 
-    const name = config.ai_name || 'Sage'
+    // Preview defaults to a neutral label when ai_name isn't yet set —
+    // never to "Sage", which would mislead a venue mid-onboarding into
+    // thinking that's their default brand. T5-β.2.
+    const name = config.ai_name || 'your AI assistant'
     const emoji = config.ai_emoji || ''
     const warmth = config.warmth_level
     const formality = config.formality_level
@@ -426,7 +429,7 @@ ${name}`
               type="text"
               value={config.ai_name}
               onChange={(e) => update('ai_name', e.target.value)}
-              placeholder="Sage"
+              placeholder="e.g. Sage, Ivy, Aria"
               className={inputClasses}
             />
           </div>
@@ -635,7 +638,7 @@ ${name}`
               placeholder="Hi there"
               className={inputClasses}
             />
-            <p className="text-xs text-sage-500 mt-1">Default greeting. Sage will also use the client&apos;s first name when available and naturally rotate between warm openers.</p>
+            <p className="text-xs text-sage-500 mt-1">Default greeting. {config.ai_name || 'Your AI'} will also use the client&apos;s first name when available and naturally rotate between warm openers.</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-sage-700 mb-1">Closer</label>
@@ -717,7 +720,7 @@ ${name}`
           <div className="border-b border-border pb-3 mb-4">
             <div className="flex items-center gap-2 text-sm text-sage-500">
               <span className="font-medium text-sage-800">From:</span>
-              <span>{config.ai_name || 'Sage'} {config.ai_emoji || ''}</span>
+              <span>{config.ai_name || 'your AI assistant'} {config.ai_emoji || ''}</span>
               {config.ai_email && (
                 <span className="text-sage-400">&lt;{config.ai_email}&gt;</span>
               )}

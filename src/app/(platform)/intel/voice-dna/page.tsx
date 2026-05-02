@@ -322,7 +322,10 @@ export default function VoiceDnaPage() {
 
   if (!data) return null
 
-  const aiName = data.aiName || 'Sage'
+  // T5-β.2: API now 400s when ai_name isn't configured, so by the time
+  // we render `data.aiName` is always a real name. Keep a neutral
+  // fallback rather than "Sage" for defensive rendering.
+  const aiName = data.aiName || 'your AI assistant'
   const venueName = data.venueName || 'your venue'
 
   // Brand-new venue callout: no phrases at all, no training, no edit loop.

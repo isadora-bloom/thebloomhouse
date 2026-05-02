@@ -63,7 +63,19 @@ export async function POST(request: NextRequest) {
     const logoUrl = venueConfig?.logo_url || null
     const primaryColor = venueConfig?.primary_color || '#7D8471'
     const tagline = venueConfig?.portal_tagline || 'Your wedding planning portal'
-    const aiName = aiConfig?.ai_name || 'Sage'
+    // T5-β.1: refuse to send an invite that would brand-leak as "Sage"
+    // when the venue hasn't named their AI yet.
+    const resolvedAiName = (aiConfig?.ai_name as string | null | undefined)?.trim()
+    if (!resolvedAiName) {
+      return NextResponse.json(
+        {
+          error:
+            'Cannot send invite: venue_ai_config.ai_name is not set. Run onboarding for this venue first.',
+        },
+        { status: 400 }
+      )
+    }
+    const aiName = resolvedAiName
 
     const portalUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'https://bloom-house-iota.vercel.app'}/couple/${venue.slug}`
     const registerUrl = `${portalUrl}/register?code=${eventCode}`

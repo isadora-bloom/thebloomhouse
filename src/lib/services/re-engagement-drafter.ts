@@ -26,6 +26,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
+import { requireAiName } from '@/lib/ai/personality-builder'
 
 export type ReEngagementChannel = 'email' | 'manual_paste'
 
@@ -64,7 +65,10 @@ async function fetchVenueContext(sb: SupabaseClient, venueId: string): Promise<V
     .maybeSingle()
   return {
     venueName: (ven as { name: string }).name,
-    aiName: ((cfg as { ai_name: string | null } | null)?.ai_name) ?? 'Sage',
+    // Throws if venue_ai_config.ai_name is null/missing rather than
+    // emitting a re-engagement message signed "Sage" from another
+    // venue's AI. T5-β.1.
+    aiName: requireAiName(cfg as { ai_name?: string | null } | null, venueId),
     signature: ((cfg as { signature_greeting: string | null } | null)?.signature_greeting) ?? null,
   }
 }

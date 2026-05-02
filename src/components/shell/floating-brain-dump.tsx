@@ -1,17 +1,16 @@
 'use client'
 
 /**
- * Floating "Tell Sage something" capture button — Phase 2.5 Task 26.
+ * Floating capture button — Phase 2.5 Task 26.
  *
  * Mounts on every platform page (not standalone routes). On click: opens a
  * modal with a free-text area + optional file drop-zone. Submits to
  * /api/brain-dump which classifies + routes.
  *
- * White-label: button + modal copy read ai_name from the current venue's
- * venue_ai_config. A venue that renamed to "Ivy" sees "Tell Ivy
- * something". Per memory the couple portal does this via useCoupleContext
- * — the platform side doesn't have an analogous context yet, so we fetch
- * ai_name once when the component mounts and venueId resolves.
+ * White-label: button + modal copy read ai_name from useAiName(), which
+ * reads from VenueScopeProvider (resolved server-side in (platform)/layout).
+ * A venue that renamed to "Ivy" sees "Tell Ivy something". T5-β.2
+ * replaced an ad-hoc useEffect fetch with this synchronous hook.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -19,6 +18,7 @@ import { usePathname } from 'next/navigation'
 import { createBrowserClient } from '@supabase/ssr'
 import { Brain, X, Loader2, Send, CheckCircle2, AlertCircle, Upload } from 'lucide-react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 
 interface ImportSummaryShape {
   inserted: number
@@ -88,7 +88,10 @@ function pathPrefillHint(pathname: string | null): string {
 export function FloatingBrainDump() {
   const venueId = useVenueId()
   const pathname = usePathname()
-  const [aiName, setAiName] = useState<string>('Sage')
+  // Synchronous read from VenueScopeProvider — no flash, no race. Falls
+  // back to a neutral noun phrase when venue_ai_config.ai_name is missing.
+  // T5-β.2.
+  const aiName = useAiName()
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
   const [file, setFile] = useState<File | null>(null)
@@ -113,21 +116,6 @@ export function FloatingBrainDump() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [pathname])
-
-  // Resolve the venue's AI assistant name once. Fallback to Sage on miss.
-  useEffect(() => {
-    if (!venueId) return
-    const supabase = getSupabase()
-    ;(async () => {
-      const { data } = await supabase
-        .from('venue_ai_config')
-        .select('ai_name')
-        .eq('venue_id', venueId)
-        .maybeSingle()
-      const name = (data?.ai_name as string | null)?.trim()
-      if (name) setAiName(name)
-    })()
-  }, [venueId])
 
   const reset = useCallback(() => {
     setText('')

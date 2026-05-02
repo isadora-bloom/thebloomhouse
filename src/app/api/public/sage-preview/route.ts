@@ -77,7 +77,20 @@ export async function POST(request: NextRequest) {
     const aiConfig = aiConfigResult.data
     const venueConfig = venueConfigResult.data
     const usps = (uspsResult.data || []).map((u) => u.usp_text)
-    const aiName = aiConfig?.ai_name || 'Sage'
+    // T5-β.1: refuse to render the preview if the venue hasn't named
+    // their AI yet — better than a public-facing chat speaking as
+    // "Sage" from another venue's brand.
+    const resolvedAiName = (aiConfig?.ai_name as string | null | undefined)?.trim()
+    if (!resolvedAiName) {
+      return NextResponse.json(
+        {
+          error:
+            'This venue has not configured an AI assistant name yet. Try again after onboarding.',
+        },
+        { status: 400 }
+      )
+    }
+    const aiName = resolvedAiName
     const aiEmoji = aiConfig?.ai_emoji || ''
 
     // -----------------------------------------------------------------------

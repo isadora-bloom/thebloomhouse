@@ -15,7 +15,11 @@
  */
 
 import { callAI } from '@/lib/ai/client'
-import { buildPersonalityPrompt, type PersonalityData } from '@/lib/ai/personality-builder'
+import {
+  buildPersonalityPrompt,
+  requireAiName,
+  type PersonalityData,
+} from '@/lib/ai/personality-builder'
 import { resolveSageIdentity, renderOpenerConstraints } from '@/lib/services/sage-identity'
 
 /**
@@ -162,8 +166,9 @@ async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
     else if (type === 'dimension') dimensions[content] = score
   }
 
-  // Build sign-off
-  const aiName = (aiConfig.ai_name as string) ?? 'Sage'
+  // Build sign-off. ai_name is required — throw early so a missing
+  // venue_ai_config row can't ship the wrong venue's brand. T5-β.1.
+  const aiName = requireAiName(aiConfig as { ai_name?: string | null }, venueId)
   const aiEmoji = (aiConfig.ai_emoji as string) ?? ''
   const venueName = (venue?.name as string) ?? 'the venue'
   const signoff = `${aiEmoji ? aiEmoji + ' ' : ''}${aiName}\n${venueName}`
@@ -372,7 +377,12 @@ export async function generateInquiryDraft(
   // Step 4: Select a fresh greeting phrase (anti-duplication)
   const venueName = personalityData.venue.name ?? 'the venue'
   const ownerName = personalityData.owner_name ?? 'the team'
-  const aiName = (personalityData.config.ai_name as string) ?? 'Sage'
+  // ai_name is required (loadPersonalityData already throws if missing,
+  // but re-resolve here so downstream phrase substitution stays explicit).
+  const aiName = requireAiName(
+    personalityData.config as { ai_name?: string | null },
+    venueId
+  )
 
   const templateVars = {
     venue_name: venueName,
@@ -601,7 +611,10 @@ export async function generateFollowUp(
 
   const venueName = personalityData.venue.name ?? 'the venue'
   const ownerName = personalityData.owner_name ?? 'the team'
-  const aiName = (personalityData.config.ai_name as string) ?? 'Sage'
+  const aiName = requireAiName(
+    personalityData.config as { ai_name?: string | null },
+    venueId
+  )
 
   const templateVars = {
     venue_name: venueName,

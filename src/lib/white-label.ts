@@ -15,11 +15,12 @@
 
 /**
  * Replace {AI_NAME} placeholder with the venue's configured AI name.
- * Falls back to 'Sage' when aiName is empty or undefined — matches
- * the venue_ai_config.ai_name default.
+ * Falls back to a neutral noun phrase when aiName is empty — never to
+ * "Sage", which would leak Hawthorne's brand into another venue's UI.
+ * T5-β.1.
  */
 export function substituteAiName(text: string, aiName: string | null | undefined): string {
   if (!text) return text
-  const name = aiName && aiName.trim().length > 0 ? aiName : 'Sage'
+  const name = aiName && aiName.trim().length > 0 ? aiName : 'your AI assistant'
   return text.replaceAll('{AI_NAME}', name)
 }

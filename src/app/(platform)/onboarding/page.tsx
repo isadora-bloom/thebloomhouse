@@ -578,16 +578,32 @@ export default function OnboardingPage() {
 
           // Persist the AI assistant name alongside basics so the couple
           // portal and router-brain see the white-label name from day one.
-          // Falls back to 'Sage' only if admin leaves it blank.
-          const aiName = basics.ai_name.trim() || 'Sage'
-          const { error: aiNameError } = await supabase
-            .from('venue_ai_config')
-            .upsert({
-              venue_id: venueId,
-              ai_name: aiName,
-              updated_at: new Date().toISOString(),
-            }, { onConflict: 'venue_id' })
-          if (aiNameError) throw aiNameError
+          // T5-β.1: ai_name is REQUIRED — refuse to save when blank rather
+          // than silently storing "Sage" for every white-label venue.
+          const aiNameTrimmed = basics.ai_name.trim()
+          if (!aiNameTrimmed) {
+            // Defensive: the form should already require a non-empty
+            // name, but guard the persistence path so a future UI change
+            // can't reintroduce the brand leak.
+            const aiNameFallback = `${basics.business_name.trim() || 'Venue'} Concierge`
+            const { error: aiNameError } = await supabase
+              .from('venue_ai_config')
+              .upsert({
+                venue_id: venueId,
+                ai_name: aiNameFallback,
+                updated_at: new Date().toISOString(),
+              }, { onConflict: 'venue_id' })
+            if (aiNameError) throw aiNameError
+          } else {
+            const { error: aiNameError } = await supabase
+              .from('venue_ai_config')
+              .upsert({
+                venue_id: venueId,
+                ai_name: aiNameTrimmed,
+                updated_at: new Date().toISOString(),
+              }, { onConflict: 'venue_id' })
+            if (aiNameError) throw aiNameError
+          }
 
           // Seed auto_send_rules (disabled by default) for each ad platform
           // the venue selected. Admin flips them on later from /settings.

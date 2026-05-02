@@ -31,6 +31,7 @@ import {
   Save, X, Trash2, Info,
 } from 'lucide-react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -105,7 +106,9 @@ const STATUS_PRESENTATION: Record<AvailabilityStatus, StatusPresentation> = {
     cellText: 'text-amber-900',
     pillBg: 'bg-amber-50 border border-amber-200',
     pillText: 'text-amber-800',
-    description: 'Tentative — a couple is about to sign. Sage will not confirm to others.',
+    // T5-β.2: literal "Sage" rewritten through aiName at consumer
+    // (page reads p.description into a tooltip).
+    description: 'Tentative — a couple is about to sign. The AI assistant will not confirm to others.',
   },
   tour_only: {
     label: 'Tour only',
@@ -195,6 +198,7 @@ function getSupabase() {
 // ---------------------------------------------------------------------------
 
 export default function AvailabilityPage() {
+  const aiName = useAiName()
   const venueId = useVenueId()
   const [month, setMonth] = useState<Date>(() => startOfMonth(new Date()))
   const [venueName, setVenueName] = useState<string>('')
@@ -503,7 +507,7 @@ export default function AvailabilityPage() {
             <div
               key={s}
               className={`px-2.5 py-1 rounded-md flex items-center gap-1.5 ${p.pillBg}`}
-              title={p.description}
+              title={p.description.replace(/\bThe AI assistant\b/g, aiName)}
             >
               <span className={`font-medium ${p.pillText}`}>{p.label}</span>
               <Info className={`w-3 h-3 ${p.pillText} opacity-60`} />
@@ -676,7 +680,7 @@ export default function AvailabilityPage() {
                       `}
                     >
                       <span className="font-medium text-sm">{p.label}</span>
-                      <span className="text-xs opacity-75">{p.description}</span>
+                      <span className="text-xs opacity-75">{p.description.replace(/\bThe AI assistant\b/g, aiName)}</span>
                     </button>
                   )
                 })}

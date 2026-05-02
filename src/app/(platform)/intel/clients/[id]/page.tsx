@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import {
   ArrowLeft,
@@ -586,6 +587,7 @@ export default function ClientProfilePage() {
   const params = useParams()
   const weddingId = params.id as string
   const VENUE_ID = useVenueId()
+  const aiName = useAiName()
 
   const [wedding, setWedding] = useState<WeddingDetail | null>(null)
   const [people, setPeople] = useState<PersonRow[]>([])
@@ -1182,7 +1184,7 @@ export default function ClientProfilePage() {
                 Planning Notes
               </h2>
               <p className="text-xs text-sage-500 mb-3">
-                Auto-extracted from Sage conversations
+                Auto-extracted from {aiName} conversations
               </p>
               <div className="space-y-3 max-h-[400px] overflow-y-auto">
                 {planningNotes.map((note) => {
