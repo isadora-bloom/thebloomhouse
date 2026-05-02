@@ -16,6 +16,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Loader2, AlertTriangle, Bell, Lightbulb, RefreshCw, ExternalLink,
+  Clock, X,
 } from 'lucide-react'
 
 type PulseSource = 'notification' | 'anomaly' | 'insight'
@@ -62,6 +63,49 @@ export default function PulsePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<PulseSource | 'all'>('all')
+  const [busyKey, setBusyKey] = useState<string | null>(null)
+
+  async function snooze(itemKey: string, days: number) {
+    setBusyKey(itemKey)
+    try {
+      const snoozedUntilIso = new Date(Date.now() + days * 86_400_000).toISOString()
+      const res = await fetch('/api/pulse/snooze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemKey, action: 'snoozed', snoozedUntilIso }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `HTTP ${res.status}`)
+      }
+      // Optimistic: remove locally rather than refetch.
+      setItems((prev) => prev.filter((it) => it.id !== itemKey))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Snooze failed')
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  async function dismiss(itemKey: string) {
+    setBusyKey(itemKey)
+    try {
+      const res = await fetch('/api/pulse/snooze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemKey, action: 'dismissed' }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `HTTP ${res.status}`)
+      }
+      setItems((prev) => prev.filter((it) => it.id !== itemKey))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Dismiss failed')
+    } finally {
+      setBusyKey(null)
+    }
+  }
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -150,15 +194,18 @@ export default function PulsePage() {
         {visible.map((item) => {
           const Icon = SOURCE_ICON[item.source]
           const pri = PRIORITY_STYLES[item.priority]
+          const acting = busyKey === item.id
           return (
             <li
               key={item.id}
-              className={`rounded-lg border border-sage-200 bg-warm-white p-4 hover:bg-sage-50/50 transition-colors ${item.href ? 'cursor-pointer' : ''}`}
-              onClick={() => { if (item.href) router.push(item.href) }}
+              className={`rounded-lg border border-sage-200 bg-warm-white p-4 hover:bg-sage-50/50 transition-colors`}
             >
               <div className="flex items-start gap-3">
                 <Icon className="w-4 h-4 text-sage-500 mt-0.5 shrink-0" />
-                <div className="flex-1 min-w-0">
+                <div
+                  className={`flex-1 min-w-0 ${item.href ? 'cursor-pointer' : ''}`}
+                  onClick={() => { if (item.href) router.push(item.href) }}
+                >
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${pri.bg} ${pri.text}`}>
                       {pri.label}
@@ -171,7 +218,33 @@ export default function PulsePage() {
                     <p className="text-sm text-sage-600 mt-1 line-clamp-2">{item.body}</p>
                   )}
                 </div>
-                {item.href && <ExternalLink className="w-3 h-3 text-sage-400 shrink-0 mt-1" />}
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); snooze(item.id, 1) }}
+                    disabled={acting}
+                    title="Snooze 1 day"
+                    className="p-1 rounded hover:bg-sage-100 text-sage-500 hover:text-sage-700 disabled:opacity-50"
+                  >
+                    {acting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Clock className="w-3 h-3" />}
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); snooze(item.id, 7) }}
+                    disabled={acting}
+                    title="Snooze 1 week"
+                    className="p-1 rounded hover:bg-sage-100 text-xs text-sage-500 hover:text-sage-700 disabled:opacity-50"
+                  >
+                    7d
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); dismiss(item.id) }}
+                    disabled={acting}
+                    title="Dismiss forever"
+                    className="p-1 rounded hover:bg-red-50 text-sage-400 hover:text-red-600 disabled:opacity-50"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                  {item.href && <ExternalLink className="w-3 h-3 text-sage-400 ml-1" />}
+                </div>
               </div>
             </li>
           )

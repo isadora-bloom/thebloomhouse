@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { HeatBadge } from '@/components/intel/heat-badge'
+import { EssentialsSlider } from '@/components/shell/essentials-slider'
 import { TIER_STYLES, styleForTier, type HeatTier } from '@/lib/heat/tier-colors'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import {
@@ -473,6 +474,8 @@ export default function LeadsPage() {
             See every lead ranked by engagement heat score — from hot prospects ready to book down to cold leads that need a nudge. Click any lead to view their full profile and history.
           </p>
         </div>
+        {/* T4-D Essentials slider — controls density on this surface. */}
+        <EssentialsSlider surface="/agent/leads" />
       </div>
 
       {/* ---- Inline insight banner ---- */}

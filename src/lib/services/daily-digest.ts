@@ -663,36 +663,52 @@ export async function sendDigestEmail(
 // ---------------------------------------------------------------------------
 
 /**
- * Sends a daily digest to all active venues that have a briefing_email
- * configured. Designed to be called from the cron route.
+ * Sends a daily digest to active venues. PREFERENCE-AWARE per T4-H:
+ * filters venues to those with at least one coordinator whose
+ * digest_preferences pass shouldSendToday (cadence + send_dow + 23h
+ * gate). Pre-fix this fired for every venue with briefing_email
+ * regardless of preferences.
+ *
+ * Legacy fallback: venues with briefing_email but NO digest_preferences
+ * row at all keep getting a daily digest so the rollout doesn't
+ * silently drop coordinators. Once they visit /settings/digest-
+ * preferences once (defaults are weekly Mon), they migrate naturally.
+ *
+ * Cost-ceiling gate still applies — paused venues are skipped.
  */
 export async function sendAllDigests(): Promise<
   Record<string, { sent: boolean; to: string }>
 > {
   const supabase = createServiceClient()
 
-  const { data: venues, error } = await supabase
+  const { eligibleVenuesToday, markPreferencesSent } = await import('@/lib/services/digest-dispatch')
+  const { venueIds: prefVenueIds, userPrefs } = await eligibleVenuesToday()
+
+  // Legacy backfill — venues with briefing_email but no preferences row.
+  const { data: fallbackVenues } = await supabase
     .from('venues')
     .select('id')
     .not('briefing_email', 'is', null)
+  const fallbackIds = ((fallbackVenues ?? []) as Array<{ id: string }>).map((v) => v.id)
+  const { data: hasAnyPrefs } = await supabase
+    .from('digest_preferences')
+    .select('venue_id')
+  const venuesWithPrefs = new Set(((hasAnyPrefs ?? []) as Array<{ venue_id: string }>).map((r) => r.venue_id))
+  const legacyVenues = fallbackIds.filter((id) => !venuesWithPrefs.has(id))
 
-  if (error || !venues || venues.length === 0) {
-    console.warn('[daily-digest] No venues with briefing_email found')
+  const targetVenueIds = Array.from(new Set([...prefVenueIds, ...legacyVenues]))
+  if (targetVenueIds.length === 0) {
+    console.log('[daily-digest] No venues eligible today (cadence + dow + cost-ceiling gates)')
     return {}
   }
 
-  // Cost-ceiling gate: digest generation runs Sonnet against the
-  // venue's data ("proactive insights" per Playbook 21.4.3). Skip
-  // venues whose autonomous behavior is paused.
-  const venueIds = venues.map((v) => v.id as string)
   const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
-  const { active, skipped } = await filterActiveVenues(venueIds)
+  const { active, skipped } = await filterActiveVenues(targetVenueIds)
   if (skipped.length > 0) {
     console.log(`[daily-digest] Skipping ${skipped.length} paused venue(s); running ${active.length}`)
   }
 
   const results: Record<string, { sent: boolean; to: string }> = {}
-
   for (const id of active) {
     try {
       results[id] = await sendDigestEmail(id)
@@ -700,6 +716,14 @@ export async function sendAllDigests(): Promise<
       console.error(`[daily-digest] Failed for venue ${id}:`, err)
       results[id] = { sent: false, to: '' }
     }
+  }
+
+  // Stamp last_sent_at on the preferences rows that drove dispatch.
+  // Legacy venues skip — there's no row to stamp.
+  const sentVenueIds = new Set(Object.entries(results).filter(([, r]) => r.sent).map(([id]) => id))
+  const stamped = userPrefs.filter((p) => sentVenueIds.has(p.venue_id))
+  if (stamped.length > 0) {
+    await markPreferencesSent(stamped)
   }
 
   return results

@@ -112,6 +112,24 @@ export async function aggregatePulse(
   const sinceDays = opts.sinceDays ?? 14
   const sinceIso = new Date(Date.now() - sinceDays * 86_400_000).toISOString()
 
+  // Pull active snoozes + dismissals up front so we can filter
+  // PulseItem candidates without a per-item query (T4-C). dismissed
+  // = forever-hidden; snoozed_until > now() = currently hidden;
+  // expired snoozes fall off the filter naturally.
+  const { data: snoozeRows } = await supabase
+    .from('pulse_snoozes')
+    .select('item_key, action, snoozed_until')
+    .eq('venue_id', venueId)
+  const nowIso = new Date().toISOString()
+  const hiddenKeys = new Set<string>()
+  for (const r of ((snoozeRows ?? []) as Array<{ item_key: string; action: string; snoozed_until: string | null }>)) {
+    if (r.action === 'dismissed') {
+      hiddenKeys.add(r.item_key)
+    } else if (r.action === 'snoozed' && r.snoozed_until && r.snoozed_until > nowIso) {
+      hiddenKeys.add(r.item_key)
+    }
+  }
+
   const items: PulseItem[] = []
 
   // Notifications.
@@ -187,15 +205,18 @@ export async function aggregatePulse(
     })
   }
 
+  // Subtract snoozed/dismissed items.
+  const visible = items.filter((it) => !hiddenKeys.has(it.id))
+
   // Sort by priority then recency. Stable ordering: same priority +
   // same created_at preserve their source-order.
-  items.sort((a, b) => {
+  visible.sort((a, b) => {
     const pr = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]
     if (pr !== 0) return pr
     return b.createdAt.localeCompare(a.createdAt)
   })
 
-  return items.slice(0, limit)
+  return visible.slice(0, limit)
 }
 
 /** Pure helper — cap items to a limit. Exported for unit tests. */

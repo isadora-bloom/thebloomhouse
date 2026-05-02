@@ -31,6 +31,11 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 import { createNotification } from '@/lib/services/admin-notifications'
+import {
+  patternSignature,
+  evaluateGraduation,
+  consumeGrantIfActive,
+} from '@/lib/services/brain-dump-graduation'
 
 export type BrainDumpIntent =
   | 'client_note'
@@ -166,6 +171,34 @@ Classify and extract according to the schema. Respond with JSON only.`
 }
 
 /**
+ * Stable shape descriptor for graduation pattern matching (T4-E).
+ * Records WHICH parser-output keys are present, not their values, so
+ * unrelated occurrences of the same intent + same shape collide
+ * deterministically. client_note routes always carry a coupleLabel
+ * but we EXCLUDE it from the shape — even if every client-note is
+ * about a different couple, the parsed shape is the same.
+ */
+function shapeOf(parsed: BrainDumpParseResult): Record<string, boolean> {
+  return {
+    has_clientMatch: Boolean(parsed.clientMatch),
+    has_weddingId: Boolean(parsed.clientMatch?.weddingId),
+    has_note: Boolean(parsed.note),
+    has_availability: Boolean(parsed.availability),
+    has_staffName: Boolean(parsed.staffName),
+    has_kbRows: Boolean(parsed.knowledgeBase?.rows?.length),
+  }
+}
+
+/** Categories that the playbook permits to graduate. client_note is
+ *  EXCLUDED per INV-20.5.4-D — per-couple intel paragraphs are
+ *  non-graduable forever. availability is destructive (date blocks);
+ *  also excluded. analytics path is propose-only via a separate flow. */
+const GRADUABLE_INTENTS: ReadonlySet<BrainDumpIntent> = new Set([
+  'operational_note',
+  'knowledge_base_import',
+])
+
+/**
  * Route a parsed brain dump to the right destination(s).
  *
  * Returns the `routed_to` array to store on brain_dump_entries.
@@ -183,10 +216,38 @@ export async function routeBrainDump(args: {
   routedTo: Array<{ table: string; id: string | null; action: string }>
   needsClarification: boolean
   clarificationQuestion: string | null
+  /** When >= REPEAT_THRESHOLD prior confirmations of this signature
+   *  exist + no active grant, surface a graduation offer for the
+   *  coordinator to accept on the next propose-and-confirm. */
+  graduationOffer?: {
+    signature: string
+    intent: BrainDumpIntent
+    confirmedCount: number
+  }
 }> {
   const { venueId, entryId, submittedBy, parsed, rawText } = args
   const supabase = createServiceClient()
   const routedTo: Array<{ table: string; id: string | null; action: string }> = []
+
+  // Compute pattern signature up front so we can stamp it on every
+  // brain_dump_entries update path + check graduation grants. Stamp
+  // immediately so even early-return clarification paths carry the
+  // signature for graduation-count purposes.
+  const signature = patternSignature({ intent: parsed.intent, shape: shapeOf(parsed) })
+  await supabase
+    .from('brain_dump_entries')
+    .update({ pattern_signature: signature })
+    .eq('id', entryId)
+
+  // GRADUATION AUTO-ROUTE: for graduable intents (operational_note +
+  // knowledge_base_import per INV-20.5.4-D), check whether an active
+  // grant covers this signature. If yes, bypass propose-and-confirm
+  // and route directly. The grant's hit_count + last_used_at are
+  // bumped fire-and-forget inside consumeGrantIfActive.
+  let activeGrant: Awaited<ReturnType<typeof consumeGrantIfActive>> = null
+  if (GRADUABLE_INTENTS.has(parsed.intent)) {
+    activeGrant = await consumeGrantIfActive(supabase, venueId, signature)
+  }
 
   // Low-confidence or explicitly ambiguous → clarification prompt.
   if (parsed.intent === 'ambiguous' || parsed.confidence < 75) {
@@ -339,6 +400,47 @@ export async function routeBrainDump(args: {
       }))
 
     if (rows.length > 0) {
+      // Auto-route via active grant: same dedup-on-question-text shape
+      // as the resolve route Case E, but skips the propose step.
+      if (activeGrant && activeGrant.intent === 'knowledge_base_import') {
+        const stamped = rows.map((r) => ({
+          venue_id: venueId,
+          question: r.question,
+          answer: r.answer,
+          category: r.category,
+          priority: 50,
+          is_active: true,
+          source: 'brain_dump_via_grant',
+        }))
+        const { data: existing } = await supabase
+          .from('knowledge_base')
+          .select('question')
+          .eq('venue_id', venueId)
+          .in('question', stamped.map((r) => r.question))
+        const existingSet = new Set(((existing ?? []) as Array<{ question: string }>).map((r) => r.question))
+        const toInsert = stamped.filter((r) => !existingSet.has(r.question))
+        if (toInsert.length > 0) {
+          await supabase.from('knowledge_base').insert(toInsert)
+        }
+        routedTo.push({
+          table: 'knowledge_base',
+          id: null,
+          action: `insert_via_grant:${toInsert.length},deduped:${existingSet.size}`,
+        })
+        await supabase
+          .from('brain_dump_entries')
+          .update({
+            parse_status: 'confirmed',
+            parsed_at: new Date().toISOString(),
+            resolved_at: new Date().toISOString(),
+            parse_result: { ...(parsed as unknown as Record<string, unknown>), via_grant_id: activeGrant.id, inserted: toInsert.length, deduped: existingSet.size },
+            routed_to: routedTo,
+          })
+          .eq('id', entryId)
+        return { routedTo, needsClarification: false, clarificationQuestion: null }
+      }
+
+      // Standard propose-and-confirm path.
       await createNotification({
         venueId,
         type: 'brain_dump_kb_import_confirm',
@@ -354,20 +456,55 @@ export async function routeBrainDump(args: {
           parse_result: { ...(parsed as unknown as Record<string, unknown>), proposed_kb_rows: rows },
         })
         .eq('id', entryId)
+
+      const graduation = await evaluateGraduation(supabase, venueId, signature)
       return {
         routedTo: [],
         needsClarification: true,
         clarificationQuestion: `Add ${rows.length} Q/A row${rows.length === 1 ? '' : 's'} to the knowledge base?`,
+        graduationOffer: graduation.shouldOfferGraduation
+          ? { signature, intent: parsed.intent, confirmedCount: graduation.confirmedCount }
+          : undefined,
       }
     }
   }
 
-  // Operational note: PROPOSE-AND-CONFIRM. Pre-fix auto-routed to
-  // knowledge_gaps; same propose-and-confirm reasoning as client_note
-  // and kb_import — coordinator confirms before the observation
-  // becomes a permanent gap entry.
+  // Operational note: PROPOSE-AND-CONFIRM by default. If an active
+  // pattern grant covers this signature (T4-E graduation), bypass
+  // the propose step and route directly to knowledge_gaps. The grant
+  // is recorded fire-and-forget by consumeGrantIfActive.
   if (parsed.intent === 'operational_note') {
     const noteBody = parsed.note || rawText
+
+    // Auto-route via active grant.
+    if (activeGrant && activeGrant.intent === 'operational_note') {
+      const { data: inserted } = await supabase
+        .from('knowledge_gaps')
+        .insert({
+          venue_id: venueId,
+          question: noteBody,
+          category: 'operational',
+          status: 'open',
+        })
+        .select('id')
+        .single()
+      if (inserted?.id) {
+        routedTo.push({ table: 'knowledge_gaps', id: inserted.id as string, action: 'insert_via_grant' })
+      }
+      await supabase
+        .from('brain_dump_entries')
+        .update({
+          parse_status: 'confirmed',
+          parsed_at: new Date().toISOString(),
+          resolved_at: new Date().toISOString(),
+          parse_result: { ...(parsed as unknown as Record<string, unknown>), via_grant_id: activeGrant.id },
+          routed_to: routedTo,
+        })
+        .eq('id', entryId)
+      return { routedTo, needsClarification: false, clarificationQuestion: null }
+    }
+
+    // Standard propose-and-confirm path.
     await createNotification({
       venueId,
       type: 'brain_dump_operational_note_confirm',
@@ -383,10 +520,17 @@ export async function routeBrainDump(args: {
         parse_result: { ...(parsed as unknown as Record<string, unknown>), proposed_operational_note: { noteBody } },
       })
       .eq('id', entryId)
+
+    // Graduation offer: if this would be the 3rd+ confirm of this
+    // shape, surface to caller so the resolve flow can prompt.
+    const graduation = await evaluateGraduation(supabase, venueId, signature)
     return {
       routedTo: [],
       needsClarification: true,
       clarificationQuestion: 'File this as an operational note in knowledge_gaps?',
+      graduationOffer: graduation.shouldOfferGraduation
+        ? { signature, intent: parsed.intent, confirmedCount: graduation.confirmedCount }
+        : undefined,
     }
   }
 
