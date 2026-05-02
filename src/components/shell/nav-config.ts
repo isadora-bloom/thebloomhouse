@@ -195,7 +195,7 @@ export const MODE_WEDDINGS: ModeConfig = {
 // /intel/voice-dna, /intel/tours, /intel/lost-deals, /intel/campaigns,
 // /intel/social, /intel/capacity, /intel/forecasts, /intel/health,
 // /intel/clients, /intel/clients/[id], /intel/matching,
-// /intel/annotations, /intel/team-compare
+// /intel/annotations, /intel/team-compare, /intel/macro-correlations (T5-θ.1)
 //
 // Org-level intel pages (/intel/portfolio, /intel/company, /intel/team,
 // /intel/regions, /intel/benchmark) move to ORG_ADMIN gear menu — they
@@ -225,6 +225,7 @@ export const MODE_INTEL: ModeConfig = {
       items: [
         { label: 'Trends', href: '/intel/trends', icon: TrendsIcon },
         { label: 'Cultural Moments', href: '/intel/cultural-moments', icon: Sparkles },
+        { label: 'Macro Correlations', href: '/intel/macro-correlations', icon: GitMerge, badge: 'AI' },
         { label: 'Marketing Reach', href: '/intel/reach', icon: BarChart3 },
         { label: 'Tours', href: '/intel/tours', icon: MapPinIcon },
         { label: 'Capacity', href: '/intel/capacity', icon: CalendarRange },
