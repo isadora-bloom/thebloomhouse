@@ -703,7 +703,9 @@ export async function sendAllDigests(): Promise<
   }
 
   const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
-  const { active, skipped } = await filterActiveVenues(targetVenueIds)
+  const { active, skipped } = await filterActiveVenues(targetVenueIds, {
+    workType: 'daily_digest',
+  })
   if (skipped.length > 0) {
     console.log(`[daily-digest] Skipping ${skipped.length} paused venue(s); running ${active.length}`)
   }

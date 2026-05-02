@@ -2395,7 +2395,9 @@ export async function runAllVenueIntelligence(): Promise<Record<string, number>>
   // generation). Skip paused venues per Playbook 21.4.3.
   const venueIds = venues.map((v) => v.id as string)
   const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
-  const { active, skipped } = await filterActiveVenues(venueIds)
+  const { active, skipped } = await filterActiveVenues(venueIds, {
+    workType: 'intelligence_analysis',
+  })
   if (skipped.length > 0) {
     console.log(`[intelligence-engine] Skipping ${skipped.length} paused venue(s); running ${active.length}`)
   }

@@ -368,6 +368,8 @@ export async function generatePricingElasticity(
   supabase: SupabaseClient,
   venueId: string,
   force: boolean = false,
+  /** T5-eta.3 correlation id; persists onto the row. */
+  correlationId: string | null = null,
 ): Promise<{
   classification: ElasticityClassification
   classification_label: string
@@ -649,6 +651,7 @@ Diagnose + recommend.`
       : result.classification === 'positive' ? 'medium'
       : result.classification === 'inelastic' ? 'medium'
       : 'low',
+    correlationId,
   })
 
   return {

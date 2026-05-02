@@ -69,4 +69,9 @@ export interface PersistInsightArgs {
   expiresAt?: string | null
   /** Priority bucket for the existing schema column. */
   priority?: 'critical' | 'high' | 'medium' | 'low'
+  /** Forensic-chain correlation id (T5-eta.3). Lets a coordinator
+   *  query "which insights were (re)generated while processing this
+   *  click / inbound email" via a single id. Optional — many
+   *  cron-driven generators don't have one. */
+  correlationId?: string | null
 }

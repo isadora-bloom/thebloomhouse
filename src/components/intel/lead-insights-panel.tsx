@@ -120,7 +120,23 @@ export function LeadInsightsPanel({ weddingId, variant = 'full' }: LeadInsightsP
     if (refresh) setRefreshing(true)
     else setLoading(true)
     try {
-      const url = `/api/insights/lead/${weddingId}${refresh ? '?refresh=1' : ''}`
+      // T5-eta.3: mint a per-click correlation id and thread it
+      // through to the API so every api_cost / intelligence_insights /
+      // engagement_event etc. created during this generator run can
+      // be queried back via the same id. Coordinator-debug query:
+      //   SELECT 'cost' src, * FROM api_costs WHERE correlation_id = X
+      //   UNION SELECT 'insight', * FROM intelligence_insights ...
+      // crypto.randomUUID is broadly available in modern browsers; if
+      // it's not (very old Safari), fall back to a Math.random-based
+      // id — quality of the id matters less than the linkage.
+      const cid =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `cid-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+      const params = new URLSearchParams()
+      if (refresh) params.set('refresh', '1')
+      params.set('correlationId', cid)
+      const url = `/api/insights/lead/${weddingId}?${params.toString()}`
       const res = await fetch(url)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = (await res.json()) as InsightsResponse

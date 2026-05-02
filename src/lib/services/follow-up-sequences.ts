@@ -462,7 +462,9 @@ export async function processAllVenueFollowUps(): Promise<
     venues.map((v) => [v.id as string, (v.name as string) ?? (v.id as string)]),
   )
   const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
-  const { active, skipped } = await filterActiveVenues(venueIds)
+  const { active, skipped } = await filterActiveVenues(venueIds, {
+    workType: 'follow_up_sequences',
+  })
   if (skipped.length > 0) {
     console.log(`[follow-ups] Skipping ${skipped.length} paused venue(s); running ${active.length}`)
   }

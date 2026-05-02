@@ -48,6 +48,11 @@ export async function createNotification(options: {
   type: string
   title: string
   body?: string
+  /** T5-eta.3: forensic-chain correlation id from the request scope.
+   *  Lets a coordinator query "every notification fired while
+   *  processing this inbound email" with one id. Optional — many
+   *  cron-driven callers don't have one. */
+  correlationId?: string | null
 }): Promise<void> {
   try {
     const supabase = createServiceClient()
@@ -80,13 +85,16 @@ export async function createNotification(options: {
     const { data: existing } = await dupeQuery
     if (existing && existing.length > 0) return
 
-    await supabase.from('admin_notifications').insert({
+    const insertPayload: Record<string, unknown> = {
       venue_id: options.venueId,
       wedding_id: options.weddingId ?? null,
       type: options.type,
       title: options.title,
       body: options.body ?? null,
-    })
+    }
+    if (options.correlationId) insertPayload.correlation_id = options.correlationId
+
+    await supabase.from('admin_notifications').insert(insertPayload)
   } catch (err) {
     console.error('[admin-notifications] Failed to create notification:', err)
   }

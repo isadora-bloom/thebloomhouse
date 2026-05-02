@@ -227,7 +227,16 @@ export function nextUtcMidnightIso(): string {
  * regardless of input size; uses .in() filter.
  */
 export async function filterActiveVenues(
-  venueIds: string[]
+  venueIds: string[],
+  /** T5-eta.2 / Stream M: when supplied, every venue dropped by this
+   *  filter has a paused_period_skipped row recorded so the daily
+   *  replay sweeper can show coordinators what was skipped during
+   *  the pause + offer a "Run now" backfill. Cron callers SHOULD
+   *  pass workType (e.g. 'weekly_digest', 'weekly_briefing',
+   *  'follow_up_sequences') so the replay summary is meaningful.
+   *  Optional payload lets the replay execute idempotently — most
+   *  callers leave it null. */
+  opts?: { workType?: string; scheduledFor?: string; payload?: Record<string, unknown> },
 ): Promise<{ active: string[]; skipped: string[] }> {
   if (venueIds.length === 0) return { active: [], skipped: [] }
   const supabase = createServiceClient()
@@ -250,6 +259,45 @@ export async function filterActiveVenues(
   // sanity checks downstream.
   const active = venueIds.filter((id) => !pausedSet.has(id))
   const skipped = venueIds.filter((id) => pausedSet.has(id))
+
+  // T5-eta.2: record what we skipped. Pre-fix this gate silently
+  // dropped paused venues; coordinators returning after a pause had
+  // no way to see "your weekly digest was skipped Monday." Now every
+  // (venue, work_type, tick) that the gate dropped gets a row. The
+  // 00:05 UTC replay-paused-skipped cron summarises the pending rows
+  // into a notification + a one-click "Run now" backfill. workType
+  // is optional only because not every existing caller has been
+  // updated yet — if absent, we still record so the row is queryable
+  // (with work_type='unknown'), but the replay summary will mark it
+  // generic.
+  if (skipped.length > 0) {
+    try {
+      const workType = opts?.workType ?? 'unknown'
+      const scheduledFor = opts?.scheduledFor ?? new Date().toISOString()
+      const payload = opts?.payload ?? {}
+      const rows = skipped.map((venueId) => ({
+        venue_id: venueId,
+        work_type: workType,
+        scheduled_for: scheduledFor,
+        payload,
+        status: 'pending' as const,
+      }))
+      const { error: insertError } = await supabase
+        .from('paused_period_skipped')
+        .insert(rows)
+      if (insertError) {
+        // Don't promote to a hard failure — replay queue is
+        // observability, not correctness. Keep the cron going.
+        console.warn(
+          `[cost-ceiling] failed to record paused_period_skipped (workType=${workType}):`,
+          insertError.message,
+        )
+      }
+    } catch (err) {
+      console.warn('[cost-ceiling] paused_period_skipped insert threw:', err)
+    }
+  }
+
   return { active, skipped }
 }
 

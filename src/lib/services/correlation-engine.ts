@@ -470,7 +470,9 @@ export async function computeCorrelationsAllVenues(
   // just the cost boundary.
   const venueIds = (venues ?? []).map((v) => v.id as string)
   const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
-  const { active, skipped } = await filterActiveVenues(venueIds)
+  const { active, skipped } = await filterActiveVenues(venueIds, {
+    workType: 'correlation_analysis',
+  })
   if (skipped.length > 0) {
     console.log(`[correlation] Skipping ${skipped.length} paused venue(s); running ${active.length}`)
   }

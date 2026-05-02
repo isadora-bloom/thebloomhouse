@@ -17,6 +17,7 @@ import { generateSourceMixCounterfactual } from '@/lib/services/insights/source-
 import { generateCoordinatorOverridePattern } from '@/lib/services/insights/coordinator-override-pattern'
 import { generateStrengthAreaCohort } from '@/lib/services/insights/strength-area-cohort'
 import { gateForBrainCall, nextUtcMidnightIso } from '@/lib/services/cost-ceiling'
+import { newCorrelationId } from '@/lib/observability/logger'
 
 export async function GET(request: NextRequest) {
   const supabase = createServiceClient()
@@ -40,6 +41,12 @@ export async function GET(request: NextRequest) {
 
   const force = request.nextUrl.searchParams.get('refresh') === '1'
 
+  // T5-eta.3: thread a correlation id through all generators so every
+  // resulting intelligence_insights row + api_costs line shares a
+  // single forensic id (mirrors the lead route).
+  const correlationId =
+    request.nextUrl.searchParams.get('correlationId') ?? newCorrelationId()
+
   // Cost-ceiling gate (T5-α.2): same 429 short-circuit as the
   // lead-scoped endpoint. See lead/[weddingId]/route.ts for the
   // rationale.
@@ -52,10 +59,10 @@ export async function GET(request: NextRequest) {
   }
 
   const [pricing, sourceMix, coordinatorOverride, strengthArea] = await Promise.allSettled([
-    generatePricingElasticity(supabase, venueId, force),
-    generateSourceMixCounterfactual(supabase, venueId, force),
-    generateCoordinatorOverridePattern(supabase, venueId, force),
-    generateStrengthAreaCohort(supabase, venueId, force),
+    generatePricingElasticity(supabase, venueId, force, correlationId),
+    generateSourceMixCounterfactual(supabase, venueId, force, correlationId),
+    generateCoordinatorOverridePattern(supabase, venueId, force, correlationId),
+    generateStrengthAreaCohort(supabase, venueId, force, correlationId),
   ])
 
   return NextResponse.json({

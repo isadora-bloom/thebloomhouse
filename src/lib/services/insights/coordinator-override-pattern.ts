@@ -224,6 +224,8 @@ export async function generateCoordinatorOverridePattern(
   supabase: SupabaseClient,
   venueId: string,
   force: boolean = false,
+  /** T5-eta.3 correlation id; persists onto the row. */
+  correlationId: string | null = null,
 ): Promise<{
   total_drafts: number
   approved_pct: number
@@ -447,6 +449,7 @@ Diagnose the pattern + recommend a specific next step.`
     priority: Math.abs(classical.rejection_drift_pp ?? 0) >= 20 ? 'high'
       : Math.abs(classical.rejection_drift_pp ?? 0) >= 10 ? 'medium'
       : 'low',
+    correlationId,
   })
 
   return {

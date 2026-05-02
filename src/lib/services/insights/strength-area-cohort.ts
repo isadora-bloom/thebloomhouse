@@ -185,6 +185,8 @@ export async function generateStrengthAreaCohort(
   supabase: SupabaseClient,
   venueId: string,
   force: boolean = false,
+  /** T5-eta.3 correlation id; persists onto the row. */
+  correlationId: string | null = null,
 ): Promise<{
   total_resolved: number
   strongest_label: string
@@ -370,6 +372,7 @@ Diagnose + recommend.`
     priority: classical.gap_pp >= 30 ? 'high'
       : classical.gap_pp >= 15 ? 'medium'
       : 'low',
+    correlationId,
   })
 
   return {

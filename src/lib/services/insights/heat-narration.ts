@@ -155,6 +155,10 @@ export async function generateHeatNarration(
   weddingId: string,
   /** Set true to bypass cache (e.g. coordinator manual regenerate). */
   force: boolean = false,
+  /** T5-eta.3 forensic-chain correlation id; threads through to
+   *  persistInsight so the row carries the same id as the api_costs
+   *  + downstream side-effects from this generator run. */
+  correlationId: string | null = null,
 ): Promise<{
   title: string
   body: string
@@ -324,6 +328,7 @@ Compose the JSON narration.`
     priority: payload.heat_score >= 80 ? 'high'
       : payload.heat_score >= 60 ? 'medium'
       : 'low',
+    correlationId,
   })
 
   if (!result.ok) {

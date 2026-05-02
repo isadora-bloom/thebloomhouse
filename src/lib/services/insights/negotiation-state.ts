@@ -172,6 +172,9 @@ export async function generateNegotiationState(
   venueId: string,
   weddingId: string,
   force: boolean = false,
+  /** T5-eta.3: forensic-chain correlation id, persists onto the
+   *  intelligence_insights row alongside the same id in api_costs. */
+  correlationId: string | null = null,
 ): Promise<{
   phase: NegotiationPhase
   phase_label: string
@@ -337,6 +340,7 @@ Classify the phase.`
     priority: result.phase === 'pending_contract' || result.phase === 'negotiation' ? 'high'
       : result.phase === 'late_decision' ? 'medium'
       : 'low',
+    correlationId,
   })
 
   return {

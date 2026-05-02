@@ -1042,7 +1042,9 @@ export async function runAllVenueAnomalies(): Promise<Record<string, AnomalyAler
   // to pause when a venue hits 100% ceiling. OPS-21.4.3.
   const venueIds = venues.map((v) => v.id as string)
   const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
-  const { active, skipped } = await filterActiveVenues(venueIds)
+  const { active, skipped } = await filterActiveVenues(venueIds, {
+    workType: 'anomaly_detection',
+  })
   if (skipped.length > 0) {
     console.log(`[anomaly] Skipping ${skipped.length} paused venue(s); running ${active.length}`)
   }

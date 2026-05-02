@@ -761,6 +761,8 @@ export async function processIncomingEmail(
       return { interactionId: null, draftId: null, classification: 'skipped', autoSent: false }
     }
     // Still persist so the inbox thread view is complete, but as outbound.
+    // correlation_id (T5-eta.3): stamp the self-loop outbound row too
+    // so the forensic chain spans the entire processIncomingEmail run.
     const outboundPayload: Record<string, unknown> = {
       venue_id: venueId,
       type: 'email',
@@ -773,6 +775,7 @@ export async function processIncomingEmail(
       gmail_message_id: email.messageId,
       gmail_thread_id: email.threadId,
       timestamp: email.date,
+      correlation_id: correlationId,
     }
     if (email.connectionId) outboundPayload.gmail_connection_id = email.connectionId
     await supabase.from('interactions').insert(outboundPayload)
@@ -923,6 +926,10 @@ export async function processIncomingEmail(
   // Step 4: Create interaction record. Always store the raw from_email /
   // from_name so the inbox can render a sender even when person_id is null
   // (per migration 063 — don't rely on the people join alone).
+  // correlation_id (T5-eta.3): stamp the inbound interaction with the
+  // request-scoped correlation id so coordinators can chase the full
+  // forensic chain (api_costs / drafts / engagement_events / interactions
+  // / notifications / intelligence_insights) from one id.
   const interactionPayload: Record<string, unknown> = {
     venue_id: venueId,
     wedding_id: weddingId,
@@ -937,6 +944,7 @@ export async function processIncomingEmail(
     gmail_message_id: email.messageId,
     gmail_thread_id: email.threadId,
     timestamp: email.date,
+    correlation_id: correlationId,
     // Universal body-identity payload — populated on every email
     // regardless of parser match. Coordinator UIs and retroactive
     // linkage scripts read interactions.extracted_identity rather
@@ -1119,7 +1127,8 @@ export async function processIncomingEmail(
           // INV-13 every engagement_event ships with direction at
           // write time.
           'inbound',
-          email.date
+          email.date,
+          correlationId
         )
       } catch (err) {
         await logPipelineError(venueId, 'initial_inquiry_record', err, {
@@ -1333,7 +1342,7 @@ export async function processIncomingEmail(
         // signaled tour interest, commitment, family context, etc.
         // INV-13 / INV-14: direction='inbound' so the events count
         // toward the wedding's heat score.
-        await recordEngagementEventsBatch(venueId, weddingId, heatEvents, 'inbound', email.date)
+        await recordEngagementEventsBatch(venueId, weddingId, heatEvents, 'inbound', email.date, correlationId)
         // Mirror attribution-relevant events to wedding_touchpoints so
         // /intel/sources can compute multi-touch journey + funnel.
         // engagementToTouchType returns null for heat-internal signals
@@ -1685,7 +1694,8 @@ export async function processIncomingEmail(
           weddingId,
           [{ eventType: 'initial_inquiry', metadata: { source: schedulingEvent.source, via: 'scheduling_tool' } }],
           'inbound',
-          email.date
+          email.date,
+          correlationId
         )
 
         // Source-attribution self-heal: same back-trace fire as the
@@ -1789,7 +1799,7 @@ export async function processIncomingEmail(
           event_datetime: schedulingEvent.eventDatetime,
           email_arrival: email.date,
         },
-      }], 'inbound', schedulingOccurredAt)
+      }], 'inbound', schedulingOccurredAt, correlationId)
 
       // Mirror to wedding_touchpoints. Source is the scheduling tool
       // ('calendly' / 'acuity' / etc.), not the wedding's first-touch

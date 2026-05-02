@@ -24,6 +24,7 @@ import { generateRiskFlags } from '@/lib/services/insights/risk-flags'
 import { generateDecayReEngagement } from '@/lib/services/insights/decay-re-engagement'
 import { generateCohortMatch } from '@/lib/services/insights/cohort-match'
 import { gateForBrainCall, nextUtcMidnightIso } from '@/lib/services/cost-ceiling'
+import { newCorrelationId } from '@/lib/observability/logger'
 
 export async function GET(
   request: NextRequest,
@@ -62,6 +63,14 @@ export async function GET(
   // Force regeneration when ?refresh=1.
   const force = request.nextUrl.searchParams.get('refresh') === '1'
 
+  // T5-eta.3: thread a correlation_id through every generator so the
+  // 4 insights, their api_costs rows, and any persisted intelligence_
+  // insights row all carry the same id. Client (LeadInsightsPanel)
+  // mints one per Refresh click and passes via ?correlationId=. Fall
+  // back to a server-minted id when caller didn't supply one.
+  const correlationId =
+    request.nextUrl.searchParams.get('correlationId') ?? newCorrelationId()
+
   // Cost-ceiling gate (T5-α.2): if the venue has tripped its daily
   // ceiling and autonomous behavior is paused, refuse the
   // user-initiated insight generation request entirely. Pre-fix a
@@ -86,12 +95,15 @@ export async function GET(
   // calling Claude. Decay self-gates and returns null when the lead
   // shows no decay signal, so the panel only renders the card when
   // there's something useful to say.
+  // T5-eta.3: each generator gets the same correlationId so all 5
+  // intelligence_insights rows + their api_costs lines share a single
+  // forensic id.
   const [heat, negotiation, risk, decay, cohort] = await Promise.allSettled([
-    generateHeatNarration(supabase, venueId, weddingId, force),
-    generateNegotiationState(supabase, venueId, weddingId, force),
-    generateRiskFlags(supabase, venueId, weddingId, force),
-    generateDecayReEngagement(supabase, venueId, weddingId, force),
-    generateCohortMatch(supabase, venueId, weddingId, force),
+    generateHeatNarration(supabase, venueId, weddingId, force, correlationId),
+    generateNegotiationState(supabase, venueId, weddingId, force, correlationId),
+    generateRiskFlags(supabase, venueId, weddingId, force, correlationId),
+    generateDecayReEngagement(supabase, venueId, weddingId, force, correlationId),
+    generateCohortMatch(supabase, venueId, weddingId, force, correlationId),
   ])
 
   return NextResponse.json({
