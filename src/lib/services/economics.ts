@@ -1,4 +1,32 @@
 /**
+ * @deprecated 2026-05-01 (T5-ε.1). LEGACY FRED writer + reader.
+ *
+ * This module writes/reads the legacy `economic_indicators` table
+ * (indicator_name + date schema). The current correlation engine and
+ * external-context loaders read `fred_indicators` (series_id +
+ * observation_date schema, see ./external-context/fred.ts).
+ *
+ * The cron writer was migrated off `fetchAllEconomicIndicators` to
+ * `fetchAllDefaultFredSeries` in `external-context/fred-fetch.ts`. The
+ * direct readers of `economic_indicators` (intel-brain.ts,
+ * me-or-market.ts, intel/dashboard, intel/market-pulse) were migrated
+ * to `fred_indicators`.
+ *
+ * Remaining users of THIS module:
+ *   - briefings.ts            getLatestIndicators + calculateDemandScore
+ *   - draft-context-summary.ts getLatestIndicators + calculateDemandScore
+ *   - sage-intelligence.ts     getLatestIndicators + calculateDemandScore
+ *   - intel/dashboard          ECONOMIC_INDICATOR_AVERAGES (constant only)
+ *
+ * Those four still call into this module because the demand-score
+ * calculation depends on PSAVERT/HOUST/CONCCONF/DSPIC96 series that
+ * the new fred-fetch writer doesn't yet pull. Once those FRED series
+ * are added to DEFAULT_FRED_SERIES, this module can be deleted.
+ *
+ * IMPORTANT: do not call fetchAllEconomicIndicators from cron — it
+ * writes the legacy table the correlation engine no longer reads.
+ *
+ * --- Original docstring -----------------------------------------------------
  * Bloom House: Economic Indicators Service
  *
  * Fetches macroeconomic signals from FRED (Federal Reserve Economic Data)

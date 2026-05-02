@@ -1883,11 +1883,15 @@ export default function MarketPulsePage() {
         trendsRes,
         confidenceRes,
       ] = await Promise.all([
-        // Latest economic indicators (one per indicator)
+        // Latest macro indicators (fred_indicators).
+        //
+        // T5-ε.1 (2026-05-01): migrated from legacy economic_indicators.
+        // Mapped to friendly names below so calculateDemandScore +
+        // setIndicators consumers don't need to relearn FRED ids.
         supabase
-          .from('economic_indicators')
-          .select('indicator_name, date, value, source')
-          .order('date', { ascending: false })
+          .from('fred_indicators')
+          .select('series_id, observation_date, value')
+          .order('observation_date', { ascending: false })
           .limit(50),
 
         // Recommendations for this venue
@@ -1920,23 +1924,35 @@ export default function MarketPulsePage() {
           .gte('week', sixMonthsAgo.toISOString().split('T')[0])
           .order('week', { ascending: true }),
 
-        // Consumer confidence history (24 months of UMCSENT)
+        // Consumer confidence history (24 months of UMCSENT).
+        // T5-ε.1: migrated from legacy economic_indicators (where
+        // 'consumer_sentiment' was the friendly name) to fred_indicators
+        // (where 'UMCSENT' is the canonical FRED series id).
         supabase
-          .from('economic_indicators')
-          .select('date, value')
-          .eq('indicator_name', 'consumer_sentiment')
-          .gte('date', twoYearsAgo.toISOString().split('T')[0])
-          .order('date', { ascending: true }),
+          .from('fred_indicators')
+          .select('observation_date, value')
+          .eq('series_id', 'UMCSENT')
+          .gte('observation_date', twoYearsAgo.toISOString().split('T')[0])
+          .order('observation_date', { ascending: true }),
       ])
       // Wait for venue config in parallel — UI shouldn't render with
       // wrong temp range and then flicker correct.
       await venueConfigPromise
 
-      // Process economic indicators — deduplicate, take latest per name
+      // Process FRED indicators — deduplicate to latest per series, then
+      // map FRED ids to friendly names so calculateDemandScore +
+      // setIndicators consumers don't change. Only UMCSENT is in the
+      // current DEFAULT_FRED_SERIES — the legacy PSAVERT/HOUST/CONCCONF
+      // aren't being written. Score function tolerates missing keys.
+      const FRED_TO_NAME: Record<string, string> = {
+        UMCSENT: 'consumer_sentiment',
+      }
       const latestIndicators: Record<string, number> = {}
       for (const row of indicatorsRes.data ?? []) {
-        const name = row.indicator_name as string
-        if (!(name in latestIndicators)) {
+        const seriesId = row.series_id as string
+        const name = FRED_TO_NAME[seriesId]
+        if (!name) continue
+        if (!(name in latestIndicators) && row.value != null) {
           latestIndicators[name] = Number(row.value)
         }
       }
@@ -1961,10 +1977,11 @@ export default function MarketPulsePage() {
       // Search trends
       setSearchTrends((trendsRes.data ?? []) as SearchTrend[])
 
-      // Confidence history
+      // Confidence history (UMCSENT from fred_indicators).
+      // T5-ε.1 (2026-05-01): observation_date is the new column name.
       setConfidenceHistory(
         (confidenceRes.data ?? []).map((d) => ({
-          date: d.date as string,
+          date: d.observation_date as string,
           value: Number(d.value),
         }))
       )
