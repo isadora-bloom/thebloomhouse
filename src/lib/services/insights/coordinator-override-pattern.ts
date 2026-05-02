@@ -144,6 +144,25 @@ export function dowRejectionAnomalies(rows: FeedbackRow[]): DowAnomaly[] {
   return out
 }
 
+/**
+ * Per ANTI-19.9 #5, self-knowledge insights that touch on coordinator
+ * BEHAVIOUR (vs. venue track-record) are opt-in only — coordinator
+ * surveillance pattern. The gate lives on venues.self_knowledge_insights_enabled
+ * (migration 148, default false). Returns true when the venue has
+ * opted in.
+ */
+async function selfKnowledgeOptedIn(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<boolean> {
+  const { data } = await supabase
+    .from('venues')
+    .select('self_knowledge_insights_enabled')
+    .eq('id', venueId)
+    .maybeSingle()
+  return Boolean((data as { self_knowledge_insights_enabled?: boolean } | null)?.self_knowledge_insights_enabled)
+}
+
 async function loadClassicalCoordinatorEvidence(
   supabase: SupabaseClient,
   venueId: string,
@@ -216,6 +235,11 @@ export async function generateCoordinatorOverridePattern(
   confidence: number
   cached: boolean
 } | null> {
+  // Opt-in gate per ANTI-19.9 #5. Default false so this insight does
+  // NOT compute / surface for any venue until explicitly enabled —
+  // protects venues from accidental coordinator-surveillance shipping.
+  if (!(await selfKnowledgeOptedIn(supabase, venueId))) return null
+
   const classical = await loadClassicalCoordinatorEvidence(supabase, venueId)
   if (!classical) return null
 

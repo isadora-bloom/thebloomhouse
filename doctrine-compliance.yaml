@@ -1351,10 +1351,10 @@ meta:
   severity: high
 
 - id: ANTI-19.9-5
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: self-knowledge insights opt-in only
-  severity: high
+  notes: "Migration 148 (2026-05-01): adds venues.self_knowledge_insights_enabled boolean NOT NULL DEFAULT false. coordinator-override-pattern.ts (T3-I a) now checks selfKnowledgeOptedIn() before any compute and returns null when off — no LLM call, no surface row, no row in intelligence_insights. Default-OFF means existing venues see no behavior change; future opt-in surface (admin toggle) gates the surveillance-flavored coordinator-behavior insight. strength-area-cohort stays default-on because it's venue-track-record (no per-coordinator surveillance), not self-knowledge in the surveillance sense."
 
 # ===================================================================
 # PART 20 — UI LAYERS, ESSENTIALS, BRAIN DUMP
@@ -1596,10 +1596,10 @@ meta:
   severity: critical
 
 - id: OPS-21.3.6
-  status: at-risk
+  status: partial
   owner: Isadora
   target: access controls (RLS + service-role discipline)
-  notes: "createServiceClient used by 25+ services with no allowlist. Migration 027 has anon UPDATE USING(true) on 10+ couple tables for demo — global-write to anon."
+  notes: "Migration 147 (2026-05-01): all anon UPDATE/INSERT/DELETE policies on the 50+ couple-portal tables from migration 027 are now scoped to is_demo venues via two STABLE SECURITY DEFINER helpers — is_demo_venue(uuid) and is_demo_wedding(uuid). Discovery loop walks information_schema and prefers venue_id, falls back to wedding_id, denies-by-default if neither exists. Wide-open `USING(true) WITH CHECK(true)` anon write count verified at 0 post-migration. Anyone with the public anon key can no longer issue cross-tenant UPDATEs through the JS console — global-write breach closed. PARTIAL because: (a) createServiceClient still used by 25+ services with no allowlist (separate sub-cell — service-role discipline pending); (b) didn't audit non-027-tracked anon policies."
   severity: high
 
 - id: OPS-21.3.7
