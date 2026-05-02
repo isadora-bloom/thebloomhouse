@@ -40,7 +40,18 @@ export const COHORT_MATCH_PROMPT_VERSION = 'cohort-match.prompt.v1.0'
 
 const DAY_MS = 86_400_000
 const COHORT_K = 10
-const MIN_COHORT_SIZE = 3
+// T5-ι.6 (2026-05-02): bumped from 3 → 5. Cohorts with N<5 cannot
+// emit "High" confidence; below that the narrator forces a "Low conf
+// — small comparison group" framing. Pairs with the
+// confidence_flag (γ.1) disclosure logic so we never say "the venue's
+// segment converts at X%" off four ambiguous data points.
+const MIN_COHORT_SIZE = 5
+// T5-ι.6: cohorts with fewer than this many qualifying members are
+// forced to "Low" badge regardless of effect size. Three is the cliff
+// at which median value/days-to-book stops being self-mocking
+// (median of 2 is just an average; median of 3 starts to reject
+// outliers).
+const MIN_QUALIFYING_BANDS_FOR_HIGH = 3
 const RECENCY_CAP_YEARS = 3
 
 type Season = 'spring' | 'summer' | 'fall' | 'winter'
@@ -75,6 +86,12 @@ interface CohortMember {
   booking_value: number | null
   /** Days from inquiry_date → booked_at. Null for lost or missing. */
   days_to_book: number | null
+  /** weddings.confidence_flag — 'live' | 'imported_high' | ... | null.
+   *  Drives γ.1 disclosure: cohorts with backfilled-low members get a
+   *  "based on N high-fidelity + M backfilled-low" stamp on the
+   *  narration so coordinator knows the comparison group is partly
+   *  inferred from Gmail backfill rather than live pipeline. */
+  confidence_flag: string | null
 }
 
 interface ClassicalCohortPayload {
@@ -90,6 +107,15 @@ interface ClassicalCohortPayload {
   conversion_pct: number  // 0-100, rounded
   median_booking_value: number | null
   median_days_to_book: number | null
+  /** Count of cohort members whose confidence_flag is one of
+   *  'imported_low' | 'manual' | null. T5-γ.1 — narration calls this
+   *  out explicitly so coordinator knows "of 8 booked, 3 are
+   *  Gmail-backfill inferred". */
+  n_low_confidence: number
+  /** Count of cohort members with strong provenance (live or
+   *  imported_high). Pre-fix the cohort blended these without
+   *  acknowledgement. */
+  n_high_confidence: number
 }
 
 function deriveSeason(wedding_date: string | null): Season | null {
@@ -238,14 +264,20 @@ async function loadClassicalCohortEvidence(
 
   const { data: candidates } = await supabase
     .from('weddings')
-    .select('id, status, guest_count_estimate, source, wedding_date, inquiry_date, booking_value, booked_at')
+    .select('id, status, guest_count_estimate, source, wedding_date, inquiry_date, booking_value, booked_at, confidence_flag')
     .eq('venue_id', venueId)
     .neq('id', weddingId)
     .in('status', ['booked', 'completed', 'lost'])
     .gte('inquiry_date', cutoff)
 
-  const candList = ((candidates ?? []) as Array<Parameters<typeof featuresFromRow>[0]>)
-    .map(featuresFromRow)
+  // T5-γ.1: keep confidence_flag on the raw candidate row so the
+  // member can carry it into the disclosure. featuresFromRow doesn't
+  // need it (it's not a similarity dim); we attach it side-channel.
+  const candRows = (candidates ?? []) as Array<Parameters<typeof featuresFromRow>[0] & { confidence_flag: string | null }>
+  const candList = candRows.map(featuresFromRow)
+  const flagByWeddingId = new Map<string, string | null>(
+    candRows.map((r) => [r.id, r.confidence_flag ?? null]),
+  )
   if (candList.length < MIN_COHORT_SIZE) return null
 
   // Venue stats for z-scoring. Use ALL candidates to build the
@@ -283,6 +315,7 @@ async function loadClassicalCohortEvidence(
       outcome,
       booking_value: cand.booking_value,
       days_to_book: daysToBook,
+      confidence_flag: flagByWeddingId.get(cand.weddingId) ?? null,
       dimsUsed,
     })
   }
@@ -299,6 +332,16 @@ async function loadClassicalCohortEvidence(
   const n_booked = members.filter((m) => m.outcome === 'booked').length
   const n_lost = members.length - n_booked
   const conversion_pct = Math.round((n_booked / members.length) * 100)
+  // T5-γ.1: tally provenance. 'live' and 'imported_high' are strong;
+  // 'imported_low' / 'manual' / null are flagged so the narration can
+  // disclose the mix. 'imported_medium' counts as high here — partial
+  // identity is still a real CRM record, not Gmail-backfill inference.
+  const n_high_confidence = members.filter(
+    (m) => m.confidence_flag === 'live'
+      || m.confidence_flag === 'imported_high'
+      || m.confidence_flag === 'imported_medium',
+  ).length
+  const n_low_confidence = members.length - n_high_confidence
   const bookingValues = members
     .filter((m) => m.outcome === 'booked' && m.booking_value !== null)
     .map((m) => m.booking_value as number)
@@ -318,6 +361,8 @@ async function loadClassicalCohortEvidence(
     conversion_pct,
     median_booking_value: median_booking_value !== null ? Math.round(median_booking_value) : null,
     median_days_to_book: median_days_to_book !== null ? Math.round(median_days_to_book) : null,
+    n_low_confidence,
+    n_high_confidence,
   }
 }
 
@@ -352,6 +397,11 @@ export async function generateCohortMatch(
   conversion_pct: number
   median_booking_value: number | null
   median_days_to_book: number | null
+  // T5-γ.1: surfaced so LeadInsightsPanel can render the disclosure
+  // row ("based on N high-fidelity + M backfilled-low") without
+  // re-querying. n_low_confidence > 0 → show disclosure.
+  n_low_confidence: number
+  n_high_confidence: number
   confidence: number
   cached: boolean
 } | null> {
@@ -366,6 +416,11 @@ export async function generateCohortMatch(
     conversion: classical.conversion_pct,
     medianValue: classical.median_booking_value,
     medianDays: classical.median_days_to_book,
+    // T5-γ.1: confidence mix is part of the cache fingerprint so a
+    // backfill that converts an imported_low into live re-narrates
+    // (the disclosure stamp changes shape).
+    nLow: classical.n_low_confidence,
+    nHigh: classical.n_high_confidence,
     // Fingerprint of cohort membership — if the same N similar weddings
     // are chosen, narration is reusable.
     cohortIds: classical.members.map((m) => m.weddingId).sort().join('|'),
@@ -390,6 +445,8 @@ export async function generateCohortMatch(
         conversion_pct: classical.conversion_pct,
         median_booking_value: classical.median_booking_value,
         median_days_to_book: classical.median_days_to_book,
+        n_low_confidence: classical.n_low_confidence,
+        n_high_confidence: classical.n_high_confidence,
         confidence: cached.confidence,
         cached: true,
       }
@@ -450,6 +507,14 @@ CRITICAL RULES:
   "the venue's small look-alike sample suggests..." not "this segment
   always books."`
 
+  // T5-γ.1: include a confidence-mix disclosure line when any cohort
+  // member is backfilled-low or has unknown provenance. Forces the
+  // LLM to acknowledge the inferred portion in its reasoning rather
+  // than narrating as if every cohort member is live-pipeline truth.
+  const confidenceMixLine = classical.n_low_confidence > 0
+    ? `  - Confidence mix: ${classical.n_high_confidence} high-fidelity + ${classical.n_low_confidence} backfilled-low (Gmail-inferred or coordinator hand-entry)`
+    : `  - Confidence mix: ${classical.n_high_confidence} high-fidelity (live or CRM-imported)`
+
   const userPrompt = `COHORT MATCH DIAGNOSTIC
 
 Current lead profile:
@@ -462,11 +527,12 @@ Look-alike cohort (same venue, last 3 years, top ${classical.n_total} matches):
   - Conversion: ${classical.conversion_pct}%
   - Median booking value (booked only): ${classical.median_booking_value !== null ? '$' + classical.median_booking_value : 'unknown'}
   - Median days-to-book: ${classical.median_days_to_book !== null ? classical.median_days_to_book + ' days' : 'unknown'}
+${confidenceMixLine}
 
 Top 5 cohort members (closest match):
 ${sampleCohort}
 
-Diagnose the pattern + recommend an action.`
+Diagnose the pattern + recommend an action.${classical.n_low_confidence > 0 ? ' If a meaningful share of the cohort is backfilled-low, acknowledge that the comparison group is partly inferred from Gmail backfill (one short clause is enough — the UI also surfaces the count separately).' : ''}`
 
   let result: CohortDiagnostic | null = null
   // Cost-ceiling gate (T5-α.2). Conversion-rate fallback below covers
@@ -504,7 +570,13 @@ Diagnose the pattern + recommend an action.`
   // Deterministic fallback — pick pattern from conversion rate.
   if (!result) {
     let pattern: CohortDiagnostic['pattern']
-    if (classical.n_total < 5) pattern = 'sparse_signal'
+    // T5-ι.6: sparse_signal gate uses MIN_QUALIFYING_BANDS_FOR_HIGH
+    // (3) — even when N >= MIN_COHORT_SIZE (5) the absolute booked or
+    // lost count needs to clear 3 to escape sparse_signal. Pre-fix a
+    // 5-member cohort with 1 booked / 4 lost emitted high_converting
+    // off a single data point.
+    if (classical.n_total < MIN_COHORT_SIZE) pattern = 'sparse_signal'
+    else if (classical.n_booked < MIN_QUALIFYING_BANDS_FOR_HIGH && classical.n_lost < MIN_QUALIFYING_BANDS_FOR_HIGH) pattern = 'sparse_signal'
     else if (classical.conversion_pct >= 70) pattern = 'high_converting'
     else if (classical.conversion_pct <= 30) pattern = 'low_converting'
     else pattern = 'mixed'
@@ -517,9 +589,17 @@ Diagnose the pattern + recommend an action.`
       ? 'Treat as a fresh lead; cohort is too small to anchor on.'
       : 'Outcome split in the cohort; tour-then-watch is the right cadence.'
 
+    // T5-γ.1: deterministic-path narration includes the disclosure when
+    // backfilled-low members exist. LLM-path adds the same hint via
+    // userPrompt so both paths produce honest narration.
+    const baseReasoning = 'Pattern inferred from cohort conversion rate (LLM diagnostic unavailable).'
+    const disclosure = classical.n_low_confidence > 0
+      ? ` ${classical.n_low_confidence} of ${classical.n_total} cohort members are backfilled-low (Gmail-inferred).`
+      : ''
+
     result = {
       pattern,
-      reasoning: 'Pattern inferred from cohort conversion rate (LLM diagnostic unavailable).',
+      reasoning: baseReasoning + disclosure,
       recommendation,
       confidence: 0.35,
     }
@@ -560,6 +640,22 @@ Diagnose the pattern + recommend an action.`
     effectSize: evidence.effectSize,
   })
 
+  // T5-ι.6: cap confidence so cohorts with N < MIN_COHORT_SIZE or
+  // fewer than MIN_QUALIFYING_BANDS_FOR_HIGH members in the dominant
+  // outcome cannot emit a "High" badge. levelForConfidence in
+  // inline-primitives.tsx maps >= 0.7 to High and >= 0.45 to Medium —
+  // we clamp to 0.44 so the UI cap is "Low" regardless of effect
+  // magnitude when the cohort is sparse. Pre-fix a 4-member cohort
+  // with 4/4 booked could emit High off effectSize=1.0 even though
+  // the sample size made the claim near-meaningless.
+  const dominantBand = Math.max(classical.n_booked, classical.n_lost)
+  const isSparseForHighBadge =
+    classical.n_total < MIN_COHORT_SIZE
+    || dominantBand < MIN_QUALIFYING_BANDS_FOR_HIGH
+  const cappedConfidence = isSparseForHighBadge
+    ? Math.min(conf.value, 0.44)
+    : conf.value
+
   const narration: InsightNarration = {
     title: result.pattern === 'high_converting'
       ? `Look-alike cohort books at ${classical.conversion_pct}%`
@@ -585,7 +681,7 @@ Diagnose the pattern + recommend an action.`
     narration,
     llmModelUsed: CLAUDE_MODEL,
     promptVersionUsed: COHORT_MATCH_PROMPT_VERSION,
-    confidence: conf.value,
+    confidence: cappedConfidence,
     surfacePriority: classical.n_total + (result.pattern === 'low_converting' ? 50 : 0),
     priority: result.pattern === 'low_converting' ? 'high'
       : result.pattern === 'sparse_signal' ? 'low'
@@ -602,7 +698,9 @@ Diagnose the pattern + recommend an action.`
     conversion_pct: classical.conversion_pct,
     median_booking_value: classical.median_booking_value,
     median_days_to_book: classical.median_days_to_book,
-    confidence: conf.value,
+    n_low_confidence: classical.n_low_confidence,
+    n_high_confidence: classical.n_high_confidence,
+    confidence: cappedConfidence,
     cached: false,
   }
 }

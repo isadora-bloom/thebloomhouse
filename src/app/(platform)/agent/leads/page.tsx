@@ -38,6 +38,12 @@ interface Lead {
   wedding_date: string | null
   guest_count_estimate: number | null
   code_extension: string | null
+  // T5-γ.1: provenance flag — null/'live' = pipeline-ingested,
+  // 'imported_high'/'imported_medium' = CRM, 'imported_low' = Gmail
+  // backfill, 'manual' = coordinator hand-entry. Surfaced as inline
+  // chip so coordinator can spot which lead profiles came from
+  // backfill vs live data.
+  confidence_flag: string | null
   // Joined
   partner1_name: string | null
   partner2_name: string | null
@@ -122,6 +128,63 @@ function statusLabel(status: string): string {
     cancelled: 'Cancelled',
   }
   return map[status] ?? status
+}
+
+// ---------------------------------------------------------------------------
+// Confidence flag chip (T5-γ.1)
+//
+// Surfaces wedding.confidence_flag inline. Coordinator needs to
+// distinguish "this lead came in live this week" from "this lead was
+// inferred from a Gmail backfill or hand-entered." Pre-fix the leads
+// table presented all rows the same.
+// ---------------------------------------------------------------------------
+
+function confidenceFlagBadge(flag: string): { bg: string; text: string; label: string; title: string } | null {
+  switch (flag) {
+    case 'imported_high':
+      return {
+        bg: 'bg-blue-50',
+        text: 'text-blue-700',
+        label: 'CRM',
+        title: 'Imported with full identity from a CRM export.',
+      }
+    case 'imported_medium':
+      return {
+        bg: 'bg-blue-50',
+        text: 'text-blue-700',
+        label: 'CRM',
+        title: 'Imported with partial identity from a CRM export.',
+      }
+    case 'imported_low':
+      return {
+        bg: 'bg-amber-50',
+        text: 'text-amber-700',
+        label: 'Imported',
+        title: 'Inferred from Gmail backfill — fields may be classifier-derived rather than live-pipeline truth.',
+      }
+    case 'manual':
+      return {
+        bg: 'bg-sage-50',
+        text: 'text-sage-700',
+        label: 'Manual',
+        title: 'Coordinator hand-entry. Not pipeline-ingested.',
+      }
+    default:
+      return null
+  }
+}
+
+function ConfidenceFlagChip({ flag }: { flag: string }) {
+  const meta = confidenceFlagBadge(flag)
+  if (!meta) return null
+  return (
+    <span
+      className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${meta.bg} ${meta.text}`}
+      title={meta.title}
+    >
+      {meta.label}
+    </span>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +392,7 @@ export default function LeadsPage() {
           wedding_date,
           guest_count_estimate,
           code_extension,
+          confidence_flag,
           venues:venue_id ( name ),
           people!people_wedding_id_fkey ( role, first_name, last_name ),
           client_codes!client_codes_wedding_id_fkey ( code )
@@ -370,6 +434,7 @@ export default function LeadsPage() {
           wedding_date: row.wedding_date,
           guest_count_estimate: row.guest_count_estimate,
           code_extension: row.code_extension ?? null,
+          confidence_flag: (row.confidence_flag as string | null) ?? null,
           partner1_name: p1
             ? [p1.first_name, p1.last_name].filter(Boolean).join(' ')
             : null,
@@ -654,6 +719,14 @@ export default function LeadsPage() {
                             <span className="text-xs font-mono text-sage-500">
                               {formatBloomNumber(lead.client_code, lead.code_extension)}
                             </span>
+                          )}
+                          {/* T5-γ.1: confidence_flag chip — surfaces
+                              when this wedding came in via backfill
+                              rather than live pipeline. Hidden for
+                              null and 'live' (the common path) so the
+                              cell stays uncluttered. */}
+                          {lead.confidence_flag && lead.confidence_flag !== 'live' && (
+                            <ConfidenceFlagChip flag={lead.confidence_flag} />
                           )}
                           {showVenueChip && <VenueChip venueName={lead.venue_name} />}
                         </div>

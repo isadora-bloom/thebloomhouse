@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { Flame, MessageCircle, AlertTriangle, TrendingDown, Users, RefreshCw, Loader2 } from 'lucide-react'
+import { PriorTouchesBadge } from '@/components/intel/inline-primitives'
+import type { PriorTouchSummary } from '@/lib/services/prior-touches'
 
 // ---------------------------------------------------------------------------
 // Lead insights panel — renders the 3 T3 generators (heat narration,
@@ -69,6 +71,12 @@ interface CohortInsight {
   conversion_pct: number
   median_booking_value: number | null
   median_days_to_book: number | null
+  // T5-γ.1: cohort confidence disclosure. Backend exposes the
+  // high/low split so this panel can render an honest "based on N
+  // high-fidelity + M backfilled-low" caption rather than presenting
+  // the cohort as homogeneous.
+  n_low_confidence?: number
+  n_high_confidence?: number
   confidence: number
   cached: boolean
 }
@@ -112,6 +120,7 @@ function riskBadgeColor(score: number): string {
 
 export function LeadInsightsPanel({ weddingId, variant = 'full' }: LeadInsightsPanelProps) {
   const [data, setData] = useState<InsightsResponse | null>(null)
+  const [priorTouches, setPriorTouches] = useState<PriorTouchSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -121,11 +130,28 @@ export function LeadInsightsPanel({ weddingId, variant = 'full' }: LeadInsightsP
     else setLoading(true)
     try {
       const url = `/api/insights/lead/${weddingId}${refresh ? '?refresh=1' : ''}`
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = (await res.json()) as InsightsResponse
+      // T5-γ.4: parallel-fetch prior touches alongside the insights
+      // bundle. Endpoint takes a personId, so we resolve via the new
+      // wedding-scoped helper that picks the partner1 (or fallback)
+      // person_id and forwards. Silent-fail on prior-touches mirrors
+      // the inbox PriorTouchesChip — INV-8.5.5 distinguishes "we
+      // looked, found nothing" (renders "No prior touches") from "we
+      // didn't look" (badge hidden).
+      const [insRes, ptRes] = await Promise.all([
+        fetch(url),
+        fetch(`/api/insights/lead/${weddingId}/prior-touches`),
+      ])
+      if (!insRes.ok) throw new Error(`HTTP ${insRes.status}`)
+      const json = (await insRes.json()) as InsightsResponse
       setData(json)
       setError(null)
+      if (ptRes.ok) {
+        const pt = (await ptRes.json()) as PriorTouchSummary | { error: string }
+        if ('touches' in pt) setPriorTouches(pt)
+        else setPriorTouches(null)
+      } else {
+        setPriorTouches(null)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load insights')
     } finally {
@@ -190,19 +216,36 @@ export function LeadInsightsPanel({ weddingId, variant = 'full' }: LeadInsightsP
     )
   }
 
+  // T5-γ.4: surface prior-touch count above heat narration. Uses the
+  // shared PriorTouchesBadge primitive — same numbers as the inbox
+  // PriorTouchesChip, just rendered inline (no expand-on-click since
+  // lead detail already shows the touch trail in WeddingJourney).
+  const priorTouchCount = priorTouches?.touches.length ?? 0
+  const priorTouchPlatforms = priorTouches
+    ? Array.from(new Set(priorTouches.touches.map((t) => t.source))).slice(0, 4)
+    : []
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="font-medium text-sage-900 text-sm">Lead insights</h3>
-        <button
-          onClick={() => fetchInsights(true)}
-          disabled={refreshing}
-          className="inline-flex items-center gap-1 text-xs text-sage-500 hover:text-sage-700 disabled:opacity-50"
-          title="Force regenerate (bypasses cache)"
-        >
-          <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
-          {refreshing ? 'Refreshing…' : 'Refresh'}
-        </button>
+        <div className="flex items-center gap-3">
+          {priorTouches && (
+            <PriorTouchesBadge
+              count={priorTouchCount}
+              platforms={priorTouchPlatforms}
+            />
+          )}
+          <button
+            onClick={() => fetchInsights(true)}
+            disabled={refreshing}
+            className="inline-flex items-center gap-1 text-xs text-sage-500 hover:text-sage-700 disabled:opacity-50"
+            title="Force regenerate (bypasses cache)"
+          >
+            <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       {data.heat && (
@@ -344,6 +387,21 @@ export function LeadInsightsPanel({ weddingId, variant = 'full' }: LeadInsightsP
           <p className="text-sm text-sage-700">{data.cohort.reasoning}</p>
           {data.cohort.recommendation && (
             <p className="text-xs text-sage-700 italic">→ {data.cohort.recommendation}</p>
+          )}
+          {/* T5-γ.1: confidence-mix disclosure. Always rendered when
+              the backend provides the breakdown so coordinator can
+              tell at a glance whether the cohort blends backfilled-low
+              members with live ones. Pre-fix the cohort presented as
+              a homogeneous group. */}
+          {typeof data.cohort.n_high_confidence === 'number' && typeof data.cohort.n_low_confidence === 'number' && (
+            <p
+              className="text-[11px] text-sage-500 italic"
+              title="Provenance breakdown of cohort members. Backfilled-low rows came from Gmail history rather than the live pipeline."
+            >
+              {data.cohort.n_low_confidence > 0
+                ? `Based on ${data.cohort.n_high_confidence} high-fidelity + ${data.cohort.n_low_confidence} backfilled-low cohort member${data.cohort.n_low_confidence === 1 ? '' : 's'}.`
+                : `Based on ${data.cohort.n_high_confidence} high-fidelity cohort member${data.cohort.n_high_confidence === 1 ? '' : 's'}.`}
+            </p>
           )}
           {(data.cohort.median_booking_value !== null || data.cohort.median_days_to_book !== null) && (
             <div className="flex flex-wrap gap-3 pt-1 text-[11px] text-sage-500">

@@ -92,6 +92,10 @@ interface Interaction {
   to_email?: string | null
   gmail_thread_id: string | null
   timestamp: string
+  // T5-γ.1: provenance tag — null/'live' = live pipeline; 'imported_low'
+  // = Gmail backfill; 'manual' = coordinator hand-entry. Surfaced as
+  // a chip so coordinator knows the row didn't come from the live poll.
+  confidence_flag?: string | null
   // Joined
   person_name?: string
   person_email?: string
@@ -331,6 +335,25 @@ function EmailListItem({
           {highlightMatch(previewText, searchTerm)}
         </p>
         {showVenueChip && <VenueChip venueName={interaction.venue_name} />}
+        {/* T5-γ.1: surface backfilled-low / manual provenance so the
+            coordinator knows the row didn't come from live polling.
+            Hidden for null and 'live' (the common path). */}
+        {interaction.confidence_flag === 'imported_low' && (
+          <span
+            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-amber-50 text-amber-700"
+            title="This email was inferred from Gmail backfill, not the live pipeline."
+          >
+            Imported
+          </span>
+        )}
+        {interaction.confidence_flag === 'manual' && (
+          <span
+            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-sage-50 text-sage-700"
+            title="Coordinator hand-entry. Not pipeline-ingested."
+          >
+            Manual
+          </span>
+        )}
         <span
           className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${badge.bg} ${badge.text}`}
         >
@@ -1315,6 +1338,7 @@ export default function InboxPage() {
           to_email,
           gmail_thread_id,
           timestamp,
+          confidence_flag,
           venues:venue_id ( name ),
           people!interactions_person_id_fkey ( first_name, last_name, email ),
           weddings!interactions_wedding_id_fkey (
@@ -1401,6 +1425,7 @@ export default function InboxPage() {
           full_body: null,
           gmail_thread_id: row.gmail_thread_id,
           timestamp: row.timestamp,
+          confidence_flag: (row.confidence_flag as string | null) ?? null,
           person_name: personName || undefined,
           person_email: personEmail || undefined,
           wedding_status: weddingStatus,
