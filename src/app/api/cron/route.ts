@@ -110,6 +110,12 @@ const VALID_JOBS = [
   // increments frequencies on existing ones, never deletes seed rows.
   // Per-venue cost-ceiling gating per Stream B; gated venues skip.
   'voice_dna_refresh',
+  // T5-followup-W (2026-05-02). Nightly DELETE of pulse_snoozes whose
+  // snoozed_until is in the past, plus dismissals older than the
+  // 90-day TTL. The aggregator already query-time-filters these, so the
+  // cron is a hygiene/audit layer — keeps the table small and stops
+  // the audit page from listing zombies. seasoned MED 16.
+  'prune_expired_pulse_snoozes',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -341,6 +347,54 @@ async function runJob(job: JobName): Promise<unknown> {
       // skip without affecting healthy ones. Anti-Sage filter preserved
       // (sampleCoordinatorEmails drops auto_sent drafts).
       return refreshVoiceDnaForAllVenues(createServiceClient())
+    case 'prune_expired_pulse_snoozes':
+      // T5-followup-W (2026-05-02). Nightly DELETE of pulse_snoozes
+      // whose action='snoozed' AND snoozed_until < now(), plus rows
+      // whose action='dismissed' AND created_at < now() - 90d. The
+      // pulse aggregator already query-time-filters these so the cron
+      // is hygiene only — keeps the table small and stops the audit
+      // page (/settings/pulse-snoozes) from listing zombies. Idempotent.
+      return runPrunePulseSnoozes()
+  }
+}
+
+/**
+ * T5-followup-W (2026-05-02). Nightly DELETE of expired pulse_snoozes.
+ * Mirrors the aggregator's filter so the row store + the read path
+ * agree on what's "live". Returns counts so cron telemetry surfaces
+ * any unexpected churn (e.g. a sudden 10x in expired-dismiss rows is
+ * a useful signal that someone's mass-dismissing).
+ */
+async function runPrunePulseSnoozes(): Promise<{
+  expired_snoozes_deleted: number
+  expired_dismisses_deleted: number
+}> {
+  const supabase = createServiceClient()
+  const nowIso = new Date().toISOString()
+  const ninetyDaysAgoIso = new Date(Date.now() - 90 * 86_400_000).toISOString()
+
+  // Expired snoozes — snoozed_until is in the past.
+  const { data: snoozeDel, error: snoozeErr } = await supabase
+    .from('pulse_snoozes')
+    .delete()
+    .eq('action', 'snoozed')
+    .lt('snoozed_until', nowIso)
+    .select('id')
+
+  // Expired dismissals — created_at older than the 90-day TTL.
+  const { data: dismissDel, error: dismissErr } = await supabase
+    .from('pulse_snoozes')
+    .delete()
+    .eq('action', 'dismissed')
+    .lt('created_at', ninetyDaysAgoIso)
+    .select('id')
+
+  if (snoozeErr) console.error('[prune_expired_pulse_snoozes] snooze delete failed:', snoozeErr.message)
+  if (dismissErr) console.error('[prune_expired_pulse_snoozes] dismiss delete failed:', dismissErr.message)
+
+  return {
+    expired_snoozes_deleted: (snoozeDel ?? []).length,
+    expired_dismisses_deleted: (dismissDel ?? []).length,
   }
 }
 

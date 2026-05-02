@@ -406,6 +406,13 @@ export async function generatePostTourBrief(
       // Persist the exact model used so audits track the actual model
       // string instead of a frozen family label that drifts. OPS-21.5.2.
       tour_brief_model: CLAUDE_MODEL,
+      // T5-followup-W (2026-05-02 / seasoned MED 17). Clear the stale
+      // marker the temporal-recompute trigger from migration 158/165
+      // stamps when the parent wedding's anchors change. The lead-detail
+      // tour-insights panel reads this column to render the "Brief is
+      // stale; regenerate?" badge — clearing it on a successful regen
+      // closes the loop.
+      tour_brief_stale_since: null,
     })
     .eq('id', tourId)
 
