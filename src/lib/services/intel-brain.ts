@@ -66,6 +66,7 @@ interface VenueDataContext {
   marketingChannels: MarketingChannelRow[]
   recentInteractionSnippets: InteractionSnippet[]
   tourCancellationReasons: TourCancellationReasonRow[]
+  lostDealReasons: LostDealReasonRow[]
 }
 
 interface WeddingSummary {
@@ -221,6 +222,11 @@ interface TourCancellationReasonRow {
   count: number
 }
 
+interface LostDealReasonRow {
+  reason: string
+  count: number
+}
+
 // ---------------------------------------------------------------------------
 // System prompt builder
 // ---------------------------------------------------------------------------
@@ -338,7 +344,10 @@ NUMBERS DISCIPLINE (ANTI-19.9-A / Playbook 19.9 #1):
  *   - pricingHistory (last 365d)
  *   - marketingChannels (active registry)
  *   - recentInteractionSnippets (last 90d inbound, top 20 by recency)
- *   - tourCancellationReasons (last 365d lost-deals at tour stage)
+ *   - tourCancellationReasons (last 365d, tours.cancellation_reason —
+ *     why a scheduled tour did not happen; lead may still book later)
+ *   - lostDealReasons (last 365d, lost_deals.reason_category at tour
+ *     stage — why the deal itself died; intentionally separate lens)
  *
  * Window bumps:
  *   - weddings 30d → 365d (Sage needs > 1mo to reason about cohorts).
@@ -389,6 +398,7 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     marketingChannelsResult,
     interactionsResult,
     lostDealsResult,
+    tourCancelResult,
   ] = await Promise.all([
     // Venue name + state (state used to scope external_calendar_events)
     supabase
@@ -579,12 +589,14 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
       .order('timestamp', { ascending: false })
       .limit(20),
 
-    // Tour cancellation reason aggregates — last 365d, lost_deals at
-    // the tour stage. tours table has no `cancellation_reason` column
-    // (verified via migrations); lost_deals.reason_category is the
-    // canonical source for "why a tour-stage deal fell through" and
-    // is what /intel/lost-deals reads. We aggregate in JS to avoid
-    // requiring a SQL VIEW.
+    // Lost-deal reason aggregates at the tour stage — last 365d.
+    // lost_deals.reason_category is the canonical "why the deal died"
+    // signal (deal-level: even after a successful tour, the couple
+    // chose another venue). DISTINCT from tours.cancellation_reason
+    // below — that one is "why was the TOUR cancelled" (the tour
+    // never happened, but the lead may still book later).
+    // Both signals are passed to Sage so NLQ answers don't conflate
+    // them. /intel/lost-deals reads from the same source.
     supabase
       .from('lost_deals')
       .select('reason_category, reason_detail')
@@ -593,6 +605,19 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
       .not('reason_category', 'is', null)
       .gte('lost_at', oneYearAgoIso)
       .limit(500),
+
+    // Tour cancellation reasons — last 365d, tours.cancellation_reason
+    // (migration 166). The partial index idx_tours_cancellation_reason
+    // (venue_id, cancellation_reason) supports this scan. JS aggregate
+    // to avoid a SQL VIEW. Distinct from lost_deals above: a tour can
+    // be cancelled (weather, family emergency) without the deal dying.
+    supabase
+      .from('tours')
+      .select('cancellation_reason')
+      .eq('venue_id', venueId)
+      .not('cancellation_reason', 'is', null)
+      .gte('scheduled_at', oneYearAgoIso)
+      .limit(1000),
   ])
 
   // Build pipeline counts from active weddings
@@ -829,15 +854,33 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     }
   }).filter((s) => s.snippet.length > 0)
 
-  // Tour cancellation reasons (lost_deals at tour stage).
-  const reasonCounts = new Map<string, number>()
+  // Tour cancellation reasons — tours.cancellation_reason (migration 166).
+  // Why-the-tour-itself-was-cancelled signal: weather / date_conflict /
+  // family_emergency / etc. Distinct from lost-deal reasons below.
+  const tourCancelCounts = new Map<string, number>()
+  for (const r of tourCancelResult.data ?? []) {
+    const reason = (r.cancellation_reason as string | null) ?? null
+    if (!reason) continue
+    tourCancelCounts.set(reason, (tourCancelCounts.get(reason) ?? 0) + 1)
+  }
+  const tourCancellationReasons: TourCancellationReasonRow[] = Array.from(
+    tourCancelCounts.entries(),
+  )
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count)
+
+  // Lost-deal reasons at the tour stage — lost_deals.reason_category.
+  // Why-the-deal-died signal: couple chose competitor / price / timing /
+  // etc. The two lenses are intentionally separate so Sage doesn't
+  // conflate "tour cancelled (rescheduled)" with "deal lost at tour".
+  const lostDealCounts = new Map<string, number>()
   for (const r of lostDealsResult.data ?? []) {
     const reason = (r.reason_category as string | null) ?? null
     if (!reason) continue
-    reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1)
+    lostDealCounts.set(reason, (lostDealCounts.get(reason) ?? 0) + 1)
   }
-  const tourCancellationReasons: TourCancellationReasonRow[] = Array.from(
-    reasonCounts.entries(),
+  const lostDealReasons: LostDealReasonRow[] = Array.from(
+    lostDealCounts.entries(),
   )
     .map(([reason, count]) => ({ reason, count }))
     .sort((a, b) => b.count - a.count)
@@ -865,6 +908,7 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     marketingChannels,
     recentInteractionSnippets,
     tourCancellationReasons,
+    lostDealReasons,
   }
 }
 
@@ -1111,12 +1155,34 @@ function formatDataContext(data: VenueDataContext): string {
     sections.push(`RECENT INBOUND INTERACTIONS (last 90d, top 20 by recency, 200-char excerpt):\n${lines}`)
   }
 
-  // Tour cancellation reasons
+  // Tour cancellation reasons (migration 166) — WHY THE TOUR ITSELF
+  // WAS CANCELLED. The tour never happened, but the lead may still
+  // book later (e.g., 'rescheduled', 'weather'). Distinct from lost-
+  // deal reasons below.
   if (data.tourCancellationReasons.length > 0) {
     const lines = data.tourCancellationReasons
       .map((r) => `  - ${r.reason}: ${r.count}`)
       .join('\n')
-    sections.push(`TOUR CANCELLATION REASONS (last 365d, lost-deals at tour stage):\n${lines}`)
+    sections.push(
+      `TOUR CANCELLATION REASONS — why scheduled tours did not happen ` +
+      `(last 365d, tours.cancellation_reason). Lead may still be alive ` +
+      `(reschedule succeeds → couple books later):\n${lines}`,
+    )
+  }
+
+  // Lost-deal reasons at the tour stage — WHY THE DEAL DIED. Sometimes
+  // even a tour that happened ended in the couple choosing another
+  // venue. Distinct from "tour cancelled" above.
+  if (data.lostDealReasons.length > 0) {
+    const lines = data.lostDealReasons
+      .map((r) => `  - ${r.reason}: ${r.count}`)
+      .join('\n')
+    sections.push(
+      `LOST-DEAL REASONS AT TOUR STAGE — why deals died at the tour ` +
+      `point in the funnel (last 365d, lost_deals.reason_category). ` +
+      `Different lens from TOUR CANCELLATION REASONS: this is "couple ` +
+      `picked competitor" / "price" / "timing" — the deal is over.\n${lines}`,
+    )
   }
 
   return sections.join('\n\n')

@@ -1906,6 +1906,43 @@ export async function processIncomingEmail(
         } catch (err) {
           console.warn('[pipeline] tour_cancelled notification failed:', err)
         }
+
+        // T5-schema-gap (migration 166): flip the matching tours row's
+        // outcome to 'cancelled' AND record a structured cancellation
+        // reason. Engagement-event side already fired (-15 heat); this
+        // closes the loop on the tours table so /intel/tours filters +
+        // intel-brain.ts cancellation aggregates see it.
+        //
+        // Best-effort: never blocks the pipeline. Default reason is
+        // 'other' if extraction can't bucket the email body — per spec,
+        // don't go overboard on the auto-detection path.
+        try {
+          const {
+            findCancellableTour,
+            extractCancellationReason,
+          } = await import('@/lib/services/tour-cancellation-reason')
+          const tourRow = await findCancellableTour(supabase, {
+            venueId,
+            weddingId,
+            eventDatetime: schedulingEvent.eventDatetime ?? null,
+          })
+          if (tourRow) {
+            const reason = await extractCancellationReason({
+              venueId,
+              subject: email.subject ?? null,
+              body: email.body ?? null,
+            })
+            await supabase
+              .from('tours')
+              .update({
+                outcome: 'cancelled',
+                cancellation_reason: reason,
+              })
+              .eq('id', tourRow.id)
+          }
+        } catch (err) {
+          console.warn('[pipeline] tours.outcome cancel write failed:', err)
+        }
       }
     } catch (err) {
       await logPipelineError(venueId, 'scheduling_tool_event', err, {

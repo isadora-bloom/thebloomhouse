@@ -71,9 +71,28 @@ interface TourRow {
   tour_brief_text?: string | null
   tour_brief_followup_draft?: string | null
   tour_brief_confidence?: 'high' | 'medium' | 'low' | null
+  // T5-schema-gap (migration 166): structured cancel reason + free-text
+  // note. Distinct from lost_deals — a cancelled tour can still keep
+  // the lead alive (reschedule succeeds).
+  cancellation_reason?: string | null
+  cancellation_note?: string | null
   venue?: { name: string | null } | null
   conductor?: { first_name: string | null; last_name: string | null } | null
 }
+
+// Mirror migration 166 enum so the UI dropdown stays in lock-step.
+const CANCEL_REASONS: Array<{ value: string; label: string }> = [
+  { value: 'weather', label: 'Weather' },
+  { value: 'date_conflict', label: 'Date conflict' },
+  { value: 'family_emergency', label: 'Family emergency' },
+  { value: 'venue_concern', label: 'Venue concern' },
+  { value: 'travel_blocker', label: 'Travel blocker' },
+  { value: 'rescheduled', label: 'Rescheduled' },
+  { value: 'no_show_followup', label: 'No-show follow-up' },
+  { value: 'other', label: 'Other' },
+]
+
+const CANCEL_NOTE_MAX = 280
 
 type TourFilter = 'all' | 'upcoming' | 'completed' | 'cancelled'
 
@@ -166,6 +185,13 @@ export default function ToursPage() {
   const [formNotes, setFormNotes] = useState('')
   const [formAttendees, setFormAttendees] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
+
+  // Cancel-tour modal state (T5-schema-gap, migration 166).
+  const [cancelTourId, setCancelTourId] = useState<string | null>(null)
+  const [cancelReason, setCancelReason] = useState<string>('other')
+  const [cancelNote, setCancelNote] = useState('')
+  const [cancelSaving, setCancelSaving] = useState(false)
+  const [cancelError, setCancelError] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
     if (scope.loading) return
@@ -480,6 +506,57 @@ export default function ToursPage() {
     }
   }
 
+  // T5-schema-gap: tour-cancel writer. Posts to /api/agent/tour-cancel
+  // which validates the reason against migration 166's enum + caps the
+  // note at 280 chars server-side. Local row state patches on success
+  // so the table reflects the new outcome without a refetch.
+  async function handleConfirmCancel() {
+    if (!cancelTourId) return
+    if (cancelNote.trim().length > CANCEL_NOTE_MAX) {
+      setCancelError(`Note must be ${CANCEL_NOTE_MAX} characters or fewer.`)
+      return
+    }
+    setCancelSaving(true)
+    setCancelError(null)
+    try {
+      const res = await fetch('/api/agent/tour-cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tourId: cancelTourId,
+          cancellationReason: cancelReason,
+          cancellationNote: cancelNote.trim() || undefined,
+        }),
+      })
+      const json = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) {
+        throw new Error(json.error || `Cancel failed (${res.status})`)
+      }
+      setTours((prev) =>
+        prev.map((t) =>
+          t.id === cancelTourId
+            ? {
+                ...t,
+                outcome: 'cancelled',
+                cancellation_reason: cancelReason,
+                cancellation_note: cancelNote.trim() || null,
+              }
+            : t
+        )
+      )
+      setCancelTourId(null)
+      setCancelReason('other')
+      setCancelNote('')
+    } catch (err) {
+      console.error('[tours] cancel failed:', err)
+      setCancelError(
+        err instanceof Error ? err.message : 'Cancel failed'
+      )
+    } finally {
+      setCancelSaving(false)
+    }
+  }
+
   const filters: { key: TourFilter; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'upcoming', label: 'Upcoming' },
@@ -651,9 +728,36 @@ export default function ToursPage() {
                           </td>
                           <td className="px-5 py-4 text-sage-600">{conductorName(t)}</td>
                           <td className="px-5 py-4">
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${outcomeBadge(t.outcome)}`}>
-                              {formatLabel(t.outcome)}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${outcomeBadge(t.outcome)}`}>
+                                {formatLabel(t.outcome)}
+                              </span>
+                              {/* T5-schema-gap: cancel-tour control. Only
+                                  shown for non-terminal outcomes — once a
+                                  tour is cancelled / lost / booked /
+                                  completed, this surface is read-only. */}
+                              {(t.outcome === 'pending' || t.outcome === 'rescheduled') && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setCancelTourId(t.id)
+                                    setCancelReason('other')
+                                    setCancelNote('')
+                                    setCancelError(null)
+                                  }}
+                                  className="text-xs text-sage-500 hover:text-sage-700 underline underline-offset-2"
+                                >
+                                  Cancel tour
+                                </button>
+                              )}
+                            </div>
+                            {t.outcome === 'cancelled' && t.cancellation_reason && (
+                              <div className="mt-1 text-xs text-sage-500">
+                                {formatLabel(t.cancellation_reason)}
+                                {t.cancellation_note ? ` — ${t.cancellation_note}` : ''}
+                              </div>
+                            )}
                           </td>
                           <td className="px-5 py-4 text-xs">
                             {hasExtraction ? (
@@ -800,6 +904,87 @@ export default function ToursPage() {
               <button onClick={() => setShowModal(false)} className="px-4 py-2 text-sm font-medium text-sage-600 hover:text-sage-800 transition-colors">Cancel</button>
               <button onClick={handleSave} disabled={saving} className="px-4 py-2 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50">
                 {saving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel-tour modal — T5-schema-gap (migration 166). Captures a
+          structured reason + free-text note and posts to the tour-cancel
+          writer. The note is capped at 280 chars to stay glanceable. */}
+      {cancelTourId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/30"
+            onClick={() => {
+              if (!cancelSaving) setCancelTourId(null)
+            }}
+          />
+          <div className="relative bg-surface rounded-xl shadow-xl w-full max-w-md p-6 mx-4">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="font-heading text-lg font-semibold text-sage-900">Cancel tour</h3>
+              <button
+                onClick={() => setCancelTourId(null)}
+                disabled={cancelSaving}
+                className="p-1.5 rounded-lg hover:bg-sage-50 disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">Reason</label>
+                <select
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-warm-white text-sage-900"
+                >
+                  {CANCEL_REASONS.map((r) => (
+                    <option key={r.value} value={r.value}>
+                      {r.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-sage-500 mt-1">
+                  Distinct from a lost-deal reason: a cancelled tour can still
+                  reschedule and book later.
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-sage-700 mb-1">
+                  Note (optional)
+                  <span className="ml-2 text-xs font-normal text-sage-500">
+                    {cancelNote.trim().length}/{CANCEL_NOTE_MAX}
+                  </span>
+                </label>
+                <textarea
+                  value={cancelNote}
+                  onChange={(e) => setCancelNote(e.target.value)}
+                  rows={3}
+                  maxLength={CANCEL_NOTE_MAX}
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-warm-white text-sage-900 resize-none"
+                  placeholder="Any context worth keeping (one liner is plenty)."
+                />
+              </div>
+              {cancelError && (
+                <p className="text-xs text-red-600">{cancelError}</p>
+              )}
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => setCancelTourId(null)}
+                disabled={cancelSaving}
+                className="px-4 py-2 text-sm font-medium text-sage-600 hover:text-sage-800 transition-colors disabled:opacity-50"
+              >
+                Back
+              </button>
+              <button
+                onClick={handleConfirmCancel}
+                disabled={cancelSaving}
+                className="px-4 py-2 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+              >
+                {cancelSaving ? 'Cancelling...' : 'Cancel tour'}
               </button>
             </div>
           </div>
