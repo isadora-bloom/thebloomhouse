@@ -40,9 +40,7 @@ CREATE TABLE IF NOT EXISTS public.org_essentials_preferences (
 );
 
 COMMENT ON TABLE public.org_essentials_preferences IS
-  'Org-level Essentials slider defaults. Inherited by every user in the ' ||
-  'org unless they have a per-(user, venue) override in essentials_preferences. ' ||
-  'Per T5-followup-Z / yc LOW 19.';
+  'Org-level Essentials slider defaults. Inherited by every user in the org unless they have a per-(user, venue) override in essentials_preferences. Per T5-followup-Z / yc LOW 19.';
 
 ALTER TABLE public.org_essentials_preferences ENABLE ROW LEVEL SECURITY;
 

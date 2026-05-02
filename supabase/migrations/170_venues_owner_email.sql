@@ -15,6 +15,4 @@ ALTER TABLE public.venues
   ADD COLUMN IF NOT EXISTS owner_email text;
 
 COMMENT ON COLUMN public.venues.owner_email IS
-  'Primary coordinator / owner email used for digest delivery and ' ||
-  'venue-wide notifications. Distinct from venue_config.coordinator_email ' ||
-  '(which is the operations contact shown to couples).';
+  'Primary coordinator / owner email used for digest delivery and venue-wide notifications. Distinct from venue_config.coordinator_email (which is the operations contact shown to couples).';
