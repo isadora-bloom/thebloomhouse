@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { HeatBadge } from '@/components/intel/heat-badge'
+import { RiskFlagChip, useBatchRiskFlags } from '@/components/intel/risk-flag-chip'
 import { EssentialsSlider } from '@/components/shell/essentials-slider'
 import { TIER_STYLES, styleForTier, type HeatTier } from '@/lib/heat/tier-colors'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
@@ -462,6 +463,15 @@ export default function LeadsPage() {
     return c
   }, [leads])
 
+  // ---- Risk flags batch fetch (T5-ζ.2) ----
+  // One POST per page load, keyed on the underlying loaded lead set.
+  // Filter/sort state changes do NOT refetch — the hook dedupes +
+  // sorts the input so it only fires when the actual ID set changes.
+  const allWeddingIds = useMemo(() => leads.map((l) => l.id), [leads])
+  const riskFlags = useBatchRiskFlags(allWeddingIds, {
+    venueId: scope.venueId ?? null,
+  })
+
   return (
     <div className="space-y-6">
       {/* ---- Header ---- */}
@@ -656,6 +666,9 @@ export default function LeadsPage() {
                             </span>
                           )}
                           {showVenueChip && <VenueChip venueName={lead.venue_name} />}
+                          {/* Risk-flag chip (T5-ζ.2). Hidden if no
+                              cached risk_flag insight or zero flags. */}
+                          <RiskFlagChip summary={riskFlags[lead.id]} />
                         </div>
                       </td>
 

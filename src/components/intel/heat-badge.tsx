@@ -9,22 +9,39 @@
  * is the renderer. ARCH-20.2.1.
  *
  * Variants:
- *   - 'pill'   (default): rounded pill with flame icon + score, used
- *               in lists where heat is the primary signal
- *   - 'dot'    : 2.5×2.5 colored dot, used in dense pipeline cards
- *               where space is tight
- *   - 'inline' : flame + score + tier label, used in detail headers
- *               where the tier name itself adds context
- *   - 'large'  : 4xl score for the top of detail pages
+ *   - 'pill'        (default): rounded pill with flame icon + score,
+ *                    used in lists where heat is the primary signal
+ *   - 'dot'         : 2.5×2.5 colored dot, used in dense pipeline cards
+ *                    where space is tight
+ *   - 'inline'      : flame + score + tier label, used in detail headers
+ *                    where the tier name itself adds context
+ *   - 'large'       : 4xl score for the top of detail pages
+ *   - 'header-icon' : just the flame icon, tier-colored. For section
+ *                    headers (e.g., "Heat Score" card title) where the
+ *                    icon prefixes a label.
+ *   - 'score-only'  : 4xl colored score number (no flame, no label).
+ *                    For the Heat Score card body where the tier is
+ *                    rendered separately as a 'tier-pill'.
+ *   - 'tier-pill'   : white-on-tier rounded capitalised tier name.
+ *                    Score not shown.
  */
 
 import { Flame } from 'lucide-react'
 import { styleForTier } from '@/lib/heat/tier-colors'
 
+export type HeatBadgeVariant =
+  | 'pill'
+  | 'dot'
+  | 'inline'
+  | 'large'
+  | 'header-icon'
+  | 'score-only'
+  | 'tier-pill'
+
 export interface HeatBadgeProps {
   tier: string | null | undefined
   score: number | null | undefined
-  variant?: 'pill' | 'dot' | 'inline' | 'large'
+  variant?: HeatBadgeVariant
   /** Optional extra classes appended to the rendered element. */
   className?: string
   /** Tooltip text (defaults to "<tier> (<score>)"). */
@@ -64,6 +81,34 @@ export function HeatBadge({ tier, score, variant = 'pill', className, title }: H
         <span className={`text-4xl font-bold ${style.text}`}>{safeScore}</span>
         <span className={`text-sm font-medium ${style.text}`}>{style.label}</span>
       </div>
+    )
+  }
+
+  if (variant === 'header-icon') {
+    return (
+      <Flame className={`w-5 h-5 ${style.text} ${className ?? ''}`} aria-label={ttl} />
+    )
+  }
+
+  if (variant === 'score-only') {
+    return (
+      <span
+        className={`text-4xl font-bold ${style.text} ${className ?? ''}`}
+        title={ttl}
+      >
+        {safeScore}
+      </span>
+    )
+  }
+
+  if (variant === 'tier-pill') {
+    return (
+      <span
+        className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold text-white capitalize ${style.dotBg} ${className ?? ''}`}
+        title={ttl}
+      >
+        {style.label}
+      </span>
     )
   }
 

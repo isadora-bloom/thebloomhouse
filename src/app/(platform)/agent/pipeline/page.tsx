@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { HeatBadge } from '@/components/intel/heat-badge'
+import { RiskFlagChip, useBatchRiskFlags, type RiskSummary } from '@/components/intel/risk-flag-chip'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import {
   DndContext,
@@ -29,7 +30,6 @@ import {
   Kanban,
   Users,
   Calendar,
-  Flame,
   Clock,
   AlertTriangle,
   RefreshCw,
@@ -166,7 +166,7 @@ function ColumnSkeleton() {
 // Pipeline Card (static — used for both sortable wrapper and overlay)
 // ---------------------------------------------------------------------------
 
-function PipelineCardContent({ wedding, onNameClick, showVenueChip }: { wedding: PipelineWedding; onNameClick?: () => void; showVenueChip?: boolean }) {
+function PipelineCardContent({ wedding, onNameClick, showVenueChip, risk }: { wedding: PipelineWedding; onNameClick?: () => void; showVenueChip?: boolean; risk?: RiskSummary | null }) {
   const source = sourceBadge(wedding.source)
   const days = daysInStage(wedding.updated_at)
 
@@ -179,7 +179,7 @@ function PipelineCardContent({ wedding, onNameClick, showVenueChip }: { wedding:
         </div>
       )}
 
-      {/* Couple name + heat dot */}
+      {/* Couple name + heat dot + risk chip (T5-ζ.2) */}
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-1.5 min-w-0">
           <GripVertical className="w-3.5 h-3.5 text-sage-300 shrink-0" />
@@ -191,6 +191,7 @@ function PipelineCardContent({ wedding, onNameClick, showVenueChip }: { wedding:
           </h4>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
+          <RiskFlagChip summary={risk} />
           <HeatBadge tier={wedding.temperature_tier} score={wedding.heat_score} variant="dot" />
         </div>
       </div>
@@ -232,7 +233,7 @@ function PipelineCardContent({ wedding, onNameClick, showVenueChip }: { wedding:
 // Sortable Card (draggable)
 // ---------------------------------------------------------------------------
 
-function SortableCard({ wedding, showVenueChip }: { wedding: PipelineWedding; showVenueChip: boolean }) {
+function SortableCard({ wedding, showVenueChip, risk }: { wedding: PipelineWedding; showVenueChip: boolean; risk?: RiskSummary | null }) {
   const cardRouter = useRouter()
   const {
     attributes,
@@ -257,7 +258,7 @@ function SortableCard({ wedding, showVenueChip }: { wedding: PipelineWedding; sh
       {...listeners}
       className="bg-surface border border-border rounded-lg p-3 shadow-sm hover:shadow-md transition-shadow cursor-grab active:cursor-grabbing"
     >
-      <PipelineCardContent wedding={wedding} onNameClick={() => cardRouter.push(`/intel/clients/${wedding.id}`)} showVenueChip={showVenueChip} />
+      <PipelineCardContent wedding={wedding} onNameClick={() => cardRouter.push(`/intel/clients/${wedding.id}`)} showVenueChip={showVenueChip} risk={risk} />
     </div>
   )
 }
@@ -266,7 +267,7 @@ function SortableCard({ wedding, showVenueChip }: { wedding: PipelineWedding; sh
 // Droppable Column
 // ---------------------------------------------------------------------------
 
-function DroppableColumn({ column, showVenueChip }: { column: PipelineColumn; showVenueChip: boolean }) {
+function DroppableColumn({ column, showVenueChip, riskFlags }: { column: PipelineColumn; showVenueChip: boolean; riskFlags: Record<string, RiskSummary | null> }) {
   const isLost = column.key === 'lost'
   const isContracted = column.key === 'contracted'
   const { setNodeRef, isOver } = useDroppable({ id: column.key })
@@ -325,7 +326,7 @@ function DroppableColumn({ column, showVenueChip }: { column: PipelineColumn; sh
               </div>
             ) : (
               column.weddings.map((wedding) => (
-                <SortableCard key={wedding.id} wedding={wedding} showVenueChip={showVenueChip} />
+                <SortableCard key={wedding.id} wedding={wedding} showVenueChip={showVenueChip} risk={riskFlags[wedding.id]} />
               ))
             )}
           </div>
@@ -560,6 +561,18 @@ export default function PipelinePage() {
     }
   }
 
+  // ---- Risk flags batch fetch (T5-ζ.2) ----
+  // One POST per page load, keyed on the underlying column-flattened
+  // wedding ID set. The hook dedupes + sorts the input, so it only
+  // fires when the actual ID set changes (not on drag-reorder).
+  const allWeddingIds = useMemo(
+    () => columns.flatMap((c) => c.weddings.map((w) => w.id)),
+    [columns],
+  )
+  const riskFlags = useBatchRiskFlags(allWeddingIds, {
+    venueId: scope.venueId ?? null,
+  })
+
   return (
     <div className="space-y-6">
       {/* ---- Header ---- */}
@@ -621,7 +634,7 @@ export default function PipelinePage() {
         >
           <div className="flex gap-4 overflow-x-auto pb-4 -mx-6 lg:-mx-8 px-6 lg:px-8">
             {columns.map((column) => (
-              <DroppableColumn key={column.key} column={column} showVenueChip={showVenueChip} />
+              <DroppableColumn key={column.key} column={column} showVenueChip={showVenueChip} riskFlags={riskFlags} />
             ))}
           </div>
 
@@ -629,7 +642,7 @@ export default function PipelinePage() {
           <DragOverlay>
             {activeWedding ? (
               <div className="bg-surface border-2 border-sage-400 rounded-lg p-3 shadow-lg w-[280px] rotate-2">
-                <PipelineCardContent wedding={activeWedding} showVenueChip={showVenueChip} />
+                <PipelineCardContent wedding={activeWedding} showVenueChip={showVenueChip} risk={riskFlags[activeWedding.id]} />
               </div>
             ) : null}
           </DragOverlay>
