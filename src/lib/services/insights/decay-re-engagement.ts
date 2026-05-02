@@ -235,6 +235,8 @@ export async function generateDecayReEngagement(
   venueId: string,
   weddingId: string,
   force: boolean = false,
+  /** T5-eta.3 correlation id; persists onto the row. */
+  correlationId: string | null = null,
 ): Promise<{
   cause: DecayCause
   cause_label: string
@@ -437,6 +439,7 @@ Diagnose the cause + recommend a specific re-engagement action.`
     priority: classical.decline_magnitude >= 40 ? 'high'
       : classical.decline_magnitude >= 20 ? 'medium'
       : 'low',
+    correlationId,
   })
 
   return {

@@ -16,7 +16,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Loader2, AlertTriangle, Bell, Lightbulb, RefreshCw, ExternalLink,
-  Clock, X,
+  Clock, X, PauseCircle, PlayCircle,
 } from 'lucide-react'
 
 type PulseSource = 'notification' | 'anomaly' | 'insight'
@@ -31,6 +31,18 @@ interface PulseItem {
   href: string | null
   createdAt: string
   metadata: Record<string, unknown>
+}
+
+interface PulsePausedBanner {
+  paused: boolean
+  pausedAt: string | null
+  pausedReason: string | null
+  ceilingCents: number
+  spendCents: number
+  utilisation: number
+  resumeAt: string
+  skipCounts: Record<string, number>
+  totalSkipped: number
 }
 
 const PRIORITY_STYLES: Record<PulsePriority, { bg: string; text: string; label: string }> = {
@@ -57,9 +69,20 @@ function formatAge(iso: string): string {
   return `${days}d`
 }
 
+function formatDollars(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`
+}
+
+function formatWorkType(workType: string): string {
+  // 'weekly_digest' -> 'weekly digest', good enough for a notification breakdown.
+  return workType.replace(/_/g, ' ')
+}
+
 export default function PulsePage() {
   const router = useRouter()
   const [items, setItems] = useState<PulseItem[]>([])
+  const [pausedBanner, setPausedBanner] = useState<PulsePausedBanner | null>(null)
+  const [resumingPause, setResumingPause] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<PulseSource | 'all'>('all')
@@ -112,8 +135,9 @@ export default function PulsePage() {
     try {
       const res = await fetch('/api/pulse')
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = (await res.json()) as { items: PulseItem[] }
+      const json = (await res.json()) as { items: PulseItem[]; pausedBanner: PulsePausedBanner | null }
       setItems(json.items)
+      setPausedBanner(json.pausedBanner ?? null)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load pulse')
@@ -121,6 +145,52 @@ export default function PulsePage() {
       setLoading(false)
     }
   }, [])
+
+  // T5-eta.1: coordinator-initiated resume from the paused banner.
+  // Confirms because resuming opens up auto-send + brain-call work
+  // that the cost ceiling explicitly paused — coordinator should
+  // know what they're agreeing to.
+  async function resumePause() {
+    if (resumingPause) return
+    if (!confirm(
+      'Resume autonomous behavior? This re-enables auto-send + proactive insights ' +
+      'before the daily cost ceiling resets at UTC midnight. You can investigate ' +
+      'spend at /agent/cost-ceiling first.'
+    )) return
+    setResumingPause(true)
+    try {
+      const res = await fetch('/api/agent/cost-ceiling/resume', { method: 'POST' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `HTTP ${res.status}`)
+      }
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resume')
+    } finally {
+      setResumingPause(false)
+    }
+  }
+
+  // T5-eta.2: replay the work skipped during the pause window. Hits
+  // the /api/agent/cost-ceiling/replay endpoint which marks rows as
+  // replayed BEFORE firing the work (so retry doesn't double-fire).
+  async function replaySkipped() {
+    if (resumingPause) return
+    setResumingPause(true)
+    try {
+      const res = await fetch('/api/agent/cost-ceiling/replay', { method: 'POST' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `HTTP ${res.status}`)
+      }
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to replay skipped work')
+    } finally {
+      setResumingPause(false)
+    }
+  }
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -151,6 +221,60 @@ export default function PulsePage() {
           Refresh
         </button>
       </div>
+
+      {/* T5-eta.1 — paused banner. Sticky-pinned, NOT a notification:
+          coordinator cannot snooze or dismiss this. Tells them the
+          venue's autonomous behavior is paused, since when, what was
+          skipped during the window, and offers Resume + Replay. */}
+      {pausedBanner && pausedBanner.paused && (
+        <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-4 space-y-3">
+          <div className="flex items-start gap-3">
+            <PauseCircle className="w-5 h-5 text-amber-700 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <h2 className="font-medium text-amber-900">
+                Autonomous behavior paused — daily cost ceiling reached
+              </h2>
+              <p className="text-sm text-amber-800 mt-1">
+                {pausedBanner.pausedAt && (
+                  <>Paused since {new Date(pausedBanner.pausedAt).toLocaleString()}. </>
+                )}
+                Spend today: {formatDollars(pausedBanner.spendCents)} of{' '}
+                {formatDollars(pausedBanner.ceilingCents)} ceiling
+                ({Math.round(pausedBanner.utilisation * 100)}%).
+                {' '}Auto-resumes at {new Date(pausedBanner.resumeAt).toLocaleString()}.
+              </p>
+              {pausedBanner.totalSkipped > 0 && (
+                <div className="mt-2 text-sm text-amber-800">
+                  <strong>Skipped during pause:</strong>{' '}
+                  {Object.entries(pausedBanner.skipCounts)
+                    .map(([wt, n]) => `${n} ${formatWorkType(wt)}${n > 1 ? 's' : ''}`)
+                    .join(', ')}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={resumePause}
+              disabled={resumingPause}
+              className="inline-flex items-center gap-2 rounded-md bg-amber-700 hover:bg-amber-800 text-white px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+            >
+              {resumingPause ? <Loader2 className="w-3 h-3 animate-spin" /> : <PlayCircle className="w-3 h-3" />}
+              Resume early
+            </button>
+            {pausedBanner.totalSkipped > 0 && (
+              <button
+                onClick={replaySkipped}
+                disabled={resumingPause}
+                className="inline-flex items-center gap-2 rounded-md border border-amber-700 text-amber-800 hover:bg-amber-100 px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+              >
+                {resumingPause ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                Run skipped work now ({pausedBanner.totalSkipped})
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Source filter pills. */}
       <div className="flex items-center gap-1 bg-sage-50 rounded-lg p-1 inline-flex">

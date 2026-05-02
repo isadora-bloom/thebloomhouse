@@ -257,6 +257,8 @@ export async function generateSourceMixCounterfactual(
   supabase: SupabaseClient,
   venueId: string,
   force: boolean = false,
+  /** T5-eta.3 correlation id; persists onto the row. */
+  correlationId: string | null = null,
 ): Promise<{
   donor: string
   recipient: string
@@ -493,6 +495,7 @@ Diagnose + recommend.`
     priority: classical.pair.projected_delta_bookings >= 3 ? 'high'
       : classical.pair.projected_delta_bookings >= 1 ? 'medium'
       : 'low',
+    correlationId,
   })
 
   return {

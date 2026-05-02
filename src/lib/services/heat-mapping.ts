@@ -280,6 +280,11 @@ async function shouldSkipDuplicate(
  * Idempotent: skips insertion if the event would duplicate an existing
  * one on this wedding (one-per-wedding event types, or same
  * event_type+occurred_at). The caller never has to dedup.
+ *
+ * correlationId (T5-eta.3): when supplied, stamps the engagement_event
+ * row so the full forensic chain (api_costs / drafts / interactions /
+ * notifications / engagement_events / intelligence_insights) joins on
+ * one id per inbound event.
  */
 export async function recordEngagementEvent(
   venueId: string,
@@ -287,7 +292,8 @@ export async function recordEngagementEvent(
   eventType: string,
   direction: 'inbound' | 'outbound',
   metadata?: Record<string, unknown>,
-  occurredAt?: string
+  occurredAt?: string,
+  correlationId?: string | null
 ): Promise<HeatScoreResult> {
   const supabase = createServiceClient()
 
@@ -306,6 +312,7 @@ export async function recordEngagementEvent(
     metadata: metadata ?? {},
   }
   if (occurredAt) row.occurred_at = occurredAt
+  if (correlationId) row.correlation_id = correlationId
 
   await supabase.from('engagement_events').insert(row)
 
@@ -329,7 +336,8 @@ export async function recordEngagementEventsBatch(
   weddingId: string,
   events: Array<{ eventType: string; metadata?: Record<string, unknown>; occurredAt?: string }>,
   direction: 'inbound' | 'outbound',
-  occurredAt?: string
+  occurredAt?: string,
+  correlationId?: string | null
 ): Promise<HeatScoreResult> {
   if (events.length === 0) {
     // Still return a current-state result so callers don't have to branch.
@@ -354,6 +362,11 @@ export async function recordEngagementEventsBatch(
       metadata: e.metadata ?? {},
     }
     if (eventOccurredAt) row.occurred_at = eventOccurredAt
+    // T5-eta.3: stamp every event in the batch with the request-scoped
+    // correlation id so a coordinator can chase the full lineage of
+    // one inbound email across api_costs / drafts / interactions /
+    // engagement_events / notifications / intelligence_insights.
+    if (correlationId) row.correlation_id = correlationId
     candidates.push({ row, eventType: e.eventType, occurredAt: eventOccurredAt })
   }
 

@@ -862,7 +862,9 @@ async function generateDigestsForAllVenues(): Promise<Record<string, boolean>> {
   // surfaces. Skip paused venues per Playbook 21.4.3.
   const venueIds = venues.map((v) => v.id as string)
   const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
-  const { active, skipped } = await filterActiveVenues(venueIds)
+  const { active, skipped } = await filterActiveVenues(venueIds, {
+    workType: 'weekly_digest',
+  })
   if (skipped.length > 0) {
     console.log(`[cron] Weekly digest skipping ${skipped.length} paused venue(s); running ${active.length}`)
   }
@@ -945,7 +947,9 @@ async function generateBriefingsForAllVenues(
   // narration. Skip paused venues per Playbook 21.4.3.
   const venueIds = venues.map((v) => v.id as string)
   const { filterActiveVenues } = await import('@/lib/services/cost-ceiling')
-  const { active, skipped } = await filterActiveVenues(venueIds)
+  const { active, skipped } = await filterActiveVenues(venueIds, {
+    workType: type === 'weekly' ? 'weekly_briefing' : 'monthly_briefing',
+  })
   if (skipped.length > 0) {
     console.log(`[cron] ${type} briefing skipping ${skipped.length} paused venue(s); running ${active.length}`)
   }

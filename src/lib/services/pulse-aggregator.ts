@@ -19,6 +19,11 @@
  *   - intelligence_insights (status='new' + high-priority)
  *
  * Returns a flat PulseItem[] sorted by (priority, recency desc).
+ *
+ * T5-eta.1 + iota.7: also returns a top-level `pausedBanner` (cost-
+ * ceiling pause state) and lets critical-priority insights bypass the
+ * sinceDays floor so a 30-day-old risk-flag still appears as long as
+ * it hasn't been acted on.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -103,11 +108,55 @@ function anomalyPriority(severity: 'info' | 'warning' | 'critical'): PulsePriori
   return 'low'
 }
 
+/**
+ * T5-eta.1: paused-banner data for the /pulse top-of-page sticky.
+ * Surfaces the cost-ceiling pause state + a derived list of skipped
+ * work types so the coordinator sees WHY work didn't happen, not
+ * just an empty feed. The banner is NOT a notification (cannot be
+ * snoozed/dismissed) — it pins until the pause clears.
+ */
+export interface PulsePausedBanner {
+  paused: boolean
+  pausedAt: string | null
+  pausedReason: string | null
+  ceilingCents: number
+  spendCents: number
+  utilisation: number
+  /** Nominal earliest auto-resume time (next UTC midnight). */
+  resumeAt: string
+  /** Per-work-type skip counts during this paused window. Read from
+   *  paused_period_skipped where status='pending'. Empty when the
+   *  pause is brand-new and no cron has tried to run yet. */
+  skipCounts: Record<string, number>
+  /** Total pending skipped rows across all work types. */
+  totalSkipped: number
+}
+
+export interface PulseAggregateResult {
+  items: PulseItem[]
+  pausedBanner: PulsePausedBanner | null
+}
+
 export async function aggregatePulse(
   supabase: SupabaseClient,
   venueId: string,
   opts: { limit?: number; sinceDays?: number } = {},
 ): Promise<PulseItem[]> {
+  const result = await aggregatePulseFull(supabase, venueId, opts)
+  return result.items
+}
+
+/**
+ * Same as aggregatePulse but also returns the paused banner. The /api/
+ * pulse route calls this; the legacy aggregatePulse() return shape is
+ * preserved for backward-compat with any internal callers that just
+ * want the items.
+ */
+export async function aggregatePulseFull(
+  supabase: SupabaseClient,
+  venueId: string,
+  opts: { limit?: number; sinceDays?: number } = {},
+): Promise<PulseAggregateResult> {
   const limit = opts.limit ?? 50
   const sinceDays = opts.sinceDays ?? 14
   const sinceIso = new Date(Date.now() - sinceDays * 86_400_000).toISOString()
@@ -179,17 +228,52 @@ export async function aggregatePulse(
     })
   }
 
-  // Insights (new + high-priority).
-  const { data: insights } = await supabase
+  // Insights (new + high-priority). T5-iota.7: critical-priority
+  // insights bypass the sinceDays floor — a 30-day-old risk flag
+  // that's never been acted on must keep surfacing on /pulse until
+  // it's dismissed or marked acted_on. Pre-fix the >= sinceIso
+  // filter was applied uniformly, so a critical risk insight from
+  // 30 days ago silently fell off /pulse on day 15 even though the
+  // coordinator never resolved it.
+  //
+  // Strategy: split the read into two queries to keep the index
+  // selectivity right (the primary index is on (venue_id, status,
+  // created_at)). High-priority gets the sinceDays floor; critical
+  // ignores it. dedupeAndLimit catches any overlap.
+  const { data: highInsights } = await supabase
     .from('intelligence_insights')
     .select('id, insight_type, title, body, priority, status, context_id, created_at')
     .eq('venue_id', venueId)
     .eq('status', 'new')
-    .in('priority', ['critical', 'high'])
+    .eq('priority', 'high')
     .gte('created_at', sinceIso)
     .order('created_at', { ascending: false })
     .limit(limit)
-  for (const i of ((insights ?? []) as InsightRow[])) {
+
+  // Critical-priority carve-out: per T5-iota.7 a critical insight
+  // surfaces until the coordinator marks it acted_on or dismisses
+  // it. status='new' OR 'seen' both qualify — 'seen' just means the
+  // coordinator clicked through to read it, not that they resolved
+  // it. Pre-fix the read filtered to status='new' only, so a critical
+  // risk-flag the coordinator opened once silently fell off /pulse
+  // even though the underlying issue was unaddressed.
+  const { data: criticalInsights } = await supabase
+    .from('intelligence_insights')
+    .select('id, insight_type, title, body, priority, status, context_id, created_at')
+    .eq('venue_id', venueId)
+    .in('status', ['new', 'seen'])
+    .eq('priority', 'critical')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  const allInsights = [
+    ...((criticalInsights ?? []) as InsightRow[]),
+    ...((highInsights ?? []) as InsightRow[]),
+  ]
+  const seenInsightIds = new Set<string>()
+  for (const i of allInsights) {
+    if (seenInsightIds.has(i.id)) continue
+    seenInsightIds.add(i.id)
     const href = i.context_id && /^[0-9a-f-]{36}$/i.test(i.context_id)
       ? `/intel/clients/${i.context_id}`
       : '/intel/insights'
@@ -216,7 +300,84 @@ export async function aggregatePulse(
     return b.createdAt.localeCompare(a.createdAt)
   })
 
-  return visible.slice(0, limit)
+  const pausedBanner = await loadPausedBanner(supabase, venueId)
+  return { items: visible.slice(0, limit), pausedBanner }
+}
+
+/**
+ * Load the cost-ceiling pause banner data (T5-eta.1). Returns null
+ * when the venue isn't paused — the route renders nothing in that
+ * case. When paused, returns enough context for the banner to show
+ * since-when, the ceiling, and what got skipped during the window.
+ */
+async function loadPausedBanner(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<PulsePausedBanner | null> {
+  const { data: cfg } = await supabase
+    .from('venue_config')
+    .select('autonomous_paused, autonomous_paused_at, autonomous_paused_reason, daily_cost_ceiling_cents')
+    .eq('venue_id', venueId)
+    .maybeSingle()
+
+  if (!cfg || !(cfg.autonomous_paused as boolean)) return null
+
+  const ceilingCents = (cfg.daily_cost_ceiling_cents as number) ?? 500
+
+  // Compute spend the same way getCostCeilingStatus does so the
+  // banner number matches the cost-ceiling cron summary. Today's
+  // UTC window.
+  const utcDayStart = new Date(
+    Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate())
+  ).toISOString()
+  const { data: spendRows } = await supabase
+    .from('api_costs')
+    .select('cost')
+    .eq('venue_id', venueId)
+    .gte('created_at', utcDayStart)
+  const spendDollars = (spendRows ?? []).reduce(
+    (sum, r) => sum + Number((r as { cost: number | string }).cost ?? 0),
+    0,
+  )
+  const spendCents = Math.round(spendDollars * 100)
+
+  // Skip-count breakdown from paused_period_skipped (T5-eta.2).
+  // Pending rows for this venue, grouped by work_type. When the
+  // table doesn't exist yet (migration 161 not applied), we
+  // gracefully return zero counts so the banner still renders.
+  const skipCounts: Record<string, number> = {}
+  let totalSkipped = 0
+  try {
+    const { data: skipped } = await supabase
+      .from('paused_period_skipped')
+      .select('work_type')
+      .eq('venue_id', venueId)
+      .eq('status', 'pending')
+    for (const row of ((skipped ?? []) as Array<{ work_type: string }>)) {
+      skipCounts[row.work_type] = (skipCounts[row.work_type] ?? 0) + 1
+      totalSkipped++
+    }
+  } catch {
+    // table not yet present — banner still renders with zeros.
+  }
+
+  // Next UTC midnight as the "earliest plausible auto-resume" hint.
+  const now = new Date()
+  const resumeAt = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+  ).toISOString()
+
+  return {
+    paused: true,
+    pausedAt: (cfg.autonomous_paused_at as string | null) ?? null,
+    pausedReason: (cfg.autonomous_paused_reason as string | null) ?? null,
+    ceilingCents,
+    spendCents,
+    utilisation: ceilingCents > 0 ? spendCents / ceilingCents : 0,
+    resumeAt,
+    skipCounts,
+    totalSkipped,
+  }
 }
 
 /** Pure helper — cap items to a limit. Exported for unit tests. */

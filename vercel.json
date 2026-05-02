@@ -103,6 +103,10 @@
     {
       "path": "/api/cron?job=cost_ceiling_reset",
       "schedule": "5 0 * * *"
+    },
+    {
+      "path": "/api/cron/replay-paused-skipped",
+      "schedule": "5 0 * * *"
     }
   ]
 }

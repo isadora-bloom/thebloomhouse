@@ -359,6 +359,8 @@ export async function generateRiskFlags(
   venueId: string,
   weddingId: string,
   force: boolean = false,
+  /** T5-eta.3 correlation id; persists onto the row. */
+  correlationId: string | null = null,
 ): Promise<{
   risk_score: number
   flags: RiskFlag[]
@@ -523,6 +525,7 @@ Compose the JSON.`
     priority: classical.risk_score >= 70 ? 'high'
       : classical.risk_score >= 40 ? 'medium'
       : 'low',
+    correlationId,
   })
 
   return {
