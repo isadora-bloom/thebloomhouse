@@ -102,6 +102,14 @@ export async function persistDropoffInsights(venueId: string): Promise<number> {
       .eq('context_id', d.weddingId)
       .maybeSingle()
 
+    // Confidence rises with outbound count: 2 unanswered = suggestive
+    // (~0.55), 5 = high signal (~0.85), 8+ = very high (~0.95). Maps
+    // to the same shape T3 insights use (sample-size-aware, capped).
+    // Pre-fix this row inserted with no confidence column → DB default
+    // 0.5 → every dropoff looked equally confident regardless of
+    // outbound count, blunting prioritisation. ANTI-19.9-4.
+    const confidence = Math.min(0.95, 0.4 + Math.log10(d.outboundCount + 1) * 0.45)
+
     const payload = {
       venue_id: venueId,
       insight_type: 'two_email_dropoff',
@@ -111,7 +119,8 @@ export async function persistDropoffInsights(venueId: string): Promise<number> {
         : `Lead stalled after ${d.outboundCount} outbound emails`,
       // Migration 041 canonical column is `body` (not `description`).
       body: "Couples who don't reply to 2+ follow-ups rarely book. Consider a final warm close or mark as lost.",
-      priority: 'medium',
+      priority: d.outboundCount >= 5 ? 'high' : 'medium',
+      confidence,
       context_id: d.weddingId,
       // Migration 041 canonical column is `data_points` (not `metadata`).
       data_points: {

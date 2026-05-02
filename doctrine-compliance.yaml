@@ -753,11 +753,10 @@ meta:
   severity: high
 
 - id: INV-11.4-C
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: forbidden-topic list per-venue extensible
-  notes: "ESCALATION_KEYWORDS hardcoded global array. checkEscalation() takes no venue_id. List missing pricing changes, contract amendments, force majeure, insurance, vendor disputes, family conflict, medical."
-  severity: high
+  notes: "T1-J B-21 (migration 125): venue_forbidden_topics table + checkEscalationForVenue(text, venueId) merges global ESCALATION_KEYWORDS with per-venue rows. 5-minute in-process cache; coordinator edits invalidate via invalidateVenueEscalationCache. All server-side check call-sites (couple/messages, portal/sage, escalation-detector) use the venue-aware function. Sync checkEscalation kept for client-side filters (portal/weddings/[id]/page.tsx) — documented carve-out. Admin page at /agent/forbidden-topics. Per Playbook LIMB-16.4."
 
 - id: OPS-11.4-D
   status: enforced
@@ -1345,9 +1344,10 @@ meta:
   severity: high
 
 - id: ANTI-19.9-4
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: confidence indicators on every insight
+  notes: "All 9 named T3 insights (heat-narration / decay-re-engagement / negotiation-state / cohort-match / pricing-elasticity / source-mix-counterfactual / risk-flags / coordinator-override-pattern / strength-area-cohort) use confidenceFor(sampleSize, effectSize) → 0..1 numeric value with low/medium/high level for badge rendering, persisted via persistInsight. Legacy writers also confidence-aware: correlation-engine sets confidence from |r|, intelligence-engine uses confidenceFromN. quality-signals.persistDropoffInsights pre-fix relied on schema default 0.5; now sets explicit log-scaled confidence (2 emails ~0.55, 5+ ~0.85, 8+ ~0.95). LeadInsightsPanel renders High/Medium/Low badges next to every card. 2026-05-01."
   severity: high
 
 - id: ANTI-19.9-5
@@ -1750,11 +1750,10 @@ meta:
   severity: medium
 
 - id: OPS-21.6.3
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: NO cross-venue retrieval ever
-  notes: "phrase-selector.ts:64-76 reads phrase_usage WITHOUT venue_id filter — explicit cross-venue rotation. Multi-tenancy violation per playbook 21.6.5."
-  severity: high
+  notes: "phrase-selector.ts (2026-05-01): pre-fix the phrase_usage lookup was unfiltered (cross-tenant) with the rationale 'prevent same couple from receiving identical phrases from different Bloom-powered venues'. The cross-tenant lookup leaked the EXISTENCE of 'another Bloom venue talked to this contact' even though only phrase_text strings came back — a stricter multi-tenancy violation than the docstring acknowledged. Fix: scope phrase_usage lookup to venues sharing the same org_id. Within an organisation (e.g., Crestwood Collection's 4 venues) rotation still works; across organisations no row existence leaks. Solo venues (org_id null) get strict venue-only scope."
 
 - id: OPS-21.6.4
   status: doctrine-only

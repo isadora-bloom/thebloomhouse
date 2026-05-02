@@ -61,16 +61,42 @@ export async function selectPhrase(options: SelectPhraseOptions): Promise<string
     return ''
   }
 
-  // Check what's been used with this contact recently (across ALL venues).
-  // Column names match migration 005: phrase_category + phrase_text + used_at.
-  // Drifting from the schema here silently errors into the catch and kills
-  // cross-venue rotation — voice-dna/route.ts already uses the right names.
+  // Check what's been used with this contact recently within the SAME
+  // ORGANISATION (e.g., Crestwood Collection's 4 venues). Pre-fix this
+  // was UNFILTERED (cross-tenant) — a violation of the multi-tenancy
+  // rule "NO cross-venue retrieval ever" (Playbook 21.6.5 / OPS-21.6.3).
+  // The cross-tenant lookup leaked the existence of "another Bloom
+  // venue talked to this contact" even though only phrase_text strings
+  // came back. Org-scoping preserves the anti-duplication intent
+  // (couples seeing 4 Crestwood venues don't get identical phrases)
+  // without leaking row existence to unrelated customers' venues.
   let usedPhrases = new Set<string>()
   try {
     const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+
+    // Resolve the venue's org. Solo venues (org_id null) get strict
+    // venue-scope; org-grouped venues get org-scope.
+    const { data: venueRow } = await supabase
+      .from('venues')
+      .select('org_id')
+      .eq('id', venueId)
+      .maybeSingle()
+    const orgId = (venueRow?.org_id as string | null) ?? null
+
+    let scopedVenueIds: string[] = [venueId]
+    if (orgId) {
+      const { data: orgVenues } = await supabase
+        .from('venues')
+        .select('id')
+        .eq('org_id', orgId)
+      scopedVenueIds = ((orgVenues ?? []) as Array<{ id: string }>).map((v) => v.id)
+      if (scopedVenueIds.length === 0) scopedVenueIds = [venueId]  // belt
+    }
+
     const { data, error } = await supabase
       .from('phrase_usage')
       .select('phrase_text')
+      .in('venue_id', scopedVenueIds)
       .eq('contact_email', contactEmail.toLowerCase())
       .eq('phrase_category', category)
       .gte('used_at', cutoff)
