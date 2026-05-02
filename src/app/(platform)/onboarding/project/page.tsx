@@ -15,7 +15,7 @@ import {
   ChevronRight,
   Sparkles,
 } from 'lucide-react'
-import { PROJECT_PLAN, TOTAL_DAYS, type DayStep } from '@/lib/services/onboarding-project'
+import { PROJECT_PLAN, TOTAL_DAYS, type DayStep, detectDay1Completion } from '@/lib/services/onboarding-project'
 import { BackfillChecklist } from '@/components/onboarding/backfill-checklist'
 
 // ---------------------------------------------------------------------------
@@ -83,6 +83,14 @@ export default function OnboardingProjectPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /**
+   * T5-followup-Z: Day-1 sub-steps auto-detect from underlying DB
+   * state (Gmail connection, Sage identity, forbidden topics, tone
+   * sliders). Refreshed on each fetchProject so coordinators see
+   * green checks without revisiting the project page after each
+   * sub-action.
+   */
+  const [day1AutoDone, setDay1AutoDone] = useState<Set<string>>(new Set())
 
   const fetchProject = useCallback(async () => {
     if (!venueId) return
@@ -99,6 +107,14 @@ export default function OnboardingProjectPage() {
       if (fetchErr) throw fetchErr
       setProject((data as ProjectState | null) ?? null)
       setError(null)
+
+      // T5-followup-Z: refresh Day-1 auto-detected completion state.
+      // Errors swallowed inside detectDay1Completion so a partial
+      // failure never blocks the page from rendering.
+      try {
+        const detected = await detectDay1Completion(supabase, venueId)
+        setDay1AutoDone(detected)
+      } catch { setDay1AutoDone(new Set()) }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to load project'
       setError(msg)
@@ -315,15 +331,29 @@ export default function OnboardingProjectPage() {
   }
 
   const stepCompletion = useMemo(() => {
-    if (!project) return new Map<string, { completed_at: string; note?: string }>()
-    const out = new Map<string, { completed_at: string; note?: string }>()
+    if (!project) return new Map<string, { completed_at: string; note?: string; auto?: boolean }>()
+    const out = new Map<string, { completed_at: string; note?: string; auto?: boolean }>()
     for (const [dayKey, dayNotes] of Object.entries(project.coordinator_notes ?? {})) {
       for (const [stepKey, entry] of Object.entries(dayNotes ?? {})) {
         out.set(`${dayKey}.${stepKey}`, entry)
       }
     }
+    // T5-followup-Z: layer auto-detected Day-1 completions on top.
+    // Coordinator-clicked completions take precedence (they may have
+    // notes); auto-detected completions only fill in steps the
+    // coordinator hasn't manually marked.
+    for (const stepKey of day1AutoDone) {
+      const mapKey = `day_1.${stepKey}`
+      if (!out.has(mapKey)) {
+        out.set(mapKey, {
+          completed_at: new Date().toISOString(),
+          note: 'auto-detected from venue state',
+          auto: true,
+        })
+      }
+    }
     return out
-  }, [project])
+  }, [project, day1AutoDone])
 
   if (loading) return <div className="p-8"><p className="text-sage-500 text-sm">Loading…</p></div>
 
@@ -505,7 +535,7 @@ interface DayCardProps {
   day: typeof PROJECT_PLAN[number]
   isCurrent: boolean
   isComplete: boolean
-  stepCompletion: Map<string, { completed_at: string; note?: string }>
+  stepCompletion: Map<string, { completed_at: string; note?: string; auto?: boolean }>
   onCompleteStep: (step: DayStep) => void
   /** T5-θ.3: inline action for the Day-4 voice_dna_extract step. */
   onVoiceDnaExtract: (step: DayStep) => void

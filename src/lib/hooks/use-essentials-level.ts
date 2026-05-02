@@ -28,6 +28,10 @@ export const ESSENTIALS_LEVELS: ReadonlyArray<EssentialsLevel> = [
 interface PreferencesResponse {
   default_level: EssentialsLevel
   surface_overrides: Record<string, EssentialsLevel>
+  /** T5-followup-Z: org-level inherited default. null when caller has
+   *  no org or org has no default set. Exposed for surfaces that want
+   *  to render "(inherited from org)" hints. */
+  org_default_level?: EssentialsLevel | null
 }
 
 // Cache to avoid re-fetching across mount/unmount cycles within a session.

@@ -44,6 +44,14 @@ interface VoiceDnaData {
   daysLearning: number
   sampleCount: number
   trainingSessionCount: number
+  /** T5-followup-Z: outbound interactions seen by Sage. */
+  emailsSeen: number
+  /** T5-followup-Z: next milestone in the learning ladder. null = mature. */
+  nextMilestone: {
+    label: string
+    progress: number
+    detail: string
+  } | null
   dimensions: {
     warmth: number
     formality: number
@@ -388,17 +396,62 @@ export default function VoiceDnaPage() {
       {/* =============================================================== */}
       {/* Hero header                                                      */}
       {/* =============================================================== */}
+      {/*
+        T5-followup-Z: bare "47 days learning" was confusing — coordinators
+        didn't know what 47 days meant or what came next. Now we show three
+        concrete signals from real platform data:
+          - day count + learning-mode badge (so it's clear it's still learning)
+          - emails seen so far (the substrate Sage learns from)
+          - next milestone with a progress bar (so coordinators know what's next)
+      */}
       <section>
+        <div className="flex items-center gap-2 mb-3">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-200 px-2.5 py-1 text-xs font-medium text-amber-800">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+            Learning mode
+          </span>
+          <span className="text-xs text-sage-500">
+            Day <span className="tabular-nums font-semibold">{data.daysLearning}</span>
+          </span>
+        </div>
         <h1 className="font-heading text-4xl md:text-5xl font-bold text-sage-900 mb-3 leading-tight">
-          <span className="text-sage-500">{aiName}</span> has been learning{' '}
-          <span className="text-sage-500">{venueName}</span>&apos;s voice for{' '}
-          <span className="tabular-nums">{data.daysLearning}</span>{' '}
-          day{data.daysLearning === 1 ? '' : 's'}.
+          <span className="text-sage-500">{aiName}</span> is learning{' '}
+          <span className="text-sage-500">{venueName}</span>&apos;s voice.
         </h1>
-        <p className="text-sage-600 text-base">
+        <p className="text-sage-600 text-base mb-4">
+          Trained on <span className="tabular-nums font-semibold text-sage-800">{data.emailsSeen}</span> outbound email{data.emailsSeen === 1 ? '' : 's'} so far.{' '}
           {data.sampleCount} phrase{data.sampleCount === 1 ? '' : 's'} mined from reviews and training.{' '}
           {data.trainingSessionCount} voice training game{data.trainingSessionCount === 1 ? '' : 's'} completed.
         </p>
+
+        {data.nextMilestone ? (
+          <div className="bg-surface border border-sage-200 rounded-xl p-4 max-w-xl">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-sage-500 uppercase tracking-wider">
+                Next milestone
+              </span>
+              <span className="text-xs text-sage-400 tabular-nums">
+                {Math.round(Math.max(0, Math.min(1, data.nextMilestone.progress)) * 100)}%
+              </span>
+            </div>
+            <p className="text-sm font-semibold text-sage-900 mb-1">
+              {data.nextMilestone.label}
+            </p>
+            <p className="text-xs text-sage-600 mb-3">{data.nextMilestone.detail}</p>
+            <div className="w-full h-1.5 bg-sage-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-sage-500 rounded-full transition-all duration-500"
+                style={{
+                  width: `${Math.round(Math.max(0, Math.min(1, data.nextMilestone.progress)) * 100)}%`,
+                }}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-3 py-1 text-xs font-medium text-emerald-800">
+            Voice DNA mature — every milestone cleared.
+          </div>
+        )}
       </section>
 
       {/* =============================================================== */}

@@ -23,6 +23,7 @@ export interface Venue {
   zip: string | null
   timezone: string
   is_active: boolean
+  owner_email: string | null
   created_at: string
   updated_at: string
 }

@@ -1,7 +1,10 @@
 /**
  * /api/settings/essentials-preferences (T4-D).
  *
- * GET   — caller's preferences (created with defaults on first read)
+ * GET   — caller's preferences (created with defaults on first read).
+ *         T5-followup-Z: GET also resolves the org-level inherited
+ *         default and returns it as `org_default_level` so the UI can
+ *         show the inherited value where the user hasn't set their own.
  * PATCH — partial update of default_level + surface_overrides
  */
 
@@ -18,7 +21,18 @@ interface PrefsRow {
   surface_overrides: Record<string, EssentialsLevel>
 }
 
-async function getOrCreate(supabase: ReturnType<typeof createServiceClient>, userId: string, venueId: string): Promise<PrefsRow> {
+interface PrefsResponse extends PrefsRow {
+  /** T5-followup-Z: org-level inherited default. Null when the user has
+   *  no org or the org has not configured a default. */
+  org_default_level: EssentialsLevel | null
+}
+
+async function getOrCreate(
+  supabase: ReturnType<typeof createServiceClient>,
+  userId: string,
+  venueId: string,
+  orgDefault: EssentialsLevel | null,
+): Promise<PrefsRow> {
   const { data: existing } = await supabase
     .from('essentials_preferences')
     .select('*')
@@ -27,9 +41,15 @@ async function getOrCreate(supabase: ReturnType<typeof createServiceClient>, use
     .maybeSingle()
   if (existing) return existing as PrefsRow
 
+  // T5-followup-Z: when creating a fresh row for a user in an org with
+  // a default set, seed default_level from the org default so the
+  // coordinator inherits org settings on first sign-in. Falls back to
+  // the platform default ('recommended') when no org default exists.
+  const seedDefault = orgDefault ?? 'recommended'
+
   const { data: inserted, error } = await supabase
     .from('essentials_preferences')
-    .insert({ user_id: userId, venue_id: venueId, default_level: 'recommended', surface_overrides: {} })
+    .insert({ user_id: userId, venue_id: venueId, default_level: seedDefault, surface_overrides: {} })
     .select('*')
     .single()
   if (inserted) return inserted as PrefsRow
@@ -47,13 +67,40 @@ async function getOrCreate(supabase: ReturnType<typeof createServiceClient>, use
   throw new Error(error?.message ?? 'failed to get-or-create essentials_preferences')
 }
 
+/**
+ * Look up the org-level default for the caller's org. Best-effort:
+ * any failure returns null so the caller falls back to the platform
+ * default. T5-followup-Z.
+ */
+async function getOrgDefault(
+  supabase: ReturnType<typeof createServiceClient>,
+  orgId: string | null,
+): Promise<EssentialsLevel | null> {
+  if (!orgId) return null
+  try {
+    const { data, error } = await supabase
+      .from('org_essentials_preferences')
+      .select('default_level')
+      .eq('org_id', orgId)
+      .maybeSingle()
+    if (error || !data) return null
+    const lvl = data.default_level as EssentialsLevel
+    if (!ESSENTIALS_LEVELS.includes(lvl)) return null
+    return lvl
+  } catch {
+    return null
+  }
+}
+
 export async function GET() {
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   const supabase = createServiceClient()
   try {
-    const prefs = await getOrCreate(supabase, auth.userId, auth.venueId)
-    return NextResponse.json(prefs)
+    const orgDefault = await getOrgDefault(supabase, auth.orgId)
+    const prefs = await getOrCreate(supabase, auth.userId, auth.venueId, orgDefault)
+    const response: PrefsResponse = { ...prefs, org_default_level: orgDefault }
+    return NextResponse.json(response)
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'load_failed' }, { status: 500 })
   }
@@ -96,7 +143,8 @@ export async function PATCH(request: NextRequest) {
 
   const supabase = createServiceClient()
   try {
-    await getOrCreate(supabase, auth.userId, auth.venueId)
+    const orgDefault = await getOrgDefault(supabase, auth.orgId)
+    await getOrCreate(supabase, auth.userId, auth.venueId, orgDefault)
     const { data, error } = await supabase
       .from('essentials_preferences')
       .update(patch)

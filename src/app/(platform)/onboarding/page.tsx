@@ -58,9 +58,35 @@ interface VenueBasics {
    *     auto_send_rules (disabled) so admin can flip sources on later.
    */
   ai_name: string
+  /**
+   * T5-followup-Z: email address Sage sends from. Persists to
+   * venue_ai_config.ai_email. We deliberately don't auto-derive this
+   * from venue domain — deliverability requires the venue to set up
+   * a real mailbox / forwarder for the address before we can use it.
+   */
+  ai_email: string
+  /**
+   * T5-followup-Z: owner / primary coordinator email used for digest
+   * delivery + venue-wide notifications. Persists to venues.owner_email.
+   * Distinct from venue_config.coordinator_email (the operations contact
+   * shown to couples).
+   */
+  owner_email: string
   venue_prefix: string
   max_events_per_day: string
   ad_platforms: string[]
+}
+
+/**
+ * RFC-style email validation. Strict enough to reject "foo", "foo@",
+ * "foo@bar"; permissive enough to accept "info+inquiries@thebloomhouse.ai".
+ * Mirrors the regex used in the agent pipeline normalisation layer.
+ */
+function isEmailValid(s: string): boolean {
+  const trimmed = s.trim()
+  if (!trimmed) return false
+  // Single @, non-empty local + domain, dot in domain, no spaces.
+  return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(trimmed)
 }
 
 // Canonical source values — match src/lib/services/normalize-source.ts
@@ -340,6 +366,8 @@ export default function OnboardingPage() {
     base_price: '',
     timezone: 'America/New_York',
     ai_name: '',
+    ai_email: '',
+    owner_email: '',
     venue_prefix: '',
     max_events_per_day: '',
     ad_platforms: [],
@@ -401,7 +429,7 @@ export default function OnboardingPage() {
       // Load venue basics
       const { data: venue } = await supabase
         .from('venues')
-        .select('name, address_line1, city, state, zip, timezone')
+        .select('name, address_line1, city, state, zip, timezone, owner_email')
         .eq('id', VENUE_ID!)
         .maybeSingle()
 
@@ -418,6 +446,7 @@ export default function OnboardingPage() {
       if (venue || config) {
         const loadedName = config?.business_name || venue?.name || ''
         const loadedPrefix = (config?.venue_prefix as string | null) || ''
+        const loadedOwnerEmail = ((venue as Record<string, unknown>)?.owner_email as string | null) || ''
         setBasics((prev) => ({
           ...prev,
           business_name: loadedName || prev.business_name,
@@ -430,14 +459,15 @@ export default function OnboardingPage() {
           timezone: config?.timezone || venue?.timezone || prev.timezone,
           venue_prefix: loadedPrefix || derivePrefix(loadedName) || prev.venue_prefix,
           max_events_per_day: (config?.max_events_per_day as number | null)?.toString() || prev.max_events_per_day,
+          owner_email: loadedOwnerEmail || prev.owner_email,
         }))
         if (loadedPrefix) setPrefixEdited(true)
       }
 
-      // Load AI personality + ai_name
+      // Load AI personality + ai_name + ai_email
       const { data: aiConfig } = await supabase
         .from('venue_ai_config')
-        .select('warmth_level, formality_level, playfulness_level, brevity_level, enthusiasm_level, ai_name')
+        .select('warmth_level, formality_level, playfulness_level, brevity_level, enthusiasm_level, ai_name, ai_email')
         .eq('venue_id', VENUE_ID!)
         .maybeSingle()
 
@@ -451,8 +481,13 @@ export default function OnboardingPage() {
           enthusiasm_level: aiConfig.enthusiasm_level ?? 6,
         })
         const loadedAiName = (aiConfig.ai_name as string | null) ?? ''
-        if (loadedAiName) {
-          setBasics((prev) => ({ ...prev, ai_name: loadedAiName }))
+        const loadedAiEmail = (aiConfig.ai_email as string | null) ?? ''
+        if (loadedAiName || loadedAiEmail) {
+          setBasics((prev) => ({
+            ...prev,
+            ai_name: loadedAiName || prev.ai_name,
+            ai_email: loadedAiEmail || prev.ai_email,
+          }))
         }
       }
 
@@ -523,6 +558,26 @@ export default function OnboardingPage() {
     try {
       switch (currentStep) {
         case 0: {
+          // T5-followup-Z: gate the basics step on the two new email
+          // fields. ai_email is the address Sage sends from (Gmail
+          // handles the actual send; this is the From: header), and
+          // owner_email is where digests + venue-wide notifications
+          // land. Both required — without them coordinators end up
+          // with a half-configured venue that can't send drafts or
+          // receive digests.
+          const aiEmailTrim = basics.ai_email.trim()
+          const ownerEmailTrim = basics.owner_email.trim()
+          if (!aiEmailTrim || !isEmailValid(aiEmailTrim)) {
+            setError('Enter a valid email address for Sage to send from (e.g., concierge@yourvenue.com).')
+            setSaving(false)
+            return false
+          }
+          if (!ownerEmailTrim || !isEmailValid(ownerEmailTrim)) {
+            setError('Enter a valid owner / primary coordinator email for digest delivery.')
+            setSaving(false)
+            return false
+          }
+
           // Save venue basics to venues + venue_config
           let slug = basics.business_name
             .toLowerCase()
@@ -551,6 +606,7 @@ export default function OnboardingPage() {
               city: basics.city || null,
               state: basics.state || null,
               zip: basics.zip || null,
+              owner_email: ownerEmailTrim,
               status: 'trial',
               updated_at: new Date().toISOString(),
             })
@@ -576,34 +632,23 @@ export default function OnboardingPage() {
             }, { onConflict: 'venue_id' })
           if (configError) throw configError
 
-          // Persist the AI assistant name alongside basics so the couple
-          // portal and router-brain see the white-label name from day one.
-          // T5-β.1: ai_name is REQUIRED — refuse to save when blank rather
-          // than silently storing "Sage" for every white-label venue.
+          // Persist the AI assistant name + email alongside basics so the
+          // couple portal and router-brain see the white-label identity
+          // from day one. T5-β.1: ai_name falls back to "{Venue} Concierge"
+          // if blank. T5-followup-Z: ai_email is required (validated
+          // above) and never auto-generated — deliverability requires
+          // the venue to set up the mailbox themselves before we use it.
           const aiNameTrimmed = basics.ai_name.trim()
-          if (!aiNameTrimmed) {
-            // Defensive: the form should already require a non-empty
-            // name, but guard the persistence path so a future UI change
-            // can't reintroduce the brand leak.
-            const aiNameFallback = `${basics.business_name.trim() || 'Venue'} Concierge`
-            const { error: aiNameError } = await supabase
-              .from('venue_ai_config')
-              .upsert({
-                venue_id: venueId,
-                ai_name: aiNameFallback,
-                updated_at: new Date().toISOString(),
-              }, { onConflict: 'venue_id' })
-            if (aiNameError) throw aiNameError
-          } else {
-            const { error: aiNameError } = await supabase
-              .from('venue_ai_config')
-              .upsert({
-                venue_id: venueId,
-                ai_name: aiNameTrimmed,
-                updated_at: new Date().toISOString(),
-              }, { onConflict: 'venue_id' })
-            if (aiNameError) throw aiNameError
-          }
+          const aiNameToWrite = aiNameTrimmed || `${basics.business_name.trim() || 'Venue'} Concierge`
+          const { error: aiCfgError } = await supabase
+            .from('venue_ai_config')
+            .upsert({
+              venue_id: venueId,
+              ai_name: aiNameToWrite,
+              ai_email: aiEmailTrim,
+              updated_at: new Date().toISOString(),
+            }, { onConflict: 'venue_id' })
+          if (aiCfgError) throw aiCfgError
 
           // Seed auto_send_rules (disabled by default) for each ad platform
           // the venue selected. Admin flips them on later from /settings.
@@ -1089,6 +1134,50 @@ export default function OnboardingPage() {
                     />
                     <p className="text-xs text-sage-400 mt-1">
                       Leave blank to use the default (Sage). White-label venues might pick Ivy, Rose, etc.
+                    </p>
+                  </div>
+
+                  {/* T5-followup-Z: ai_email is required. We do NOT
+                      auto-generate this from the venue domain because
+                      deliverability requires the venue to set up the
+                      mailbox / forwarder themselves first. */}
+                  <div>
+                    <label className="block text-sm font-medium text-sage-700 mb-1">
+                      Email address for {basics.ai_name.trim() || 'Sage'} to send from <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="email"
+                      value={basics.ai_email}
+                      onChange={(e) => setBasics({ ...basics, ai_email: e.target.value })}
+                      placeholder="concierge@yourvenue.com"
+                      className={inputClasses}
+                      maxLength={120}
+                      required
+                    />
+                    <p className="text-xs text-sage-400 mt-1">
+                      Make sure this mailbox exists and forwards to your inquiry inbox before Go Live.
+                    </p>
+                  </div>
+
+                  {/* T5-followup-Z: owner_email is where digests +
+                      venue-wide notifications land. Distinct from the
+                      coordinator_email shown to couples (set later
+                      in /settings). */}
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-sage-700 mb-1">
+                      Owner / primary coordinator email for digest delivery <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="email"
+                      value={basics.owner_email}
+                      onChange={(e) => setBasics({ ...basics, owner_email: e.target.value })}
+                      placeholder="you@yourvenue.com"
+                      className={inputClasses}
+                      maxLength={120}
+                      required
+                    />
+                    <p className="text-xs text-sage-400 mt-1">
+                      Where the daily digest + venue-wide notifications land. You can add more coordinators later in Settings.
                     </p>
                   </div>
 
@@ -1691,7 +1780,14 @@ export default function OnboardingPage() {
                 </button>
                 <button
                   onClick={handleNext}
-                  disabled={saving || (currentStep === 0 && !basics.business_name.trim())}
+                  disabled={
+                    saving ||
+                    (currentStep === 0 && (
+                      !basics.business_name.trim() ||
+                      !isEmailValid(basics.ai_email) ||
+                      !isEmailValid(basics.owner_email)
+                    ))
+                  }
                   className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg px-6 py-2.5 transition-colors text-sm"
                 >
                   {saving ? (
