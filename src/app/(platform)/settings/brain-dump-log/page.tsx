@@ -1,17 +1,25 @@
 'use client'
 
 /**
- * /settings/brain-dump-log — graduated pattern audit (T4-E).
+ * /settings/brain-dump-log — graduated pattern audit + 30-day entry log.
  *
  * Lists active brain-dump pattern grants — standing rules the
  * coordinator authorised after 3+ confirmations of the same shape.
  * Each row shows description + intent + hit count + last used, with
  * a Revoke button that re-engages propose-and-confirm for future
  * matching entries.
+ *
+ * T5-γ.7 (2026-05-02): added "Recent entries (30d)" section so the
+ * page is the audit log it claimed to be. Pre-fix the page only
+ * rendered grants — the per-submission record (parse_status, routed
+ * table, intent, original input) was written but never surfaced.
+ * Coordinator can now answer "what did Sage do with each thing I
+ * dropped in over the last month?" alongside the standing-rule
+ * abstractions.
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { Loader2, Trash2, Brain, Clock } from 'lucide-react'
+import { Loader2, Trash2, Brain, Clock, FileText, AlertTriangle, CheckCircle2, XCircle, ListFilter } from 'lucide-react'
 
 interface Grant {
   id: string
@@ -26,17 +34,65 @@ interface Grant {
   revoked_at: string | null
 }
 
+interface BrainDumpEntry {
+  id: string
+  raw_input: string
+  raw_input_excerpt: string
+  input_type: string
+  parse_status: string
+  intent: string | null
+  routed_table: string | null
+  routed_to: Array<{ table?: string; action?: string; field?: string }>
+  clarification_question: string | null
+  clarification_answer: string | null
+  submitter_name: string | null
+  created_at: string
+  parsed_at: string | null
+  resolved_at: string | null
+}
+
 function formatDate(iso: string | null): string {
   if (!iso) return 'never'
   const d = new Date(iso)
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
+function formatDateTime(iso: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return d.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+function statusBadge(status: string): { bg: string; text: string; label: string; Icon: typeof CheckCircle2 } {
+  switch (status) {
+    case 'parsed':
+    case 'confirmed':
+      return { bg: 'bg-emerald-50', text: 'text-emerald-700', label: status === 'confirmed' ? 'Confirmed' : 'Parsed', Icon: CheckCircle2 }
+    case 'needs_clarification':
+      return { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Needs clarification', Icon: AlertTriangle }
+    case 'dismissed':
+      return { bg: 'bg-sage-50', text: 'text-sage-600', label: 'Dismissed', Icon: XCircle }
+    case 'pending':
+    default:
+      return { bg: 'bg-blue-50', text: 'text-blue-700', label: 'Pending', Icon: Loader2 }
+  }
+}
+
 export default function BrainDumpLogPage() {
   const [grants, setGrants] = useState<Grant[]>([])
+  const [entries, setEntries] = useState<BrainDumpEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [entriesLoading, setEntriesLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [entriesError, setEntriesError] = useState<string | null>(null)
   const [revoking, setRevoking] = useState<string | null>(null)
+  const [statusFilter, setStatusFilter] = useState<string>('all')
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -53,7 +109,23 @@ export default function BrainDumpLogPage() {
     }
   }, [])
 
+  const refreshEntries = useCallback(async () => {
+    setEntriesLoading(true)
+    try {
+      const res = await fetch('/api/brain-dump/entries')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = (await res.json()) as { entries: BrainDumpEntry[] }
+      setEntries(json.entries)
+      setEntriesError(null)
+    } catch (err) {
+      setEntriesError(err instanceof Error ? err.message : 'Failed to load entries')
+    } finally {
+      setEntriesLoading(false)
+    }
+  }, [])
+
   useEffect(() => { refresh() }, [refresh])
+  useEffect(() => { refreshEntries() }, [refreshEntries])
 
   async function revoke(id: string) {
     if (!confirm('Revoke this grant? Future matching brain-dumps will go back to propose-and-confirm.')) return
@@ -152,6 +224,125 @@ export default function BrainDumpLogPage() {
           </ul>
         </section>
       )}
+
+      {/* T5-γ.7: per-entry audit log. The grants section above shows
+          standing-rule abstractions ("after 3 confirmations of the
+          same shape"); this section shows the raw submission feed
+          underneath. Coordinator can audit "what did Sage do with
+          each thing I dropped in over the last month?" without
+          needing the SQL editor. */}
+      <section>
+        <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-sage-500 flex items-center gap-2">
+              <FileText className="w-3.5 h-3.5" />
+              Recent entries (30d)
+            </h2>
+            <p className="text-xs text-sage-500 mt-1">
+              Every brain-dump submission for the last 30 days, newest first. Limit 50.
+            </p>
+          </div>
+          <div className="flex items-center gap-1 text-xs">
+            <ListFilter className="w-3 h-3 text-sage-400" />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="border border-sage-200 rounded px-2 py-1 text-xs bg-warm-white text-sage-700"
+            >
+              <option value="all">All statuses</option>
+              <option value="parsed">Parsed</option>
+              <option value="confirmed">Confirmed</option>
+              <option value="needs_clarification">Needs clarification</option>
+              <option value="pending">Pending</option>
+              <option value="dismissed">Dismissed</option>
+            </select>
+          </div>
+        </div>
+
+        {entriesLoading && entries.length === 0 ? (
+          <div className="flex items-center gap-2 text-sm text-sage-500 py-12 justify-center">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Loading entries…
+          </div>
+        ) : entriesError ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{entriesError}</div>
+        ) : entries.length === 0 ? (
+          <div className="rounded-lg border border-sage-200 bg-warm-white p-6 text-center text-sm text-sage-500">
+            No brain-dump entries in the last 30 days. As you tell Sage things, they&apos;ll appear here.
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {entries
+              .filter((e) => statusFilter === 'all' || e.parse_status === statusFilter)
+              .map((e) => {
+                const badge = statusBadge(e.parse_status)
+                const StatusIcon = badge.Icon
+                return (
+                  <li key={e.id} className="rounded-lg border border-sage-200 bg-warm-white p-4">
+                    <div className="flex items-start justify-between gap-3 mb-2 flex-wrap">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${badge.bg} ${badge.text}`}>
+                          <StatusIcon className="w-3 h-3" />
+                          {badge.label}
+                        </span>
+                        {e.intent && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-sage-50 text-sage-700">
+                            intent: {e.intent}
+                          </span>
+                        )}
+                        {e.routed_table && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-50 text-blue-700">
+                            → {e.routed_table}
+                          </span>
+                        )}
+                        {e.input_type !== 'text' && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-sage-50 text-sage-600">
+                            {e.input_type}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-sage-500 flex items-center gap-2 shrink-0">
+                        <Clock className="w-3 h-3" />
+                        {formatDateTime(e.created_at)}
+                        {e.submitter_name && (
+                          <span className="text-sage-400">· {e.submitter_name}</span>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-sm text-sage-800 leading-snug whitespace-pre-wrap break-words">
+                      {e.raw_input_excerpt}
+                      {e.raw_input.length > e.raw_input_excerpt.length && '…'}
+                    </p>
+                    {e.clarification_question && (
+                      <div className="mt-2 text-xs text-amber-800 bg-amber-50/60 border border-amber-200 rounded p-2">
+                        <strong className="font-semibold">Clarification asked:</strong> {e.clarification_question}
+                        {e.clarification_answer && (
+                          <div className="mt-1 text-sage-700">
+                            <strong className="font-semibold">Answer:</strong> {e.clarification_answer}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {e.routed_to.length > 1 && (
+                      <details className="mt-2">
+                        <summary className="text-xs text-sage-500 cursor-pointer hover:text-sage-700">
+                          {e.routed_to.length} routing target{e.routed_to.length === 1 ? '' : 's'}
+                        </summary>
+                        <ul className="mt-1 space-y-0.5 text-[11px] font-mono text-sage-600 pl-4 list-disc">
+                          {e.routed_to.map((r, idx) => (
+                            <li key={idx}>
+                              {r.table ?? '?'}{r.field ? `.${r.field}` : ''}{r.action ? ` (${r.action})` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </li>
+                )
+              })}
+          </ul>
+        )}
+      </section>
     </div>
   )
 }

@@ -85,6 +85,48 @@ const METRICS: Record<string, MetricConfig> = {
 }
 
 // ---------------------------------------------------------------------------
+// Feature flag — HEAT_RESPECTS_CONFIDENCE (T5-γ.1)
+// ---------------------------------------------------------------------------
+//
+// When enabled (default), engagement-rate anomaly math down-weights
+// engagement_events whose confidence_flag is 'imported_low' or
+// 'manual' so a Gmail-backfill spike doesn't masquerade as a real
+// engagement surge. Pre-fix every event counted equally regardless of
+// provenance — a venue importing 6 months of Gmail history would
+// trip a +400% engagement_rate critical alert based on data that
+// arrived in a single day.
+//
+// Set HEAT_RESPECTS_CONFIDENCE=false to revert to legacy behavior
+// (counts every event the same). Default-on so new venues get the
+// fix; the env var exists for emergency rollback only.
+//
+// Weight schedule (deliberate, not theoretical):
+//   live              : 1.0
+//   imported_high     : 1.0  (CRM full-identity rows are real)
+//   imported_medium   : 1.0  (CRM partial — still real)
+//   imported_low      : 0.3  (Gmail backfill — classifier-inferred)
+//   manual            : 0.5  (coordinator entered, but no pipeline trace)
+//   null/legacy       : 1.0  (don't punish pre-T2-A rows)
+function heatRespectsConfidence(): boolean {
+  const v = process.env.HEAT_RESPECTS_CONFIDENCE
+  if (v === undefined) return true
+  return v.toLowerCase() !== 'false' && v !== '0'
+}
+
+const CONFIDENCE_WEIGHT: Record<string, number> = {
+  live: 1.0,
+  imported_high: 1.0,
+  imported_medium: 1.0,
+  imported_low: 0.3,
+  manual: 0.5,
+}
+
+function weightForConfidence(flag: string | null | undefined): number {
+  if (!flag) return 1.0
+  return CONFIDENCE_WEIGHT[flag] ?? 1.0
+}
+
+// ---------------------------------------------------------------------------
 // Date helpers
 // ---------------------------------------------------------------------------
 
@@ -280,17 +322,44 @@ async function queryMetric(
       // couple-side activity divided by inquiries. Outbound auto-sends
       // counted here would falsely lift the rate every time we replied
       // to anyone.
-      const { count: engagementCount, error: engError } = await supabase
-        .from('engagement_events')
-        .select('id', { count: 'exact', head: true })
-        .eq('venue_id', venueId)
-        .eq('direction', 'inbound')
-        .gte('occurred_at', periodStart)
-        .lt('occurred_at', periodEnd)
-
-      if (engError) {
-        console.error(`[anomaly] Error querying engagement_rate events:`, engError.message)
-        return null
+      //
+      // T5-γ.1: when HEAT_RESPECTS_CONFIDENCE is on (default), pull
+      // confidence_flag and apply per-row weights. Pre-fix a Gmail
+      // backfill could fire a +400% spike because every imported_low
+      // event counted as 1.0. Now imported_low events count as 0.3,
+      // manual as 0.5, so a backfill alone produces a much smaller
+      // (and accurate) blip rather than a critical alert.
+      const respectConfidence = heatRespectsConfidence()
+      let engagementCount: number
+      if (respectConfidence) {
+        const { data: rows, error: engError } = await supabase
+          .from('engagement_events')
+          .select('confidence_flag')
+          .eq('venue_id', venueId)
+          .eq('direction', 'inbound')
+          .gte('occurred_at', periodStart)
+          .lt('occurred_at', periodEnd)
+        if (engError) {
+          console.error(`[anomaly] Error querying engagement_rate events:`, engError.message)
+          return null
+        }
+        engagementCount = ((rows ?? []) as Array<{ confidence_flag: string | null }>).reduce(
+          (sum, r) => sum + weightForConfidence(r.confidence_flag),
+          0,
+        )
+      } else {
+        const { count, error: engError } = await supabase
+          .from('engagement_events')
+          .select('id', { count: 'exact', head: true })
+          .eq('venue_id', venueId)
+          .eq('direction', 'inbound')
+          .gte('occurred_at', periodStart)
+          .lt('occurred_at', periodEnd)
+        if (engError) {
+          console.error(`[anomaly] Error querying engagement_rate events:`, engError.message)
+          return null
+        }
+        engagementCount = count ?? 0
       }
 
       const { count: inquiryCount, error: inqError } = await supabase
@@ -306,7 +375,7 @@ async function queryMetric(
       }
       if (!inquiryCount || inquiryCount === 0) return null
 
-      return (engagementCount ?? 0) / inquiryCount
+      return engagementCount / inquiryCount
     }
 
     // ----- candidate_volume: count of candidate_identities created -----
