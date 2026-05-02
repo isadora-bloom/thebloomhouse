@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Rocket,
   ChevronRight,
+  Sparkles,
 } from 'lucide-react'
 import { PROJECT_PLAN, TOTAL_DAYS, type DayStep } from '@/lib/services/onboarding-project'
 import { BackfillChecklist } from '@/components/onboarding/backfill-checklist'
@@ -141,6 +142,84 @@ export default function OnboardingProjectPage() {
       const msg = err instanceof Error ? err.message : 'Failed to record step'
       setError(msg)
     } finally { setBusy(false) }
+  }
+
+  /**
+   * T5-θ.3: Run the voice-DNA extraction on the venue's coordinator-
+   * written Gmail backfill. The route returns counts; we surface them
+   * in the step note so the coordinator sees what was captured. The
+   * step is marked done only on rowsWritten > 0 — partial failures
+   * (LLM all-batches-failed, no samples) leave the step open so the
+   * coordinator can retry.
+   */
+  async function handleVoiceDnaExtract(day: number, step: DayStep) {
+    if (!project || busy) return
+    // First-run path leaves overwrite=false so the API can return 409
+    // if a prior import exists; the 409-handler below prompts the
+    // coordinator and retries with overwrite=true. Re-running an
+    // already-completed step explicitly opts in to overwrite.
+    const stepHasRun = Boolean(stepCompletion.get(`day_${day}.${step.key}`))
+    if (stepHasRun && !window.confirm('Voice DNA has already been extracted for this venue. Re-running will OVERWRITE the previous extraction. Continue?')) {
+      return
+    }
+    const overwrite = stepHasRun
+    setBusy(true)
+    try {
+      const res = await fetch('/api/onboarding/voice-dna-extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ overwrite }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        if (res.status === 409 && body.error === 'already_imported') {
+          if (window.confirm('Voice DNA has already been extracted. Re-run and OVERWRITE the previous extraction?')) {
+            const retry = await fetch('/api/onboarding/voice-dna-extract', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ overwrite: true }),
+            })
+            const retryBody = await retry.json().catch(() => ({}))
+            if (!retry.ok) throw new Error(retryBody.message ?? retryBody.error ?? `HTTP ${retry.status}`)
+            await applyVoiceDnaSuccess(day, step, retryBody)
+            return
+          }
+          return
+        }
+        if (res.status === 429) {
+          throw new Error(`${body.message ?? 'Cost ceiling reached'}${body.resume_at ? ` (auto-resumes ${new Date(body.resume_at).toLocaleString()})` : ''}`)
+        }
+        throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`)
+      }
+      await applyVoiceDnaSuccess(day, step, body)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Voice DNA extraction failed'
+      setError(msg)
+    } finally { setBusy(false) }
+  }
+
+  async function applyVoiceDnaSuccess(day: number, step: DayStep, body: Record<string, unknown>) {
+    const sampled = (body.sampled_count as number | undefined) ?? 0
+    const rowsWritten = (body.rows_written as number | undefined) ?? 0
+    const phrases = (body.phrases_extracted as number | undefined) ?? 0
+    const greetings = (body.greeting_patterns as number | undefined) ?? 0
+    const signoffs = (body.signoff_patterns as number | undefined) ?? 0
+
+    if (rowsWritten <= 0) {
+      // Per spec: step is marked done only when rowsWritten > 0.
+      setError(
+        `Sampled ${sampled} emails but no voice anchors were written. ` +
+        `Try again, or check that your outbound emails contain enough variety.`
+      )
+      return
+    }
+
+    const note =
+      `Sampled ${sampled} coordinator-written emails; extracted ${phrases} phrases ` +
+      `+ ${greetings} greeting / ${signoffs} signoff patterns; ` +
+      `wrote ${rowsWritten} rows to voice_preferences/phrase_usage/review_language.`
+
+    await handleStepComplete(day, step, note)
   }
 
   async function handleAdvanceDay() {
@@ -319,6 +398,7 @@ export default function OnboardingProjectPage() {
               isComplete={dayDone}
               stepCompletion={stepCompletion}
               onCompleteStep={(step) => handleStepComplete(dp.day, step)}
+              onVoiceDnaExtract={(step) => handleVoiceDnaExtract(dp.day, step)}
               advanceDay={handleAdvanceDay}
               busy={busy}
               status={project.status}
@@ -405,12 +485,14 @@ interface DayCardProps {
   isComplete: boolean
   stepCompletion: Map<string, { completed_at: string; note?: string }>
   onCompleteStep: (step: DayStep) => void
+  /** T5-θ.3: inline action for the Day-4 voice_dna_extract step. */
+  onVoiceDnaExtract: (step: DayStep) => void
   advanceDay: () => void
   busy: boolean
   status: ProjectState['status']
 }
 
-function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, advanceDay, busy, status }: DayCardProps) {
+function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, onVoiceDnaExtract, advanceDay, busy, status }: DayCardProps) {
   const allStepsDone = day.steps.every((s) => stepCompletion.has(`day_${day.day}.${s.key}`))
   return (
     <section className={`rounded-lg border p-4 ${isCurrent ? 'border-sage-400 bg-sage-50/40' : isComplete ? 'border-sage-200 bg-white' : 'border-sage-100 bg-white opacity-70'}`}>
@@ -475,7 +557,21 @@ function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, a
                     {s.linkLabel ?? 'Open surface'} ↗
                   </a>
                 )}
-                {!stepDone && isCurrent && status === 'in_progress' && (
+                {/* T5-θ.3: Day-4 voice DNA extraction is run in-page —
+                    the LLM extraction service does the work + writes
+                    voice anchors. Step is marked done by the success
+                    handler only if rows_written > 0. */}
+                {!stepDone && isCurrent && status === 'in_progress' && s.actionKey === 'voice_dna_extract' && (
+                  <button
+                    onClick={() => onVoiceDnaExtract(s)}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1 rounded bg-sage-700 hover:bg-sage-800 disabled:opacity-50 text-white text-xs font-medium px-2 py-1"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    {busy ? 'Running…' : 'Run voice DNA extraction from Gmail backfill'}
+                  </button>
+                )}
+                {!stepDone && isCurrent && status === 'in_progress' && s.actionKey !== 'voice_dna_extract' && (
                   <button
                     onClick={() => onCompleteStep(s)}
                     disabled={busy}

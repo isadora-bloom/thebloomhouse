@@ -41,8 +41,8 @@ export interface DayStep {
   description: string
   /** Action key the UI handler matches against. */
   actionKey: 'oauth_gmail' | 'backfill_email' | 'seed_channels' | 'reconstruct_pricing'
-    | 'import_crm' | 'orphan_triage' | 'voice_dna_seed' | 'kb_seed' | 'readiness_check'
-    | 'manual'
+    | 'import_crm' | 'orphan_triage' | 'voice_dna_seed' | 'voice_dna_extract'
+    | 'kb_seed' | 'readiness_check' | 'manual'
   /** External admin surface where the coordinator does the actual
    *  work for this step. Page renders this as a "Go to surface" link
    *  so coordinators don't have to memorise where each piece lives.
@@ -141,10 +141,10 @@ export const PROJECT_PLAN: DayPlan[] = [
         key: 'voice_dna_extract',
         label: 'Extract voice patterns from imports',
         description:
-          'Run transcript-voice-learning over the 12mo Gmail backfill + any tour transcripts. Patterns surface for confirmation — coordinator approves or rejects each. (Bulk extraction trigger landing in T2-A follow-up; for now use the existing voice training games to seed.)',
-        actionKey: 'voice_dna_seed',
-        linkHref: '/settings/voice',
-        linkLabel: 'Open voice training',
+          'Run voice DNA extraction over the 12mo Gmail backfill. Pulls coordinator-written outbound emails, identifies your greetings + signoffs + pet phrases + sentence rhythm, and writes them to the venue voice anchors. Click "Run extraction" below — no need to leave this page (T5-θ.3).',
+        actionKey: 'voice_dna_extract',
+        linkHref: null,
+        linkLabel: 'Run extraction',
       },
       {
         key: 'voice_dna_confirm',

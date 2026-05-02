@@ -61,6 +61,15 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
   + follow-up draft composer. Tier-1 content (transcript-derived
   family/financial intelligence).
 
+### voice-dna-extract (`voice-dna-extract.prompt.v1.0`)
+- **v1.0** (2026-05-02) — T5-θ.3. Extracts greetings, signoffs, pet
+  phrases, punctuation tics, voice rules, and sentence rhythm from a
+  batch of coordinator-written outbound emails. Used for the Day-4
+  onboarding seed pass over the 12-month Gmail backfill. Tier-1 content
+  (outbound emails contain couple PII + sometimes family context).
+  Sonnet-tier for the nuanced extraction; Haiku is too brittle on
+  free-text style identification at this batch size.
+
 ## Adding a new brain prompt
 
 1. Export `BRAIN_PROMPT_VERSION` at the top of the brain file.
