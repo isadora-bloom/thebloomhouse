@@ -94,27 +94,58 @@ interface ConversionWindow {
   conversion_rate: number  // booked / resolved, 0..1
 }
 
-/** Compute conversion stats for a venue window. Terminal-status only. */
+/** Compute conversion stats for a venue window. Terminal-status only.
+ *  Filters on the RESOLUTION timestamp (booked_at for booked/completed,
+ *  lost_at for lost) NOT on inquiry_date — otherwise a lead who
+ *  inquired BEFORE a price change but only decided AFTER the change
+ *  would land in the pre cohort even though their decision was made
+ *  under the new price regime. T3 review P1 #10. */
 async function loadConversionWindow(
   supabase: SupabaseClient,
   venueId: string,
   windowStart: Date,
   windowEnd: Date,
 ): Promise<ConversionWindow> {
+  const startIso = windowStart.toISOString()
+  const endIso = windowEnd.toISOString()
+
+  // Pull all candidate weddings (terminal status), then filter in JS
+  // by the resolution-timestamp rule. Two queries (one for booked,
+  // one for lost) would hit different timestamp columns; combining
+  // in-memory is cheaper than chaining .or() with column-specific
+  // bounds and avoids a complex Supabase REST query.
   const { data } = await supabase
     .from('weddings')
-    .select('status')
+    .select('status, booked_at, lost_at')
     .eq('venue_id', venueId)
-    .gte('inquiry_date', windowStart.toISOString())
-    .lte('inquiry_date', windowEnd.toISOString())
     .in('status', ['booked', 'completed', 'lost'])
+    // Pre-filter to give Postgres a chance to use the inquiry_date
+    // index — anything before windowStart's earliest plausible
+    // inquiry-to-decision lag (180 days) can't have a decision in
+    // the window. Conservative + index-friendly.
+    .gte('inquiry_date', new Date(windowStart.getTime() - 180 * 86_400_000).toISOString())
 
-  const rows = ((data ?? []) as Array<{ status: string }>)
-  const booked = rows.filter((r) => r.status === 'booked' || r.status === 'completed').length
-  const resolved = rows.length
+  const rows = ((data ?? []) as Array<{
+    status: string
+    booked_at: string | null
+    lost_at: string | null
+  }>)
+
+  let booked = 0
+  let resolved = 0
+  for (const r of rows) {
+    const resolutionTs = (r.status === 'booked' || r.status === 'completed')
+      ? r.booked_at
+      : r.lost_at
+    if (!resolutionTs) continue  // status terminal but no resolution timestamp; skip
+    if (resolutionTs < startIso || resolutionTs > endIso) continue
+    resolved++
+    if (r.status === 'booked' || r.status === 'completed') booked++
+  }
+
   return {
-    windowStart: windowStart.toISOString(),
-    windowEnd: windowEnd.toISOString(),
+    windowStart: startIso,
+    windowEnd: endIso,
     resolved,
     booked,
     conversion_rate: resolved > 0 ? booked / resolved : 0,

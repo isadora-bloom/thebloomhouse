@@ -29,12 +29,17 @@ export async function POST(request: NextRequest) {
   const scope = request.nextUrl.searchParams.get('scope') ?? 'venue'
 
   // Build the venueId list. 'venue' = caller's own venue (default).
-  // 'all' = sweep every venue with a google_trends_metro set.
-  // 'all' is admin-gated when wired into UI; cron uses a service-
-  // role bearer that bypasses getPlatformAuth, but that path goes
-  // through a separate cron route (not this endpoint).
+  // 'all' = sweep every venue with a google_trends_metro set; ADMIN-
+  // GATED because cross-tenant writes (cultural_moments rows
+  // dedup'd at (term, weekStart) across all venues) must not be
+  // initiable by any signed-in coordinator. Pre-fix any coordinator
+  // could `?scope=all` and effectively claim auto-proposal slots
+  // platform-wide. T3 review P0 #3.
   let venueIds: string[]
   if (scope === 'all') {
+    if (auth.role !== 'org_admin' && auth.role !== 'super_admin') {
+      return NextResponse.json({ error: 'forbidden_scope_all' }, { status: 403 })
+    }
     const { data } = await supabase
       .from('venues')
       .select('id')

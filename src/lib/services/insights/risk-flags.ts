@@ -30,6 +30,34 @@ import type { ClassicalEvidence, InsightNarration } from './types'
 
 export const RISK_FLAGS_PROMPT_VERSION = 'risk-flags.prompt.v1.0'
 
+/**
+ * Strip likely PII (emails / phone numbers) from a free-text friction
+ * tag before it gets persisted into intelligence_insights.evidence /
+ * data_points. Coordinators occasionally type natural-language tags
+ * that accidentally include couple email or phone; without this
+ * sanitiser the value lands in the insight row and surfaces in
+ * /intel UIs. Conservative replacements with a tag marker so the
+ * insight reads as "Friction tags: payment_late, [redacted]".
+ */
+export function sanitizeFrictionTag(tag: string): string {
+  if (!tag) return tag
+  // Trim and clamp length first.
+  const trimmed = String(tag).slice(0, 80).trim()
+  if (!trimmed) return trimmed
+  let cleaned = trimmed
+  // Email
+  cleaned = cleaned.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[redacted-email]')
+  // Phone (US-shaped — 10 digits with optional country code +
+  // optional separators). Lookbehind/lookahead anchors prevent the
+  // optional leading separator from chewing the preceding word's
+  // trailing space (which would garble the surrounding sentence).
+  cleaned = cleaned.replace(
+    /(?<![\d])(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?![\d])/g,
+    '[redacted-phone]',
+  )
+  return cleaned
+}
+
 export type RiskFlagCode =
   | 'missing_contract'
   | 'missing_timeline'
@@ -197,7 +225,13 @@ async function classicalRiskPass(
   }
 
   // Rule: friction_present — coordinator-tagged friction signals.
-  const frictionTags = Array.isArray(wedding.friction_tags) ? wedding.friction_tags as string[] : []
+  // Sanitise tag content before persisting into intelligence_insights:
+  // friction_tags is a free-text array, and nothing prevents a
+  // coordinator from accidentally typing PII ("jane@example.com
+  // complained") that would otherwise be persisted verbatim into the
+  // insight row's evidence + data_points jsonb. T3 review P1 #8.
+  const frictionTagsRaw = Array.isArray(wedding.friction_tags) ? wedding.friction_tags as string[] : []
+  const frictionTags = frictionTagsRaw.map(sanitizeFrictionTag)
   if (frictionTags.length > 0) {
     flags.push({
       code: 'friction_present',

@@ -141,9 +141,13 @@ export function checkNarrationNumbers(
     // Skip calendar tokens.
     if (isYearOrCalendarToken(token)) continue
 
-    // Tolerate round percentages ("100%", "50%", "25%", etc.) when the
-    // option is on.
-    if (tolerateRoundPercents && /^\d{1,3}%$/.test(token) && Number(token.slice(0, -1)) % 25 === 0) {
+    // Tolerate ONLY 0% and 100% as stock-phrase percentages
+    // (e.g. "100% sure", "0% no-show rate"). Pre-fix this allowlisted
+    // any multiple of 25 (25%, 50%, 75%, 100%), which let an LLM
+    // fabricate "conversion fell to 25%" through the guard when the
+    // truth might have been 18%. Real quantitative percentages must
+    // come from classical.numbers. T3 review P1 #7.
+    if (tolerateRoundPercents && (token === '0%' || token === '100%')) {
       continue
     }
 

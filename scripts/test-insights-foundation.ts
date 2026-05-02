@@ -130,18 +130,36 @@ const ok2 = checkNarrationNumbers(
 )
 assertEq(ok2.length, 0, 'year tokens pass')
 
-// Round percentages tolerated by default
+// Stock-phrase percentages tolerated by default. T3 review P1 #7
+// tightened this from "% 25 === 0" (which let an LLM smuggle "25%",
+// "50%", "75%" past the guard) to ONLY 0% and 100% — because those
+// two are unambiguous stock phrases ("100% sure", "0% no-show rate")
+// while 25/50/75 are real quantitative claims that must be in
+// classical.numbers.
 const ok3 = checkNarrationNumbers(
   'Couple is 100% committed to the venue.',
   classical,
 )
-assertEq(ok3.length, 0, '100% phrase tolerated')
+assertEq(ok3.length, 0, '100% stock phrase tolerated')
 
-const ok4 = checkNarrationNumbers(
+const ok3b = checkNarrationNumbers(
+  '0% no-show rate this month.',
+  classical,
+)
+assertEq(ok3b.length, 0, '0% stock phrase tolerated')
+
+// 50% is no longer a stock-phrase tolerance; must be in classical.
+const violate50 = checkNarrationNumbers(
   '50% non-refundable retainer.',
   classical,
 )
-assertEq(ok4.length, 0, '50% retainer phrase tolerated')
+assertEq(violate50.length, 1, 'tightened: 50% trips guard unless in classical')
+
+const ok4WithClassical = checkNarrationNumbers(
+  '50% non-refundable retainer.',
+  { ...classical, numbers: [50, ...classical.numbers] },
+)
+assertEq(ok4WithClassical.length, 0, '50% passes when added to classical.numbers')
 
 // Round percentage NOT tolerated when option off
 const bad2 = checkNarrationNumbers(

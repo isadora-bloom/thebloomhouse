@@ -123,7 +123,12 @@ async function loadClassicalDecayEvidence(
   if (!wedding) return null
 
   const status = (wedding.status as string) ?? 'inquiry'
-  if (status === 'lost' || status === 'cancelled' || status === 'completed' || status === 'booked') {
+  // Skip terminal-resolved statuses only. 'booked' clients can still
+  // go silent during the contract-to-wedding planning phase, and
+  // re-engagement is just as important then. Pre-fix decay refused
+  // to fire on booked, leaving coordinators blind to silent contract-
+  // phase clients. T3 review P1 #6.
+  if (status === 'lost' || status === 'cancelled' || status === 'completed') {
     return null
   }
 

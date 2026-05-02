@@ -237,9 +237,15 @@ export async function generateCoordinatorOverridePattern(
     anomalyDays: classical.dow_anomalies.map((a) => `${a.day}:${a.diff_from_mean_pp}`).join(','),
   })
 
+  // Synthetic context_id 'venue' — null context_id breaks upsert dedup
+  // because Postgres treats NULL != NULL in unique indexes, so every
+  // run would insert a duplicate row instead of updating. Same value
+  // is used in lookupCachedInsight + persistInsight below.
+  const VENUE_SCOPE_CONTEXT = 'venue'
+
   if (!force) {
     const cached = await lookupCachedInsight(
-      supabase, venueId, 'coordinator_override_pattern', null, cacheKey,
+      supabase, venueId, 'coordinator_override_pattern', VENUE_SCOPE_CONTEXT, cacheKey,
     )
     if (cached) {
       const dp = cached.data_points as Partial<ClassicalCoordinatorPayload> & { recommendation?: string }
@@ -396,7 +402,7 @@ Diagnose the pattern + recommend a specific next step.`
   await persistInsight(supabase, {
     venueId,
     insightType: 'coordinator_override_pattern',
-    contextId: null,
+    contextId: VENUE_SCOPE_CONTEXT,
     category: 'agent_quality',
     surfaceLayer: 'pulse',
     classical: evidence,

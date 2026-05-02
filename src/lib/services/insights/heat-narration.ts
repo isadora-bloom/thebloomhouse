@@ -156,7 +156,14 @@ export async function generateHeatNarration(
   const cacheKey = buildCacheKey({
     score: payload.heat_score,
     tier: payload.temperature_tier,
-    topEvents: payload.top_events.map((e) => `${e.event_type}@${e.points}`),
+    // Include occurred_at-day in the fingerprint so two events of the
+    // same type+points but different days don't collapse into a stale
+    // cache hit. Pre-fix the cache key dropped occurred_at, which made
+    // a fresh tour_completed (re-fired after a re-engagement) look
+    // identical to a year-old tour_completed. T3 review P1 #18.
+    topEvents: payload.top_events.map((e) =>
+      `${e.event_type}@${e.points}@${(e.occurred_at ?? '').slice(0, 10)}`,
+    ),
     totalEvents: payload.total_events,
   })
 

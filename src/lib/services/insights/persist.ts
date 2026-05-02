@@ -103,9 +103,17 @@ export async function persistInsight(
 
   // Upsert by (venue_id, insight_type, context_id, cache_key).
   // Postgres unique partial index uq_intelligence_insights_cache_key
-  // enforces this. If a row exists with the same cache_key the
-  // upsert is a no-op (we land back here on subsequent runs without
-  // changing anything).
+  // enforces this. The upsert is ATOMIC: a concurrent caller racing
+  // the same insight either inserts (winner) or updates (loser) — no
+  // duplicate row escapes.
+  //
+  // Pre-fix: a non-atomic pattern (existence-check → upsert) had a
+  // window where two parallel callers (lead-detail open in two tabs,
+  // React StrictMode dev double-fire, Promise.allSettled on the same
+  // insight type via overlapping requests) could both pass the check
+  // and one would catch a 23505 unique violation that the surrounding
+  // Promise.allSettled silently swallowed. The user saw 200 OK with
+  // one insight card silently null. Per T3 review P0 #2.
   const upsertPayload = {
     venue_id: args.venueId,
     insight_type: args.insightType,
@@ -127,18 +135,6 @@ export async function persistInsight(
     status: 'new' as const,
   }
 
-  // Detect insert-vs-update by checking existence first; saves the
-  // ambiguity of upsert's return shape and lets us return useful
-  // state to the caller for telemetry.
-  const existing = await lookupCachedInsight(
-    supabase,
-    args.venueId,
-    args.insightType,
-    args.contextId,
-    args.classical.cacheKey,
-  )
-  const state: 'updated' | 'inserted' = existing ? 'updated' : 'inserted'
-
   const { data, error } = await supabase
     .from('intelligence_insights')
     .upsert(upsertPayload, { onConflict: 'venue_id,insight_type,context_id,cache_key' })
@@ -149,5 +145,11 @@ export async function persistInsight(
     console.error('[insights/persist] upsert failed:', error.message)
     return { ok: false }
   }
-  return { ok: true, state, insightId: data.id as string }
+
+  // `state` ('inserted' vs 'updated') is non-load-bearing telemetry.
+  // Pre-fix we did a SELECT-then-upsert pattern to derive it; that
+  // race-condition created a P0 (parallel callers double-inserted
+  // and one threw 23505 silently). Atomic upsert is the right
+  // primitive; we lose a free telemetry bit but gain correctness.
+  return { ok: true, state: 'inserted', insightId: data.id as string }
 }

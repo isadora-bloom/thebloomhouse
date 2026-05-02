@@ -212,9 +212,14 @@ export async function generateStrengthAreaCohort(
     bands: classical.bands.map((b) => `${b.label}:${b.resolved}:${b.conversion_pct}`).join('|'),
   })
 
+  // Synthetic context_id — null breaks upsert dedup (Postgres treats
+  // NULL != NULL in unique indexes). See coordinator-override-pattern
+  // for the same pattern.
+  const VENUE_SCOPE_CONTEXT = 'venue'
+
   if (!force) {
     const cached = await lookupCachedInsight(
-      supabase, venueId, 'strength_area_cohort', null, cacheKey,
+      supabase, venueId, 'strength_area_cohort', VENUE_SCOPE_CONTEXT, cacheKey,
     )
     if (cached) {
       const dp = cached.data_points as Partial<ClassicalStrengthPayload> & { recommendation?: string }
@@ -344,7 +349,7 @@ Diagnose + recommend.`
   await persistInsight(supabase, {
     venueId,
     insightType: 'strength_area_cohort',
-    contextId: null,
+    contextId: VENUE_SCOPE_CONTEXT,
     category: 'venue_strategy',
     surfaceLayer: 'on_demand',
     classical: evidence,
