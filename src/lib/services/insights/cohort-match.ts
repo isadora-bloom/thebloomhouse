@@ -360,6 +360,13 @@ export async function generateCohortMatch(
 
   const cacheKey = buildCacheKey({
     weddingId,
+    // T5-delta.1 (2026-05-02). Current lead's inquiry_date in the
+    // fingerprint — when coordinator corrects the date, planning
+    // horizon shifts, similarity rankings shift, the narration is
+    // stale. Belt-and-braces with migration 158's signature null-out.
+    inquiryDateDay: classical.current.inquiry_date
+      ? new Date(classical.current.inquiry_date).toISOString().slice(0, 10)
+      : '',
     n: classical.n_total,
     booked: classical.n_booked,
     lost: classical.n_lost,

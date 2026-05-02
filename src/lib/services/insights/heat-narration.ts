@@ -45,6 +45,12 @@ interface ClassicalHeatPayload {
   weddingId: string
   heat_score: number
   temperature_tier: string
+  /** ISO yyyy-mm-dd. Captured here so the cache_key invalidates when
+   *  a coordinator corrects inquiry_date — INV-2.5 / T5-delta.1. The
+   *  trigger 158 nulls last_classical_signature, but having the day
+   *  in the cache_key is belt-and-braces for manual refresh paths
+   *  that bypass the signature compare. */
+  inquiry_date_day: string | null
   top_events: Array<{
     event_type: string
     points: number
@@ -68,11 +74,15 @@ async function loadClassicalHeatEvidence(
 ): Promise<{ payload: ClassicalHeatPayload; allowedNumbers: Array<number | string> } | null> {
   const { data: wedding } = await supabase
     .from('weddings')
-    .select('id, heat_score, temperature_tier')
+    .select('id, heat_score, temperature_tier, inquiry_date')
     .eq('id', weddingId)
     .eq('venue_id', venueId)
     .maybeSingle()
   if (!wedding) return null
+
+  const inquiryDateDay = wedding.inquiry_date
+    ? new Date(wedding.inquiry_date as string).toISOString().slice(0, 10)
+    : null
 
   const { data: events, count: totalEvents } = await supabase
     .from('engagement_events')
@@ -103,6 +113,7 @@ async function loadClassicalHeatEvidence(
     weddingId,
     heat_score: (wedding.heat_score as number) ?? 0,
     temperature_tier: (wedding.temperature_tier as string) ?? 'cool',
+    inquiry_date_day: inquiryDateDay,
     top_events: topEvents,
     total_events: totalEvents ?? list.length,
     newest_event_at: newest,
@@ -158,6 +169,12 @@ export async function generateHeatNarration(
   const cacheKey = buildCacheKey({
     score: payload.heat_score,
     tier: payload.temperature_tier,
+    // T5-delta.1 (2026-05-02). inquiry_date in the fingerprint so a
+    // coordinator correction (back-dating a misread inquiry, fixing a
+    // bad import) invalidates the cached narration even when the
+    // trigger-driven signature null somehow misses (e.g. cache_key was
+    // never reached during write). Belt-and-braces with migration 158.
+    inquiryDateDay: payload.inquiry_date_day ?? '',
     // Include occurred_at-day in the fingerprint so two events of the
     // same type+points but different days don't collapse into a stale
     // cache hit. Pre-fix the cache key dropped occurred_at, which made

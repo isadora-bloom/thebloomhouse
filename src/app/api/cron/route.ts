@@ -13,7 +13,7 @@ import { generateWeeklyDigest } from '@/lib/services/weekly-digest'
 import { measureInsightOutcomes } from '@/lib/services/insight-tracking'
 import { sendAllDigests } from '@/lib/services/daily-digest'
 import { processAllVenueFollowUps } from '@/lib/services/follow-up-sequences'
-import { applyDailyDecay } from '@/lib/services/heat-mapping'
+import { applyDailyDecay, recalculateHeatScore } from '@/lib/services/heat-mapping'
 import { processAllNewEmails, flushPendingAutoSends } from '@/lib/services/email-pipeline'
 import { runAllVenueIntelligence } from '@/lib/services/intelligence-engine'
 import { createNotification } from '@/lib/services/admin-notifications'
@@ -82,6 +82,11 @@ const VALID_JOBS = [
   // pauses (separate jobs so vercel.json can give them different cadences).
   'cost_ceiling_check',
   'cost_ceiling_reset',
+  // T5-delta.2 (2026-05-02). Drains weddings.heat_recompute_pending
+  // set by the temporal-change trigger (migration 158) when a
+  // coordinator corrects inquiry_date / wedding_date / guest_count.
+  // Runs every 5 minutes — INV-2.5 derived-state recompute.
+  'recompute_pending_temporal',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -265,6 +270,15 @@ async function runJob(job: JobName): Promise<unknown> {
       // spend is back under ceiling. Coordinators who can't wait
       // for the natural reset use POST /api/agent/cost-ceiling/resume.
       return clearStaleAutonomousPauses()
+
+    case 'recompute_pending_temporal':
+      // T5-delta.2 (2026-05-02). Every 5 minutes. Drains
+      // weddings.heat_recompute_pending — the BEFORE-UPDATE trigger
+      // installed by migration 158 stamps it true when a coordinator
+      // corrects inquiry_date / wedding_date / guest_count. Heat
+      // recompute is multi-table so it can't run inline in the trigger
+      // without holding row locks; cron is the deferred path.
+      return runRecomputePendingTemporal()
   }
 }
 
@@ -357,6 +371,82 @@ async function sweepDataIntegrityAllVenues() {
 async function sweepReEngagementAttribution() {
   const supabase = createServiceClient()
   return sweepReEngagementConversions(supabase)
+}
+
+/**
+ * T5-delta.2 (2026-05-02). Drains weddings.heat_recompute_pending.
+ *
+ * The BEFORE-UPDATE trigger from migration 158 stamps the flag true
+ * when inquiry_date / wedding_date / guest_count change. The AFTER
+ * trigger nulls T3 cache signatures + stamps stale_since on journey
+ * narratives + tour briefs in the same transaction. This cron does
+ * the load-bearing heat-score recompute that has to be deferred —
+ * recalculateHeatScore reads engagement_events + candidate_identities
+ * + attribution_events, which is too expensive to run inline.
+ *
+ * Caps at 100 weddings per tick so a bulk back-fill correction (a
+ * coordinator running an import-fix script that touches thousands of
+ * rows) doesn't blow the function timeout. The next 5-min tick picks
+ * up the rest.
+ *
+ * Per-wedding errors are logged + the flag is left true so the next
+ * tick retries. Permanent failures will surface in cron_runs telemetry.
+ */
+async function runRecomputePendingTemporal(): Promise<{
+  scanned: number
+  recomputed: number
+  failed: number
+  remaining_estimate: number
+}> {
+  const supabase = createServiceClient()
+
+  const { data: pending } = await supabase
+    .from('weddings')
+    .select('id, venue_id')
+    .eq('heat_recompute_pending', true)
+    .limit(100)
+
+  const list = ((pending ?? []) as Array<{ id: string; venue_id: string }>)
+  if (list.length === 0) {
+    return { scanned: 0, recomputed: 0, failed: 0, remaining_estimate: 0 }
+  }
+
+  let recomputed = 0
+  let failed = 0
+
+  for (const w of list) {
+    try {
+      await recalculateHeatScore(w.venue_id, w.id)
+      const { error } = await supabase
+        .from('weddings')
+        .update({ heat_recompute_pending: false })
+        .eq('id', w.id)
+        .eq('heat_recompute_pending', true)
+      if (error) {
+        console.error(`[recompute_pending_temporal] flag clear failed for ${w.id}:`, error.message)
+        failed++
+        continue
+      }
+      recomputed++
+    } catch (err) {
+      console.error(`[recompute_pending_temporal] recompute failed for ${w.id}:`, err)
+      failed++
+    }
+  }
+
+  // Cheap remaining-estimate so the cron telemetry shows pressure.
+  // head:true skips the row payload — count-only.
+  const { count: remaining } = await supabase
+    .from('weddings')
+    .select('id', { count: 'exact', head: true })
+    .eq('heat_recompute_pending', true)
+
+  return {
+    scanned: list.length,
+    recomputed,
+    failed,
+    remaining_estimate: remaining ?? 0,
+  }
 }
 
 /**

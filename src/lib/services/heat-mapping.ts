@@ -210,63 +210,117 @@ async function getPointsForEvent(
 }
 
 // ---------------------------------------------------------------------------
-// Idempotency
+// Idempotency — DB-enforced fire-once invariant
 // ---------------------------------------------------------------------------
 
 /**
- * Event types that should fire AT MOST ONCE per wedding regardless of
- * how many emails / signals come in. Repeat firings used to compound
- * (Knot inquiry + Calendly booking both fired initial_inquiry, then
- * mergePeople consolidated → wedding ended up with 2× initial_inquiry,
- * +80 base points, distorted heat). Listed here, dedup runs at insert.
+ * Event types that fire AT MOST ONCE per wedding. Listed in CLAUDE.md
+ * Heat scoring section. Migration 159 added a partial UNIQUE INDEX
+ * (uq_engagement_events_fire_once) on (venue_id, wedding_id, event_type)
+ * filtered to these types — Postgres enforces the invariant atomically
+ * at INSERT time. The pre-fix SELECT-then-INSERT shouldSkipDuplicate
+ * pattern had a race window where two concurrent pipeline runs (Knot
+ * inquiry + Calendly booking landing in the same poll cycle) could both
+ * pass the SELECT and both INSERT, double-counting heat points.
+ *
+ * Reopen-bypass: when a wedding is re-engaged after lost_at, the same
+ * event_type can fire again (e.g. fresh tour_requested after a couple
+ * comes back two months later). A pure DB unique constraint can't
+ * express the cross-table check, so the bypass lives in the INSERT
+ * path: on 23505 unique_violation, if weddings.lost_at is more recent
+ * than the existing event's created_at, DELETE the stale event and
+ * retry the INSERT. See insertEngagementEventReopenAware.
  */
-const ONE_PER_WEDDING_EVENTS = new Set([
+const FIRE_ONCE_EVENTS = new Set([
   'initial_inquiry',
-  'sustained_engagement',
+  'tour_completed',
+  'tour_requested',
   'high_commitment_signal',
-  'high_specificity',
   'family_mentioned',
+  'high_specificity',
+  'tour_cancelled',
+  'not_interested_signal',
 ])
 
 /**
- * Decide whether to skip inserting an event because it would duplicate
- * one already on the wedding. Two rules:
- *   1. ONE_PER_WEDDING_EVENTS: skip if ANY row of this event_type
- *      already exists on the wedding.
- *   2. Per-interaction events: skip if a row with the same
- *      (event_type, occurred_at) already exists. Backfills running
- *      twice would otherwise insert exact duplicates.
+ * Insert one engagement_event row with reopen-aware retry on the
+ * fire-once unique constraint (uq_engagement_events_fire_once,
+ * migration 159).
  *
- * Returns { skip: true, reason } when a duplicate is detected.
+ * Returns true if the row landed (either first try or after reopen
+ * retry); false if the unique violation was for a non-reopen case
+ * (the existing fire-once event is still valid for a wedding that
+ * has not been lost since).
+ *
+ * Non-23505 errors are logged and swallowed so the surrounding heat
+ * recompute still runs — caller already passes through to
+ * recalculateHeatScore which is the load-bearing step.
  */
-async function shouldSkipDuplicate(
+async function insertEngagementEventReopenAware(
   supabase: ReturnType<typeof createServiceClient>,
-  weddingId: string,
-  eventType: string,
-  occurredAt: string | null
-): Promise<{ skip: boolean; reason?: string }> {
-  if (ONE_PER_WEDDING_EVENTS.has(eventType)) {
-    const { data } = await supabase
-      .from('engagement_events')
-      .select('id')
-      .eq('wedding_id', weddingId)
-      .eq('event_type', eventType)
-      .limit(1)
-    if (data && data.length > 0) return { skip: true, reason: 'one-per-wedding' }
-    return { skip: false }
+  row: Record<string, unknown>,
+): Promise<boolean> {
+  const { error } = await supabase.from('engagement_events').insert(row)
+  if (!error) return true
+
+  // Postgres unique_violation. The supabase-js error shape exposes the
+  // SQLSTATE in error.code.
+  const code = (error as { code?: string }).code
+  if (code !== '23505') {
+    console.error('[heat-mapping] engagement_events insert failed:', error.message)
+    return false
   }
-  // Per-interaction events — exact (type, time) match means a re-run.
-  if (occurredAt) {
-    const { data } = await supabase
-      .from('engagement_events')
-      .select('id')
-      .eq('wedding_id', weddingId)
-      .eq('event_type', eventType)
-      .eq('occurred_at', occurredAt)
-      .limit(1)
-    if (data && data.length > 0) return { skip: true, reason: 'same (type, occurred_at)' }
+
+  const eventType = row.event_type as string
+  const weddingId = row.wedding_id as string | undefined
+  if (!FIRE_ONCE_EVENTS.has(eventType) || !weddingId) {
+    // Unique violation but not on the fire-once index — caller's batch
+    // re-fired the same row twice in the same call, just no-op.
+    return false
   }
-  return { skip: false }
+
+  // Reopen check: was the wedding marked lost more recently than the
+  // existing event's created_at? If yes, delete the stale event and
+  // retry. If no, the fire-once invariant holds — no insert.
+  const { data: wedding } = await supabase
+    .from('weddings')
+    .select('lost_at')
+    .eq('id', weddingId)
+    .maybeSingle()
+  const lostAt = (wedding?.lost_at as string | null) ?? null
+  if (!lostAt) return false  // never lost → no reopen, invariant holds
+
+  const { data: existing } = await supabase
+    .from('engagement_events')
+    .select('id, created_at')
+    .eq('wedding_id', weddingId)
+    .eq('event_type', eventType)
+    .order('created_at', { ascending: true })
+    .limit(1)
+  const existingRow = ((existing ?? [])[0] ?? null) as { id: string; created_at: string } | null
+  if (!existingRow) return false  // race resolved — caller can retry on next pass
+
+  if (Date.parse(existingRow.created_at) >= Date.parse(lostAt)) {
+    // Existing event is post-reopen; this is a true duplicate.
+    return false
+  }
+
+  // Reopen-bypass: delete the pre-loss event, retry.
+  const { error: delError } = await supabase
+    .from('engagement_events')
+    .delete()
+    .eq('id', existingRow.id)
+  if (delError) {
+    console.error('[heat-mapping] reopen-bypass delete failed:', delError.message)
+    return false
+  }
+
+  const { error: retryError } = await supabase.from('engagement_events').insert(row)
+  if (retryError) {
+    console.error('[heat-mapping] reopen-bypass retry insert failed:', retryError.message)
+    return false
+  }
+  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -277,9 +331,11 @@ async function shouldSkipDuplicate(
  * Record an engagement event for a wedding lead. Inserts the event,
  * recalculates the heat score, and updates the wedding record.
  *
- * Idempotent: skips insertion if the event would duplicate an existing
- * one on this wedding (one-per-wedding event types, or same
- * event_type+occurred_at). The caller never has to dedup.
+ * Idempotent: the fire-once-per-wedding invariant is now enforced by
+ * the DB unique index uq_engagement_events_fire_once (migration 159)
+ * with reopen-aware retry inside insertEngagementEventReopenAware.
+ * Non-fire-once event types can have multiple rows; the caller
+ * doesn't have to dedup.
  */
 export async function recordEngagementEvent(
   venueId: string,
@@ -290,11 +346,6 @@ export async function recordEngagementEvent(
   occurredAt?: string
 ): Promise<HeatScoreResult> {
   const supabase = createServiceClient()
-
-  const dup = await shouldSkipDuplicate(supabase, weddingId, eventType, occurredAt ?? null)
-  if (dup.skip) {
-    return recalculateHeatScore(venueId, weddingId)
-  }
 
   const points = await getPointsForEvent(venueId, eventType)
   const row: Record<string, unknown> = {
@@ -307,7 +358,7 @@ export async function recordEngagementEvent(
   }
   if (occurredAt) row.occurred_at = occurredAt
 
-  await supabase.from('engagement_events').insert(row)
+  await insertEngagementEventReopenAware(supabase, row)
 
   return recalculateHeatScore(venueId, weddingId)
 }
@@ -337,10 +388,12 @@ export async function recordEngagementEventsBatch(
   }
 
   const supabase = createServiceClient()
-  // Build candidate rows + filter out duplicates BEFORE the insert.
-  // Same dedup rules as recordEngagementEvent. Also dedup within the
-  // batch itself — caller could pass two of the same event type for
-  // the same wedding; only insert once.
+  // Build candidate rows. The fire-once invariant is enforced by the
+  // DB unique index (migration 159) with reopen-aware retry, so we
+  // don't pre-dedup against the DB. Within-batch dedup of fire-once
+  // types still helps — calling insertEngagementEventReopenAware
+  // twice for the same row in the same batch would just race against
+  // ourselves on the unique index.
   const candidates: Array<{ row: Record<string, unknown>; eventType: string; occurredAt: string | null }> = []
   for (const e of events) {
     const points = await getPointsForEvent(venueId, e.eventType)
@@ -357,32 +410,24 @@ export async function recordEngagementEventsBatch(
     candidates.push({ row, eventType: e.eventType, occurredAt: eventOccurredAt })
   }
 
-  // Within-batch dedup: drop later occurrences of one-per-wedding types
-  // and exact (type, time) collisions before hitting the DB.
+  // Within-batch dedup of fire-once types — the DB index will reject
+  // duplicates anyway, but we save a round-trip + spurious 23505 retry
+  // by collapsing here.
   const seenOnceTypes = new Set<string>()
-  const seenInteractionKeys = new Set<string>()
   const filtered: typeof candidates = []
   for (const c of candidates) {
-    if (ONE_PER_WEDDING_EVENTS.has(c.eventType)) {
+    if (FIRE_ONCE_EVENTS.has(c.eventType)) {
       if (seenOnceTypes.has(c.eventType)) continue
       seenOnceTypes.add(c.eventType)
-    } else if (c.occurredAt) {
-      const key = `${c.eventType}@${c.occurredAt}`
-      if (seenInteractionKeys.has(key)) continue
-      seenInteractionKeys.add(key)
     }
     filtered.push(c)
   }
 
-  // DB-level dedup: skip rows whose duplicate already exists.
-  const toInsert: Record<string, unknown>[] = []
+  // Insert one at a time so the reopen-aware retry runs per row.
+  // Heat batches are small (typically 1-4 rows) so the per-row cost
+  // is negligible vs the correctness gain.
   for (const c of filtered) {
-    const dup = await shouldSkipDuplicate(supabase, weddingId, c.eventType, c.occurredAt)
-    if (!dup.skip) toInsert.push(c.row)
-  }
-
-  if (toInsert.length > 0) {
-    await supabase.from('engagement_events').insert(toInsert)
+    await insertEngagementEventReopenAware(supabase, c.row)
   }
 
   return recalculateHeatScore(venueId, weddingId)

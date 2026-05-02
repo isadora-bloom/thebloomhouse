@@ -63,6 +63,9 @@ const PHASE_PRIORITY: Record<NegotiationPhase, number> = {
 interface ClassicalNegotiationPayload {
   weddingId: string
   status: string
+  /** ISO yyyy-mm-dd for the wedding's inquiry_date — INV-2.5 / T5-delta.1
+   *  belt-and-braces invalidation. */
+  inquiry_date_day: string | null
   inbound_count: number
   outbound_count: number
   most_recent_inbound_at: string | null
@@ -90,7 +93,7 @@ async function loadClassicalNegotiationEvidence(
 ): Promise<{ payload: ClassicalNegotiationPayload } | null> {
   const { data: wedding } = await supabase
     .from('weddings')
-    .select('id, status')
+    .select('id, status, inquiry_date')
     .eq('id', weddingId)
     .eq('venue_id', venueId)
     .maybeSingle()
@@ -101,6 +104,10 @@ async function loadClassicalNegotiationEvidence(
   if (status === 'lost' || status === 'cancelled' || status === 'completed' || status === 'booked') {
     return null
   }
+
+  const inquiryDateDay = wedding.inquiry_date
+    ? new Date(wedding.inquiry_date as string).toISOString().slice(0, 10)
+    : null
 
   const { data: inbound } = await supabase
     .from('interactions')
@@ -141,6 +148,7 @@ async function loadClassicalNegotiationEvidence(
     payload: {
       weddingId,
       status,
+      inquiry_date_day: inquiryDateDay,
       inbound_count: inboundList.length,
       outbound_count: outboundCount ?? 0,
       most_recent_inbound_at: inboundList[0]?.timestamp ?? null,
@@ -178,6 +186,10 @@ export async function generateNegotiationState(
   const cacheKey = buildCacheKey({
     weddingId,
     status: payload.status,
+    // T5-delta.1 (2026-05-02). inquiry_date in the fingerprint so a
+    // coordinator correction invalidates the cache. Belt-and-braces
+    // with migration 158's last_classical_signature null-out trigger.
+    inquiryDateDay: payload.inquiry_date_day ?? '',
     inboundCount: payload.inbound_count,
     mostRecent: payload.most_recent_inbound_at,
   })
