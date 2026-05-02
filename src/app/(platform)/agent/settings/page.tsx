@@ -25,6 +25,8 @@ import {
   Check,
   Plus,
   User,
+  Brain,
+  Lock,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -58,7 +60,7 @@ interface VenueAIConfig {
   max_follow_ups: number
 }
 
-type TabKey = 'auto-send' | 'gmail' | 'follow-ups'
+type TabKey = 'auto-send' | 'gmail' | 'follow-ups' | 'self-knowledge'
 
 const SOURCES = [
   { value: 'all', label: 'All Sources' },
@@ -233,13 +235,20 @@ export default function AgentSettingsPage() {
   const [editingLabel, setEditingLabel] = useState<string | null>(null)
   const [labelDraft, setLabelDraft] = useState('')
 
+  // Self-knowledge insights opt-in (T5-γ.6 / migration 148 /
+  // ANTI-19.9 #5). venues.self_knowledge_insights_enabled is the
+  // gate for surveillance-flavored insights about the coordinator's
+  // own draft-editing patterns.
+  const [selfKnowledgeEnabled, setSelfKnowledgeEnabled] = useState<boolean>(false)
+  const [selfKnowledgeSaving, setSelfKnowledgeSaving] = useState(false)
+
   const supabase = createClient()
 
   // ---- Fetch all data ----
   const fetchData = useCallback(async () => {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
 
-    const [rulesRes, syncRes, aiRes, syncedRes] = await Promise.all([
+    const [rulesRes, syncRes, aiRes, syncedRes, venueRes] = await Promise.all([
       supabase
         .from('auto_send_rules')
         .select('*')
@@ -261,12 +270,22 @@ export default function AgentSettingsPage() {
         .select('id', { count: 'exact', head: true })
         .eq('venue_id', VENUE_ID)
         .gte('created_at', sevenDaysAgo),
+      supabase
+        .from('venues')
+        .select('self_knowledge_insights_enabled')
+        .eq('id', VENUE_ID)
+        .maybeSingle(),
     ])
 
     if (rulesRes.data) setRules(rulesRes.data as AutoSendRule[])
     if (syncRes.data) setSyncState(syncRes.data as EmailSyncState)
     if (aiRes.data) setAiConfig(aiRes.data as VenueAIConfig)
     setEmailsSynced7d(syncedRes.count ?? 0)
+    if (venueRes.data) {
+      setSelfKnowledgeEnabled(
+        Boolean((venueRes.data as { self_knowledge_insights_enabled?: boolean }).self_knowledge_insights_enabled),
+      )
+    }
     setLoading(false)
   }, [supabase, VENUE_ID])
 
@@ -518,11 +537,38 @@ export default function AgentSettingsPage() {
     }
   }
 
+  // ---- Toggle self-knowledge opt-in (T5-γ.6) ----
+  // PATCH the venues.self_knowledge_insights_enabled column. When
+  // enabled, T3-I `coordinator-override-pattern` insights compute +
+  // surface for this venue. Default false; explicit opt-in only.
+  async function toggleSelfKnowledge(next: boolean) {
+    setSelfKnowledgeSaving(true)
+    setSaveMessage(null)
+    // Optimistic update — revert on error.
+    setSelfKnowledgeEnabled(next)
+    const { error } = await supabase
+      .from('venues')
+      .update({ self_knowledge_insights_enabled: next })
+      .eq('id', VENUE_ID)
+    if (error) {
+      console.error('Failed to update self_knowledge_insights_enabled:', error)
+      setSelfKnowledgeEnabled(!next)
+      setSaveMessage('Failed to update self-knowledge insight preference.')
+    } else {
+      setSaveMessage(next
+        ? 'Self-knowledge insights enabled.'
+        : 'Self-knowledge insights disabled.')
+    }
+    setSelfKnowledgeSaving(false)
+    setTimeout(() => setSaveMessage(null), 3000)
+  }
+
   // ---- Tabs ----
   const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
     { key: 'auto-send', label: 'Auto-Send Rules', icon: <Zap className="w-4 h-4" /> },
     { key: 'gmail', label: 'Gmail Connection', icon: <Mail className="w-4 h-4" /> },
     { key: 'follow-ups', label: 'Follow-Up Sequences', icon: <CalendarClock className="w-4 h-4" /> },
+    { key: 'self-knowledge', label: 'Self-Knowledge Insights', icon: <Brain className="w-4 h-4" /> },
   ]
 
   const gmailConnected = gmailStatus?.connected ?? (syncState !== null && syncState.status !== 'disconnected')
@@ -1044,6 +1090,84 @@ export default function AgentSettingsPage() {
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {/* ================================================================== */}
+      {/* Self-Knowledge Insights Tab (T5-γ.6 / ANTI-19.9 #5)                  */}
+      {/* ================================================================== */}
+      {activeTab === 'self-knowledge' && (
+        <div className="space-y-6">
+          <div>
+            <h2 className="font-heading text-xl font-semibold text-sage-900">Self-Knowledge Insights</h2>
+            <p className="text-sm text-sage-500 mt-1">
+              Control whether the agent surfaces patterns about how you collaborate with it.
+            </p>
+          </div>
+
+          {/* Audit / transparency notice */}
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+            <Lock className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-amber-800">Off by default</p>
+              <p className="text-xs text-amber-700 mt-1 leading-relaxed">
+                When enabled, Bloom may surface insights about your own draft-editing patterns
+                (e.g., &ldquo;You consistently make X type of edit to my drafts &mdash; should I learn
+                this preference?&rdquo;). These insights describe coordinator behaviour, so they are
+                opt-in only. Disabling at any time stops generation immediately and removes the
+                insight from your dashboard on the next refresh.
+              </p>
+            </div>
+          </div>
+
+          {/* The toggle */}
+          <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <Brain className="w-5 h-5 text-sage-500" />
+                  <h3 className="font-heading text-lg font-semibold text-sage-900">
+                    Coordinator override-pattern insights
+                  </h3>
+                </div>
+                <p className="text-sm text-sage-600 mt-2 leading-relaxed">
+                  Track approve / edit / reject mix on AI drafts over the last 4 weeks vs. the
+                  prior 4 weeks. Surfaces day-of-week anomalies and rejection drift so you can
+                  catch when the AI&apos;s draft fit has shifted &mdash; or when a particular
+                  weekday inquiry context is consistently off-target.
+                </p>
+                <p className="text-xs text-sage-500 mt-3">
+                  Generated by the <code className="bg-sage-50 px-1.5 py-0.5 rounded text-[11px]">coordinator-override-pattern</code> insight engine.
+                  When this toggle is off, no compute, no LLM call, no surface row.
+                </p>
+              </div>
+              <button
+                onClick={() => toggleSelfKnowledge(!selfKnowledgeEnabled)}
+                disabled={selfKnowledgeSaving}
+                className="text-sage-500 hover:text-sage-700 transition-colors disabled:opacity-50"
+                aria-label={selfKnowledgeEnabled ? 'Disable self-knowledge insights' : 'Enable self-knowledge insights'}
+              >
+                {selfKnowledgeEnabled ? (
+                  <ToggleRight className="w-10 h-10 text-sage-500" />
+                ) : (
+                  <ToggleLeft className="w-10 h-10 text-sage-300" />
+                )}
+              </button>
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-border flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${selfKnowledgeEnabled ? 'bg-emerald-400' : 'bg-sage-300'}`} />
+              <span className={`text-xs font-medium ${selfKnowledgeEnabled ? 'text-emerald-700' : 'text-sage-500'}`}>
+                {selfKnowledgeEnabled ? 'Enabled' : 'Disabled (default)'}
+              </span>
+              {selfKnowledgeSaving && (
+                <span className="text-xs text-sage-400 ml-2 flex items-center gap-1">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  Saving...
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
