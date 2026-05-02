@@ -16,6 +16,14 @@
  *     told "treat this elasticity as suspect" (drives the inconclusive
  *     classification).
  *
+ *   - Approximate marketing-spend figures (LLM extraction from
+ *     coordinator brain-dumps) → loadMarketingSpendChange also reports
+ *     the share of marketing_spend rows whose source_provenance is
+ *     'brain_dump_text'. When >50%, the elasticity is computed against
+ *     a fuzzy spend baseline; we damp confidence to <=0.4 and inject a
+ *     "self-reported; treat as approximate" disclosure into the
+ *     narration. T5-γ.2 / migration 146.
+ *
  *   - Selection bias from booked-only counts → conversion is computed
  *     on TERMINAL-status weddings (booked + completed + lost).
  *     Still-in-flight (inquiry / tour_scheduled / proposal_sent) are
@@ -159,12 +167,24 @@ interface MarketingSpendDelta {
   post_total: number
   delta_pct: number  // (post - pre) / pre * 100; 0 if pre = 0
   is_confound: boolean
+  /** Share of rows in the analysis window whose source_provenance is
+   *  'brain_dump_text' (LLM-extracted from prose). 0..1. Used by the
+   *  data-quality weighting downstream — when this is high, the
+   *  marketing-spend numbers themselves are approximate, so the
+   *  pre/post comparison is fuzzy. T5-γ.2 / migration 146. */
+  brain_dump_share: number
+  /** True when brain_dump_share > 0.5 — over half the rows are
+   *  self-reported brain-dump extractions. The narration warns the
+   *  coordinator and confidence is damped. */
+  is_self_reported_dominant: boolean
 }
 
 /** Sum marketing_spend in [start, end] across all sources. Used to
  *  detect a confounded comparison: if marketing spend swung >20%
  *  alongside the price change, the conversion-rate delta is
- *  confounded. */
+ *  confounded. Also computes the share of rows whose provenance is
+ *  'brain_dump_text' — when that share is dominant the numbers are
+ *  themselves approximate (T5-γ.2 / migration 146). */
 async function loadMarketingSpendChange(
   supabase: SupabaseClient,
   venueId: string,
@@ -175,31 +195,47 @@ async function loadMarketingSpendChange(
 ): Promise<MarketingSpendDelta | null> {
   const { data } = await supabase
     .from('marketing_spend')
-    .select('month, amount')
+    .select('month, amount, source_provenance')
     .eq('venue_id', venueId)
     .gte('month', preStart.toISOString().split('T')[0])
     .lte('month', postEnd.toISOString().split('T')[0])
 
-  const rows = ((data ?? []) as Array<{ month: string; amount: number }>)
+  const rows = ((data ?? []) as Array<{
+    month: string
+    amount: number
+    source_provenance?: string | null
+  }>)
   if (rows.length === 0) return null  // no spend data → can't detect confound; treat as unknown
 
   let pre_total = 0
   let post_total = 0
+  let in_window_total = 0
+  let in_window_brain_dump = 0
   for (const r of rows) {
     const m = Date.parse(r.month + 'T12:00:00Z')
-    if (m >= preStart.getTime() && m <= preEnd.getTime()) pre_total += Number(r.amount) || 0
-    if (m >= postStart.getTime() && m <= postEnd.getTime()) post_total += Number(r.amount) || 0
+    const inPre = m >= preStart.getTime() && m <= preEnd.getTime()
+    const inPost = m >= postStart.getTime() && m <= postEnd.getTime()
+    if (inPre) pre_total += Number(r.amount) || 0
+    if (inPost) post_total += Number(r.amount) || 0
+    if (inPre || inPost) {
+      in_window_total++
+      if (r.source_provenance === 'brain_dump_text') in_window_brain_dump++
+    }
   }
 
   const delta_pct = pre_total > 0
     ? ((post_total - pre_total) / pre_total) * 100
     : (post_total > 0 ? 100 : 0)
 
+  const brain_dump_share = in_window_total > 0 ? in_window_brain_dump / in_window_total : 0
+
   return {
     pre_total: Math.round(pre_total),
     post_total: Math.round(post_total),
     delta_pct: Math.round(delta_pct * 10) / 10,
     is_confound: Math.abs(delta_pct) >= MARKETING_CONFOUND_THRESHOLD_PCT,
+    brain_dump_share: Math.round(brain_dump_share * 100) / 100,
+    is_self_reported_dominant: brain_dump_share > 0.5,
   }
 }
 
@@ -384,6 +420,8 @@ export async function generatePricingElasticity(
   post_n: number
   elasticity: number | null
   marketing_confound: boolean
+  marketing_self_reported_dominant: boolean
+  marketing_brain_dump_share: number
   has_adjacent_change: boolean
   confidence: number
   cached: boolean
@@ -408,6 +446,8 @@ export async function generatePricingElasticity(
     elasticity: classical.elasticity,
     confound: marketing_confound,
     adjacent: classical.has_adjacent_change,
+    selfReported: classical.marketing_spend?.is_self_reported_dominant ?? false,
+    brainDumpShare: classical.marketing_spend?.brain_dump_share ?? 0,
   })
 
   if (!force) {
@@ -435,6 +475,8 @@ export async function generatePricingElasticity(
         post_n: classical.post.resolved,
         elasticity: classical.elasticity,
         marketing_confound,
+        marketing_self_reported_dominant: classical.marketing_spend?.is_self_reported_dominant === true,
+        marketing_brain_dump_share: classical.marketing_spend?.brain_dump_share ?? 0,
         has_adjacent_change: classical.has_adjacent_change,
         confidence: cached.confidence,
         cached: true,
@@ -443,11 +485,16 @@ export async function generatePricingElasticity(
   }
 
   const aiName = await loadAiName(supabase, venueId)
+  const selfReportedDominant = classical.marketing_spend?.is_self_reported_dominant === true
   const confoundBlock = marketing_confound
     ? `WARNING: Marketing spend changed ${classical.marketing_spend!.delta_pct}% pre→post — treat elasticity as confounded.`
     : (classical.marketing_spend
         ? `Marketing spend stable (${classical.marketing_spend.delta_pct}% delta — within tolerance).`
         : 'No marketing spend data on file for this window.')
+
+  const provenanceBlock = selfReportedDominant
+    ? `NOTE: ${Math.round(classical.marketing_spend!.brain_dump_share * 100)}% of marketing-spend rows in this window are self-reported (brain-dump text extraction). Treat the spend trend as approximate — the comparison itself rests on rough figures.`
+    : ''
 
   const adjacentBlock = classical.has_adjacent_change
     ? 'WARNING: Another base_price change occurred within ±60 days — windows leak across interventions.'
@@ -487,7 +534,12 @@ CRITICAL RULES:
   pre/post sample sizes, and the elasticity value.
 - Never invent dates, weddings, or specific figures.
 - If marketing spend confound or adjacent change is flagged, you MUST
-  output classification='inconclusive' regardless of elasticity sign.`
+  output classification='inconclusive' regardless of elasticity sign.
+- If the prompt includes a NOTE about self-reported (brain-dump)
+  marketing-spend rows being dominant in the window, append a short
+  disclosure to your reasoning ("Marketing spend in this window is
+  mostly self-reported (brain-dump); treat the trend as approximate.")
+  and lower confidence to <=0.4.`
 
   const userPrompt = `PRICING ELASTICITY DIAGNOSTIC
 
@@ -510,7 +562,7 @@ Elasticity: ${classical.elasticity ?? 'unable to compute'}
 
 Confound checks:
   - ${confoundBlock}
-  - ${adjacentBlock}
+  - ${adjacentBlock}${provenanceBlock ? `\n  - ${provenanceBlock}` : ''}
 
 Diagnose + recommend.`
 
@@ -577,6 +629,22 @@ Diagnose + recommend.`
     result = { ...result, classification: 'inconclusive', confidence: Math.min(result.confidence, 0.4) }
   }
 
+  // T5-γ.2: Provenance damp. When the marketing-spend in the window is
+  // mostly self-reported (brain-dump), the comparison itself rests on
+  // approximate figures. Damp confidence and force-inject the
+  // disclosure into the narration if the LLM didn't already include it.
+  // This is the belt to the system-prompt suspenders above — works
+  // even on the deterministic fallback path.
+  if (selfReportedDominant) {
+    const disclosurePhrase = 'Marketing spend in this window is mostly self-reported (brain-dump); treat the trend as approximate.'
+    const alreadyDisclosed = /self-reported|brain[- ]dump|approximate/i.test(result.reasoning)
+    result = {
+      ...result,
+      reasoning: alreadyDisclosed ? result.reasoning : `${result.reasoning} ${disclosurePhrase}`.trim(),
+      confidence: Math.min(result.confidence, 0.4),
+    }
+  }
+
   // Numbers the narration may reference. Include both signed and abs
   // forms so the LLM saying "1.2x elasticity" matches the abs(-1.2).
   const allowedNumbers: Array<number | string> = [
@@ -607,9 +675,13 @@ Diagnose + recommend.`
     // Effect = how clean the elasticity signal is.
     // |elasticity| close to 0 OR confound present → low effect.
     // Strong elastic OR strong inelastic + no confound → high.
+    // T5-γ.2: provenance-dominant brain-dump rows also damp effect —
+    // the elasticity calc is fine but the spend trend it rides on is
+    // approximate.
     effectSize: (() => {
       if (marketing_confound || classical.has_adjacent_change) return 0.2
       if (classical.elasticity === null) return 0.2
+      if (selfReportedDominant) return 0.3
       const e = Math.abs(classical.elasticity)
       // 1.0 elasticity → effect 1.0; 0 elasticity → effect 0.5
       // (no movement is itself a signal of inelasticity).
@@ -667,6 +739,8 @@ Diagnose + recommend.`
     post_n: classical.post.resolved,
     elasticity: classical.elasticity,
     marketing_confound,
+    marketing_self_reported_dominant: selfReportedDominant,
+    marketing_brain_dump_share: classical.marketing_spend?.brain_dump_share ?? 0,
     has_adjacent_change: classical.has_adjacent_change,
     confidence: conf.value,
     cached: false,
