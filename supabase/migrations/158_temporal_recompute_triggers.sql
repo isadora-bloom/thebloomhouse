@@ -1,7 +1,7 @@
 -- Migration 158: T5-delta.1 temporal-derived recompute triggers (INV-2.5).
 --
 -- Audit finding (2026-05-T4 CRITICAL 5): when a coordinator corrects
--- inquiry_date / wedding_date / guest_count on a wedding, downstream
+-- inquiry_date / wedding_date on a wedding, downstream
 -- derived state stays stale until the daily heat-decay cron runs:
 --   * weddings.heat_score / temperature_tier
 --   * intelligence_insights.last_classical_signature (T3 cache)
@@ -34,7 +34,7 @@ ALTER TABLE public.weddings
 
 COMMENT ON COLUMN public.weddings.heat_recompute_pending IS
   'T5-delta.1 (2026-05-02). Set TRUE by the temporal-change trigger when '
-  'inquiry_date / wedding_date / guest_count is updated. Drained by the '
+  'inquiry_date / wedding_date is updated. Drained by the '
   '/api/cron/recompute-pending-temporal sweep every 5 minutes — the cron '
   'calls recalculateHeatScore() and clears the flag. Inline recompute '
   'would block the UPDATE, so we defer.';
@@ -49,7 +49,7 @@ ALTER TABLE public.wedding_journey_narratives
 
 COMMENT ON COLUMN public.wedding_journey_narratives.stale_since IS
   'T5-delta.1 (2026-05-02). Stamped now() when the wedding''s temporal '
-  'inputs (inquiry_date / wedding_date / guest_count) change. Lazy '
+  'inputs (inquiry_date / wedding_date) change. Lazy '
   'regeneration path checks this alongside signal_count + attribution_count '
   'drift; non-NULL means re-narrate on next view. Cleared on regeneration.';
 
@@ -59,7 +59,7 @@ ALTER TABLE public.tours
 
 COMMENT ON COLUMN public.tours.tour_brief_stale_since IS
   'T5-delta.1 (2026-05-02). Stamped now() when the parent wedding''s '
-  'inquiry_date / wedding_date / guest_count changes. Lazy regen path '
+  'inquiry_date / wedding_date changes. Lazy regen path '
   'on /api/agent/post-tour-brief checks this; non-NULL forces a fresh '
   'brief on next view. Cleared on regeneration.';
 
@@ -74,7 +74,7 @@ BEGIN
   -- IS DISTINCT FROM so first-time set (NULL -> value) also triggers.
   IF (NEW.inquiry_date IS DISTINCT FROM OLD.inquiry_date)
      OR (NEW.wedding_date IS DISTINCT FROM OLD.wedding_date)
-     OR (NEW.guest_count IS DISTINCT FROM OLD.guest_count) THEN
+  THEN
     NEW.heat_recompute_pending := true;
   END IF;
   RETURN NEW;
@@ -99,8 +99,7 @@ BEGIN
   -- Same gate as the BEFORE trigger: only invalidate when something
   -- actually changed.
   IF (NEW.inquiry_date IS NOT DISTINCT FROM OLD.inquiry_date)
-     AND (NEW.wedding_date IS NOT DISTINCT FROM OLD.wedding_date)
-     AND (NEW.guest_count IS NOT DISTINCT FROM OLD.guest_count) THEN
+     AND (NEW.wedding_date IS NOT DISTINCT FROM OLD.wedding_date) THEN
     RETURN NEW;
   END IF;
 
@@ -131,7 +130,7 @@ $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION public.weddings_temporal_change_recompute_after() IS
   'T5-delta.1 (2026-05-02). AFTER-UPDATE on weddings. When inquiry_date / '
-  'wedding_date / guest_count change, invalidate downstream caches: T3 '
+  'wedding_date change, invalidate downstream caches: T3 '
   'insight last_classical_signature, wedding_journey_narratives.stale_since, '
   'tours.tour_brief_stale_since. Pinned narratives are spared. Heat-score '
   'recompute itself is deferred to the cron via heat_recompute_pending '
@@ -143,13 +142,13 @@ COMMENT ON FUNCTION public.weddings_temporal_change_recompute_after() IS
 
 DROP TRIGGER IF EXISTS trg_weddings_temporal_recompute_before ON public.weddings;
 CREATE TRIGGER trg_weddings_temporal_recompute_before
-  BEFORE UPDATE OF inquiry_date, wedding_date, guest_count ON public.weddings
+  BEFORE UPDATE OF inquiry_date, wedding_date ON public.weddings
   FOR EACH ROW
   EXECUTE FUNCTION public.weddings_temporal_change_recompute_before();
 
 DROP TRIGGER IF EXISTS trg_weddings_temporal_recompute_after ON public.weddings;
 CREATE TRIGGER trg_weddings_temporal_recompute_after
-  AFTER UPDATE OF inquiry_date, wedding_date, guest_count ON public.weddings
+  AFTER UPDATE OF inquiry_date, wedding_date ON public.weddings
   FOR EACH ROW
   EXECUTE FUNCTION public.weddings_temporal_change_recompute_after();
 
