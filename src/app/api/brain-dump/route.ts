@@ -19,6 +19,12 @@ import { importPlatformSignals } from '@/lib/services/platform-signals-import'
 import { clusterSignals } from '@/lib/services/candidate-clusterer'
 import { resolveVenueCandidates } from '@/lib/services/candidate-resolver'
 import { callAIVision, callAIJson } from '@/lib/ai/client'
+import { createNotification } from '@/lib/services/admin-notifications'
+import {
+  detectUrlOnlyInput,
+  fetchAndExtractUrl,
+} from '@/lib/services/brain-dump-url'
+import { extractPdfText, PDF_SIZE_CAP_BYTES } from '@/lib/services/brain-dump-pdf'
 
 const FILE_CONTENT_CAP = 40_000 // chars embedded into the classifier prompt
 const LARGE_CSV_ROW_THRESHOLD = 50 // rows above this → preview + confirm
@@ -77,6 +83,24 @@ async function readAttachedFileBase64(
     if (error || !data) return null
     const buf = Buffer.from(await data.arrayBuffer())
     return buf.toString('base64')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Pull an attached file out of the brain-dump bucket as a raw Buffer.
+ * Used by the PDF fast path so pdf-parse can ingest the binary
+ * directly. Caller is responsible for size-capping.
+ */
+async function readAttachedFileBuffer(
+  supabase: ReturnType<typeof createServiceClient>,
+  path: string
+): Promise<Buffer | null> {
+  try {
+    const { data, error } = await supabase.storage.from('brain-dump').download(path)
+    if (error || !data) return null
+    return Buffer.from(await data.arrayBuffer())
   } catch {
     return null
   }
@@ -212,6 +236,112 @@ export async function POST(request: NextRequest) {
   }
 
   const attachment = extractAttachmentMeta(rawText)
+
+  // 1.5 URL fast path (T5-ι.3). When the coordinator pastes nothing
+  // but a URL (or a URL + trivial preamble), fetch the page, extract
+  // og:title / og:description / og:image, and surface a propose-and-
+  // confirm with the URL summary. Pinterest URLs use og:image as the
+  // pin image. Google Doc URLs defer to coordinator (no OAuth flow
+  // yet). Generic URLs feed extracted text into the regular text
+  // classifier on confirm.
+  //
+  // Per Playbook INV-20.5.4-A even the Pinterest happy path goes
+  // through propose-and-confirm — the brain-dump never silently
+  // files anything. The classifier runs only on confirm via the
+  // resolve route.
+  //
+  // Skip this path if there's an attachment — the file dominates the
+  // payload and the URL-only detector wouldn't fire anyway, but the
+  // explicit check makes the contract clear.
+  if (!attachment) {
+    const urlOnly = detectUrlOnlyInput(rawText)
+    if (urlOnly) {
+      const fetchResult = await fetchAndExtractUrl(urlOnly)
+
+      // Successful Pinterest / generic fetch — propose with the
+      // extracted summary. Coordinator confirm routes through
+      // classifier.
+      if (fetchResult.ok && fetchResult.shape !== 'google_doc') {
+        const q = `Fetch as KB? ${fetchResult.summaryForCoordinator}`
+        await createNotification({
+          venueId: auth.venueId,
+          type: 'brain_dump_url_confirm',
+          title: `Confirm URL import: ${fetchResult.title ?? fetchResult.url}`,
+          body: JSON.stringify({
+            entryId: entry.id,
+            url: fetchResult.url,
+            shape: fetchResult.shape,
+            title: fetchResult.title,
+            description: fetchResult.description,
+            imageUrl: fetchResult.imageUrl,
+            extractedText: fetchResult.extractedText,
+          }),
+        })
+        await supabase.from('brain_dump_entries').update({
+          parse_status: 'needs_clarification',
+          clarification_question: q,
+          parse_result: {
+            url_fetch: {
+              url: fetchResult.url,
+              shape: fetchResult.shape,
+              title: fetchResult.title,
+              description: fetchResult.description,
+              imageUrl: fetchResult.imageUrl,
+              extractedText: fetchResult.extractedText,
+            },
+          },
+          parsed_at: new Date().toISOString(),
+        }).eq('id', entry.id)
+        return NextResponse.json({
+          entryId: entry.id,
+          intent: `url_${fetchResult.shape}_preview`,
+          confidence: 80,
+          needsClarification: true,
+          clarificationQuestion: q,
+          urlSummary: fetchResult.summaryForCoordinator,
+        })
+      }
+
+      // Google Doc — propose-only (defer OAuth) with a friendly
+      // prompt asking for paste / future Drive grant.
+      if (fetchResult.ok && fetchResult.shape === 'google_doc') {
+        const q = fetchResult.summaryForCoordinator
+        await createNotification({
+          venueId: auth.venueId,
+          type: 'brain_dump_url_google_doc_deferred',
+          title: 'Google Doc URL — paste needed',
+          body: JSON.stringify({
+            entryId: entry.id,
+            url: fetchResult.url,
+            reason: fetchResult.proposeOnlyReason,
+          }),
+        })
+        await supabase.from('brain_dump_entries').update({
+          parse_status: 'needs_clarification',
+          clarification_question: q,
+          parse_result: {
+            url_fetch: {
+              url: fetchResult.url,
+              shape: 'google_doc',
+              proposeOnlyReason: fetchResult.proposeOnlyReason,
+            },
+          },
+          parsed_at: new Date().toISOString(),
+        }).eq('id', entry.id)
+        return NextResponse.json({
+          entryId: entry.id,
+          intent: 'url_google_doc_deferred',
+          confidence: 60,
+          needsClarification: true,
+          clarificationQuestion: q,
+        })
+      }
+
+      // Fetch failed — fall through to standard text classifier so the
+      // bare URL still records something (the classifier may decide
+      // it's an operational note, ambiguous, etc.).
+    }
+  }
 
   // 2. CSV fast path — sniff headers and short-circuit obvious shapes.
   if (attachment && (attachment.type === 'text/csv' || attachment.name.toLowerCase().endsWith('.csv'))) {
@@ -386,6 +516,102 @@ export async function POST(request: NextRequest) {
           clarificationQuestion: v.summary ?? null,
         })
       }
+    }
+  }
+
+  // 3.5 PDF fast path (T5-ι.4). Pre-fix the PDF was uploaded to
+  // storage, tagged inputType='pdf' on brain_dump_entries, then
+  // routed to the text classifier with only the rawText (typically
+  // just the [Attached file: ...] marker). The classifier had no
+  // body to work with. Now we use pdf-parse to pull plain text out
+  // of the PDF first, surface a propose-and-confirm with the
+  // extracted summary, then route the extracted text through the
+  // standard text classifier on confirm. Caps: 10MB PDF, 50KB
+  // extracted text. Per Playbook INV-20.5.4-A always propose, never
+  // silently file.
+  if (
+    attachment &&
+    (attachment.type === 'application/pdf' || attachment.name.toLowerCase().endsWith('.pdf'))
+  ) {
+    const buf = await readAttachedFileBuffer(supabase, attachment.path)
+    if (buf) {
+      if (buf.length > PDF_SIZE_CAP_BYTES) {
+        const q = `PDF (${attachment.name}) is ${(buf.length / 1024 / 1024).toFixed(1)}MB — over the ${PDF_SIZE_CAP_BYTES / 1024 / 1024}MB cap. Trim it down or paste the relevant section as text.`
+        await supabase.from('brain_dump_entries').update({
+          parse_status: 'needs_clarification',
+          clarification_question: q,
+          parse_result: { pdf: { rejected: 'oversized', bytes: buf.length, name: attachment.name } },
+          parsed_at: new Date().toISOString(),
+        }).eq('id', entry.id)
+        return NextResponse.json({
+          entryId: entry.id,
+          intent: 'pdf_oversized',
+          confidence: 100,
+          needsClarification: true,
+          clarificationQuestion: q,
+        })
+      }
+
+      const pdf = await extractPdfText(buf)
+      if (pdf.ok && pdf.text.length > 0) {
+        const preview = pdf.text.slice(0, 800) + (pdf.text.length > 800 ? '…' : '')
+        const q = `PDF "${attachment.name}" (${pdf.pages ?? '?'} page${pdf.pages === 1 ? '' : 's'}, ${pdf.text.length.toLocaleString()} chars${pdf.truncated ? ', truncated' : ''}) parsed. Confirm to file via the standard classifier.\n\nPreview:\n${preview}`
+        await createNotification({
+          venueId: auth.venueId,
+          type: 'brain_dump_pdf_confirm',
+          title: `Confirm PDF import: ${attachment.name}`,
+          body: JSON.stringify({
+            entryId: entry.id,
+            name: attachment.name,
+            pages: pdf.pages,
+            chars: pdf.text.length,
+            truncated: pdf.truncated,
+            preview,
+          }),
+        })
+        await supabase.from('brain_dump_entries').update({
+          parse_status: 'needs_clarification',
+          clarification_question: q,
+          parse_result: {
+            pdf: {
+              name: attachment.name,
+              pages: pdf.pages,
+              chars: pdf.text.length,
+              truncated: pdf.truncated,
+              extractedText: pdf.text,
+              storagePath: attachment.path,
+            },
+          },
+          parsed_at: new Date().toISOString(),
+        }).eq('id', entry.id)
+        return NextResponse.json({
+          entryId: entry.id,
+          intent: 'pdf_preview',
+          confidence: 80,
+          needsClarification: true,
+          clarificationQuestion: q,
+          pdfPages: pdf.pages,
+          pdfChars: pdf.text.length,
+        })
+      }
+
+      // pdf-parse failed — degrade to a clarification asking for a
+      // paste rather than silently filing a binary that nobody can
+      // read.
+      const q = `Couldn't extract text from PDF "${attachment.name}"${pdf.reason ? ` (${pdf.reason})` : ''}. Paste the relevant section as text instead.`
+      await supabase.from('brain_dump_entries').update({
+        parse_status: 'needs_clarification',
+        clarification_question: q,
+        parse_result: { pdf: { name: attachment.name, error: pdf.reason ?? 'unknown' } },
+        parsed_at: new Date().toISOString(),
+      }).eq('id', entry.id)
+      return NextResponse.json({
+        entryId: entry.id,
+        intent: 'pdf_extract_failed',
+        confidence: 40,
+        needsClarification: true,
+        clarificationQuestion: q,
+      })
     }
   }
 

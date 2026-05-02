@@ -65,21 +65,29 @@ export async function persistAudioSegments(args: PersistArgs): Promise<PersistRe
   // ---------- 1. Already-bound session? ------------------------------------
   const { data: boundTour } = await supabase
     .from('tours')
-    .select('id, transcript')
+    .select('id')
     .eq('venue_id', venueId)
     .eq('session_id', sessionId)
     .maybeSingle()
 
   if (boundTour?.id) {
     const tourId = boundTour.id as string
-    const current = typeof boundTour.transcript === 'string' ? boundTour.transcript : ''
-    const nextTranscript = current ? `${current} ${aggregateText}` : aggregateText
-
-    await supabase
-      .from('tours')
-      .update({ transcript: nextTranscript, transcript_received_at: nowIso })
-      .eq('id', tourId)
-      .eq('venue_id', venueId)
+    // Atomic concurrent-append (T5-ι.2). Pre-fix: SELECT existing
+    // transcript → JS concat → UPDATE. Two webhook calls hitting
+    // the same session ms-apart would each read the pre-state, then
+    // each write their own concat — clobbering whichever one ran
+    // last. Post-fix: server-side concat via Postgres RPC so the
+    // append is a single statement and the row-level lock that
+    // backs the UPDATE serializes the two appends.
+    const { error: appendErr } = await supabase.rpc('append_tour_transcript', {
+      p_tour_id: tourId,
+      p_venue_id: venueId,
+      p_text: aggregateText,
+      p_received_at: nowIso,
+    })
+    if (appendErr) {
+      console.error('[audio-capture/orchestrator] append_tour_transcript failed:', appendErr.message)
+    }
 
     const written = await writeSegments(supabase, venueId, segments, sessionId, audioProvider, tourId, null)
     return { matchedTourId: tourId, orphanId: null, session: 'existing', segmentsWritten: written }
@@ -94,33 +102,46 @@ export async function persistAudioSegments(args: PersistArgs): Promise<PersistRe
 
     const { data: candidates } = await supabase
       .from('tours')
-      .select('id, scheduled_at, transcript')
+      .select('id, scheduled_at')
       .eq('venue_id', venueId)
       .in('outcome', ['pending', 'completed'])
       .is('session_id', null)
       .gte('scheduled_at', lowerIso)
       .lte('scheduled_at', upperIso)
 
+    // Only id + scheduled_at — the transcript is updated server-side
+    // via append_tour_transcript so we don't need the existing value.
     const nearest = (candidates ?? [])
       .map((t) => ({
         id: t.id as string,
-        transcript: typeof t.transcript === 'string' ? t.transcript : '',
         delta: Math.abs(new Date((t.scheduled_at as string) || nowIso).getTime() - nowMs),
       }))
       .sort((a, b) => a.delta - b.delta)[0]
 
     if (nearest) {
-      const nextTranscript = nearest.transcript ? `${nearest.transcript} ${aggregateText}` : aggregateText
+      // Bind the session_id + audio_provider first (one-shot UPDATE
+      // — these are write-once per row), then atomically append text.
+      // Splitting the UPDATE keeps the append idempotent across
+      // concurrent webhook calls that race onto the same nearest
+      // tour after a binding-race retry.
       await supabase
         .from('tours')
         .update({
           session_id: sessionId,
           audio_provider: audioProvider,
-          transcript: nextTranscript,
-          transcript_received_at: nowIso,
         })
         .eq('id', nearest.id)
         .eq('venue_id', venueId)
+
+      const { error: appendErr } = await supabase.rpc('append_tour_transcript', {
+        p_tour_id: nearest.id,
+        p_venue_id: venueId,
+        p_text: aggregateText,
+        p_received_at: nowIso,
+      })
+      if (appendErr) {
+        console.error('[audio-capture/orchestrator] append_tour_transcript (new_match) failed:', appendErr.message)
+      }
 
       const written = await writeSegments(supabase, venueId, segments, sessionId, audioProvider, nearest.id, null)
       return { matchedTourId: nearest.id, orphanId: null, session: 'new_match', segmentsWritten: written }
@@ -128,39 +149,44 @@ export async function persistAudioSegments(args: PersistArgs): Promise<PersistRe
   }
 
   // ---------- 3. Orphan it ------------------------------------------------
-  const { data: existingOrphan } = await supabase
-    .from('tour_transcript_orphans')
-    .select('id, transcript, segments_count')
-    .eq('venue_id', venueId)
-    .eq('session_id', sessionId)
-    .maybeSingle()
+  // Atomic upsert-with-concat (T5-ι.2). Pre-fix: SELECT existing →
+  // JS concat → upsert. Two concurrent webhook calls for the same
+  // (venue_id, session_id) would each read the pre-state and each
+  // write their own concat, with the second write clobbering the
+  // first. Post-fix: a single SQL statement performs the
+  // INSERT ... ON CONFLICT DO UPDATE with `transcript = orphans.transcript || EXCLUDED.transcript`,
+  // and Postgres serializes concurrent INSERTs on the (venue_id,
+  // session_id) unique index so each append observes the previous
+  // one. tour_transcript_orphans has UNIQUE INDEX on (venue_id,
+  // session_id) per migration 122 (uq_tour_transcript_orphans_venue_session).
+  const { data: orphanRow, error: orphanErr } = await supabase.rpc('upsert_orphan_transcript', {
+    p_venue_id: venueId,
+    p_session_id: sessionId,
+    p_audio_provider: audioProvider,
+    p_text: aggregateText,
+    p_segments_count_delta: segments.length,
+    p_last_segment_at: nowIso,
+  })
 
-  const currentOrphanText = typeof existingOrphan?.transcript === 'string' ? existingOrphan.transcript : ''
-  const currentCount = typeof existingOrphan?.segments_count === 'number' ? existingOrphan.segments_count : 0
-  const nextOrphanText = currentOrphanText ? `${currentOrphanText} ${aggregateText}` : aggregateText
-
-  const { data: orphan } = await supabase
-    .from('tour_transcript_orphans')
-    .upsert(
-      {
-        venue_id: venueId,
-        session_id: sessionId,
-        audio_provider: audioProvider,
-        transcript: nextOrphanText,
-        segments_count: currentCount + segments.length,
-        last_segment_at: nowIso,
-        status: 'pending',
-      },
-      { onConflict: 'venue_id,session_id' },
+  if (orphanErr || !orphanRow) {
+    console.error(
+      '[audio-capture/orchestrator] upsert_orphan_transcript failed:',
+      orphanErr?.message ?? 'no row returned',
     )
-    .select('id')
-    .single()
-
-  if (!orphan) {
     return { matchedTourId: null, orphanId: null, session: 'orphan', segmentsWritten: 0 }
   }
 
-  const orphanId = orphan.id as string
+  // RPC returns either a uuid scalar or a single-row TABLE. Normalise.
+  const orphanId =
+    typeof orphanRow === 'string'
+      ? orphanRow
+      : Array.isArray(orphanRow)
+        ? ((orphanRow[0] as { id?: string })?.id ?? null)
+        : ((orphanRow as { id?: string })?.id ?? null)
+
+  if (!orphanId) {
+    return { matchedTourId: null, orphanId: null, session: 'orphan', segmentsWritten: 0 }
+  }
   const written = await writeSegments(supabase, venueId, segments, sessionId, audioProvider, null, orphanId)
   return { matchedTourId: null, orphanId, session: 'orphan', segmentsWritten: written }
 }
