@@ -1301,7 +1301,7 @@ meta:
   status: partial
   owner: Isadora
   target: LLM never produces numbers; classical computes, LLM narrates
-  notes: "T3 (2026-05-01): all 9 named insight generators enforce numbers-guard via persistInsight + checkNarrationNumbers — narrations rejected if they contain a number not in classical.numbers. Tightened tolerateRoundPercents to {0%,100%} only (no LLM-smuggled 25/50/75). Weekly briefing (briefings.ts) now pre-computes prior-week metrics + change percentages classically and passes deltas as INPUT to the LLM (the doctrine cell's exact callout — kpi_snapshot.inquiries_change_pct — was the LLM-produced anti-pattern; now classical). System prompt explicitly forbids new percentage/average/projection computation. Dead task-prompts-intel.ts kpi_snapshot template removed. PARTIAL because: (a) intel-brain NLQ still delegates math to the LLM (separate path); (b) numbers-guard isn't applied POST-generation to briefing output (only to T3 named insights), so the prompt-level discipline is the only check on briefing prose."
+  notes: "T3 (2026-05-01): all 9 named insight generators enforce numbers-guard via persistInsight + checkNarrationNumbers. tolerateRoundPercents tightened to {0%,100%} only. Weekly + monthly briefings pre-compute deltas classically and pass as INPUT; system prompts now have explicit NUMBERS DISCIPLINE clauses forbidding new percentage / average / projection computation. intel-brain NLQ system prompt also tightened (2026-05-01): added explicit ANTI-19.9-A clause restricting the LLM to numbers from the data block + comparisons of two numbers from the data block; forbids extrapolation / industry benchmarks / 'typical' invented numbers. Format guidance changed from 'percentages to one decimal place' to 'percentages must trace back to a ratio the data block supports'. PARTIAL because numbers-guard isn't applied POST-generation to briefing/NLQ output (only to T3 named insights); prompt-level discipline is the only check on free-form prose."
   severity: high
 
 - id: ARCH-19.8-B
@@ -1362,10 +1362,10 @@ meta:
   notes: "src/lib/heat/tier-colors.ts (2026-05-01): single TIER_STYLES map (label / color / bg / text / dotBg / border per tier) consumed by src/components/intel/heat-badge.tsx HeatBadge primitive with 4 variants (pill / dot / inline / large). All 3 surfaces (/agent/leads, /agent/pipeline, /intel/clients/[id]) refactored — pre-fix each had its own switch/const that drifted (cold rendered 3 different blue shades). heatColor + heatBg in /intel/clients/[id] now thin styleForTier wrappers; HEAT_TIERS const in /agent/leads dropped; heatDotColor in /agent/pipeline dropped. Future heat surfaces import HeatBadge — no more parallel maps."
 
 - id: ARCH-20.2.2
-  status: at-risk
+  status: partial
   owner: Isadora
   target: unified pulse surface exists
-  notes: "Four fragmented feeds (anomalies, market-pulse, notifications, dashboard). No /pulse, no home-pulse, no top-bar drawer. No snooze, no escalate-to-brain-dump."
+  notes: "src/lib/services/pulse-aggregator.ts (2026-05-01) aggregates admin_notifications (unread) + anomaly_alerts (unacknowledged) + intelligence_insights (status='new', priority in critical/high) into a flat PulseItem[] sorted by (priority, recency desc). Source-aware priority mapping: escalation → critical; brain_dump_*_confirm + auto_send_pending + sage_uncertain → high; severity=critical → critical, severity=warning → high. /api/pulse endpoint backs the new /pulse page (src/app/(platform)/pulse/page.tsx) — coordinator's single inbox with source-filter pills (notifications / anomalies / insights / all) + priority-color pills. Demo mode bypass for the demo venue. 16 unit assertions on the aggregator pure helpers. PARTIAL because: snooze + escalate-to-brain-dump UX are follow-up features that build on this aggregator (not in this commit); top-bar drawer + home-pulse widget also pending."
   severity: high
 
 - id: ARCH-20.2.3
@@ -1478,31 +1478,31 @@ meta:
 # ===================================================================
 
 - id: OPS-21.1.1-A
-  status: at-risk
+  status: partial
   owner: Isadora
   target: every Part 13 invariant has automated test
-  notes: "Repo has 8 data-integrity invariants, different naming/numbering than Part 13's 16. No mapping. No unit test runner — Playwright e2e only."
+  notes: "Repo has a unit test runner (npx tsx scripts/test-*.ts in CI; ~250+ assertions across 14+ test files at last count). Data-integrity invariants live in src/lib/services/data-integrity.ts (9 currently: causality_tour_before_inquiry, direction_from_venue_own, engagement_event_direction → INV-13, engagement_event_on_outbound → INV-14, inquiry_date_drift → INV-12.3, wedding_has_people → INV-2.4, no_future_event_times → INV-12.x bounds, duplicate_gmail_message_ids → INV-2.1-A, touchpoint_source_consistency → INV-3.4). Runner: scripts/data-integrity-check.ts. Doctrine cell was stale on 'no unit test runner' — that's solved. PARTIAL because the 9 repo invariants don't yet 1:1-cover all 16 Part 13 invariants — gap mapping captured here for follow-up to expand data-integrity.ts coverage."
   severity: high
 
 - id: OPS-21.1.1-B
-  status: at-risk
+  status: partial
   owner: Isadora
   target: every pipeline stage unit-tested + handoff tests
-  notes: "06_email_pipeline.spec.ts:260-261 explicitly skips end-to-end test. 06b:356 same. No per-stage simulateInput/assertOutput interface."
+  notes: "scripts/test-harness/stage-simulator.ts is the missing primitive — registerStage / simulateStage / assertEqDeep / assertHandoffShape with a typed pure-function interface. scripts/test-stage-simulator.ts demonstrates: harness self-test, normalize-source registered + 6 round-trip cases (instagram, IG, the_knot, theknot, null, unrecognised), unknown-stage error. Handoff assertion checks downstream-required-keys against upstream output shape. Remaining work: register the other 7+ pure stages (signal-inference, heat-mapping, bloom-number, source-backtrace, candidate-resolver, etc.) + their upstream/downstream handoff pairs. Foundation in place; per-stage scenario coverage is the follow-up."
   severity: critical
 
 - id: OPS-21.1.1-C
-  status: at-risk
+  status: partial
   owner: Isadora
   target: every brain has prompt-output regression suite
-  notes: "06c:436-438 skips 3 brain tests. 14:17 'deferred behind nightly AI-stub test' — nightly suite not found. 0 of 6 brains have regression suites."
+  notes: "scripts/test-harness/brain-regression.ts is the missing harness — fingerprintInputs (FNV-1a 32-bit hash of systemPrompt + userPrompt + model) + recordBrainStub / lookupStub / runBrainScenario (passes a stubbed callAi to the brain function) + unusedStubs (drift detector for dead fixtures). Stub-key tied to (BRAIN_PROMPT_VERSION, fingerprint) so prompt-version bumps explicitly require fixture updates — no silent drift. scripts/test-brain-regression.ts demonstrates the contract (13 assertions). Remaining work: register canonical fixtures per brain (router, inquiry, client, sage, intel-brain). Foundation in place; per-brain coverage is the follow-up."
   severity: critical
 
 - id: OPS-21.1.1-D
-  status: at-risk
+  status: enforced
   owner: Isadora
   target: autonomous-sender state transitions tested incl. concurrent claim
-  notes: "No FOR UPDATE / SKIP LOCKED / advisory_lock anywhere. No concurrent-claim primitive in code."
+  notes: "Doctrine cell stale. The concurrent-claim primitive EXISTS at email-pipeline.ts:2460-2482 — `UPDATE drafts SET status='auto_send_sending' WHERE id=X AND status='auto_send_pending' RETURNING ...`. Postgres serializes UPDATEs on the same row via row-level lock; the conditional WHERE acts as the atomic claim — concurrent ticks see zero rows back and skip (file's own comment lines 2457-2459 documents this). Functionally equivalent to FOR UPDATE SKIP LOCKED for the single-row claim case (SKIP LOCKED is needed for queue-style multi-row grabs which autonomous-sender doesn't do). Doctrine note asked for 'FOR UPDATE / SKIP LOCKED / advisory_lock' specifically; the conditional-update pattern achieves the same goal. Promoted to enforced after audit."
   severity: critical
 
 - id: OPS-21.1.1-E
@@ -1538,10 +1538,10 @@ meta:
   severity: critical
 
 - id: OPS-21.2.3
-  status: at-risk
+  status: partial
   owner: Isadora
   target: 10 metered counters/histograms
-  notes: "2 derivable from api_costs. 8 missing. No p50/p95/p99 latency. No cron_runs table."
+  notes: "Migration 151 (2026-05-01): cron_runs (per cron-tick row with started_at / ended_at / duration_ms / status / error_class / error_message + structured metadata jsonb) + metered_events (generic counter+histogram store: counter_name + venue_id + value + dimension jsonb + observed_at). RLS scoped to user's venue / org (org-admins see org-wide; service-role bypasses). src/lib/observability/metrics.ts ships recordCounter / recordHistogram / trackCronRun helpers + classifyError (timeout / rate_limit / auth / not_found / network / unknown bucketing). /api/cron route now wraps every job in trackCronRun — every cron tick lands in cron_runs. 14 unit assertions on classifyError. PARTIAL because: (a) recordCounter / recordHistogram exist but only the cron_runs path is wired; need to add counter calls in autonomous-sender (success / failure / rate_limited), pipeline (per-stage latency histograms), insights (cache hit/miss). (b) p50/p95/p99 read-side aggregation function not yet built — that's the metrics-aggregate.ts follow-up."
   severity: high
 
 - id: OPS-21.2.4

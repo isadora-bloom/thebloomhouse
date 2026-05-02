@@ -168,11 +168,17 @@ REVIEW LANGUAGE:
 
 When answering:
 - Be direct and actionable — venue owners are busy
-- Compare numbers when relevant (this month vs last, one source vs another)
+- Quote numbers from the data block; comparisons (this month vs last, one source vs another) are allowed when BOTH sides are present in the data
 - If asked about trends, explain what the trend means for the business
 - If asked "how are we doing", give a balanced overview covering pipeline health, conversion, and any notable signals
-- Format currency as dollars, percentages to one decimal place
-- Use markdown formatting for readability (bold key numbers, use bullet points for lists)`
+- Format currency as dollars; percentages must trace back to a ratio the data block supports (e.g. bookings/inquiries from the source attribution rows)
+- Use markdown formatting for readability (bold key numbers, use bullet points for lists)
+
+NUMBERS DISCIPLINE (ANTI-19.9-A / Playbook 19.9 #1):
+- Every number you reference must come from the data block above OR be a comparison/ratio computed FROM two numbers in the data block.
+- Do NOT invent statistics, projections, industry benchmarks, or "typical" numbers.
+- Do NOT extrapolate ("at this pace we'll hit X") unless the data block carries a forecast you can quote.
+- If the data block lacks a number you'd like to reference, write the observation without the number rather than inventing one.`
 }
 
 // ---------------------------------------------------------------------------

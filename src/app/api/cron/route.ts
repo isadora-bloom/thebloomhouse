@@ -921,12 +921,15 @@ export async function GET(request: NextRequest) {
     )
   }
 
+  // OPS-21.2.3: every cron tick gets a cron_runs row via trackCronRun.
+  // Captures started_at / ended_at / duration_ms / status / error_class
+  // so the pipeline-health page + alerts can detect stuck/failed crons.
+  const { trackCronRun } = await import('@/lib/observability/metrics')
   try {
     console.log(`[cron] Starting job: ${job}`)
-    const result = await runJob(job)
-    console.log(`[cron] Completed job: ${job}`)
-
-    return NextResponse.json({ job, success: true, result })
+    const wrapped = await trackCronRun(job, async () => runJob(job))
+    console.log(`[cron] Completed job: ${job} in ${wrapped.duration_ms}ms`)
+    return NextResponse.json({ job, success: true, result: wrapped.result, duration_ms: wrapped.duration_ms })
   } catch (err) {
     console.error(`[cron] Job ${job} failed:`, err)
     return NextResponse.json(
