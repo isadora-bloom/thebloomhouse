@@ -52,16 +52,20 @@ const seen = new Set<string>()
 
 for (let i = 0; i < lines.length; i++) {
   const line = lines[i]
-  // Match `- id: SOMETHING`
-  const idMatch = line.match(/^- id:\s+([A-Z\-0-9._]+)\s*$/)
+  // Match `- id: SOMETHING` at any indentation. Post 2026-05-02 the file
+  // is wrapped in a top-level `cells:` mapping so each list entry is
+  // indented two spaces — accept either shape so legacy + restructured
+  // YAMLs both work.
+  const idMatch = line.match(/^(\s*)- id:\s+([A-Z\-0-9._]+)\s*$/)
   if (!idMatch) continue
 
-  const cellId = idMatch[1]
+  const cellId = idMatch[2]
   if (!STATUS_UPDATES[cellId]) continue
   if (seen.has(cellId)) continue
   seen.add(cellId)
 
-  // Next line should be `  status: <something>`
+  // Next line should be `  status: <something>` (indentation depends on
+  // whether the YAML is the legacy flat shape or wrapped under `cells:`).
   const nextLine = lines[i + 1]
   const statusMatch = nextLine?.match(/^(\s+)status:\s+(.+)$/)
   if (!statusMatch) {
