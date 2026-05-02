@@ -288,12 +288,19 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
       .order('frequency', { ascending: false })
       .limit(15),
 
-    // Latest economic indicators
+    // Latest macro indicators (fred_indicators).
+    //
+    // T5-ε.1 (2026-05-01): migrated from legacy economic_indicators
+    // (which the cron writer had silently abandoned post-launch) to
+    // fred_indicators — the table the correlation engine reads. Pull
+    // a generous window so the per-series dedup below catches the
+    // latest observation regardless of FRED's update cadence (CPI is
+    // monthly, SP500 is daily).
     supabase
-      .from('economic_indicators')
-      .select('indicator_name, value')
-      .order('date', { ascending: false })
-      .limit(10),
+      .from('fred_indicators')
+      .select('series_id, value, observation_date')
+      .order('observation_date', { ascending: false })
+      .limit(50),
   ])
 
   // Build pipeline counts from active weddings
@@ -303,12 +310,23 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     pipelineCounts[status] = (pipelineCounts[status] ?? 0) + 1
   }
 
-  // Deduplicate economic indicators (take latest per indicator)
+  // Deduplicate FRED series — keep latest observation per series_id.
+  // The query already orders DESC so the first occurrence per series_id
+  // is the latest. Map FRED ids to friendly labels so the AI prompt
+  // stays human-readable ("CPI (headline): 305.2" beats "CPIAUCSL: 305.2").
+  const FRED_LABELS: Record<string, string> = {
+    CPIAUCSL:     'CPI (headline)',
+    MORTGAGE30US: '30y fixed mortgage rate',
+    SP500:        'S&P 500',
+    UNRATE:       'US unemployment',
+    UMCSENT:      'Consumer sentiment',
+  }
   const indicators: Record<string, number> = {}
   for (const row of indicatorsResult.data ?? []) {
-    const name = row.indicator_name as string
-    if (!(name in indicators)) {
-      indicators[name] = Number(row.value)
+    const seriesId = row.series_id as string
+    const label = FRED_LABELS[seriesId] ?? seriesId
+    if (!(label in indicators) && row.value != null) {
+      indicators[label] = Number(row.value)
     }
   }
 

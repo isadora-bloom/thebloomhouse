@@ -41,8 +41,12 @@
       "schedule": "0 8 1 * *"
     },
     {
-      "path": "/api/cron?job=economic_indicators",
-      "schedule": "0 3 * * 3"
+      "path": "/api/cron?job=fred_daily_refresh",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron?job=cultural_moments_auto_propose",
+      "schedule": "15 8 * * *"
     },
     {
       "path": "/api/cron?job=inbox_filter_learning",

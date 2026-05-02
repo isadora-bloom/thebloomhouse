@@ -139,11 +139,15 @@ export async function computeMeOrMarket(venueId: string): Promise<MeOrMarketDiag
   }
 
   // --- 3. Economic trend (US-only; UK venues get null) ---------------------
+  // T5-ε.1 (2026-05-01): migrated from legacy economic_indicators
+  // (consumer_sentiment) to fred_indicators (UMCSENT, the FRED series
+  // id that maps to the same data series). The legacy table is no
+  // longer being written by cron post-launch.
   const { data: econRows } = await service
-    .from('economic_indicators')
-    .select('date, value')
-    .eq('indicator_name', 'consumer_sentiment')
-    .order('date', { ascending: false })
+    .from('fred_indicators')
+    .select('observation_date, value')
+    .eq('series_id', 'UMCSENT')
+    .order('observation_date', { ascending: false })
     .limit(2)
 
   let econTrend: 'up' | 'flat' | 'down' | null = null

@@ -392,18 +392,31 @@ export default function IntelligenceDashboardPage() {
   const fetchStatCards = useCallback(async () => {
     if (scope.loading) return
     try {
-      // 1. Demand score from economic_indicators (not venue-scoped)
+      // 1. Demand score from fred_indicators (not venue-scoped).
+      //
+      // T5-ε.1 (2026-05-01): migrated from legacy economic_indicators.
+      // Map FRED series ids to the friendly names the demand-score
+      // function uses. Only UMCSENT is currently in DEFAULT_FRED_SERIES
+      // — the legacy PSAVERT/HOUST/CONCCONF aren't populated. The
+      // score function tolerates missing keys (each contribution is
+      // gated on != null), so partial data → partial score, never
+      // silently wrong.
+      const FRED_TO_NAME: Record<string, string> = {
+        UMCSENT: 'consumer_sentiment',
+      }
       const { data: indicatorRows } = await supabase
-        .from('economic_indicators')
-        .select('indicator_name, value')
-        .order('date', { ascending: false })
+        .from('fred_indicators')
+        .select('series_id, value, observation_date')
+        .order('observation_date', { ascending: false })
         .limit(50)
 
       if (indicatorRows && indicatorRows.length > 0) {
         const latest: Record<string, number> = {}
         for (const row of indicatorRows) {
-          const name = row.indicator_name as string
-          if (!(name in latest)) {
+          const seriesId = row.series_id as string
+          const name = FRED_TO_NAME[seriesId]
+          if (!name) continue
+          if (!(name in latest) && row.value != null) {
             latest[name] = Number(row.value)
           }
         }

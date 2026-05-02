@@ -2,7 +2,8 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { NextRequest, NextResponse } from 'next/server'
 import { fetchAllVenueTrends } from '@/lib/services/trends'
 import { fetchWeatherForecast } from '@/lib/services/weather'
-import { fetchAllEconomicIndicators } from '@/lib/services/economics'
+import { fetchAllDefaultFredSeries } from '@/lib/services/external-context/fred-fetch'
+import { autoProposeFromTrendSpikes } from '@/lib/services/insights/cultural-moments-auto-propose'
 import { runAllVenueAnomalies } from '@/lib/services/anomaly-detection'
 import {
   generateWeeklyBriefing,
@@ -43,7 +44,16 @@ const VALID_JOBS = [
   'heat_decay',
   'trends_refresh',
   'weather_forecast',
+  // T5-ε.1 (2026-05-01): renamed from 'economic_indicators' which wrote
+  // the legacy economic_indicators table (FRED series id mapped to a
+  // friendly name). The correlation engine reads fred_indicators, so the
+  // legacy writer left the macro channels permanently empty. The new
+  // handler calls fetchAllDefaultFredSeries() against fred_indicators.
+  // Old job name kept as alias below so already-deployed Vercel cron
+  // entries keep working until vercel.json is fully migrated.
+  'fred_daily_refresh',
   'economic_indicators',
+  'cultural_moments_auto_propose',
   'anomaly_detection',
   'intelligence_analysis',
   'weekly_briefing',
@@ -94,8 +104,24 @@ async function runJob(job: JobName): Promise<unknown> {
     case 'weather_forecast':
       return fetchWeatherForAllVenues()
 
+    case 'fred_daily_refresh':
     case 'economic_indicators':
-      return fetchAllEconomicIndicators()
+      // T5-ε.1 (2026-05-01): writes fred_indicators (the table the
+      // correlation engine + ./external-context/fred.ts actually read).
+      // Old key 'economic_indicators' kept as alias so the running
+      // Vercel cron continues to fire while vercel.json migrates.
+      // Sanity-asserts at the end that the writer actually landed rows
+      // in the last hour — if zero, logs loudly so a silent FRED
+      // outage doesn't drag the macro channels back to null.
+      return runFredDailyRefresh()
+
+    case 'cultural_moments_auto_propose':
+      // T5-ε.2 (2026-05-01): nightly sweep of every venue with a
+      // google_trends_metro set. Without this cron the propose-and-
+      // confirm queue stays empty unless an org_admin clicks the
+      // manual trigger at /api/intel/cultural-moments/auto-propose.
+      // Audit yc-partner.md CRITICAL 3.
+      return runCulturalMomentsAutoPropose()
 
     case 'anomaly_detection':
       return runAllVenueAnomalies()
@@ -331,6 +357,138 @@ async function sweepDataIntegrityAllVenues() {
 async function sweepReEngagementAttribution() {
   const supabase = createServiceClient()
   return sweepReEngagementConversions(supabase)
+}
+
+/**
+ * T5-ε.1 (2026-05-01). Daily FRED refresh writing fred_indicators
+ * (the table read by correlation-engine.ts and external-context/fred.ts).
+ *
+ * Pre-fix the cron called fetchAllEconomicIndicators which writes the
+ * legacy economic_indicators table — the correlation engine never
+ * looked at that table, so the macro channels (CPI, mortgage rate,
+ * S&P 500, unemployment, consumer sentiment) sat permanently empty
+ * after onboarding's one-shot backfill.
+ *
+ * Sanity assertion: after the writer returns, count fred_indicators
+ * rows whose fetched_at is in the last hour. If the writer claims
+ * success but no rows landed (FRED outage, network blip, RLS quirk),
+ * we log loudly so the failure doesn't go silent.
+ */
+async function runFredDailyRefresh(): Promise<{
+  series: Array<{ series_id: string; observations_returned: number; rows_upserted: number; error?: string }>
+  totalRowsUpserted: number
+  rowsLandedLastHour: number | null
+  freshnessOk: boolean
+}> {
+  const results = await fetchAllDefaultFredSeries()
+  const totalRowsUpserted = results.reduce((sum, r) => sum + r.rows_upserted, 0)
+
+  const supabase = createServiceClient()
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+  const { count, error: countError } = await supabase
+    .from('fred_indicators')
+    .select('id', { count: 'exact', head: true })
+    .gte('fetched_at', oneHourAgo)
+
+  let rowsLandedLastHour: number | null = null
+  if (countError) {
+    console.error('[cron][fred_daily_refresh] sanity count failed:', countError.message)
+  } else {
+    rowsLandedLastHour = count ?? 0
+  }
+
+  const freshnessOk = rowsLandedLastHour !== null && rowsLandedLastHour > 0
+  if (!freshnessOk) {
+    console.error(
+      `[cron][fred_daily_refresh] FRESHNESS ALERT — fetchAllDefaultFredSeries reported ${totalRowsUpserted} rows ` +
+      `upserted across ${results.length} series, but fred_indicators has ${rowsLandedLastHour ?? 'unknown'} ` +
+      `rows fetched in the last hour. ` +
+      `Per-series detail: ${JSON.stringify(results)}. ` +
+      `Likely causes: missing FRED_API_KEY, FRED outage, RLS blocking service-role write, network egress.`,
+    )
+  }
+
+  return {
+    series: results,
+    totalRowsUpserted,
+    rowsLandedLastHour,
+    freshnessOk,
+  }
+}
+
+/**
+ * T5-ε.2 (2026-05-01). Nightly cultural-moments auto-propose sweep.
+ *
+ * Runs autoProposeFromTrendSpikes against every venue with a
+ * google_trends_metro configured. Pre-fix the propose-and-confirm
+ * queue stayed empty unless an org_admin clicked the manual trigger
+ * at POST /api/intel/cultural-moments/auto-propose. Audit
+ * yc-partner.md CRITICAL 3.
+ *
+ * Per-venue dedup is handled inside the service (fingerprint on
+ * (term, weekStart) across all venues) — calling repeatedly is safe.
+ */
+async function runCulturalMomentsAutoPropose(): Promise<{
+  venuesChecked: number
+  spikesDetected: number
+  proposed: number
+  deduped: number
+  errors: number
+  perVenue: Array<{ venueId: string; spikesDetected: number; proposed: number; deduped: number; errors: number }>
+}> {
+  const supabase = createServiceClient()
+
+  const { data: venueRows } = await supabase
+    .from('venues')
+    .select('id')
+    .not('google_trends_metro', 'is', null)
+    .is('archived_at', null)
+
+  const venueIds = ((venueRows ?? []) as Array<{ id: string }>).map((v) => v.id)
+
+  const summary = {
+    venuesChecked: venueIds.length,
+    spikesDetected: 0,
+    proposed: 0,
+    deduped: 0,
+    errors: 0,
+    perVenue: [] as Array<{
+      venueId: string
+      spikesDetected: number
+      proposed: number
+      deduped: number
+      errors: number
+    }>,
+  }
+
+  for (const venueId of venueIds) {
+    try {
+      const r = await autoProposeFromTrendSpikes(supabase, venueId)
+      summary.spikesDetected += r.spikesDetected
+      summary.proposed += r.proposed
+      summary.deduped += r.deduped
+      summary.errors += r.errors
+      summary.perVenue.push({
+        venueId,
+        spikesDetected: r.spikesDetected,
+        proposed: r.proposed,
+        deduped: r.deduped,
+        errors: r.errors,
+      })
+    } catch (err) {
+      console.error(`[cron][cultural_moments_auto_propose] failed for venue ${venueId}:`, err)
+      summary.errors += 1
+      summary.perVenue.push({
+        venueId,
+        spikesDetected: 0,
+        proposed: 0,
+        deduped: 0,
+        errors: 1,
+      })
+    }
+  }
+
+  return summary
 }
 
 async function scanBacktraceAllVenues(): Promise<
