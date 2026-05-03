@@ -45,10 +45,18 @@ const probes: Probe[] = [
   },
   {
     migration: '190',
-    describe: 'weather_data extension columns (Stream ZZ)',
+    describe: 'weather_data composite index + Rixey lat/lon (Stream ZZ)',
     run: async (sb) => {
-      const { error } = await sb.from('weather_data').select('region, severity_score').limit(1)
-      return { applied: !error || !/column .* does not exist/i.test(error.message), note: error?.message?.slice(0, 80) }
+      // 190 doesn't add columns — it adds idx_weather_data_venue_date + sets
+      // Rixey's lat/lon. Probe by checking Rixey's row has lat/lon populated.
+      const { data, error } = await sb
+        .from('venues')
+        .select('latitude, longitude')
+        .eq('id', 'f3d10226-4c5c-47ad-b89b-98ad63842492')
+        .maybeSingle()
+      if (error) return { applied: false, note: error.message.slice(0, 80) }
+      const hasCoords = data?.latitude != null && data?.longitude != null
+      return { applied: hasCoords, note: hasCoords ? `Rixey lat=${data!.latitude}, lon=${data!.longitude}` : 'Rixey lat/lon NULL — 190 not applied' }
     },
   },
   {
@@ -77,9 +85,9 @@ const probes: Probe[] = [
   },
   {
     migration: '195',
-    describe: 'venue signature fields (ai_role_title, signature_tagline, signature_website, signature_phone, signature_text_capable) (Stream FFF)',
+    describe: 'venue_ai_config signature fields (ai_role_title, signature_tagline, signature_website, signature_phone, signature_text_capable) (Stream FFF)',
     run: async (sb) => {
-      const { error } = await sb.from('venues').select('id, ai_role_title, signature_tagline, signature_website, signature_phone, signature_text_capable').limit(1)
+      const { error } = await sb.from('venue_ai_config').select('id, ai_role_title, signature_tagline, signature_website, signature_phone, signature_text_capable').limit(1)
       return { applied: !error || !/column .* does not exist/i.test(error.message), note: error?.message?.slice(0, 80) }
     },
   },

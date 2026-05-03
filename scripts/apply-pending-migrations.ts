@@ -83,10 +83,45 @@ async function ensureRpcAvailable(sb: SupabaseClient): Promise<void> {
   console.log('✓ exec_sql RPC available')
 }
 
+// PL/pgSQL EXECUTE rejects transaction-control statements ("EXECUTE of
+// transaction commands is not implemented", SQLSTATE 0A000). Strip them.
+// Each EXECUTE in exec_sql already runs as an implicit single-statement
+// transaction, and migration files in this repo are idempotent — losing
+// the BEGIN/COMMIT grouping doesn't change correctness.
+const TX_CONTROL_RE = /^(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK|SAVEPOINT|RELEASE\s+SAVEPOINT|END)\b/i
+
+/** Strip leading whitespace + line/block comments. The TX-control regex
+ *  matches against this so a chunk like "-- header\nBEGIN" is recognized. */
+function stripLeadingNoise(s: string): string {
+  let i = 0
+  while (i < s.length) {
+    const c = s[i]!
+    if (/\s/.test(c)) { i++; continue }
+    if (c === '-' && s[i + 1] === '-') {
+      while (i < s.length && s[i] !== '\n') i++
+      continue
+    }
+    if (c === '/' && s[i + 1] === '*') {
+      let depth = 1
+      i += 2
+      while (i < s.length && depth > 0) {
+        if (s[i] === '/' && s[i + 1] === '*') { depth++; i += 2; continue }
+        if (s[i] === '*' && s[i + 1] === '/') { depth--; i += 2; continue }
+        i++
+      }
+      continue
+    }
+    break
+  }
+  return s.slice(i)
+}
+
 async function applyFile(sb: SupabaseClient, file: string): Promise<void> {
   const sql = readFileSync(resolve(file), 'utf8')
-  const statements = splitSqlStatements(sql)
-  console.log(`  → ${statements.length} statement(s)`)
+  const allStatements = splitSqlStatements(sql)
+  const statements = allStatements.filter((s) => !TX_CONTROL_RE.test(stripLeadingNoise(s)))
+  const skipped = allStatements.length - statements.length
+  console.log(`  → ${statements.length} statement(s)${skipped > 0 ? ` (${skipped} BEGIN/COMMIT skipped — exec_sql runs each as its own tx)` : ''}`)
   for (let idx = 0; idx < statements.length; idx++) {
     const stmt = statements[idx]!
     const preview = stmt.replace(/\s+/g, ' ').slice(0, 100) + (stmt.length > 100 ? '...' : '')

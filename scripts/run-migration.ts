@@ -46,9 +46,15 @@ async function main() {
   }
   const abs = resolve(path)
   const sql = readFileSync(abs, 'utf8')
-  const statements = splitSqlStatements(sql)
+  const all = splitSqlStatements(sql)
+  // PL/pgSQL EXECUTE rejects transaction-control statements
+  // (SQLSTATE 0A000 "EXECUTE of transaction commands is not implemented").
+  // Strip BEGIN/COMMIT/etc. — each statement runs as its own implicit tx.
+  const TX_CONTROL_RE = /^\s*(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK|SAVEPOINT|RELEASE\s+SAVEPOINT|END)\b/i
+  const statements = all.filter((s) => !TX_CONTROL_RE.test(s))
+  const skipped = all.length - statements.length
   console.log(`Migration: ${path}`)
-  console.log(`Parsed: ${statements.length} top-level statement(s)`)
+  console.log(`Parsed: ${statements.length} top-level statement(s)${skipped > 0 ? ` (${skipped} BEGIN/COMMIT skipped)` : ''}`)
 
   const env = loadEnv()
   const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL!, env.SUPABASE_SERVICE_ROLE_KEY!, {

@@ -67,9 +67,8 @@ async function main() {
 
   // (4) Run the classifier.
   console.log(`\nRunning classifier for Rixey…`)
-  const { classifyToursForVenue } = await import('../../src/lib/services/tour-outcome-classifier.js')
-    .catch(async () => await import('../../src/lib/services/tour-outcome-classifier.ts' as string))
-  const result = await (classifyToursForVenue as (sb: any, venueId: string) => Promise<unknown>)(sb, RIXEY)
+  const { classifyTourOutcomes } = await import('../../src/lib/services/tour-outcome-classifier')
+  const result = await classifyTourOutcomes(sb as Parameters<typeof classifyTourOutcomes>[0], RIXEY)
   console.log('\nClassifier result:')
   console.log(JSON.stringify(result, null, 2))
 
