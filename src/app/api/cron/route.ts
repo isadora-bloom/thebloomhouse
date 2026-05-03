@@ -28,6 +28,7 @@ import { mineTranscriptVoiceForAllVenues } from '@/lib/services/transcript-voice
 import { findBacktraceCandidates } from '@/lib/services/source-backtrace'
 import { reclusterVenue } from '@/lib/services/candidate-clusterer'
 import { resolveVenueCandidates } from '@/lib/services/candidate-resolver'
+import { runBacktrackAllVenues } from '@/lib/services/identity-backtrack'
 import { syncMeetings as syncZoomMeetings } from '@/lib/services/zoom'
 import { syncAllVenues as syncOpenPhoneAllVenues } from '@/lib/services/openphone'
 import { runDataIntegritySweepAllVenues } from '@/lib/services/data-integrity'
@@ -83,6 +84,16 @@ const VALID_JOBS = [
   'zoom_poll',
   'openphone_poll',
   'phase_b_sweep',
+  // T5-Rixey-CCC (2026-05-02). Candidate-resolver backtrack — when
+  // weddings become known-email, retroactively scan unresolved storefront
+  // candidate_identities and link the orphans. BBB spike measured 12.7%
+  // of tangential signals connected to active weddings on Rixey; the
+  // 1,704-orphan tail (553 of which are The Knot) never gets attribution
+  // even when the same person submits the calculator weeks later. Daily
+  // sweep runs alongside phase_b_sweep so any new wedding inserts AND
+  // any new storefront imports get retried. Stamps backtrack_attempted_at
+  // (migration 191) so re-runs paginate past recently-evaluated rows.
+  'identity_backtrack',
   'data_integrity_sweep',
   're_engagement_attribution',
   // Cost-ceiling circuit breaker (Playbook OPS-21.4.3). cost_ceiling_check
@@ -295,6 +306,18 @@ async function runJob(job: JobName): Promise<unknown> {
       // ambiguous cases on the sweep — that already happened at
       // import time; AI is too expensive to retry every night.
       return sweepPhaseBAllVenues()
+
+    case 'identity_backtrack':
+      // T5-Rixey-CCC (2026-05-02). Daily backtrack — for each venue,
+      // for each wedding with inquiry_date, score every unresolved
+      // storefront candidate (Knot/WW/IG/Pinterest/...) on first_name
+      // + last_initial + state + ±90/+14d window. High-confidence
+      // matches auto-link via attribution_events; medium queue for
+      // /intel/identity-backtrack coordinator review; low + no-match
+      // get backtrack_attempted_at stamped so the next sweep skips
+      // them for REATTEMPT_WINDOW_DAYS (7d). Idempotent — re-running
+      // doesn't re-link or duplicate. Pure rule scoring; no LLM.
+      return sweepIdentityBacktrackAllVenues()
 
     case 'data_integrity_sweep':
       // Phase 2 multi-venue rollout (2026-04-30). Runs the 8 data
@@ -711,6 +734,17 @@ async function sweepPhaseBAllVenues(): Promise<
   }
 
   return out
+}
+
+/**
+ * T5-Rixey-CCC identity-backtrack sweep wrapper. Per-venue runner
+ * lives in the identity-backtrack service; this wraps it so the cron
+ * switch stays consistent. Returns per-venue summary keyed by venue
+ * name for log readability.
+ */
+async function sweepIdentityBacktrackAllVenues() {
+  const supabase = createServiceClient()
+  return runBacktrackAllVenues(supabase)
 }
 
 /**

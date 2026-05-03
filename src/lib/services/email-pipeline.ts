@@ -1208,6 +1208,26 @@ export async function processIncomingEmail(
           console.warn('[pipeline] create-time candidate resolve failed:', err)
         }
       })()
+
+      // T5-Rixey-CCC (2026-05-02): retroactive storefront backtrack on
+      // every new wedding. The candidate-resolver above scans candidates
+      // unresolved-as-of-now; backtrack additionally scans every
+      // unresolved storefront candidate (Knot/WW/IG/Pinterest/...) within
+      // the [-90d, +14d] inquiry window for first_name + last_initial +
+      // state matches. This catches the "Sarah viewed Knot 6 weeks ago,
+      // finally emails today" case that the candidate-resolver alone
+      // misses because the candidate's first_seen falls outside the
+      // resolver's tier-1 ±72h window. Fire-and-forget, never blocks.
+      void (async () => {
+        try {
+          const { runBacktrackForWedding } = await import('@/lib/services/identity-backtrack')
+          if (weddingId) {
+            await runBacktrackForWedding(supabase, weddingId)
+          }
+        } catch (err) {
+          console.warn('[pipeline] create-time identity backtrack failed:', err)
+        }
+      })()
     }
   } else if (
     isNewContact &&
