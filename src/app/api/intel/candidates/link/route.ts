@@ -125,6 +125,10 @@ export async function POST(req: NextRequest) {
         is_first_touch: false,
         bucket,
         conflict_with_legacy_source: bucket === 'attribution' ? conflictFlag : null,
+        // T5-Rixey-BBB: attribution_events rows are source-class
+        // anchors — they exist precisely to mark a discovery touch.
+        // signal-class-justified: attribution_events represent source-class discovery
+        signal_class: 'source',
       }
     })
 

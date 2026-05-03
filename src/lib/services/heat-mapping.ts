@@ -1192,6 +1192,7 @@ export async function markAsLost(
   })
 
   // Insert lost_deals record
+  // signal-class-justified: lost-deals are structurally always outcome
   await supabase.from('lost_deals').insert({
     venue_id: venueId,
     wedding_id: weddingId,
@@ -1200,6 +1201,7 @@ export async function markAsLost(
     reason_detail: reason ?? null,
     competitor_name: lostTo ?? null,
     lost_at: now,
+    signal_class: 'outcome',
   })
 
   // Insert score history snapshot

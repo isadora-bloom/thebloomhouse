@@ -567,6 +567,9 @@ export async function syncMeetings(
         : `Zoom meeting${meeting.startTime ? ` (${meeting.startTime.split('T')[0]})` : ''}`
       const bodyPreview = transcriptText.slice(0, 500)
 
+      // T5-Rixey-BBB: Zoom meetings are touchpoint signals — the lead
+      // showed up to a virtual tour AFTER discovering the venue.
+      // signal-class-justified: zoom meetings are touchpoint
       const { error: iError } = await supabase.from('interactions').insert({
         venue_id: venueId,
         wedding_id: matchedWeddingId,
@@ -576,6 +579,7 @@ export async function syncMeetings(
         body_preview: bodyPreview,
         full_body: transcriptText.slice(0, 50000),
         timestamp: meeting.startTime || new Date().toISOString(),
+        signal_class: 'touchpoint',
       })
       if (iError) {
         console.error('[zoom] interactions insert failed:', iError.message)

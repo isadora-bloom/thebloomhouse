@@ -121,6 +121,10 @@ export async function importIdentityCandidates(args: {
       else match_status = 'low_confidence_match'
     }
 
+    // T5-Rixey-BBB: tangential signals from cross-platform parsing
+    // are source-class by definition (Knot views, IG follows, etc.).
+    // Form submissions are written elsewhere (web-form adapter).
+    // signal-class-justified: tangential cross-platform signals are source
     const { data: inserted, error } = await supabase
       .from('tangential_signals')
       .insert({
@@ -133,6 +137,7 @@ export async function importIdentityCandidates(args: {
         matched_person_id,
         confidence_score,
         source_entry_id: sourceEntryId ?? null,
+        signal_class: 'source',
       })
       .select('id')
       .single()

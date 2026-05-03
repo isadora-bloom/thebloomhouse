@@ -43,6 +43,7 @@ import {
 } from '@/lib/services/external-context/calendar-writer'
 import { refreshVoiceDnaForAllVenues } from '@/lib/services/voice-dna-extract'
 import { logEvent } from '@/lib/observability/logger'
+import { computeAttributionParityAllVenues } from '@/lib/services/attribution-parity'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -132,6 +133,15 @@ const VALID_JOBS = [
   // Runs at 02:00 UTC, before the 03:00+ morning crons fire so the
   // pre-burst telemetry is already trimmed.
   'prune_telemetry',
+  // T5-Rixey-BBB (2026-05-02). Side-by-side parity scan: writes one
+  // attribution_parity_log row per active wedding per run with the
+  // legacy 7-tier chain output AND the new identity-cluster compute
+  // output. Drives /intel/sources/parity dashboard. Cutover gate:
+  // USE_CLUSTER_FIRST_TOUCH flips ON only when dashboard shows
+  // >=90% agreement for 7 consecutive days AND CCC has been running
+  // for >=48h. Sequenced AFTER backtrace_scan (04:30) and
+  // phase_b_sweep (04:45).
+  'compute_attribution_parity',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -196,6 +206,13 @@ async function runJob(job: JobName): Promise<unknown> {
 
     case 'attribution_refresh':
       return refreshAttributionAllVenues()
+
+    case 'compute_attribution_parity':
+      // T5-Rixey-BBB. Side-by-side scan: per-wedding chain + cluster
+      // outputs into attribution_parity_log. Read-only against
+      // weddings; only writes are to the parity log. Cutover gate
+      // is the dashboard at /intel/sources/parity.
+      return computeAttributionParityAllVenues(createServiceClient())
 
     case 'post_event_feedback_check':
       return checkPostEventFeedback()

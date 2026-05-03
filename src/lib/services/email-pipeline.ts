@@ -776,6 +776,9 @@ export async function processIncomingEmail(
       gmail_thread_id: email.threadId,
       timestamp: email.date,
       correlation_id: correlationId,
+      // T5-Rixey-BBB: outbound venue-side emails are not lead signals.
+      // signal-class-justified: outbound venue-side replies are not lead signals
+      signal_class: 'unclassified',
     }
     if (email.connectionId) outboundPayload.gmail_connection_id = email.connectionId
     await supabase.from('interactions').insert(outboundPayload)
@@ -930,6 +933,36 @@ export async function processIncomingEmail(
   // request-scoped correlation id so coordinators can chase the full
   // forensic chain (api_costs / drafts / engagement_events / interactions
   // / notifications / intelligence_insights) from one id.
+  // T5-Rixey-BBB: classify the inbound email by from-domain so the
+  // cluster-compute service can find source-class signals without a
+  // post-hoc scan. Mirrors the spike classifier
+  // (scripts/rixey-load/50-bbb-spike.ts) and the canonical map in
+  // lead-source-derivation.ts. CRM relays (HoneyBook / Dubsado) get
+  // 'crm'; scheduling-tool relays (Calendly / Acuity) get 'touchpoint';
+  // platform listing relays (The Knot / WeddingWire / Zola / HCTG /
+  // Wedsites) get 'source'. Anything else (consumer mail, unknown
+  // domains) lands 'unclassified' — a body-extracted hear_source or
+  // UTM in extracted_identity is also enough to credit 'source'.
+  const fromDomainForClass = fromEmail.includes('@')
+    ? fromEmail.split('@').pop()!.toLowerCase()
+    : ''
+  const inboundSignalClass: 'source' | 'touchpoint' | 'crm' | 'unclassified' = (() => {
+    if (!fromDomainForClass) return 'unclassified'
+    if (fromDomainForClass === 'honeybook.com' || fromDomainForClass.endsWith('.honeybook.com')
+      || fromDomainForClass === 'dubsado.com' || fromDomainForClass.endsWith('.dubsado.com')) return 'crm'
+    if (fromDomainForClass === 'calendly.com' || fromDomainForClass.endsWith('.calendly.com')
+      || fromDomainForClass === 'acuityscheduling.com' || fromDomainForClass.endsWith('.acuityscheduling.com')) return 'touchpoint'
+    if (fromDomainForClass === 'theknot.com' || fromDomainForClass.endsWith('.theknot.com')
+      || fromDomainForClass === 'weddingwire.com' || fromDomainForClass.endsWith('.weddingwire.com')
+      || fromDomainForClass === 'authsolic.com'
+      || fromDomainForClass === 'zola.com' || fromDomainForClass.endsWith('.zola.com')
+      || fromDomainForClass === 'herecomestheguide.com'
+      || fromDomainForClass === 'wedsites.com') return 'source'
+    if (extractedIdentity && typeof extractedIdentity === 'object'
+      && (('hear_source' in extractedIdentity) || ('utm_source' in extractedIdentity))) return 'source'
+    return 'unclassified'
+  })()
+
   const interactionPayload: Record<string, unknown> = {
     venue_id: venueId,
     wedding_id: weddingId,
@@ -950,6 +983,9 @@ export async function processIncomingEmail(
     // linkage scripts read interactions.extracted_identity rather
     // than re-parsing.
     extracted_identity: extractedIdentity,
+    // T5-Rixey-BBB: see inboundSignalClass derivation above.
+    // signal-class-justified: derived from from-domain + extracted_identity
+    signal_class: inboundSignalClass,
   }
   if (email.connectionId) {
     interactionPayload.gmail_connection_id = email.connectionId
@@ -2932,6 +2968,7 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
     .eq('id', draftId)
 
   // Create outbound interaction record
+  // signal-class-justified: outbound venue-side sends are not lead signals
   await supabase.from('interactions').insert({
     venue_id: draft.venue_id,
     wedding_id: null, // Could link if needed
@@ -2944,6 +2981,7 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
     gmail_message_id: sentMessageId,
     gmail_thread_id: threadId ?? null,
     timestamp: new Date().toISOString(),
+    signal_class: 'unclassified',
   })
 
   console.log(`[pipeline] Sent approved draft ${draftId} to ${draft.to_email}`)

@@ -626,6 +626,7 @@ export async function importTourRecords(
       else if (['virtual', 'video', 'zoom'].includes(rawType)) tourType = 'virtual'
       else if (['phone', 'call'].includes(rawType)) tourType = 'phone'
 
+      // signal-class-justified: tours are structurally always touchpoint
       const { error } = await supabase.from('tours').insert({
         venue_id: venueId,
         scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : null,
@@ -633,6 +634,7 @@ export async function importTourRecords(
         source: row.source || null,
         outcome,
         notes: row.notes || (row.couple_name ? `Couple: ${row.couple_name}` : null),
+        signal_class: 'touchpoint',
       })
 
       if (error) {
@@ -1082,6 +1084,7 @@ export async function importLostDeals(
       const rawStage = (row.lost_at_stage || '').toLowerCase().trim()
       const lostAtStage = validStages.includes(rawStage) ? rawStage : null
 
+      // signal-class-justified: lost-deals are structurally always outcome
       const { error } = await supabase.from('lost_deals').insert({
         venue_id: venueId,
         lost_at_stage: lostAtStage,
@@ -1089,6 +1092,7 @@ export async function importLostDeals(
         reason_detail: row.reason_detail || row.couple_name || null,
         competitor_name: row.competitor_name || null,
         lost_at: parseDatetime(row.lost_at || ''),
+        signal_class: 'outcome',
       })
 
       if (error) {

@@ -47,6 +47,7 @@ export async function POST(request: NextRequest) {
 
     // Log the outbound interaction (store the disclosed version — that's
     // what the recipient actually received)
+    // signal-class-justified: outbound venue-side sends are not lead signals
     const supabase = createServiceClient()
     await supabase.from('interactions').insert({
       venue_id: auth.venueId,
@@ -57,6 +58,7 @@ export async function POST(request: NextRequest) {
       full_body: bodyWithDisclosure,
       gmail_message_id: sentMessageId,
       timestamp: new Date().toISOString(),
+      signal_class: 'unclassified',
     })
 
     return NextResponse.json({ success: true, messageId: sentMessageId })

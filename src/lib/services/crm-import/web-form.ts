@@ -583,6 +583,14 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
         // structural answer for calculator submissions.
         hear_source: 'website',
       },
+      // T5-Rixey-BBB: form submissions are touchpoint class. The
+      // lead used the calculator AFTER discovering the venue — the
+      // upstream source (the_knot / google / referral / etc.) is
+      // recovered via the cluster walk against tangential_signals
+      // (Knot view, IG follow) or earlier interactions on the same
+      // person identity.
+      // signal-class-justified: web-form submissions are touchpoint, not source
+      signal_class: 'touchpoint',
     }
 
     // Compose a notes blob for the wedding (intent + free-text + total).
@@ -699,6 +707,10 @@ async function commitWebForm(args: {
     crmSource: 'web_form',
     confidenceFlag: 'imported_high',
     sourceProvenance: 'web_form_import',
+    // T5-Rixey-BBB: every web-form interaction is a touchpoint by
+    // default. Per-row overrides (the synthetic interaction above
+    // already declares 'touchpoint' explicitly) take precedence.
+    defaultInteractionSignalClass: 'touchpoint',
   })
 
   if (!baseResult.ok) return baseResult
@@ -727,6 +739,10 @@ async function commitWebForm(args: {
     match_status: 'confirmed_match',
     matched_person_id: null,
     confidence_score: 1.0,
+    // T5-Rixey-BBB: form-submission tangentials are touchpoint
+    // class — the lead's interaction tool, not the discovery channel.
+    // signal-class-justified: form_submission is a touchpoint signal_type
+    signal_class: 'touchpoint' as const,
   }))
 
   if (tangentialRows.length > 0) {
