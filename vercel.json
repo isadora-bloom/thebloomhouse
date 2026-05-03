@@ -151,6 +151,10 @@
     {
       "path": "/api/cron?job=merge_people_aliases",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron?job=tour_outcome_classifier",
+      "schedule": "0 6 * * *"
     }
   ]
 }

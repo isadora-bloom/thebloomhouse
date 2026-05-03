@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Eye, ArrowRight } from 'lucide-react'
+import { Eye, ArrowRight, ChevronDown } from 'lucide-react'
 
 interface PostTourLead {
   wedding_id: string
@@ -31,10 +31,22 @@ function daysAgo(d: string): number {
  * on a vendor platform again. Strong signal that they're still
  * considering — perfect timing for a check-in email. Self-hides
  * when there are no such leads.
+ *
+ * T5-Rixey-GGG Bug 18: list defaults to 6 rows with a "View all N"
+ * expand button. Click toggles in-line — no route change so the
+ * coordinator's place on the dashboard is preserved.
+ *
+ * T5-Rixey-GGG Bug 22: rows are post-TOUR, not post-INQUIRY (rewrite
+ * lives in src/lib/services/post-tour-browsing.ts). The card no
+ * longer shows leads whose latest Knot save is BEFORE their tour
+ * date.
  */
+const INITIAL_LIMIT = 6
+
 export function PostTourBrowsingCard() {
   const [leads, setLeads] = useState<PostTourLead[]>([])
   const [loading, setLoading] = useState(true)
+  const [showAll, setShowAll] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -47,6 +59,9 @@ export function PostTourBrowsingCard() {
 
   if (loading) return null
   if (leads.length === 0) return null
+
+  const visible = showAll ? leads : leads.slice(0, INITIAL_LIMIT)
+  const hiddenCount = leads.length - INITIAL_LIMIT
 
   return (
     <div className="bg-surface border border-border rounded-xl shadow-sm">
@@ -61,7 +76,7 @@ export function PostTourBrowsingCard() {
         </p>
       </div>
       <div className="divide-y divide-border max-h-96 overflow-y-auto">
-        {leads.map((l) => (
+        {visible.map((l) => (
           <Link
             key={l.wedding_id}
             href={`/intel/clients/${l.wedding_id}`}
@@ -82,6 +97,20 @@ export function PostTourBrowsingCard() {
           </Link>
         ))}
       </div>
+      {hiddenCount > 0 && (
+        <button
+          onClick={() => setShowAll((prev) => !prev)}
+          className="w-full px-5 py-2.5 text-xs font-medium text-sage-600 hover:text-sage-900 hover:bg-sage-50/40 transition-colors border-t border-border flex items-center justify-center gap-1"
+        >
+          {showAll ? (
+            <>Show less</>
+          ) : (
+            <>
+              View all {leads.length} <ChevronDown className="w-3 h-3" />
+            </>
+          )}
+        </button>
+      )}
     </div>
   )
 }

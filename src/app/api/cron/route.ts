@@ -46,6 +46,7 @@ import { refreshVoiceDnaForAllVenues } from '@/lib/services/voice-dna-extract'
 import { logEvent } from '@/lib/observability/logger'
 import { computeAttributionParityAllVenues } from '@/lib/services/attribution-parity'
 import { mergePeopleAliasesAllVenues } from '@/lib/services/people-merge-aliases'
+import { classifyTourOutcomesAllVenues } from '@/lib/services/tour-outcome-classifier'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -167,6 +168,15 @@ const VALID_JOBS = [
   // morning lead-source-derivation runs so the canonical-person view
   // is stable when source attribution computes.
   'merge_people_aliases',
+  // T5-Rixey-GGG (2026-05-02). Tour outcome classifier. Walks past-due
+  // tours with outcome IN ('pending', NULL) and stamps the right
+  // terminal outcome (completed / cancelled / no_show) based on
+  // evidence (cancellation interactions, no-show notes, otherwise
+  // completed). Sequenced AFTER weather (05:00) and correlation
+  // (05:00) so the post-cancellation hooks have fresh context. Bias is
+  // toward false negatives — when uncertain, leaves 'pending' so the
+  // coordinator review surfaces it. Bug 12.
+  'tour_outcome_classifier',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -462,6 +472,17 @@ async function runJob(job: JobName): Promise<unknown> {
       // signals / forensic record and are NEVER pruned. Logs counts per
       // table so the cron telemetry shows what was trimmed.
       return runPruneTelemetry()
+
+    case 'tour_outcome_classifier':
+      // T5-Rixey-GGG (2026-05-02). For each tour with outcome IN
+      // ('pending', NULL) AND scheduled_at + duration < now(), walk
+      // the evidence and flip to completed / cancelled / no_show.
+      // Coordinator notes win first, then engagement_events, then
+      // inbound interactions, then post-tour notes. When uncertain,
+      // keeps 'pending'. Idempotent — re-running is a no-op for rows
+      // already classified. Backfills the existing pending-tour
+      // backlog automatically the first time it runs.
+      return classifyTourOutcomesAllVenues(createServiceClient())
   }
 }
 

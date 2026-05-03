@@ -40,6 +40,7 @@ interface WeddingRow {
   booking_value: number | null
   wedding_date: string | null
   source: string | null
+  inquiry_date: string | null
   created_at: string
 }
 
@@ -74,7 +75,11 @@ interface ClientData {
   eventDate: string | null
   revenue: number
   coordinator: string
-  created_at: string
+  // T5-Rixey-GGG: arrival_date is the REAL "when did the lead arrive"
+  // (inquiry_date when present, fallback to created_at on rows that
+  // predate inquiry_date population). Replaces the prior `created_at`
+  // which always rendered import time on backfilled rows.
+  arrival_date: string
   notes: string[]
 }
 
@@ -151,9 +156,12 @@ function ClientsPageInner() {
       const [weddingRes, personRes, contactRes] = await Promise.all([
         supabase
           .from('weddings')
-          .select('id, venue_id, status, booking_value, wedding_date, source, created_at')
+          .select('id, venue_id, status, booking_value, wedding_date, source, inquiry_date, created_at')
           .eq('venue_id', VENUE_ID)
-          .order('created_at', { ascending: false }),
+          // T5-Rixey-GGG: order by inquiry_date (the REAL arrival time)
+          // not created_at (import time). Falls back via NULLS LAST so
+          // pre-inquiry-date rows still appear at the bottom.
+          .order('inquiry_date', { ascending: false, nullsFirst: false }),
         supabase
           .from('people')
           .select('id, wedding_id, first_name, last_name, role, email, phone')
@@ -226,7 +234,10 @@ function ClientsPageInner() {
         // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
         revenue: (w.booking_value ?? 0) / 100,
         coordinator: '--',
-        created_at: w.created_at,
+        // T5-Rixey-GGG Bug 23 cousin: prefer the REAL arrival time
+        // (inquiry_date) over created_at (import time) so the timeline
+        // doesn't render today's date for every backfilled row.
+        arrival_date: w.inquiry_date ?? w.created_at,
         notes: [],
       }
     })
@@ -409,7 +420,7 @@ function ClientsPageInner() {
                               <div>
                                 <p className="text-xs font-semibold uppercase tracking-wider text-sage-500 mb-2">Timeline</p>
                                 <div className="space-y-1 text-sm text-sage-700">
-                                  <p>Created: {new Date(c.created_at).toLocaleDateString()}</p>
+                                  <p>Inquired: {new Date(c.arrival_date).toLocaleDateString()}</p>
                                   <p>Status: {formatLabel(c.status)}</p>
                                 </div>
                                 {c.status === 'inquiry' && (

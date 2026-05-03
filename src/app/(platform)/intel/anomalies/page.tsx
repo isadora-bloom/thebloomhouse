@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   AlertTriangle,
   ArrowUpDown,
@@ -125,8 +126,18 @@ function AnomaliesInner() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [ackLoadingId, setAckLoadingId] = useState<string | null>(null)
 
+  // T5-Rixey-GGG Bug 19: severity can be deep-linked via the
+  // `severity` query parameter (?severity=critical|warning|info).
+  // The dashboard's Active Alerts tile uses this so the click takes
+  // the coordinator straight to the relevant filter.
+  const searchParams = useSearchParams()
+  const initialSeverity: SeverityFilter = (() => {
+    const raw = searchParams?.get('severity')
+    if (raw === 'critical' || raw === 'warning' || raw === 'info') return raw
+    return 'all'
+  })()
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
-  const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all')
+  const [severityFilter, setSeverityFilter] = useState<SeverityFilter>(initialSeverity)
   const [sortKey, setSortKey] = useState<SortKey>('created_at')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 

@@ -105,6 +105,7 @@ export function BrainDumpClarifications() {
                   {e.clarification_question || 'Needs clarification.'}
                 </p>
                 <p className="text-xs text-sage-500 mt-1">
+                  {/* created-at-ok: brain_dumps.created_at IS the user input time (interactive submission) */}
                   {timeAgo(e.created_at)}
                   {e.parse_result?.intent && (
                     <>

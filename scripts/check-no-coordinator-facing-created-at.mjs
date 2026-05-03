@@ -72,6 +72,23 @@ const UPDATED_AT_FILTER_SCAN_DIRS = [
   'src/app/(platform)/agent/pipeline',
 ]
 
+// T5-Rixey-GGG: additional event-row display scopes. These are
+// coordinator-facing per-event timeline surfaces where rendering
+// `.created_at` of a row leaks the import time onto a per-event
+// timestamp cell. Rule: in these scopes, JSX timestamp displays should
+// reference the table's REAL event-time column (occurred_at,
+// timestamp, signal_date, scheduled_at, ...) not created_at. The
+// opt-out marker `// created-at-ok: <reason>` covers the genuine
+// exceptions (e.g. drafts.created_at IS the AI generation time, which
+// is the meaningful per-event timestamp for that row class).
+const EVENT_ROW_DISPLAY_SCAN_DIRS = [
+  'src/app/(platform)/intel/clients',
+  'src/app/(platform)/agent/leads',
+  'src/app/(platform)/agent/pipeline',
+  'src/components/agent',
+  'src/components/intel',
+]
+
 // Tables where created_at IS the meaningful timestamp.
 // Keep this in sync with TELEMETRY_TABLES in src/lib/services/date-windows.ts.
 const TELEMETRY_TABLES = new Set([
@@ -155,6 +172,58 @@ const FRESHNESS_UPDATED_AT_USE = /\b(?:last[_\s]*activity|last[_\s]*seen|freshne
 // "Days in Stage" axis where stage was actually mutated).
 const BARE_UPDATED_AT_READ = /\.updated_at\b/
 
+// T5-Rixey-GGG: per-row created_at rendering on event-timeline
+// surfaces. The pattern matches a JSX-style render of `.created_at`
+// (e.g. `{e.created_at}` or `fmtDatetime(row.created_at)`) inside the
+// event-row display scopes. Pure write/insert/upsert lines and pure
+// query selects are not flagged — only render contexts where the
+// timestamp string is being shown to the coordinator.
+//
+// Heuristic: line contains `.created_at` AND is inside a JSX context
+// (we approximate by checking for `{` as the leading char of an
+// expression — TSX braces — plus contains either a renderer call
+// (fmtDate/fmtDatetime/format/toLocale...) OR a JSX-style expression
+// brace surrounding the read).
+const EVENT_ROW_CREATED_AT_USE = /(?:\{[^}]*\.created_at\b|fmt[A-Z]\w*\([^)]*\.created_at\b|toLocale\w+\([^)]*\)[^)]*\.created_at\b|\.created_at\b[^)]*toLocale)/
+
+// Tables whose .created_at IS the meaningful per-event timestamp on
+// per-row displays. Mirrors TELEMETRY_TABLES + a couple of action-time
+// rows (drafts = AI generation time IS the event time per the LL
+// doctrine; activity_log entries are timestamp-at-write by design).
+const ROW_CREATED_AT_OK_TABLES = new Set([
+  // Same set as TELEMETRY_TABLES — rebuilt as a Set below from the
+  // TELEMETRY_TABLES constant via merge so both stays in sync.
+  'drafts',
+  'activity_log',
+  'planning_notes',
+  'sage_conversations',
+  'messages',
+  'draft_feedback',
+  'ai_briefings',
+  'admin_notifications',
+  'pulse_snoozes',
+  'anomaly_alerts',
+  'intelligence_insights',
+  'intelligence_extractions',
+  'api_costs',
+  'cron_runs',
+  'metered_events',
+  'lead_score_history',
+  'sage_drafts',
+  'sage_queue',
+  'wedding_drafts',
+  'follow_up_drafts',
+  'audit_logs',
+  'team_invites',
+  'tour_briefs',
+  'consultant_metrics',
+  'inbox_filters',
+  'sequences',
+  'sequence_steps',
+  'voice_training_sessions',
+  'essentials_action_log',
+])
+
 // Tables where updated_at IS the meaningful "freshness" axis. Anything
 // else gets flagged. Keep this ALSO in sync with TELEMETRY_TABLES so
 // the two passes stay coherent.
@@ -215,16 +284,32 @@ function nearestFromTable(lines, lineIdx) {
 function isOptedOut(lines, lineIdx, marker = OPT_OUT_MARKER) {
   // Inline marker on the same line wins.
   if (marker.test(lines[lineIdx] ?? '')) return true
-  // Walk back through contiguous comment lines (// or empty) up to 6
-  // lines. The marker can sit at the top of a multi-line comment block
-  // explaining the opt-out.
-  for (let i = 1; i <= 6; i++) {
+  // Walk back up to 8 lines looking for the marker. The marker can
+  // appear in:
+  //   - a `// ...` single-line comment immediately above
+  //   - a `/* ... */` block comment (one or many lines)
+  //   - a JSX `{/* ... */}` block (which renders as a comment in TSX)
+  // Stop walking when we hit a non-comment, non-empty code line so a
+  // marker far away doesn't accidentally cover an unrelated read.
+  let inBlock = false
+  for (let i = 1; i <= 8; i++) {
     const line = lines[lineIdx - i]
     if (line === undefined) break
-    const trimmed = line.trim()
-    if (trimmed === '') break
-    if (!trimmed.startsWith('//')) break
     if (marker.test(line)) return true
+    const trimmed = line.trim()
+    if (trimmed === '') continue
+    // Inside a block comment we keep walking until we see the opener.
+    if (inBlock) {
+      if (/\/\*|\{\s*\/\*/.test(trimmed)) inBlock = false
+      continue
+    }
+    if (trimmed.startsWith('//')) continue
+    if (trimmed.endsWith('*/') || trimmed.endsWith('*/}')) {
+      inBlock = true
+      continue
+    }
+    // Hit a code line; stop walking.
+    break
   }
   return false
 }
@@ -233,19 +318,27 @@ const files = SCAN_DIRS.flatMap((d) => walk(d))
 const updatedAtFilterFiles = new Set(
   UPDATED_AT_FILTER_SCAN_DIRS.flatMap((d) => walk(d)),
 )
-// Make sure the narrower updated_at filter scope is also walked even if
-// it's not in the broader SCAN_DIRS — this keeps the leads/pipeline
-// pages covered for the freshness display heuristic too.
-const allFiles = new Set([...files, ...updatedAtFilterFiles])
+// T5-Rixey-GGG: event-row display scope. Coordinator-facing per-row
+// timestamp render. Heuristic targets only JSX render context, not
+// query .select() lists.
+const eventRowDisplayFiles = new Set(
+  EVENT_ROW_DISPLAY_SCAN_DIRS.flatMap((d) => walk(d)),
+)
+// Make sure all the narrower scopes are also walked even if they're
+// not in the broader SCAN_DIRS — this keeps the leads/pipeline pages
+// covered for the freshness display heuristic too.
+const allFiles = new Set([...files, ...updatedAtFilterFiles, ...eventRowDisplayFiles])
 
 const violations = []
 const updatedAtViolations = []
+const eventRowCreatedAtViolations = []
 
 for (const file of allFiles) {
   const text = readFileSync(file, 'utf8')
   const lines = text.split(/\r?\n/)
   const isInBroadScope = files.includes(file)
   const isInFilterScope = updatedAtFilterFiles.has(file)
+  const isInEventRowScope = eventRowDisplayFiles.has(file)
 
   // Track in-block-comment state across lines so JSX {/* ... */} or
   // /* ... */ multi-line comments don't trip the heuristic.
@@ -335,6 +428,45 @@ for (const file of allFiles) {
         text: line.trim().slice(0, 140),
       })
     }
+
+    // ----- Per-row created_at render check (T5-Rixey-GGG Bug 23/25) -----
+    // Coordinator-facing per-event timeline surface: rendering
+    // `.created_at` as the per-row timestamp leaks the import time
+    // onto the cell. Allowlist via TELEMETRY-style tables (where
+    // created_at IS the meaningful event time) OR via the inline
+    // marker `// created-at-ok: <reason>`.
+    //
+    // Heuristic is conservative: only fires when the line both reads
+    // `.created_at` AND has a render shape (formatter call, JSX brace
+    // expression). Pure type declarations / select() lists do not
+    // trip it.
+    if (
+      !isCommentOnly &&
+      isInEventRowScope &&
+      EVENT_ROW_CREATED_AT_USE.test(line) &&
+      // Skip lines that are clearly query .select / type interface
+      // declarations (they reference created_at as a column name, not
+      // a render).
+      !/select\s*\(/.test(line) &&
+      !/^\s*created_at\s*:/.test(line) &&
+      !/[A-Za-z]\s*['"]\s*$/.test(line.trim())
+    ) {
+      if (isOptedOut(lines, i, OPT_OUT_MARKER)) continue
+      const table = nearestFromTable(lines, i)
+      if (table && (TELEMETRY_TABLES.has(table) || ROW_CREATED_AT_OK_TABLES.has(table))) continue
+      // The allowlist also covers cases where the developer used the
+      // `??` fallback (`occurred_at ?? created_at`) — that's the
+      // correct migration shape, not a violation.
+      if (/occurred_at\s*\?\?\s*[a-zA-Z_]+\.created_at\b/.test(line)) continue
+      if (/timestamp\s*\?\?\s*[a-zA-Z_]+\.created_at\b/.test(line)) continue
+      if (/signal_date\s*\?\?\s*[a-zA-Z_]+\.created_at\b/.test(line)) continue
+      eventRowCreatedAtViolations.push({
+        file: file.replace(/\\/g, '/'),
+        line: i + 1,
+        table: table ?? '<unknown>',
+        text: line.trim().slice(0, 140),
+      })
+    }
   }
 }
 
@@ -402,9 +534,36 @@ if (updatedAtViolations.length > 0) {
   )
 }
 
-if (violations.length > 0 || updatedAtViolations.length > 0) {
+if (eventRowCreatedAtViolations.length > 0) {
+  console.log(
+    `\nFound ${eventRowCreatedAtViolations.length} per-row created_at render(s) on coordinator event-timeline surface(s) (T5-Rixey-GGG):`,
+  )
+  for (const v of eventRowCreatedAtViolations) {
+    console.log(`  ${v.file}:${v.line}  table=${v.table}`)
+    console.log(`    ${v.text}`)
+  }
+  console.log(
+    '\nFix: render the REAL per-event timestamp column instead of created_at:',
+  )
+  console.log('  interactions       → timestamp')
+  console.log('  engagement_events  → occurred_at  (or occurred_at ?? created_at)')
+  console.log('  attribution_events → occurred_at')
+  console.log('  tangential_signals → signal_date  (or signal_date ?? created_at)')
+  console.log('  tours              → scheduled_at')
+  console.log('  wedding_touchpoints → occurred_at')
+  console.log(
+    '\nIf the row class is one where created_at IS the meaningful event time',
+  )
+  console.log(
+    '(drafts: AI generation; activity_log: action time; planning_notes: extraction time),',
+  )
+  console.log('tag the line with `// created-at-ok: <reason>`.')
+}
+
+if (violations.length > 0 || updatedAtViolations.length > 0 || eventRowCreatedAtViolations.length > 0) {
   process.exit(1)
 }
 
 console.log('No coordinator-facing created_at filters found.')
 console.log('No coordinator-facing updated_at-as-freshness uses found.')
+console.log('No coordinator-facing per-row created_at renders found.')

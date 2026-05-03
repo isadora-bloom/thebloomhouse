@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useScope } from '@/lib/hooks/use-scope'
 import {
@@ -10,13 +11,14 @@ import {
   RefreshCw,
   BarChart3,
   TrendingUp,
+  TrendingDown,
+  Info,
   Lightbulb,
   Clock,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
-import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { WeeklyLearnedCard } from '@/components/intel/WeeklyLearnedCard'
 import { PostTourBrowsingCard } from '@/components/intel/PostTourBrowsingCard'
@@ -370,7 +372,14 @@ export default function IntelligenceDashboardPage() {
   const [error, setError] = useState<string | null>(null)
 
   // Real stat card state
-  const [demandScore, setDemandScore] = useState<{ score: number; outlook: 'positive' | 'neutral' | 'caution' } | null>(null)
+  // T5-Rixey-GGG Bug 20: extended to carry a 30-day sparkline + a
+  // 7-day trend delta. Each entry is one daily series point.
+  const [demandScore, setDemandScore] = useState<{
+    score: number
+    outlook: 'positive' | 'neutral' | 'caution'
+    sparkline: Array<{ date: string; score: number }>
+    weekDelta: number | null
+  } | null>(null)
   const [pendingRecsCount, setPendingRecsCount] = useState<number | null>(null)
 
   // ---- Fetch alerts ----
@@ -405,11 +414,15 @@ export default function IntelligenceDashboardPage() {
       const FRED_TO_NAME: Record<string, string> = {
         UMCSENT: 'consumer_sentiment',
       }
+      // T5-Rixey-GGG Bug 20: pull a wider rolling history so we can
+      // build a 30-day sparkline + compute a 7-day delta. Each row is
+      // (series_id, value, observation_date) — observation_date is the
+      // REAL date the FRED data point applies to (not insert time).
       const { data: indicatorRows } = await supabase
         .from('fred_indicators')
         .select('series_id, value, observation_date')
         .order('observation_date', { ascending: false })
-        .limit(50)
+        .limit(400)
 
       if (indicatorRows && indicatorRows.length > 0) {
         const latest: Record<string, number> = {}
@@ -421,7 +434,43 @@ export default function IntelligenceDashboardPage() {
             latest[name] = Number(row.value)
           }
         }
-        setDemandScore(calcDemandScore(latest))
+        const current = calcDemandScore(latest)
+
+        // Build a daily sparkline: walk dates in chronological order
+        // and recompute demand-score per day. FRED series can be
+        // monthly — we forward-fill within a window so each day's
+        // score reflects the most recent reading available for each
+        // series. observation_date is the REAL date the data point
+        // applies to (not insert time), so the sparkline is a true
+        // time-series.
+        const byDateBySeries = new Map<string, Map<string, number>>() // date → series → value
+        for (const row of indicatorRows) {
+          const seriesId = row.series_id as string
+          const name = FRED_TO_NAME[seriesId]
+          if (!name) continue
+          const date = String(row.observation_date).slice(0, 10)
+          const m = byDateBySeries.get(date) ?? new Map<string, number>()
+          if (row.value != null) m.set(name, Number(row.value))
+          byDateBySeries.set(date, m)
+        }
+        const sortedDates = [...byDateBySeries.keys()].sort()
+        const carried: Record<string, number> = {}
+        const dailySeries: Array<{ date: string; score: number }> = []
+        for (const date of sortedDates) {
+          const todayMap = byDateBySeries.get(date)!
+          for (const [k, v] of todayMap.entries()) carried[k] = v
+          if (Object.keys(carried).length === 0) continue
+          const ds = calcDemandScore(carried).score
+          dailySeries.push({ date, score: ds })
+        }
+        const sparkline = dailySeries.slice(-30)
+        let weekDelta: number | null = null
+        if (sparkline.length >= 8) {
+          const lastIdx = sparkline.length - 1
+          const priorIdx = Math.max(0, lastIdx - 7)
+          weekDelta = sparkline[lastIdx].score - sparkline[priorIdx].score
+        }
+        setDemandScore({ ...current, sparkline, weekDelta })
       }
 
       // Resolve scope → list of venue IDs (null = all venues / company)
@@ -564,10 +613,6 @@ export default function IntelligenceDashboardPage() {
         </button>
       </div>
 
-      {/* Stream HHH Bug 10: high-severity risk insights surface here
-          (and on /pulse) — not on every coordinator page. */}
-      <InlineInsightBanner surface="dashboard" />
-
       {/* ---- Error state ---- */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
@@ -592,7 +637,20 @@ export default function IntelligenceDashboardPage() {
           </>
         ) : (
           <>
-            <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+            {/* Active Alerts — clickable, routes to /intel/anomalies
+                (T5-Rixey-GGG Bug 19). Was an info-only tile; now opens
+                the full alerts list with severity pre-filtered when a
+                single severity dominates. */}
+            <Link
+              href={
+                criticalCount > 0
+                  ? '/intel/anomalies?severity=critical'
+                  : warningCount > 0
+                    ? '/intel/anomalies?severity=warning'
+                    : '/intel/anomalies'
+              }
+              className="block bg-surface border border-border rounded-xl p-6 shadow-sm hover:shadow-md hover:border-sage-300 transition-all"
+            >
               <div className="flex items-center gap-3 mb-3">
                 <div className="p-2 bg-red-50 rounded-lg">
                   <AlertTriangle className="w-4 h-4 text-red-500" />
@@ -613,19 +671,51 @@ export default function IntelligenceDashboardPage() {
                 {alerts.length === 0 && (
                   <span className="text-emerald-600">All clear</span>
                 )}
+                <span className="ml-auto text-sage-400">View all →</span>
               </div>
-            </div>
+            </Link>
 
+            {/* Latest Demand Score — now with tooltip explaining the
+                computation, a 30-day sparkline + a 7-day trend delta
+                (T5-Rixey-GGG Bug 20). The score is a national
+                economic-conditions composite (FRED indicators), not
+                venue-specific. Coordinators kept asking "what does
+                this number mean?" because there was no context. */}
             <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
               <div className="flex items-center gap-3 mb-3">
                 <div className="p-2 bg-teal-50 rounded-lg">
                   <TrendingUp className="w-4 h-4 text-teal-600" />
                 </div>
                 <span className="text-sm font-medium text-sage-600">Latest Demand Score</span>
+                <span
+                  tabIndex={0}
+                  className="ml-auto text-sage-400 hover:text-sage-700 cursor-help focus:outline-none focus:text-sage-700"
+                  title="Demand Score is a 0–100 composite of national economic indicators (consumer sentiment, savings rate, consumer confidence, housing starts) computed daily from FRED data. 50 is the historical baseline; ≥58 is positive, <42 is caution. National signal — not venue-specific."
+                  aria-label="What is Demand Score?"
+                >
+                  <Info className="w-3.5 h-3.5" />
+                </span>
               </div>
-              <p className="text-3xl font-bold text-sage-900">
-                {demandScore != null ? demandScore.score : <span className="text-sage-300">--</span>}
-              </p>
+              <div className="flex items-baseline gap-3">
+                <p className="text-3xl font-bold text-sage-900">
+                  {demandScore != null ? demandScore.score : <span className="text-sage-300">--</span>}
+                </p>
+                {demandScore?.weekDelta != null && demandScore.weekDelta !== 0 && (
+                  <span className={`inline-flex items-center gap-0.5 text-xs font-medium ${
+                    demandScore.weekDelta > 0 ? 'text-emerald-600' : 'text-red-500'
+                  }`}>
+                    {demandScore.weekDelta > 0 ? (
+                      <TrendingUp className="w-3 h-3" />
+                    ) : (
+                      <TrendingDown className="w-3 h-3" />
+                    )}
+                    {demandScore.weekDelta > 0 ? '+' : ''}{demandScore.weekDelta} this week
+                  </span>
+                )}
+                {demandScore?.weekDelta === 0 && (
+                  <span className="text-xs text-sage-500">flat this week</span>
+                )}
+              </div>
               <div className="mt-2 flex items-center gap-2">
                 {demandScore != null ? (
                   <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border capitalize ${
@@ -639,6 +729,30 @@ export default function IntelligenceDashboardPage() {
                   <span className="text-xs text-sage-500">Computed from economic data</span>
                 )}
               </div>
+              {/* 30-day sparkline (uses observation_date, the REAL date
+                  the data point applies to — not insert time). Self-
+                  hides when there aren't enough points yet (e.g. brand-
+                  new venue before FRED refresh has run). */}
+              {demandScore && demandScore.sparkline.length > 1 && (
+                <div className="mt-3">
+                  <div className="flex items-end gap-px h-8" aria-hidden>
+                    {demandScore.sparkline.map((p, i) => {
+                      const height = Math.max(4, (p.score / 100) * 100)
+                      return (
+                        <div
+                          key={p.date + i}
+                          className="flex-1 rounded-sm bg-teal-300/70"
+                          style={{ height: `${height}%` }}
+                          title={`${p.date}: ${p.score}`}
+                        />
+                      )
+                    })}
+                  </div>
+                  <p className="mt-1 text-[10px] text-sage-400">
+                    {demandScore.sparkline.length}-day series · daily from FRED
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">

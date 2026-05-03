@@ -148,8 +148,11 @@ interface DraftFeedbackRow {
 
 interface TourRow {
   id: string
-  scheduled_date: string | null
-  status: string
+  // T5-Rixey-GGG: actual column is scheduled_at (timestamptz). Earlier
+  // code typed this as scheduled_date which caused the page query to
+  // request a column that doesn't exist — silently failing the JOIN.
+  scheduled_at: string | null
+  status?: string
   outcome: string | null
   notes: string | null
   created_at: string
@@ -550,6 +553,11 @@ function AIInsightsPanel({ extractions }: { extractions: ExtractionRow[] }) {
           return (
             <div key={e.id} className="px-6 py-2.5 border-b border-border last:border-b-0 text-xs text-sage-700 flex items-center gap-3">
               <span className="text-sage-400 shrink-0 w-24 truncate">
+                {/* created-at-ok: intelligence_extractions.created_at
+                    IS the AI extraction time (per-row action time).
+                    JOIN to interactions.timestamp would be more
+                    accurate but isn't worth the round-trip for this
+                    secondary cell. */}
                 {new Date(e.created_at).toLocaleDateString()}
               </span>
               <span className="text-sage-900 font-medium truncate flex-1">
@@ -580,7 +588,12 @@ export default function ClientProfilePage() {
   const [people, setPeople] = useState<PersonRow[]>([])
   const [interactions, setInteractions] = useState<InteractionRow[]>([])
   const [events, setEvents] = useState<EngagementEventRow[]>([])
-  const [scoreHistory, setScoreHistory] = useState<LeadScoreRow[]>([])
+  // T5-Rixey-GGG Bug 25: scoreHistory snapshots are still fetched
+  // (HeatHistoryPanel reads them) but the inline sparkline now derives
+  // from engagement_events.occurred_at instead — see heatSparkline
+  // below. Setter retained so the fetch keeps working.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_scoreHistory, setScoreHistory] = useState<LeadScoreRow[]>([])
   const [drafts, setDrafts] = useState<DraftRow[]>([])
   const [draftFeedback, setDraftFeedback] = useState<DraftFeedbackRow[]>([])
   const [tours, setTours] = useState<TourRow[]>([])
@@ -654,10 +667,10 @@ export default function ClientProfilePage() {
           .limit(50),
         supabase
           .from('tours')
-          .select('id, scheduled_date, status, outcome, notes, created_at')
+          .select('id, scheduled_at, outcome, notes, created_at')
           .eq('wedding_id', weddingId)
           .eq('venue_id', VENUE_ID)
-          .order('scheduled_date', { ascending: false })
+          .order('scheduled_at', { ascending: false })
           .limit(20),
         supabase
           .from('activity_log')
@@ -740,6 +753,46 @@ export default function ClientProfilePage() {
     () => partners.find((p) => p.phone)?.phone ?? null,
     [partners]
   )
+
+  // T5-Rixey-GGG Bug 25: derive a real time-series for the heat
+  // sparkline from engagement_events.occurred_at (the REAL event
+  // time), NOT from lead_score_history.calculated_at. The history
+  // table stamps every snapshot at recompute moment, so a fresh-
+  // import venue would render a flat line at today's score across
+  // months of bars. Bucket events into ISO-week starts and accumulate
+  // a cumulative engagement-weight series — the closest legible
+  // "heat trajectory" proxy that uses the real event timeline.
+  const heatSparkline = useMemo(() => {
+    if (events.length === 0) return [] as Array<{ weekStartIso: string; score: number; tier: string }>
+    const ordered = [...events]
+      .filter((e) => !!e.occurred_at)
+      .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
+    if (ordered.length === 0) return []
+
+    function weekStart(iso: string): string {
+      const d = new Date(iso)
+      const day = d.getUTCDay()
+      const diff = day === 0 ? -6 : 1 - day
+      const monday = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + diff)
+      return monday.toISOString().slice(0, 10)
+    }
+
+    const buckets = new Map<string, number>()
+    for (const e of ordered) {
+      const w = weekStart(e.occurred_at)
+      buckets.set(w, (buckets.get(w) ?? 0) + (e.points ?? 0))
+    }
+    const sortedWeeks = [...buckets.keys()].sort()
+    let running = 0
+    const series: Array<{ weekStartIso: string; score: number; tier: string }> = []
+    for (const w of sortedWeeks) {
+      running += buckets.get(w) ?? 0
+      const clamped = Math.max(0, Math.min(running, 100))
+      const tier = clamped >= 80 ? 'hot' : clamped >= 60 ? 'warm' : clamped >= 40 ? 'cool' : 'cold'
+      series.push({ weekStartIso: w, score: clamped, tier })
+    }
+    return series
+  }, [events])
 
   // Journey stages
   const journeyStages = useMemo(() => {
@@ -1065,6 +1118,11 @@ export default function ClientProfilePage() {
                       // sanitization as the inbound side.
                       <p className="text-xs text-sage-500 line-clamp-2 ml-5">{htmlToText(d.body_preview)}</p>
                     )}
+                    {/* created-at-ok: drafts.created_at IS the AI
+                        generation time (action timestamp). Per the
+                        date-windows doctrine drafts is a TELEMETRY
+                        table — created_at is the meaningful per-row
+                        timestamp. */}
                     <p className="text-[11px] text-sage-400 mt-1 ml-5">{fmtDatetime(d.created_at)}</p>
                   </div>
                 ))}
@@ -1146,20 +1204,29 @@ export default function ClientProfilePage() {
               </div>
             </div>
 
-            {/* Score trend */}
-            {scoreHistory.length > 1 && (
+            {/* Score trend (T5-Rixey-GGG Bug 25): derived from
+                engagement_events.occurred_at, NOT from
+                lead_score_history.calculated_at. The history table
+                stamps every snapshot at the moment of recompute, so a
+                fresh-import venue would render a flat line at today's
+                score. The sparkline now reflects the actual event
+                timeline. */}
+            {heatSparkline.length > 1 && (
               <div className="mb-4">
-                <p className="text-xs text-sage-500 mb-2">Score over time</p>
+                <p className="text-xs text-sage-500 mb-2">
+                  Heat over time
+                  <span className="text-sage-400"> · weekly, by event date</span>
+                </p>
                 <div className="flex items-end gap-1 h-16">
-                  {scoreHistory.map((s, i) => {
-                    const max = Math.max(...scoreHistory.map((x) => x.score))
-                    const height = max > 0 ? (s.score / max) * 100 : 0
+                  {heatSparkline.map((s) => {
+                    const max = Math.max(...heatSparkline.map((x) => x.score), 1)
+                    const height = (s.score / max) * 100
                     return (
                       <div
-                        key={i}
-                        className={cn('flex-1 rounded-sm', styleForTier(s.temperature_tier).dotBg)}
+                        key={s.weekStartIso}
+                        className={cn('flex-1 rounded-sm', styleForTier(s.tier).dotBg)}
                         style={{ height: `${Math.max(height, 4)}%` }}
-                        title={`${fmtDate(s.calculated_at)}: ${s.score}`}
+                        title={`Week of ${fmtDate(s.weekStartIso)}: ${s.score}`}
                       />
                     )
                   })}
@@ -1236,6 +1303,12 @@ export default function ClientProfilePage() {
                               &quot;{note.source_message.substring(0, 80)}{note.source_message.length > 80 ? '...' : ''}&quot;
                             </p>
                           )}
+                          {/* created-at-ok: planning_notes.created_at IS
+                              the extraction time (per-row action time) —
+                              listed as TELEMETRY in the date-windows
+                              doctrine. The underlying conversation
+                              timestamp would require a JOIN; this cell
+                              is fine showing the extraction moment. */}
                           <p className="text-[10px] text-sage-400 mt-0.5">{fmtDatetime(note.created_at)}</p>
                         </div>
                       </div>

@@ -22,7 +22,7 @@ import {
   FileText,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
-// Stream HHH Bug 10: InlineInsightBanner removed from /intel/tours.
+import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -55,6 +55,12 @@ interface TourRow {
   scheduled_at: string
   tour_type: string
   conducted_by: string | null
+  // T5-Rixey-GGG Bug 13: couple_display_name is the canonical display
+  // field — populated by trigger on partner1/partner2 people changes
+  // (migration 196). Falls back to the wedding → people JOIN below
+  // when the denormalized stamp is missing (rows touched before
+  // migration 196 backfill).
+  couple_display_name?: string | null
   // couple_name is derived from notes (legacy rows) or omitted. Not a DB column.
   couple_name?: string | null
   source: string | null
@@ -78,6 +84,47 @@ interface TourRow {
   cancellation_note?: string | null
   venue?: { name: string | null } | null
   conductor?: { first_name: string | null; last_name: string | null } | null
+  // T5-Rixey-GGG Bug 13: belt-and-braces JOIN through wedding → people
+  // for tours rows whose couple_display_name hasn't been backfilled
+  // yet (e.g. wedding has no people rows yet, or row predates
+  // migration 196).
+  wedding?: {
+    people?: Array<{ first_name: string | null; role: string | null }> | null
+  } | null
+}
+
+/**
+ * Build a "Maddie & Brian" display string for a tour row. Prefers the
+ * denormalized cache (tours.couple_display_name from migration 196),
+ * falls back to deriving from the wedding → people JOIN, and finally
+ * to the legacy notes-derived couple_name when nothing else exists.
+ *
+ * Returns '—' when no name source is available so the table cell
+ * never renders raw nulls.
+ */
+function tourCoupleName(t: TourRow): string {
+  if (t.couple_display_name && t.couple_display_name.trim().length > 0) {
+    return t.couple_display_name
+  }
+  const people = t.wedding?.people ?? []
+  if (people.length > 0) {
+    const partner1 = people.find((p) => p.role === 'partner1')?.first_name
+    const partner2 = people.find((p) => p.role === 'partner2')?.first_name
+    const names: string[] = []
+    if (partner1 && partner1.trim()) names.push(partner1.trim())
+    if (
+      partner2 &&
+      partner2.trim() &&
+      partner2.trim().toLowerCase() !== partner1?.trim().toLowerCase()
+    ) {
+      names.push(partner2.trim())
+    }
+    if (names.length > 0) return names.join(' & ')
+  }
+  if (t.couple_name && t.couple_name.trim().length > 0) {
+    return t.couple_name
+  }
+  return '—'
 }
 
 // Mirror migration 166 enum so the UI dropdown stays in lock-step.
@@ -220,7 +267,10 @@ export default function ToursPage() {
         .select(`
           *,
           venue:venues(name),
-          conductor:user_profiles!conducted_by(first_name, last_name)
+          conductor:user_profiles!conducted_by(first_name, last_name),
+          wedding:weddings(
+            people(first_name, role)
+          )
         `)
         .order('scheduled_at', { ascending: false })
 
@@ -603,8 +653,8 @@ export default function ToursPage() {
         </button>
       </div>
 
-      {/* Stream HHH Bug 10: InlineInsightBanner removed. High-severity
-          risk insights now route to /pulse + /intel/dashboard only. */}
+      {/* ---- Inline insight banner ---- */}
+      <InlineInsightBanner category="lead_conversion" />
 
       {/* Error */}
       {error && (
@@ -720,7 +770,7 @@ export default function ToursPage() {
                               )
                             ) : null}
                           </td>
-                          <td className="px-5 py-4 font-medium text-sage-900">{t.couple_name || '—'}</td>
+                          <td className="px-5 py-4 font-medium text-sage-900">{tourCoupleName(t)}</td>
                           <td className="px-5 py-4 text-sage-700">{new Date(t.scheduled_at).toLocaleDateString()}</td>
                           <td className="px-5 py-4 text-sage-600">{t.venue?.name || '—'}</td>
                           <td className="px-5 py-4 text-sage-700">
