@@ -33,6 +33,7 @@ import { createHash } from 'node:crypto'
 import { loadFredSeries } from './external-context/fred'
 import { loadCulturalMomentsSeries } from './external-context/cultural-moments'
 import { loadCalendarSeries } from './external-context/calendar'
+import { loadGovernmentSeries } from './external-context/government'
 import { bonferroniCriticalR } from './external-context/stats'
 
 /**
@@ -356,15 +357,23 @@ async function buildSeries(
   // resolve venue geo + run all 3 loaders concurrently.
   try {
     const venueGeoScope = await getVenueGeoScope(supabase, venueId)
-    const [fredResult, calendarResult, cultural] = await Promise.all([
+    const [fredResult, calendarResult, cultural, governmentResult] = await Promise.all([
       loadFredSeries(supabase, start, now),
       loadCalendarSeries(supabase, start, now, venueGeoScope),
       // Migration 167: cultural moments are now per-venue confirmed.
       // Pass venueId so the engine reads moments THIS venue elevated,
       // not every confirmed moment globally.
       loadCulturalMomentsSeries(supabase, start, now, venueId),
+      // Z6 (T5-Rixey-ZZ): government_events binary signal. The loader
+      // checks venue geo + amplifies for DC-region venues (state IN
+      // VA/DC/MD or within 100mi of DC). Non-DC venues still see the
+      // channel at 0.5x weight — federal events touch national
+      // consumer sentiment regardless. Returns [] if no rows overlap
+      // the window so non-shutdown years don't add a noisy zero
+      // channel to the correlation matrix.
+      loadGovernmentSeries(supabase, start, now, venueId),
     ])
-    const externalSeries = [...fredResult, ...calendarResult]
+    const externalSeries = [...fredResult, ...calendarResult, ...governmentResult]
     // Cultural moments returns a single channel even when no rows match.
     if (cultural.points.length > 0) externalSeries.push(cultural)
 
@@ -466,6 +475,7 @@ function humanChannel(ch: string): string {
     return `${cat} (calendar)`
   }
   if (ch === 'cultural_moments') return 'cultural moments'
+  if (ch === 'government_signals') return 'government shutdown / political events'
   return ch
     .replace(/_/g, ' ')
     .replace(/\bthe knot\b/i, 'The Knot')

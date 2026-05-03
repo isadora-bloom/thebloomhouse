@@ -23,6 +23,7 @@ import { computeAllVenueHealth } from '@/lib/services/venue-health-compute'
 import { persistDropoffInsights } from '@/lib/services/quality-signals'
 import { refreshAllCensusData } from '@/lib/services/census-ingest'
 import { computeCorrelationsAllVenues } from '@/lib/services/correlation-engine'
+import { analyzeWeatherCancellationsAllVenues } from '@/lib/services/insights/weather-cancellation'
 import { mineTranscriptVoiceForAllVenues } from '@/lib/services/transcript-voice-learning'
 import { findBacktraceCandidates } from '@/lib/services/source-backtrace'
 import { reclusterVenue } from '@/lib/services/candidate-clusterer'
@@ -36,7 +37,10 @@ import {
   clearStaleAutonomousPauses,
 } from '@/lib/services/cost-ceiling'
 import { runEssentialsSuggester } from '@/lib/services/essentials-suggester'
-import { populateUSCalendarEvents } from '@/lib/services/external-context/calendar-writer'
+import {
+  populateUSCalendarEvents,
+  populateVirginiaCalendarEvents,
+} from '@/lib/services/external-context/calendar-writer'
 import { refreshVoiceDnaForAllVenues } from '@/lib/services/voice-dna-extract'
 import { logEvent } from '@/lib/observability/logger'
 
@@ -239,7 +243,14 @@ async function runJob(job: JobName): Promise<unknown> {
       // Cost-ceiling gate inside computeCorrelationsAllVenues already
       // filters paused venues — no extra activity gate needed because
       // the engine is sub-cent per venue per run.
-      return computeCorrelationsAllVenues(createServiceClient())
+      //
+      // T5-Rixey-ZZ / Z7 (2026-05-02): also runs the weather × tour
+      // cancellation analyzer. Same daily cadence; gates internally on
+      // missing weather_data (returns dataGated=true). Pure SQL +
+      // bucket-rate compute — no AI call. Writes correlation_narration
+      // insights with signal_class='weather_x_venue' when a bad-weather
+      // bucket has cancellation_rate >= 1.5x baseline.
+      return runCorrelationAndWeatherCancellation()
 
     case 'zoom_poll':
       // Daily Zoom recording sync per active connection. We poll once a
@@ -565,29 +576,67 @@ async function runExternalCalendarRefresh(): Promise<{
   const end = new Date(start)
   end.setUTCDate(start.getUTCDate() + 365)
 
-  const result = await populateUSCalendarEvents(supabase, {
+  const usResult = await populateUSCalendarEvents(supabase, {
     startDate: start,
     endDate: end,
   })
 
+  // T5-Rixey-ZZ / Z8 — Virginia-region calendar (university graduations,
+  // regional festivals, Greater Northern Virginia bridal shows). The
+  // calendar reader's hierarchical geo_scope expansion picks these up
+  // automatically for any VA venue. Idempotent UPSERT mirrors the US
+  // writer; failures here don't block the US result.
+  let vaResult: Awaited<ReturnType<typeof populateVirginiaCalendarEvents>> | null = null
+  try {
+    vaResult = await populateVirginiaCalendarEvents(supabase, {
+      startDate: start,
+      endDate: end,
+    })
+  } catch (err) {
+    logEvent({
+      level: 'error',
+      msg: 'va-calendar-refresh.failed',
+      event_type: 'external_calendar_refresh',
+      outcome: 'fail',
+      data: { error: err instanceof Error ? err.message : String(err) },
+    })
+  }
+
+  // Combine results — caller cares about the rolled-up counts.
+  const merged = {
+    rows_total: usResult.rows_total + (vaResult?.rows_total ?? 0),
+    rows_inserted: usResult.rows_inserted + (vaResult?.rows_inserted ?? 0),
+    rows_updated: usResult.rows_updated + (vaResult?.rows_updated ?? 0),
+    rows_failed: usResult.rows_failed + (vaResult?.rows_failed ?? 0),
+    by_category: { ...usResult.by_category } as Record<string, number>,
+    warnings: [...usResult.warnings, ...((vaResult?.warnings) ?? [])],
+  }
+  if (vaResult) {
+    for (const [k, v] of Object.entries(vaResult.by_category)) {
+      merged.by_category[k] = (merged.by_category[k] ?? 0) + (v as number)
+    }
+  }
+
   logEvent({
-    level: result.rows_failed > 0 ? 'error' : 'info',
+    level: merged.rows_failed > 0 ? 'error' : 'info',
     msg: 'external-calendar-refresh.complete',
     event_type: 'external_calendar_refresh',
-    outcome: result.rows_failed > 0 ? 'fail' : 'ok',
+    outcome: merged.rows_failed > 0 ? 'fail' : 'ok',
     data: {
-      rows_total: result.rows_total,
-      rows_inserted: result.rows_inserted,
-      rows_updated: result.rows_updated,
-      rows_failed: result.rows_failed,
-      by_category: result.by_category,
-      warnings: result.warnings,
+      rows_total: merged.rows_total,
+      rows_inserted: merged.rows_inserted,
+      rows_updated: merged.rows_updated,
+      rows_failed: merged.rows_failed,
+      by_category: merged.by_category,
+      warnings: merged.warnings,
+      us_rows: usResult.rows_total,
+      va_rows: vaResult?.rows_total ?? 0,
       window_start: start.toISOString().slice(0, 10),
       window_end: end.toISOString().slice(0, 10),
     },
   })
 
-  return result
+  return merged
 }
 
 /**
@@ -1497,6 +1546,48 @@ async function checkPostEventFeedback(): Promise<{ notified: number }> {
   }
 
   return { notified }
+}
+
+/**
+ * T5-Rixey-ZZ / Z7 (2026-05-02): correlation engine + weather × tour
+ * cancellation analyzer in one cron tick. Both are pure-stats classical
+ * compute — no AI call — so running them back-to-back keeps the
+ * cron-coverage map simple. Each handler swallows its own errors so
+ * one bad venue doesn't take down the other side.
+ *
+ * Returns rolled-up counts so the cron telemetry shows what fired.
+ */
+async function runCorrelationAndWeatherCancellation(): Promise<{
+  correlations: Record<string, number>
+  weather_cancellations: {
+    venues_total: number
+    venues_with_signal: number
+    venues_data_gated: number
+    by_reason: Record<string, number>
+  }
+}> {
+  const supabase = createServiceClient()
+  const correlations = await computeCorrelationsAllVenues(supabase)
+
+  const wxResults = await analyzeWeatherCancellationsAllVenues(supabase)
+  const summary = {
+    venues_total: 0,
+    venues_with_signal: 0,
+    venues_data_gated: 0,
+    by_reason: {} as Record<string, number>,
+  }
+  for (const r of Object.values(wxResults)) {
+    summary.venues_total++
+    if (r.dataGated) {
+      summary.venues_data_gated++
+      const reason = r.gatedReason ?? 'unknown'
+      summary.by_reason[reason] = (summary.by_reason[reason] ?? 0) + 1
+    } else if (r.ok && r.insightId) {
+      summary.venues_with_signal++
+    }
+  }
+
+  return { correlations, weather_cancellations: summary }
 }
 
 // ---------------------------------------------------------------------------
