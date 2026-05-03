@@ -790,7 +790,7 @@ export default function EmailLearningPage() {
                 placeholder={
                   bulkMode
                     ? 'Paste multiple emails separated by --- on a new line.\n\nHi Sarah! Thanks so much for reaching out...\n\n---\n\nHey there! Congrats on the engagement...\n\n---\n\nGood morning! I loved hearing about...'
-                    : `Paste a sample email you've written to an inquiry or client...\n\nHi Sarah! Thanks so much for reaching out about Crestwood Farm! I'm thrilled you're considering us for your big day...`
+                    : `Paste a sample email you've written to an inquiry or client...\n\nHi Sarah! Thanks so much for reaching out about your wedding! I'm thrilled you're considering us for your big day...`
                 }
                 rows={8}
                 className="w-full px-4 py-3 border border-sage-200 rounded-lg text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 resize-none bg-warm-white leading-relaxed"

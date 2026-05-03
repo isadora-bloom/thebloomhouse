@@ -20,6 +20,28 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { Loader2, Trash2, Brain, Clock, FileText, AlertTriangle, CheckCircle2, XCircle, ListFilter } from 'lucide-react'
+import { useAiName } from '@/lib/hooks/use-ai-name'
+
+// Coordinator-friendly labels for raw DB table names. Avoids leaking
+// schema identifiers like "admin_notifications" / "voice_preferences"
+// into the brain-dump entry log badges.
+const TABLE_LABELS: Record<string, string> = {
+  admin_notifications: 'Notifications',
+  marketing_spend: 'Marketing spend',
+  pricing_history: 'Pricing log',
+  voice_preferences: 'Voice preferences',
+  forbidden_topics: 'Forbidden topics',
+  weddings: 'Lead profile',
+  interactions: 'Email log',
+}
+
+function tableLabel(table: string): string {
+  if (TABLE_LABELS[table]) return TABLE_LABELS[table]
+  // Fallback: title-case + replace underscores with spaces.
+  return table
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
 
 interface Grant {
   id: string
@@ -85,6 +107,7 @@ function statusBadge(status: string): { bg: string; text: string; label: string;
 }
 
 export default function BrainDumpLogPage() {
+  const aiName = useAiName()
   const [grants, setGrants] = useState<Grant[]>([])
   const [entries, setEntries] = useState<BrainDumpEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -268,7 +291,7 @@ export default function BrainDumpLogPage() {
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{entriesError}</div>
         ) : entries.length === 0 ? (
           <div className="rounded-lg border border-sage-200 bg-warm-white p-6 text-center text-sm text-sage-500">
-            No brain-dump entries in the last 30 days. As you tell Sage things, they&apos;ll appear here.
+            No brain-dump entries in the last 30 days. As you tell {aiName} things, they&apos;ll appear here.
           </div>
         ) : (
           <ul className="space-y-2">
@@ -291,8 +314,11 @@ export default function BrainDumpLogPage() {
                           </span>
                         )}
                         {e.routed_table && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-50 text-blue-700">
-                            → {e.routed_table}
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-700"
+                            title={`routed to ${e.routed_table}`}
+                          >
+                            → {tableLabel(e.routed_table)}
                           </span>
                         )}
                         {e.input_type !== 'text' && (

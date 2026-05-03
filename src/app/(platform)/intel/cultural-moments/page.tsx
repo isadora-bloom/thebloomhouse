@@ -199,7 +199,7 @@ export default function CulturalMomentsPage() {
   // a future migration can split it per-venue if real conflicts emerge.
   async function handleConfirm(id: string, weight: number) {
     if (weight < -100 || weight > 100) {
-      setError('Influence weight out of range (-100 to 100)')
+      setError('Impact score must be between -100 and +100.')
       return
     }
     try {
@@ -294,12 +294,12 @@ export default function CulturalMomentsPage() {
           </button>
         </div>
         <p className="text-sm text-sage-600 max-w-2xl">
-          Cultural moments are time-bounded events that materially shift
-          wedding-related discretionary behaviour — celebrity weddings,
-          aesthetic shifts (cottagecore, dark academia), generational
-          milestones, breaking industry news. AI proposes; coordinator
-          confirms with an influence weight before they enter the
-          correlation engine&apos;s External Context.
+          Trends and cultural moments that affect wedding inquiries.
+          Confirm the ones you see showing up in your bookings (a
+          celebrity wedding, a viral aesthetic, a major news cycle), and
+          the platform learns to weight your decisions when forecasting
+          future demand. Dismiss anything that doesn&apos;t move your
+          calendar.
         </p>
       </header>
 
@@ -360,7 +360,7 @@ export default function CulturalMomentsPage() {
               </label>
             </div>
             <div>
-              <label className="text-xs text-sage-600">Geo scope</label>
+              <label className="text-xs text-sage-600">Region</label>
               <input
                 type="text"
                 placeholder="us / us_va / us_va_culpeper"
@@ -399,7 +399,7 @@ export default function CulturalMomentsPage() {
         emptyMessage="No moments awaiting your decision."
       />
       <Section
-        title="Confirmed by your venue (in correlation engine)"
+        title="Confirmed by your venue (factored into forecasts)"
         icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}
         rows={venueConfirmed}
         onConfirm={handleConfirm}
@@ -537,7 +537,7 @@ function MomentRow({ row, showActions, showWeight, onConfirm, onDismiss }: Momen
             value={weight}
             onChange={(e) => setWeight(e.target.value)}
             className="w-16 rounded border border-sage-200 px-1.5 py-1 text-xs font-mono text-right"
-            title="Influence weight (-100 to 100)"
+            title="Impact score: -100 (strong negative effect on inquiries) to +100 (strong positive effect)"
           />
           <button
             onClick={() => onConfirm(row.id, Number(weight))}
