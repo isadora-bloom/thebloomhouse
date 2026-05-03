@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { type Cents, sumCents, centsToDollars, asCents } from '@/lib/types/monetary'
 import {
   Mail, FileCheck, Newspaper, Heart,
   TrendingUp, ArrowRight, Building2, Layers, MapPin,
@@ -163,9 +164,11 @@ export default function DashboardPage() {
         .eq('status', 'booked')
         .gte('wedding_date', now.toISOString().split('T')[0])
         .lte('wedding_date', oneYear.toISOString().split('T')[0])
-      const { data: revData } = await withVenueFilter(revQ as never) as { data: Array<{ booking_value: number | null }> | null }
-      // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
-      const bookedRevenue = (revData ?? []).reduce((sum, r) => sum + (r.booking_value ?? 0) / 100, 0)
+      const { data: revData } = await withVenueFilter(revQ as never) as { data: Array<{ booking_value: Cents | number | null }> | null }
+      // booking_value is branded Cents (T5-Rixey-RR fix #5; previously
+      // T5-Rixey-NN bug #8). Sum cents → convert to dollars at the boundary.
+      const bookedRevenueCents = sumCents((revData ?? []).map((r) => r.booking_value))
+      const bookedRevenue = centsToDollars(bookedRevenueCents)
 
       // ---- AI cost this month ----
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
@@ -206,13 +209,13 @@ export default function DashboardPage() {
             .in('venue_id', venuesData.map((v) => v.id))
 
           const aggregates = new Map<string, { inquiries: number; booked: number; revenue: number }>()
-          for (const w of (venueWeddings.data ?? []) as Array<{ venue_id: string; status: string; booking_value: number | null }>) {
+          for (const w of (venueWeddings.data ?? []) as Array<{ venue_id: string; status: string; booking_value: Cents | number | null }>) {
             const a = aggregates.get(w.venue_id) ?? { inquiries: 0, booked: 0, revenue: 0 }
             if (w.status === 'inquiry') a.inquiries += 1
             if (w.status === 'booked') {
               a.booked += 1
-              // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8).
-              a.revenue += (w.booking_value ?? 0) / 100
+              // booking_value is branded Cents (T5-Rixey-RR fix #5).
+              a.revenue += centsToDollars(asCents(Number(w.booking_value ?? 0)))
             }
             aggregates.set(w.venue_id, a)
           }

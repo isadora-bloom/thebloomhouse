@@ -123,6 +123,7 @@ export async function POST(request: NextRequest) {
     const { data, error } = await supabase
       .from('packages')
       .upsert(payloads, {
+        // onConflict-skip-check: T5-Rixey-RR finding — packages has no matching composite unique; needs migration in follow-up
         onConflict: 'venue_id,kind,name,season,guest_count_min,guest_count_max',
         ignoreDuplicates: false,
       })

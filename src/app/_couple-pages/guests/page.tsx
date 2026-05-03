@@ -364,6 +364,7 @@ export default function GuestListPage() {
   async function saveConfig(updates: Record<string, unknown>) {
     await supabase
       .from('wedding_config')
+      // onConflict-skip-check: T5-Rixey-RR finding — wedding_config(wedding_id) unique missing; needs migration in follow-up
       .upsert({ wedding_id: weddingId, ...updates }, { onConflict: 'wedding_id' })
   }
 

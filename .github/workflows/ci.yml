@@ -125,3 +125,6 @@ jobs:
 
       - name: Date-doctrine guard — no coordinator-facing created_at (T5-Rixey-LL)
         run: node scripts/check-no-coordinator-facing-created-at.mjs
+
+      - name: Schema guard — every .upsert onConflict has a matching unique constraint (T5-Rixey-RR)
+        run: node scripts/check-on-conflict-constraints.mjs

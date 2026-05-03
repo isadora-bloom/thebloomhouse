@@ -37,6 +37,7 @@ import type {
 } from './index'
 import { commitNormalisedRows } from './index'
 import { parseCsvRows } from '@/lib/services/brain-dump-csv-shape'
+import { type Cents, asDollars, dollarsToCents } from '@/lib/types/monetary'
 
 const SUPPORTED_FIELDS = new Set([
   'source_id',
@@ -90,11 +91,14 @@ function coerceNumber(raw: string | null | undefined): number | null {
  * (T5-Rixey-NN bug #8), weddings.booking_value is integer cents.
  * Coordinator-supplied CSV values come in as raw dollars
  * ("$4,500" / "4500.00" / "4500"), so multiply by 100.
+ *
+ * T5-Rixey-RR fix #5: typed return surfaces the unit at the writer
+ * call site so a future refactor can't drop the *100.
  */
-function coerceMoneyToCents(raw: string | null | undefined): number | null {
+function coerceMoneyToCents(raw: string | null | undefined): Cents | null {
   const dollars = coerceNumber(raw)
-  if (dollars == null) return null
-  return Math.round(dollars * 100)
+  if (dollars == null || dollars < 0) return null
+  return dollarsToCents(asDollars(dollars))
 }
 
 function coerceDate(raw: string | null | undefined): string | null {

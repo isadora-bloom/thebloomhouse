@@ -68,6 +68,7 @@ import type {
 } from './index'
 import { commitNormalisedRows } from './index'
 import { parseCsvRows } from '@/lib/services/brain-dump-csv-shape'
+import { type Cents, asDollars, dollarsToCents } from '@/lib/types/monetary'
 
 // ---------------------------------------------------------------------------
 // Provider hint shape — a config the adapter consumes to know which
@@ -250,14 +251,15 @@ export function findHint(provider: string | null | undefined): FormHint | null {
 // Coercion helpers (deliberately tolerant — form data is messy).
 // ---------------------------------------------------------------------------
 
-/** "$17,119" / "17,119" / "17,119.00" → 1711900 (cents). */
-function parseMoneyToCents(raw: string | null | undefined): number | null {
+/** "$17,119" / "17,119" / "17,119.00" → 1711900 (cents).
+ *  T5-Rixey-RR fix #5: typed return surfaces the unit at every call site. */
+function parseMoneyToCents(raw: string | null | undefined): Cents | null {
   if (raw == null) return null
   const cleaned = String(raw).replace(/[$,\s]/g, '').trim()
   if (!cleaned) return null
   const n = Number(cleaned)
-  if (!Number.isFinite(n)) return null
-  return Math.round(n * 100)
+  if (!Number.isFinite(n) || n < 0) return null
+  return dollarsToCents(asDollars(n))
 }
 
 /** "1 month ago 2026-03-23" / "2026-03-23" / "March 23, 2026" → ISO timestamp. */

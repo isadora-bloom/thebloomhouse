@@ -33,6 +33,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { htmlToText } from '@/lib/utils/html-text'
+import type { Cents } from '@/lib/types/monetary'
 
 /** Stable identifier for the per-row crm_source column. Mirrors the
  *  weddings.crm_source CHECK constraint extended by migration 178 to
@@ -118,7 +120,7 @@ export interface NormalisedLeadRow {
   partner2_phone?: string | null          // captures partner2 contact too
   wedding_date?: string | null            // ISO yyyy-mm-dd
   guest_count_estimate?: number | null
-  booking_value?: number | null           // in cents (Bloom convention)
+  booking_value?: Cents | number | null   // in cents (Bloom convention) — branded Cents preferred (T5-Rixey-RR fix #5)
   status?: 'inquiry' | 'tour_scheduled' | 'tour_completed' | 'proposal_sent'
          | 'booked' | 'completed' | 'lost' | 'cancelled' | null
   source?: string | null                  // wedding source channel
@@ -341,18 +343,24 @@ export async function commitNormalisedRows(args: {
 
       // interactions
       if (row.interactions?.length) {
-        const interactionPayloads = row.interactions.map((i) => ({
-          venue_id: venueId,
-          wedding_id: weddingId,
-          type: i.type,
-          direction: i.direction,
-          subject: i.subject ?? null,
-          full_body: i.body ?? null,
-          body_preview: (i.body ?? '').slice(0, 200) || null,
-          timestamp: i.occurred_at,
-          confidence_flag: confidenceFlag,
-          crm_source: crmSource,
-        }))
+        // T5-Rixey-RR fix #1: CRM exports often round-trip user-pasted
+        // rich text — strip HTML at the writer so structured readers
+        // (lead_source derivation regex, AI grounding) never see tags.
+        const interactionPayloads = row.interactions.map((i) => {
+          const cleanBody = i.body ? htmlToText(i.body) : null
+          return {
+            venue_id: venueId,
+            wedding_id: weddingId,
+            type: i.type,
+            direction: i.direction,
+            subject: i.subject ?? null,
+            full_body: cleanBody,
+            body_preview: cleanBody ? cleanBody.slice(0, 200) || null : null,
+            timestamp: i.occurred_at,
+            confidence_flag: confidenceFlag,
+            crm_source: crmSource,
+          }
+        })
         const { error: intErr } = await supabase.from('interactions').insert(interactionPayloads)
         if (intErr) {
           result.errors.push(`interactions insert (wedding ${weddingId}): ${intErr.message}`)

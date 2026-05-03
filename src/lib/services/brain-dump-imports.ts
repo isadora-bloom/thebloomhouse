@@ -28,6 +28,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ShapeDetection } from '@/lib/services/brain-dump-csv-shape'
 import { rowToRecord } from '@/lib/services/brain-dump-csv-shape'
 import { normalizeSource } from '@/lib/services/normalize-source'
+import { htmlToText } from '@/lib/utils/html-text'
 
 export interface ImportSummary {
   inserted: number
@@ -220,14 +221,19 @@ export async function importLeads(args: {
       // "today's note"). Without a date, the note is still on
       // wedding.notes; losing the interaction row is acceptable.
       if (r.notes && inquiryDate?.iso) {
+        // T5-Rixey-RR fix #1: CRM "notes" cells are user-controlled
+        // free-text often pasted from rich-text editors. Strip HTML
+        // before persisting so structured downstream readers (lead-
+        // source derivation, AI grounding) never see raw tags.
+        const cleanNotes = htmlToText(r.notes)
         await supabase.from('interactions').insert({
           venue_id: venueId,
           wedding_id: wedding.id,
           type: 'note',
           direction: 'inbound',
           subject: 'Historical note from CRM import',
-          full_body: r.notes,
-          body_preview: r.notes.slice(0, 200),
+          full_body: cleanNotes,
+          body_preview: cleanNotes.slice(0, 200),
           timestamp: `${inquiryDate.iso}T00:00:00Z`,
           from_email: email1,
           from_name: r.client_name ?? null,

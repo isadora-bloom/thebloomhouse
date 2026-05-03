@@ -14,6 +14,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { htmlToText } from '@/lib/utils/html-text'
 
 // ---------------------------------------------------------------------------
 // Graceful dependency check
@@ -483,21 +484,34 @@ export function parseEmailBody(payload: Record<string, unknown>): string {
       }
     }
 
-    // Fallback: try text/html if no plain text found
+    // Fallback: try text/html if no plain text found.
+    // T5-Rixey-RR fix #1: convert to plain text BEFORE returning so
+    // raw HTML never lands in `interactions.full_body`. Without this,
+    // form-relay parsers' `fieldAfter()` regexes can extract chunks
+    // like `</strong> The Knot` and the lead-source derivation chain
+    // can stamp `</strong>` into `weddings.lead_source` (the bug NN
+    // band-aided at the derivation layer; this fix removes it at the
+    // parser source).
     for (const part of parts) {
       const partMime = part.mimeType as string | undefined
       const partBody = part.body as { data?: string; size?: number } | undefined
 
       if (partMime === 'text/html' && partBody?.data) {
-        // Return raw HTML — caller can strip tags if needed
-        return Buffer.from(partBody.data, 'base64url').toString('utf-8')
+        const raw = Buffer.from(partBody.data, 'base64url').toString('utf-8')
+        return htmlToText(raw)
       }
     }
   }
 
-  // Last resort: body data on the top-level payload
+  // Last resort: body data on the top-level payload.
+  // Same defense as above — htmlToText() is a no-op for plain text
+  // (cheap looksLikeHtml prefilter), so safe to apply unconditionally.
   if (body?.data) {
-    return Buffer.from(body.data, 'base64url').toString('utf-8')
+    const raw = Buffer.from(body.data, 'base64url').toString('utf-8')
+    if (mimeType?.startsWith('text/html')) return htmlToText(raw)
+    // Top-level might be text/plain; only strip when it actually looks
+    // like HTML (defends against mislabeled-mime senders).
+    return htmlToText(raw)
   }
 
   return ''

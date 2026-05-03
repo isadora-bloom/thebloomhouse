@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { type Cents, formatCents } from '@/lib/types/monetary'
 import { cn } from '@/lib/utils'
 import {
   Printer,
@@ -110,7 +111,7 @@ interface Wedding {
   wedding_date: string | null
   guest_count: number | null
   status: string
-  booking_value: number | null
+  booking_value: Cents | null
   ceremony_time: string | null
   reception_time: string | null
   color_palette: string | null
@@ -357,8 +358,8 @@ function DashboardSummary({
       <div className="flex items-center gap-4 text-sm text-sage-600">
         <span>Status: <strong className="text-sage-900 capitalize">{wedding.status}</strong></span>
         {wedding.booking_value && (
-          /* booking_value is cents per Bloom convention (T5-Rixey-NN bug #8) */
-          <span>Booking Value: <strong className="text-sage-900">{fmt$(wedding.booking_value / 100)}</strong></span>
+          /* booking_value is branded Cents (T5-Rixey-RR fix #5; previously T5-Rixey-NN bug #8) */
+          <span>Booking Value: <strong className="text-sage-900">{formatCents(wedding.booking_value)}</strong></span>
         )}
         {wedding.theme && (
           <span>Theme: <strong className="text-sage-900">{wedding.theme}</strong></span>

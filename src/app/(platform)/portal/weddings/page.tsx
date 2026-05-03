@@ -5,6 +5,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { normalizeSource } from '@/lib/services/normalize-source'
+import { type Cents, asDollars, dollarsToCents, formatCents } from '@/lib/types/monetary'
 import {
   Heart,
   Calendar,
@@ -75,7 +76,7 @@ interface Wedding {
   wedding_date: string | null
   guest_count: number | null
   status: string
-  booking_value: number | null
+  booking_value: Cents | null
   created_at: string
   event_code: string | null
   couple_invited_at: string | null
@@ -304,8 +305,8 @@ function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; 
           {wedding.booking_value != null && (
             <span className="flex items-center gap-1.5 text-sage-600">
               <DollarSign className="w-3.5 h-3.5 text-sage-400" />
-              {/* booking_value is cents (Bloom convention; T5-Rixey-NN bug #8) */}
-              {fmt$(wedding.booking_value / 100)}
+              {/* booking_value is branded Cents (T5-Rixey-RR fix #5; previously T5-Rixey-NN bug #8) */}
+              {formatCents(wedding.booking_value)}
             </span>
           )}
           {totalChecklist > 0 && (
@@ -544,9 +545,11 @@ function NewBookingModal({
           wedding_date: form.weddingDate || null,
           guest_count_estimate: form.guestCount ? parseInt(form.guestCount) : null,
           source: form.source ? normalizeSource(form.source) : null,
-          // T5-Rixey-NN bug #8: weddings.booking_value is in cents per the
-          // Bloom convention. The form input is dollars; convert.
-          booking_value: form.estimatedValue ? Math.round(parseFloat(form.estimatedValue) * 100) : null,
+          // T5-Rixey-RR fix #5: branded types make the unit conversion explicit
+          // (previously: T5-Rixey-NN bug #8 fixed the silent dollars-as-cents bug).
+          booking_value: form.estimatedValue
+            ? dollarsToCents(asDollars(parseFloat(form.estimatedValue)))
+            : null,
           notes: form.notes || null,
           event_code: code,
           couple_invited_at: form.sendInvite ? new Date().toISOString() : null,
@@ -566,9 +569,10 @@ function NewBookingModal({
               wedding_date: form.weddingDate || null,
               guest_count_estimate: form.guestCount ? parseInt(form.guestCount) : null,
               source: form.source ? normalizeSource(form.source) : null,
-              // T5-Rixey-NN bug #8: weddings.booking_value is in cents per the
-          // Bloom convention. The form input is dollars; convert.
-          booking_value: form.estimatedValue ? Math.round(parseFloat(form.estimatedValue) * 100) : null,
+              // T5-Rixey-RR fix #5: branded types make the unit conversion explicit.
+              booking_value: form.estimatedValue
+                ? dollarsToCents(asDollars(parseFloat(form.estimatedValue)))
+                : null,
               notes: form.notes || null,
               event_code: retryCode,
               couple_invited_at: form.sendInvite ? new Date().toISOString() : null,

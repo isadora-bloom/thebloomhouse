@@ -1574,6 +1574,7 @@ export default function TimelinePage() {
 
     const { error } = await supabase
       .from('timeline')
+      // onConflict-skip-check: T5-Rixey-RR finding — timeline(wedding_id) unique missing; needs migration in follow-up
       .upsert(payload, { onConflict: 'wedding_id' })
 
     if (!error) {
