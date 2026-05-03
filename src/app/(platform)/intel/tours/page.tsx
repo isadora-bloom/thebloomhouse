@@ -22,7 +22,6 @@ import {
   FileText,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
-import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -652,9 +651,6 @@ export default function ToursPage() {
           Add Tour
         </button>
       </div>
-
-      {/* ---- Inline insight banner ---- */}
-      <InlineInsightBanner category="lead_conversion" />
 
       {/* Error */}
       {error && (
