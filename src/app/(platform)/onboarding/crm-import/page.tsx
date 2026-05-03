@@ -70,7 +70,11 @@ export default function CrmImportPage() {
   }, [])
 
   const adapter = adapters.find((a) => a.name === selectedAdapter)
+  // Generic CSV needs a hand-built mapping; provider-specific adapters
+  // (HoneyBook, Dubsado, Aisle Planner) embed their column mapping in
+  // the adapter itself, so the UI hides the mapping textarea for them.
   const showMapping = selectedAdapter === 'generic_csv'
+  const isHoneybook = selectedAdapter === 'honeybook'
 
   function clearMessages() {
     setErrors([])
@@ -193,6 +197,42 @@ export default function CrmImportPage() {
               onChange={(e) => setMappingText(e.target.value)}
               className="w-full px-3 py-2 text-xs font-mono border border-sage-200 rounded"
             />
+          </div>
+        )}
+
+        {isHoneybook && (
+          <div className="space-y-2 bg-sage-50/40 border border-sage-200 rounded-lg p-3">
+            <p className="text-xs font-medium text-sage-900">HoneyBook export instructions</p>
+            <ol className="list-decimal list-inside text-[11px] text-sage-700 space-y-1">
+              <li>In HoneyBook, go to <strong>Settings → Reports → Projects</strong>.</li>
+              <li>Click <strong>Export as CSV</strong> (top-right of the report).</li>
+              <li>Open the CSV and paste the contents into the box below.</li>
+            </ol>
+            <p className="text-[11px] text-sage-700">
+              Required columns: <code className="bg-white px-1 rounded">Project Name</code>,{' '}
+              <code className="bg-white px-1 rounded">Project Date</code>,{' '}
+              <code className="bg-white px-1 rounded">Client Email</code>.
+            </p>
+            <p className="text-[11px] text-sage-700">
+              Optional but recommended: <code className="bg-white px-1 rounded">Project Status</code>,{' '}
+              <code className="bg-white px-1 rounded">Total</code>,{' '}
+              <code className="bg-white px-1 rounded">Inquiry Date</code>,{' '}
+              <code className="bg-white px-1 rounded">Booking Date</code>,{' '}
+              <code className="bg-white px-1 rounded">Source</code>,{' '}
+              <code className="bg-white px-1 rounded">Tags</code>,{' '}
+              <code className="bg-white px-1 rounded">Notes</code>.
+            </p>
+            <p className="text-[11px] text-sage-700">
+              Column-name detection is case-insensitive and accepts common variants
+              (e.g. <em>Event Date</em> = <em>Project Date</em>).
+            </p>
+            <a
+              href="/samples/honeybook-sample.csv"
+              download
+              className="inline-block text-[11px] text-sage-800 underline hover:no-underline"
+            >
+              Download a sample HoneyBook CSV (5 fake rows)
+            </a>
           </div>
         )}
 
