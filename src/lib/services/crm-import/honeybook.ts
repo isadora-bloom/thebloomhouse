@@ -243,6 +243,19 @@ interface ParsedNames {
   partner2_last: string | null
 }
 
+/**
+ * Strip a trailing possessive `'s` / `’s` from each whitespace-separated
+ * token. T5-Rixey-OO bug #5: "Rebecca and Mike's Wedding" survives the
+ * trailing-"Wedding" strip but leaves "Mike's" as partner2_first_name.
+ * The apostrophe-s on the second name is purely grammatical (it modifies
+ * the now-stripped trailing "Wedding"); strip it from both partner
+ * tokens AND from the full project-name string before splitting so the
+ * fix is defensive against either order.
+ */
+function stripTrailingPossessive(token: string): string {
+  return token.replace(/['’][sS]$/u, '')
+}
+
 function parseProjectName(raw: string | null): ParsedNames {
   const empty: ParsedNames = {
     partner1_first: null, partner1_last: null,
@@ -250,11 +263,14 @@ function parseProjectName(raw: string | null): ParsedNames {
   }
   if (!raw) return empty
   // Strip trailing "Wedding" / "Event" / "Reception" tokens.
-  const stripped = raw
+  let stripped = raw
     .trim()
     .replace(/\b(wedding|event|reception|ceremony|nuptials)\b\s*$/i, '')
     .trim()
   if (!stripped) return empty
+  // Defensive: also strip a trailing possessive 's that the wedding-
+  // word strip left dangling. e.g. "Rebecca and Mike's" → "Rebecca and Mike".
+  stripped = stripTrailingPossessive(stripped).trim()
 
   // Two partners?  "Sarah & Mike Chen" / "Sarah and Mike Chen"
   const splitMatch = stripped.split(/\s+(?:&|and|\+)\s+/i)
@@ -262,8 +278,10 @@ function parseProjectName(raw: string | null): ParsedNames {
     const [left, right] = splitMatch
     // Heuristic: shared last-name pattern → "Sarah" + "Mike Chen"
     // gives partner1_first=Sarah, partner2 first+last from right.
-    const leftTokens = left.trim().split(/\s+/).filter(Boolean)
-    const rightTokens = right.trim().split(/\s+/).filter(Boolean)
+    // Strip possessive from each token in case the apostrophe-s landed
+    // on a partner name and slipped past the whole-string strip above.
+    const leftTokens = left.trim().split(/\s+/).map(stripTrailingPossessive).filter(Boolean)
+    const rightTokens = right.trim().split(/\s+/).map(stripTrailingPossessive).filter(Boolean)
     const result: ParsedNames = { ...empty }
     if (leftTokens.length === 1 && rightTokens.length >= 2) {
       // Partner1 first only; partner2 first + last; partner1 inherits last
@@ -282,7 +300,7 @@ function parseProjectName(raw: string | null): ParsedNames {
   }
 
   // Single partner. "Sarah Chen" / "Sarah". Take first + last.
-  const tokens = stripped.split(/\s+/).filter(Boolean)
+  const tokens = stripped.split(/\s+/).map(stripTrailingPossessive).filter(Boolean)
   if (tokens.length === 1) {
     return { ...empty, partner1_first: tokens[0] ?? null }
   }
@@ -296,7 +314,8 @@ function parseProjectName(raw: string | null): ParsedNames {
 /** "Sarah Chen" → ["Sarah", "Chen"]. */
 function splitFullName(raw: string | null | undefined): { first: string | null; last: string | null } {
   if (!raw) return { first: null, last: null }
-  const t = raw.trim().split(/\s+/).filter(Boolean)
+  // Strip trailing possessive 's on each token (T5-Rixey-OO #5 defence).
+  const t = raw.trim().split(/\s+/).map(stripTrailingPossessive).filter(Boolean)
   if (t.length === 0) return { first: null, last: null }
   if (t.length === 1) return { first: t[0] ?? null, last: null }
   return { first: t[0] ?? null, last: t.slice(1).join(' ') }

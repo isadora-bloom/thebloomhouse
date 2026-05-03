@@ -1,4 +1,11 @@
 // Phase 8: Lead-source derivation. Run multiple passes since the function caps at 500 per call.
+//
+// T5-Rixey-OO #6 (2026-05-02): the cron now stamps
+// lead_source_derivation_attempted_at after every attempt and skips
+// rows attempted within the last 30 days. Each pass therefore makes
+// real forward progress (no infinite loop on the no_signal bucket).
+// We loop until weddingsScanned drops to 0, which means every NULL
+// lead_source row has an attempted_at stamp.
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
 import { deriveLeadSourceForVenue } from '../../src/lib/services/lead-source-derivation'
@@ -24,14 +31,12 @@ async function main() {
     .is('lead_source', null)
   console.log(`Active weddings with NULL lead_source: ${nullBefore}`)
 
-  // Note: deriveLeadSourceForVenue() pulls 500 NULL-lead_source rows per call.
-  // Rows that derive to no_signal stay NULL — so re-running just re-processes them.
-  // We need to either (a) run enough passes to cover the active set OR (b) accept
-  // that no-signal rows will keep failing forever. Cap at 3 passes since we have
-  // ~854 active rows and the cap is 500/pass.
+  // T5-Rixey-OO #6: with attempted_at pagination, weddingsScanned
+  // strictly decreases every pass until 0. Cap at 10 passes to be
+  // safe against runaway loops if the SELECT or the stamp ever
+  // regresses.
   let pass = 0
-  let priorDerived = -1
-  while (pass < 3) {
+  while (pass < 10) {
     pass++
     console.log(`\n=== Pass ${pass} ===`)
     const r = await deriveLeadSourceForVenue(sb, RIXEY_ID)
@@ -39,8 +44,6 @@ async function main() {
     console.log('perPriority:', r.perPriority)
     if (r.errors.length > 0) console.log(`errors[0..4]: ${r.errors.slice(0, 5).join(' | ')}`)
     if (r.weddingsScanned === 0) break
-    if (r.derived === 0 && priorDerived === 0) break  // two consecutive zero-derive passes → done
-    priorDerived = r.derived
   }
 
   // Post-count

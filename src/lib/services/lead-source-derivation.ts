@@ -416,12 +416,31 @@ export async function deriveLeadSourceForVenue(
   }
 
   // Active + lead_source-NULL set.
+  //
+  // T5-Rixey-OO #6 — pagination via lead_source_derivation_attempted_at
+  // (migration 182). The cron used to loop on a no_signal backlog:
+  // WHERE lead_source IS NULL LIMIT 500 returned the same never-
+  // resolvable rows on every run, never paginating to fresher
+  // candidates and never re-deriving as new signals landed. The fix:
+  //   1. Stamp lead_source_derivation_attempted_at after every attempt
+  //      (signal-derived OR no-signal — see the per-row UPDATE below).
+  //   2. SELECT excludes rows attempted within the last 30 days so the
+  //      cron walks the backlog AND re-tries each row weekly-ish as
+  //      new signals arrive.
+  //   3. ORDER BY inquiry_date DESC NULLS LAST so the most-recent
+  //      leads get derived first — older silent leads are less likely
+  //      to ever resolve, freshness wins.
+  // NULL still means "we don't know" in app reads (no sentinel value).
+  const DAY_MS = 24 * 60 * 60 * 1000
+  const reattemptCutoff = new Date(Date.now() - 30 * DAY_MS).toISOString()
   const { data: weddingsRaw, error } = await supabase
     .from('weddings')
     .select('id, venue_id, inquiry_date, source_records, attribution_priority, source, source_detail')
     .eq('venue_id', venueId)
     .is('merged_into_id', null)
     .is('lead_source', null)
+    .or(`lead_source_derivation_attempted_at.is.null,lead_source_derivation_attempted_at.lt.${reattemptCutoff}`)
+    .order('inquiry_date', { ascending: false, nullsFirst: false })
     .limit(500) // cap so a never-derived backlog doesn't blow function timeout
 
   if (error) {
@@ -446,11 +465,16 @@ export async function deriveLeadSourceForVenue(
       const derived = await deriveLeadSourceForWedding(supabase, w)
       result.perPriority[derived.priority] = (result.perPriority[derived.priority] ?? 0) + 1
 
+      const attemptedAt = new Date().toISOString()
       if (derived.source) {
-        // Update weddings.lead_source.
+        // Update weddings.lead_source AND stamp attempted_at so the next
+        // cron run skips this row for 30 days (T5-Rixey-OO #6).
         const { error: updErr } = await supabase
           .from('weddings')
-          .update({ lead_source: derived.source })
+          .update({
+            lead_source: derived.source,
+            lead_source_derivation_attempted_at: attemptedAt,
+          })
           .eq('id', w.id)
           .is('lead_source', null) // race-guard
         if (updErr) {
@@ -459,6 +483,15 @@ export async function deriveLeadSourceForVenue(
         }
         result.derived += 1
       } else {
+        // No-signal: leave lead_source NULL but stamp attempted_at so
+        // the cron paginates past this row (T5-Rixey-OO #6).
+        const { error: stampErr } = await supabase
+          .from('weddings')
+          .update({ lead_source_derivation_attempted_at: attemptedAt })
+          .eq('id', w.id)
+        if (stampErr) {
+          result.errors.push(`wedding ${w.id} no-signal stamp: ${stampErr.message}`)
+        }
         result.noSignal += 1
       }
 

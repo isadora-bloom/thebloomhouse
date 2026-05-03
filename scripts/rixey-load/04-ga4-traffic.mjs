@@ -1,12 +1,18 @@
 // Phase 3: GA4 traffic load.
-// Two annual rollups (2025 full year, 2026 YTD partial). Recorded as
-// tangential_signals rows with signal_type='analytics_entry' since
-// GA4 channel sessions are tangential funnel signals, not direct identity.
-// Each row's signal_date = period start; payload encodes the metrics +
-// period bounds.
+// Two annual rollups (2025 full year, 2026 YTD partial).
+//
+// T5-Rixey-OO platform finding (2026-05-02): GA4 channel rollups now
+// land in `website_traffic_history` (migration 183), NOT
+// tangential_signals. Rationale: tangential_signals is per-LEAD
+// identifiable touches; GA4 channel rollups are venue-level aggregates
+// with no person identity. The dedicated table cleans up identity-
+// cluster operations + powers Sage's "what % of my traffic is paid
+// search?" answers via intel-brain.ts.
+//
+// Idempotent via the (venue_id, period_start, period_end,
+// channel_group, source) UNIQUE INDEX — re-runs upsert.
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')
@@ -65,64 +71,41 @@ for (const f of FILES) {
     console.error('missing:', f.path)
     continue
   }
-  const { header, rows } = parseGa4Csv(f.path)
+  const { rows } = parseGa4Csv(f.path)
   console.log(`${f.label}: ${rows.length} channel rows`)
   for (const r of rows) {
-    const channel = r[0]
+    const channel = (r[0] ?? '').trim()
+    if (!channel) continue
     const sessions = Number(r[1] ?? 0) || 0
     const engagedSessions = Number(r[2] ?? 0) || 0
     const engagementRate = Number(r[3] ?? 0) || 0
-    const avgEngagementSec = Number(r[4] ?? 0) || 0
-    const eventsPerSession = Number(r[5] ?? 0) || 0
-    const eventCount = Number(r[6] ?? 0) || 0
     const keyEvents = Number(r[7] ?? 0) || 0
     const sessionKeyEventRate = Number(r[8] ?? 0) || 0
     inserts.push({
       venue_id: RIXEY_ID,
-      signal_type: 'analytics_entry',
-      source_platform: 'ga4',
-      action_class: 'website_session',
-      extracted_identity: {
-        channel_group: channel,
-        period_start: f.period_start,
-        period_end: f.period_end,
-        sessions,
-        engaged_sessions: engagedSessions,
-        engagement_rate: engagementRate,
-        avg_engagement_sec: avgEngagementSec,
-        events_per_session: eventsPerSession,
-        event_count: eventCount,
-        key_events: keyEvents,
-        session_key_event_rate: sessionKeyEventRate,
-      },
-      source_context: `${f.label} — ${channel}`,
-      signal_date: `${f.period_start}T00:00:00Z`,
-      match_status: 'confirmed_match',
-      matched_person_id: null,
-      confidence_score: 1.0,
+      period_start: f.period_start,
+      period_end: f.period_end,
+      channel_group: channel,
+      sessions,
+      engaged_sessions: engagedSessions,
+      key_events: keyEvents,
+      engagement_rate: engagementRate,
+      session_key_event_rate: sessionKeyEventRate,
+      source: 'ga4',
     })
   }
 }
 
-console.log(`Total signals to write: ${inserts.length}`)
-
-// Idempotent: detect existing GA4 rows by (signal_type='analytics_entry',
-// source_platform='ga4', source_context same). Delete-then-insert is
-// simplest for re-runs.
-const { error: delErr, count: delCount } = await sb
-  .from('tangential_signals')
-  .delete({ count: 'exact' })
-  .eq('venue_id', RIXEY_ID)
-  .eq('signal_type', 'analytics_entry')
-  .eq('source_platform', 'ga4')
-if (delErr) console.error('delete prior GA4 rows err:', delErr.message)
-else console.log(`deleted ${delCount} prior GA4 rows`)
+console.log(`Total website_traffic_history rows to upsert: ${inserts.length}`)
 
 let inserted = 0, errors = 0
-// Insert in batches of 50.
+// Upsert in batches of 50 against the (venue_id, period_start,
+// period_end, channel_group, source) unique index.
 for (let i = 0; i < inserts.length; i += 50) {
   const batch = inserts.slice(i, i + 50)
-  const { error } = await sb.from('tangential_signals').insert(batch)
+  const { error } = await sb
+    .from('website_traffic_history')
+    .upsert(batch, { onConflict: 'venue_id,period_start,period_end,channel_group,source' })
   if (error) { errors++; console.error(`batch ${i}: ${error.message}`) } else inserted += batch.length
 }
-console.log(`inserted=${inserted} errors=${errors}`)
+console.log(`upserted=${inserted} errors=${errors}`)

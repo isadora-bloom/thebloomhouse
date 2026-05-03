@@ -89,6 +89,17 @@ function classifyRoleMarker(raw: string | null): PersonRole {
   return 'other'
 }
 
+/**
+ * Strip a trailing possessive `'s` / `’s` (smart quote) from a single token.
+ * Bug T5-Rixey-OO #5: project names like "Rebecca and Mike's Wedding"
+ * survive the trailing-"Wedding" strip but leave the apostrophe-s glued
+ * onto the second partner's first name. Apply at the token level so we
+ * don't break legitimate apostrophes that sit inside names like O'Brien.
+ */
+function stripPossessive(token: string): string {
+  return token.replace(/['’][sS]$/u, '')
+}
+
 /** Best-effort cleanup of a name token: trim, strip stray punctuation, fold whitespace. */
 function tidyName(s: string): string | null {
   const t = s.replace(/\s+/g, ' ').trim()
@@ -97,7 +108,16 @@ function tidyName(s: string): string | null {
   if (!stripped) return null
   // If it's literally an email (no separate name), don't pretend it's a name.
   if (EMAIL_RE.test(stripped) && stripped.split(/\s+/).length === 1) return null
-  return stripped
+  // Strip trailing possessive `'s` / `'S` / smart-quote `'s` from each
+  // whitespace-separated token. "Mike's" → "Mike". Defensive against
+  // upstream parsers that leave possessive-s glued onto the last
+  // partner name when a trailing word ("Wedding") gets stripped first.
+  const possessiveStripped = stripped
+    .split(/\s+/)
+    .map(stripPossessive)
+    .filter(Boolean)
+    .join(' ')
+  return possessiveStripped || null
 }
 
 /**
