@@ -15,6 +15,7 @@ import {
   type CringePhrase,
   type QuizQuestion,
 } from '@/config/voice-training-content'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 
 // TODO: Wire venue selector — for now we load the first venue
 const supabase = createBrowserClient(
@@ -63,15 +64,9 @@ function shuffle<T>(arr: T[]): T[] {
   return a
 }
 
-const SOURCE_LABELS: Record<string, string> = {
-  the_knot: 'The Knot',
-  wedding_wire: 'WeddingWire',
-  weddingwire: 'WeddingWire',
-  google: 'Google',
-  instagram: 'Instagram',
-  website: 'Website',
-  referral: 'Referral',
-}
+// T5-Rixey-DDD: SOURCE_LABELS map removed — labels now go through the
+// shared formatSourceLabel() so this surface stays in sync with the
+// rest of the platform automatically.
 
 const GAME_CONFIGS = {
   would_you_send: {
@@ -649,7 +644,12 @@ export default function VoiceTrainingPage() {
                       Original Inquiry
                     </h3>
                     <span className="text-xs font-medium text-sage-500 bg-sage-100 px-2 py-0.5 rounded-full">
-                      {SOURCE_LABELS[shuffledInquiries[currentRound]?.source] ?? 'Unknown'}
+                      {/* T5-Rixey-DDD: render through formatSourceLabel
+                          so the pill matches every other surface
+                          (Title-Case + 'Untracked / Pre-Bloom' for null
+                          / empty / unknown) instead of falling back to
+                          the bare 'Unknown' string. */}
+                      {formatSourceLabel(shuffledInquiries[currentRound]?.source)}
                     </span>
                   </div>
                   <p className="text-sm font-medium text-sage-900 mb-2">

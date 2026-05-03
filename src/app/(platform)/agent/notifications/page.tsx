@@ -6,6 +6,7 @@ import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { BrainDumpClarifications } from '@/components/agent/brain-dump-clarifications'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 import {
   Bell,
   Mail,
@@ -379,7 +380,11 @@ function PendingAutoSendCard({
         </p>
         {details.confidenceScore !== null && (
           <p className="text-[10px] text-amber-600 mt-0.5">
-            Confidence: {Math.round((details.confidenceScore ?? 0) * 100)}% | Source: {details.source}
+            {/* T5-Rixey-DDD: details.source is the wedding-source enum
+                that drove the auto-send rule match — render through
+                formatSourceLabel so 'venue_calculator' / 'calendly' /
+                etc. show up Title-Cased to the coordinator. */}
+            Confidence: {Math.round((details.confidenceScore ?? 0) * 100)}% | Source: {formatSourceLabel(details.source)}
           </p>
         )}
       </div>

@@ -19,6 +19,7 @@ import {
   Loader2, AlertTriangle, CheckCircle2, RefreshCw, ArrowRight,
   X, Sparkles, Calendar, MapPin,
 } from 'lucide-react'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 
 interface CandidateRow {
   id: string
@@ -339,7 +340,10 @@ function ReviewCard({ item, onLink, onReject, onDefer, busy }: ReviewCardProps) 
                   <Calendar className="w-3 h-3" /> inquiry {wedding.inquiry_date.slice(0, 10)}
                 </span>
               )}
-              {wedding.source && <span>source: {wedding.source}</span>}
+              {/* T5-Rixey-DDD: source MUST go through formatSourceLabel
+                  so snake_case ('venue_calculator', 'calendly') gets
+                  Title-Cased before display. */}
+              {wedding.source && <span>source: {formatSourceLabel(wedding.source)}</span>}
               {wedding.state && (
                 <span className="inline-flex items-center gap-1">
                   <MapPin className="w-3 h-3" /> {wedding.state}

@@ -126,6 +126,9 @@ jobs:
       - name: Date-doctrine guard — no coordinator-facing created_at (T5-Rixey-LL)
         run: node scripts/check-no-coordinator-facing-created-at.mjs
 
+      - name: Source-rendering guard — every wedding/lead source goes through formatSourceLabel (T5-Rixey-DDD)
+        run: node scripts/check-source-rendering.mjs
+
       - name: Schema guard — every .upsert onConflict has a matching unique constraint (T5-Rixey-RR)
         run: node scripts/check-on-conflict-constraints.mjs
       - name: Adapter-as-facts guard — CRM-import adapters cannot write weddings.source (T5-Rixey-TT)

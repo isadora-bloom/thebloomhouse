@@ -27,6 +27,7 @@ import {
   Loader2, AlertTriangle, CheckCircle2, Users, Mail, Calendar,
   RefreshCw, ArrowRight, X,
 } from 'lucide-react'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 
 interface ReconciliationCluster {
   status: 'auto_merged' | 'surfaced_for_review' | 'singleton_skipped'
@@ -408,7 +409,10 @@ function ClusterCard({ cluster, weddingDetails, onMerge, onKeepSeparate, onDefer
                       <div className="truncate">{w.partner1_phone}</div>
                     )}
                     {w?.lead_source && (
-                      <div className="truncate">source: {w.lead_source}</div>
+                      // T5-Rixey-DDD: lead_source MUST render through
+                      // formatSourceLabel (Title-Case + 'Untracked /
+                      // Pre-Bloom' for null/empty/unknown).
+                      <div className="truncate">source: {formatSourceLabel(w.lead_source)}</div>
                     )}
                     {(w?.estimated_guests || w?.guest_count_estimate) && (
                       <div>guests: {w?.estimated_guests ?? w?.guest_count_estimate}</div>
