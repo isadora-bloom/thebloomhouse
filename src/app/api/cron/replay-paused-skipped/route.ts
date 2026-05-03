@@ -39,6 +39,10 @@ interface RecapResult {
   venuesNotified: number
   skipsExpired: number
   skipsPending: number
+  /** #95 (T5-followup-CC): how many resolved rows the prune pass deleted
+   *  this tick. Surfaced in the cron telemetry so we can verify the
+   *  prune is actually draining the table. */
+  skipsPruned: number
   perVenue: Array<{
     venueId: string
     pausedNow: boolean
@@ -96,6 +100,7 @@ async function buildRecap(): Promise<RecapResult> {
     venuesNotified: 0,
     skipsExpired: 0, // computed below from before/after counts is overkill; report 0 here, the lt() update doesn't return count cheaply
     skipsPending: pending.length,
+    skipsPruned: 0,
     perVenue: [],
   }
 
@@ -140,6 +145,21 @@ async function buildRecap(): Promise<RecapResult> {
     summary.perVenue.push({ venueId, pausedNow, skipCounts, notified })
     if (notified) summary.venuesNotified++
   }
+
+  // #95 (T5-followup-CC): prune resolved rows. Pre-fix this sweeper
+  // flipped pending → expired and (via the replay endpoint) pending →
+  // replayed but never DELETEd anything. Table grew unbounded — every
+  // 24h paused tick contributes ~5-15 work_type skips per venue,
+  // permanent. 30 days is the audit-window comfort: long enough to
+  // backtrack a coordinator's complaint about a missed digest, short
+  // enough to stay small. Idempotent: re-runs find nothing new.
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86_400_000).toISOString()
+  const { count: prunedCount } = await supabase
+    .from('paused_period_skipped')
+    .delete({ count: 'exact' })
+    .in('status', ['replayed', 'expired'])
+    .lt('skipped_at', thirtyDaysAgo)
+  summary.skipsPruned = prunedCount ?? 0
 
   return summary
 }

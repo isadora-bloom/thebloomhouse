@@ -17,7 +17,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
 import { generateHeatNarration } from '@/lib/services/insights/heat-narration'
 import { generateNegotiationState } from '@/lib/services/insights/negotiation-state'
 import { generateRiskFlags } from '@/lib/services/insights/risk-flags'
@@ -25,6 +25,7 @@ import { generateDecayReEngagement } from '@/lib/services/insights/decay-re-enga
 import { generateCohortMatch } from '@/lib/services/insights/cohort-match'
 import { gateForBrainCall, nextUtcMidnightIso } from '@/lib/services/cost-ceiling'
 import { newCorrelationId } from '@/lib/observability/logger'
+import { redactError } from '@/lib/observability/redact'
 
 export async function GET(
   request: NextRequest,
@@ -50,7 +51,17 @@ export async function GET(
   }
   const venueId = wedding.venue_id as string
 
-  if (!demo) {
+  if (demo) {
+    // Demo-mode authz (#85, T5-followup-CC): the bloom_demo cookie is
+    // an open bypass on this route. Any caller could ask for insights
+    // on any wedding by UUID and trigger LLM spend on real production
+    // venues — the cost-ceiling caps damage but still bills. Restrict
+    // demo callers to the Crestwood Collection's 4 venues; the
+    // wedding's owning venue must be in the allowlist.
+    if (!isDemoVenueAllowed(venueId)) {
+      return NextResponse.json({ error: 'forbidden' }, { status: 403 })
+    }
+  } else {
     const platform = await getPlatformAuth()
     if (!platform) {
       return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
@@ -115,12 +126,18 @@ export async function GET(
     risk: risk.status === 'fulfilled' ? risk.value : null,
     decay: decay.status === 'fulfilled' ? decay.value : null,
     cohort: cohort.status === 'fulfilled' ? cohort.value : null,
+    // #86 (T5-followup-CC): Stream B closed the stdout PII leak via
+    // redactError, but the same raw reason strings were re-leaked into
+    // the HTTP body via String(promise.reason). Anthropic 4xx responses
+    // can echo the prompt content (couple emails, tour notes), so this
+    // path silently exfiltrated tier-1 data on every brain failure.
+    // redactError strips the same shapes the logger redacts.
     errors: [
-      ...(heat.status === 'rejected' ? [{ insight: 'heat', error: String(heat.reason) }] : []),
-      ...(negotiation.status === 'rejected' ? [{ insight: 'negotiation', error: String(negotiation.reason) }] : []),
-      ...(risk.status === 'rejected' ? [{ insight: 'risk', error: String(risk.reason) }] : []),
-      ...(decay.status === 'rejected' ? [{ insight: 'decay', error: String(decay.reason) }] : []),
-      ...(cohort.status === 'rejected' ? [{ insight: 'cohort', error: String(cohort.reason) }] : []),
+      ...(heat.status === 'rejected' ? [{ insight: 'heat', error: redactError(heat.reason) }] : []),
+      ...(negotiation.status === 'rejected' ? [{ insight: 'negotiation', error: redactError(negotiation.reason) }] : []),
+      ...(risk.status === 'rejected' ? [{ insight: 'risk', error: redactError(risk.reason) }] : []),
+      ...(decay.status === 'rejected' ? [{ insight: 'decay', error: redactError(decay.reason) }] : []),
+      ...(cohort.status === 'rejected' ? [{ insight: 'cohort', error: redactError(cohort.reason) }] : []),
     ],
   })
 }

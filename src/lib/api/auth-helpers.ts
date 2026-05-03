@@ -12,6 +12,34 @@ const DEMO_USER_ID = '33333333-3333-3333-3333-333333333301' // Sarah Chen
 const DEMO_WEDDING_ID = 'ab000000-0000-0000-0000-000000000001' // Chloe & Ryan
 
 /**
+ * Crestwood Collection — the 4 demo venues a `bloom_demo=true` cookie may
+ * legitimately request. Anything outside this set is a real production
+ * venue and must be refused, even in demo mode. Pre-fix the demo cookie
+ * was an open authz bypass on the insights endpoints — anyone could
+ * trigger LLM spend on real venues by passing their UUID. The
+ * cost-ceiling caps damage but still bills. (#85, T5-followup-CC.)
+ *
+ * UUIDs sourced from supabase/seed.sql. Hardcoded rather than queried at
+ * request time so the allowlist is auditable in code review and there's
+ * no DB round-trip per request.
+ */
+export const DEMO_VENUE_ALLOWLIST: ReadonlySet<string> = new Set([
+  '22222222-2222-2222-2222-222222222201', // Hawthorne Manor
+  '22222222-2222-2222-2222-222222222202', // Crestwood Farm
+  '22222222-2222-2222-2222-222222222203', // The Glass House
+  '22222222-2222-2222-2222-222222222204', // Rose Hill Gardens
+])
+
+/**
+ * Returns true if the supplied venueId is in the Crestwood demo set.
+ * Use in any route that takes a caller-supplied venue/wedding id while
+ * in demo mode.
+ */
+export function isDemoVenueAllowed(venueId: string | null | undefined): boolean {
+  return !!venueId && DEMO_VENUE_ALLOWLIST.has(venueId)
+}
+
+/**
  * Check if the current request is in demo mode (bloom_demo cookie set).
  */
 export async function isDemoMode(): Promise<boolean> {

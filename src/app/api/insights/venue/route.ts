@@ -11,13 +11,14 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
 import { generatePricingElasticity } from '@/lib/services/insights/pricing-elasticity'
 import { generateSourceMixCounterfactual } from '@/lib/services/insights/source-mix-counterfactual'
 import { generateCoordinatorOverridePattern } from '@/lib/services/insights/coordinator-override-pattern'
 import { generateStrengthAreaCohort } from '@/lib/services/insights/strength-area-cohort'
 import { gateForBrainCall, nextUtcMidnightIso } from '@/lib/services/cost-ceiling'
 import { newCorrelationId } from '@/lib/observability/logger'
+import { redactError } from '@/lib/observability/redact'
 
 export async function GET(request: NextRequest) {
   const supabase = createServiceClient()
@@ -30,6 +31,14 @@ export async function GET(request: NextRequest) {
     venueId = request.nextUrl.searchParams.get('venueId')
     if (!venueId) {
       return NextResponse.json({ error: 'venueId required in demo' }, { status: 400 })
+    }
+    // Demo authz (#85, T5-followup-CC): the bloom_demo cookie is an
+    // open bypass — any caller could ask for venue insights on a real
+    // production venue UUID and bill LLM spend (cost-ceiling caps but
+    // doesn't prevent). Restrict to the Crestwood Collection's 4
+    // venues.
+    if (!isDemoVenueAllowed(venueId)) {
+      return NextResponse.json({ error: 'forbidden' }, { status: 403 })
     }
   } else {
     const platform = await getPlatformAuth()
@@ -71,11 +80,15 @@ export async function GET(request: NextRequest) {
     sourceMix: sourceMix.status === 'fulfilled' ? sourceMix.value : null,
     coordinatorOverride: coordinatorOverride.status === 'fulfilled' ? coordinatorOverride.value : null,
     strengthArea: strengthArea.status === 'fulfilled' ? strengthArea.value : null,
+    // #86 (T5-followup-CC): wrap inner-promise rejection messages with
+    // redactError before serialising into the HTTP body. Stream B
+    // closed the stdout PII leak; the same Anthropic-error → prompt-echo
+    // shape was leaking into the response body via String(reason).
     errors: [
-      ...(pricing.status === 'rejected' ? [{ insight: 'pricing', error: String(pricing.reason) }] : []),
-      ...(sourceMix.status === 'rejected' ? [{ insight: 'sourceMix', error: String(sourceMix.reason) }] : []),
-      ...(coordinatorOverride.status === 'rejected' ? [{ insight: 'coordinatorOverride', error: String(coordinatorOverride.reason) }] : []),
-      ...(strengthArea.status === 'rejected' ? [{ insight: 'strengthArea', error: String(strengthArea.reason) }] : []),
+      ...(pricing.status === 'rejected' ? [{ insight: 'pricing', error: redactError(pricing.reason) }] : []),
+      ...(sourceMix.status === 'rejected' ? [{ insight: 'sourceMix', error: redactError(sourceMix.reason) }] : []),
+      ...(coordinatorOverride.status === 'rejected' ? [{ insight: 'coordinatorOverride', error: redactError(coordinatorOverride.reason) }] : []),
+      ...(strengthArea.status === 'rejected' ? [{ insight: 'strengthArea', error: redactError(strengthArea.reason) }] : []),
     ],
   })
 }
