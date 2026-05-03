@@ -223,9 +223,13 @@ async function buildSourceBullet(venueId: string): Promise<WeeklyLearnedBullet> 
       })
     const top = ranked[0]
     if (top && top.avgRevenue > 0) {
+      // T5-Rixey-VV Y1: avgRevenue is now in CENTS — divide here for
+      // display. computeSourceQuality changed to keep cents-scale
+      // consistent with Stream RR doctrine.
+      const avgDollars = top.avgRevenue / 100
       return {
         kind: 'source',
-        text: `${top.source} sent your highest-value couples this month: avg $${top.avgRevenue.toFixed(0)} per booking.`,
+        text: `${top.source} sent your highest-value couples this month: avg $${avgDollars.toFixed(0)} per booking.`,
       }
     }
   } catch (err) {
