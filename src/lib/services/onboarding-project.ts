@@ -44,6 +44,7 @@ export interface DayStep {
     | 'import_crm' | 'orphan_triage' | 'voice_dna_seed' | 'voice_dna_extract'
     | 'kb_seed' | 'readiness_check' | 'manual' | 'pricing_history_ui'
     | 'crm_import_ui' | 'sage_identity' | 'forbidden_topics' | 'tone_preferences'
+    | 'identity_reconciliation'
   /** External admin surface where the coordinator does the actual
    *  work for this step. Page renders this as a "Go to surface" link
    *  so coordinators don't have to memorise where each piece lives.
@@ -166,6 +167,15 @@ export const PROJECT_PLAN: DayPlan[] = [
         actionKey: 'orphan_triage',
         linkHref: '/agent/audio-inbox',
         linkLabel: 'Open audio inbox',
+      },
+      {
+        key: 'identity_reconciliation',
+        label: 'Reconcile identities across sources',
+        description:
+          'After all imports land (HoneyBook + Calendly + calculator + CRM), the same human often appears as multiple weddings rows — once per source. The reconciler clusters by shared email and consolidates duplicates: Tier-1 safe matches auto-merge silently; Tier-2 conflicts (same email, conflicting names or dates) surface as cards for coordinator review. Losers are soft-deleted (forensic record preserved per Constitution); the winner accumulates a source_records[] audit + gains backfilled fields from each loser. Step is complete when the surfaced-for-review queue is empty (or coordinator clicks "review later").',
+        actionKey: 'identity_reconciliation',
+        linkHref: '/onboarding/identity-reconciliation',
+        linkLabel: 'Open reconciliation',
       },
     ],
   },
