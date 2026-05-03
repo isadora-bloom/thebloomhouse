@@ -10,9 +10,9 @@
  * status='active', confidence_flag='live'.
  *
  * Pairs with /onboarding/web-form-import. The form CSV is the input;
- * the resulting catalog feeds Sage's pricing-context loader, the
- * temporal-trigger booking-value resolver, and future pricing-history
- * reconciliation.
+ * the resulting catalog feeds the venue AI's pricing-context loader,
+ * the temporal-trigger booking-value resolver, and future
+ * pricing-history reconciliation.
  */
 
 import { useState } from 'react'
@@ -20,6 +20,7 @@ import {
   Upload, AlertCircle, CheckCircle2, Loader2, Package, Sparkles, Trash2,
 } from 'lucide-react'
 import Link from 'next/link'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 
 interface ProposedPackage {
   kind: 'package' | 'upgrade' | 'discount' | 'fee'
@@ -44,6 +45,7 @@ const PROVIDERS: Array<{ provider: string; label: string }> = [
 ]
 
 export default function ExtractPackagesPage() {
+  const aiName = useAiName()
   const [provider, setProvider] = useState<string>('rixey_calculator')
   const [csv, setCsv] = useState('')
   const [proposals, setProposals] = useState<ProposedPackage[]>([])
@@ -163,7 +165,7 @@ export default function ExtractPackagesPage() {
           Many venues encode their pricing structure in the form they expose to couples
           (season tiers, upgrades, discounts). This tool walks your form data once and
           proposes a catalog you can confirm with one click. Confirmed packages feed
-          Sage&apos;s pricing context, the temporal-trigger booking-value resolver, and
+          {aiName}&apos;s pricing context, the temporal-trigger booking-value resolver, and
           future pricing-history reconciliation.
         </p>
         <p className="text-xs text-sage-500">
