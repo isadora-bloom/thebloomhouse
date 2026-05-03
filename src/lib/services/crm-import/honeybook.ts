@@ -87,6 +87,7 @@ import type {
 } from './index'
 import { commitNormalisedRows } from './index'
 import { parseCsvRows } from '@/lib/services/brain-dump-csv-shape'
+import { type Cents, asDollars, dollarsToCents } from '@/lib/types/monetary'
 
 // ---------------------------------------------------------------------------
 // Column-name detection (case-insensitive, accepts common variants)
@@ -205,14 +206,15 @@ function canonicaliseSource(raw: string | null | undefined): NonNullable<Normali
 // Money + date helpers
 // ---------------------------------------------------------------------------
 
-/** "$4,500.00" → 450000 (cents). Returns null if unparseable. */
-function parseMoneyToCents(raw: string | null | undefined): number | null {
+/** "$4,500.00" → 450000 (cents). Returns null if unparseable.
+ *  T5-Rixey-RR fix #5: typed return surfaces the unit at call sites. */
+function parseMoneyToCents(raw: string | null | undefined): Cents | null {
   if (raw == null) return null
   const cleaned = raw.replace(/[$,\s]/g, '').trim()
   if (!cleaned) return null
   const n = Number(cleaned)
-  if (!Number.isFinite(n)) return null
-  return Math.round(n * 100)
+  if (!Number.isFinite(n) || n < 0) return null
+  return dollarsToCents(asDollars(n))
 }
 
 function parseDateIso(raw: string | null | undefined): string | null {

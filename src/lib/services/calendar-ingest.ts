@@ -695,6 +695,7 @@ export async function seedCalendarForVenue(
 
     const { error } = await supabase
       .from('calendar_events')
+      // onConflict-skip-check: T5-Rixey-RR finding — calendar_events table not asserted in migrations or has no (date,name) unique; legacy fallback path; needs follow-up
       .upsert(rows, { onConflict: 'date,name' })
 
     if (error) {

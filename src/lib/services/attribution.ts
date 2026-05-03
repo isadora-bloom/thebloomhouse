@@ -32,6 +32,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { type Cents, asCents, centsToDollars } from '@/lib/types/monetary'
 
 export type AttributionModel = 'first_touch' | 'last_touch' | 'linear'
 
@@ -68,7 +69,7 @@ interface WeddingRow {
   id: string
   source: string | null
   status: string | null
-  booking_value: number | null
+  booking_value: Cents | number | null
   inquiry_date: string | null
 }
 
@@ -173,8 +174,8 @@ export async function computeSourceFunnel(
       revenue: 0,
       creditedSources: new Map<string | null, number>(),
     }
-    // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); store dollars in revenue.
-    if (ind.booked) ind.revenue = Number(w.booking_value ?? 0) / 100
+    // booking_value is branded Cents (T5-Rixey-RR fix #5); store dollars in revenue.
+    if (ind.booked) ind.revenue = centsToDollars(asCents(Number(w.booking_value ?? 0)))
 
     // Source credit is model-dependent. Use weddings.source as the
     // canonical first-touch (it's normalized by email-pipeline at

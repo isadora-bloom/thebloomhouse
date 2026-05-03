@@ -17,6 +17,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { type Cents, asCents, centsToDollars } from '@/lib/types/monetary'
 
 export interface SourceQualityRow {
   source: string
@@ -144,8 +145,13 @@ export async function computeSourceQuality(
 
     if (!bySource[src]) bySource[src] = { ids: [], revenues: [], frictionHits: 0, referralHits: 0, daysToBook: [] }
     bySource[src].ids.push(w.id as string)
-    // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); store dollars in revenues array.
-    if (w.booking_value) bySource[src].revenues.push(Number(w.booking_value) / 100)
+    // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8;
+    // T5-Rixey-RR fix #5 — branded `Cents` type makes this explicit).
+    // Store dollars in revenues array for downstream display math.
+    if (w.booking_value) {
+      const cents = asCents(Number(w.booking_value))
+      bySource[src].revenues.push(centsToDollars(cents))
+    }
 
     const ft = w.friction_tags
     if (Array.isArray(ft) && ft.length > 0) bySource[src].frictionHits++

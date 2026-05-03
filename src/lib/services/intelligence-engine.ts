@@ -16,6 +16,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { asCents, centsToDollars } from '@/lib/types/monetary'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -365,8 +366,8 @@ async function detectSourceQuality(
 
       if (['booked', 'completed'].includes(w.status as string)) {
         stats.booked++
-        // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); store dollars in totalValue.
-        stats.totalValue += (Number(w.booking_value) || 0) / 100
+        // booking_value is branded Cents (T5-Rixey-RR fix #5); store dollars in totalValue.
+        stats.totalValue += centsToDollars(asCents(Number(w.booking_value) || 0))
 
         if (w.inquiry_date && w.booked_at) {
           const days = (new Date(w.booked_at as string).getTime() - new Date(w.inquiry_date as string).getTime()) / (1000 * 60 * 60 * 24)
@@ -818,8 +819,8 @@ async function detectPipelineStalls(
         const status = w.status as string
         const existing = stalledByStage.get(status) || { count: 0, totalValue: 0, maxDays: 0 }
         existing.count++
-        // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); store dollars.
-        existing.totalValue += (Number(w.booking_value) || 0) / 100
+        // booking_value is branded Cents (T5-Rixey-RR fix #5); store dollars.
+        existing.totalValue += centsToDollars(asCents(Number(w.booking_value) || 0))
         existing.maxDays = Math.max(existing.maxDays, daysSinceUpdate)
         stalledByStage.set(status, existing)
       }
@@ -954,8 +955,8 @@ async function detectSeasonalOpportunities(
       if (weddingDate.getFullYear() === currentYear) {
         const month = weddingDate.getMonth()
         monthBookings[month].count++
-        // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); store dollars.
-        monthBookings[month].totalValue += (Number(w.booking_value) || 0) / 100
+        // booking_value is branded Cents (T5-Rixey-RR fix #5); store dollars.
+        monthBookings[month].totalValue += centsToDollars(asCents(Number(w.booking_value) || 0))
       }
     }
 
@@ -1113,10 +1114,10 @@ async function detectLostDealPatterns(
           if (topReason[0] === 'pricing') {
             // Check actual conversion on higher-budget leads
             if (lostWeddings && lostWeddings.length > 0) {
-              // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
+              // booking_value is branded Cents (T5-Rixey-RR fix #5); convert to dollars.
               const allWeddingValues = lostWeddings
                 .filter(w => w.booking_value != null)
-                .map(w => Number(w.booking_value) / 100)
+                .map(w => centsToDollars(asCents(Number(w.booking_value))))
 
               if (allWeddingValues.length > 0) {
                 const medianValue = allWeddingValues.sort((a, b) => a - b)[Math.floor(allWeddingValues.length / 2)]

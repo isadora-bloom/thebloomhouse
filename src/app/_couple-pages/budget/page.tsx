@@ -346,6 +346,7 @@ export default function BudgetPage() {
     setEditingBudget(false)
     await supabase
       .from('wedding_config')
+      // onConflict-skip-check: T5-Rixey-RR finding — wedding_config(wedding_id) unique missing; (venue_id, wedding_id) exists; needs migration in follow-up
       .upsert({ wedding_id: weddingId, total_budget: amount }, { onConflict: 'wedding_id' })
   }
 
@@ -355,6 +356,7 @@ export default function BudgetPage() {
     setShareWithVenue(val)
     await supabase
       .from('wedding_config')
+      // onConflict-skip-check: T5-Rixey-RR finding — wedding_config(wedding_id) unique missing; needs migration in follow-up
       .upsert({ wedding_id: weddingId, budget_shared: val }, { onConflict: 'wedding_id' })
   }
 

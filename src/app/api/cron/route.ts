@@ -1,4 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/service'
+import { asCents, centsToDollars } from '@/lib/types/monetary'
 import { NextRequest, NextResponse } from 'next/server'
 import { fetchAllVenueTrends } from '@/lib/services/trends'
 import { fetchWeatherForecast } from '@/lib/services/weather'
@@ -1178,10 +1179,10 @@ async function refreshAttributionAllVenues(): Promise<Record<string, boolean>> {
         if (['tour_scheduled', 'tour_completed', 'proposal_sent', 'booked', 'completed'].includes(w.status as string)) b.tours++
         if (['booked', 'completed'].includes(w.status as string)) {
           b.bookings++
-          // booking_value is cents per Bloom convention; convert to
-          // dollars for source_attribution.revenue.
-          const cents = Number(w.booking_value) || 0
-          b.revenue += cents / 100
+          // booking_value is branded Cents (T5-Rixey-RR fix #5);
+          // convert to dollars at the boundary into source_attribution.revenue.
+          const cents = asCents(Number(w.booking_value) || 0)
+          b.revenue += centsToDollars(cents)
         }
         buckets.set(k, b)
       }

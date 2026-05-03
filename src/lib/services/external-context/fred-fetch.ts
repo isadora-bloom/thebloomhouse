@@ -142,6 +142,7 @@ export async function fetchFredSeries(
   const supabase = createServiceClient()
   const { error, data: insertedRows } = await supabase
     .from('fred_indicators')
+    // onConflict-skip-check: T5-Rixey-RR finding — fred_indicators unique is (series_id, COALESCE(region, ''), observation_date) but onConflict only names 2 of 3 columns; needs follow-up to either align the index or pass region in onConflict
     .upsert(rows, { onConflict: 'series_id,observation_date', ignoreDuplicates: false })
     .select('id')
   const count = insertedRows?.length ?? 0

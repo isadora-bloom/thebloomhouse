@@ -11,6 +11,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import type { DataType, ColumnMapping } from './data-detection'
 import { normalizeSource } from './normalize-source'
+import { type Cents, asDollars, dollarsToCents } from '@/lib/types/monetary'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -162,8 +163,12 @@ export async function importClientList(
       const guestCount = parseNumber(row.guest_count_estimate || '')
       // T5-Rixey-NN bug #8: weddings.booking_value is in cents per the
       // Bloom convention. parseNumber returns raw dollars; convert.
+      // T5-Rixey-RR fix #5: branded types make the unit explicit so a
+      // future copy-paste can't drop the *100 again.
       const bookingValueDollars = parseNumber(row.booking_value || '')
-      const bookingValue = bookingValueDollars != null ? Math.round(bookingValueDollars * 100) : null
+      const bookingValue: Cents | null = bookingValueDollars != null
+        ? dollarsToCents(asDollars(bookingValueDollars))
+        : null
       const source = row.source ? normalizeSource(row.source) : null
       const notes = row.notes || null
 
@@ -676,8 +681,12 @@ export async function importHistoricalWeddings(
       const guestCount = parseNumber(row.guest_count || '')
       // T5-Rixey-NN bug #8: weddings.booking_value is in cents per the
       // Bloom convention. parseNumber returns raw dollars; convert.
+      // T5-Rixey-RR fix #5: branded types make the unit explicit so a
+      // future copy-paste can't drop the *100 again.
       const bookingValueDollars = parseNumber(row.booking_value || '')
-      const bookingValue = bookingValueDollars != null ? Math.round(bookingValueDollars * 100) : null
+      const bookingValue: Cents | null = bookingValueDollars != null
+        ? dollarsToCents(asDollars(bookingValueDollars))
+        : null
       const coupleName = row.couple_name || ''
 
       if (!weddingDate && !coupleName) {

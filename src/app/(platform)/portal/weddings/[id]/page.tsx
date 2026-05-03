@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
+import { type Cents, formatCents } from '@/lib/types/monetary'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import Link from 'next/link'
 import {
@@ -55,7 +56,7 @@ interface WeddingRow {
   status: string
   wedding_date: string | null
   guest_count_estimate: number | null
-  booking_value: number | null
+  booking_value: Cents | null
   couple_photo_url: string | null
   notes: string | null
   assigned_consultant_id: string | null
@@ -489,8 +490,8 @@ function OverviewTab({
           </div>
           <div>
             <p className="text-xs text-sage-500">Booking Value</p>
-            {/* booking_value is cents per Bloom convention (T5-Rixey-NN bug #8) */}
-            <p className="font-medium text-sage-900">{fmt$(wedding.booking_value != null ? wedding.booking_value / 100 : null)}</p>
+            {/* booking_value is branded Cents (T5-Rixey-RR fix #5; previously T5-Rixey-NN bug #8) */}
+            <p className="font-medium text-sage-900">{formatCents(wedding.booking_value)}</p>
           </div>
           <div>
             <p className="text-xs text-sage-500">Coordinator</p>

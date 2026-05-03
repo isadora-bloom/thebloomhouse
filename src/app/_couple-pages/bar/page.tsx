@@ -706,6 +706,7 @@ export default function BarPlannerPage() {
                 notes_list: next.list,
                 notes_recipes: next.recipes,
               },
+              // onConflict-skip-check: T5-Rixey-RR finding — bar_planning has no unique(wedding_id) yet; needs migration in follow-up
               { onConflict: 'wedding_id' }
             )
           } catch (err) {
