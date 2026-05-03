@@ -45,6 +45,7 @@ import {
 import { refreshVoiceDnaForAllVenues } from '@/lib/services/voice-dna-extract'
 import { logEvent } from '@/lib/observability/logger'
 import { computeAttributionParityAllVenues } from '@/lib/services/attribution-parity'
+import { mergePeopleAliasesAllVenues } from '@/lib/services/people-merge-aliases'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -153,6 +154,19 @@ const VALID_JOBS = [
   // for >=48h. Sequenced AFTER backtrace_scan (04:30) and
   // phase_b_sweep (04:45).
   'compute_attribution_parity',
+  // T5-Rixey-EEE Bug 1 (2026-05-02). Per-wedding alias collapse for
+  // the same human under multiple email addresses (Knot proxy + real
+  // Gmail; Knot + WW + real Gmail). Stream KK collapses duplicate
+  // weddings; this collapses duplicate people rows within ONE
+  // wedding. Conservative gate — auto-merge only when one row holds
+  // a real-domain email AND every other row holds a known platform-
+  // alias domain (member.theknot.com / notifications.honeybook.com /
+  // etc.). Anything ambiguous is logged + skipped for coordinator
+  // review. Sequenced AFTER phase_b_sweep (04:45) so KK has already
+  // done the wedding-level merge, BEFORE attribution_refresh + the
+  // morning lead-source-derivation runs so the canonical-person view
+  // is stable when source attribution computes.
+  'merge_people_aliases',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -224,6 +238,19 @@ async function runJob(job: JobName): Promise<unknown> {
       // weddings; only writes are to the parity log. Cutover gate
       // is the dashboard at /intel/sources/parity.
       return computeAttributionParityAllVenues(createServiceClient())
+
+    case 'merge_people_aliases':
+      // T5-Rixey-EEE Bug 1. Per-wedding alias collapse. Sweeps every
+      // venue, buckets each wedding's people rows by normalized name,
+      // and folds platform-alias-email rows (member.theknot.com /
+      // notifications.honeybook.com / etc.) into the canonical row
+      // holding a real-domain address. Conservative gate — never
+      // auto-merges when ambiguous (multiple real or multiple alias
+      // rows for the same name). Sequenced AFTER phase_b_sweep
+      // (04:45) so KK has done the wedding-level merge, BEFORE
+      // attribution_refresh so source attribution sees the canonical
+      // person view.
+      return mergePeopleAliasesAllVenues(createServiceClient())
 
     case 'post_event_feedback_check':
       return checkPostEventFeedback()
@@ -1567,16 +1594,21 @@ async function checkPostEventFeedback(): Promise<{ notified: number }> {
     const weddingId = w.id as string
     const venueId = w.venue_id as string
 
-    // Get couple names for the notification
+    // Get couple names for the notification.
+    // T5-Rixey-EEE Bug 1 (defense-in-depth): pull last_name too so
+    // dedupePeopleByName can collapse alias-row duplicates by full
+    // name signature.
     const { data: people } = await supabase
       .from('people')
-      .select('first_name, role')
+      .select('first_name, last_name, role')
       .eq('wedding_id', weddingId)
 
-    const coupleNames = (people ?? [])
-      .filter((p) =>
+    const { dedupePeopleByName } = await import('@/lib/utils/couple-name')
+    const coupleNames = dedupePeopleByName(
+      (people ?? []).filter((p) =>
         ['partner1', 'partner2', 'bride', 'groom', 'partner'].includes(p.role)
       )
+    )
       .map((p) => p.first_name)
       .join(' & ')
 

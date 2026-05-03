@@ -5,6 +5,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import {
   Upload,
   FileText,
@@ -373,8 +374,8 @@ export default function QuickAddPage() {
           setWeddings(
             data.map((w) => {
               const people = (w.people as { first_name: string; last_name: string }[]) || []
-              const names = people
-                .filter((p) => p.first_name)
+              // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name.
+              const names = dedupePeopleByName(people.filter((p) => p.first_name))
                 .map((p) => `${p.first_name} ${p.last_name || ''}`.trim())
                 .join(' & ')
               const date = w.wedding_date

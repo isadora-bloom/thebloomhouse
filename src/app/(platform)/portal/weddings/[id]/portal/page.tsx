@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { type Cents, formatCents } from '@/lib/types/monetary'
 import { cn } from '@/lib/utils'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import {
   Printer,
   ExternalLink,
@@ -169,10 +170,11 @@ function getCoupleNames(people: Person[]): string {
     (p) => p.role === 'bride' || p.role === 'groom' || p.role === 'partner'
   )
   if (principals.length === 0) {
-    const first = people.slice(0, 2)
+    // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name.
+    const first = dedupePeopleByName(people).slice(0, 2)
     return first.map((p) => p.first_name).join(' & ') || 'Unnamed Wedding'
   }
-  return principals.map((p) => p.first_name).join(' & ')
+  return dedupePeopleByName(principals).map((p) => p.first_name).join(' & ')
 }
 
 // ---------------------------------------------------------------------------

@@ -630,6 +630,33 @@ export async function reconcileVenue(
     }
   }
 
+  // T5-Rixey-EEE Bug 1: after the WEDDING-level reconciliation runs,
+  // every cluster of merged weddings now has its people pointing at
+  // the canonical wedding. THIS is the right moment to also collapse
+  // PEOPLE rows within the surviving wedding — the same human under
+  // multiple email aliases (Knot proxy + real Gmail; Knot + WW + real
+  // Gmail) still appears as multiple `people` rows after KK.
+  // Without the alias-merge, lead detail headlines render as
+  // "Sarah & Sarah & Sarah" because the join walks every contact.
+  // Skipped on dryRun so the preview UI doesn't surface phantom
+  // collapses.
+  if (!dryRun) {
+    try {
+      const { mergePeopleAliasesForVenue } = await import('./people-merge-aliases')
+      const aliasSummary = await mergePeopleAliasesForVenue(supabase, venueId)
+      if (aliasSummary.rowsCollapsed > 0) {
+        // Surface the alias-merge counts on the result for the
+        // coordinator UI to show alongside the wedding-merge stats.
+        result.fieldsBackfilled['people.alias_collapsed'] =
+          (result.fieldsBackfilled['people.alias_collapsed'] ?? 0) + aliasSummary.rowsCollapsed
+      }
+      result.errors.push(...aliasSummary.errors)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown alias-merge error'
+      result.errors.push(`alias-merge: ${msg}`)
+    }
+  }
+
   return result
 }
 

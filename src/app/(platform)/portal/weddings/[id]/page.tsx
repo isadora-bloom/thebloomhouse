@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import { type Cents, formatCents } from '@/lib/types/monetary'
 import { useAiName } from '@/lib/hooks/use-ai-name'
@@ -238,15 +239,20 @@ const DELAY_PHASES = [
 // Helpers
 // ---------------------------------------------------------------------------
 
+// T5-Rixey-EEE Bug 1 (defense-in-depth): route name composition
+// through dedupePeopleByName so duplicate `people` rows (Knot proxy +
+// real Gmail under one human, before the alias-merge cron runs) don't
+// render as "Sarah & Sarah & Sarah". The root fix is in
+// people-merge-aliases.ts; this is the safety net.
 function getCoupleNames(people: PersonRow[]): string {
   const principals = people.filter(
     (p) => p.role === 'partner1' || p.role === 'partner2' || p.role === 'bride' || p.role === 'groom' || p.role === 'partner'
   )
   if (principals.length === 0) {
-    const first = people.slice(0, 2)
+    const first = dedupePeopleByName(people).slice(0, 2)
     return first.map((p) => p.first_name).join(' & ') || 'Unnamed Wedding'
   }
-  return principals.map((p) => p.first_name).join(' & ')
+  return dedupePeopleByName(principals).map((p) => p.first_name).join(' & ')
 }
 
 function getCoupleFullNames(people: PersonRow[]): string {
@@ -254,10 +260,10 @@ function getCoupleFullNames(people: PersonRow[]): string {
     (p) => p.role === 'partner1' || p.role === 'partner2' || p.role === 'bride' || p.role === 'groom' || p.role === 'partner'
   )
   if (principals.length === 0) {
-    const first = people.slice(0, 2)
+    const first = dedupePeopleByName(people).slice(0, 2)
     return first.map((p) => `${p.first_name} ${p.last_name}`).join(' & ') || 'Unnamed Wedding'
   }
-  return principals.map((p) => `${p.first_name} ${p.last_name}`).join(' & ')
+  return dedupePeopleByName(principals).map((p) => `${p.first_name} ${p.last_name}`).join(' & ')
 }
 
 function daysUntil(dateStr: string | null): number | null {

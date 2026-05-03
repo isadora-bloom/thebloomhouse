@@ -22,6 +22,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
 
 const STALENESS_DELTA = 2
 const GEN_LOCK_TTL_MS = 60_000 // 60s — generation that takes longer than this is assumed crashed
@@ -156,8 +157,10 @@ async function fetchContext(supabase: SupabaseClient, weddingId: string) {
 
 function buildUserPrompt(ctx: NonNullable<Awaited<ReturnType<typeof fetchContext>>>): string {
   const { wedding, candidates, signals, attributions, people, interactionSubjects, computedInquirySource } = ctx
-  const couple = people
-    .filter((p) => p.first_name)
+  // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name so the AI
+  // narrative doesn't refer to the same human twice (Knot proxy +
+  // real Gmail rows for one human).
+  const couple = dedupePeopleByName(people.filter((p) => p.first_name))
     .map((p) => `${p.first_name}${p.last_name ? ' ' + p.last_name : ''}`)
     .join(' & ') || 'this couple'
 

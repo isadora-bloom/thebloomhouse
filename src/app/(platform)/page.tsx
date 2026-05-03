@@ -15,6 +15,7 @@ import { MarketContextCard } from '@/components/intel/market-context-card'
 import { InsightFeed } from '@/components/intel/insight-feed'
 import { BrainDumpQueue } from '@/components/portal/brain-dump-queue'
 import { UpcomingMeetings } from '@/components/platform/upcoming-meetings'
+import { htmlToText } from '@/lib/utils/html-text'
 
 interface Stats {
   activeInquiries: number
@@ -444,7 +445,9 @@ export default function DashboardPage() {
                   <div className="w-2 h-2 mt-2 rounded-full bg-sage-400 shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-sage-800 line-clamp-1">
-                      {a.subject || a.body_preview || a.type}
+                      {/* T5-Rixey-EEE Bug 2: HTML strip body_preview
+                          fallback (subject is plain text already). */}
+                      {a.subject || htmlToText(a.body_preview) || a.type}
                     </p>
                     <p className="text-xs text-muted mt-0.5">
                       {new Date(a.created_at).toLocaleDateString('en-US', {

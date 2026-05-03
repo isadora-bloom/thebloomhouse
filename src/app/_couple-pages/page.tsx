@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import Link from 'next/link'
 import {
   Calendar,
@@ -332,8 +333,8 @@ export default function CoupleDashboard() {
           first_name: string
           role: string
         }>
-        const principals = people.filter(
-          (p) => p.role === 'partner1' || p.role === 'partner2'
+        const principals = dedupePeopleByName(
+          people.filter((p) => p.role === 'partner1' || p.role === 'partner2')
         )
         const coupleNames = principals.length > 0
           ? principals.map((p) => p.first_name).join(' & ')

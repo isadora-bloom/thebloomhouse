@@ -5,6 +5,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createBrowserClient } from '@supabase/ssr'
 import { VenueChip } from '@/components/intel/venue-chip'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import {
   MessageSquare,
   Send,
@@ -64,7 +65,8 @@ function getCoupleLabel(people: Person[]): string {
   const principals = people.filter(
     (p) => p.role === 'bride' || p.role === 'groom' || p.role === 'partner'
   )
-  const names = principals.length > 0 ? principals : people.slice(0, 2)
+  // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name.
+  const names = dedupePeopleByName(principals.length > 0 ? principals : people.slice(0, 2))
   return names.map((p) => p.first_name).join(' & ') || 'Unknown'
 }
 

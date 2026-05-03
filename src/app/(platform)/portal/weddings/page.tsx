@@ -5,6 +5,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { normalizeSource } from '@/lib/services/normalize-source'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import { type Cents, asDollars, dollarsToCents, formatCents } from '@/lib/types/monetary'
 import {
   Heart,
@@ -128,11 +129,12 @@ function getCoupleNames(people: Person[]): string {
     (p) => p.role === 'bride' || p.role === 'groom' || p.role === 'partner'
   )
   if (principals.length === 0) {
-    // Fallback to first two people
-    const first = people.slice(0, 2)
+    // Fallback to first two people. Dedupe by name (T5-Rixey-EEE
+    // Bug 1) so alias-row duplicates don't render as repeats.
+    const first = dedupePeopleByName(people).slice(0, 2)
     return first.map((p) => p.first_name).join(' & ') || 'Unnamed'
   }
-  return principals.map((p) => p.first_name).join(' & ')
+  return dedupePeopleByName(principals).map((p) => p.first_name).join(' & ')
 }
 
 function daysUntil(dateStr: string | null): number | null {

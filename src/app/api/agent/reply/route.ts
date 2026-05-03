@@ -73,6 +73,9 @@ export async function POST(request: NextRequest) {
     // attribution purposes (they're our outreach, not a lead-side
     // signal of any class).
     // signal-class-justified: outbound replies are venue-side, not lead signals
+    // html-stripped-justified: outbound coordinator/AI replies are
+    //   plain-text composed in the coordinator UI + appended disclosure;
+    //   no inbound HTML to strip.
     await supabase.from('interactions').insert({
       venue_id: auth.venueId,
       wedding_id: null,
