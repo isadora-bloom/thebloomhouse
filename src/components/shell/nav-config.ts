@@ -256,6 +256,7 @@ export const MODE_INTEL: ModeConfig = {
         { label: 'All Clients', href: '/intel/clients', icon: UserCheck },
         { label: 'Matching / Dedup', href: '/intel/matching', icon: GitMerge },
         { label: 'Candidate Review', href: '/intel/candidates', icon: Sparkles },
+        { label: 'Identity Backtrack', href: '/intel/identity-backtrack', icon: Sparkles },
         { label: 'Re-engagement', href: '/intel/reengagement', icon: Send },
       ],
     },

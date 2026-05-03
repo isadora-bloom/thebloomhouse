@@ -93,6 +93,10 @@
       "schedule": "45 4 * * *"
     },
     {
+      "path": "/api/cron?job=identity_backtrack",
+      "schedule": "0 4 * * *"
+    },
+    {
       "path": "/api/cron?job=data_integrity_sweep",
       "schedule": "0 5 * * *"
     },
