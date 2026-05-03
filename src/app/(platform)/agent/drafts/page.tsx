@@ -5,6 +5,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { DraftContextPanel } from '@/components/agent/DraftContextPanel'
+import { htmlToText } from '@/lib/utils/html-text'
 import {
   FileCheck,
   CheckCircle,
@@ -423,7 +424,10 @@ function DraftCard({
             {draft.interaction_subject && (
               <span className="font-medium not-italic">{draft.interaction_subject}: </span>
             )}
-            {draft.interaction_preview}
+            {/* T5-Rixey-EEE Bug 2: display-time HTML strip
+                — historical interactions still hold raw HTML in
+                body_preview. */}
+            {htmlToText(draft.interaction_preview)}
           </p>
         </div>
       )}

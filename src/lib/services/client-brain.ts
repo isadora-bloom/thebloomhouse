@@ -13,6 +13,7 @@
  */
 
 import { callAI } from '@/lib/ai/client'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import {
   buildPersonalityPrompt,
   requireAiName,
@@ -239,7 +240,10 @@ async function loadWeddingContext(weddingId: string): Promise<string> {
     .in('role', ['partner1', 'partner2'])
 
   if (people && people.length > 0) {
-    const names = people.map((p) => {
+    // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name so AI
+    // grounding doesn't see the same human twice (Knot proxy + real
+    // Gmail).
+    const names = dedupePeopleByName(people).map((p) => {
       const name = [p.first_name, p.last_name].filter(Boolean).join(' ')
       return `${name} (${p.role})`
     })

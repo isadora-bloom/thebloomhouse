@@ -19,6 +19,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
 
 export interface PostTourBrowsingLead {
   wedding_id: string
@@ -117,13 +118,13 @@ export async function getPostTourBrowsingLeads(
     // Dedup first names — some weddings have a person row repeated
     // under different roles or partner_index values, which produced
     // "Sarah & Sarah" rendering. Stable order by first appearance.
-    const seenNames = new Set<string>()
+    // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by FULL name so
+    // we don't drop "Sarah Olkowski" when the canonical row is also
+    // "Sarah Rohrschneider" (same first name, different last). The
+    // shared util normalizes accents + whitespace.
     const orderedNames: string[] = []
-    for (const p of wedPeople) {
+    for (const p of dedupePeopleByName(wedPeople)) {
       if (!p.first_name) continue
-      const k = p.first_name.toLowerCase()
-      if (seenNames.has(k)) continue
-      seenNames.add(k)
       orderedNames.push(p.first_name)
     }
     const coupleName = orderedNames.join(' & ') || 'Unnamed couple'

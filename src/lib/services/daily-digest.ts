@@ -13,6 +13,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import { callAI } from '@/lib/ai/client'
 import { sendEmail as sendGmail } from '@/lib/services/gmail'
 import { sendEmail as sendTransactionalEmail } from '@/lib/services/email'
@@ -260,10 +261,13 @@ export async function generateDigest(
   ])
 
   // ---- Helper: extract couple names from people join ----
+  // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name so Knot
+  // proxy + real-Gmail rows don't render as repeats in the digest.
   function getCoupleNames(row: any): string {
     const people = row.people ?? []
     const partners = people.filter((p: any) => p.role === 'partner1' || p.role === 'partner2')
-    const names = partners.map((p: any) => [p.first_name, p.last_name].filter(Boolean).join(' ')).filter(Boolean)
+    const deduped = dedupePeopleByName(partners)
+    const names = deduped.map((p: any) => [p.first_name, p.last_name].filter(Boolean).join(' ')).filter(Boolean)
     return names.length > 0 ? names.join(' & ') : 'Unknown'
   }
 

@@ -147,6 +147,10 @@
     {
       "path": "/api/cron?job=compute_attribution_parity",
       "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron?job=merge_people_aliases",
+      "schedule": "30 3 * * *"
     }
   ]
 }

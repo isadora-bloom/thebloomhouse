@@ -48,6 +48,9 @@ export async function POST(request: NextRequest) {
     // Log the outbound interaction (store the disclosed version — that's
     // what the recipient actually received)
     // signal-class-justified: outbound venue-side sends are not lead signals
+    // html-stripped-justified: outbound coordinator/AI sends are
+    //   plain-text composed in the coordinator UI + appended disclosure;
+    //   no inbound HTML to strip.
     const supabase = createServiceClient()
     await supabase.from('interactions').insert({
       venue_id: auth.venueId,

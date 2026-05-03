@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -331,10 +332,11 @@ function getCoupleNames(people: Person[]): string {
     (p) => p.role === 'partner1' || p.role === 'partner2'
   )
   if (principals.length === 0) {
-    const first = people.slice(0, 2)
+    // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name.
+    const first = dedupePeopleByName(people).slice(0, 2)
     return first.map((p) => p.first_name).filter(Boolean).join(' & ') || 'Wedding'
   }
-  return principals.map((p) => p.first_name).filter(Boolean).join(' & ')
+  return dedupePeopleByName(principals).map((p) => p.first_name).filter(Boolean).join(' & ')
 }
 
 function isNonEmpty<T>(v: T | null | undefined): v is T {

@@ -62,6 +62,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { detectFormRelay, type FormRelayLead } from './form-relay-parsers'
 import { normalizeSource } from './normalize-source'
 import { getGmailClient, parseEmailBody } from './gmail'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
 
 /**
  * Sources we consider "weak" first-touch — i.e. a scheduling-tool
@@ -617,7 +618,10 @@ export async function findBacktraceCandidates(
     // couple_names string only includes partner1/partner2 — that's the
     // human-readable label for the UI; the cluster-email check uses
     // the wider set.
-    const partners = ppl.filter((p) => p.role === 'partner1' || p.role === 'partner2')
+    // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name.
+    const partners = dedupePeopleByName(
+      ppl.filter((p) => p.role === 'partner1' || p.role === 'partner2')
+    )
     const parts = partners
       .map((p) => [p.first_name, p.last_name].filter(Boolean).join(' ').trim())
       .filter(Boolean)
@@ -854,7 +858,10 @@ export async function backtraceOneWedding(
     .select('wedding_id, first_name, last_name, email, role')
     .eq('wedding_id', weddingId)
   const ppl = (people ?? []) as PersonRow[]
-  const partners = ppl.filter((p) => p.role === 'partner1' || p.role === 'partner2')
+  // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name.
+  const partners = dedupePeopleByName(
+    ppl.filter((p) => p.role === 'partner1' || p.role === 'partner2')
+  )
   const coupleNames = partners
     .map((p) => [p.first_name, p.last_name].filter(Boolean).join(' ').trim())
     .filter(Boolean)

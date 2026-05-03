@@ -5,6 +5,8 @@ import { useParams, useRouter } from 'next/navigation'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
+import { dedupePeopleByName } from '@/lib/utils/couple-name'
+import { htmlToText } from '@/lib/utils/html-text'
 import {
   ArrowLeft,
   Mail,
@@ -719,7 +721,11 @@ export default function ClientProfilePage() {
 
   const coupleName = useMemo(() => {
     if (partners.length === 0) return 'Unknown Client'
-    return partners.map((p) => p.first_name).join(' & ')
+    // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name so the
+    // headline doesn't render "Sarah & Sarah & Sarah" when one human
+    // exists under multiple email aliases (Knot proxy + real Gmail).
+    // Root fix lives in people-merge-aliases.ts.
+    return dedupePeopleByName(partners).map((p) => p.first_name).join(' & ')
   }, [partners])
 
   const primaryEmail = useMemo(
@@ -1008,7 +1014,13 @@ export default function ClientProfilePage() {
                           </span>
                         </div>
                         {int.body_preview && (
-                          <p className="text-xs text-sage-500 line-clamp-2">{int.body_preview}</p>
+                          // T5-Rixey-EEE Bug 2 (display-time
+                          // sanitization, layer 2 of 3): historical
+                          // rows from MM bulk import + WW re-import
+                          // hold raw HTML in body_preview. Always
+                          // run htmlToText() — no-op for already-
+                          // plain text.
+                          <p className="text-xs text-sage-500 line-clamp-2">{htmlToText(int.body_preview)}</p>
                         )}
                         <p className="text-[11px] text-sage-400 mt-1">{fmtDatetime(int.timestamp)}</p>
                       </div>
@@ -1046,7 +1058,9 @@ export default function ClientProfilePage() {
                       </span>
                     </div>
                     {d.body_preview && (
-                      <p className="text-xs text-sage-500 line-clamp-2 ml-5">{d.body_preview}</p>
+                      // T5-Rixey-EEE Bug 2: same display-time
+                      // sanitization as the inbound side.
+                      <p className="text-xs text-sage-500 line-clamp-2 ml-5">{htmlToText(d.body_preview)}</p>
                     )}
                     <p className="text-[11px] text-sage-400 mt-1 ml-5">{fmtDatetime(d.created_at)}</p>
                   </div>

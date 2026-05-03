@@ -31,6 +31,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { htmlToText } from '@/lib/utils/html-text'
 
 export type JourneyCategory =
   | 'funnel_step'
@@ -409,15 +410,27 @@ export async function getWeddingJourney(
   }
 
   // ---- Interactions (raw emails / calls) ----
+  // T5-Rixey-EEE Bug 2 (display-time sanitization, layer 2 of 3):
+  // historical interactions from MM bulk import + WW re-import + any
+  // pre-RR pipeline run carry raw HTML in body_preview. Stream RR
+  // fixed gmail.ts:parseEmailBody to strip at WRITE time for new
+  // emails, but the renderer doesn't know which rows pre-date the
+  // fix. Always run htmlToText() here as defense-in-depth — no-op for
+  // already-plain text (idempotent), strips HTML for the legacy rows.
+  // Layer 1 (HTML backfill script scripts/backfill-html-text.ts)
+  // cleans the data at rest. Layer 3 (writer audit + CI guard
+  // scripts/check-html-stripped-at-writer.mjs) prevents future
+  // regressions.
   for (const ix of (interactionRes.data ?? []) as InteractionRow[]) {
     const isInbound = ix.direction === 'inbound'
     const typeLabel = ix.type === 'email' ? 'Email' : ix.type === 'call' ? 'Call' : ix.type === 'voicemail' ? 'Voicemail' : 'SMS'
+    const cleanPreview = htmlToText(ix.body_preview)
     events.push({
       id: `ix-${ix.id}`,
       timestamp: ix.timestamp,
       category: 'communication',
       title: `${typeLabel} ${isInbound ? 'received' : 'sent'}${ix.subject ? `: ${ix.subject}` : ''}`,
-      description: ix.body_preview ?? undefined,
+      description: cleanPreview ? cleanPreview.slice(0, 200) : undefined,
       actor: isInbound ? 'couple' : 'venue',
       evidence: { from_email: ix.from_email, from_name: ix.from_name, direction: ix.direction, type: ix.type },
     })

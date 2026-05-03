@@ -54,11 +54,15 @@ export async function POST(request: NextRequest) {
       .select('first_name, last_name, role')
       .eq('wedding_id', feedback.wedding_id)
 
-    const coupleNames = (people ?? [])
-      .filter((p: { role: string }) =>
+    // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name so the
+    // notification doesn't list the same human twice.
+    const { dedupePeopleByName } = await import('@/lib/utils/couple-name')
+    const coupleNames = dedupePeopleByName(
+      (people ?? []).filter((p: { role: string }) =>
         ['partner1', 'partner2', 'bride', 'groom', 'partner'].includes(p.role)
       )
-      .map((p: { first_name: string; last_name: string }) => `${p.first_name} ${p.last_name}`)
+    )
+      .map((p) => `${p.first_name} ${p.last_name}`)
       .join(' & ')
 
     // Fetch venue name
