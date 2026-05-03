@@ -34,6 +34,15 @@ import { loadFredSeries } from './external-context/fred'
 import { loadCulturalMomentsSeries } from './external-context/cultural-moments'
 import { loadCalendarSeries } from './external-context/calendar'
 import { bonferroniCriticalR } from './external-context/stats'
+import {
+  formatSeriesLabel,
+  classifySeries,
+  classifyPair,
+  rankMultiplierForPair,
+  lagsForPair,
+  type PairClass,
+  type SignalClass,
+} from '@/lib/utils/format-series-label'
 
 /**
  * Stable namespace UUID for correlation context_id derivation. RFC 4122
@@ -85,7 +94,15 @@ const WINDOW_DAYS = 90
 // it; for ad-hoc historical-significance runs we accept a windowDaysOverride
 // up to MAX_WINDOW_DAYS. Cron path stays at 90d.
 const MAX_WINDOW_DAYS = 730
-const LAGS = [0, 3, 5, 7, 14]
+// Stream YY (Z5): replaced fixed `[0, 3, 5, 7, 14]` with class-aware
+// lag selection. The macro × venue Rixey demo ("mortgage rate affects
+// wedding inquiries") doesn't land at 14d but lands strongly at 60-90d
+// because consumer-behaviour transmission is slow. Per-pair-class lag
+// sets live in `format-series-label.ts` (lagsForPair); the engine
+// derives the BONFERRONI_LAG_COUNT from the union of all per-class
+// lags to keep the family-wise correction honest across the wider
+// search space.
+const ALL_LAGS_UNION = [0, 7, 14, 30, 60, 90, 180]
 // T5-Rixey-NN: lowered from 20 → 12. Stream MM verified that small venues
 // (Rixey, ~191 inquiries / 90d) commonly have valid leading-indicator
 // series with 16-18 nonzero days that the 20-day gate killed outright.
@@ -114,6 +131,15 @@ export interface CorrelationInsight {
   headline: string
   body: string
   confidence: number
+  /** Stream YY (Z1): pair-class taxonomy. Drives surface_priority and
+   *  the /intel/macro-correlations filter chips. */
+  pairClass: PairClass
+  classA: SignalClass
+  classB: SignalClass
+  /** Stream YY (Z1): |r| × 100 × rankMultiplierForPair(pairClass).
+   *  Persisted to intelligence_insights.surface_priority so coordinators
+   *  see venue × macro insights above macro × macro noise. */
+  rankScore: number
 }
 
 function pearson(xs: number[], ys: number[]): number {
@@ -427,7 +453,14 @@ async function getVenueGeoScope(
  */
 function correctedThresholdFor(numChannels: number, windowDays: number = WINDOW_DAYS): number {
   if (numChannels < 2) return CORRELATION_THRESHOLD
-  const numTests = numChannels * (numChannels - 1) * LAGS.length
+  // Stream YY (Z5 caveat): the lag set is now class-aware, but the
+  // Bonferroni penalty must reflect the WIDEST search space the engine
+  // could traverse — otherwise we'd give macro × macro pairs an unfair
+  // significance break compared to venue × social pairs. Use the union
+  // of all per-class lags. (For an N=12 channel family that's 12×11×7
+  // = 924 tests vs the old 12×11×5 = 660; the threshold rises by
+  // ~0.02-0.04 which is the right honest trade-off.)
+  const numTests = numChannels * (numChannels - 1) * ALL_LAGS_UNION.length
   const bonferroniR = bonferroniCriticalR(numTests, windowDays, FAMILY_ALPHA)
   return Math.max(CORRELATION_THRESHOLD, Math.min(0.85, bonferroniR))
 }
@@ -447,36 +480,17 @@ function applyLag(arr: number[], lag: number): { x: number[]; y: number[] } {
   return { x: arr.slice(0, n), y: arr.slice(lag) }
 }
 
+/**
+ * Stream YY (Z3): channel-id → coordinator-readable label.
+ *
+ * Delegates to the shared utility so the engine, the narration
+ * surface, and any future macro-correlations consumer all render
+ * identical labels. Pre-Stream-YY this lived in two places (here +
+ * correlation-narration.ts) and drifted ("S&P 500" properly cased
+ * alongside "30y mortgage rate" / "consumer sentiment" lowercase).
+ */
 function humanChannel(ch: string): string {
-  // T2-C: External Context channel-name mappings. fred_<id>, calendar_<cat>,
-  // cultural_moments → human-friendly labels for the insight headlines.
-  const fredLabels: Record<string, string> = {
-    CPIAUCSL: 'CPI (inflation)',
-    MORTGAGE30US: '30y mortgage rate',
-    SP500: 'S&P 500',
-    UNRATE: 'unemployment rate',
-    UMCSENT: 'consumer sentiment',
-  }
-  if (ch.startsWith('fred_')) {
-    const id = ch.slice('fred_'.length)
-    return fredLabels[id] ?? `FRED ${id}`
-  }
-  if (ch.startsWith('calendar_')) {
-    const cat = ch.slice('calendar_'.length).replace(/_/g, ' ')
-    return `${cat} (calendar)`
-  }
-  if (ch === 'cultural_moments') return 'cultural moments'
-  return ch
-    .replace(/_/g, ' ')
-    .replace(/\bthe knot\b/i, 'The Knot')
-    .replace(/\bwedding wire\b/i, 'WeddingWire')
-    .replace(/\binstagram\b/i, 'Instagram')
-    .replace(/\bfacebook\b/i, 'Facebook')
-    .replace(/\bpinterest\b/i, 'Pinterest')
-    .replace(/\btiktok\b/i, 'TikTok')
-    .replace(/\bgoogle analytics\b/i, 'Google Analytics')
-    .replace(/\bgoogle\b/i, 'Google')
-    .replace(/\bhoneybook\b/i, 'HoneyBook')
+  return formatSeriesLabel(ch)
 }
 
 /**
@@ -519,13 +533,42 @@ export async function computeCorrelationsForVenue(args: {
   for (let i = 0; i < names.length; i++) {
     for (let j = 0; j < names.length; j++) {
       if (i === j) continue
-      const a = arrays.get(names[i])!
-      const b = arrays.get(names[j])!
+      const nameA = names[i]
+      const nameB = names[j]
+
+      // Stream YY (Z2): direction enforcement. Macro channels (FRED,
+      // calendar, cultural moments) are exogenous — a venue's internal
+      // metric cannot causally PRECEDE national CPI or 30-year mortgage
+      // rates. Skip the venue/social → macro direction; the macro →
+      // venue/social direction will be evaluated when (i, j) reaches
+      // the swap. Same applies to social → macro (downstream of macro).
+      // For symmetric same-class pairs (venue × venue, social × social,
+      // macro × macro) both directions remain valid and dedup picks
+      // the stronger.
+      const classA = classifySeries(nameA)
+      const classB = classifySeries(nameB)
+      if (classB === 'macro' && classA !== 'macro') {
+        // (venue|social) → macro: drop. The mirror (macro → venue|social)
+        // is evaluated separately and IS allowed.
+        continue
+      }
+
+      const a = arrays.get(nameA)!
+      const b = arrays.get(nameB)!
       if (nonZeroCount(a) < MIN_NONZERO_DAYS || nonZeroCount(b) < MIN_NONZERO_DAYS) continue
+
+      // Stream YY (Z5): class-aware lag set. Macro × venue gets the
+      // 30-180d slow-consumer-behaviour set; venue × social gets the
+      // 0-30d viral set; etc. The Bonferroni threshold is computed
+      // against the WIDEST union (correctedThresholdFor uses
+      // ALL_LAGS_UNION.length) so we can't game significance by
+      // searching wider.
+      const pairClass = classifyPair(nameA, nameB)
+      const lagsToTry = lagsForPair(pairClass)
 
       // Try each lag; keep the highest-|r| hit that clears threshold.
       let best: { lag: number; r: number } | null = null
-      for (const lag of LAGS) {
+      for (const lag of lagsToTry) {
         const { x, y } = applyLag(a, lag) // A leads B by `lag` days
         const pairedA = x
         const pairedB = applyLag(b, lag).y // align same tail of b
@@ -536,8 +579,8 @@ export async function computeCorrelationsForVenue(args: {
       }
       if (!best) continue
 
-      const humanA = humanChannel(names[i])
-      const humanB = humanChannel(names[j])
+      const humanA = humanChannel(nameA)
+      const humanB = humanChannel(nameB)
       const direction = best.r > 0 ? 'rise together' : 'move in opposite directions'
       const lagPhrase = best.lag === 0 ? 'on the same day' : `with a ${best.lag}-day lag`
       const headline = best.lag === 0
@@ -548,20 +591,35 @@ export async function computeCorrelationsForVenue(args: {
           ? `A spike in ${humanA} has tended to predict a move in ${humanB} about ${best.lag} days later.`
           : 'Movements appear synchronous.'
       }`
+      // Stream YY (Z1): rankScore = |r| × 100 × per-pair-class
+      // multiplier. Persisted as surface_priority so the UI sort puts
+      // venue × macro insights above macro × macro noise without
+      // hiding the latter.
+      const rankScore = Math.abs(best.r) * 100 * rankMultiplierForPair(pairClass)
       insights.push({
-        channelA: names[i],
-        channelB: names[j],
+        channelA: nameA,
+        channelB: nameB,
         lagDays: best.lag,
         r: best.r,
         headline,
         body,
         confidence: Math.min(1, Math.abs(best.r)),
+        pairClass,
+        classA,
+        classB,
+        rankScore,
       })
     }
   }
 
-  // Sort by |r|, dedupe by un-ordered pair (drop the mirror), take top N.
-  insights.sort((x, y) => Math.abs(y.r) - Math.abs(x.r))
+  // Sort by rankScore (Stream YY Z1 — incorporates the pair-class
+  // multiplier). Within the same rankScore, fall back to |r|. Then
+  // dedupe by un-ordered pair (drop the mirror), take top N.
+  insights.sort((x, y) => {
+    const ds = y.rankScore - x.rankScore
+    if (ds !== 0) return ds
+    return Math.abs(y.r) - Math.abs(x.r)
+  })
   const seenPairs = new Set<string>()
   const deduped: CorrelationInsight[] = []
   for (const ins of insights) {
@@ -598,6 +656,10 @@ export async function computeCorrelationsForVenue(args: {
       body: ins.body,
       priority: Math.abs(ins.r) >= 0.8 ? 'high' : 'medium',
       confidence: Math.abs(ins.r),
+      // Stream YY (Z1): persist signal_class + rank score so /intel UIs
+      // can filter by class without re-running the engine, and so
+      // ORDER BY surface_priority DESC reflects the per-class boost.
+      surface_priority: ins.rankScore,
       data_points: {
         channel_a: ins.channelA,
         channel_b: ins.channelB,
@@ -608,6 +670,13 @@ export async function computeCorrelationsForVenue(args: {
         // future reader) can reverse-engineer which pair the UUID
         // belongs to without re-running the engine.
         pair_key: pairKey,
+        // Stream YY (Z1): signal-class taxonomy. UI filter (Z4) reads
+        // these to switch chips between All / Venue-relevant / Macro.
+        signal_class: ins.pairClass,
+        class_a: ins.classA,
+        class_b: ins.classB,
+        rank_multiplier: rankMultiplierForPair(ins.pairClass),
+        rank_score: ins.rankScore,
       },
       status: 'new',
       context_id: contextId,

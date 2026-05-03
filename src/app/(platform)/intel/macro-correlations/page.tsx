@@ -50,6 +50,25 @@ interface NarratedCorrelation {
   createdAt: string
   seriesA: Array<{ dayKey: string; value: number }>
   seriesB: Array<{ dayKey: string; value: number }>
+  /** Stream YY (Z1 / Z4): pair-class taxonomy. Drives filter chips. */
+  signalClass: string
+}
+
+// Stream YY (Z4): filter chips at the top of the page so coordinators
+// can drill into the cards that matter for them. "Venue-relevant" is
+// the default-friendly view (anything touching internal venue series);
+// "Macro only" is for the economically-curious; "All" preserves the
+// pre-filter behaviour.
+type FilterMode = 'all' | 'venue_relevant' | 'macro_only'
+
+function isVenueRelevant(signalClass: string): boolean {
+  // Any pair where at least one side is a venue/social channel.
+  // macro_x_macro is the only excluded class.
+  return signalClass !== 'macro_x_macro'
+}
+
+function isPureMacro(signalClass: string): boolean {
+  return signalClass === 'macro_x_macro'
 }
 
 interface ApiResponse {
@@ -113,6 +132,36 @@ function Sparkline({
     <svg width={width} height={height} className="overflow-visible">
       <path d={path} stroke={color} strokeWidth={1.5} fill="none" />
     </svg>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Filter chip (Stream YY, Z4)
+// ---------------------------------------------------------------------------
+
+function FilterChip({
+  active,
+  onClick,
+  label,
+  count,
+}: {
+  active: boolean
+  onClick: () => void
+  label: string
+  count: number
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={
+        active
+          ? 'px-3 py-1 text-xs rounded-full bg-sage-600 text-white border border-sage-600'
+          : 'px-3 py-1 text-xs rounded-full bg-white text-sage-700 border border-sage-200 hover:bg-sage-50'
+      }
+    >
+      {label}{' '}
+      <span className={active ? 'opacity-80' : 'opacity-60'}>({count})</span>
+    </button>
   )
 }
 
@@ -258,6 +307,12 @@ export default function MacroCorrelationsPage() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Stream YY (Z4): filter chip state. Defaults to "venue_relevant"
+  // because the user's complaint was that pure macro × macro
+  // correlations dominated the surface and aren't actionable for a
+  // wedding venue coordinator. The chip set still lets curious users
+  // pull up Macro only or All.
+  const [filter, setFilter] = useState<FilterMode>('venue_relevant')
 
   const load = useCallback(async (refresh: boolean) => {
     if (refresh) setRefreshing(true)
@@ -287,14 +342,51 @@ export default function MacroCorrelationsPage() {
     load(false)
   }, [load])
 
+  // Stream YY (Z1 + Z4): sort by adjusted priority (|r| × class
+  // multiplier) and then apply the filter mode. Unfiltered counts are
+  // computed separately so the chips can show how many are in each
+  // bucket.
+  const counts = useMemo(() => {
+    if (!data) return { all: 0, venue: 0, macro: 0 }
+    let venue = 0
+    let macro = 0
+    for (const n of data.narrations) {
+      if (isVenueRelevant(n.signalClass)) venue++
+      else if (isPureMacro(n.signalClass)) macro++
+    }
+    return { all: data.narrations.length, venue, macro }
+  }, [data])
+
   const sorted = useMemo(() => {
     if (!data) return []
-    return [...data.narrations].sort((a, b) => {
+    const filtered = data.narrations.filter((n) => {
+      if (filter === 'all') return true
+      if (filter === 'venue_relevant') return isVenueRelevant(n.signalClass)
+      if (filter === 'macro_only') return isPureMacro(n.signalClass)
+      return true
+    })
+    return filtered.sort((a, b) => {
       // Strong signals first.
       if (a.weakSignal !== b.weakSignal) return a.weakSignal ? 1 : -1
-      return Math.abs(b.r) - Math.abs(a.r)
+      // Stream YY (Z1): apply the same pair-class multiplier the engine
+      // and narration writer use for surface_priority (kept in sync with
+      // rankMultiplierForPair in lib/utils/format-series-label.ts). We
+      // mirror it client-side rather than reading surface_priority off
+      // the API because the response shape doesn't expose it; the
+      // resulting ordering matches the DB-ranked listExistingNarrations
+      // order in steady state.
+      const mult = (sc: string): number => {
+        if (sc === 'macro_x_venue') return 1.5
+        if (sc === 'venue_x_social') return 1.3
+        if (sc === 'venue_x_venue') return 1.2
+        if (sc === 'macro_x_macro') return 0.4
+        return 1.0
+      }
+      const aScore = Math.abs(a.r) * mult(a.signalClass)
+      const bScore = Math.abs(b.r) * mult(b.signalClass)
+      return bScore - aScore
     })
-  }, [data])
+  }, [data, filter])
 
   return (
     <div className="space-y-6">
@@ -350,6 +442,35 @@ export default function MacroCorrelationsPage() {
         </div>
       )}
 
+      {/* Stream YY (Z4): filter chips. Default = venue-relevant
+          because pure macro × macro correlations don't drive
+          coordinator action. */}
+      {data && data.narrations.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs uppercase tracking-wide text-sage-500 mr-1">
+            Show
+          </span>
+          <FilterChip
+            active={filter === 'venue_relevant'}
+            onClick={() => setFilter('venue_relevant')}
+            label="Venue-relevant"
+            count={counts.venue}
+          />
+          <FilterChip
+            active={filter === 'macro_only'}
+            onClick={() => setFilter('macro_only')}
+            label="Macro only"
+            count={counts.macro}
+          />
+          <FilterChip
+            active={filter === 'all'}
+            onClick={() => setFilter('all')}
+            label="All"
+            count={counts.all}
+          />
+        </div>
+      )}
+
       {/* Body */}
       {loading ? (
         <div className="flex items-center justify-center py-16">
@@ -364,12 +485,14 @@ export default function MacroCorrelationsPage() {
         <div className="bg-surface border border-border rounded-xl p-12 text-center">
           <Sparkles className="w-8 h-8 text-sage-300 mx-auto mb-3" />
           <p className="text-sage-600 font-medium">
-            No macro correlations narrated yet
+            {data && data.narrations.length > 0
+              ? 'No correlations match this filter'
+              : 'No macro correlations narrated yet'}
           </p>
           <p className="text-sm text-muted mt-1 max-w-md mx-auto">
-            Bloom's correlation engine surfaces cross-limb stories as your
-            data accumulates. Click Refresh to narrate the most recent
-            engine findings, or wait for the daily cron.
+            {data && data.narrations.length > 0
+              ? `${data.narrations.length} narration${data.narrations.length === 1 ? '' : 's'} ${data.narrations.length === 1 ? 'is' : 'are'} hidden by the current filter. Switch to "All" to see everything.`
+              : "Bloom's correlation engine surfaces cross-limb stories as your data accumulates. Click Refresh to narrate the most recent engine findings, or wait for the daily cron."}
           </p>
         </div>
       ) : (

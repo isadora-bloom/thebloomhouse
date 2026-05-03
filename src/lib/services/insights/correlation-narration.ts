@@ -48,6 +48,11 @@ import type { ClassicalEvidence, InsightNarration } from './types'
 import { loadFredSeries } from '../external-context/fred'
 import { loadCulturalMomentsSeries } from '../external-context/cultural-moments'
 import { loadCalendarSeries } from '../external-context/calendar'
+import {
+  formatSeriesLabel,
+  classifyPair,
+  rankMultiplierForPair,
+} from '@/lib/utils/format-series-label'
 
 export const CORRELATION_NARRATION_PROMPT_VERSION =
   'correlation-narration.prompt.v1.0'
@@ -127,6 +132,9 @@ export interface NarratedCorrelation {
   /** Recent values for the "view raw series" expandable. */
   seriesA: Array<{ dayKey: string; value: number }>
   seriesB: Array<{ dayKey: string; value: number }>
+  /** Stream YY (Z1 / Z4): pair-class taxonomy. UI filter chips
+   *  use this to switch between All / Venue-relevant / Macro. */
+  signalClass: string
 }
 
 // ---------------------------------------------------------------------------
@@ -170,32 +178,14 @@ function effectivePValue(r: number, n: number): number {
   return Math.max(0, Math.min(1, 2 * (1 - phi)))
 }
 
+/**
+ * Stream YY (Z3): channel-id → coordinator-readable label. Delegates
+ * to the shared utility so the engine + narration surface render
+ * identical labels (pre-Stream-YY this file had its own copy that
+ * drifted from the engine's, producing inconsistent casing).
+ */
 function humanChannel(ch: string): string {
-  const fredLabels: Record<string, string> = {
-    CPIAUCSL: 'CPI (inflation)',
-    MORTGAGE30US: '30y mortgage rate',
-    SP500: 'S&P 500',
-    UNRATE: 'unemployment rate',
-    UMCSENT: 'consumer sentiment',
-  }
-  if (ch.startsWith('fred_')) {
-    const id = ch.slice('fred_'.length)
-    return fredLabels[id] ?? `FRED ${id}`
-  }
-  if (ch.startsWith('calendar_')) {
-    const cat = ch.slice('calendar_'.length).replace(/_/g, ' ')
-    return `${cat} (calendar)`
-  }
-  if (ch === 'cultural_moments') return 'cultural moments'
-  if (ch === 'inquiries') return 'inquiries'
-  return ch
-    .replace(/_/g, ' ')
-    .replace(/\bthe knot\b/i, 'The Knot')
-    .replace(/\bwedding wire\b/i, 'WeddingWire')
-    .replace(/\binstagram\b/i, 'Instagram')
-    .replace(/\bfacebook\b/i, 'Facebook')
-    .replace(/\bpinterest\b/i, 'Pinterest')
-    .replace(/\btiktok\b/i, 'TikTok')
+  return formatSeriesLabel(ch)
 }
 
 function summariseSeries(
@@ -535,6 +525,11 @@ async function narrateOne(
   const channelBLabel = humanChannel(channelB)
   const pValue = effectivePValue(r, windowDays)
   const weakSignal = Math.abs(r) < WEAK_R_THRESHOLD || pValue > WEAK_P_THRESHOLD
+  // Stream YY (Z1): pair-class taxonomy — used both for ranking
+  // (surfacePriority below) and for the UI filter chips on
+  // /intel/macro-correlations. Computed here so the cached-return
+  // path also carries it.
+  const pairClassEarly = classifyPair(channelA, channelB)
 
   // 4. Build cache key. Stable inputs only — recent values shift daily,
   // so we DON'T fingerprint the full series; we fingerprint the
@@ -578,6 +573,7 @@ async function narrateOne(
         createdAt: row.created_at,
         seriesA: aSummary.recentValues,
         seriesB: bSummary.recentValues,
+        signalClass: pairClassEarly,
       }
     }
   }
@@ -694,9 +690,17 @@ made-up numbers.`
     }
   }
 
-  // 7. Persist with numbers-guard via the shared infra. Surface
-  // priority = |r| * 100 so the strongest correlations sort first;
-  // weak signals sink to the bottom.
+  // 7. Persist with numbers-guard via the shared infra.
+  //
+  // Stream YY (Z1): apply the same pair-class multiplier the engine
+  // uses on its primary rows. Without this the narration rows would
+  // sort independently of the engine — a strong macro × macro narration
+  // could outrank a moderate macro × venue narration on the
+  // /intel/macro-correlations surface, defeating the whole point of
+  // the down-rank.
+  const pairClass = pairClassEarly
+  const surfacePriority = Math.abs(r) * 100 * rankMultiplierForPair(pairClass)
+
   const classical: ClassicalEvidence = {
     cacheKey,
     numbers: allowedNumbers,
@@ -707,6 +711,12 @@ made-up numbers.`
       lagDays, r, pValue,
       windowDays,
       weakSignal,
+      // Stream YY (Z1 / Z4): signal-class taxonomy on the narration
+      // row so the /intel/macro-correlations filter chips can switch
+      // between All / Venue-relevant / Macro without re-running the
+      // engine.
+      signalClass: pairClass,
+      rankMultiplier: rankMultiplierForPair(pairClass),
       seriesASummary: {
         nonZeroDays: aSummary.nonZeroDays,
         min: aSummary.min, max: aSummary.max,
@@ -740,7 +750,7 @@ made-up numbers.`
     llmModelUsed: CLAUDE_MODEL,
     promptVersionUsed: CORRELATION_NARRATION_PROMPT_VERSION,
     confidence: conf.value,
-    surfacePriority: Math.abs(r) * 100,
+    surfacePriority,
     priority: Math.abs(r) >= 0.7 ? 'high' : Math.abs(r) >= 0.5 ? 'medium' : 'low',
   })
 
@@ -771,7 +781,7 @@ made-up numbers.`
       llmModelUsed: CLAUDE_MODEL,
       promptVersionUsed: CORRELATION_NARRATION_PROMPT_VERSION,
       confidence: conf.value,
-      surfacePriority: Math.abs(r) * 100,
+      surfacePriority,
       priority: Math.abs(r) >= 0.7 ? 'high' : Math.abs(r) >= 0.5 ? 'medium' : 'low',
     })
     if (!retry.ok) {
@@ -791,6 +801,7 @@ made-up numbers.`
         createdAt: row.created_at,
         seriesA: aSummary.recentValues,
         seriesB: bSummary.recentValues,
+        signalClass: pairClass,
       }
     }
     return {
@@ -808,6 +819,7 @@ made-up numbers.`
       createdAt: row.created_at,
       seriesA: aSummary.recentValues,
       seriesB: bSummary.recentValues,
+      signalClass: pairClass,
     }
   }
 
@@ -826,6 +838,7 @@ made-up numbers.`
     createdAt: row.created_at,
     seriesA: aSummary.recentValues,
     seriesB: bSummary.recentValues,
+    signalClass: pairClass,
   }
 }
 
@@ -883,6 +896,12 @@ export async function listExistingNarrations(
     const seriesB = Array.isArray(dp.seriesB)
       ? (dp.seriesB as Array<{ dayKey: string; value: number }>)
       : []
+    // Stream YY (Z1 / Z4): pull signalClass from the persisted payload
+    // when present; fall back to re-classifying from the raw channel
+    // ids for legacy rows that pre-date this column.
+    const signalClass = typeof dp.signalClass === 'string' && dp.signalClass.length > 0
+      ? dp.signalClass
+      : classifyPair(channelA, channelB)
     out.push({
       id: row.id,
       correlationId: row.context_id ?? row.id,
@@ -897,6 +916,7 @@ export async function listExistingNarrations(
       cached: true,
       createdAt: row.created_at,
       seriesA, seriesB,
+      signalClass,
     })
   }
   return out
