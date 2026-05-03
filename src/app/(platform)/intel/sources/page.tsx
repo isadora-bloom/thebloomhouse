@@ -71,16 +71,34 @@ interface MarketingSpend {
   venues?: { name: string | null } | null
 }
 
-/** T5-Rixey-VV Y2/Y4: weddings rollup row used by the page to compute
- *  Total Revenue + augment the Source Comparison table with bookings
- *  that have no wedding_touchpoints (e.g. HoneyBook bookings imported
- *  before the touchpoint pipeline existed). booking_value is CENTS. */
-interface WeddingRollupRow {
-  id: string
+/** T5-Rixey-JJJ: weddings rollup row used by the page to compute Total
+ *  Revenue + augment the Source Comparison table with bookings that
+ *  have no wedding_touchpoints (e.g. HoneyBook bookings imported
+ *  before the touchpoint pipeline existed).
+ *
+ *  Renamed from WeddingRollupRow → WeddingRollupAgg in JJJ because the
+ *  shape changed: it's now ONE row per (source_key, venue_id) returned
+ *  by the server-side endpoint, not per-wedding. The browser-side
+ *  weddings query was removed — RLS denied the cross-venue + logged-out
+ *  reads and the page silently displayed $0 revenue.
+ *
+ *  source_key is snake_case (server keeps the raw key — coordinator
+ *  formatting happens client-side via formatSourceLabel). NULL DB
+ *  values arrive as 'unknown'.
+ *
+ *  revenue_cents is CENTS (Bloom money convention).
+ */
+interface WeddingRollupAgg {
+  source_key: string
   venue_id: string
-  source: string | null
-  status: string | null
-  booking_value: number | null
+  venue_name: string
+  bookings: number
+  revenue_cents: number
+}
+
+interface WeddingRollupApiResponse {
+  rows?: WeddingRollupAgg[]
+  totals?: { bookings: number; revenue_cents: number }
 }
 
 interface SourceRow {
@@ -1218,10 +1236,12 @@ export default function SourceAttributionPage() {
   const scope = useScope()
   const [funnelRows, setFunnelRows] = useState<FunnelApiRow[]>([])
   const [spendData, setSpendData] = useState<MarketingSpend[]>([])
-  // T5-Rixey-VV Y2/Y4: weddings loaded directly so Total Revenue and
-  // the Source Comparison table can include bookings without
-  // wedding_touchpoints (HoneyBook + pre-Bloom history).
-  const [weddingsRollup, setWeddingsRollup] = useState<WeddingRollupRow[]>([])
+  // T5-Rixey-JJJ: weddings rollup now arrives PRE-AGGREGATED (one row
+  // per source × venue) from a server-side endpoint that uses the
+  // service-role client. The previous in-page browser fetch was bitten
+  // by RLS and silently returned zero rows — Total Revenue showed $0
+  // even though Rixey had $794K of HoneyBook revenue.
+  const [weddingsRollup, setWeddingsRollup] = useState<WeddingRollupAgg[]>([])
   const [venueNameById, setVenueNameById] = useState<Map<string, string>>(new Map())
   const [model, setModel] = useState<AttributionModel>('first_touch')
   const [loading, setLoading] = useState(true)
@@ -1280,47 +1300,52 @@ export default function SourceAttributionPage() {
         spendQuery.in('venue_id', venueIds)
       }
 
-      // T5-Rixey-VV Y2/Y4: pull every booked / completed wedding so we
-      // can compute Total Revenue from booking_value directly + show
-      // sources that have bookings but no wedding_touchpoints (Stream
-      // SS-era HoneyBook backfill rows). Restricted to terminal
-      // statuses so in-flight inquiries don't inflate revenue.
-      const weddingsQuery = supabase
-        .from('weddings')
-        .select('id, venue_id, source, status, booking_value')
-        .in('status', ['booked', 'completed'])
-      if (venueIds && venueIds.length > 0) {
-        weddingsQuery.in('venue_id', venueIds)
-      }
+      // T5-Rixey-JJJ: weddings rollup now comes from a server-side
+      // endpoint that uses the service-role client. The previous
+      // browser-side `supabase.from('weddings')` query was hit by RLS
+      // and silently returned zero rows — Total Revenue showed $0 even
+      // though the database had $794K of HoneyBook revenue. The new
+      // endpoint also adds the merged_into_id IS NULL filter that the
+      // browser-side query was missing (prevents double-counting
+      // deduped HoneyBook rows).
 
-      // T5-Rixey-VV Y4: venue-name map for the augmented Source
-      // Comparison rows that come from weddingsRollup (no
-      // venues:venue_id(name) join needed because we already have the
-      // ids).
-      const venuesQuery = venueIds && venueIds.length > 0
-        ? supabase.from('venues').select('id, name').in('id', venueIds)
-        : Promise.resolve({ data: [], error: null })
-
-      const [funnelRes, spendRes, weddingsRes, venuesRes] = await Promise.all([
+      const [funnelRes, spendRes, weddingRollupRes] = await Promise.all([
         fetch(`/api/intel/sources/funnel?${apiParams.toString()}`),
         spendQuery,
-        weddingsQuery,
-        venuesQuery,
+        fetch(`/api/intel/sources/wedding-rollup?${apiParams.toString()}`),
       ])
 
       if (!funnelRes.ok) throw new Error(`Funnel HTTP ${funnelRes.status}`)
+      if (!weddingRollupRes.ok) throw new Error(`Wedding rollup HTTP ${weddingRollupRes.status}`)
       const funnelJson = (await funnelRes.json()) as { rows?: FunnelApiRow[] }
+      const weddingRollupJson = (await weddingRollupRes.json()) as WeddingRollupApiResponse
       if (spendRes.error) throw spendRes.error
-      if (weddingsRes.error) throw weddingsRes.error
 
+      const rollupRows = weddingRollupJson.rows ?? []
+      // Build the venue-name map from the rollup payload itself —
+      // the server already joined venue_id → name for every row, so
+      // the page no longer needs a separate venues query.
       const nameMap = new Map<string, string>()
-      for (const v of (venuesRes.data ?? []) as Array<{ id: string; name: string | null }>) {
-        nameMap.set(v.id, v.name ?? '')
+      for (const r of rollupRows) {
+        if (r.venue_id) nameMap.set(r.venue_id, r.venue_name ?? '')
+      }
+      // venueIds resolved above (still needed for spend query); fold
+      // them into the name map via a one-shot venues lookup ONLY when
+      // the rollup is empty (all-zero state). This keeps the legacy
+      // labelling for the spend table when no bookings exist yet.
+      if (nameMap.size === 0 && venueIds && venueIds.length > 0) {
+        const { data: venuesData } = await supabase
+          .from('venues')
+          .select('id, name')
+          .in('id', venueIds)
+        for (const v of (venuesData ?? []) as Array<{ id: string; name: string | null }>) {
+          nameMap.set(v.id, v.name ?? '')
+        }
       }
 
       setFunnelRows(funnelJson.rows ?? [])
       setSpendData((spendRes.data ?? []) as unknown as MarketingSpend[])
-      setWeddingsRollup((weddingsRes.data ?? []) as unknown as WeddingRollupRow[])
+      setWeddingsRollup(rollupRows)
       setVenueNameById(nameMap)
       setError(null)
     } catch (err) {
@@ -1414,15 +1439,17 @@ export default function SourceAttributionPage() {
       cur.revenue += Number(r.revenue ?? 0)
       funnelByKey.set(k, cur)
     }
+    // T5-Rixey-JJJ: weddingsRollup is now PRE-AGGREGATED (one row per
+    // source × venue) by the server endpoint, so we consume it
+    // directly instead of looping per-wedding. revenue_cents → dollars
+    // happens here so the rest of the page math stays in dollars.
     const wedByKey = new Map<string, { bookings: number; revenueDollars: number }>()
     for (const w of weddingsRollup) {
-      const sourceKey = (w.source ?? 'unknown').toLowerCase()
+      const sourceKey = (w.source_key ?? 'unknown').toLowerCase()
       const k = makeKey(sourceKey, w.venue_id ?? null)
       const cur = wedByKey.get(k) ?? { bookings: 0, revenueDollars: 0 }
-      cur.bookings += 1
-      // booking_value is cents (Bloom convention). Convert here for
-      // display-side arithmetic; the funnel API already returns dollars.
-      cur.revenueDollars += Number(w.booking_value ?? 0) / 100
+      cur.bookings += Number(w.bookings ?? 0)
+      cur.revenueDollars += Number(w.revenue_cents ?? 0) / 100
       wedByKey.set(k, cur)
     }
     for (const [k, wed] of wedByKey) {
@@ -1538,13 +1565,15 @@ export default function SourceAttributionPage() {
 
   // ---- Summary stats ----
   const totalSpend = sourceRows.reduce((sum, r) => sum + r.spend, 0)
-  // T5-Rixey-VV Y2: Total Revenue reads weddings.booking_value directly
-  // (cents → dollars) so HoneyBook bookings count even when the funnel
-  // API misses them for lack of touchpoints. Previously this summed the
-  // funnel-rollup revenue and showed $0 because every booking was a
-  // HoneyBook backfill.
+  // T5-Rixey-JJJ: Total Revenue sums revenue_cents from the
+  // server-aggregated rollup (cents → dollars). The previous in-page
+  // browser fetch was bitten by RLS and returned zero rows, which made
+  // this tile display $0 even though the database had $794K of
+  // HoneyBook revenue for Rixey. The new server endpoint also adds the
+  // merged_into_id IS NULL filter that the browser query was missing
+  // (prevents double-counting deduped HoneyBook rows).
   const totalRevenue = weddingsRollup.reduce(
-    (sum, w) => sum + Number(w.booking_value ?? 0) / 100,
+    (sum, w) => sum + Number(w.revenue_cents ?? 0) / 100,
     0,
   )
   // Total Bookings: now sourced from sourceRows (which already absorbs
