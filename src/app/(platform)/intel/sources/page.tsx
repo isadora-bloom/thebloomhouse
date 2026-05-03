@@ -21,6 +21,7 @@ import { VenueChip } from '@/components/intel/venue-chip'
 import { SpendImporter } from '@/components/intel/spend-importer'
 import { ReEngagementROIPanel } from '@/components/intel/ReEngagementROIPanel'
 import { formatSourceLabel } from '@/lib/utils/format-source-label'
+import { formatCents } from '@/lib/types/monetary'
 import Link from 'next/link'
 import {
   BarChart,
@@ -65,6 +66,18 @@ interface MarketingSpend {
   venues?: { name: string | null } | null
 }
 
+/** T5-Rixey-VV Y2/Y4: weddings rollup row used by the page to compute
+ *  Total Revenue + augment the Source Comparison table with bookings
+ *  that have no wedding_touchpoints (e.g. HoneyBook bookings imported
+ *  before the touchpoint pipeline existed). booking_value is CENTS. */
+interface WeddingRollupRow {
+  id: string
+  venue_id: string
+  source: string | null
+  status: string | null
+  booking_value: number | null
+}
+
 interface SourceRow {
   source_key: string
   source_name: string
@@ -91,10 +104,28 @@ type SortDir = 'asc' | 'desc'
 // Source label mapping — single source of truth in
 // src/lib/utils/format-source-label (T5-Rixey-UU Bug E).
 // Local wrapper kept so the caller signature (string-only) stays stable.
+//
+// T5-Rixey-VV Y6: the "unknown" / "(unknown)" bucket on this page is
+// architecturally "Untracked / Pre-Bloom" — bookings (mostly via
+// HoneyBook + Calendly) whose original inquiry email predates Gmail
+// OAuth, so we couldn't derive a marketing source. Renaming it surfaces
+// the actionable framing ("run a Gmail backfill / re-attribute
+// scheduling-tool bookings") rather than the blank "Unknown" label.
 // ---------------------------------------------------------------------------
 
-function formatSource(source: string): string {
-  return formatSourceLabel(source)
+const UNTRACKED_LABEL = 'Untracked / Pre-Bloom'
+const UNTRACKED_TOOLTIP =
+  "These bookings completed before we had lead-side data (Calendly Q7, web-form, or backfilled Gmail). Run a Gmail historical backfill or click 'Re-attribute Scheduling-Tool Bookings' to try to attribute."
+
+function isUntrackedKey(raw: string | null | undefined): boolean {
+  if (!raw) return true
+  const k = String(raw).trim().toLowerCase()
+  return k === '' || k === 'unknown' || k === '(unknown)'
+}
+
+function formatSource(source: string | null | undefined): string {
+  if (isUntrackedKey(source)) return UNTRACKED_LABEL
+  return formatSourceLabel(source ?? '')
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +189,9 @@ const SOURCE_COLORS: Record<string, string> = {
   'Venue Calculator':     '#9D8B6E',
   'Other':                '#9AA098',
   'Unknown':              '#9AA098',
+  // T5-Rixey-VV Y6: same warm-grey as Other/Unknown, since this is the
+  // "we couldn't attribute" bucket.
+  [UNTRACKED_LABEL]:      '#9AA098',
 }
 
 function getSourceColor(source: string): string {
@@ -852,14 +886,19 @@ function SourceQualityScorecard({ scope, windowDays, onWindowChange }: Scorecard
             ) : (
               sortedRows.map((row, i) => {
                 const isAggregateRow = row.venueId === '__aggregate__'
+                const label = formatSource(row.source)
+                const isUntracked = label === UNTRACKED_LABEL
                 const sourceCell = (
                   <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
-                    <div className="flex items-center gap-2">
+                    <div
+                      className="flex items-center gap-2"
+                      title={isUntracked ? UNTRACKED_TOOLTIP : undefined}
+                    >
                       <div
                         className="w-2.5 h-2.5 rounded-full shrink-0"
-                        style={{ backgroundColor: getSourceColor(formatSource(row.source)) }}
+                        style={{ backgroundColor: getSourceColor(label) }}
                       />
-                      {formatSource(row.source)}
+                      {label}
                       {scope.level !== 'venue' && !isAggregateRow && (
                         <VenueChip venueName={row.venueName} />
                       )}
@@ -880,7 +919,10 @@ function SourceQualityScorecard({ scope, windowDays, onWindowChange }: Scorecard
                     {viewMode === 'quality' && (
                       <>
                         <td className="px-4 py-3 text-sage-700 tabular-nums">{row.bookedCount}</td>
-                        <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">{fmt$(row.avgRevenue)}</td>
+                        {/* T5-Rixey-VV Y1: source-quality API returns avgRevenue
+                            in CENTS now (Stream RR doctrine). formatCents
+                            handles the divide. */}
+                        <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">{formatCents(row.avgRevenue)}</td>
                         <td className="px-4 py-3 text-sage-700 tabular-nums">
                           {row.avgDaysToBook !== null ? `${Math.round(row.avgDaysToBook)} d` : '—'}
                         </td>
@@ -1096,7 +1138,17 @@ function ModelComparisonCard({ scope }: ModelComparisonProps) {
             <tr className="border-b border-border bg-sage-50/50">
               <th className="px-4 py-3 text-left font-medium text-sage-600">Source</th>
               <th className="px-4 py-3 text-right font-medium text-sage-600">First-touch</th>
-              <th className="px-4 py-3 text-right font-medium text-sage-600">Last-touch</th>
+              {/* T5-Rixey-VV Y5: relabel as "Last-touch tool" so users
+                  understand scheduling/contracting tools (Calendly,
+                  HoneyBook) showing up here are the LAST TOOL the lead
+                  passed through, not a marketing channel. The math is
+                  factually correct; only the column header was misleading. */}
+              <th
+                className="px-4 py-3 text-right font-medium text-sage-600"
+                title="The most recent tool/source touched before booking. Includes scheduling tools (Calendly, HoneyBook) when those were the last thing the couple touched — they're tools, not channels, but they're factually the last touch."
+              >
+                Last-touch tool
+              </th>
               <th className="px-4 py-3 text-right font-medium text-sage-600">Linear</th>
               <th className="px-4 py-3 text-right font-medium text-sage-600" title="Difference between max and min across models — bigger = model choice matters more">
                 Spread
@@ -1112,11 +1164,17 @@ function ModelComparisonCard({ scope }: ModelComparisonProps) {
               </tr>
             ) : (
               rows.map((row) => {
-                const label = row.source === '(unknown)' ? 'Unknown' : formatSource(row.source)
+                // T5-Rixey-VV Y6: route through formatSource so the
+                // "(unknown)" sentinel from attribution.ts surfaces as
+                // "Untracked / Pre-Bloom".
+                const label = formatSource(row.source)
                 return (
                   <tr key={row.source} className="hover:bg-sage-50/30 transition-colors">
                     <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
+                      <div
+                        className="flex items-center gap-2"
+                        title={label === UNTRACKED_LABEL ? UNTRACKED_TOOLTIP : undefined}
+                      >
                         <div
                           className="w-2.5 h-2.5 rounded-full shrink-0"
                           style={{ backgroundColor: getSourceColor(label) }}
@@ -1165,6 +1223,11 @@ export default function SourceAttributionPage() {
   const scope = useScope()
   const [funnelRows, setFunnelRows] = useState<FunnelApiRow[]>([])
   const [spendData, setSpendData] = useState<MarketingSpend[]>([])
+  // T5-Rixey-VV Y2/Y4: weddings loaded directly so Total Revenue and
+  // the Source Comparison table can include bookings without
+  // wedding_touchpoints (HoneyBook + pre-Bloom history).
+  const [weddingsRollup, setWeddingsRollup] = useState<WeddingRollupRow[]>([])
+  const [venueNameById, setVenueNameById] = useState<Map<string, string>>(new Map())
   const [model, setModel] = useState<AttributionModel>('first_touch')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -1222,17 +1285,48 @@ export default function SourceAttributionPage() {
         spendQuery.in('venue_id', venueIds)
       }
 
-      const [funnelRes, spendRes] = await Promise.all([
+      // T5-Rixey-VV Y2/Y4: pull every booked / completed wedding so we
+      // can compute Total Revenue from booking_value directly + show
+      // sources that have bookings but no wedding_touchpoints (Stream
+      // SS-era HoneyBook backfill rows). Restricted to terminal
+      // statuses so in-flight inquiries don't inflate revenue.
+      const weddingsQuery = supabase
+        .from('weddings')
+        .select('id, venue_id, source, status, booking_value')
+        .in('status', ['booked', 'completed'])
+      if (venueIds && venueIds.length > 0) {
+        weddingsQuery.in('venue_id', venueIds)
+      }
+
+      // T5-Rixey-VV Y4: venue-name map for the augmented Source
+      // Comparison rows that come from weddingsRollup (no
+      // venues:venue_id(name) join needed because we already have the
+      // ids).
+      const venuesQuery = venueIds && venueIds.length > 0
+        ? supabase.from('venues').select('id, name').in('id', venueIds)
+        : Promise.resolve({ data: [], error: null })
+
+      const [funnelRes, spendRes, weddingsRes, venuesRes] = await Promise.all([
         fetch(`/api/intel/sources/funnel?${apiParams.toString()}`),
         spendQuery,
+        weddingsQuery,
+        venuesQuery,
       ])
 
       if (!funnelRes.ok) throw new Error(`Funnel HTTP ${funnelRes.status}`)
       const funnelJson = (await funnelRes.json()) as { rows?: FunnelApiRow[] }
       if (spendRes.error) throw spendRes.error
+      if (weddingsRes.error) throw weddingsRes.error
+
+      const nameMap = new Map<string, string>()
+      for (const v of (venuesRes.data ?? []) as Array<{ id: string; name: string | null }>) {
+        nameMap.set(v.id, v.name ?? '')
+      }
 
       setFunnelRows(funnelJson.rows ?? [])
       setSpendData((spendRes.data ?? []) as unknown as MarketingSpend[])
+      setWeddingsRollup((weddingsRes.data ?? []) as unknown as WeddingRollupRow[])
+      setVenueNameById(nameMap)
       setError(null)
     } catch (err) {
       console.error('Failed to fetch source attribution data:', err)
@@ -1307,6 +1401,49 @@ export default function SourceAttributionPage() {
       row.proposals_sent += Number(r.proposals_sent ?? 0)
       row.bookings += Number(r.bookings ?? 0)
       row.revenue += Number(r.revenue ?? 0)
+    }
+
+    // 1b) T5-Rixey-VV Y2/Y4: layer in bookings + revenue from weddings
+    //     directly so HoneyBook bookings (which lack wedding_touchpoints
+    //     and were therefore invisible to the funnel API) show up in
+    //     the Source Comparison table and contribute to Total Revenue.
+    //     Whichever value is bigger wins per (source, venue) cell —
+    //     the funnel-based number already includes touchpoint-attributed
+    //     bookings, so we only ADD the delta from weddings the funnel
+    //     missed. Revenue is converted from cents → dollars here.
+    const funnelByKey = new Map<string, { bookings: number; revenue: number }>()
+    for (const r of funnelRows) {
+      const k = makeKey((r.source ?? 'unknown').toLowerCase(), r.venueId ?? null)
+      const cur = funnelByKey.get(k) ?? { bookings: 0, revenue: 0 }
+      cur.bookings += Number(r.bookings ?? 0)
+      cur.revenue += Number(r.revenue ?? 0)
+      funnelByKey.set(k, cur)
+    }
+    const wedByKey = new Map<string, { bookings: number; revenueDollars: number }>()
+    for (const w of weddingsRollup) {
+      const sourceKey = (w.source ?? 'unknown').toLowerCase()
+      const k = makeKey(sourceKey, w.venue_id ?? null)
+      const cur = wedByKey.get(k) ?? { bookings: 0, revenueDollars: 0 }
+      cur.bookings += 1
+      // booking_value is cents (Bloom convention). Convert here for
+      // display-side arithmetic; the funnel API already returns dollars.
+      cur.revenueDollars += Number(w.booking_value ?? 0) / 100
+      wedByKey.set(k, cur)
+    }
+    for (const [k, wed] of wedByKey) {
+      const [sourceKey, vidPart] = k.includes('|') ? k.split('|') : [k, null]
+      const venueId = vidPart && vidPart !== 'unknown' ? vidPart : null
+      const venueName = venueId ? (venueNameById.get(venueId) ?? null) : null
+      const row = ensure(sourceKey!, venueId, venueName)
+      const funnel = funnelByKey.get(k) ?? { bookings: 0, revenue: 0 }
+      // Add only the delta the funnel missed. Avoids double-counting
+      // when the funnel API has touchpoint-attributed bookings AND the
+      // weddings rollup has the same row. Negative delta clamped to 0
+      // (linear attribution can produce fractional counts above 1).
+      const bookingsDelta = Math.max(0, wed.bookings - funnel.bookings)
+      const revenueDelta = Math.max(0, wed.revenueDollars - funnel.revenue)
+      row.bookings += bookingsDelta
+      row.revenue += revenueDelta
     }
 
     // 2) Layer spend from marketing_spend (amount column)
@@ -1406,7 +1543,18 @@ export default function SourceAttributionPage() {
 
   // ---- Summary stats ----
   const totalSpend = sourceRows.reduce((sum, r) => sum + r.spend, 0)
-  const totalRevenue = sourceRows.reduce((sum, r) => sum + r.revenue, 0)
+  // T5-Rixey-VV Y2: Total Revenue reads weddings.booking_value directly
+  // (cents → dollars) so HoneyBook bookings count even when the funnel
+  // API misses them for lack of touchpoints. Previously this summed the
+  // funnel-rollup revenue and showed $0 because every booking was a
+  // HoneyBook backfill.
+  const totalRevenue = weddingsRollup.reduce(
+    (sum, w) => sum + Number(w.booking_value ?? 0) / 100,
+    0,
+  )
+  // Total Bookings: now sourced from sourceRows (which already absorbs
+  // the weddingsRollup delta in step 1b above), so HoneyBook bookings
+  // contribute. Stays a single source of truth across the table + tile.
   const totalBookings = sourceRows.reduce((sum, r) => sum + r.bookings, 0)
   const overallCPB = totalBookings > 0 ? totalSpend / totalBookings : 0
 
@@ -1414,6 +1562,21 @@ export default function SourceAttributionPage() {
   const sourceInsights: InsightItem[] = (() => {
     if (sourceRows.length === 0) return []
     const items: InsightItem[] = []
+
+    // T5-Rixey-VV Y3: degenerate-state guard. When every channel shows
+    // $0 revenue, the leverage and ROI math both produce nonsense
+    // (∞ best AND -100% worst on the same channel). Surface the data
+    // gap as a SINGLE insight instead of generating mutually
+    // contradictory ones.
+    const maxRevenue = sourceRows.reduce((m, r) => Math.max(m, r.revenue), 0)
+    if (maxRevenue <= 0) {
+      items.push({
+        icon: 'warning',
+        text: "Revenue not yet flowing into the rollup — check that booking_value is populated and the source_attribution rollup ran since the latest data load.",
+        priority: 'high',
+      })
+      return items
+    }
 
     // Best performing source (by revenue per inquiry)
     const withInquiries = sourceRows.filter((r) => r.inquiries > 0)
@@ -1723,10 +1886,18 @@ export default function SourceAttributionPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {sortedRows.map((row) => (
+                {sortedRows.map((row) => {
+                  // T5-Rixey-VV Y6: surface the explanatory tooltip on
+                  // the Untracked / Pre-Bloom row so coordinators
+                  // understand it's a data-coverage gap, not noise.
+                  const isUntracked = row.source_name === UNTRACKED_LABEL
+                  return (
                   <tr key={row.source_key} className="hover:bg-sage-50/30 transition-colors">
                     <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
+                      <div
+                        className="flex items-center gap-2"
+                        title={isUntracked ? UNTRACKED_TOOLTIP : undefined}
+                      >
                         <div
                           className="w-2.5 h-2.5 rounded-full shrink-0"
                           style={{ backgroundColor: getSourceColor(row.source_name) }}
@@ -1754,7 +1925,8 @@ export default function SourceAttributionPage() {
                       </span>
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -1785,9 +1957,13 @@ export default function SourceAttributionPage() {
                   ['Proposals', row.proposals_sent],
                   ['Booked', row.bookings],
                 ]
+                const isUntracked = row.source_name === UNTRACKED_LABEL
                 return (
                   <div key={row.source_key}>
-                    <div className="flex items-center gap-2 mb-1.5">
+                    <div
+                      className="flex items-center gap-2 mb-1.5"
+                      title={isUntracked ? UNTRACKED_TOOLTIP : undefined}
+                    >
                       <div
                         className="w-2.5 h-2.5 rounded-full shrink-0"
                         style={{ backgroundColor: getSourceColor(row.source_name) }}

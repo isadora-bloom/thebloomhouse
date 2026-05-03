@@ -17,11 +17,15 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { type Cents, asCents, centsToDollars } from '@/lib/types/monetary'
+import { asCents } from '@/lib/types/monetary'
 
 export interface SourceQualityRow {
   source: string
   bookedCount: number
+  /** Average booking_value across this source's booked weddings, in CENTS.
+   *  Display sites must call formatCents() / divide by 100 to render
+   *  dollars (Stream RR doctrine — keep cents-scale until the UI).
+   *  T5-Rixey-VV Y1 fix (was double-converted by some readers). */
   avgRevenue: number
   avgEmailsExchanged: number
   avgPortalActivity: number
@@ -147,10 +151,13 @@ export async function computeSourceQuality(
     bySource[src].ids.push(w.id as string)
     // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8;
     // T5-Rixey-RR fix #5 — branded `Cents` type makes this explicit).
-    // Store dollars in revenues array for downstream display math.
+    // T5-Rixey-VV Y1: keep cents-scale all the way to display so callers
+    // use formatCents() consistently (Stream RR doctrine). Previously
+    // converted to dollars here, which produced double-conversion when
+    // some readers also divided.
     if (w.booking_value) {
       const cents = asCents(Number(w.booking_value))
-      bySource[src].revenues.push(centsToDollars(cents))
+      bySource[src].revenues.push(cents)
     }
 
     const ft = w.friction_tags
