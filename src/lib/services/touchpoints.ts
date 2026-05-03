@@ -72,6 +72,42 @@ export interface TouchpointInput {
 const ONE_PER_WEDDING_TOUCH_TYPES = new Set<TouchType>(['inquiry', 'contract_signed'])
 
 /**
+ * T5-Rixey-KKK: per-touch_type signal_class. Mirrors mig 200's backfill
+ * mapping. Inquiry rows get refined post-classify when source is a
+ * scheduling tool (Calendly / Acuity etc.) — they're touchpoints, not
+ * acquisition channels. The DB DEFAULT was dropped after mig 200's
+ * backfill, so writers MUST declare the class on insert (matches the
+ * mig 192 enforcement model).
+ */
+const TOUCH_TYPE_TO_SIGNAL_CLASS: Record<TouchType, 'source' | 'touchpoint' | 'crm' | 'outcome' | 'unclassified'> = {
+  inquiry:         'source',
+  email_reply:     'touchpoint',
+  tour_booked:     'touchpoint',
+  tour_conducted:  'touchpoint',
+  proposal_sent:   'touchpoint',
+  contract_signed: 'outcome',
+  calendly_booked: 'touchpoint',
+  website_visit:   'source',
+  ad_click:        'source',
+  referral:        'source',
+  other:           'unclassified',
+}
+
+const SCHEDULING_TOOL_SOURCES = new Set(['calendly', 'acuity', 'acuityscheduling', 'square_appointments', 'squareappointments'])
+
+function classifySignal(touchType: TouchType, source: string | null | undefined): 'source' | 'touchpoint' | 'crm' | 'outcome' | 'unclassified' {
+  const base = TOUCH_TYPE_TO_SIGNAL_CLASS[touchType]
+  // Inquiry via a scheduling tool is plumbing, not acquisition. Demote
+  // 'source' → 'touchpoint' so attribution doesn't credit the tool as
+  // a channel.
+  if (base === 'source' && touchType === 'inquiry') {
+    const s = (source ?? '').toString().trim().toLowerCase()
+    if (SCHEDULING_TOOL_SOURCES.has(s)) return 'touchpoint'
+  }
+  return base
+}
+
+/**
  * Fire one touchpoint. Idempotent on two layers:
  *   1. ONE_PER_WEDDING_TOUCH_TYPES: skip if any row of this touch_type
  *      already exists on the wedding. Inquiry / contract_signed mark
@@ -112,6 +148,12 @@ export async function recordTouchpoint(input: TouchpointInput): Promise<void> {
     medium: input.medium ?? null,
     campaign: input.campaign ?? null,
     metadata: input.metadata ?? {},
+    // T5-Rixey-KKK (mig 200): every wedding_touchpoints row carries
+    // an explicit class. The DB DEFAULT was dropped, so omitting this
+    // would NOT NULL violation — declaring it explicitly keeps the
+    // writer honest the same way mig 192 does for interactions/tours/
+    // tangential_signals/lost_deals/attribution_events.
+    signal_class: classifySignal(input.touchType, input.source ?? null),
   }
   if (input.occurredAt) row.occurred_at = input.occurredAt
 

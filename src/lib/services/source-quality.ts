@@ -106,24 +106,44 @@ export async function computeSourceQuality(
   // attribution tracking, manual entries, etc.).
   const weddingIdsAll = (weddings ?? []).map((w) => w.id as string)
   const firstTouchByWedding = new Map<string, string>()
+  // T5-Rixey-KKK: trust only HIGH-confidence first-touch
+  // attribution_events when promoting wedding source. Tier 2 wide-AI
+  // matches are guesses (year-long window, name-only) and producing
+  // phantom-Knot bookings via firstTouchByWedding when wedding.source
+  // is NULL is exactly the B7 leak (audit-knot-phantom diagnosed two
+  // such rows on Rixey: weddings 2c229347 + 635e97ba both got
+  // tier_2_wide_ai Knot first-touch but their wedding.source is null
+  // and no Knot signal exists in their own cluster). The high-trust
+  // tiers (manual / coordinator override / tier_1_*) are explicit-
+  // identity matches and CAN override a null wedding.source. AI tiers
+  // remain visible on /intel/sources via the candidate panels but
+  // don't pollute the booked-cohort scorecard.
+  const HIGH_TRUST_TIERS = new Set([
+    'tier_1_exact', 'tier_1_full_name', 'tier_1_email_domain',
+    'tier_1_name_window', 'tier_2_coordinator', 'manual',
+    'coordinator_override',
+  ])
   if (weddingIdsAll.length > 0) {
     const FT_CHUNK = 200
     for (let i = 0; i < weddingIdsAll.length; i += FT_CHUNK) {
       const chunk = weddingIdsAll.slice(i, i + FT_CHUNK)
       const { data: ftRows } = await supabase
         .from('attribution_events')
-        .select('wedding_id, source_platform')
+        .select('wedding_id, source_platform, tier, signal_class')
         .eq('venue_id', venueId)
         .eq('is_first_touch', true)
         .is('reverted_at', null)
         .in('wedding_id', chunk)
-      for (const r of (ftRows ?? []) as Array<{ wedding_id: string; source_platform: string }>) {
+      for (const r of (ftRows ?? []) as Array<{ wedding_id: string; source_platform: string; tier: string | null; signal_class: string | null }>) {
         // Multiple first-touch rows shouldn't happen (trigger enforces
         // it) but if they do the first row wins; downstream invariant
         // detection catches the duplicate.
-        if (!firstTouchByWedding.has(r.wedding_id)) {
-          firstTouchByWedding.set(r.wedding_id, r.source_platform)
-        }
+        if (firstTouchByWedding.has(r.wedding_id)) continue
+        // Only source-class signals contribute (matches mig 192 model).
+        if (r.signal_class && r.signal_class !== 'source') continue
+        // Tier 2 AI matches are guesses; require high-trust tier.
+        if (!HIGH_TRUST_TIERS.has(r.tier ?? '')) continue
+        firstTouchByWedding.set(r.wedding_id, r.source_platform)
       }
     }
   }

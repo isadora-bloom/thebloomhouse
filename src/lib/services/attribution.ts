@@ -63,6 +63,12 @@ interface TouchpointRow {
   source: string | null
   occurred_at: string
   touch_type: string
+  /** T5-Rixey-KKK (mig 200). 'source' = real acquisition channel.
+   *  'touchpoint' = scheduling tool / post-discovery. 'crm' = internal
+   *  record system. 'outcome' = terminal event. Last-touch and linear
+   *  attribution must filter to 'source' rows so Calendly tour
+   *  confirmations (touchpoint) cannot leak into channel credit. */
+  signal_class: string | null
 }
 
 interface WeddingRow {
@@ -104,11 +110,22 @@ export async function computeSourceFunnel(
   // We need the wedding row to know status, booking_value, and
   // first-touch source. We always fetch every wedding for the venue
   // (date filter applies to touchpoints, not wedding rows).
-  const { data: weddings } = await sb
+  //
+  // T5-Rixey-KKK: filter merged_into_id IS NULL so merged-loser
+  // weddings don't double-count alongside their winners. Mirrors the
+  // wedding-rollup endpoint's filter — without it, a wedding that was
+  // dedup'd into another would still pull touchpoints into the per-
+  // source aggregate (the merged-loser kept its touchpoints by FK
+  // chain). Concrete bug shape on Rixey: wedding 74a88ca9 has
+  // source='the_knot' AND merged_into_id set → its inquiry touchpoint
+  // contributed 1 booked Knot row to last-touch + linear, even though
+  // wedding-rollup correctly excluded it.
+  const wedRowsTuple = await sb
     .from('weddings')
     .select('id, source, status, booking_value, inquiry_date')
     .eq('venue_id', venueId)
-  const wedRows = (weddings ?? []) as WeddingRow[]
+    .is('merged_into_id', null)
+  const wedRows = (wedRowsTuple.data ?? []) as WeddingRow[]
   const wedById = new Map<string, WeddingRow>()
   for (const w of wedRows) wedById.set(w.id, w)
 
@@ -117,7 +134,7 @@ export async function computeSourceFunnel(
   // window was specified.
   let tpQuery = sb
     .from('wedding_touchpoints')
-    .select('wedding_id, source, occurred_at, touch_type')
+    .select('wedding_id, source, occurred_at, touch_type, signal_class')
     .eq('venue_id', venueId)
     .order('occurred_at', { ascending: true })
   if (options.from) tpQuery = tpQuery.gte('occurred_at', options.from)
@@ -181,21 +198,45 @@ export async function computeSourceFunnel(
     // canonical first-touch (it's normalized by email-pipeline at
     // wedding-creation time, single source of truth) and the
     // touchpoint's source field for last-touch / linear.
+    //
+    // T5-Rixey-KKK: last_touch + linear MUST filter to signal_class
+    // = 'source' touchpoints. Mig 200 stamped every wedding_touchpoints
+    // row with its class. Without this filter a Calendly tour-booked
+    // touchpoint (signal_class='touchpoint') credits Calendly with the
+    // booking — but Calendly is a scheduling tool, not an acquisition
+    // channel, and Stream TT explicitly NULLed weddings.source for
+    // Calendly to encode that. The pre-fix Rixey numbers were
+    // Calendly: 17 last_touch / 9.8 linear bookings; truth is 0/0.
+    //
+    // The wedding.source fallback below is intentional: if NO source-
+    // class touchpoint exists in the journey but the wedding row
+    // carries an attribution-pipeline-decided source, that's still
+    // the most authoritative answer. Calendly weddings have w.source
+    // = NULL per Stream TT, so the fallback correctly produces null
+    // (counted as '(unknown)') and Calendly gets zero credit.
     if (model === 'first_touch') {
       ind.creditedSources.set(w.source ?? null, 1)
     } else if (model === 'last_touch') {
-      // The latest touchpoint before booking — or the latest overall if
-      // not booked yet. tps is occurred_at ASC.
+      // Filter to source-class touchpoints + drop the contract_signed
+      // (outcome) row when picking last-touch-before-booking. tps is
+      // occurred_at ASC.
+      const sourceTps = tps.filter((t) => t.signal_class === 'source')
       const lastBeforeBooking = ind.booked
-        ? [...tps].reverse().find((t) => !STEP_TOUCH_TYPES.contract_signed.has(t.touch_type))
-        : tps[tps.length - 1]
+        ? [...sourceTps].reverse().find((t) => !STEP_TOUCH_TYPES.contract_signed.has(t.touch_type))
+        : sourceTps[sourceTps.length - 1]
       ind.creditedSources.set(lastBeforeBooking?.source ?? w.source ?? null, 1)
     } else if (model === 'linear') {
-      // Distinct sources across the journey, equal weight.
+      // Distinct SOURCE-class sources across the journey, equal weight.
       const sources = new Set<string | null>()
-      for (const t of tps) sources.add(t.source ?? null)
+      for (const t of tps) {
+        if (t.signal_class !== 'source') continue
+        sources.add(t.source ?? null)
+      }
       // Always include the wedding's first-touch even if it isn't on a
-      // touchpoint (rare but possible after merges).
+      // touchpoint (rare but possible after merges). When no source-
+      // class touchpoint AND no wedding.source exists, the credit
+      // bucket is null → '(unknown)' which is correct: there is no
+      // attributable acquisition channel.
       sources.add(w.source ?? null)
       const weight = 1 / sources.size
       for (const s of sources) ind.creditedSources.set(s, weight)
