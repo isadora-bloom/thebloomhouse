@@ -126,7 +126,16 @@ export async function fetchFredSeries(
     .filter((obs) => obs.value !== '.' && obs.value !== '' && obs.value !== undefined)
     .map((obs) => ({
       series_id: seriesId,
-      region: null,
+      // T5-Rixey-XX: pass empty string '' (not NULL) so the plain
+      // unique index uq_fred_indicators_series_region_date_plain
+      // (mig 188) actually constrains. Postgres treats NULL as
+      // not-equal-NULL in plain unique indexes, which silently
+      // bypassed conflict detection. The legacy COALESCE-based
+      // index uq_fred_indicators_series_region_date (mig 138)
+      // already evaluated NULL as '' so this is a no-op for that
+      // index — total semantics unchanged, just made resolvable
+      // by ON CONFLICT.
+      region: '',
       observation_date: obs.date,
       value: Number(obs.value),
       units: meta.units ?? null,
@@ -142,8 +151,8 @@ export async function fetchFredSeries(
   const supabase = createServiceClient()
   const { error, data: insertedRows } = await supabase
     .from('fred_indicators')
-    // onConflict-skip-check: T5-Rixey-RR finding — fred_indicators unique is (series_id, COALESCE(region, ''), observation_date) but onConflict only names 2 of 3 columns; needs follow-up to either align the index or pass region in onConflict
-    .upsert(rows, { onConflict: 'series_id,observation_date', ignoreDuplicates: false })
+    // T5-Rixey-XX: matched by uq_fred_indicators_series_region_date_plain (mig 188).
+    .upsert(rows, { onConflict: 'series_id,region,observation_date', ignoreDuplicates: false })
     .select('id')
   const count = insertedRows?.length ?? 0
   if (error) {

@@ -12,8 +12,6 @@
  * Nager.Date API (free): https://date.nager.at/api/v3/PublicHolidays/{year}/US
  */
 
-import { createServiceClient } from '@/lib/supabase/service'
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -666,70 +664,23 @@ export function getSeasonalAdvisory(date?: Date): {
 }
 
 // ---------------------------------------------------------------------------
-// Database seeding
+// Database seeding (removed)
 // ---------------------------------------------------------------------------
-
-/**
- * Seeds calendar events for a venue into the database.
- * Uses venue_config feature_flags to store calendar preferences,
- * and can optionally populate a calendar_events table if it exists.
- */
-export async function seedCalendarForVenue(
-  venueId: string,
-  year: number
-): Promise<{ seeded: number; errors: number }> {
-  const supabase = createServiceClient()
-  const events = getHolidaysForYear(year)
-
-  // Try to insert into calendar_events table (may not exist yet)
-  // If the table doesn't exist, store in venue_config.feature_flags
-  try {
-    const rows = events.map(e => ({
-      date: e.date,
-      name: e.name,
-      type: e.type,
-      region: e.region || 'US',
-      impacts_demand: e.impact !== 'low',
-      demand_modifier: e.demand_modifier || 1.0,
-    }))
-
-    const { error } = await supabase
-      .from('calendar_events')
-      // onConflict-skip-check: T5-Rixey-RR finding — calendar_events table not asserted in migrations or has no (date,name) unique; legacy fallback path; needs follow-up
-      .upsert(rows, { onConflict: 'date,name' })
-
-    if (error) {
-      if (error.message?.includes('does not exist') || error.code === '42P01') {
-        // Table doesn't exist yet — fall back to venue_config storage
-        console.log('[calendar-ingest] calendar_events table not yet created, storing in venue_config')
-
-        const { error: configError } = await supabase
-          .from('venue_config')
-          .update({
-            feature_flags: {
-              calendar_events_year: year,
-              calendar_events_count: events.length,
-              calendar_seeded_at: new Date().toISOString(),
-            },
-          })
-          .eq('venue_id', venueId)
-
-        if (configError) {
-          console.error('[calendar-ingest] Failed to update venue_config:', configError.message)
-          return { seeded: 0, errors: 1 }
-        }
-
-        return { seeded: events.length, errors: 0 }
-      }
-
-      console.error('[calendar-ingest] Failed to seed events:', error.message)
-      return { seeded: 0, errors: 1 }
-    }
-
-    console.log(`[calendar-ingest] Seeded ${events.length} calendar events for ${year}`)
-    return { seeded: events.length, errors: 0 }
-  } catch (err) {
-    console.error('[calendar-ingest] seedCalendarForVenue failed:', err)
-    return { seeded: 0, errors: 1 }
-  }
-}
+//
+// `seedCalendarForVenue` was removed by T5-Rixey-XX (RR finding):
+//   - it referenced a `calendar_events` table that was never created
+//     in any migration (only `external_calendar_events` exists, mig 140);
+//   - the function had no callers anywhere in src/;
+//   - the upsert used `onConflict: 'date,name'` against a non-existent
+//     unique constraint, which would silently no-op even if the table
+//     existed.
+//
+// External calendar holidays are seeded by Stream V (mig 169 +
+// seed.sql §60.3 for the demo-data path) into
+// public.external_calendar_events, which IS the table the correlation
+// engine reads. There is no need for a venue-scoped duplicate.
+//
+// If a future surface needs venue-scoped calendar customisation, model
+// it as overrides on top of external_calendar_events rather than
+// resurrecting the deleted code path.
+// ---------------------------------------------------------------------------
