@@ -5,7 +5,10 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
-import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
+// Stream HHH Bug 10: InlineInsightBanner removed from /agent/inbox.
+// High-priority risk insights now route to /pulse + /intel/dashboard
+// only — page-spam was the lived problem (same banner on every page,
+// coordinator dismissed without reading).
 import { RiskFlagChip, useBatchRiskFlags, type RiskSummary } from '@/components/intel/risk-flag-chip'
 import { PriorTouchesChip } from '@/components/agent/PriorTouchesChip'
 import { GmailConnectionStatus } from '@/components/agent/gmail-connection-status'
@@ -2021,8 +2024,11 @@ export default function InboxPage() {
         </div>
       )}
 
-      {/* ---- Inline insight banner ---- */}
-      <InlineInsightBanner category="lead_conversion,response_time" />
+      {/* Stream HHH Bug 10: InlineInsightBanner removed. The 34%-tour-cancel
+          banner formerly rendered here, /agent/leads, /agent/pipeline,
+          /intel/sources, /intel/tours, /intel/lost-deals — coordinator
+          saw it six times in a row and dismissed without reading.
+          High-severity risks now route to /pulse + /intel/dashboard only. */}
 
       {/* ---- Error ---- */}
       {error && (

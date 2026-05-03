@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
-import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
+// Stream HHH Bug 10: InlineInsightBanner removed from /agent/pipeline.
 import { HeatBadge } from '@/components/intel/heat-badge'
 import { RiskFlagChip, useBatchRiskFlags, type RiskSummary } from '@/components/intel/risk-flag-chip'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
@@ -630,8 +630,8 @@ export default function PipelinePage() {
         </button>
       </div>
 
-      {/* ---- Inline insight banner ---- */}
-      <InlineInsightBanner category="lead_conversion" />
+      {/* Stream HHH Bug 10: InlineInsightBanner removed. High-severity
+          risk insights now route to /pulse + /intel/dashboard only. */}
 
       {/* ---- Error ---- */}
       {error && (

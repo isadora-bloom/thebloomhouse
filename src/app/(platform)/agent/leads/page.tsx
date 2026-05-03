@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
-import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
+// Stream HHH Bug 10: InlineInsightBanner removed from /agent/leads.
 import { HeatBadge } from '@/components/intel/heat-badge'
 import { RiskFlagChip, useBatchRiskFlags } from '@/components/intel/risk-flag-chip'
 import { EssentialsSlider } from '@/components/shell/essentials-slider'
@@ -645,8 +645,8 @@ export default function LeadsPage() {
         <EssentialsSlider surface="/agent/leads" />
       </div>
 
-      {/* ---- Inline insight banner ---- */}
-      <InlineInsightBanner category="lead_conversion,team_performance" />
+      {/* Stream HHH Bug 10: InlineInsightBanner removed. High-severity
+          risk insights now route to /pulse + /intel/dashboard only. */}
 
       {/* ---- Error ---- */}
       {error && (

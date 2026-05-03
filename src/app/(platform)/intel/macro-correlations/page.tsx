@@ -30,6 +30,7 @@ import {
   Clock,
   Pause,
 } from 'lucide-react'
+import { rankMultiplierForPair, type PairClass } from '@/lib/utils/format-series-label'
 
 interface NarratedCorrelation {
   id: string
@@ -368,22 +369,15 @@ export default function MacroCorrelationsPage() {
     return filtered.sort((a, b) => {
       // Strong signals first.
       if (a.weakSignal !== b.weakSignal) return a.weakSignal ? 1 : -1
-      // Stream YY (Z1): apply the same pair-class multiplier the engine
-      // and narration writer use for surface_priority (kept in sync with
-      // rankMultiplierForPair in lib/utils/format-series-label.ts). We
-      // mirror it client-side rather than reading surface_priority off
-      // the API because the response shape doesn't expose it; the
-      // resulting ordering matches the DB-ranked listExistingNarrations
-      // order in steady state.
-      const mult = (sc: string): number => {
-        if (sc === 'macro_x_venue') return 1.5
-        if (sc === 'venue_x_social') return 1.3
-        if (sc === 'venue_x_venue') return 1.2
-        if (sc === 'macro_x_macro') return 0.4
-        return 1.0
-      }
-      const aScore = Math.abs(a.r) * mult(a.signalClass)
-      const bScore = Math.abs(b.r) * mult(b.signalClass)
+      // Stream HHH Bug 17: use the shared rankMultiplierForPair helper
+      // directly (same one Stream HHH's rankInsightForCoordinator
+      // wraps). Single source of truth for the pair-class multipliers
+      // — /intel/insights uses the wrapper; /intel/macro-correlations
+      // uses the raw helper because its sort key is |r| × multiplier
+      // (no surface_priority / priority bucket fallback needed here
+      // since every row is a correlation_narration with known r).
+      const aScore = Math.abs(a.r) * rankMultiplierForPair(a.signalClass as PairClass)
+      const bScore = Math.abs(b.r) * rankMultiplierForPair(b.signalClass as PairClass)
       return bScore - aScore
     })
   }, [data, filter])

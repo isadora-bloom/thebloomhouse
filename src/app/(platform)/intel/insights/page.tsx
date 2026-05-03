@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { InsightCard, type InsightRow } from '@/components/intel/insight-card'
 import { InsightOutcomesPanel } from '@/components/intel/insight-outcomes-panel'
 import {
@@ -8,6 +8,7 @@ import {
   Zap, Check, XCircle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { rankInsightForCoordinator } from '@/lib/utils/insight-routing'
 
 // ---------------------------------------------------------------------------
 // Filter options
@@ -133,6 +134,21 @@ export default function InsightsPage() {
     }
   }
 
+  // Stream HHH Bug 17: apply Stream YY's coordinator-relevance
+  // ranking to the insight list. Pre-this-fix /intel/insights sorted
+  // by raw priority bucket alone, so pure FRED × FRED correlation
+  // rows (CPI × CSI 83%, S&P × UNRATE 97%) dominated the top of the
+  // list — coordinator-irrelevant noise pushed venue-actionable
+  // insights below the fold. The shared rankInsightForCoordinator
+  // helper applies YY's pair-class multiplier to correlation rows
+  // (macro × macro × 0.4, macro × venue × 1.5) while falling back to
+  // surface_priority / priority × confidence for everything else.
+  const rankedInsights = useMemo(() => {
+    return [...insights].sort(
+      (a, b) => rankInsightForCoordinator(b) - rankInsightForCoordinator(a),
+    )
+  }, [insights])
+
   const totalPages = Math.ceil(total / PAGE_SIZE)
 
   return (
@@ -249,7 +265,7 @@ export default function InsightsPage() {
         <div className="flex items-center justify-center py-16">
           <Loader2 className="w-6 h-6 text-sage-400 animate-spin" />
         </div>
-      ) : insights.length === 0 ? (
+      ) : rankedInsights.length === 0 ? (
         <div className="bg-surface border border-border rounded-xl p-12 text-center">
           <Lightbulb className="w-8 h-8 text-sage-300 mx-auto mb-3" />
           <p className="text-sage-600 font-medium">No insights found</p>
@@ -261,7 +277,7 @@ export default function InsightsPage() {
         </div>
       ) : (
         <div className="space-y-3">
-          {insights.map((insight) => (
+          {rankedInsights.map((insight) => (
             <InsightCard
               key={insight.id}
               insight={insight}

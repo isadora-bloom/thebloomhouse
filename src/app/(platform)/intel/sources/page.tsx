@@ -1681,8 +1681,11 @@ export default function SourceAttributionPage() {
       <SpendImporter onImported={() => window.location.reload()} />
 
 
-      {/* ---- Inline insight banner ---- */}
-      <InlineInsightBanner category="source_attribution" />
+      {/* Stream HHH Bug 10: routed by surface='sources' — only channel/
+          source-specific insights (source_attribution category, plus
+          trend/opportunity rows tagged to a source) render here. The
+          generic 34%-tour-cancel risk no longer leaks across. */}
+      <InlineInsightBanner surface="sources" category="source_attribution" />
 
       {/* ---- Error state ---- */}
       {error && (
