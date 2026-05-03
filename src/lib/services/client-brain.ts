@@ -15,6 +15,7 @@
 import { callAI } from '@/lib/ai/client'
 import {
   buildPersonalityPrompt,
+  buildSignoffBlock,
   requireAiName,
   type PersonalityData,
 } from '@/lib/ai/personality-builder'
@@ -143,10 +144,26 @@ async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
 
   // Build sign-off. ai_name is required — throw if venue_ai_config is
   // missing rather than silently signing as Sage. T5-β.1.
+  //
+  // T5-Rixey-FFF (migration 195): structured signoff block built from
+  // venue config, replacing the prior two-line concatenation that left
+  // Claude to invent the role title / tagline / website / phone line.
   const aiName = requireAiName(aiConfig as { ai_name?: string | null }, venueId)
   const aiEmoji = (aiConfig.ai_emoji as string) ?? ''
   const venueName = (venue?.name as string) ?? 'the venue'
-  const signoff = `${aiEmoji ? aiEmoji + ' ' : ''}${aiName}\n${venueName}`
+  const signoff = buildSignoffBlock({
+    aiName,
+    aiEmoji,
+    aiRoleTitle: (aiConfig.ai_role_title as string | null) ?? null,
+    venueName,
+    signatureTagline: (aiConfig.signature_tagline as string | null) ?? null,
+    signatureWebsite: (aiConfig.signature_website as string | null) ?? null,
+    signaturePhone:
+      ((aiConfig.signature_phone as string | null) ?? null) ||
+      ((venueConfig?.coordinator_phone as string | null) ?? null),
+    signatureCloser: (aiConfig.signature_closer as string | null) ?? null,
+    signatureTextCapable: (aiConfig.signature_text_capable as boolean | null) ?? false,
+  })
 
   return {
     config: aiConfig,

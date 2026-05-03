@@ -28,6 +28,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { getCohortBookingRate, applyCohortDamping } from '@/lib/services/heat-mapping'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -35,7 +36,15 @@ import type { ClassicalEvidence, InsightNarration } from './types'
 // T5-followup-AA (2026-05-02): bumped to v1.1 — trajectory bucket
 // added to the prompt so the LLM grounds its prose in rising / falling
 // / plateau / volatile direction, not just the static score.
-export const HEAT_NARRATION_PROMPT_VERSION = 'heat-narration.prompt.v1.1'
+// T5-Rixey-FFF (2026-05-02): bumped to v1.2 — cohort damping signal
+// added. When the look-alike cohort booking rate is < 20% the heat
+// score is multiplicatively damped and the narration MUST acknowledge
+// the damping ("100 raw points but cohort signal damps to 70 —
+// comparable leads aren't booking; needs intervention"). Pre-fix the
+// narration would describe the raw score as "Hot" while the cohort
+// tile right next to it said the lead was likely to walk away — the
+// two intelligence layers were not talking to each other.
+export const HEAT_NARRATION_PROMPT_VERSION = 'heat-narration.prompt.v1.2'
 
 interface HeatEventForNarration {
   event_type: string
@@ -80,6 +89,24 @@ interface ClassicalHeatPayload {
   total_events: number
   newest_event_at: string | null
   oldest_event_at: string | null
+  /** T5-Rixey-FFF. Pre-damping score derived from event sums + Phase B
+   *  contribution (i.e. the "raw" heat). Equals heat_score when no
+   *  damping fired; differs when the cohort signal pulled the score
+   *  down. Surfaced in the narration so the model can phrase damping
+   *  explicitly ("100 raw → 70 after cohort damping"). */
+  raw_heat_score: number
+  /** T5-Rixey-FFF. The damping factor that was applied to raw_heat_score
+   *  to produce heat_score. 1.0 means no damping; 0.7 / 0.5 are the
+   *  configured damping multipliers. */
+  cohort_multiplier: number
+  /** T5-Rixey-FFF. Cohort booking rate (0-1) and member count. Null
+   *  when no cohort signal was available (insufficient comparable
+   *  weddings on file). The narration uses these to phrase the
+   *  cohort context concretely ("9 of 10 comparable leads went
+   *  elsewhere"). */
+  cohort_rate: number | null
+  cohort_n_total: number | null
+  cohort_n_booked: number | null
 }
 
 const TRAJECTORY_LOOKBACK_DAYS = 14
@@ -208,9 +235,37 @@ async function loadClassicalHeatEvidence(
   const oldest = list[list.length - 1]?.occurred_at ?? null
   const trajectory = await trajectoryPromise
 
+  // T5-Rixey-FFF: also surface the raw vs damped heat split so the
+  // narration can acknowledge cohort damping when it fired. We
+  // recompute the damping decision here rather than reading it from
+  // a stored column because heat_score on the wedding row is
+  // already the post-damping value (recalculateHeatScore writes the
+  // damped score). Re-running getCohortBookingRate is cheap (one
+  // SELECT against weddings) and keeps the narration in lockstep
+  // with whatever the heat scorer last computed. If the cohort
+  // shifted between recompute and narration, the narration reflects
+  // the LATEST cohort — that is the right tradeoff (small drift is
+  // fine; calling out a stale cohort would be worse).
+  const heatScore = (wedding.heat_score as number) ?? 0
+  let cohort: { rate: number; nTotal: number; nBooked: number } | null = null
+  try {
+    cohort = await getCohortBookingRate(supabase, venueId, weddingId)
+  } catch {
+    cohort = null
+  }
+  // Reverse-engineer the raw score from the damping multiplier so the
+  // narration has both numbers to reference. This is exact when the
+  // damping multiplier is 0.5 / 0.7 / 1.0; if a future damping config
+  // adds finer-grained multipliers we may want to store the raw score
+  // explicitly instead.
+  const damping = applyCohortDamping(0, cohort)  // probe for multiplier
+  const rawHeatScore = damping.multiplier > 0
+    ? Math.round(heatScore / damping.multiplier)
+    : heatScore
+
   const payload: ClassicalHeatPayload = {
     weddingId,
-    heat_score: (wedding.heat_score as number) ?? 0,
+    heat_score: heatScore,
     temperature_tier: (wedding.temperature_tier as string) ?? 'cool',
     inquiry_date_day: inquiryDateDay,
     trajectory,
@@ -218,18 +273,33 @@ async function loadClassicalHeatEvidence(
     total_events: totalEvents ?? list.length,
     newest_event_at: newest,
     oldest_event_at: oldest,
+    raw_heat_score: rawHeatScore,
+    cohort_multiplier: damping.multiplier,
+    cohort_rate: cohort?.rate ?? null,
+    cohort_n_total: cohort?.nTotal ?? null,
+    cohort_n_booked: cohort?.nBooked ?? null,
   }
 
-  // Numbers the narration is allowed to reference: the score, every
-  // event's points (signed and absolute), and the total event count.
-  // The narrator is forbidden from inventing percentages, ratios, or
-  // ranks not in this list.
+  // Numbers the narration is allowed to reference: the score, the
+  // raw (pre-damping) score, the cohort booked / total / percentage,
+  // every event's points (signed and absolute), and the total event
+  // count. The narrator is forbidden from inventing percentages,
+  // ratios, or ranks not in this list.
   const allowedNumbers: Array<number | string> = [
     payload.heat_score,
     Math.abs(payload.heat_score),
+    payload.raw_heat_score,
     payload.total_events,
     ...topEvents.flatMap((e) => [e.points, Math.abs(e.points)]),
   ]
+  if (payload.cohort_n_total !== null) allowedNumbers.push(payload.cohort_n_total)
+  if (payload.cohort_n_booked !== null) allowedNumbers.push(payload.cohort_n_booked)
+  if (payload.cohort_rate !== null) {
+    // Cohort percentage is one of the most useful narration tokens —
+    // include both the rounded percent and the raw fraction so
+    // numbers-guard accepts either rendering ("0%" or "0/10").
+    allowedNumbers.push(Math.round(payload.cohort_rate * 100))
+  }
   return { payload, allowedNumbers }
 }
 
@@ -286,6 +356,16 @@ export async function generateHeatNarration(
     // don't over-bucket. Without this, a wedding climbing 40→55→70 and
     // a wedding crashing 100→85→70 collapse onto the same cached prose.
     trajectory: payload.trajectory,
+    // T5-Rixey-FFF: cohort damping multiplier + cohort booking rate
+    // bucket (rounded to nearest 10%) keep the narration in lockstep
+    // with the heat scorer's damping decision. A wedding whose cohort
+    // shifted from 5% → 25% (and whose damping multiplier consequently
+    // moved from 0.5 → 0.7) deserves a fresh narration; the prior cache
+    // hit would describe a damped score that no longer applies.
+    cohortMultiplier: payload.cohort_multiplier,
+    cohortRateBucket: payload.cohort_rate !== null
+      ? Math.round(payload.cohort_rate * 10)
+      : -1,
     // Include occurred_at-day in the fingerprint so two events of the
     // same type+points but different days don't collapse into a stale
     // cache hit. Pre-fix the cache key dropped occurred_at, which made
@@ -317,29 +397,38 @@ export async function generateHeatNarration(
     .map((e) => `  - ${e.event_type} (${e.points >= 0 ? '+' : ''}${e.points} pts)${e.occurred_at ? ' on ' + e.occurred_at.slice(0, 10) : ''}`)
     .join('\n')
 
+  const dampingFired = payload.cohort_multiplier !== 1.0
+  const cohortDescriptor = payload.cohort_rate !== null && payload.cohort_n_total !== null
+    ? `${payload.cohort_n_booked}/${payload.cohort_n_total} comparable leads booked (${Math.round(payload.cohort_rate * 100)}%)`
+    : 'no comparable cohort on file'
+
   const systemPrompt = `You are ${aiName}, a wedding-venue concierge. You're explaining to a venue
 coordinator WHY a particular lead's heat score is what it is. Output JSON with:
   - title: a short headline (max ~60 chars). Refer to the lead via the
-    score + tier (e.g. "Strong lead — sustained engagement + tour completion").
+    score + tier (e.g. "Strong lead — sustained engagement but cohort doubt").
   - body: 1-2 sentences. Ground every claim in the events listed below
-    AND in the heat trajectory (see "Trajectory" in user prompt). When the
-    trajectory is rising / falling / plateau / volatile, that direction MUST
-    be referenced — same score with different trajectory should read very
-    differently (e.g. "climbing fast" vs "recovering from a stall" vs "stable
-    at warm" vs "swinging week-to-week").
+    AND in the heat trajectory (see "Trajectory" in user prompt) AND in
+    the cohort damping signal (see "Cohort damping" in user prompt) when
+    it fired. When damping fired, the body MUST acknowledge it explicitly
+    — say something like "X raw points damped to Y because comparable
+    leads aren't booking" rather than describing the damped score as if
+    it stood on its own. When the trajectory is rising / falling /
+    plateau / volatile, that direction must be referenced too.
   - action: one specific next step the coordinator can take this week,
-    matched to the heat tier AND trajectory (hot+rising → push to contract;
-    hot+falling → urgent re-engagement; warm+plateau → tour follow-up;
-    warm+volatile → stabilise with a clarifying call; cool+rising → nurture;
-    cool+falling → re-engage; unknown → tier-default action). null if no
-    clear action (informational only).
+    matched to the heat tier AND trajectory AND cohort signal. When
+    damping fired, the action should reflect that the cohort suggests
+    this lead is structurally at risk — e.g. "intervene with the
+    differentiator" rather than "push to contract". null if no clear
+    action (informational only).
 
 CRITICAL RULES:
 - Never invent numbers. The ONLY numbers you may reference are the heat
-  score, the events' point values, and the total event count — all listed
-  in the user prompt. No percentages, ratios, or ranks unless they are
-  exact matches to the listed numbers.
-- Never reference other couples or venues; only this lead.
+  score, the raw (pre-damping) heat score, the cohort booked / total /
+  percentage, the events' point values, and the total event count — all
+  listed in the user prompt. No percentages, ratios, or ranks unless they
+  are exact matches to the listed numbers.
+- Never reference other couples or venues; only this lead and the cohort
+  by SHAPE (e.g. "comparable leads" / "look-alike cohort" / "this segment").
 - Never claim to know what the couple is "thinking" or "feeling" — narrate
   observed signals, not interpretations.
 - Use the venue's voice but stay neutral / factual.`
@@ -347,6 +436,9 @@ CRITICAL RULES:
   const userPrompt = `LEAD HEAT NARRATION
 
 Composite score: ${payload.heat_score} (${payload.temperature_tier})
+${dampingFired ? `Raw score (pre-damping): ${payload.raw_heat_score}\nCohort damping multiplier: ${payload.cohort_multiplier}` : ''}
+Cohort context: ${cohortDescriptor}
+${dampingFired ? `Cohort damping FIRED — heat dropped from ${payload.raw_heat_score} to ${payload.heat_score} because comparable leads aren't converting. The narration MUST acknowledge this explicitly.` : ''}
 Trajectory (last ~14 days): ${payload.trajectory}
 Total engagement events on file: ${payload.total_events}
 
@@ -357,7 +449,7 @@ Window: ${payload.oldest_event_at?.slice(0, 10) ?? '?'} → ${payload.newest_eve
 
 Compose the JSON narration. Reference the trajectory direction in the body
 so a coordinator scanning a list of leads can tell at a glance which way
-this lead is moving.`
+this lead is moving.${dampingFired ? ' And acknowledge the cohort damping — without it, the body and the cohort tile beside it would tell contradictory stories.' : ''}`
 
   let narration: InsightNarration | null = null
   // Cost-ceiling gate (T5-α.2). Per OPS-21.4.3, when a venue's daily
@@ -399,7 +491,12 @@ this lead is moving.`
   // because every number used here comes from the classical payload.
   // T5-followup-AA: trajectory-aware so the fallback prose reflects
   // direction, matching the bucketing we feed into the cache_key.
+  // T5-Rixey-FFF: cohort-damping aware so the fallback prose explicitly
+  // calls out the raw → damped split when damping fired. Without this,
+  // the fallback would describe the damped score as if it stood on its
+  // own — exactly the disagreement-with-cohort-tile bug we are fixing.
   if (!narration) {
+    const dampingFiredFallback = payload.cohort_multiplier !== 1.0
     const verb = payload.heat_score >= 80 ? 'Strong'
       : payload.heat_score >= 60 ? 'Warm'
       : payload.heat_score >= 40 ? 'Cool'
@@ -419,11 +516,13 @@ this lead is moving.`
     const concern = negativeEvents.length > 0
       ? `; offset by ${negativeEvents[0].event_type}`
       : ''
-    // Action picks based on (tier × trajectory) so the same warm-tier
-    // lead reads as "stabilise with a clarifying call" when volatile vs
-    // "send a tour follow-up" when steady.
+    // Action picks based on (tier × trajectory × cohort) so the same
+    // warm-tier lead reads as "intervene with the differentiator" when
+    // cohort-damped vs "send a tour follow-up" when steady.
     let action: string
-    if (payload.trajectory === 'falling') {
+    if (dampingFiredFallback) {
+      action = 'Cohort signal flags structural risk — surface the venue\'s differentiator early before this lead goes elsewhere.'
+    } else if (payload.trajectory === 'falling') {
       action = payload.heat_score >= 60
         ? 'Heat is dropping — send a re-engagement note this week.'
         : 'Queue a re-engagement nudge before the lead goes cold.'
@@ -438,9 +537,14 @@ this lead is moving.`
         ? 'Send a tour follow-up or proposal this week.'
         : 'Watch for re-engagement; queue a check-in if quiet for 14+ days.'
     }
+    const cohortPhrase = dampingFiredFallback && payload.cohort_n_total !== null && payload.cohort_n_booked !== null
+      ? ` Raw score ${payload.raw_heat_score} damped to ${payload.heat_score} because only ${payload.cohort_n_booked} of ${payload.cohort_n_total} comparable leads booked.`
+      : ''
     narration = {
-      title: `${verb} lead — ${payload.heat_score} (${payload.temperature_tier}, ${trajPhrase[payload.trajectory]})`,
-      body: `Heat score ${payload.heat_score} based on ${payload.total_events} engagement events; ${trajPhrase[payload.trajectory]} over the last ~14 days. ${summary}${concern}.`,
+      title: dampingFiredFallback
+        ? `${verb} on engagement, doubt on cohort — ${payload.heat_score} (${payload.temperature_tier})`
+        : `${verb} lead — ${payload.heat_score} (${payload.temperature_tier}, ${trajPhrase[payload.trajectory]})`,
+      body: `Heat score ${payload.heat_score} based on ${payload.total_events} engagement events; ${trajPhrase[payload.trajectory]} over the last ~14 days. ${summary}${concern}.${cohortPhrase}`,
       action,
     }
   }

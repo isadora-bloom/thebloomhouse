@@ -50,6 +50,16 @@ export interface PersonalityConfig {
   ai_purposes?: string[]
   ai_custom_purpose?: string | null
   ai_opener_shape?: string
+  // Venue-templated sign-off fields (migration 195, T5-Rixey-FFF). All
+  // optional so the structured signoff builder can degrade gracefully
+  // when a venue has not filled them in. Replaces the previous AI
+  // hallucination of "Digital Concierge to <owner>" / venue tagline /
+  // website / phone from the personality prompt context.
+  ai_role_title?: string | null
+  signature_tagline?: string | null
+  signature_website?: string | null
+  signature_phone?: string | null
+  signature_text_capable?: boolean | null
 }
 
 export interface VenueInfo {
@@ -165,6 +175,87 @@ const DEFAULT_PERSONALITY_DIALS: Omit<
   signature_expressions: [],
   signature_greeting: null,
   signature_closer: null,
+}
+
+/**
+ * Render the structured outbound sign-off block for a venue (T5-Rixey-FFF).
+ *
+ * Pre-fix the brain layer handed the AI a one-line signoff
+ * (`${aiEmoji} ${aiName}\n${venueName}`) and let Claude IMPROVISE the
+ * rest of the block from personality-prompt context — owner_name,
+ * coordinator_phone, and a hallucinated tagline. That worked at Rixey
+ * because the surrounding context implied the right values, but it
+ * means every venue's signature shape is non-deterministic and any
+ * venue without those upstream context fields gets either an invented
+ * tagline or an inconsistent block across drafts.
+ *
+ * This builder produces a deterministic block keyed entirely off
+ * venue config:
+ *
+ *   Warmly,
+ *   <ai_emoji> <ai_name>
+ *   <ai_role_title>          ← migration 195
+ *   <venue_name>
+ *   <signature_tagline>      ← migration 195, optional
+ *   <signature_website> | <signature_phone>   ← optional combined line
+ *   And yes, you can text    ← only when signature_text_capable=true
+ *
+ * Missing fields are skipped silently rather than producing empty lines
+ * so a venue that has only set the name + role still gets a clean
+ * three-line signature.
+ *
+ * The closer ("Warmly,") is taken from venue_ai_config.signature_closer
+ * when present and falls back to "Warmly," — the same default the AI
+ * had been using before this builder existed. Coordinators can switch
+ * it via /settings/personality without touching the prompt code.
+ */
+export function buildSignoffBlock(opts: {
+  aiName: string
+  aiEmoji?: string | null
+  aiRoleTitle?: string | null
+  venueName: string
+  signatureTagline?: string | null
+  signatureWebsite?: string | null
+  signaturePhone?: string | null
+  signatureCloser?: string | null
+  signatureTextCapable?: boolean | null
+}): string {
+  const lines: string[] = []
+  const closer = (opts.signatureCloser ?? '').trim() || 'Warmly,'
+  lines.push(closer)
+
+  const namedLine = opts.aiEmoji && opts.aiEmoji.trim().length > 0
+    ? `${opts.aiName} ${opts.aiEmoji.trim()}`
+    : opts.aiName
+  lines.push(namedLine)
+
+  if (opts.aiRoleTitle && opts.aiRoleTitle.trim().length > 0) {
+    lines.push(opts.aiRoleTitle.trim())
+  }
+  lines.push(opts.venueName)
+
+  if (opts.signatureTagline && opts.signatureTagline.trim().length > 0) {
+    lines.push(opts.signatureTagline.trim())
+  }
+
+  // Combined contact line: "website | phone". Render whichever subset
+  // is non-empty; skip the line entirely when both are missing so we
+  // don't emit a stray pipe character.
+  const websitePart = (opts.signatureWebsite ?? '').trim()
+  const phonePart = (opts.signaturePhone ?? '').trim()
+  if (websitePart && phonePart) {
+    lines.push(`${websitePart} | ${phonePart}`)
+  } else if (websitePart) {
+    lines.push(websitePart)
+  } else if (phonePart) {
+    lines.push(phonePart)
+  }
+
+  if (opts.signatureTextCapable === true) {
+    lines.push('And yes, you can text')
+  }
+
+  return lines.join('\n')
 }
 
 /**
@@ -463,9 +554,21 @@ ${renderTourBookingBlock(tourLinksArray, defaultTourLink)}
 
 ## SIGN-OFF TEMPLATE
 
-Use this sign-off at the end of every email:
+Use this EXACT sign-off block at the end of every email. Do NOT modify
+it, do NOT add a role title or tagline that isn't already present, do
+NOT invent a website or phone, do NOT add lines like "And yes, you can
+text" unless they are already in the block below. If a line you would
+normally include is missing here, the venue intentionally has not
+configured it — leaving it out is correct.
 
+\`\`\`
 ${signoff}
+\`\`\`
+
+Render the block byte-for-byte as shown. The only acceptable variation
+is replacing "Warmly," with one of the configured signature closers
+when this prompt's "typical closer" field above lists one, in which
+case use that closer instead.
 
 ---
 

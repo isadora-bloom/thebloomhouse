@@ -74,6 +74,17 @@ export interface VenueAIConfig {
   ai_purposes: string[]
   ai_custom_purpose: string | null
   ai_opener_shape: SageOpenerShape
+  // Venue-templated outbound signature fields (migration 195, T5-Rixey-FFF).
+  // Replace the prior AI hallucination of "Digital Concierge to <owner>" /
+  // venue tagline / website / phone in draft sign-off blocks. Free-text;
+  // missing fields are skipped by buildSignoffBlock rather than producing
+  // empty lines. signature_phone falls back to venue_config.coordinator_phone
+  // in the sign-off builder when null.
+  ai_role_title: string | null
+  signature_tagline: string | null
+  signature_website: string | null
+  signature_phone: string | null
+  signature_text_capable: boolean
   created_at: string
   updated_at: string
 }

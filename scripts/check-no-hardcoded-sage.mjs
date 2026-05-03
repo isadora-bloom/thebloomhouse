@@ -12,9 +12,19 @@
 //   - src/components                (shared agent / couple / shell components)
 // White-label leaks were equally bad in coordinator-facing pages.
 //
+// T5-Rixey-FFF expansion: also flags hardcoded venue-identifying
+// strings in prompt templates + brain services. Bug 4 root cause was
+// not "Sage" leaking into UI but the SIGNATURE TEMPLATE in outbound
+// drafts inventing "Digital Concierge to Isadora Martin-Dye" / "A
+// Historic Virginia Wedding Venue for Modern Love" / "www.rixeymanor.com"
+// / "540-212-4545" because the prompt let Claude IMPROVISE those lines.
+// All five must come from venue_ai_config (migration 195) — never from
+// a string literal in src/config/prompts/* or src/lib/services/*-brain.ts.
+//
 // What this script does: walk each scope dir for *.ts / *.tsx files,
 // flag user-visible 'Sage' string literals, subtract the known-OK
-// allowlist, exit 1 if anything is left.
+// allowlist, then ALSO walk the prompt + brain dirs for the venue-
+// identifying token list. Exit 1 if anything is left.
 //
 // Run:
 //   node scripts/check-no-hardcoded-sage.mjs
@@ -28,6 +38,43 @@ const SCAN_DIRS = [
   'src/app/(platform)',
   'src/components',
 ]
+
+// T5-Rixey-FFF: separate scan for prompt templates + brain services.
+// These files are the LAST place a venue-specific string can leak
+// before reaching Claude — once a hardcoded "Rixey Manor" or "Isadora"
+// lands in a system prompt, every venue using that brain produces
+// drafts with that string in them. Same scan logic, different
+// vocabulary.
+const PROMPT_BRAIN_SCAN_DIRS = [
+  'src/config/prompts',
+  'src/lib/services',
+]
+// Venue-identifying tokens that MUST be templated through venue
+// config. Word-boundary matched. Case-sensitive on the named-entity
+// tokens (lowercase "isadora" can be a generic word in comments) but
+// case-insensitive on phrases that are unambiguous as identifiers.
+const PROMPT_FORBIDDEN_TOKENS = [
+  { pattern: /\bDigital Concierge to\b/, label: 'Digital Concierge to <owner>' },
+  { pattern: /\bIsadora Martin-Dye\b/, label: 'Isadora Martin-Dye' },
+  { pattern: /\bRixey Manor\b/, label: 'Rixey Manor' },
+  { pattern: /\bHistoric Virginia\b/i, label: 'Historic Virginia (tagline fragment)' },
+  { pattern: /www\.rixeymanor\.com/i, label: 'www.rixeymanor.com' },
+  { pattern: /540-212-4545/, label: 'Rixey phone (540-212-4545)' },
+]
+// Files in the prompt/brain scan whose literal use of a venue-
+// identifying token is intentional (typically a parser test fixture
+// or an admin-facing preset label). Updated narrowly when a
+// legitimate case appears.
+const PROMPT_BRAIN_ALLOWLIST = new Set([
+  // crm-import/web-form.ts ships RIXEY_CALCULATOR_HINT as a
+  // built-in form-mapping preset (label + description shown in the
+  // admin onboarding picker, NOT routed through any prompt). The
+  // string "Rixey Manor pricing calculator" is the literal name of
+  // the export the hint maps. Other tenants pick a different hint
+  // from the same picker — none of these labels reach a venue's
+  // outbound draft.
+  'src/lib/services/crm-import/web-form.ts',
+])
 
 // Specific file+line combinations that are explicitly OK. Update this
 // list if you add a legitimate literal 'Sage' (e.g. a color swatch).
@@ -130,6 +177,8 @@ for (const file of files) {
   }
 }
 
+// Defer the exit on UI violations so the prompt/brain scan also runs
+// — both passes write their findings, then we exit at the bottom.
 if (violations.length > 0) {
   console.log(`\nFound ${violations.length} hardcoded 'Sage' literal(s) in venue-facing UI:`)
   for (const v of violations) {
@@ -139,6 +188,68 @@ if (violations.length > 0) {
   console.log('\nFix by routing through useCoupleContext().aiName (couple portal),')
   console.log('useAiName() (platform shell), or .replaceAll("Sage", aiName).')
   console.log('If this is legitimately a color name or similar, add to ALLOWLIST in scripts/check-no-hardcoded-sage.mjs.')
-  process.exit(1)
 }
-console.log('No hardcoded Sage literals found in venue-facing UI.')
+
+// ---------------------------------------------------------------------------
+// T5-Rixey-FFF: second pass over prompt templates + brain services.
+// ---------------------------------------------------------------------------
+// Same comment / block-comment skipping as the UI pass above so the
+// behaviour is consistent. The token list is the difference — instead
+// of looking for 'Sage' (which is allowed in brains as the
+// DEFAULT_AI_NAME fallback constant), we look for venue-identifying
+// strings that should be loaded from venue_ai_config columns added
+// in migration 195.
+
+const promptBrainFiles = PROMPT_BRAIN_SCAN_DIRS.flatMap((d) => walk(d))
+const promptViolations = []
+
+for (const file of promptBrainFiles) {
+  const normalized = file.replace(/\\/g, '/')
+  if (PROMPT_BRAIN_ALLOWLIST.has(normalized)) continue
+
+  const fileText = readFileSync(file, 'utf8')
+  const lines = fileText.split(/\r?\n/)
+  let inBlockComment = false
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (inBlockComment) {
+      if (line.includes('*/')) inBlockComment = false
+      continue
+    }
+    const opensBlock = /\/\*/.test(line) && !/\/\*[\s\S]*\*\//.test(line)
+    if (opensBlock) {
+      inBlockComment = true
+      continue
+    }
+    if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue
+    if (/\/\*.*\*\//.test(line)) continue
+    if (/console\.(log|warn|error|info|debug)/.test(line)) continue
+
+    for (const token of PROMPT_FORBIDDEN_TOKENS) {
+      if (token.pattern.test(line)) {
+        promptViolations.push({ file, line: i + 1, text: line.trim(), label: token.label })
+      }
+    }
+  }
+}
+
+if (promptViolations.length > 0) {
+  console.log(`\nFound ${promptViolations.length} hardcoded venue-identifying string(s) in prompts/brains:`)
+  for (const v of promptViolations) {
+    console.log(`  ${v.file}:${v.line} (${v.label})`)
+    console.log(`    ${v.text.slice(0, 120)}`)
+  }
+  console.log('\nFix by loading the value from venue_ai_config (migration 195: ai_role_title, signature_tagline,')
+  console.log('signature_website, signature_phone, signature_text_capable) and templating it into the prompt')
+  console.log('via the buildSignoffBlock() helper or the SIGN-OFF TEMPLATE block. Never inline a venue-specific')
+  console.log('string in src/config/prompts/* or src/lib/services/*-brain.ts — every venue must speak in their own brand.')
+}
+
+if (violations.length === 0 && promptViolations.length === 0) {
+  console.log('No hardcoded Sage literals found in venue-facing UI.')
+  console.log('No hardcoded venue-identifying strings found in prompt templates or brain services.')
+  process.exit(0)
+}
+
+process.exit(1)
