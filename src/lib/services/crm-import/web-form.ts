@@ -25,10 +25,12 @@
  * - Per-row writes (SUPERSET of the standard CRM-import three-table
  *   write):
  *     * weddings           — confidence_flag='imported_high' (first-party
- *                            data > third-party CRM), source='website',
+ *                            data > third-party CRM), source NULL (per
+ *                            T5-Rixey-TT adapter-as-facts contract),
  *                            source_provenance='web_form_import',
- *                            crm_source='web_form'. lead_source NULL —
- *                            Stream KK / Calendly will fill if it can.
+ *                            crm_source='web_form'. lead_source resolves
+ *                            via the derivation chain reading the per-
+ *                            row interaction's extracted_identity.
  *     * interactions       — direction='inbound', type='web_form',
  *                            body = readable concatenation of the
  *                            relevant filled-in form fields + free-text
@@ -524,6 +526,17 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
       type: 'web_form' as NormalisedInteractionRow['type'],  // migration 178 widens the CHECK
       subject: refRaw ? `Web form submission #${refRaw}` : 'Web form submission',
       body,
+      // T5-Rixey-TT: tee the form-provider hint into extracted_identity
+      // so the lead-source-derivation chain can distinguish first-party
+      // calculator submissions ("website") from a generic third-party
+      // form (still "website" but lower confidence).
+      extracted_identity: {
+        provider: hint.provider,
+        is_first_party: hint.provider === 'rixey_calculator',
+        // hear_source feeds Priority-2 directly. 'website' is the
+        // structural answer for calculator submissions.
+        hear_source: 'website',
+      },
     }
 
     // Compose a notes blob for the wedding (intent + free-text + total).
@@ -533,6 +546,22 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
     if (totalRaw) weddingNotesParts.push(`Calculated total: ${totalRaw}`)
     const weddingNotes = weddingNotesParts.join('\n') || null
 
+    // T5-Rixey-TT adapter-as-facts: web-form intake leaves
+    // weddings.source NULL. The factual provenance lives in
+    // crm_source='web_form' + source_detail (provider name) + the
+    // tangential_signals row written in commit(). Lead-source-
+    // derivation Priority-3 reads the form-submission interaction
+    // and stamps lead_source='website' from the structural signal,
+    // which is the right path because:
+    //   (a) it goes through the same chain as every other source,
+    //       so coordinator overrides + audit logging work uniformly
+    //   (b) it leaves room for upstream attribution (Calendly Q7,
+    //       UTM tags, email-domain) to override 'website' with the
+    //       channel that drove the calculator submission, when the
+    //       cluster matching catches that.
+    // The interaction's extracted_identity carries the form-provider
+    // hint so Priority-3 can distinguish "first-party calculator" from
+    // a generic web form.
     rows.push({
       source_id: refRaw,
       partner1_first_name: p1.first,
@@ -549,11 +578,7 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
       // status — web-form submission is a brand-new inquiry. Coordinator
       // can flip it later via the lead detail UI.
       status: 'inquiry',
-      // source — 'website' (per spec) is a stable canonical value
-      // already in CANONICAL_SOURCES. Keep first-party and channel-agnostic;
-      // Stream KK + the back-trace flow will add lead_source attribution
-      // if it can find an upstream Knot/Wire/Calendly touchpoint.
-      source: 'website',
+      source: null,
       source_detail: hint.provider === 'rixey_calculator'
         ? 'Rixey pricing calculator'
         : `web_form_${hint.provider}`,

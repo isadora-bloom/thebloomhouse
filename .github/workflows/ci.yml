@@ -125,3 +125,6 @@ jobs:
 
       - name: Date-doctrine guard — no coordinator-facing created_at (T5-Rixey-LL)
         run: node scripts/check-no-coordinator-facing-created-at.mjs
+
+      - name: Adapter-as-facts guard — CRM-import adapters cannot write weddings.source (T5-Rixey-TT)
+        run: node scripts/check-adapter-source-justification.mjs

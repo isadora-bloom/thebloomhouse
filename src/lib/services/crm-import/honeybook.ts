@@ -60,12 +60,31 @@
  *                                                'other' so downstream
  *                                                lost-deal queries see it)
  *
- * Source mapping (HoneyBook → weddings.source enum)
- * --------------------------------------------------
- * HoneyBook's "Source" is a free-text coordinator field. We canonicalise
- * common values into weddings.source's restricted enum (the_knot,
- * weddingwire, google, instagram, referral, website, walk_in, other) and
- * preserve the original string in source_detail so nothing is lost.
+ * Source attribution (T5-Rixey-TT adapter-as-facts refactor, 2026-05-02)
+ * ----------------------------------------------------------------------
+ * HoneyBook is a CRM (scheduling + invoicing + workflows) — it is NOT
+ * an acquisition channel. The previous version of this adapter wrote
+ * `weddings.source = 'honeybook'` (or canonicalised the free-text
+ * "Lead Source" column to the restricted enum). That short-circuited
+ * the lead-source-derivation chain: the Calendly Q7 "where did you
+ * hear about us?" answer or the inbound-email-domain analysis would
+ * have produced a real first-touch (the_knot / wedding_wire / referral),
+ * but a non-NULL `weddings.source = 'honeybook'` made the chain skip
+ * the row.
+ *
+ * New contract: this adapter writes FACTS only.
+ *   - `weddings.crm_source = 'honeybook'`  (factual: which CRM)
+ *   - `weddings.source_detail` keeps the raw "Source" cell verbatim
+ *     so the coordinator's hand-typed value isn't lost
+ *   - `weddings.source = NULL` always — the lead-source-derivation
+ *     cron decides the real first-touch from Q7 / web-form / email-
+ *     domain / UTM in priority order
+ *
+ * If the HoneyBook "Source" cell happens to encode a real channel
+ * (e.g. coordinator typed "The Knot"), the value is also dropped into
+ * `interactions.extracted_identity.hear_source` on a synthetic per-row
+ * interaction so the derivation chain Priority-2 can pick it up. Per
+ * Stream-TT design.
  *
  * Confidence + provenance
  * -----------------------
@@ -82,6 +101,7 @@ import type {
   ParseResult,
   PreviewResult,
   NormalisedLeadRow,
+  NormalisedInteractionRow,
   CommitResult,
   NormalisedLostDealRow,
 } from './index'
@@ -181,24 +201,39 @@ function mapStatus(raw: string | null | undefined): WeddingStatus {
 }
 
 // ---------------------------------------------------------------------------
-// Source-channel canonicalisation. weddings.source is a CHECK-constrained
-// enum (the_knot, weddingwire, google, instagram, referral, website,
-// walk_in, other). HoneyBook's Source field is free-text; we lowercase
-// and keyword-match.
+// Source-channel canonicalisation (T5-Rixey-TT — scoped DOWN, not removed).
+//
+// The previous version returned a canonical enum value from the free-text
+// "Source" cell and wrote it to `weddings.source`. That circumvented the
+// lead-source-derivation chain: a typed "The Knot" or "Word of Mouth" got
+// stamped immediately, blocking later signals (Q7, email-domain, UTM)
+// from ever running for the row.
+//
+// New contract: this function still RECOGNISES known channels in the
+// free-text — but the result feeds the synthetic interaction's
+// `extracted_identity.hear_source` (which the lead-source-derivation
+// Priority-2 reads), not `weddings.source` directly. Returning null
+// means "I didn't recognise this string" — keep the raw value in
+// source_detail and let derivation work from other signals.
 // ---------------------------------------------------------------------------
 
-function canonicaliseSource(raw: string | null | undefined): NonNullable<NormalisedLeadRow['source']> | null {
+function recogniseHearSource(raw: string | null | undefined): string | null {
   if (!raw) return null
   const s = raw.trim().toLowerCase()
   if (!s) return null
   if (/(the\s*knot|theknot)/.test(s)) return 'the_knot'
   if (/(wedding\s*wire|weddingwire)/.test(s)) return 'weddingwire'
-  if (/(instagram|insta|ig)/.test(s)) return 'instagram'
+  if (/(instagram|insta|\big\b)/.test(s)) return 'instagram'
+  if (/(facebook|\bfb\b)/.test(s)) return 'facebook'
+  if (/(pinterest)/.test(s)) return 'pinterest'
+  if (/(tik[\s-]*tok)/.test(s)) return 'tiktok'
   if (/(google|search|seo|sem|ads?)/.test(s)) return 'google'
-  if (/(referral|referred|word of mouth|wom)/.test(s)) return 'referral'
+  if (/(referral|referred|word of mouth|wom|friend|family)/.test(s)) return 'referral'
   if (/(website|web\s*form|own\s*site|inquiry\s*form)/.test(s)) return 'website'
   if (/(walk[\s-]*in|drop[\s-]*in)/.test(s)) return 'walk_in'
-  return 'other'
+  if (/(here\s*comes\s*the\s*guide)/.test(s)) return 'here_comes_the_guide'
+  if (/(zola)/.test(s)) return 'zola'
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -410,7 +445,34 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
     if (notes) noteParts.push(notes)
     const combinedNotes = noteParts.length > 0 ? noteParts.join('\n\n') : null
 
-    const canonicalSource = canonicaliseSource(sourceRaw)
+    // T5-Rixey-TT adapter-as-facts refactor: do NOT canonicalise the
+    // free-text Source into weddings.source. Instead, recognise the
+    // value (when possible) and tee it into a synthetic per-row
+    // interaction's extracted_identity.hear_source so the lead-source-
+    // derivation Priority-2 picks it up. The raw value is also kept
+    // in source_detail.
+    const recognisedHearSource = recogniseHearSource(sourceRaw)
+
+    const adapterInteractions: NormalisedInteractionRow[] = []
+    if (sourceRaw || recognisedHearSource) {
+      // Anchor the synthetic interaction at the inquiry timestamp so
+      // ORDER BY timestamp picks it up as one of the earliest rows
+      // tied to the wedding (the derivation chain queries earliest-
+      // first).
+      const occurredAt = parseDateIso(inquiry) ?? parseDateIso(projDate) ?? new Date().toISOString()
+      adapterInteractions.push({
+        occurred_at: occurredAt,
+        direction: 'inbound',
+        type: 'meeting',
+        subject: 'HoneyBook lead-source provenance',
+        body: `provider:honeybook\nlead_source_raw:${sourceRaw ?? '(empty)'}`,
+        extracted_identity: {
+          provider: 'honeybook',
+          hear_source_raw: sourceRaw,
+          hear_source: recognisedHearSource,
+        },
+      })
+    }
 
     // Lost-deals stub when the row landed in 'lost' status with no further
     // detail. commitNormalisedRows wires this in if status === 'lost' OR
@@ -442,14 +504,17 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
       guest_count_estimate: null,
       booking_value: parseMoneyToCents(totalRaw),
       status: status ?? 'inquiry',
-      source: canonicalSource,
+      // T5-Rixey-TT: HoneyBook is a CRM (factual provenance lives in
+      // crm_source='honeybook'). Lead-source derivation decides the real
+      // first-touch from Q7 / email-domain / UTM in priority order.
+      source: null,
       source_detail: sourceRaw,
       inquiry_date: parseDateIso(inquiry),
       booked_at: parseDateIso(booking),
       lost_at: lostAtIso,
       lost_reason: status === 'lost' ? 'other' : null,
       notes: combinedNotes,
-      interactions: [],
+      interactions: adapterInteractions,
       tours: [],
       lost_deal: lostDeal,
     })

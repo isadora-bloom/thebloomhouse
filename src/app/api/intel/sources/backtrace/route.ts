@@ -15,8 +15,11 @@ import { findBacktraceCandidates, applyBacktrace } from '@/lib/services/source-b
  *     window.
  *
  *     Query params:
- *       ?venue_id=UUID    — single venue (defaults to auth.venueId)
- *       ?live=false       — skip live Gmail (preview without quota)
+ *       ?venue_id=UUID         — single venue (defaults to auth.venueId)
+ *       ?live=false            — skip live Gmail (preview without quota)
+ *       ?include_no_match=true — include rows where backtrace found nothing
+ *                                (default: hide from queue, only show
+ *                                weak_match + confident_match)
  *
  *   POST /api/intel/sources/backtrace
  *     Body: { weddingId, newSource }
@@ -36,6 +39,7 @@ export async function GET(request: NextRequest) {
   const sp = request.nextUrl.searchParams
   const venueIdParam = sp.get('venue_id')
   const liveParam = sp.get('live')
+  const includeNoMatchParam = sp.get('include_no_match')
   const venueId = venueIdParam || auth.venueId
   if (venueId !== auth.venueId) {
     // Only let the requester backtrace their own venue. Cross-venue
@@ -47,8 +51,20 @@ export async function GET(request: NextRequest) {
   try {
     const candidates = await findBacktraceCandidates(venueId, {
       useLiveGmail: liveParam !== 'false',
+      includeNoMatch: includeNoMatchParam === 'true',
     })
-    return NextResponse.json({ candidates })
+    // T5-Rixey-TT: split the response so the UI can distinguish weak vs
+    // confident matches without re-deriving from the per-row status.
+    const weakMatches = candidates.filter((c) => c.status === 'weak_match').length
+    const confidentMatches = candidates.filter((c) => c.status === 'confident_match').length
+    return NextResponse.json({
+      candidates,
+      counts: {
+        total: candidates.length,
+        weak_matches: weakMatches,
+        confident_matches: confidentMatches,
+      },
+    })
   } catch (err) {
     console.error('[api/intel/sources/backtrace GET]', err)
     return NextResponse.json({ error: 'Failed to compute backtrace' }, { status: 500 })

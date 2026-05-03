@@ -470,17 +470,21 @@ function parseWeddingDateHint(raw: string | null | undefined): string | null {
   return null
 }
 
-/** Calendly's "Where did you first hear about us?" → weddings.source enum.
- *  Mirrors honeybook.ts canonicaliseSource but extended with the actual
- *  values seen in the Rixey export. */
-function canonicaliseLeadSource(raw: string | null | undefined): {
-  source: NonNullable<NormalisedLeadRow['source']> | null
+/** Calendly's "Where did you first hear about us?" → canonical channel
+ *  KEY (the_knot / wedding_wire / etc.). Returns null when the value
+ *  isn't recognisable — caller keeps the raw string in source_detail
+ *  and feeds the recognised value (when present) into the synthetic
+ *  interaction's extracted_identity.hear_source so the lead-source-
+ *  derivation Priority-2 picks it up. Per Stream-TT adapter-as-facts
+ *  contract: tour-scheduler never writes weddings.source directly. */
+function recogniseHearSource(raw: string | null | undefined): {
+  source: string | null
   detail: string | null
 } {
   const text = (raw ?? '').trim()
   if (!text) return { source: null, detail: null }
   const lower = text.toLowerCase()
-  let source: NonNullable<NormalisedLeadRow['source']> | null
+  let source: string | null
   if (/the\s*knot|theknot/.test(lower))                              source = 'the_knot'
   else if (/wedding\s*wire|weddingwire/.test(lower))                 source = 'wedding_wire'
   else if (/here\s*comes\s*the\s*guide/.test(lower))                 source = 'here_comes_the_guide'
@@ -493,7 +497,7 @@ function canonicaliseLeadSource(raw: string | null | undefined): {
   else if (/word\s*of\s*mouth|referral|referred|been\s*here\s*before|friend|family/.test(lower)) source = 'referral'
   else if (/website|web\s*form/.test(lower))                         source = 'website'
   else if (/walk[\s-]*in/.test(lower))                               source = 'walk_in'
-  else                                                               source = 'other'
+  else                                                               source = null
   return { source, detail: text }
 }
 
@@ -713,7 +717,9 @@ function calendlyRowsToNormalised(
     const guestCount = parseGuestCount(aggregateRouted.get('estimated_guests'))
     const wedDateHint = parseWeddingDateHint(aggregateRouted.get('wedding_date_hint'))
     const leadSourceRaw = aggregateRouted.get('lead_source') ?? null
-    const { source, detail } = canonicaliseLeadSource(leadSourceRaw)
+    // T5-Rixey-TT: source becomes a HEAR_SOURCE for the synthetic
+    // interaction's extracted_identity, NOT a write to weddings.source.
+    const { source: hearSource, detail } = recogniseHearSource(leadSourceRaw)
 
     // Detect HoneyBook-funnel tours (UTM Source = honeybook on any tour
     // row in the group). These weddings should be tagged so source-
@@ -781,6 +787,24 @@ function calendlyRowsToNormalised(
       if (r.eventUuid) bodyLines.push(`event_uuid:${r.eventUuid}`)
       const body = bodyLines.join('\n')
 
+      // T5-Rixey-TT: stamp this row's Q&A directly into the
+      // interaction's extracted_identity so the lead-source-derivation
+      // Priority-2 picks up Q7 / lead_source answers without re-parsing
+      // the body. Includes UTM tags so Priority-5 also benefits.
+      const rowExtractedIdentity: Record<string, unknown> = {
+        provider: 'calendly',
+        event_type: r.eventTypeName,
+      }
+      const rowLeadSourceRaw = r.questionsRouted.get('lead_source')
+      if (rowLeadSourceRaw) {
+        const recognised = recogniseHearSource(rowLeadSourceRaw)
+        rowExtractedIdentity.hear_source_raw = rowLeadSourceRaw
+        if (recognised.source) rowExtractedIdentity.hear_source = recognised.source
+      }
+      if (r.utmSource) rowExtractedIdentity.utm_source = r.utmSource
+      if (r.utmCampaign) rowExtractedIdentity.utm_campaign = r.utmCampaign
+      if (r.utmMedium) rowExtractedIdentity.utm_medium = r.utmMedium
+
       const occurredAt = r.startIso ?? r.createdIso ?? new Date().toISOString()
       interactions.push({
         occurred_at: occurredAt,
@@ -788,6 +812,7 @@ function calendlyRowsToNormalised(
         type: 'meeting',
         subject,
         body,
+        extracted_identity: rowExtractedIdentity,
       })
 
       if (overrideBucket === 'tour') {
@@ -837,6 +862,15 @@ function calendlyRowsToNormalised(
       }
     }
 
+    // T5-Rixey-TT adapter-as-facts: tour-scheduler is INTAKE plumbing,
+    // not an acquisition channel. Leave weddings.source NULL so the
+    // lead-source-derivation cron can decide the real first-touch from
+    // Q7 (synthetic interaction extracted_identity.hear_source above)
+    // / email-domain / UTM in priority order. The hearSource recognition
+    // happens but its result feeds the per-row extracted_identity, NOT
+    // weddings.source directly.
+    void hearSource
+
     out.push({
       source_id: groupKey,
       partner1_first_name: seed.inviteeFirst,
@@ -851,7 +885,7 @@ function calendlyRowsToNormalised(
       guest_count_estimate: guestCount,
       booking_value: null,
       status: aggregateStatus,
-      source: source ?? 'calendly',
+      source: null,
       source_detail: sourceDetail,
       inquiry_date: seed.createdIso ?? seed.startIso,
       booked_at: null,

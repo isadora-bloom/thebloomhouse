@@ -35,6 +35,12 @@ export interface BacktraceCandidate {
   suggestedSource: string | null
   evidence: Evidence | null
   confidence: 'high' | 'medium' | 'low' | 'none'
+  /** T5-Rixey-TT: explicit return state. weak_match candidates render a
+   *  "review carefully" banner; confident_match auto-applies cleanly;
+   *  no_match is filtered out by the API by default. */
+  status?: 'no_match' | 'weak_match' | 'confident_match'
+  /** T5-Rixey-TT: human-readable warnings to surface alongside weak matches. */
+  warnings?: string[]
 }
 
 const SOURCE_OPTIONS = [
@@ -291,6 +297,24 @@ export function SourceBacktracePanel({ compact = false, onComplete }: PanelProps
                     )}
                   </div>
 
+                  {c.status === 'weak_match' && c.warnings && c.warnings.length > 0 && (
+                    <div className="mt-3 bg-amber-50 border border-amber-200 rounded p-3 text-xs">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-600 mt-0.5 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-amber-900">
+                            Weak match — review carefully
+                          </div>
+                          <ul className="mt-1 list-disc list-inside text-amber-800 space-y-0.5">
+                            {c.warnings.map((w, idx) => (
+                              <li key={idx}>{w}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {c.evidence ? (
                     <div className="mt-3 bg-sage-50/50 border border-border rounded p-3 text-xs">
                       <div className="flex items-start gap-2">
@@ -309,6 +333,12 @@ export function SourceBacktracePanel({ compact = false, onComplete }: PanelProps
                           <div className="text-sage-400 mt-1">
                             {c.evidence.timestamp.slice(0, 10)} · confidence:{' '}
                             <span className="font-medium">{c.confidence}</span>
+                            {c.status && (
+                              <>
+                                {' '}· status:{' '}
+                                <span className="font-medium">{c.status}</span>
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>

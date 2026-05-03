@@ -186,6 +186,12 @@ async function parseGenericCsv(config: AdapterConfig): Promise<ParseResult> {
       guest_count_estimate: coerceNumber(get('guest_count_estimate')),
       booking_value: coerceMoneyToCents(get('booking_value')),
       status: status ?? 'inquiry',
+      // adapter-source-justified: generic-csv ONLY writes weddings.source
+      //   when the coordinator EXPLICITLY mapped a CSV column to the
+      //   `source` Bloom field via columnMapping. That's a deliberate,
+      //   hand-curated act — the coordinator is asserting "this column
+      //   IS the first-touch attribution." If they don't map it, the
+      //   value stays null and the lead-source-derivation chain runs.
       source: get('source'),
       source_detail: get('source_detail'),
       inquiry_date: coerceDate(get('inquiry_date')),
