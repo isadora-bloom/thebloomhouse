@@ -54,6 +54,8 @@ export interface NormalisedLeadRow {
   partner1_phone?: string | null
   partner2_first_name?: string | null
   partner2_last_name?: string | null
+  partner2_email?: string | null
+  partner2_phone?: string | null
   wedding_date?: string | null            // ISO yyyy-mm-dd
   guest_count_estimate?: number | null
   booking_value?: number | null           // in cents (Bloom convention)
@@ -67,10 +69,35 @@ export interface NormalisedLeadRow {
   lost_reason?: string | null
   notes?: string | null
 
+  /** T5-Rixey-GG / migration 175 — extra financial detail. All in cents. */
+  tax_amount?: number | null
+  amount_paid?: number | null
+  gratuity_amount?: number | null
+  refunded_amount?: number | null
+  /** T5-Rixey-GG / migration 175 — provider's primary key, for dedup. */
+  crm_external_id?: string | null
+  /** T5-Rixey-GG / migration 175 — provider-side team assignments. */
+  crm_team_members?: Array<{ name: string | null; email: string | null; role: string | null }> | null
+  /** T5-Rixey-GG / migration 175 — per-row import warnings. */
+  import_warnings?: Array<{ field: string; issue: string; value: unknown }> | null
+
   /** Linked sub-records (each becomes one row in its respective table). */
   interactions?: NormalisedInteractionRow[]
   tours?: NormalisedTourRow[]
   lost_deal?: NormalisedLostDealRow | null
+
+  /** Other people surfaced by the CRM (parents, planners, vendors). Each
+   *  becomes a `people` row with role != partner1/partner2. */
+  others?: NormalisedPersonRow[]
+}
+
+/** Additional people on a wedding row beyond partner1 / partner2. */
+export interface NormalisedPersonRow {
+  first_name: string | null
+  last_name: string | null
+  email: string | null
+  phone: string | null
+  role: string                             // 'parent_mother' / 'planner' / etc.
 }
 
 export interface NormalisedInteractionRow {
@@ -128,6 +155,46 @@ export interface AdapterConfig {
   jsonText?: string                        // raw JSON content (some exports are JSON)
 }
 
+/**
+ * Pre-commit validation question. The adapter's `validate()` method
+ * surfaces these to the coordinator BEFORE commit so they can supply
+ * defaults for ambiguous decisions (e.g. "12% of projects have no
+ * booking date — should they be Lost or Inquiry?"). Per T5-Rixey-GG /
+ * Stream GG.
+ */
+export interface ValidationQuestion {
+  /** Stable id the UI uses to keep the answer with the question. */
+  id: string
+  /** Coordinator-facing question text. */
+  question: string
+  /** Possible answers — each becomes a button in the UI. */
+  choices: Array<{
+    /** Stable id sent back to the adapter on commit. */
+    id: string
+    /** Coordinator-facing label. */
+    label: string
+    /** Whether this is the recommended default. */
+    recommended?: boolean
+  }>
+  /** Number of rows this question affects. Drives prominence in UI. */
+  affectedRowCount: number
+  /** First few example row identifiers (couple name / source_id) for
+   *  coordinator preview. */
+  exampleRows?: string[]
+}
+
+export interface ValidationResult {
+  questions: ValidationQuestion[]
+  /** Pure-info notes that don't require an answer (e.g. "94 rows have
+   *  Lead Source = Unknown — Bloom will backfill from Calendly data"). */
+  notes: string[]
+  /** Rows that will be skipped at commit time and why. */
+  skipped: Array<{ rowIndex: number; reason: string; identifier?: string | null }>
+}
+
+/** Coordinator answers keyed by ValidationQuestion.id → choice.id. */
+export type ValidationAnswers = Record<string, string>
+
 export interface CrmAdapter {
   /** Stable identifier matching the crm_source enum. */
   name: CrmSource
@@ -140,6 +207,18 @@ export interface CrmAdapter {
   ready: boolean
   parse(config: AdapterConfig): Promise<ParseResult>
   preview(rows: NormalisedLeadRow[]): PreviewResult
+  /**
+   * Optional pre-commit validation pass — the adapter can surface
+   * questions to the coordinator before commit (per T5-Rixey-GG).
+   * Adapters without ambiguity (generic_csv) can omit this.
+   */
+  validate?(rows: NormalisedLeadRow[]): ValidationResult
+  /**
+   * Optional answer-applier — given coordinator answers from
+   * validate(), the adapter mutates / re-shapes rows before commit.
+   * Adapters without validate() can omit this.
+   */
+  applyAnswers?(rows: NormalisedLeadRow[], answers: ValidationAnswers): NormalisedLeadRow[]
   commit(args: {
     supabase: SupabaseClient
     venueId: string
@@ -161,6 +240,33 @@ export const ADAPTERS: ReadonlyArray<CrmAdapter> = [
 
 export function findAdapter(name: string): CrmAdapter | null {
   return ADAPTERS.find((a) => a.name === name) ?? null
+}
+
+/**
+ * Map our richer parsed role strings (parent_mother / planner /
+ * coordinator / vendor / wedding_party / officiant / witness / other)
+ * into the people.role CHECK enum (partner1 / partner2 / guest /
+ * wedding_party / vendor / family). Per T5-Rixey-GG / Stream GG.
+ */
+function mapParsedRoleToPeopleRole(parsedRole: string): string {
+  switch (parsedRole) {
+    case 'parent_mother':
+    case 'parent_father':
+      return 'family'
+    case 'planner':
+    case 'coordinator':
+    case 'vendor':
+    case 'officiant':
+      return 'vendor'
+    case 'wedding_party':
+    case 'witness':
+      return 'wedding_party'
+    case 'partner':
+      // Fallback when more than 2 partners parsed (unusual). Treat as guest.
+      return 'guest'
+    default:
+      return 'guest'
+  }
 }
 
 /**
@@ -190,7 +296,11 @@ export async function commitNormalisedRows(args: {
       const weddingPayload = {
         venue_id: venueId,
         status: row.status ?? 'inquiry',
-        source: row.source ?? 'other',
+        // T5-Rixey-GG: source can be NULL for "Unknown" CRM exports —
+        // the source channel is later backfilled from Calendly /
+        // web-inquiry data. Don't force 'other' or downstream attribution
+        // gets a misleading explicit channel for every imported row.
+        source: row.source ?? null,
         source_detail: row.source_detail ?? null,
         wedding_date: row.wedding_date ?? null,
         guest_count_estimate: row.guest_count_estimate ?? null,
@@ -200,6 +310,14 @@ export async function commitNormalisedRows(args: {
         lost_at: row.lost_at ?? null,
         lost_reason: row.lost_reason ?? null,
         notes: row.notes ?? null,
+        // T5-Rixey-GG / migration 175 — extra financial detail.
+        tax_amount: row.tax_amount ?? null,
+        amount_paid: row.amount_paid ?? null,
+        gratuity_amount: row.gratuity_amount ?? null,
+        refunded_amount: row.refunded_amount ?? null,
+        crm_external_id: row.crm_external_id ?? null,
+        crm_team_members: row.crm_team_members ?? null,
+        import_warnings: row.import_warnings ?? null,
         confidence_flag: 'imported_medium',
         crm_source: crmSource,
       }
@@ -230,16 +348,40 @@ export async function commitNormalisedRows(args: {
           crm_source: crmSource,
         })
       }
-      if (row.partner2_first_name || row.partner2_last_name) {
+      if (row.partner2_first_name || row.partner2_last_name || row.partner2_email) {
         await supabase.from('people').insert({
           venue_id: venueId,
           wedding_id: weddingId,
           role: 'partner2',
           first_name: row.partner2_first_name ?? null,
           last_name: row.partner2_last_name ?? null,
+          email: row.partner2_email ?? null,
+          phone: row.partner2_phone ?? null,
           confidence_flag: 'imported_medium',
           crm_source: crmSource,
         })
+      }
+
+      // T5-Rixey-GG: extra people on the wedding (parents, planners,
+      // vendors). The people.role CHECK currently allows
+      // ('partner1', 'partner2', 'guest', 'wedding_party', 'vendor',
+      // 'family'). We map our richer parsed roles into those allowed
+      // values so the insert doesn't violate the constraint.
+      if (row.others?.length) {
+        for (const other of row.others) {
+          const dbRole = mapParsedRoleToPeopleRole(other.role)
+          await supabase.from('people').insert({
+            venue_id: venueId,
+            wedding_id: weddingId,
+            role: dbRole,
+            first_name: other.first_name ?? null,
+            last_name: other.last_name ?? null,
+            email: other.email ?? null,
+            phone: other.phone ?? null,
+            confidence_flag: 'imported_medium',
+            crm_source: crmSource,
+          })
+        }
       }
 
       // interactions
