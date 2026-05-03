@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { CheckCircle2, AlertCircle, Search, Loader2, Inbox } from 'lucide-react'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 
 /**
  * Source-backtrace review panel — shared between Settings and the
@@ -53,28 +54,10 @@ const SOURCE_OPTIONS = [
   'other',
 ]
 
+// T5-Rixey-UU Bug E: shared formatter for all source labels.
 function formatSource(s: string | null | undefined): string {
   if (!s) return 'unknown'
-  const map: Record<string, string> = {
-    the_knot: 'The Knot',
-    wedding_wire: 'Wedding Wire',
-    here_comes_the_guide: 'Here Comes The Guide',
-    zola: 'Zola',
-    website: 'Website',
-    venue_calculator: 'Venue Calculator',
-    instagram: 'Instagram',
-    facebook: 'Facebook',
-    google: 'Google',
-    referral: 'Word of Mouth',
-    walk_in: 'Walk-in',
-    direct: 'Direct',
-    calendly: 'Calendly',
-    acuity: 'Acuity',
-    honeybook: 'HoneyBook',
-    dubsado: 'Dubsado',
-    other: 'Other',
-  }
-  return map[s] ?? s
+  return formatSourceLabel(s)
 }
 
 interface PanelProps {

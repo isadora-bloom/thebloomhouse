@@ -288,3 +288,227 @@ export function splitFullName(name: string | null | undefined): {
   if (tokens.length === 1) return { first: tokens[0]!, last: null }
   return { first: tokens[0]!, last: tokens.slice(1).join(' ') }
 }
+
+// ---------------------------------------------------------------------------
+// Concatenated couple-name splitter (T5-Rixey-UU Bug G)
+// ---------------------------------------------------------------------------
+//
+// Web-form / venue-calculator submissions sometimes ship the partner
+// names glued together because the source form had a single "name"
+// field and the user typed both names without spaces:
+//   "Megandcooperrosenberg"   →  "Meg" + "Cooper Rosenberg"
+//   "MeganANDcooper"           →  "Megan" + "Cooper"
+//   "MeganAndCooperRosenberg"  →  "Megan" + "Cooper Rosenberg"
+//   "Jganthony"                →  ambiguous (two-letter pre-"and"
+//                                  fragment looks like initials, not
+//                                  a name) — leave + flag
+//
+// We only run the splitter on plausible candidates (length > 8, no
+// spaces, mixed-case OR all-lowercase, no email / role marker).
+// Conservative by design: false positives (wrong splits) are worse
+// than no-split-but-flagged because a coordinator can fix the latter
+// in seconds, but a wrong split corrupts both partner records.
+// ---------------------------------------------------------------------------
+
+export interface ConcatSplitResult {
+  /** "Confident" → use the split. "Unconfident" → leave name as-is + flag. */
+  confidence: 'confident' | 'unconfident'
+  partner1: string | null
+  partner2: string | null
+  /** Optional shared surname appended to partner2. */
+  surname: string | null
+  /** Reason this confidence level was chosen, useful for warning rows. */
+  reason: string
+}
+
+const MIN_CONCAT_NAME_LENGTH = 8
+const MIN_NAME_TOKEN_LENGTH = 3   // "Meg", "Sam", "Jon" — three is the
+                                   // shortest realistic English first
+                                   // name; below that we treat the
+                                   // fragment as initials and refuse
+                                   // to split.
+
+/**
+ * Try to split a concatenated couple-name like "Megandcooperrosenberg".
+ *
+ * Strategy ladder — bias toward NOT splitting when ambiguous:
+ *   1. Lower-case "and" infix → split on it. If both halves are
+ *      ≥ MIN_NAME_TOKEN_LENGTH alpha-only chars, confident.
+ *   2. CamelCase boundary AND lowercase-"and" fallback (handles
+ *      "MeganANDcooper" or "MeganAndCooper").
+ *   3. Pure camelCase split with NO "and" — only confident if exactly
+ *      two camel humps (e.g., "MeganCooper" → "Megan" + "Cooper");
+ *      three+ humps drop to unconfident because they could be one
+ *      name + surname or two-name-plus-surname patterns.
+ *   4. Otherwise → unconfident.
+ *
+ * Surname handling: if the "and" splitter produces a long second half
+ * (e.g., "Megandcooperrosenberg" → 2nd = "cooperrosenberg"), we try
+ * one camelCase / common-suffix split on the second half to peel off
+ * the shared surname. If we can't, we leave the full string as
+ * partner2 with `surname: null`.
+ */
+export function splitConcatenatedCoupleName(input: string | null | undefined): ConcatSplitResult {
+  const fail = (reason: string): ConcatSplitResult => ({
+    confidence: 'unconfident',
+    partner1: null,
+    partner2: null,
+    surname: null,
+    reason,
+  })
+
+  if (!input) return fail('empty')
+  const raw = input.trim()
+  if (!raw) return fail('empty')
+
+  // Reject names with whitespace — those went through normal parsing
+  // and aren't candidates for concat-splitting.
+  if (/\s/.test(raw)) return fail('contains_whitespace')
+
+  // Reject anything with non-alpha content (emails, phones, numbers).
+  if (!/^[a-zA-Z]+$/.test(raw)) return fail('non_alpha')
+
+  // Length floor — short tokens like "Sam" or "JG" are real single
+  // names / initials, not concatenations.
+  if (raw.length <= MIN_CONCAT_NAME_LENGTH) return fail('too_short')
+
+  // ---- Strategy 1: lower-case "and" infix ----
+  // Look for "and" surrounded by alpha on both sides, NOT at the very
+  // start or end. Case-sensitive: we only want "and" lower-case here,
+  // the camelCase variant runs in strategy 2.
+  const lowerAndMatch = raw.match(/^([a-zA-Z]+)and([a-zA-Z]+)$/)
+  if (lowerAndMatch) {
+    const left = lowerAndMatch[1]!
+    const right = lowerAndMatch[2]!
+    if (left.length >= MIN_NAME_TOKEN_LENGTH && right.length >= MIN_NAME_TOKEN_LENGTH) {
+      const peeled = peelTrailingSurname(right)
+      return {
+        confidence: 'confident',
+        partner1: capitalise(left),
+        partner2: capitalise(peeled.name),
+        surname: peeled.surname,
+        reason: 'lowercase_and_split',
+      }
+    }
+    return fail('and_split_fragment_too_short')
+  }
+
+  // ---- Strategy 2: case-insensitive "and" / "And" / "AND" ----
+  const caseAndMatch = raw.match(/^([a-zA-Z]+?)(?:AND|And)([A-Za-z]+)$/)
+  if (caseAndMatch) {
+    const left = caseAndMatch[1]!
+    const right = caseAndMatch[2]!
+    if (left.length >= MIN_NAME_TOKEN_LENGTH && right.length >= MIN_NAME_TOKEN_LENGTH) {
+      const peeled = peelTrailingSurname(right)
+      return {
+        confidence: 'confident',
+        partner1: capitalise(left),
+        partner2: capitalise(peeled.name),
+        surname: peeled.surname,
+        reason: 'mixed_case_and_split',
+      }
+    }
+    return fail('and_split_fragment_too_short')
+  }
+
+  // ---- Strategy 3: pure camelCase boundary, NO "and" ----
+  // Only confident on EXACTLY two humps. Three+ humps could be
+  // first+middle+last (one person), so we refuse to split.
+  const humps = raw.match(/[A-Z][a-z]+/g) ?? []
+  if (humps.length === 2 && humps.join('') === raw) {
+    if (humps[0]!.length >= MIN_NAME_TOKEN_LENGTH && humps[1]!.length >= MIN_NAME_TOKEN_LENGTH) {
+      return {
+        confidence: 'confident',
+        partner1: humps[0]!,
+        partner2: humps[1]!,
+        surname: null,
+        reason: 'camel_case_two_humps',
+      }
+    }
+    return fail('camel_case_fragment_too_short')
+  }
+
+  return fail('no_confident_split')
+}
+
+/**
+ * Try to peel a likely-surname off the end of a glued first-name +
+ * last-name string like "cooperrosenberg" → ("cooper", "rosenberg").
+ *
+ * Heuristics in order:
+ *   - camelCase boundary in the middle ("cooperRosenberg")
+ *   - common surname suffixes (-berg, -son, -man, -stein, -smith,
+ *     etc.) where the prefix length is plausible (≥ 3 chars). We
+ *     only peel when the suffix lookup finds an end-of-string match.
+ * Falls back to the whole string as the name + null surname.
+ */
+function peelTrailingSurname(s: string): { name: string; surname: string | null } {
+  // camelCase split — easy win.
+  const camel = s.match(/^([a-z][a-z]+)([A-Z][a-zA-Z]+)$/)
+  if (camel) {
+    return { name: camel[1]!, surname: camel[2]! }
+  }
+
+  // Lowercase-everything path — peel a known surname suffix when the
+  // remaining prefix is ≥ 3 chars. Conservative: if a suffix matches
+  // but leaves a 1-2-char prefix, we DON'T peel because that's likely
+  // a coincidence, not a real surname boundary.
+  const lower = s.toLowerCase()
+  const surnameSuffixes = [
+    'rosenberg', 'silverstein', 'goldstein', 'feinstein',
+    'berg', 'son', 'sen', 'man', 'mann', 'smith', 'jones',
+    'brown', 'wilson', 'taylor', 'davis', 'miller', 'moore',
+    'thomas', 'martin', 'thompson', 'garcia', 'martinez',
+    'robinson', 'clark', 'rodriguez', 'lewis', 'walker',
+    'hall', 'allen', 'young', 'king', 'wright', 'lopez',
+    'hill', 'scott', 'green', 'adams', 'baker', 'nelson',
+    'carter', 'mitchell', 'perez', 'roberts', 'turner',
+    'phillips', 'campbell', 'parker', 'evans', 'edwards',
+    'collins', 'stewart', 'sanchez', 'morris', 'rogers',
+    'reed', 'cook', 'morgan', 'bell', 'murphy', 'bailey',
+    'rivera', 'cooper', 'richardson', 'cox', 'howard',
+    'ward', 'torres', 'peterson', 'gray', 'ramirez',
+    'james', 'watson', 'brooks', 'kelly', 'sanders',
+    'price', 'bennett', 'wood', 'barnes', 'ross',
+    'henderson', 'coleman', 'jenkins', 'perry', 'powell',
+    'long', 'patterson', 'hughes', 'flores', 'washington',
+    'butler', 'simmons', 'foster', 'gonzales', 'bryant',
+  ]
+  for (const suffix of surnameSuffixes) {
+    if (lower.endsWith(suffix)) {
+      const prefixLen = lower.length - suffix.length
+      if (prefixLen >= MIN_NAME_TOKEN_LENGTH) {
+        return {
+          name: s.slice(0, prefixLen),
+          surname: s.slice(prefixLen),
+        }
+      }
+    }
+  }
+
+  return { name: s, surname: null }
+}
+
+function capitalise(s: string): string {
+  if (!s) return s
+  return s[0]!.toUpperCase() + s.slice(1).toLowerCase()
+}
+
+/**
+ * Decide whether a parsed name LOOKS LIKE it might be a concatenated
+ * couple name. Used by the backfill scanner to find candidates without
+ * paying the splitter cost on every row.
+ */
+export function looksLikeConcatenatedCoupleName(name: string | null | undefined): boolean {
+  if (!name) return false
+  const trimmed = name.trim()
+  if (trimmed.length <= 12) return false
+  if (/\s/.test(trimmed)) return false
+  if (!/^[a-zA-Z]+$/.test(trimmed)) return false
+  // Mixed case OR all lowercase. All-uppercase is more likely an
+  // acronym / abbreviation, less interesting to flag.
+  const hasUpper = /[A-Z]/.test(trimmed)
+  const hasLower = /[a-z]/.test(trimmed)
+  if (hasUpper && !hasLower) return false   // ALLCAPS — skip
+  return true
+}

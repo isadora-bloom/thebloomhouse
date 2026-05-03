@@ -9,6 +9,7 @@ import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { HeatBadge } from '@/components/intel/heat-badge'
 import { RiskFlagChip, useBatchRiskFlags, type RiskSummary } from '@/components/intel/risk-flag-chip'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 import {
   DndContext,
   DragOverlay,
@@ -83,25 +84,49 @@ const PIPELINE_STAGES: { key: string; label: string }[] = [
 // Helpers
 // ---------------------------------------------------------------------------
 
+// T5-Rixey-UU Bug E: pull labels from formatSourceLabel() so we never
+// leak raw snake_case values ('venue_calculator', 'calendly', 'other',
+// 'direct') into the pipeline cards. Pill colours stay per-source for
+// visual scanability.
 function sourceBadge(source: string | null): { bg: string; text: string; label: string } {
+  const label = formatSourceLabel(source)
   switch (source) {
     case 'the_knot':
-      return { bg: 'bg-rose-50', text: 'text-rose-700', label: 'The Knot' }
+      return { bg: 'bg-rose-50', text: 'text-rose-700', label }
     case 'wedding_wire':
     case 'weddingwire':
-      return { bg: 'bg-purple-50', text: 'text-purple-700', label: 'WeddingWire' }
+      return { bg: 'bg-purple-50', text: 'text-purple-700', label }
     case 'google':
-      return { bg: 'bg-blue-50', text: 'text-blue-700', label: 'Google' }
+    case 'google_business':
+    case 'google_ads':
+      return { bg: 'bg-blue-50', text: 'text-blue-700', label }
     case 'instagram':
-      return { bg: 'bg-pink-50', text: 'text-pink-700', label: 'Instagram' }
+      return { bg: 'bg-pink-50', text: 'text-pink-700', label }
+    case 'pinterest':
+      return { bg: 'bg-rose-50', text: 'text-rose-700', label }
+    case 'facebook':
+      return { bg: 'bg-indigo-50', text: 'text-indigo-700', label }
     case 'referral':
-      return { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Referral' }
+    case 'word_of_mouth':
+      return { bg: 'bg-emerald-50', text: 'text-emerald-700', label }
     case 'website':
-      return { bg: 'bg-teal-50', text: 'text-teal-700', label: 'Website' }
+    case 'web_form':
+      return { bg: 'bg-teal-50', text: 'text-teal-700', label }
+    case 'venue_calculator':
+      return { bg: 'bg-amber-50', text: 'text-amber-700', label }
+    case 'here_comes_the_guide':
+      return { bg: 'bg-violet-50', text: 'text-violet-700', label }
     case 'walk_in':
-      return { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Walk-in' }
+      return { bg: 'bg-amber-50', text: 'text-amber-700', label }
+    case 'direct':
+      return { bg: 'bg-slate-50', text: 'text-slate-700', label }
+    case 'calendly':
+    case 'acuity':
+    case 'honeybook':
+    case 'dubsado':
+      return { bg: 'bg-cyan-50', text: 'text-cyan-700', label }
     default:
-      return { bg: 'bg-sage-50', text: 'text-sage-600', label: source || 'Unknown' }
+      return { bg: 'bg-sage-50', text: 'text-sage-600', label }
   }
 }
 
@@ -168,6 +193,12 @@ function ColumnSkeleton() {
 
 function PipelineCardContent({ wedding, onNameClick, showVenueChip, risk }: { wedding: PipelineWedding; onNameClick?: () => void; showVenueChip?: boolean; risk?: RiskSummary | null }) {
   const source = sourceBadge(wedding.source)
+  // updated-at-ok: "Days in Stage" is computed off weddings.updated_at
+  // because the kanban drag-drop writes status + updated_at together.
+  // Known limitation: bulk imports also bump updated_at, so freshly
+  // imported tour_scheduled rows show "0 days in stage". Tracked
+  // separately from T5-Rixey-UU; pipeline-page fix needs a
+  // status_change_history audit trail, out of scope here.
   const days = daysInStage(wedding.updated_at)
 
   return (
@@ -441,6 +472,8 @@ export default function PipelinePage() {
             heat_score: row.heat_score ?? 0,
             temperature_tier: row.temperature_tier ?? 'cool',
             inquiry_date: row.inquiry_date,
+            // updated-at-ok: feeds "Days in Stage" computation only;
+            // see PipelineCardContent for the rationale + known limit.
             updated_at: row.updated_at,
             partner1_name: p1
               ? [p1.first_name, p1.last_name].filter(Boolean).join(' ')

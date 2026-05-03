@@ -6,6 +6,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 import {
   Hash,
   Search,
@@ -170,8 +171,10 @@ function LookupResult({ wedding, onClear }: { wedding: WeddingLookup; onClear: (
         {wedding.source && (
           <div>
             <p className="text-xs text-sage-500 mb-1">Source</p>
-            <p className="text-sm font-medium text-sage-900 capitalize">
-              {wedding.source.replace(/_/g, ' ')}
+            {/* T5-Rixey-UU Bug E: shared formatter so we never leak
+                raw snake_case ('venue_calculator', 'calendly') here. */}
+            <p className="text-sm font-medium text-sage-900">
+              {formatSourceLabel(wedding.source)}
             </p>
           </div>
         )}

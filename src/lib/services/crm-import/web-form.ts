@@ -69,6 +69,10 @@ import type {
 import { commitNormalisedRows } from './index'
 import { parseCsvRows } from '@/lib/services/brain-dump-csv-shape'
 import { type Cents, asDollars, dollarsToCents } from '@/lib/types/monetary'
+import {
+  splitConcatenatedCoupleName,
+  looksLikeConcatenatedCoupleName,
+} from './primitives/couple-parser'
 
 // ---------------------------------------------------------------------------
 // Provider hint shape — a config the adapter consumes to know which
@@ -513,6 +517,46 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
     const p1 = splitFullName(contactName)
     const p2 = splitFullName(partnerName)
 
+    // T5-Rixey-UU Bug G: web-form contactName is often a single
+    // concatenated string when the source form had one "name" field
+    // and the user typed both partners without spaces (e.g.
+    // "Megandcooperrosenberg"). When the splitter is confident, we
+    // promote the split into p1 + p2; when it's not, we leave the
+    // name as-is and emit a warning so the coordinator can fix it
+    // manually via the lead detail.
+    const importWarnings: Array<{ field: string; issue: string; value?: string | null }> = []
+
+    // Only run the splitter when:
+    //   - p1 looks like a concat candidate (no space, ≥ 12 chars,
+    //     mixed case or all-lowercase), AND
+    //   - p2 has no first name (no separate partnerName column was
+    //     filled — otherwise we'd be overwriting real data).
+    const p1FullForCheck = [p1.first, p1.last].filter(Boolean).join('') || p1.first
+    if (
+      !p2.first &&
+      !partnerName &&
+      looksLikeConcatenatedCoupleName(p1FullForCheck)
+    ) {
+      const splitResult = splitConcatenatedCoupleName(p1FullForCheck)
+      if (splitResult.confidence === 'confident' && splitResult.partner1 && splitResult.partner2) {
+        // Promote — partner2 inherits the surname (if any).
+        p1.first = splitResult.partner1
+        p1.last = splitResult.surname
+        p2.first = splitResult.partner2
+        p2.last = splitResult.surname
+        warnings.push(`row ${r}: split concatenated couple-name "${contactName}" → "${splitResult.partner1}" / "${splitResult.partner2}${splitResult.surname ? ' ' + splitResult.surname : ''}" (${splitResult.reason})`)
+      } else {
+        // Leave as-is, flag for coordinator review. The original
+        // string survives in p1.first so they can see what came in.
+        importWarnings.push({
+          field: 'couple_name',
+          issue: 'unparseable_concat',
+          value: contactName ?? null,
+        })
+        warnings.push(`row ${r}: couldn't confidently split concatenated name "${contactName}" — flagged for review (${splitResult.reason})`)
+      }
+    }
+
     const submissionIso = parseDateIso(submissionDt) ?? new Date().toISOString()
 
     // Build the human-readable interaction body — a "fields filled in"
@@ -556,6 +600,9 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
       // Stream KK + the back-trace flow will add lead_source attribution
       // if it can find an upstream Knot/Wire/Calendly touchpoint.
       source: 'website',
+      // T5-Rixey-UU Bug G: per-row import-time warnings flow through
+      // to weddings.import_warnings via commitNormalisedRows.
+      import_warnings: importWarnings.length > 0 ? importWarnings : null,
       source_detail: hint.provider === 'rixey_calculator'
         ? 'Rixey pricing calculator'
         : `web_form_${hint.provider}`,

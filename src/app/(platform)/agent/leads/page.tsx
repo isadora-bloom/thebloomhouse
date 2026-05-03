@@ -11,6 +11,7 @@ import { RiskFlagChip, useBatchRiskFlags } from '@/components/intel/risk-flag-ch
 import { EssentialsSlider } from '@/components/shell/essentials-slider'
 import { TIER_STYLES, styleForTier, type HeatTier } from '@/lib/heat/tier-colors'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 import {
   Flame,
   ArrowUpDown,
@@ -35,7 +36,6 @@ interface Lead {
   heat_score: number
   temperature_tier: string
   inquiry_date: string
-  updated_at: string
   wedding_date: string | null
   guest_count_estimate: number | null
   code_extension: string | null
@@ -45,6 +45,16 @@ interface Lead {
   // chip so coordinator can spot which lead profiles came from
   // backfill vs live data.
   confidence_flag: string | null
+  // T5-Rixey-UU Bug F: real "last activity" derived from
+  // MAX(interactions.timestamp). Not weddings.updated_at — that gets
+  // bumped to NOW() by every batch import / reconciliation /
+  // lead-source derivation pass, so every row would show today.
+  last_activity_at: string | null
+  // T5-Rixey-UU Bug G: import-time warnings surfaced inline as a
+  // "needs review" badge. Currently we surface couple_name issues; the
+  // jsonb is shaped as { field, issue, value }[] so future warning
+  // categories slot in without a UI change.
+  import_warnings: ImportWarning[] | null
   // Joined
   partner1_name: string | null
   partner2_name: string | null
@@ -52,8 +62,18 @@ interface Lead {
   venue_name: string | null
 }
 
+interface ImportWarning {
+  field: string
+  issue: string
+  value?: string | null
+}
+
 type TierFilter = 'all' | 'hot' | 'warm' | 'cool' | 'cold' | 'frozen'
-type SortField = 'heat_score' | 'inquiry_date' | 'updated_at'
+// T5-Rixey-UU Bug F: 'last_activity' replaces the old 'updated_at'
+// sort key. Sort is by MAX(interactions.timestamp), not by
+// weddings.updated_at (which gets bumped to NOW() by every batch
+// import / reconciliation pass and so was useless as a sort axis).
+type SortField = 'heat_score' | 'inquiry_date' | 'last_activity'
 type SortDir = 'asc' | 'desc'
 
 // ---------------------------------------------------------------------------
@@ -95,26 +115,60 @@ function formatDate(dateStr: string | null): string {
   })
 }
 
+// T5-Rixey-UU Bug E: source pill colours stay per-source for visual
+// scanability, but the LABEL always comes from formatSourceLabel() so
+// we never leak raw snake_case ('venue_calculator', 'calendly',
+// 'other', 'direct') into the table cell.
 function sourceBadge(source: string | null): { bg: string; text: string; label: string } {
+  const label = formatSourceLabel(source)
   switch (source) {
     case 'the_knot':
-      return { bg: 'bg-rose-50', text: 'text-rose-700', label: 'The Knot' }
+      return { bg: 'bg-rose-50', text: 'text-rose-700', label }
     case 'wedding_wire':
     case 'weddingwire':
-      return { bg: 'bg-purple-50', text: 'text-purple-700', label: 'WeddingWire' }
+      return { bg: 'bg-purple-50', text: 'text-purple-700', label }
     case 'google':
-      return { bg: 'bg-blue-50', text: 'text-blue-700', label: 'Google' }
+    case 'google_business':
+    case 'google_ads':
+      return { bg: 'bg-blue-50', text: 'text-blue-700', label }
     case 'instagram':
-      return { bg: 'bg-pink-50', text: 'text-pink-700', label: 'Instagram' }
+      return { bg: 'bg-pink-50', text: 'text-pink-700', label }
+    case 'pinterest':
+      return { bg: 'bg-rose-50', text: 'text-rose-700', label }
+    case 'facebook':
+      return { bg: 'bg-indigo-50', text: 'text-indigo-700', label }
     case 'referral':
-      return { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Referral' }
+    case 'word_of_mouth':
+      return { bg: 'bg-emerald-50', text: 'text-emerald-700', label }
     case 'website':
-      return { bg: 'bg-teal-50', text: 'text-teal-700', label: 'Website' }
+    case 'web_form':
+      return { bg: 'bg-teal-50', text: 'text-teal-700', label }
+    case 'venue_calculator':
+      return { bg: 'bg-amber-50', text: 'text-amber-700', label }
+    case 'here_comes_the_guide':
+      return { bg: 'bg-violet-50', text: 'text-violet-700', label }
     case 'walk_in':
-      return { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Walk-in' }
+      return { bg: 'bg-amber-50', text: 'text-amber-700', label }
+    case 'direct':
+      return { bg: 'bg-slate-50', text: 'text-slate-700', label }
+    case 'calendly':
+    case 'acuity':
+    case 'honeybook':
+    case 'dubsado':
+      return { bg: 'bg-cyan-50', text: 'text-cyan-700', label }
     default:
-      return { bg: 'bg-sage-50', text: 'text-sage-600', label: source || 'Unknown' }
+      return { bg: 'bg-sage-50', text: 'text-sage-600', label }
   }
+}
+
+// T5-Rixey-UU Bug G: detect rows whose import_warnings include an
+// unresolved couple_name issue. Coordinator gets a 'needs review'
+// chip on the lead row.
+function hasCoupleNameWarning(warnings: ImportWarning[] | null | undefined): boolean {
+  if (!warnings || !Array.isArray(warnings)) return false
+  return warnings.some(
+    (w) => w?.field === 'couple_name' && typeof w.issue === 'string' && w.issue.length > 0
+  )
 }
 
 function statusLabel(status: string): string {
@@ -389,11 +443,11 @@ export default function LeadsPage() {
           heat_score,
           temperature_tier,
           inquiry_date,
-          updated_at,
           wedding_date,
           guest_count_estimate,
           code_extension,
           confidence_flag,
+          import_warnings,
           venues:venue_id ( name ),
           people!people_wedding_id_fkey ( role, first_name, last_name ),
           client_codes!client_codes_wedding_id_fkey ( code )
@@ -414,6 +468,33 @@ export default function LeadsPage() {
 
       if (fetchError) throw fetchError
 
+      // T5-Rixey-UU Bug F: Last Activity = MAX(interactions.timestamp)
+      // per wedding, NOT weddings.updated_at. The latter gets bumped by
+      // every batch import / reconciliation pass so all rows would
+      // otherwise show today's date. We pull interactions in one batch
+      // keyed on the loaded wedding ids and aggregate client-side.
+      // created-at-ok: interactions.timestamp is the real event-date
+      // column for that table (see src/lib/services/date-windows.ts).
+      const weddingIds = (data ?? []).map((r: any) => r.id as string)
+      const lastActivityByWedding: Record<string, string> = {}
+      if (weddingIds.length > 0) {
+        const { data: interactions } = await supabase
+          .from('interactions')
+          .select('wedding_id, timestamp')
+          .in('wedding_id', weddingIds)
+          .order('timestamp', { ascending: false })
+        for (const row of interactions ?? []) {
+          const wid = row.wedding_id as string | null
+          const ts = row.timestamp as string | null
+          if (!wid || !ts) continue
+          // Only keep the first (most recent) per wedding — the query
+          // ordered desc, so the first hit wins.
+          if (!(wid in lastActivityByWedding)) {
+            lastActivityByWedding[wid] = ts
+          }
+        }
+      }
+
       const mapped: Lead[] = (data ?? []).map((row: any) => {
         const people = row.people ?? []
         const p1 = people.find((p: any) => p.role === 'partner1')
@@ -423,6 +504,14 @@ export default function LeadsPage() {
         const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
         const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
 
+        // T5-Rixey-UU Bug G: parse import_warnings jsonb defensively —
+        // some rows may have legacy non-array values from earlier
+        // import passes.
+        const rawWarnings = row.import_warnings as unknown
+        const importWarnings: ImportWarning[] | null = Array.isArray(rawWarnings)
+          ? (rawWarnings as ImportWarning[])
+          : null
+
         return {
           id: row.id,
           venue_id: row.venue_id,
@@ -431,11 +520,12 @@ export default function LeadsPage() {
           heat_score: row.heat_score ?? 0,
           temperature_tier: row.temperature_tier ?? 'cool',
           inquiry_date: row.inquiry_date,
-          updated_at: row.updated_at,
           wedding_date: row.wedding_date,
           guest_count_estimate: row.guest_count_estimate,
           code_extension: row.code_extension ?? null,
           confidence_flag: (row.confidence_flag as string | null) ?? null,
+          last_activity_at: lastActivityByWedding[row.id as string] ?? null,
+          import_warnings: importWarnings,
           partner1_name: p1
             ? [p1.first_name, p1.last_name].filter(Boolean).join(' ')
             : null,
@@ -504,9 +594,11 @@ export default function LeadsPage() {
           aVal = new Date(a.inquiry_date).getTime()
           bVal = new Date(b.inquiry_date).getTime()
           break
-        case 'updated_at':
-          aVal = new Date(a.updated_at).getTime()
-          bVal = new Date(b.updated_at).getTime()
+        case 'last_activity':
+          // Treat null last-activity as 0 so weddings with no
+          // recorded interaction sort to the bottom on desc.
+          aVal = a.last_activity_at ? new Date(a.last_activity_at).getTime() : 0
+          bVal = b.last_activity_at ? new Date(b.last_activity_at).getTime() : 0
           break
         default:
           return 0
@@ -685,7 +777,7 @@ export default function LeadsPage() {
                   <th className="text-left px-4 py-3">
                     <SortHeader
                       label="Last Activity"
-                      field="updated_at"
+                      field="last_activity"
                       currentField={sortField}
                       currentDir={sortDir}
                       onSort={handleSort}
@@ -742,6 +834,20 @@ export default function LeadsPage() {
                           {/* Risk-flag chip (T5-ζ.2). Hidden if no
                               cached risk_flag insight or zero flags. */}
                           <RiskFlagChip summary={riskFlags[lead.id]} />
+                          {/* T5-Rixey-UU Bug G: import-warning badge
+                              for couple_name issues. Surfaces when the
+                              CRM-import pipeline couldn't confidently
+                              split a concatenated name like
+                              'Megandcooperrosenberg'. Coordinator clicks
+                              through to the lead detail to fix. */}
+                          {hasCoupleNameWarning(lead.import_warnings) && (
+                            <span
+                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700"
+                              title="Imported couple-name couldn't be confidently parsed — needs review."
+                            >
+                              needs review
+                            </span>
+                          )}
                         </div>
                       </td>
 
@@ -771,10 +877,14 @@ export default function LeadsPage() {
                         </div>
                       </td>
 
-                      {/* Last Activity */}
+                      {/* Last Activity — MAX(interactions.timestamp).
+                          Renders '—' for weddings with zero recorded
+                          interactions (rather than misleadingly
+                          showing weddings.updated_at which gets
+                          bumped on every batch import). */}
                       <td className="px-4 py-3">
                         <span className="text-sm text-sage-600">
-                          {formatDate(lead.updated_at)}
+                          {formatDate(lead.last_activity_at)}
                         </span>
                       </td>
 
