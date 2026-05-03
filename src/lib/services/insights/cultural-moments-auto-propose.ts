@@ -216,6 +216,10 @@ export async function findExistingProposalFingerprint(
     .from('cultural_moments')
     .select('id, evidence, status')
     .neq('status', 'dismissed')
+    // created-at-ok: 60-day fingerprint-dedup window; checking "have we
+    // already proposed this term/weekStart pair in the last 60 days of
+    // INSERTIONS." Different intent from coordinator-facing analytics —
+    // the cultural moment's own start_at is unrelated.
     .gte('created_at', new Date(Date.now() - 60 * DAY_MS).toISOString())
     .limit(50)
   if (!data) return null

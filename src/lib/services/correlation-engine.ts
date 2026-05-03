@@ -293,12 +293,18 @@ async function buildSeries(supabase: SupabaseClient, venueId: string): Promise<S
   }
   for (const [k, v] of mmBySeries) series.push({ channel: k, values: v })
 
-  // 3. tangential_signals per platform per day
+  // 3. tangential_signals per platform per day.
+  // T5-Rixey-LL: window on signal_date (real signal time). Pre-fix the
+  // filter was on created_at — a backfilled signal whose signal_date
+  // is 6 months old but whose created_at is the import day would either
+  // appear in the wrong day's bucket or get dropped from the analysis
+  // entirely. NULL signal_date rows fall through to created_at via the
+  // OR below.
   const { data: ts } = await supabase
     .from('tangential_signals')
     .select('extracted_identity, signal_date, created_at')
     .eq('venue_id', venueId)
-    .gte('created_at', start.toISOString())
+    .or(`signal_date.gte.${start.toISOString()},and(signal_date.is.null,created_at.gte.${start.toISOString()})`)
   const tsBySeries = new Map<string, Map<string, number>>()
   for (const r of ts ?? []) {
     const ei = (r.extracted_identity ?? {}) as Record<string, unknown>

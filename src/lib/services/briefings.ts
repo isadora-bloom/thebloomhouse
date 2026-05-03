@@ -214,13 +214,16 @@ async function getWeddingMetrics(
 ): Promise<BriefingMetrics> {
   const supabase = createServiceClient()
 
-  // New inquiries in the window
+  // New inquiries in the window. T5-Rixey-LL: window on inquiry_date
+  // (real arrival time) not created_at (import time). Briefings shown
+  // to coordinators must reflect when leads ACTUALLY landed, not when
+  // the row was inserted into Supabase.
   const { count: newInquiries } = await supabase
     .from('weddings')
     .select('id', { count: 'exact', head: true })
     .eq('venue_id', venueId)
-    .gte('created_at', fromDate)
-    .lte('created_at', toDate)
+    .gte('inquiry_date', fromDate)
+    .lte('inquiry_date', toDate)
 
   // Tours scheduled in the window
   const { count: toursScheduled } = await supabase

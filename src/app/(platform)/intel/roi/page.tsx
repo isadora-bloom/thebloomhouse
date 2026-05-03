@@ -149,12 +149,17 @@ export default function ROIDashboardPage() {
       const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999)
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
 
-      // 1. Inquiries handled this month (inbound emails)
+      // 1. Inquiries handled this month (inbound emails).
+      // T5-Rixey-LL: window on timestamp (real email send/receive
+      // time) not created_at (Bloom-side row insertion). Pre-fix a
+      // backfilled venue would either see zero inquiries (none imported
+      // recently) or a giant import-day spike (all 12 months collapsed
+      // into the import day's bucket).
       const inboundQ = supabase
         .from('interactions')
         .select('id', { count: 'exact', head: true })
         .eq('direction', 'inbound')
-        .gte('created_at', monthStart.toISOString())
+        .gte('timestamp', monthStart.toISOString())
       const { count: inquiriesHandled } = await vf(inboundQ as never)
 
       // Inquiries last month for comparison
@@ -162,33 +167,37 @@ export default function ROIDashboardPage() {
         .from('interactions')
         .select('id', { count: 'exact', head: true })
         .eq('direction', 'inbound')
-        .gte('created_at', lastMonthStart.toISOString())
-        .lte('created_at', lastMonthEnd.toISOString())
+        .gte('timestamp', lastMonthStart.toISOString())
+        .lte('timestamp', lastMonthEnd.toISOString())
       const { count: inquiriesLastMonth } = await vf(inboundLastQ as never)
 
-      // 2. Average first response time
-      // Fetch inbound interactions this month with their wedding_id
+      // 2. Average first response time.
+      // Fetch inbound interactions this month with their wedding_id.
+      // Window AND ordering use timestamp — same doctrine as above,
+      // and we need the email-time semantics for matching outbound
+      // replies after the inbound (response time = elapsed event-time,
+      // not elapsed import-time).
       const inboundDataQ = supabase
         .from('interactions')
-        .select('id, wedding_id, created_at')
+        .select('id, wedding_id, timestamp')
         .eq('direction', 'inbound')
-        .gte('created_at', thirtyDaysAgo.toISOString())
-        .order('created_at', { ascending: true })
+        .gte('timestamp', thirtyDaysAgo.toISOString())
+        .order('timestamp', { ascending: true })
         .limit(500)
       const { data: inboundData } = await vf(inboundDataQ as never) as {
-        data: Array<{ id: string; wedding_id: string | null; created_at: string }> | null
+        data: Array<{ id: string; wedding_id: string | null; timestamp: string }> | null
       }
 
       // Fetch outbound interactions for matching
       const outboundDataQ = supabase
         .from('interactions')
-        .select('id, wedding_id, created_at')
+        .select('id, wedding_id, timestamp')
         .eq('direction', 'outbound')
-        .gte('created_at', thirtyDaysAgo.toISOString())
-        .order('created_at', { ascending: true })
+        .gte('timestamp', thirtyDaysAgo.toISOString())
+        .order('timestamp', { ascending: true })
         .limit(500)
       const { data: outboundData } = await vf(outboundDataQ as never) as {
-        data: Array<{ id: string; wedding_id: string | null; created_at: string }> | null
+        data: Array<{ id: string; wedding_id: string | null; timestamp: string }> | null
       }
 
       // Compute average response time: for each inbound with a wedding_id,
@@ -198,12 +207,15 @@ export default function ROIDashboardPage() {
       let rescuedLeads = 0
 
       if (inboundData && outboundData) {
-        // Index outbound by wedding_id (earliest first)
-        const outboundByWedding = new Map<string, Array<{ created_at: string }>>()
+        // Index outbound by wedding_id (earliest first). T5-Rixey-LL:
+        // use timestamp (real send time) instead of created_at so
+        // backfilled responses match their backfilled inbounds in the
+        // right chronological order.
+        const outboundByWedding = new Map<string, Array<{ timestamp: string }>>()
         for (const ob of outboundData) {
           if (!ob.wedding_id) continue
           const arr = outboundByWedding.get(ob.wedding_id) ?? []
-          arr.push({ created_at: ob.created_at })
+          arr.push({ timestamp: ob.timestamp })
           outboundByWedding.set(ob.wedding_id, arr)
         }
 
@@ -215,12 +227,12 @@ export default function ROIDashboardPage() {
           if (!outbounds) continue
 
           // Find first outbound after this inbound
-          const ibTime = new Date(ib.created_at).getTime()
+          const ibTime = new Date(ib.timestamp).getTime()
           const firstReply = outbounds.find(
-            (ob) => new Date(ob.created_at).getTime() > ibTime
+            (ob) => new Date(ob.timestamp).getTime() > ibTime
           )
           if (firstReply) {
-            const replyTime = new Date(firstReply.created_at).getTime()
+            const replyTime = new Date(firstReply.timestamp).getTime()
             const diffMs = replyTime - ibTime
             totalResponseMs += diffMs
             responseCount += 1
@@ -232,7 +244,7 @@ export default function ROIDashboardPage() {
             if (responseMinutes < 60) {
               // Check if this lead had been waiting > 24 hours (no prior outbound)
               const priorOutbound = outbounds.find(
-                (ob) => new Date(ob.created_at).getTime() <= ibTime
+                (ob) => new Date(ob.timestamp).getTime() <= ibTime
               )
               if (!priorOutbound) {
                 rescuedLeads += 1
@@ -262,12 +274,17 @@ export default function ROIDashboardPage() {
       const hoursSaved = Math.round(((draftsThisMonth ?? 0) * ESTIMATED_MINUTES_PER_DRAFT) / 60 * 10) / 10
       const hoursSavedLastMonth = Math.round(((draftsLastMonth ?? 0) * ESTIMATED_MINUTES_PER_DRAFT) / 60 * 10) / 10
 
-      // 5. Bookings this month vs last month + pipeline value
+      // 5. Bookings this month vs last month + pipeline value.
+      // T5-Rixey-LL: window on booked_at (real signing date), not
+      // created_at (import date). Pre-fix, a venue importing 12 months
+      // of HoneyBook history would see "0 bookings this month" because
+      // every booked wedding's created_at was the import day, not the
+      // actual signing date.
       const bookingsQ = supabase
         .from('weddings')
         .select('id, booking_value')
         .eq('status', 'booked')
-        .gte('created_at', monthStart.toISOString())
+        .gte('booked_at', monthStart.toISOString())
       const { data: bookingsData } = await vf(bookingsQ as never) as {
         data: Array<{ id: string; booking_value: number | null }> | null
       }
@@ -276,8 +293,8 @@ export default function ROIDashboardPage() {
         .from('weddings')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'booked')
-        .gte('created_at', lastMonthStart.toISOString())
-        .lte('created_at', lastMonthEnd.toISOString())
+        .gte('booked_at', lastMonthStart.toISOString())
+        .lte('booked_at', lastMonthEnd.toISOString())
       const { count: bookingsLastMonthCount } = await vf(bookingsLastMonthQ as never)
 
       const pipelineQ = supabase

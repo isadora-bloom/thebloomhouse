@@ -55,15 +55,21 @@ async function buildVoiceBullet(
   const supabase = createServiceClient()
   const sevenDaysAgo = daysAgoIso(7)
 
-  // Count voice preferences added in the last 7 days.
+  // T5-Rixey-LL: window on signal_date (migration 179) so backfill-
+  // derived voice anchors land on their underlying email's occurred_at,
+  // not the import date. Pre-fix a Day-0 onboarding venue would always
+  // see "waiting for voice training activity" because every imported
+  // pref shared the import day's created_at and that day was no longer
+  // "this week" by the time the coordinator opened the panel.
   const { count: prefCount } = await supabase
     .from('voice_preferences')
     .select('id', { count: 'exact', head: true })
     .eq('venue_id', venueId)
-    .gte('created_at', sevenDaysAgo)
+    .gte('signal_date', sevenDaysAgo)
 
   // Count voice training responses for this venue's sessions in the last 7 days.
-  // voice_training_responses links to voice_training_sessions which has venue_id.
+  // voice_training_sessions.started_at IS the event timestamp (the game
+  // session started time) — telemetry-correct as-is.
   const { data: recentSessions } = await supabase
     .from('voice_training_sessions')
     .select('id')
@@ -73,11 +79,13 @@ async function buildVoiceBullet(
   const sessionIds = (recentSessions ?? []).map((r) => r.id as string)
   let responseCount = 0
   if (sessionIds.length > 0) {
+    // signal_date (migration 179) on voice_training_responses defaults to
+    // created_at for live entries; backfill writers set it explicitly.
     const { count } = await supabase
       .from('voice_training_responses')
       .select('id', { count: 'exact', head: true })
       .in('session_id', sessionIds)
-      .gte('created_at', sevenDaysAgo)
+      .gte('signal_date', sevenDaysAgo)
     responseCount = count ?? 0
   }
 

@@ -162,14 +162,18 @@ async function buildPerformanceSection(
   const lastWeekStart = daysAgo(14)
   const lastWeekEnd = daysAgo(8)
 
-  // This week counts
+  // This week counts.
+  // T5-Rixey-LL: window on inquiry_date for new-inquiry counts (real
+  // arrival time, not import time). booked_at and tour_date are already
+  // event-times and stay as-is; updated_at is "last activity" stamp,
+  // also fine as-is.
   const [thisInquiries, thisTours, thisBookings, thisLost, thisRevenue] = await Promise.all([
     supabase
       .from('weddings')
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId)
-      .gte('created_at', thisWeekStart)
-      .lte('created_at', thisWeekEnd),
+      .gte('inquiry_date', thisWeekStart)
+      .lte('inquiry_date', thisWeekEnd),
     supabase
       .from('weddings')
       .select('id', { count: 'exact', head: true })
@@ -200,14 +204,15 @@ async function buildPerformanceSection(
       .lte('booked_at', thisWeekEnd),
   ])
 
-  // Last week counts for comparison
+  // Last week counts for comparison. T5-Rixey-LL: same inquiry_date
+  // doctrine as the this-week branch above.
   const [lastInquiries, lastBookings] = await Promise.all([
     supabase
       .from('weddings')
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId)
-      .gte('created_at', lastWeekStart)
-      .lte('created_at', lastWeekEnd),
+      .gte('inquiry_date', lastWeekStart)
+      .lte('inquiry_date', lastWeekEnd),
     supabase
       .from('weddings')
       .select('id', { count: 'exact', head: true })

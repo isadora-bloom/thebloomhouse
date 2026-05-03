@@ -1312,19 +1312,23 @@ export async function getScoreHistory(
 
   if (!history || history.length === 0) return []
 
-  // Get engagement events in a matching time window to correlate
+  // Get engagement events in a matching time window to correlate.
+  // T5-Rixey-LL: window on occurred_at (real event time) not created_at
+  // (insertion time). Backfilled events have occurred_at = real signal
+  // time and created_at = import day; the heat-history correlator must
+  // match on the event-time so reconstructed timelines are accurate.
   const oldestEntry = history[history.length - 1]
   const { data: events } = await supabase
     .from('engagement_events')
-    .select('event_type, points, created_at')
+    .select('event_type, points, occurred_at')
     .eq('wedding_id', weddingId)
-    .gte('created_at', oldestEntry.calculated_at as string)
-    .order('created_at', { ascending: false })
+    .gte('occurred_at', oldestEntry.calculated_at as string)
+    .order('occurred_at', { ascending: false })
 
   // Build a map of event timestamps (rounded to seconds) to event info
   const eventMap = new Map<number, { eventType: string; points: number }>()
   for (const e of events ?? []) {
-    const ts = Math.floor(new Date(e.created_at as string).getTime() / 1000)
+    const ts = Math.floor(new Date(e.occurred_at as string).getTime() / 1000)
     if (!eventMap.has(ts)) {
       eventMap.set(ts, {
         eventType: e.event_type as string,

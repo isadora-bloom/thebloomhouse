@@ -122,3 +122,6 @@ jobs:
 
       - name: PII guard — no raw err.message logs in T3 insights (T5-α.3)
         run: node scripts/check-no-raw-err-logs-in-t3.mjs
+
+      - name: Date-doctrine guard — no coordinator-facing created_at (T5-Rixey-LL)
+        run: node scripts/check-no-coordinator-facing-created-at.mjs

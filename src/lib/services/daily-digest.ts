@@ -147,12 +147,18 @@ export async function generateDigest(
     staleLeadsResult,
     unansweredResult,
   ] = await Promise.all([
-    // New inquiries in last 24 hours
+    // New inquiries in last 24 hours.
+    // T5-Rixey-LL: window on inquiry_date (real arrival time) not
+    // created_at (import time). A venue importing 12 months of historical
+    // leads on Day 0 would otherwise see "0 new inquiries yesterday"
+    // even though hundreds of historical inquiry rows just landed —
+    // their inquiry_date stretched back a year but their created_at
+    // collapsed to the import day.
     supabase
       .from('weddings')
       .select('id, people!people_wedding_id_fkey(role, first_name, last_name)')
       .eq('venue_id', venueId)
-      .gte('created_at', since),
+      .gte('inquiry_date', since),
 
     // Pending drafts awaiting approval
     supabase
@@ -239,13 +245,18 @@ export async function generateDigest(
       .eq('status', 'inquiry')
       .lt('updated_at', hoursAgo(120)),
 
-    // Unanswered inquiries: inquiry status, created > 2 hours ago with no outbound interaction
+    // Unanswered inquiries: inquiry status, ARRIVED > 2 hours ago with
+    // no outbound interaction. T5-Rixey-LL: window on inquiry_date
+    // (real arrival time) not created_at (import time). Pre-fix every
+    // historical inquiry would count as "unanswered for >2h" the moment
+    // it landed in the import — false alarm for venues that responded
+    // to those leads months ago.
     supabase
       .from('weddings')
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId)
       .eq('status', 'inquiry')
-      .lt('created_at', hoursAgo(2)),
+      .lt('inquiry_date', hoursAgo(2)),
   ])
 
   // ---- Helper: extract couple names from people join ----

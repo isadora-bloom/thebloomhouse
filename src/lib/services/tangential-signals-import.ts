@@ -94,6 +94,9 @@ export async function importIdentityCandidates(args: {
       .eq('signal_type', allowedSignalType(cand.signal_type))
       .eq('extracted_identity->>first_name', first || null as unknown as string)
       .eq('extracted_identity->>username', username || null as unknown as string)
+      // created-at-ok: 1-hour write-side dupe guard. Catches "user
+      // re-uploaded the same screenshot 30 seconds later" — by
+      // definition wants insertion-time, not signal-time.
       .gte('created_at', oneHourAgo)
     if ((existing ?? 0) > 0) continue
 

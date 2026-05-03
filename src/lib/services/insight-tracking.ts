@@ -136,21 +136,30 @@ async function measureMetric(
     }
 
     case 'lead_conversion': {
-      // Conversion rate: booked / total inquiries
+      // Conversion rate: booked / total inquiries.
+      // T5-Rixey-LL: window on inquiry_date (real arrival time) not
+      // created_at (import time). Pre-fix a backfilled venue's
+      // conversion-rate insight tracking would either miss every
+      // historical lead (none arrived in the recent window per
+      // created_at) or report 0% conversion the instant a 12-month
+      // history landed (all rows show as "this period's inquiries"
+      // with status='booked' counted on the same created_at filter
+      // but the rate divides by a smaller bucket because some are
+      // status='lost').
       const { count: totalCount } = await supabase
         .from('weddings')
         .select('id', { count: 'exact', head: true })
         .eq('venue_id', venueId)
-        .gte('created_at', periodStart)
-        .lte('created_at', periodEnd)
+        .gte('inquiry_date', periodStart)
+        .lte('inquiry_date', periodEnd)
 
       const { count: bookedCount } = await supabase
         .from('weddings')
         .select('id', { count: 'exact', head: true })
         .eq('venue_id', venueId)
         .in('status', ['booked', 'completed'])
-        .gte('created_at', periodStart)
-        .lte('created_at', periodEnd)
+        .gte('inquiry_date', periodStart)
+        .lte('inquiry_date', periodEnd)
 
       const total = totalCount ?? 0
       const booked = bookedCount ?? 0

@@ -360,14 +360,17 @@ async function loadSeriesForChannels(
     }
   }
 
-  // tangential_signals: channels ending in `_signals`.
+  // tangential_signals: channels ending in `_signals`. T5-Rixey-LL:
+  // window on signal_date (real signal time) so backfilled signals
+  // bucket on the day they actually fired, not the import day. Mirror
+  // of the same fix in correlation-engine.ts.
   const tsChannels = channels.filter((c) => c.endsWith('_signals'))
   if (tsChannels.length > 0) {
     const { data: ts } = await supabase
       .from('tangential_signals')
       .select('extracted_identity, signal_date, created_at')
       .eq('venue_id', venueId)
-      .gte('created_at', start.toISOString())
+      .or(`signal_date.gte.${start.toISOString()},and(signal_date.is.null,created_at.gte.${start.toISOString()})`)
     const bySeries = new Map<string, Map<string, number>>()
     for (const r of ts ?? []) {
       const ei = (r.extracted_identity ?? {}) as Record<string, unknown>

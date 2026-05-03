@@ -94,6 +94,11 @@ interface SampleRow {
   body_preview: string | null
   subject: string | null
   created_at: string
+  /** T5-Rixey-LL: real email-event time (interactions.timestamp). Used
+   *  to populate voice_preferences.signal_date so backfill-derived
+   *  anchors land on the underlying email's send-time, not the import
+   *  day. NULL for legacy rows that pre-date the timestamp column. */
+  timestamp: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -147,13 +152,18 @@ async function sampleCoordinatorEmails(
 
   let q = supabase
     .from('interactions')
-    .select('id, full_body, body_preview, subject, from_email, gmail_thread_id, created_at')
+    .select('id, full_body, body_preview, subject, from_email, gmail_thread_id, created_at, timestamp')
     .eq('venue_id', venueId)
     .eq('type', 'email')
     .eq('direction', 'outbound')
     .order('created_at', { ascending: false })
     .limit(Math.max(limit * 2, limit + 50)) // over-pull so post-filter still hits limit
   if (sinceIso) {
+    // created-at-ok: refresh-since-last-tick. The pointer
+    // voice_dna_last_refresh_at tracks INSERTION time so when a venue
+    // backfills 6-month-old emails today, the next refresh DOES
+    // re-process them (and learns from the fresh import). Switching
+    // to interactions.timestamp would silently skip the backfill.
     q = q.gt('created_at', sinceIso)
   }
   const { data: rows, error } = await q
@@ -169,6 +179,7 @@ async function sampleCoordinatorEmails(
     from_email: string | null
     gmail_thread_id: string | null
     created_at: string
+    timestamp: string | null
   }>
 
   // Apply the from_email allowlist when we know what the venue's own
@@ -214,6 +225,7 @@ async function sampleCoordinatorEmails(
     body_preview: r.body_preview,
     subject: r.subject,
     created_at: r.created_at,
+    timestamp: r.timestamp ?? null,
   }))
 }
 
@@ -429,11 +441,34 @@ async function clearPriorImport(
 // Persistence
 // ---------------------------------------------------------------------------
 
+/**
+ * T5-Rixey-LL: pick the most-recent real signal time from the samples.
+ * Prefers `interactions.timestamp` (real email time) over `created_at`
+ * (insertion time). Returns the MAX so the resulting voice_preferences
+ * rows reflect the freshest underlying email — the "Sage learned this
+ * week" tracker windowed on signal_date will see backfilled-from-recent
+ * imports as recent learning, while a 12-month-old import stays old.
+ */
+function deriveSignalDate(samples: SampleRow[]): string {
+  let latest = 0
+  for (const s of samples) {
+    const ts = s.timestamp ?? s.created_at
+    const ms = new Date(ts).getTime()
+    if (Number.isFinite(ms) && ms > latest) latest = ms
+  }
+  return latest > 0 ? new Date(latest).toISOString() : new Date().toISOString()
+}
+
 async function persistVoiceAnchors(
   supabase: SupabaseClient,
   venueId: string,
   agg: AggregatedVoice,
   sampleIdsRef: string,
+  /** T5-Rixey-LL: explicit signal_date so backfill rows window on the
+   *  underlying email's real send-time (interactions.timestamp), not
+   *  the insertion date. Live training writes default to NOW() via the
+   *  DB column default. Migration 179 added the column. */
+  signalDate: string,
 ): Promise<{ rowsWritten: number; phrasesExtracted: number }> {
   let rowsWritten = 0
 
@@ -452,6 +487,7 @@ async function persistVoiceAnchors(
           source_type: 'conversation',
           source_reference: sampleIdsRef,
           confidence_flag: 'imported_high',
+          signal_date: signalDate,
         }, { onConflict: 'venue_id,preference_type,content' })
       if (!error) rowsWritten++
     } catch { /* swallow — partial writes preferred over hard fail */ }
@@ -472,6 +508,7 @@ async function persistVoiceAnchors(
           source_type: 'conversation',
           source_reference: sampleIdsRef,
           confidence_flag: 'imported_high',
+          signal_date: signalDate,
         }, { onConflict: 'venue_id,preference_type,content' })
       if (!error) rowsWritten++
     } catch { /* swallow */ }
@@ -491,6 +528,7 @@ async function persistVoiceAnchors(
           source_type: 'conversation',
           source_reference: sampleIdsRef,
           confidence_flag: 'imported_high',
+          signal_date: signalDate,
         }, { onConflict: 'venue_id,preference_type,content' })
       if (!error) rowsWritten++
     } catch { /* swallow */ }
@@ -510,6 +548,7 @@ async function persistVoiceAnchors(
           source_type: 'conversation',
           source_reference: sampleIdsRef,
           confidence_flag: 'imported_high',
+          signal_date: signalDate,
         }, { onConflict: 'venue_id,preference_type,content' })
       if (!error) rowsWritten++
     } catch { /* swallow */ }
@@ -530,6 +569,7 @@ async function persistVoiceAnchors(
         source_type: 'conversation',
         source_reference: sampleIdsRef,
         confidence_flag: 'imported_high',
+        signal_date: signalDate,
       }, { onConflict: 'venue_id,preference_type,content' })
     if (!error) rowsWritten++
   } catch { /* swallow */ }
@@ -739,7 +779,11 @@ export async function extractVoiceDnaFromBackfill(
 
   let writeResult = { rowsWritten: 0, phrasesExtracted: 0 }
   try {
-    writeResult = await persistVoiceAnchors(supabase, venueId, agg, sampleIdsRef)
+    // T5-Rixey-LL: derive signal_date from the freshest source-email
+    // timestamp so backfill rows window correctly on /intel/voice-dna's
+    // weekly tracker.
+    const signalDate = deriveSignalDate(samples)
+    writeResult = await persistVoiceAnchors(supabase, venueId, agg, sampleIdsRef, signalDate)
   } catch (err) {
     log.error('voice_dna.persist_failed', {
       event_type: 'voice_dna_extract',
@@ -832,6 +876,10 @@ async function persistVoiceAnchorsIncremental(
   venueId: string,
   agg: AggregatedVoice,
   sampleIdsRef: string,
+  /** T5-Rixey-LL: signal_date threaded through so existing rows get
+   *  bumped to the freshest underlying signal time on update, and new
+   *  rows insert with the correct backfill date. */
+  signalDate: string,
 ): Promise<{ rowsAdded: number; rowsUpdated: number; newPhrasesAdded: number }> {
   let rowsAdded = 0
   let rowsUpdated = 0
@@ -839,7 +887,8 @@ async function persistVoiceAnchorsIncremental(
 
   // Helper: incremental upsert into voice_preferences. Looks up by
   // (venue_id, preference_type, content). If exists → increment
-  // score/sample_count by deltaCount. Else → insert with deltaCount.
+  // score/sample_count by deltaCount AND bump signal_date forward (so
+  // weekly tracker sees fresh activity). Else → insert with deltaCount.
   async function bumpVoicePreference(
     preference_type: 'approved_phrase' | 'rule' | 'dimension',
     content: string,
@@ -848,20 +897,27 @@ async function persistVoiceAnchorsIncremental(
     try {
       const { data: existing } = await supabase
         .from('voice_preferences')
-        .select('id, score, sample_count')
+        .select('id, score, sample_count, signal_date')
         .eq('venue_id', venueId)
         .eq('preference_type', preference_type)
         .eq('content', content)
         .maybeSingle()
       if (existing) {
+        // Only advance signal_date if the new tick's signalDate is
+        // ahead — never regress (a refresh that re-imports older
+        // emails shouldn't pull the row's fresh-activity stamp back).
+        const existingSignal = (existing.signal_date as string | null) ?? null
+        const advance = !existingSignal || existingSignal < signalDate
+        const update: Record<string, unknown> = {
+          score: ((existing.score as number | null) ?? 0) + deltaCount,
+          sample_count: ((existing.sample_count as number | null) ?? 0) + deltaCount,
+          // Never overwrite the seed source_reference — the new
+          // sample ids land in source_reference only on first insert.
+        }
+        if (advance) update.signal_date = signalDate
         const { error } = await supabase
           .from('voice_preferences')
-          .update({
-            score: ((existing.score as number | null) ?? 0) + deltaCount,
-            sample_count: ((existing.sample_count as number | null) ?? 0) + deltaCount,
-            // Never overwrite the seed source_reference — the new
-            // sample ids land in source_reference only on first insert.
-          })
+          .update(update)
           .eq('id', existing.id as string)
         if (!error) rowsUpdated++
       } else {
@@ -876,6 +932,7 @@ async function persistVoiceAnchorsIncremental(
             source_type: 'conversation',
             source_reference: sampleIdsRef,
             confidence_flag: 'imported_high',
+            signal_date: signalDate,
           })
         if (!error) rowsAdded++
       }
@@ -1116,7 +1173,10 @@ export async function refreshVoiceDnaIncremental(
   // the next tick re-processes the same window.
   let writeResult: { rowsAdded: number; rowsUpdated: number; newPhrasesAdded: number } | null = null
   try {
-    writeResult = await persistVoiceAnchorsIncremental(supabase, venueId, agg, sampleIdsRef)
+    // T5-Rixey-LL: thread the freshest source-email signal time so
+    // refreshed rows window correctly on the weekly tracker.
+    const signalDate = deriveSignalDate(samples)
+    writeResult = await persistVoiceAnchorsIncremental(supabase, venueId, agg, sampleIdsRef, signalDate)
     // Advance the refresh pointer ONLY on persist success — protects
     // the ratchet from billing-without-persistence.
     await supabase
