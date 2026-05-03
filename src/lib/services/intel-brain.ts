@@ -15,7 +15,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { callAI, callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
-export const BRAIN_PROMPT_VERSION = 'intel-brain.prompt.v1.0'
+export const BRAIN_PROMPT_VERSION = 'intel-brain.prompt.v1.1'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -67,6 +67,17 @@ interface VenueDataContext {
   recentInteractionSnippets: InteractionSnippet[]
   tourCancellationReasons: TourCancellationReasonRow[]
   lostDealReasons: LostDealReasonRow[]
+
+  // T5-PP (2026-05-02): NLQ context-loader gaps surfaced by Stream MM.
+  // (1) toursByMonth — bucket tours by scheduled_at month so questions
+  //     like "what's my busiest tour month?" can be grounded.
+  // (2) marketingSpendByMonth — pull marketing_spend rows directly so
+  //     NLQ has fresh per-month spend without depending on the weekly
+  //     source_attribution cron freshness. source_attribution still
+  //     gets read above (cost-per-lead computed numbers) — these two
+  //     fields are complementary lenses.
+  toursByMonth: ToursByMonthRow[]
+  marketingSpendByMonth: MarketingSpendByMonthRow[]
 }
 
 interface WeddingSummary {
@@ -227,6 +238,28 @@ interface LostDealReasonRow {
   count: number
 }
 
+// T5-PP (2026-05-02) — NLQ context-loader gaps from Stream MM Q4 + bug surface.
+interface ToursByMonthRow {
+  /** ISO 'YYYY-MM' bucket (UTC) */
+  month: string
+  count: number
+  completed: number
+  cancelled: number
+  no_show: number
+  rescheduled: number
+  pending: number
+}
+
+interface MarketingSpendByMonthRow {
+  source: string
+  /** ISO 'YYYY-MM' bucket */
+  month: string
+  /** raw dollar amount as stored in marketing_spend.amount (decimal) */
+  amount: number
+  /** populated when the writer set notes (confidence flags etc.) */
+  notes: string | null
+}
+
 // ---------------------------------------------------------------------------
 // System prompt builder
 // ---------------------------------------------------------------------------
@@ -244,9 +277,27 @@ WEDDINGS (booking pipeline):
 - Each wedding has: booking_value, guest_count_estimate, heat_score (lead temperature), temperature_tier
 - Key dates: inquiry_date, wedding_date, booked_at, lost_at
 
-SOURCE ATTRIBUTION:
+SOURCE ATTRIBUTION (cost-per-lead rollup, refreshed weekly):
 - Marketing spend vs results per source (inquiries, tours, bookings, revenue)
 - Calculated metrics: cost_per_inquiry, cost_per_booking, conversion_rate, ROI
+- IMPORTANT: this is computed by a weekly cron job. Recent spend changes
+  may not yet be reflected here. For always-fresh per-month spend, prefer
+  the MARKETING SPEND BY MONTH block below.
+
+MARKETING SPEND BY MONTH (raw, always fresh):
+- Per source × month spend pulled directly from marketing_spend (last 12
+  months). Use this when the user asks about recent spend changes,
+  channel comparisons, or month-over-month trends — these numbers reflect
+  what's currently in the database, no cron lag.
+- Notes column carries confidence flags (high / medium / low) when set
+  by the loader, so you can call out estimated months explicitly.
+
+TOURS BY MONTH (last 12 months):
+- Tours bucketed by scheduled_at month (UTC) with outcome breakdown:
+  total, completed, cancelled, no_show, rescheduled, pending.
+- Use this to answer "what's my busiest tour month?" or to spot months
+  with elevated cancellation / no-show rates. Tours grouped by the
+  month they were scheduled for, not the month they were created.
 
 SEARCH TRENDS:
 - Google Trends interest scores for wedding-related terms in the venue's metro
@@ -399,6 +450,9 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     interactionsResult,
     lostDealsResult,
     tourCancelResult,
+    // T5-PP additions:
+    toursByMonthResult,
+    marketingSpendDirectResult,
   ] = await Promise.all([
     // Venue name + state (state used to scope external_calendar_events)
     supabase
@@ -620,6 +674,33 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
       .not('cancellation_reason', 'is', null)
       .gte('scheduled_at', oneYearAgoIso)
       .limit(1000),
+
+    // T5-PP: tours bucketed by month for "busiest tour month" questions.
+    // Pull last 12 months of tours with scheduled_at + outcome; we GROUP
+    // in JS to avoid a server-side SQL function. Stream MM Q4 surfaced
+    // this gap: NLQ said "I see 178 active tours but no monthly breakdown."
+    supabase
+      .from('tours')
+      .select('scheduled_at, outcome')
+      .eq('venue_id', venueId)
+      .not('scheduled_at', 'is', null)
+      .gte('scheduled_at', oneYearAgoIso)
+      .order('scheduled_at', { ascending: false })
+      .limit(2000),
+
+    // T5-PP: direct marketing_spend pull (last 12 months, source x month).
+    // source_attribution above carries computed cost-per-lead numbers but
+    // is refreshed by a weekly cron — recent spend changes are invisible
+    // until the next refresh. Stream MM had to manually trigger a refresh
+    // to get NLQ Q1 (Google Ads ROI) grounded. Pulling marketing_spend
+    // directly closes that freshness gap.
+    supabase
+      .from('marketing_spend')
+      .select('source, month, amount, notes')
+      .eq('venue_id', venueId)
+      .gte('month', oneYearAgoDate)
+      .order('month', { ascending: false })
+      .limit(500),
   ])
 
   // Build pipeline counts from active weddings
@@ -918,6 +999,79 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     .map(([reason, count]) => ({ reason, count }))
     .sort((a, b) => b.count - a.count)
 
+  // T5-PP: tours bucketed by month (UTC). Outcome breakdown lets Sage
+  // answer "busiest tour month" AND distinguish completed vs cancelled
+  // (a month with 30 scheduled / 25 completed vs 30 scheduled / 5
+  // completed are different stories). Pending = outcome IS NULL.
+  type ToursBucket = {
+    count: number
+    completed: number
+    cancelled: number
+    no_show: number
+    rescheduled: number
+    pending: number
+  }
+  const toursMonthMap = new Map<string, ToursBucket>()
+  for (const r of toursByMonthResult.data ?? []) {
+    const scheduled = r.scheduled_at as string | null
+    if (!scheduled) continue
+    const monthKey = scheduled.slice(0, 7) // 'YYYY-MM' (UTC ISO prefix)
+    if (!monthKey) continue
+    const bucket = toursMonthMap.get(monthKey) ?? {
+      count: 0,
+      completed: 0,
+      cancelled: 0,
+      no_show: 0,
+      rescheduled: 0,
+      pending: 0,
+    }
+    bucket.count += 1
+    const outcome = (r.outcome as string | null) ?? null
+    if (outcome === 'completed') bucket.completed += 1
+    else if (outcome === 'cancelled') bucket.cancelled += 1
+    else if (outcome === 'no_show') bucket.no_show += 1
+    else if (outcome === 'rescheduled') bucket.rescheduled += 1
+    else bucket.pending += 1
+    toursMonthMap.set(monthKey, bucket)
+  }
+  const toursByMonth: ToursByMonthRow[] = Array.from(toursMonthMap.entries())
+    .map(([month, b]) => ({ month, ...b }))
+    // Newest month first so the "busiest recent" scan is at the top.
+    .sort((a, b) => b.month.localeCompare(a.month))
+
+  // T5-PP: marketing_spend by source × month. We bucket month dates to
+  // 'YYYY-MM' so duplicate writes against the same source+month merge
+  // (rare, but harmless). The notes field carries confidence flags
+  // (`high`, `medium`, `low`) when set by the loader so Sage can reason
+  // about data quality.
+  type SpendBucket = { amount: number; notes: string | null }
+  const spendMap = new Map<string, SpendBucket>()
+  for (const r of marketingSpendDirectResult.data ?? []) {
+    const source = (r.source as string | null) ?? 'unknown'
+    const monthRaw = (r.month as string | null) ?? ''
+    if (!monthRaw) continue
+    const monthKey = monthRaw.slice(0, 7) // 'YYYY-MM'
+    const amount = Number(r.amount ?? 0)
+    if (!Number.isFinite(amount)) continue
+    const key = `${source}::${monthKey}`
+    const existing = spendMap.get(key) ?? { amount: 0, notes: null }
+    existing.amount += amount
+    if (!existing.notes && r.notes) existing.notes = r.notes as string
+    spendMap.set(key, existing)
+  }
+  const marketingSpendByMonth: MarketingSpendByMonthRow[] = Array.from(
+    spendMap.entries(),
+  )
+    .map(([key, v]) => {
+      const [source, month] = key.split('::')
+      return { source, month, amount: v.amount, notes: v.notes }
+    })
+    .sort((a, b) => {
+      // Newest month first; within a month, biggest spend first.
+      if (a.month !== b.month) return b.month.localeCompare(a.month)
+      return b.amount - a.amount
+    })
+
   return {
     venueName: (venueResult.data?.name as string) ?? 'Unknown Venue',
     recentWeddings: (weddingsResult.data ?? []) as WeddingSummary[],
@@ -942,6 +1096,9 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     recentInteractionSnippets,
     tourCancellationReasons,
     lostDealReasons,
+    // T5-PP new fields
+    toursByMonth,
+    marketingSpendByMonth,
   }
 }
 
@@ -1215,6 +1372,50 @@ function formatDataContext(data: VenueDataContext): string {
       `point in the funnel (last 365d, lost_deals.reason_category). ` +
       `Different lens from TOUR CANCELLATION REASONS: this is "couple ` +
       `picked competitor" / "price" / "timing" — the deal is over.\n${lines}`,
+    )
+  }
+
+  // T5-PP — Tours bucketed by month (busiest-month questions).
+  if (data.toursByMonth.length > 0) {
+    const lines = data.toursByMonth
+      .map(
+        (t) =>
+          `  - ${t.month}: total=${t.count}, completed=${t.completed}, ` +
+          `cancelled=${t.cancelled}, no_show=${t.no_show}, ` +
+          `rescheduled=${t.rescheduled}, pending=${t.pending}`,
+      )
+      .join('\n')
+    sections.push(
+      `TOURS BY MONTH (last 12 months, scheduled_at, UTC):\n${lines}`,
+    )
+  }
+
+  // T5-PP — Direct marketing_spend (always-fresh complement to source
+  // attribution rollups). Format groups all sources for a given month
+  // so the AI can compare cross-channel spend without re-shuffling.
+  if (data.marketingSpendByMonth.length > 0) {
+    const byMonth = new Map<string, MarketingSpendByMonthRow[]>()
+    for (const r of data.marketingSpendByMonth) {
+      const arr = byMonth.get(r.month) ?? []
+      arr.push(r)
+      byMonth.set(r.month, arr)
+    }
+    const lines = Array.from(byMonth.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([month, rows]) => {
+        const inner = rows
+          .map((r) => {
+            const note = r.notes ? ` [${r.notes}]` : ''
+            return `${r.source}=$${r.amount.toFixed(2)}${note}`
+          })
+          .join(', ')
+        return `  - ${month}: ${inner}`
+      })
+      .join('\n')
+    sections.push(
+      `MARKETING SPEND BY MONTH (last 12 months, direct from ` +
+      `marketing_spend — always fresh, independent of the weekly ` +
+      `source_attribution cron):\n${lines}`,
     )
   }
 

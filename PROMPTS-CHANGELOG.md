@@ -51,7 +51,20 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 - **v1.0** (2026-05-01) — Initial versioning baseline. Email
   classification on Haiku (per OPS-21.4.2) with the 7-class label set.
 
-### intel-brain (`intel-brain.prompt.v1.0`)
+### intel-brain (`intel-brain.prompt.v1.1`)
+- **v1.1** (2026-05-02) — T5-Rixey-PP. NLQ context-loader gaps closed
+  per Stream MM real-data load (Q4 "busiest tour month" returned
+  ungrounded; Q1 "Google Ads ROI" needed a manual cron refresh first).
+  `gatherVenueData` now pulls (a) `toursByMonth` — last 12 months of
+  tours bucketed by `scheduled_at` UTC month with completed / cancelled
+  / no_show / rescheduled / pending breakdown, and (b)
+  `marketingSpendByMonth` — direct read of `marketing_spend` rows
+  (source × month × amount × notes) to give Sage always-fresh per-month
+  spend without depending on the weekly `source_attribution` cron.
+  System prompt updated to describe both blocks, plus a clarifying note
+  on SOURCE ATTRIBUTION explaining the cron-freshness caveat and
+  pointing the LLM at MARKETING SPEND BY MONTH for recent-spend
+  questions.
 - **v1.0** (2026-05-01) — Initial versioning baseline. Covers both NLQ
   (`generateNLQResponse`) and positioning suggestions
   (`generatePositioningSuggestions`).

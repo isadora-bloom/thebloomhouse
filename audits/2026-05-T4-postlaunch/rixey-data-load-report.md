@@ -175,6 +175,48 @@ Today's count: by inquiry_date=1, by created_at=716. **Without the LL fix, every
 ### 1. Auth admin user-create fails with "Database error checking email"
 `sb.auth.admin.createUser()` returns "Database error checking email" when called against staging Supabase to create `grace@rixeymanor.com`. Tested via supabase-js v2.x. Could not add Grace's user_profile row because user_profiles.id has FK to auth.users.id. **Workaround:** report-only — coordinator can be added via the Supabase admin UI manually. Worth investigating whether there's a custom `auth.users` trigger that's failing.
 
+#### Stream PP investigation (2026-05-02)
+
+Reproduction probe in `scripts/rixey-load/17-auth-investigate.mjs` + follow-up `17b-auth-probe.mjs`. Findings:
+
+| probe | result |
+|---|---|
+| `createUser({email:'pp-test+rand@bloomhouse.test'})` (throwaway) | **OK — succeeds** |
+| `createUser({email:'grace@rixeymanor.com'})` | err `Database error checking email` (status 500, code `unexpected_failure`) |
+| `createUser({email:'GRACE@rixeymanor.com'})` (caps) | same err — **case-insensitive match** |
+| `createUser({email:'grace+test@rixeymanor.com'})` | OK |
+| `createUser({email:'grace.baker@rixeymanor.com'})` | OK |
+| `createUser({email:'grace@rixeymanor.org'})` (alt TLD) | OK |
+| `createUser({email:'grace@bloomhouse.test'})` (alt domain) | OK |
+| `listUsers({page:1, perPage:10})` | OK (10 users) |
+| `listUsers({page:2, perPage:10})` | err `Database error finding users` |
+| `listUsers({page:11..14, perPage:1})` | OK |
+| `listUsers({page:15, perPage:1})` | err — **the 15th row in pagination is corrupt** |
+| `inviteUserByEmail('grace@rixeymanor.com')` | err `Database error finding user` |
+
+**Root cause:** there is a corrupted (or partial / orphaned) row in `auth.users` whose email is `grace@rixeymanor.com` (case-insensitive). Most likely an unconfirmed-signup row missing required join data in `auth.identities` (the GoTrue email-uniqueness lookup tries to LEFT JOIN identities and fails on this specific row).
+
+**Evidence chain:**
+- `createUser` works for fresh emails, so neither the public `handle_new_auth_user` trigger nor a global hook is the problem.
+- The error is *deterministic on the email value* (same email → same error every time), which rules out generic platform flakiness.
+- Page 15 of `listUsers` errors AND the email `grace@rixeymanor.com` errors → the corrupt row IS that email's row.
+- `grace+test@rixeymanor.com` succeeds → it's not a domain/MX block, not a webhook, not a custom trigger.
+- The migration audit (Bash grep over `supabase/migrations/`) found **only one** trigger on `auth.users`: the AFTER INSERT `on_auth_user_created` from migration 061. AFTER INSERT cannot block the email-check that fails BEFORE INSERT, so it's exonerated.
+
+**Recommended next step for Isadora:** the JS service-role client cannot DELETE / UPDATE `auth.users` rows directly (PostgREST exposes only `public` and `graphql_public` schemas — confirmed in probe output). Two paths:
+
+1. **(recommended) Fix via Supabase Dashboard:** Authentication → Users → search "grace" → delete the corrupt row → THEN re-run `node scripts/rixey-load/02-venue-config.mjs` which will create Grace cleanly.
+2. **(alternative) Skip the cleanup entirely:** create Grace's account directly via the Dashboard "Add user" button (Authentication → Users → Add user → "Create new user"). This bypasses the corrupt-row email check on the API path. The dashboard goes through admin SQL not GoTrue API. Then run `02-venue-config.mjs` which detects existing users via `listUsers` (caveat: that call is broken — but the script's `existingUsers.users.find` will still see Grace once the dashboard creates her, because the broken page-2 row is the corrupt one being deleted/replaced).
+
+If neither dashboard path works, the underlying SQL fix is:
+```sql
+-- Run from Supabase Dashboard SQL editor (service-role context):
+DELETE FROM auth.users WHERE lower(email) = 'grace@rixeymanor.com';
+-- Then admin.createUser will work.
+```
+
+This stream did not push a code fix because the corruption is data-state, not application logic.
+
 ### 2. tangential_signals.platform field-name mismatch (writer vs reader)
 `correlation-engine.ts:311` reads `extracted_identity.platform`, but `storefront-analytics-import.ts` writes the platform name to the row-level `source_platform` column (and leaves `extracted_identity.platform` unset). Net effect: all 553 the_knot storefront signals (plus all 18 web-form signals from web-form imports) collapse into a single `other_signals` channel in the correlation engine. **Pattern-I-style bug.** Fix is one-line — engine should read `ei.platform ?? r.source_platform`.
 
