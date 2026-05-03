@@ -49,9 +49,9 @@ const { data: ts } = await sb
   .eq('venue_id', RIXEY_ID)
   .or(`signal_date.gte.${start.toISOString()},and(signal_date.is.null,created_at.gte.${start.toISOString()})`)
 console.log(`tangential_signals: ${ts?.length ?? 0}`)
-const platCounts = {}
+const platCounts: Record<string, number> = {}
 for (const r of ts ?? []) {
-  const p = (r.extracted_identity?.platform) ?? r.source_platform ?? 'other'
+  const p = ((r.extracted_identity as any)?.platform) ?? r.source_platform ?? 'other'
   platCounts[p] = (platCounts[p] ?? 0) + 1
 }
 console.log('  by extracted_identity.platform fallback source_platform:', platCounts)

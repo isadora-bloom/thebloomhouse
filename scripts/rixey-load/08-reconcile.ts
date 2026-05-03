@@ -39,7 +39,7 @@ async function main() {
   console.log('Sample auto-merged clusters (first 5):')
   const auto = result.clusters.filter((c) => c.status === 'auto_merged')
   for (const c of auto.slice(0, 5)) {
-    console.log(`  email=${c.email} winner=${c.winnerId.slice(0, 8)} losers=${c.loserIds.length} backfilled=${c.backfillPlan.map((p) => p.field).join(',')}`)
+    console.log(`  email=${c.email} winner=${c.winnerId?.slice(0, 8) ?? '(none)'} losers=${c.loserIds.length} backfilled=${c.backfillPlan.map((p) => p.field).join(',')}`)
   }
   console.log()
   console.log('Sample surfaced clusters (first 5):')
