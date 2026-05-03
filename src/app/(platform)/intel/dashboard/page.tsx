@@ -16,6 +16,7 @@ import {
   ChevronUp,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
+import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { WeeklyLearnedCard } from '@/components/intel/WeeklyLearnedCard'
 import { PostTourBrowsingCard } from '@/components/intel/PostTourBrowsingCard'
@@ -562,6 +563,10 @@ export default function IntelligenceDashboardPage() {
           {running ? 'Running...' : 'Run Anomaly Detection'}
         </button>
       </div>
+
+      {/* Stream HHH Bug 10: high-severity risk insights surface here
+          (and on /pulse) — not on every coordinator page. */}
+      <InlineInsightBanner surface="dashboard" />
 
       {/* ---- Error state ---- */}
       {error && (

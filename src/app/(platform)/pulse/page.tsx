@@ -18,6 +18,7 @@ import {
   Loader2, AlertTriangle, Bell, Lightbulb, RefreshCw, ExternalLink,
   Clock, X, PauseCircle, PlayCircle,
 } from 'lucide-react'
+import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 
 type PulseSource = 'notification' | 'anomaly' | 'insight'
 type PulsePriority = 'critical' | 'high' | 'medium' | 'low'
@@ -221,6 +222,10 @@ export default function PulsePage() {
           Refresh
         </button>
       </div>
+
+      {/* Stream HHH Bug 10: high-severity risk insights surface here
+          (and on /intel/dashboard) — not on every coordinator page. */}
+      <InlineInsightBanner surface="pulse" />
 
       {/* T5-eta.1 — paused banner. Sticky-pinned, NOT a notification:
           coordinator cannot snooze or dismiss this. Tells them the

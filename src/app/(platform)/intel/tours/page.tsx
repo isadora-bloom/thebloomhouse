@@ -22,7 +22,7 @@ import {
   FileText,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
-import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
+// Stream HHH Bug 10: InlineInsightBanner removed from /intel/tours.
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -603,8 +603,8 @@ export default function ToursPage() {
         </button>
       </div>
 
-      {/* ---- Inline insight banner ---- */}
-      <InlineInsightBanner category="lead_conversion" />
+      {/* Stream HHH Bug 10: InlineInsightBanner removed. High-severity
+          risk insights now route to /pulse + /intel/dashboard only. */}
 
       {/* Error */}
       {error && (

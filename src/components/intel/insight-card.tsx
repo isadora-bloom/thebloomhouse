@@ -139,7 +139,14 @@ export function InsightCard({ insight, onStatusChange, compact = false }: Insigh
         )} />
 
         <div className="flex-1 min-w-0">
-          {/* Type badge + confidence */}
+          {/* Type badge + confidence
+              Stream HHH Bug 21: ALWAYS render a confidence badge.
+              Pre-fix the badge was gated by `insight.confidence >= 0.7`,
+              so any row with low / null / missing confidence rendered
+              with no confidence indicator at all (the user's "CPI
+              precedes The Knot signals by 14 days" card was the
+              caught example). Fallback to "—% confidence" so the
+              missing data is visible, not silent. */}
           <div className="flex items-center gap-2 mb-1">
             <span className={cn(
               'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider',
@@ -148,11 +155,20 @@ export function InsightCard({ insight, onStatusChange, compact = false }: Insigh
               <TypeIcon className="w-3 h-3" />
               {typeConfig.label}
             </span>
-            {insight.confidence >= 0.7 && (
-              <span className="text-[10px] text-sage-400 font-medium">
-                {Math.round(insight.confidence * 100)}% confidence
-              </span>
-            )}
+            {(() => {
+              const c = insight.confidence
+              const hasConfidence = typeof c === 'number' && Number.isFinite(c) && c > 0
+              return (
+                <span
+                  className="text-[10px] text-sage-400 font-medium"
+                  title={hasConfidence
+                    ? `Confidence ${Math.round(c * 100)}% — sample size + effect size combined`
+                    : 'Confidence not recorded for this insight'}
+                >
+                  {hasConfidence ? `${Math.round(c * 100)}% confidence` : '—% confidence'}
+                </span>
+              )
+            })()}
             {insight.status === 'new' && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-sage-100 text-sage-600">
                 NEW

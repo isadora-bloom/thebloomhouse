@@ -9,14 +9,29 @@ import {
 import { cn } from '@/lib/utils'
 import type { InsightRow } from './insight-card'
 import { usePlanTier } from '@/lib/hooks/use-plan-tier'
+import {
+  filterAndRankForSurface,
+  type InsightSurface,
+} from '@/lib/utils/insight-routing'
 
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
 interface InlineInsightBannerProps {
-  /** Filter by category (or multiple separated by comma) */
-  category: string
+  /**
+   * Coordinator surface this banner lives on. Drives the audience
+   * predicate per Stream HHH Bug 10:
+   *   - 'pulse' / 'dashboard'  → high-severity risk + critical/high
+   *   - 'sources'              → channel-specific only
+   *   - 'lead_detail'          → that lead's insights
+   * Pass the surface that matches the page wrapping the banner.
+   */
+  surface: InsightSurface
+  /** Optional category filter (back-compat). When set, narrows the API
+   *  fetch to one category (or comma-separated list). The audience
+   *  predicate still applies on top. */
+  category?: string
   /** Additional class */
   className?: string
 }
@@ -47,7 +62,7 @@ const PRIORITY_ACCENT: Record<string, { border: string; bg: string; dot: string 
 // Component
 // ---------------------------------------------------------------------------
 
-export function InlineInsightBanner({ category, className }: InlineInsightBannerProps) {
+export function InlineInsightBanner({ surface, category, className }: InlineInsightBannerProps) {
   const [insight, setInsight] = useState<InsightRow | null>(null)
   const [dismissed, setDismissed] = useState(false)
   // Insights live behind the Intelligence tier server-side (requirePlan in
@@ -64,24 +79,42 @@ export function InlineInsightBanner({ category, className }: InlineInsightBanner
 
     async function fetchInsight() {
       try {
-        // Fetch the single highest-priority insight for this category
-        const categories = category.split(',').map((c) => c.trim())
-        // We'll try each category and take the first result
-        for (const cat of categories) {
-          const res = await fetch(`/api/intel/insights?category=${cat}&limit=1`)
-          if (!res.ok) continue
-          const data = await res.json()
-          if (data.insights && data.insights.length > 0) {
-            setInsight(data.insights[0])
-            return
+        // Stream HHH Bug 10: fetch a wider candidate set, then filter +
+        // rank client-side via the shared audience predicate. This is
+        // what keeps the 34%-tour-cancellation banner OFF surfaces it
+        // doesn't belong on (every coordinator page) and ON the ones it
+        // does (/pulse + /intel/dashboard).
+        const candidates: InsightRow[] = []
+        if (category) {
+          // Back-compat path: caller asked for specific categories.
+          const categories = category.split(',').map((c) => c.trim())
+          for (const cat of categories) {
+            const res = await fetch(`/api/intel/insights?category=${cat}&limit=10`)
+            if (!res.ok) continue
+            const data = await res.json()
+            const rows = (data.insights ?? []) as InsightRow[]
+            candidates.push(...rows)
           }
+        } else {
+          // No category narrowing — pull the top 25 active insights and
+          // let the surface predicate decide.
+          const res = await fetch(`/api/intel/insights?limit=25`)
+          if (!res.ok) return
+          const data = await res.json()
+          const rows = (data.insights ?? []) as InsightRow[]
+          candidates.push(...rows)
+        }
+
+        const ranked = filterAndRankForSurface(candidates, surface)
+        if (ranked.length > 0) {
+          setInsight(ranked[0]!)
         }
       } catch (err) {
         console.error('Failed to fetch inline insight:', err)
       }
     }
     fetchInsight()
-  }, [category, hasIntel, planLoading])
+  }, [surface, category, hasIntel, planLoading])
 
   if (!hasIntel || !insight || dismissed) return null
 

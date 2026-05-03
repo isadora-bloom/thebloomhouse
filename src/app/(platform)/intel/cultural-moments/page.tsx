@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
+  Info,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -73,6 +74,68 @@ const CATEGORY_OPTIONS = [
   { value: 'other', label: 'Other' },
 ]
 
+// ---------------------------------------------------------------------------
+// Stream HHH Bug 15: queue grouping by category.
+//
+// The propose-and-confirm queue mixed celebrity-trends with macro-
+// events with platform-events with industry-news in one flat list.
+// "Knot platform redesign" filed as a Cultural Moment with a
+// PLATFORM EVENT badge looked miscategorised because it was sitting
+// next to "Royal-adjacent celebrity wedding spike". Group them by
+// the existing category field — coordinator can reason about each
+// type separately without inventing new categories.
+// ---------------------------------------------------------------------------
+
+type CategoryGroup = 'cultural' | 'platform' | 'macro' | 'industry' | 'other'
+
+interface CategoryGroupDef {
+  id: CategoryGroup
+  label: string
+  description: string
+  /** Maps from cultural_moments.category values (migration 139 CHECK). */
+  categories: string[]
+}
+
+const CATEGORY_GROUPS: CategoryGroupDef[] = [
+  {
+    id: 'cultural',
+    label: 'Cultural trends',
+    description: 'Celebrity weddings, aesthetic shifts, generational milestones — the drivers of taste and timing.',
+    categories: ['celebrity_wedding', 'aesthetic_shift', 'generational_milestone'],
+  },
+  {
+    id: 'platform',
+    label: 'Platform events',
+    description: 'Knot redesigns, WeddingWire algorithm changes, Pinterest UI shifts — anything that moves the listing/discovery layer.',
+    categories: ['platform_event'],
+  },
+  {
+    id: 'macro',
+    label: 'Macro events',
+    description: 'Election cycles, market drawdowns, mortgage shifts, weather events — the discretionary-spending environment.',
+    categories: ['macro_event'],
+  },
+  {
+    id: 'industry',
+    label: 'Industry news',
+    description: 'Bridal-industry developments and announcements that shift coordinator-relevant context.',
+    categories: ['industry_news'],
+  },
+  {
+    id: 'other',
+    label: 'Other / uncategorised',
+    description: 'Moments without a category yet — categorise on confirm.',
+    categories: ['other'],
+  },
+]
+
+function groupForCategory(category: string | null): CategoryGroup {
+  for (const grp of CATEGORY_GROUPS) {
+    if (category && grp.categories.includes(category)) return grp.id
+  }
+  return 'other'
+}
+
 function formatRange(startIso: string, endIso: string | null): string {
   const s = new Date(startIso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   if (!endIso) return `${s} – ongoing`
@@ -85,6 +148,10 @@ export default function CulturalMomentsPage() {
   const venueId = useVenueId()
   const [error, setError] = useState<string | null>(null)
   const [showProposeForm, setShowProposeForm] = useState(false)
+  // Stream HHH Bug 15: active category-group tab for the propose-and-
+  // confirm queue. Defaults to 'cultural' (the largest bucket); the
+  // tab strip below shows the count per group.
+  const [activeGroup, setActiveGroup] = useState<CategoryGroup>('cultural')
 
   const [newTitle, setNewTitle] = useState('')
   const [newDescription, setNewDescription] = useState('')
@@ -275,6 +342,20 @@ export default function CulturalMomentsPage() {
     [moments],
   )
 
+  // Stream HHH Bug 15: per-group counts for the awaiting tab strip.
+  const awaitingByGroup = useMemo(() => {
+    const map = new Map<CategoryGroup, Moment[]>()
+    for (const grp of CATEGORY_GROUPS) map.set(grp.id, [])
+    for (const m of awaiting) {
+      const g = groupForCategory(m.category)
+      map.get(g)!.push(m)
+    }
+    return map
+  }, [awaiting])
+
+  const activeGroupRows = awaitingByGroup.get(activeGroup) ?? []
+  const activeGroupDef = CATEGORY_GROUPS.find((g) => g.id === activeGroup) ?? CATEGORY_GROUPS[0]!
+
   if (loading) return <div className="p-8"><p className="text-sage-500 text-sm">Loading…</p></div>
 
   return (
@@ -389,15 +470,67 @@ export default function CulturalMomentsPage() {
         </form>
       )}
 
-      <Section
-        title="Awaiting your decision"
-        icon={<Clock className="w-4 h-4 text-amber-600" />}
-        rows={awaiting}
-        onConfirm={handleConfirm}
-        onDismiss={handleDismiss}
-        showActions
-        emptyMessage="No moments awaiting your decision."
-      />
+      {/* Stream HHH Bug 14: visible legend for the Impact (-100 to +100)
+          score so coordinators stop seeing it as an unlabeled magic
+          number. Renders once at the top so every section that shows
+          a score inherits the meaning. */}
+      <div className="rounded-md bg-sage-50/60 border border-sage-100 px-3 py-2 text-xs text-sage-700 flex items-start gap-2">
+        <Info className="w-3.5 h-3.5 mt-0.5 text-sage-500 shrink-0" />
+        <p>
+          <strong className="text-sage-800">Impact score (-100 to +100).</strong>{' '}
+          Positive values mean the moment <em>lifts</em> wedding inquiries; negative
+          values mean it <em>drags</em> them down. Range: -100 (strong negative) to
+          +100 (strong positive). Set the score when you confirm a moment.
+        </p>
+      </div>
+
+      {/* Stream HHH Bug 15: awaiting queue split into category-group
+          tabs (Cultural / Platform / Macro / Industry / Other) so the
+          coordinator can reason about each type separately instead of
+          scrolling a flat list mixing celebrity weddings with Knot
+          redesigns with mortgage shifts. */}
+      <section className="space-y-2">
+        <h2 className="font-medium text-sage-900 flex items-center gap-2">
+          <Clock className="w-4 h-4 text-amber-600" />
+          Awaiting your decision ({awaiting.length})
+        </h2>
+        {/* Tab strip */}
+        <div className="flex items-center gap-1 flex-wrap border-b border-sage-100">
+          {CATEGORY_GROUPS.map((g) => {
+            const count = awaitingByGroup.get(g.id)?.length ?? 0
+            const active = activeGroup === g.id
+            return (
+              <button
+                key={g.id}
+                onClick={() => setActiveGroup(g.id)}
+                className={`px-3 py-1.5 text-sm border-b-2 transition-colors -mb-px ${
+                  active
+                    ? 'border-sage-700 text-sage-900 font-medium'
+                    : 'border-transparent text-sage-500 hover:text-sage-700'
+                }`}
+              >
+                {g.label}
+                <span className={`ml-1.5 text-[11px] ${active ? 'text-sage-600' : 'text-sage-400'}`}>
+                  ({count})
+                </span>
+              </button>
+            )
+          })}
+        </div>
+        <p className="text-xs text-sage-500 italic">{activeGroupDef.description}</p>
+        {activeGroupRows.length === 0 ? (
+          <p className="text-sm text-sage-500 italic">No moments in this group awaiting your decision.</p>
+        ) : (
+          <ul className="rounded-lg border border-sage-200 bg-white divide-y divide-sage-100">
+            {activeGroupRows.map((m) => (
+              <li key={m.id} className="px-4 py-3">
+                <MomentRow row={m} showActions onConfirm={handleConfirm} onDismiss={handleDismiss} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       <Section
         title="Confirmed by your venue (factored into forecasts)"
         icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}
@@ -516,9 +649,21 @@ function MomentRow({ row, showActions, showWeight, onConfirm, onDismiss }: Momen
               other venues confirmed — decide for yours
             </span>
           )}
+          {/* Stream HHH Bug 14: explicit "Impact +35" rendering with
+              sign + bracket so the score is never a floating bare
+              number. Coordinator can read it without the legend. */}
           {showWeight && row.influence_weight !== null && (
-            <span className={`font-mono text-xs ${row.influence_weight > 0 ? 'text-emerald-700' : row.influence_weight < 0 ? 'text-red-700' : 'text-sage-500'}`}>
-              {row.influence_weight > 0 ? '+' : ''}{row.influence_weight}
+            <span
+              className={`inline-flex items-center px-1.5 py-0.5 rounded font-mono text-xs ${
+                row.influence_weight > 0
+                  ? 'bg-emerald-50 text-emerald-700'
+                  : row.influence_weight < 0
+                    ? 'bg-red-50 text-red-700'
+                    : 'bg-sage-50 text-sage-500'
+              }`}
+              title={`Impact score: ${row.influence_weight > 0 ? '+' : ''}${row.influence_weight} on a -100 to +100 scale.`}
+            >
+              Impact {row.influence_weight > 0 ? '+' : ''}{row.influence_weight}
             </span>
           )}
         </div>
@@ -529,16 +674,23 @@ function MomentRow({ row, showActions, showWeight, onConfirm, onDismiss }: Momen
         )}
       </div>
       {showActions && (
-        <div className="flex items-center gap-1">
-          <input
-            type="number"
-            min="-100"
-            max="100"
-            value={weight}
-            onChange={(e) => setWeight(e.target.value)}
-            className="w-16 rounded border border-sage-200 px-1.5 py-1 text-xs font-mono text-right"
-            title="Impact score: -100 (strong negative effect on inquiries) to +100 (strong positive effect)"
-          />
+        <div className="flex items-end gap-1">
+          {/* Stream HHH Bug 14: explicit field label + range on the
+              score input. The input itself was previously labelled
+              only via title-attribute; now the (-100 to +100) range
+              is visible at all times. */}
+          <label className="flex flex-col items-end text-[10px] text-sage-500">
+            <span className="leading-none">Impact (-100 to +100)</span>
+            <input
+              type="number"
+              min="-100"
+              max="100"
+              value={weight}
+              onChange={(e) => setWeight(e.target.value)}
+              className="w-20 mt-0.5 rounded border border-sage-200 px-1.5 py-1 text-xs font-mono text-right"
+              title="Impact score: positive values mean the moment lifts wedding inquiries; negative values mean it drags them down. Range: -100 (strong negative) to +100 (strong positive)."
+            />
+          </label>
           <button
             onClick={() => onConfirm(row.id, Number(weight))}
             className="inline-flex items-center gap-1 rounded bg-sage-700 hover:bg-sage-800 text-white text-xs px-2 py-1"
