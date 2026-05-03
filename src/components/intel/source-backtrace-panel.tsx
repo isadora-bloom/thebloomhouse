@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { CheckCircle2, AlertCircle, Search, Loader2, Inbox } from 'lucide-react'
-import { formatSourceLabel } from '@/lib/utils/format-source-label'
 
 /**
  * Source-backtrace review panel — shared between Settings and the
@@ -36,12 +35,6 @@ export interface BacktraceCandidate {
   suggestedSource: string | null
   evidence: Evidence | null
   confidence: 'high' | 'medium' | 'low' | 'none'
-  /** T5-Rixey-TT: explicit return state. weak_match candidates render a
-   *  "review carefully" banner; confident_match auto-applies cleanly;
-   *  no_match is filtered out by the API by default. */
-  status?: 'no_match' | 'weak_match' | 'confident_match'
-  /** T5-Rixey-TT: human-readable warnings to surface alongside weak matches. */
-  warnings?: string[]
 }
 
 const SOURCE_OPTIONS = [
@@ -60,10 +53,28 @@ const SOURCE_OPTIONS = [
   'other',
 ]
 
-// T5-Rixey-UU Bug E: shared formatter for all source labels.
 function formatSource(s: string | null | undefined): string {
   if (!s) return 'unknown'
-  return formatSourceLabel(s)
+  const map: Record<string, string> = {
+    the_knot: 'The Knot',
+    wedding_wire: 'Wedding Wire',
+    here_comes_the_guide: 'Here Comes The Guide',
+    zola: 'Zola',
+    website: 'Website',
+    venue_calculator: 'Venue Calculator',
+    instagram: 'Instagram',
+    facebook: 'Facebook',
+    google: 'Google',
+    referral: 'Word of Mouth',
+    walk_in: 'Walk-in',
+    direct: 'Direct',
+    calendly: 'Calendly',
+    acuity: 'Acuity',
+    honeybook: 'HoneyBook',
+    dubsado: 'Dubsado',
+    other: 'Other',
+  }
+  return map[s] ?? s
 }
 
 interface PanelProps {
@@ -77,6 +88,7 @@ export function SourceBacktracePanel({ compact = false, onComplete }: PanelProps
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hasScanned, setHasScanned] = useState(false)
+  const [scanWasLive, setScanWasLive] = useState(false)
   const [selections, setSelections] = useState<Record<string, string | null>>({})
   const [applying, setApplying] = useState(false)
   const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set())
@@ -97,6 +109,7 @@ export function SourceBacktracePanel({ compact = false, onComplete }: PanelProps
       for (const c of json.candidates ?? []) sel[c.weddingId] = c.suggestedSource
       setSelections(sel)
       setHasScanned(true)
+      setScanWasLive(live)
     } catch (err) {
       console.error(err)
       setError(err instanceof Error ? err.message : 'Scan failed')
@@ -173,6 +186,23 @@ export function SourceBacktracePanel({ compact = false, onComplete }: PanelProps
     (c) => !appliedIds.has(c.weddingId) && !skippedIds.has(c.weddingId)
   )
 
+  // T5-Rixey-SS Bug C: when a local-only scan returned candidates but
+  // none of them carry an actionable suggestion (all confidence='none'
+  // or no suggestedSource), the prior UI rendered the candidate list
+  // with "no evidence found" text + greyed-out Apply buttons and no
+  // explanation of the next step. The reality: the inquiry email lives
+  // only in Gmail, not in local interactions, so the local search has
+  // nothing to match against. Surface that explicitly + offer the
+  // live-Gmail re-scan button.
+  const hasActionable = candidates.some(
+    (c) => c.suggestedSource && c.confidence !== 'none'
+  )
+  const needsLiveGmailRescan =
+    hasScanned &&
+    candidates.length > 0 &&
+    !hasActionable &&
+    !scanWasLive
+
   return (
     <div className="space-y-4">
       {!compact && (
@@ -224,6 +254,47 @@ export function SourceBacktracePanel({ compact = false, onComplete }: PanelProps
           <span className="text-sm text-sage-700">
             No scheduling-tool first-touches found. Your sources look clean.
           </span>
+        </div>
+      )}
+
+      {needsLiveGmailRescan && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="flex-1 space-y-2">
+              <div className="text-sm text-amber-900 font-medium">
+                Found {candidates.length} potential matches but they need a live Gmail scan to confirm.
+              </div>
+              <div className="text-sm text-amber-800">
+                The inquiry emails for these couples live only in Gmail (outside the local
+                90-day history we keep), so the local search couldn&apos;t find an upstream
+                first-touch. A live Gmail scan searches your full mailbox by couple name +
+                runs the form-relay parsers against the earliest matching email.
+              </div>
+              <div className="flex items-center gap-3 pt-1">
+                <button
+                  onClick={() => scan(true)}
+                  disabled={loading}
+                  className="px-4 py-2 bg-amber-700 hover:bg-amber-800 disabled:opacity-60 text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  {loading ? 'Scanning Gmail…' : 'Re-scan with live Gmail'}
+                </button>
+                <span className="text-xs text-amber-700">
+                  Uses Gmail API quota — one search per couple.
+                </span>
+              </div>
+              <div className="text-xs text-amber-700 pt-1">
+                If Gmail isn&apos;t connected yet,{' '}
+                <a
+                  href="/agent/settings"
+                  className="underline font-medium hover:text-amber-900"
+                >
+                  connect it from Agent → Settings
+                </a>
+                {' '}then come back and re-scan.
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -280,24 +351,6 @@ export function SourceBacktracePanel({ compact = false, onComplete }: PanelProps
                     )}
                   </div>
 
-                  {c.status === 'weak_match' && c.warnings && c.warnings.length > 0 && (
-                    <div className="mt-3 bg-amber-50 border border-amber-200 rounded p-3 text-xs">
-                      <div className="flex items-start gap-2">
-                        <AlertCircle className="w-3.5 h-3.5 text-amber-600 mt-0.5 shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <div className="font-medium text-amber-900">
-                            Weak match — review carefully
-                          </div>
-                          <ul className="mt-1 list-disc list-inside text-amber-800 space-y-0.5">
-                            {c.warnings.map((w, idx) => (
-                              <li key={idx}>{w}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
                   {c.evidence ? (
                     <div className="mt-3 bg-sage-50/50 border border-border rounded p-3 text-xs">
                       <div className="flex items-start gap-2">
@@ -316,12 +369,6 @@ export function SourceBacktracePanel({ compact = false, onComplete }: PanelProps
                           <div className="text-sage-400 mt-1">
                             {c.evidence.timestamp.slice(0, 10)} · confidence:{' '}
                             <span className="font-medium">{c.confidence}</span>
-                            {c.status && (
-                              <>
-                                {' '}· status:{' '}
-                                <span className="font-medium">{c.status}</span>
-                              </>
-                            )}
                           </div>
                         </div>
                       </div>

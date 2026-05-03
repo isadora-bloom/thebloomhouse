@@ -2,7 +2,7 @@
  * Lead-source derivation cron + audit (Stream KK / migration 177).
  *
  * For each active wedding (`merged_into_id IS NULL`) where
- * `lead_source IS NULL`, walks a 6-tier priority chain to backfill
+ * `lead_source IS NULL`, walks a 7-tier priority chain to backfill
  * the canonical first-touch lead source:
  *
  *   Priority 0 (skip): coordinator override via `attribution_priority`
@@ -30,6 +30,18 @@
  *     attribution_events whose evidence references a utm_source on
  *     the candidate's first signal. Confidence: low.
  *
+ *   Priority 7: legacy `weddings.source` column fallback. Many imported
+ *     and pre-derivation-era weddings carry a non-null `source` value
+ *     (CRM importers, Calendly/HoneyBook adapters, hand-edits) but sat
+ *     at `lead_source = NULL` because the prior 6-tier chain never read
+ *     that column. Surfaces the legacy value via `normalizeSource` so
+ *     callers see canonical channel keys. Confidence: low (the legacy
+ *     column conflates real first-touch with last-touch / surface
+ *     channel — the higher priorities exist precisely for that reason,
+ *     so they always win when present). Per T5-Rixey-SS Bug A. The DB
+ *     CHECK on lead_source_derivation_log.priority_used was widened
+ *     from `<= 6` to `<= 7` in migration 185.
+ *
  *   Priority 6: leave NULL with reason='no_signal'. Confidence: low.
  *
  * Each decision writes a `lead_source_derivation_log` row. Coordinator
@@ -41,12 +53,19 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { logEvent } from '@/lib/observability/logger'
+import { normalizeSource } from '@/lib/services/normalize-source'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type DerivationPriority = 0 | 1 | 2 | 3 | 4 | 5 | 6
+// Priority 7 is the `weddings.source` legacy-column fallback added in
+// T5-Rixey-SS (Bug A). It runs AFTER the UTM tier (5) and BEFORE the
+// no-signal terminal (6). The DB CHECK on
+// lead_source_derivation_log.priority_used was widened to <= 7 in
+// migration 185 to accept this new priority. The audit log is
+// distinguishable by priority_used + evidence.note='weddings_source_fallback'.
+export type DerivationPriority = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
 
 export type DerivationConfidence = 'high' | 'medium' | 'low'
 
@@ -344,6 +363,55 @@ async function tryPriority5UtmFromAttributionEvents(
 }
 
 /**
+ * Priority 7 — `weddings.source` legacy-column fallback.
+ *
+ * Bug A / T5-Rixey-SS: the prior 6-tier chain never read the legacy
+ * `weddings.source` column. Many imported / older weddings carry a
+ * non-null `source` value (set by the original create-time attribution
+ * — CRM importers, the Calendly/HoneyBook adapters, hand-edits) but
+ * sat at `lead_source = NULL` because none of priorities 1-5 fired.
+ *
+ * This is intentionally LOW confidence — the legacy column conflates
+ * real first-touch (theknot.com inbound email) with last-touch
+ * (calendly tour link) with surface-level CRM (honeybook). We surface
+ * it only when the higher-priority signals miss.
+ *
+ * Returns a normalised channel key via `normalizeSource` so callers
+ * downstream see the same canonical labels (`'the_knot'`, not
+ * `'theknot'`; `'wedding_wire'`, not `'weddingwire'`). When the legacy
+ * value normalises to 'other' the priority bails so the chain falls
+ * through to the no-signal terminal — that bucket carries no real
+ * attribution information.
+ */
+async function tryPriority7WeddingsSourceFallback(
+  wedding: WeddingForDerivation,
+): Promise<DerivedLeadSource | null> {
+  const raw = wedding.source
+  if (!raw) return null
+  const trimmed = raw.trim().toLowerCase()
+  if (!trimmed) return null
+  // Skip values that carry no attribution signal — they would just
+  // re-pollute lead_source with the same useless bucket.
+  if (trimmed === 'unknown' || trimmed === 'other') return null
+  const normalised = normalizeSource(trimmed)
+  // normalizeSource never returns 'unknown' (it returns 'other' for
+  // unrecognised input). Skipping 'other' keeps the no-signal terminal
+  // from getting polluted with a vague bucket.
+  if (!normalised || normalised === 'other') return null
+  return {
+    source: normalised,
+    priority: 7,
+    confidence: 'low',
+    evidence: {
+      note: 'weddings_source_fallback',
+      legacy_source: raw,
+      legacy_source_detail: wedding.source_detail ?? null,
+      normalised,
+    },
+  }
+}
+
+/**
  * T5-Rixey-NN bug #7: web-form bodies often contain raw HTML
  * ("<strong>Where did you hear about us?</strong> The Knot"). The
  * priority-2 body-regex captures the chunk after "?" and before the
@@ -449,6 +517,12 @@ export async function deriveLeadSourceForWedding(
 
   const p5 = await tryPriority5UtmFromAttributionEvents(supabase, wedding)
   if (isAcceptableLeadSource(p5)) return p5
+
+  // Priority 7 (Bug A / T5-Rixey-SS): legacy `weddings.source` fallback.
+  // Runs after UTM and before the no-signal terminal so explicit signals
+  // always win over the legacy column. See migration 185.
+  const p7 = await tryPriority7WeddingsSourceFallback(wedding)
+  if (isAcceptableLeadSource(p7)) return p7
 
   return {
     source: null,
