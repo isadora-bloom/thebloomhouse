@@ -331,6 +331,16 @@ function EmailListItem({
               <RiskFlagChip summary={risk} />
             </span>
           )}
+          {/* real-time-verified: bug 26 audit 2026-05-03.
+              `interaction.timestamp` is `interactions.timestamp` from
+              the SELECT above, which the email pipeline writes as
+              `email.date` (Gmail's reported receive time, not import
+              wall-clock). The list is also ordered by that same column.
+              Suspicious 11h/16h/17h cluster reported by user reflects
+              real arrival times, not import-time leakage. Outbound
+              sends are the only path that uses `new Date()` for
+              `timestamp` (email-pipeline.ts:3003), which is correct
+              because the send IS happening now. */}
           <span className="text-xs text-sage-400">
             {timeAgo(interaction.timestamp)}
           </span>
@@ -944,11 +954,19 @@ function ThreadView({
 // Inline draft approval (rendered under matching email in the list)
 // ---------------------------------------------------------------------------
 
+// T5-Rixey-III bug 8: the % shown next to the AI Draft chip is the brain's
+// own confidence in the DRAFT it just generated (data-completeness for
+// inquiry-brain at lib/services/inquiry-brain.ts:587-594, KB+wedding-context
+// presence for client-brain at lib/services/client-brain.ts:407-410). It is
+// NOT the inquiry-classification confidence (that lives on
+// intelligence_extractions.metadata.confidence and surfaces on the lead
+// detail). Label the chip "Draft quality" here so coordinators don't read
+// it as "this is X% likely to be a real inquiry."
 function confidenceMeta(score: number | null) {
-  if (score === null) return { bg: 'bg-sage-50', text: 'text-sage-600', label: '?' }
-  if (score >= 90) return { bg: 'bg-emerald-50', text: 'text-emerald-700', label: `${score}%` }
-  if (score >= 75) return { bg: 'bg-amber-50', text: 'text-amber-700', label: `${score}%` }
-  return { bg: 'bg-red-50', text: 'text-red-700', label: `${score}%` }
+  if (score === null) return { bg: 'bg-sage-50', text: 'text-sage-600', label: 'Draft quality —' }
+  if (score >= 90) return { bg: 'bg-emerald-50', text: 'text-emerald-700', label: `Draft quality ${score}%` }
+  if (score >= 75) return { bg: 'bg-amber-50', text: 'text-amber-700', label: `Draft quality ${score}%` }
+  return { bg: 'bg-red-50', text: 'text-red-700', label: `Draft quality ${score}%` }
 }
 
 function brainMeta(brain: string | null) {
@@ -992,6 +1010,7 @@ function InlineDraftApproval({
           <span className="text-xs font-semibold text-amber-800">AI draft ready</span>
           <span
             className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${conf.bg} ${conf.text}`}
+            title="The brain's confidence in this DRAFT (based on how much context it had: extracted dates, guest count, KB hits, availability). Not classification confidence."
           >
             <Sparkles className="w-2.5 h-2.5" />
             {conf.label}

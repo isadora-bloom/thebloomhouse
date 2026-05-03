@@ -89,6 +89,20 @@ export function HeatHistoryPanel({ weddingId }: Props) {
   const latest = snapshots[0]
   const previous = snapshots[1]
   const delta = latest.score - previous.score
+  // T5-Rixey-III bug 9: always render the delta as `+N`, `-N`, or `±0`
+  // (never the descriptive fallback "flat"). The "since last snapshot"
+  // window matches the Recent Snapshots list below — both diff against
+  // the immediately prior lead_score_history row, NOT a fixed 7d/30d
+  // window. The score-over-time table in the expanded view uses the
+  // same comparison so the chip number lines up with the first delta
+  // in that list.
+  const deltaSign = delta > 0 ? '+' : delta < 0 ? '' : '±'
+  const deltaLabel = `${deltaSign}${delta} since last snapshot`
+  const deltaColor =
+    delta > 0 ? 'text-emerald-700' : delta < 0 ? 'text-rose-700' : 'text-sage-500'
+  const TrendIcon = delta > 0 ? TrendingUp : delta < 0 ? TrendingDown : null
+  const trendIconColor =
+    delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-rose-600' : ''
 
   return (
     <div className="bg-surface border border-border rounded-xl p-5 shadow-sm">
@@ -99,20 +113,12 @@ export function HeatHistoryPanel({ weddingId }: Props) {
         <div className="flex items-center gap-2 min-w-0">
           <Flame className="w-4 h-4 text-sage-500 shrink-0" />
           <h3 className="text-sm font-semibold text-sage-900">Heat history</h3>
-          <span className="text-xs text-sage-500 ml-2 inline-flex items-center gap-1">
-            {delta > 0 ? (
-              <>
-                <TrendingUp className="w-3 h-3 text-emerald-600" />
-                <span className="text-emerald-700">+{delta} this period</span>
-              </>
-            ) : delta < 0 ? (
-              <>
-                <TrendingDown className="w-3 h-3 text-rose-600" />
-                <span className="text-rose-700">{delta} this period</span>
-              </>
-            ) : (
-              <span>flat</span>
-            )}
+          <span
+            className="text-xs text-sage-500 ml-2 inline-flex items-center gap-1"
+            title="Change in lead score from the previous lead_score_history snapshot. Snapshots are written each recalc, not on a fixed cadence — so 'since last snapshot' can be hours or days depending on activity."
+          >
+            {TrendIcon && <TrendIcon className={`w-3 h-3 ${trendIconColor}`} />}
+            <span className={deltaColor}>{deltaLabel}</span>
           </span>
         </div>
         <ChevronRight className={`w-4 h-4 text-sage-500 transition-transform ${expanded ? 'rotate-90' : ''}`} />
