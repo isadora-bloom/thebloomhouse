@@ -544,8 +544,32 @@ interface DayCardProps {
   status: ProjectState['status']
 }
 
+/**
+ * T5-followup-DD: per-day readiness explainers. The advance gate runs
+ * different checks per day (Day-1 auto-detects sub-steps from DB state;
+ * Day-3 requires N pricing rows + 1 imported wedding); coordinators
+ * shouldn't have to read the source to know what unblocks them.
+ */
+const READINESS_EXPLAINERS: Record<number, string[] | null> = {
+  1: [
+    'Gmail OAuth — at least one gmail_connections row with status=active',
+    'AI identity — venue_ai_config has both ai_name and ai_email set',
+    'Forbidden topics — at least one venue_forbidden_topics row',
+    'Tone preferences — at least one personality slider moved off the platform default',
+    'Backfill — coordinator marks the 12-month Gmail backfill done',
+  ],
+  2: null,
+  3: [
+    '5+ manual pricing-history rows (entered via the reconstruction UI, not auto-trigger fires)',
+    '1+ wedding tagged imported_medium (CRM import has produced at least one row)',
+  ],
+  4: null,
+  5: null,
+}
+
 function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, onVoiceDnaExtract, advanceDay, busy, status }: DayCardProps) {
   const allStepsDone = day.steps.every((s) => stepCompletion.has(`day_${day.day}.${s.key}`))
+  const checks = READINESS_EXPLAINERS[day.day]
   return (
     <section className={`rounded-lg border p-4 ${isCurrent ? 'border-sage-400 bg-sage-50/40' : isComplete ? 'border-sage-200 bg-white' : 'border-sage-100 bg-white opacity-70'}`}>
       <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
@@ -569,6 +593,23 @@ function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, o
           </button>
         )}
       </div>
+      {isCurrent && checks && checks.length > 0 && (
+        <details className="mb-3 rounded border border-sage-200 bg-warm-white px-3 py-2">
+          <summary className="text-xs font-medium text-sage-700 cursor-pointer hover:text-sage-900">
+            What this checks before advancing
+          </summary>
+          <ul className="mt-2 space-y-1 text-xs text-sage-600 list-disc pl-5">
+            {checks.map((c, i) => (
+              <li key={i}>{c}</li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[11px] text-sage-500">
+            {day.day === 3
+              ? 'You can advance anyway — a confirm dialog appears if any threshold is short.'
+              : 'Sub-steps auto-detect from underlying state when possible, so green checks may appear without your clicking Mark done.'}
+          </p>
+        </details>
+      )}
       <ul className="space-y-2">
         {day.steps.map((s) => {
           const completion = stepCompletion.get(`day_${day.day}.${s.key}`)
