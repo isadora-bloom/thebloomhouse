@@ -78,6 +78,8 @@ interface VenueDataContext {
   //     fields are complementary lenses.
   toursByMonth: ToursByMonthRow[]
   marketingSpendByMonth: MarketingSpendByMonthRow[]
+  /** T5-Rixey-OO: GA4 (and future analytics-provider) channel rollups. */
+  websiteTrafficHistory: WebsiteTrafficRow[]
 }
 
 interface WeddingSummary {
@@ -260,6 +262,22 @@ interface MarketingSpendByMonthRow {
   notes: string | null
 }
 
+// T5-Rixey-OO platform finding (2026-05-02): website_traffic_history is
+// the dedicated GA4 (and future analytics-provider) channel-rollup
+// table created by migration 183. Reads here power Sage answers like
+// "what % of my traffic is paid search?".
+interface WebsiteTrafficRow {
+  period_start: string
+  period_end: string
+  channel_group: string
+  sessions: number
+  engaged_sessions: number
+  key_events: number
+  engagement_rate: number | null
+  session_key_event_rate: number | null
+  source: string
+}
+
 // ---------------------------------------------------------------------------
 // System prompt builder
 // ---------------------------------------------------------------------------
@@ -399,6 +417,9 @@ NUMBERS DISCIPLINE (ANTI-19.9-A / Playbook 19.9 #1):
  *     why a scheduled tour did not happen; lead may still book later)
  *   - lostDealReasons (last 365d, lost_deals.reason_category at tour
  *     stage — why the deal itself died; intentionally separate lens)
+ *   - websiteTrafficHistory (GA4 channel rollups from
+ *     website_traffic_history, migration 183 — venue-level, not per-lead;
+ *     powers "what % of my traffic is paid search?" answers)
  *
  * Window bumps:
  *   - weddings 30d → 365d (Sage needs > 1mo to reason about cohorts).
@@ -453,6 +474,7 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     // T5-PP additions:
     toursByMonthResult,
     marketingSpendDirectResult,
+    websiteTrafficResult,
   ] = await Promise.all([
     // Venue name + state (state used to scope external_calendar_events)
     supabase
@@ -701,6 +723,16 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
       .gte('month', oneYearAgoDate)
       .order('month', { ascending: false })
       .limit(500),
+    // Website traffic history — GA4 channel-group rollups from
+    // website_traffic_history (migration 183). Pulled venue-scoped,
+    // most-recent first. Powers Sage's "what % of my traffic is paid
+    // search?" answers. Distinct from per-lead tangential_signals.
+    supabase
+      .from('website_traffic_history')
+      .select('period_start, period_end, channel_group, sessions, engaged_sessions, key_events, engagement_rate, session_key_event_rate, source')
+      .eq('venue_id', venueId)
+      .order('period_start', { ascending: false })
+      .limit(50),
   ])
 
   // Build pipeline counts from active weddings
@@ -1071,6 +1103,34 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
       if (a.month !== b.month) return b.month.localeCompare(a.month)
       return b.amount - a.amount
     })
+  // Website traffic history — GA4 channel rollups (migration 183).
+  // Ordered DESC by period_start from the query; map directly into
+  // typed rows for the prompt. Numeric fields default to 0; rates may
+  // legitimately be null when the source didn't ship the metric.
+  type WebsiteTrafficRaw = {
+    period_start: string | null
+    period_end: string | null
+    channel_group: string | null
+    sessions: number | null
+    engaged_sessions: number | null
+    key_events: number | null
+    engagement_rate: number | null
+    session_key_event_rate: number | null
+    source: string | null
+  }
+  const websiteTrafficHistory: WebsiteTrafficRow[] = (
+    (websiteTrafficResult.data ?? []) as WebsiteTrafficRaw[]
+  ).map((r) => ({
+    period_start: r.period_start ?? '',
+    period_end: r.period_end ?? '',
+    channel_group: r.channel_group ?? '',
+    sessions: typeof r.sessions === 'number' ? r.sessions : 0,
+    engaged_sessions: typeof r.engaged_sessions === 'number' ? r.engaged_sessions : 0,
+    key_events: typeof r.key_events === 'number' ? r.key_events : 0,
+    engagement_rate: typeof r.engagement_rate === 'number' ? r.engagement_rate : null,
+    session_key_event_rate: typeof r.session_key_event_rate === 'number' ? r.session_key_event_rate : null,
+    source: r.source ?? 'ga4',
+  }))
 
   return {
     venueName: (venueResult.data?.name as string) ?? 'Unknown Venue',
@@ -1099,6 +1159,7 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     // T5-PP new fields
     toursByMonth,
     marketingSpendByMonth,
+    websiteTrafficHistory,
   }
 }
 
@@ -1417,6 +1478,45 @@ function formatDataContext(data: VenueDataContext): string {
       `MARKETING SPEND BY MONTH (last 12 months, direct from ` +
       `marketing_spend — always fresh, independent of the weekly ` +
       `source_attribution cron):\n${lines}`,
+    )
+  }
+
+  // Website traffic history — GA4 channel-group rollups (T5-Rixey-OO
+  // platform finding, migration 183). Group by period so Sage can
+  // answer "what % of my traffic is paid search?" and similar
+  // channel-mix questions. Per-period channel-share is computed in
+  // JS to keep the prompt human-readable.
+  if (data.websiteTrafficHistory.length > 0) {
+    const byPeriod = new Map<
+      string,
+      { channel_group: string; sessions: number; key_events: number }[]
+    >()
+    for (const r of data.websiteTrafficHistory) {
+      const key = `${r.period_start} → ${r.period_end} (${r.source})`
+      if (!byPeriod.has(key)) byPeriod.set(key, [])
+      byPeriod.get(key)!.push({
+        channel_group: r.channel_group,
+        sessions: r.sessions,
+        key_events: r.key_events,
+      })
+    }
+    const periodLines: string[] = []
+    for (const [period, channels] of byPeriod.entries()) {
+      const totalSessions = channels.reduce((s, c) => s + c.sessions, 0)
+      const channelLines = channels
+        .sort((a, b) => b.sessions - a.sessions)
+        .map((c) => {
+          const pct = totalSessions > 0
+            ? ((c.sessions / totalSessions) * 100).toFixed(1)
+            : '0.0'
+          return `    - ${c.channel_group}: ${c.sessions} sessions (${pct}%), ${c.key_events} key events`
+        })
+        .join('\n')
+      periodLines.push(`  ${period} — total ${totalSessions} sessions:\n${channelLines}`)
+    }
+    sections.push(
+      `WEBSITE TRAFFIC (analytics-provider channel rollups, ` +
+      `latest periods):\n${periodLines.join('\n')}`,
     )
   }
 
