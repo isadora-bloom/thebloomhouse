@@ -25,10 +25,10 @@ don't drift the same way.
 | table | writer_class | writer_path | read_freshness_target | observability |
 |---|---|---|---|---|
 | `weddings` | live + import | `email-pipeline.ts` (live), `data-import.ts` / `brain-dump-imports.ts` (bulk), `portal/weddings/page.tsx` (manual) | real-time | `cron_runs.email_poll`, structured logs `wedding_created` |
-| `interactions` | live | `email-pipeline.ts` (inbound + outbound), `agent/send` + `agent/reply` routes | real-time | structured logs |
+| `interactions` | live | `email-pipeline.ts` (inbound + outbound), `agent/send` + `agent/reply` routes | real-time; **retention NEVER** — coordinator + couple email history is the forensic record | structured logs |
 | `drafts` | live + cron | `email-pipeline.ts` + `post-tour-brief.ts` (cron-driven via `tour_brief`) | real-time | `cron_runs` (tour_brief side-effect of `phase_b_sweep`) |
 | `engagement_events` | live + import | `heat-mapping.ts` after-action triggers, `storefront-analytics-import.ts`, `brain-dump-imports.ts` | real-time | logs |
-| `lead_score_history` | live | `heat-mapping.ts` (every recompute) + `recompute_pending_temporal` cron | real-time | `cron_runs.recompute_pending_temporal` (every 5 min) |
+| `lead_score_history` | live | `heat-mapping.ts` (every recompute) + `recompute_pending_temporal` cron | real-time; **retention 365d** via `prune_telemetry` cron (drives heat-trajectory bucketing per AA — keep a year) | `cron_runs.recompute_pending_temporal` (every 5 min); `cron_runs.prune_telemetry` |
 | `attribution_events` | live + cron | `candidate-resolver.ts` (live), `phase_b_sweep` cron, `intel/candidates/link` route | bounded by cron 04:45 | `cron_runs.phase_b_sweep` |
 | `candidate_identities` | live + cron | `email-pipeline.ts` + `candidate-clusterer.ts`, `phase_b_sweep` cron | bounded by cron 04:45 | `cron_runs.phase_b_sweep` |
 | `tangential_signals` | import + live | `platform-signals-import.ts`, `tangential-signals-import.ts`, `identity-enqueue.ts` | per-import | logs |
@@ -47,9 +47,9 @@ don't drift the same way.
 | `wedding_journey_narratives` | cron | written by `journey-narrative.ts` triggered by intelligence pipelines | varies | logs |
 | `tour_brief_*` (on `tours`) | cron | `post-tour-brief.ts` triggered after tour completes | within 24h of tour | logs |
 | `re_engagement_actions` | live + cron | `intel/reengagement/draft` route + `re-engagement.ts` sweeper called by `re_engagement_attribution` cron | daily 05:30 UTC | `cron_runs.re_engagement_attribution` |
-| `api_costs` | live | `lib/ai/client.ts:184`, `lib/ai/cost-tracker.ts`, `bar-recipe-extract.ts` | every callAI invocation | self — its own telemetry |
-| `cron_runs` | cron-meta | `lib/observability/metrics.ts:trackCronRun` (wraps every job) | every cron tick | self |
-| `metered_events` | live | `lib/observability/metrics.ts` counter ingest | real-time | self |
+| `api_costs` | live | `lib/ai/client.ts:184`, `lib/ai/cost-tracker.ts`, `bar-recipe-extract.ts` | every callAI invocation; **retention 90d** via `prune_telemetry` cron (cost telemetry, supersedes after billing cycle) | self — its own telemetry; `cron_runs.prune_telemetry` |
+| `cron_runs` | cron-meta | `lib/observability/metrics.ts:trackCronRun` (wraps every job) | every cron tick; **retention 30d** via `prune_telemetry` cron (operational telemetry) | self; `cron_runs.prune_telemetry` |
+| `metered_events` | live | `lib/observability/metrics.ts` counter ingest | real-time; **retention 90d** via `prune_telemetry` cron | self; `cron_runs.prune_telemetry` |
 | `paused_period_skipped` | live + cron | `cost-ceiling.ts:286` insert + `replay-paused-skipped` cron expire | real-time + daily 00:05 UTC | `cron_runs.replay_paused_skipped` |
 | `ai_briefings` | cron | `briefings.ts` from `weekly_briefing` (Mon 08:00 UTC) + `monthly_briefing` (1st 08:00 UTC) | weekly/monthly | `cron_runs.{weekly,monthly}_briefing` |
 | `anomaly_alerts` | cron | `anomaly-detection.ts:832` from `anomaly_detection` cron | daily 04:00 UTC | `cron_runs.anomaly_detection` |
@@ -60,7 +60,7 @@ don't drift the same way.
 | `event_feedback` | live | `portal/weddings/[id]/page.tsx` coordinator submit | on submit | nudged by `post_event_feedback_check` (currently un-scheduled) |
 | `insight_outcomes` | cron | `insight-tracking.ts` from `outcome_measurement` (currently un-scheduled) | varies | n/a |
 | `voice_preferences` | coordinator-config + onboarding | `settings/voice/page.tsx`, `agent/learning/page.tsx`, Day-4 onboarding wizard | on save | none |
-| `phrase_usage` | live | `lib/ai/phrase-selector.ts:125` per draft | real-time | logs |
+| `phrase_usage` | live | `lib/ai/phrase-selector.ts:125` per draft + `voice_dna_refresh` cron | real-time; **retention NEVER** — drives voice DNA refresh (coordinator-derived signal) | logs |
 | `consultant_metrics` | live | `consultant-tracking.ts` per draft accept/reject | real-time | logs |
 | `review_language` | cron + import | `transcript_voice_mining` cron, `data-import.ts` (review imports) | weekly Tue 06:00 UTC | `cron_runs.transcript_voice_mining` |
 | `market_intelligence` | cron | `census-ingest.ts:172` from `census_refresh` | monthly 1st 03:00 UTC | `cron_runs.census_refresh` |
@@ -87,6 +87,7 @@ don't drift the same way.
 | `0 * * * *` | `follow_up_sequences` | `drafts`, `interactions`, `wedding_sequences` | enqueue follow-up sequence steps that came due this hour. |
 | `5 0 * * *` | `cost_ceiling_reset` | `venue_config.autonomous_paused` | clear yesterday's pauses if spend is back under ceiling. |
 | `5 0 * * *` | `replay_paused_skipped` | `paused_period_skipped`, `admin_notifications` | expire stale skipped rows + emit a per-venue recap notification when pause clears. |
+| `0 2 * * *` | `prune_telemetry` | `api_costs` (90d), `cron_runs` (30d), `metered_events` (90d), `lead_score_history` (365d) | nightly retention prune for telemetry tables (Pattern I closure / #96). `phrase_usage` and `interactions` are coordinator-derived signals / forensic record and are NEVER pruned. Coordinator-data tables (weddings, voice_preferences, marketing_spend, pricing_history, cultural_moments, etc.) are never touched. Runs at 02:00 UTC, before the 03:00+ morning crons fire. |
 | `0 2 * * 1` | `attribution_refresh` | `source_attribution` | weekly source × outcome ROI rollup from `weddings` + `marketing_spend`. |
 | `0 3 * * 1` | `trends_refresh` | `search_trends` | weekly SerpAPI google-trends pull per venue metro × wedding-term. |
 | `0 3 * * *` | `fred_daily_refresh` | `fred_indicators` | daily FRED macro indicators (CPI, mortgage, S&P 500, unemployment, sentiment). Sanity-asserts rows landed. |
@@ -192,6 +193,27 @@ ORDER BY job_name;
 
 If any cron-driven table has stale `max(...)` > expected cadence, treat
 it as P1 like Stream C found for FRED.
+
+## Telemetry retention (T5-followup-EE / #96)
+
+The `prune_telemetry` cron (02:00 UTC daily) trims old rows from
+telemetry tables. This is a Pattern I closure — telemetry tables had
+no retention policy and were growing unbounded.
+
+| table | TTL | rationale |
+|---|---|---|
+| `api_costs` | 90 days | cost telemetry, supersedes after billing cycle |
+| `cron_runs` | 30 days | operational telemetry; older runs are noise |
+| `metered_events` | 90 days | counter / histogram store; long tails not load-bearing |
+| `lead_score_history` | 365 days | drives heat-trajectory bucketing per AA — keep a year |
+| `phrase_usage` | NEVER | drives voice DNA refresh — coordinator-derived signals |
+| `interactions` | NEVER | coordinator + couple email history is the forensic record |
+
+Coordinator-data tables (`weddings`, `voice_preferences`,
+`marketing_spend`, `pricing_history`, `cultural_moments`, etc.) are
+NEVER pruned by this job — telemetry only. If a future table needs
+retention, add it to `runPruneTelemetry` in `src/app/api/cron/route.ts`
+and add a row above with TTL + rationale.
 
 ## Coverage gap checklist (for future migrations)
 

@@ -73,6 +73,22 @@ interface VoiceDnaResponse {
   marketingByTheme: PhrasesByTheme
   editPairs: EditPair[]
   timeline: TimelineBucket[]
+  /** T5-followup-EE (#94). Visibility for the monthly voice-DNA refresh
+   *  cron added by Stream X (vercel.json: `0 6 1 * *`). Coordinators
+   *  need to see when the refresh last ran, what it learned, and when
+   *  it'll fire next — otherwise the cron is invisible learning. */
+  refresh: {
+    /** voice_dna_last_refresh_at on venue_ai_config. NULL = never run. */
+    lastRefreshedAt: string | null
+    /** Whole days since the last refresh. NULL when lastRefreshedAt is NULL. */
+    daysSinceLastRefresh: number | null
+    /** Count of phrase_usage rows tagged 'voice_dna_refresh' since the
+     *  last refresh's previous tick. Approximates "new phrases discovered
+     *  in last refresh." NULL when never run. */
+    newPhrasesLastRefresh: number | null
+    /** ISO date for the next scheduled refresh — 1st of next UTC month. */
+    nextRefreshAt: string
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +219,7 @@ export async function GET(req: NextRequest) {
     service.from('venues').select('id, name').eq('id', venueId).maybeSingle(),
     service
       .from('venue_ai_config')
-      .select('ai_name, warmth_level, formality_level, playfulness_level, brevity_level, enthusiasm_level')
+      .select('ai_name, warmth_level, formality_level, playfulness_level, brevity_level, enthusiasm_level, voice_dna_last_refresh_at')
       .eq('venue_id', venueId)
       .maybeSingle(),
     service
@@ -418,6 +434,46 @@ export async function GET(req: NextRequest) {
     dimensions,
   })
 
+  // T5-followup-EE (#94). Voice-DNA refresh visibility. Stream X added the
+  // monthly cron + the column; this surfaces it. We compute:
+  //  - lastRefreshedAt: raw timestamp (NULL on un-refreshed venues).
+  //  - daysSinceLastRefresh: whole-day delta for the UI's "X days ago" copy.
+  //  - newPhrasesLastRefresh: count of phrase_usage rows tagged
+  //    'voice_dna_refresh' that landed AFTER lastRefreshedAt - 1 day.
+  //    Approximates "phrases discovered in the most recent refresh tick."
+  //    Bounded by a single window so re-renders stay cheap.
+  //  - nextRefreshAt: 1st of next UTC month at 06:00 UTC (matches
+  //    vercel.json cron `0 6 1 * *`).
+  const lastRefreshedAt = (configRow?.voice_dna_last_refresh_at as string | null | undefined) ?? null
+  let daysSinceLastRefresh: number | null = null
+  let newPhrasesLastRefresh: number | null = null
+  if (lastRefreshedAt) {
+    const lastMs = new Date(lastRefreshedAt).getTime()
+    if (!Number.isNaN(lastMs)) {
+      daysSinceLastRefresh = Math.max(0, Math.floor((Date.now() - lastMs) / (24 * 60 * 60 * 1000)))
+      // Window: anything tagged 'voice_dna_refresh' and inserted in a
+      // 24h band ending at lastRefreshedAt is "this refresh's batch."
+      // The cron writes one row per top phrase per tick; counting rows
+      // is the cheapest signal that survives without a new column.
+      const windowStart = new Date(lastMs - 24 * 60 * 60 * 1000).toISOString()
+      const { count: refreshPhraseCount } = await service
+        .from('phrase_usage')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .eq('phrase_category', 'voice_dna_refresh')
+        .gte('used_at', windowStart)
+        .lte('used_at', lastRefreshedAt)
+      newPhrasesLastRefresh = refreshPhraseCount ?? 0
+    }
+  }
+  const nowDate = new Date()
+  const nextRefreshAt = new Date(Date.UTC(
+    nowDate.getUTCFullYear(),
+    nowDate.getUTCMonth() + 1,
+    1,
+    6, 0, 0, 0,
+  )).toISOString()
+
   const response: VoiceDnaResponse = {
     aiName,
     venueName,
@@ -431,6 +487,12 @@ export async function GET(req: NextRequest) {
     marketingByTheme,
     editPairs,
     timeline,
+    refresh: {
+      lastRefreshedAt,
+      daysSinceLastRefresh,
+      newPhrasesLastRefresh,
+      nextRefreshAt,
+    },
   }
 
   return NextResponse.json(response)

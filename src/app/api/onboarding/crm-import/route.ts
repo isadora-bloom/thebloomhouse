@@ -48,6 +48,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `unknown adapter: ${body.adapter}` }, { status: 400 })
   }
 
+  // T5-followup-EE (#93). Scaffold-only adapters (`ready: false`) used to
+  // fall through to parse() and surface their "not yet implemented" string
+  // as a generic 400 — coordinators read it as a parse error and tried
+  // re-uploading. Short-circuit BEFORE parse so the rejection is unambiguous.
+  // Stream FF is promoting honeybook to a real implementation; once that
+  // lands its `ready` flag flips to true and this gate becomes a no-op for it.
+  if (adapter.ready === false) {
+    return NextResponse.json(
+      {
+        error: 'adapter_not_implemented',
+        adapter: adapter.name,
+        message: 'Use generic-csv adapter or contact support.',
+      },
+      { status: 501 }
+    )
+  }
+
   const parsed = await adapter.parse({
     csvText: body.csv,
     jsonText: body.json,

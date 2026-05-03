@@ -63,6 +63,13 @@ interface VoiceDnaData {
   marketingByTheme: Record<string, PhraseRow[]>
   editPairs: Array<{ banned: string; approved: string }>
   timeline: Array<{ week: string; trainings: number; preferences: number }>
+  /** T5-followup-EE (#94): Stream X's monthly refresh visibility. */
+  refresh: {
+    lastRefreshedAt: string | null
+    daysSinceLastRefresh: number | null
+    newPhrasesLastRefresh: number | null
+    nextRefreshAt: string
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -455,6 +462,15 @@ export default function VoiceDnaPage() {
       </section>
 
       {/* =============================================================== */}
+      {/* Monthly refresh state (T5-followup-EE / #94)                    */}
+      {/* =============================================================== */}
+      {/* Stream X added the cron + voice_dna_last_refresh_at column. The
+          coordinator surface had no signal that the refresh was happening
+          (or hadn't yet) — so we surface last-run time, what it learned,
+          and the next scheduled fire so it stops being invisible learning. */}
+      <RefreshStateCard refresh={data.refresh} aiName={aiName} />
+
+      {/* =============================================================== */}
       {/* Tone dimensions                                                  */}
       {/* =============================================================== */}
       <section>
@@ -704,6 +720,84 @@ export default function VoiceDnaPage() {
       {/* =============================================================== */}
       <LearningTimeline timeline={data.timeline} />
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Refresh state card (T5-followup-EE / #94)
+// ---------------------------------------------------------------------------
+// Visibility for Stream X's monthly voice_dna_refresh cron. Coordinators
+// see when the refresh last ran, how many phrases the most recent refresh
+// surfaced, and when the next one fires. When voice_dna_last_refresh_at is
+// NULL we render the "first refresh after seed" copy.
+
+function formatRefreshDate(iso: string): string {
+  try {
+    const d = new Date(iso)
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  } catch {
+    return iso.slice(0, 10)
+  }
+}
+
+function RefreshStateCard({
+  refresh,
+  aiName,
+}: {
+  refresh: VoiceDnaData['refresh']
+  aiName: string
+}) {
+  const hasRun = refresh.lastRefreshedAt != null
+  const daysAgo = refresh.daysSinceLastRefresh ?? 0
+  const newPhrases = refresh.newPhrasesLastRefresh ?? 0
+  const nextLabel = formatRefreshDate(refresh.nextRefreshAt)
+
+  return (
+    <section className="bg-surface border border-border rounded-xl p-5 shadow-sm">
+      <div className="mb-3 flex items-center gap-2">
+        <GraduationCap className="w-4 h-4 text-sage-500" />
+        <h2 className="font-heading text-base font-semibold text-sage-900">
+          Monthly voice refresh
+        </h2>
+      </div>
+      {hasRun ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="border border-sage-100 rounded-lg p-3 bg-warm-white">
+            <p className="text-[10px] text-sage-500 uppercase tracking-wide">Last refreshed</p>
+            <p className="text-lg font-semibold text-sage-900 tabular-nums">
+              {daysAgo === 0 ? 'Today' : `${daysAgo} day${daysAgo === 1 ? '' : 's'} ago`}
+            </p>
+            <p className="text-[10px] text-sage-500 mt-0.5">
+              {refresh.lastRefreshedAt ? formatRefreshDate(refresh.lastRefreshedAt) : ''}
+            </p>
+          </div>
+          <div className="border border-sage-100 rounded-lg p-3 bg-warm-white">
+            <p className="text-[10px] text-sage-500 uppercase tracking-wide">New phrases learned</p>
+            <p className="text-lg font-semibold text-sage-900 tabular-nums">{newPhrases}</p>
+            <p className="text-[10px] text-sage-500 mt-0.5">
+              From the most recent refresh
+            </p>
+          </div>
+          <div className="border border-sage-100 rounded-lg p-3 bg-warm-white">
+            <p className="text-[10px] text-sage-500 uppercase tracking-wide">Next refresh</p>
+            <p className="text-lg font-semibold text-sage-900 tabular-nums">{nextLabel}</p>
+            <p className="text-[10px] text-sage-500 mt-0.5">
+              1st of next month
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-warm-white border border-sage-100 rounded-lg p-4">
+          <p className="text-sm text-sage-700">
+            Voice DNA refresh hasn&apos;t run yet — first refresh will land{' '}
+            <span className="font-semibold">{nextLabel}</span> (1st of next month after seed).
+          </p>
+          <p className="text-xs text-sage-500 mt-1">
+            {aiName} re-learns from your latest outbound emails monthly so the voice stays current as your team and style evolve.
+          </p>
+        </div>
+      )}
+    </section>
   )
 }
 

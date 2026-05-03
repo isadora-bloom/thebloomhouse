@@ -116,6 +116,17 @@ const VALID_JOBS = [
   // cron is a hygiene/audit layer — keeps the table small and stops
   // the audit page from listing zombies. seasoned MED 16.
   'prune_expired_pulse_snoozes',
+  // T5-followup-EE (2026-05-02). Nightly telemetry retention prune
+  // (#96 / Pattern I regression). 4 telemetry tables had no retention
+  // policy — `api_costs` (90d), `cron_runs` (30d), `metered_events`
+  // (90d), `lead_score_history` (365d). `phrase_usage` and
+  // `interactions` are coordinator-derived signals / forensic record
+  // and are NEVER pruned. Coordinator-data tables (weddings,
+  // voice_preferences, marketing_spend, pricing_history,
+  // cultural_moments) are NEVER pruned by this job — telemetry only.
+  // Runs at 02:00 UTC, before the 03:00+ morning crons fire so the
+  // pre-burst telemetry is already trimmed.
+  'prune_telemetry',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -363,6 +374,15 @@ async function runJob(job: JobName): Promise<unknown> {
       // is hygiene only — keeps the table small and stops the audit
       // page (/settings/pulse-snoozes) from listing zombies. Idempotent.
       return runPrunePulseSnoozes()
+
+    case 'prune_telemetry':
+      // T5-followup-EE (2026-05-02). Nightly retention prune for the 4
+      // telemetry tables that had no policy: api_costs (90d), cron_runs
+      // (30d), metered_events (90d), lead_score_history (365d).
+      // `phrase_usage` and `interactions` are coordinator-derived
+      // signals / forensic record and are NEVER pruned. Logs counts per
+      // table so the cron telemetry shows what was trimmed.
+      return runPruneTelemetry()
   }
 }
 
@@ -403,6 +423,116 @@ async function runPrunePulseSnoozes(): Promise<{
   return {
     expired_snoozes_deleted: (snoozeDel ?? []).length,
     expired_dismisses_deleted: (dismissDel ?? []).length,
+  }
+}
+
+/**
+ * T5-followup-EE (2026-05-02). Nightly telemetry retention prune (#96 /
+ * Pattern I regression).
+ *
+ * Per-table TTLs (telemetry only — coordinator data is NEVER pruned here):
+ *   - api_costs:          90 days  (cost telemetry, supersedes after billing cycle)
+ *   - cron_runs:          30 days  (operational telemetry)
+ *   - metered_events:     90 days  (counter telemetry)
+ *   - lead_score_history: 365 days (drives heat-trajectory bucketing per AA — keep a year)
+ *
+ * Explicitly NOT pruned (these are coordinator-derived signals or forensic record):
+ *   - phrase_usage  — feeds voice DNA refresh; deletion would erase voice signal
+ *   - interactions  — coordinator + couple email history is the forensic record
+ *
+ * Each prune runs independently; failures on one table don't block the others.
+ * Idempotent — re-running deletes the rows that have aged in since the prior tick.
+ *
+ * Note on cron_runs: this handler itself writes to cron_runs via trackCronRun,
+ * so a successful run leaves a fresh entry that survives the next prune (because
+ * it's < 30 days old). Self-healing audit trail.
+ */
+async function runPruneTelemetry(): Promise<{
+  api_costs_deleted: number
+  cron_runs_deleted: number
+  metered_events_deleted: number
+  lead_score_history_deleted: number
+  errors: string[]
+}> {
+  const supabase = createServiceClient()
+  const now = Date.now()
+  const errors: string[] = []
+
+  const ttl = (days: number) => new Date(now - days * 24 * 60 * 60 * 1000).toISOString()
+  const apiCostsCutoff = ttl(90)
+  const cronRunsCutoff = ttl(30)
+  const meteredEventsCutoff = ttl(90)
+  const leadScoreHistoryCutoff = ttl(365)
+
+  // api_costs — created_at predates the row.
+  let apiCostsDeleted = 0
+  try {
+    const { data, error } = await supabase
+      .from('api_costs')
+      .delete()
+      .lt('created_at', apiCostsCutoff)
+      .select('id')
+    if (error) errors.push(`api_costs: ${error.message}`)
+    apiCostsDeleted = (data ?? []).length
+  } catch (err) {
+    errors.push(`api_costs: ${err instanceof Error ? err.message : 'unknown'}`)
+  }
+
+  // cron_runs — started_at is the canonical timestamp (every row has one).
+  let cronRunsDeleted = 0
+  try {
+    const { data, error } = await supabase
+      .from('cron_runs')
+      .delete()
+      .lt('started_at', cronRunsCutoff)
+      .select('id')
+    if (error) errors.push(`cron_runs: ${error.message}`)
+    cronRunsDeleted = (data ?? []).length
+  } catch (err) {
+    errors.push(`cron_runs: ${err instanceof Error ? err.message : 'unknown'}`)
+  }
+
+  // metered_events — observed_at on the counter row (per migration 151).
+  let meteredEventsDeleted = 0
+  try {
+    const { data, error } = await supabase
+      .from('metered_events')
+      .delete()
+      .lt('observed_at', meteredEventsCutoff)
+      .select('id')
+    if (error) errors.push(`metered_events: ${error.message}`)
+    meteredEventsDeleted = (data ?? []).length
+  } catch (err) {
+    errors.push(`metered_events: ${err instanceof Error ? err.message : 'unknown'}`)
+  }
+
+  // lead_score_history — calculated_at when the heat-mapping service stamped it
+  // (per migration 002 schema).
+  let leadScoreHistoryDeleted = 0
+  try {
+    const { data, error } = await supabase
+      .from('lead_score_history')
+      .delete()
+      .lt('calculated_at', leadScoreHistoryCutoff)
+      .select('id')
+    if (error) errors.push(`lead_score_history: ${error.message}`)
+    leadScoreHistoryDeleted = (data ?? []).length
+  } catch (err) {
+    errors.push(`lead_score_history: ${err instanceof Error ? err.message : 'unknown'}`)
+  }
+
+  console.log(
+    `[prune_telemetry] api_costs=${apiCostsDeleted} cron_runs=${cronRunsDeleted} ` +
+    `metered_events=${meteredEventsDeleted} lead_score_history=${leadScoreHistoryDeleted}` +
+    (errors.length > 0 ? ` errors=${errors.length}` : ''),
+  )
+
+  return {
+    api_costs_deleted: apiCostsDeleted,
+    cron_runs_deleted: cronRunsDeleted,
+    metered_events_deleted: meteredEventsDeleted,
+    lead_score_history_deleted: leadScoreHistoryDeleted,
+    errors,
   }
 }
 

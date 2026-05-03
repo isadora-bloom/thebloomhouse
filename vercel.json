@@ -135,6 +135,10 @@
     {
       "path": "/api/cron?job=prune_expired_pulse_snoozes",
       "schedule": "15 0 * * *"
+    },
+    {
+      "path": "/api/cron?job=prune_telemetry",
+      "schedule": "0 2 * * *"
     }
   ]
 }
