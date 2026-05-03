@@ -1106,32 +1106,49 @@ export async function refreshVoiceDnaIncremental(
 
   const sampleIdsRef = `interactions:${samples.slice(0, 3).map((s) => s.id).join(',')}+${Math.max(samples.length - 6, 0)}_more+${samples.slice(-3).map((s) => s.id).join(',')}`.slice(0, 250)
 
-  let writeResult = { rowsAdded: 0, rowsUpdated: 0, newPhrasesAdded: 0 }
+  // #87 (T5-followup-CC): pointer ratchet bug. Pre-fix the pointer was
+  // stamped UNCONDITIONALLY after persist — even when persist threw and
+  // we caught it, voice_dna_last_refresh_at advanced. The LLM samples
+  // were billed but never written, and the next month's run skipped
+  // them because sinceIso had already moved past their window. Fix:
+  // stamp the pointer ONLY inside the try block, after persist returns
+  // a value. On thrown error: log + leave the pointer where it was so
+  // the next tick re-processes the same window.
+  let writeResult: { rowsAdded: number; rowsUpdated: number; newPhrasesAdded: number } | null = null
   try {
     writeResult = await persistVoiceAnchorsIncremental(supabase, venueId, agg, sampleIdsRef)
+    // Advance the refresh pointer ONLY on persist success — protects
+    // the ratchet from billing-without-persistence.
+    await supabase
+      .from('venue_ai_config')
+      .update({ voice_dna_last_refresh_at: new Date().toISOString() })
+      .eq('venue_id', venueId)
   } catch (err) {
     log.error('voice_dna_refresh.persist_failed', {
       event_type: 'voice_dna_refresh',
       outcome: 'fail',
       data: { error: redactError(err) },
     })
+    return {
+      ok: false,
+      reason: 'extraction_failed',
+      sampledCount: samples.length,
+      correlationId,
+    }
   }
 
-  // Advance the refresh pointer.
-  await supabase
-    .from('venue_ai_config')
-    .update({ voice_dna_last_refresh_at: new Date().toISOString() })
-    .eq('venue_id', venueId)
-
+  // writeResult is guaranteed non-null here — the catch above returns
+  // early on failure. Type-narrow for the compiler.
+  const persisted = writeResult
   log.info('voice_dna_refresh.complete', {
     event_type: 'voice_dna_refresh',
     outcome: 'ok',
     latency_ms: Date.now() - started,
     data: {
       sampled_count: samples.length,
-      rows_added: writeResult.rowsAdded,
-      rows_updated: writeResult.rowsUpdated,
-      new_phrases_added: writeResult.newPhrasesAdded,
+      rows_added: persisted.rowsAdded,
+      rows_updated: persisted.rowsUpdated,
+      new_phrases_added: persisted.newPhrasesAdded,
       successful_batches: successfulBatches,
       batch_count: batches.length,
       since: sinceIso,
@@ -1140,10 +1157,10 @@ export async function refreshVoiceDnaIncremental(
 
   return {
     ok: true,
-    rowsAdded: writeResult.rowsAdded,
-    rowsUpdated: writeResult.rowsUpdated,
+    rowsAdded: persisted.rowsAdded,
+    rowsUpdated: persisted.rowsUpdated,
     samplesProcessed: samples.length,
-    newPhrasesAdded: writeResult.newPhrasesAdded,
+    newPhrasesAdded: persisted.newPhrasesAdded,
     correlationId,
   }
 }
