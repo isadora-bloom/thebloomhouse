@@ -67,6 +67,10 @@ function getCoupleLabel(wedding: SageQueueItem['wedding']): string {
   return names.map((p) => p.first_name).join(' & ')
 }
 
+// T5-Rixey-III bug 8: this surface lists ESCALATED Sage answers — the % is
+// Sage's own confidence in its drafted answer (low confidence is the
+// reason it landed in the queue). Distinct from "Draft quality" on the
+// agent Drafts page (different brain, different signal).
 function confidenceConfig(score: number): {
   label: string
   className: string
@@ -74,12 +78,12 @@ function confidenceConfig(score: number): {
   // Scores are stored as integers 0-100
   if (score >= 50) {
     return {
-      label: `${score}% — needs confirmation`,
+      label: `Answer confidence ${score}% — needs confirmation`,
       className: 'bg-amber-50 text-amber-700 border border-amber-200',
     }
   }
   return {
-    label: `${score}% — low confidence`,
+    label: `Answer confidence ${score}% — low`,
     className: 'bg-red-50 text-red-700 border border-red-200',
   }
 }

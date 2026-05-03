@@ -61,12 +61,17 @@ function timeAgo(dateStr: string): string {
   return `${days}d ago`
 }
 
+// T5-Rixey-III bug 8: this surface lists pending DRAFTS, so the % is the
+// brain's draft-quality score (data-completeness from inquiry-brain or
+// KB+wedding-context presence from client-brain). Not classification
+// confidence. Label as "Draft quality" so it doesn't read as "X% likely
+// to be a real inquiry."
 function confidenceColor(score: number | null): {
   bg: string
   text: string
   label: string
 } {
-  if (score === null) return { bg: 'bg-sage-50', text: 'text-sage-600', label: '?' }
+  if (score === null) return { bg: 'bg-sage-50', text: 'text-sage-600', label: '—' }
   if (score >= 90) return { bg: 'bg-emerald-50', text: 'text-emerald-700', label: `${score}%` }
   if (score >= 75) return { bg: 'bg-amber-50', text: 'text-amber-700', label: `${score}%` }
   return { bg: 'bg-red-50', text: 'text-red-700', label: `${score}%` }
@@ -392,12 +397,17 @@ function DraftCard({
 
       {/* Badges */}
       <div className="flex items-center gap-2 flex-wrap mb-4">
-        {/* Confidence */}
+        {/* Draft quality (T5-Rixey-III bug 8 — was labelled "X% confidence",
+            ambiguous: read as "Sage is X% sure this is a real inquiry."
+            The score is actually the brain's confidence in the DRAFT it
+            produced, derived from data-completeness for inquiries and
+            KB/wedding context for client replies. Re-labelled here. */}
         <span
           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${conf.bg} ${conf.text}`}
+          title="The brain's confidence in this DRAFT (based on how much context it had: extracted dates, guest count, KB hits, availability). Not classification confidence."
         >
           <Sparkles className="w-3 h-3" />
-          {conf.label} confidence
+          Draft quality {conf.label}
         </span>
         {/* Brain */}
         <span

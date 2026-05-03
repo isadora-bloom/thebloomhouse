@@ -508,8 +508,11 @@ function AIInsightsPanel({ extractions }: { extractions: ExtractionRow[] }) {
           {urgency.label.replace('urgency', 'email urgency')}
         </span>
         {typeof latest.metadata?.confidence === 'number' && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-sage-100 text-sage-700">
-            {latest.metadata.confidence}% confident
+          <span
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-sage-100 text-sage-700"
+            title="How confident the inquiry classifier was that this email is a real inquiry vs reply, vendor pitch, or noise. Stored on intelligence_extractions.metadata.confidence. Distinct from Draft quality on the Drafts page."
+          >
+            Inquiry classification: {latest.metadata.confidence}%
           </span>
         )}
         {latest.metadata?.classification && (
