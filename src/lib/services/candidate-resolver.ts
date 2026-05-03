@@ -641,6 +641,11 @@ async function writeAttributionEvents(args: {
         is_first_touch: false,
         bucket,
         conflict_with_legacy_source: bucket === 'attribution' ? conflict_flag : null,
+        // T5-Rixey-BBB: attribution_events anchor source-class
+        // discovery touches (or post-discovery re-engagement on the
+        // same acquisition platform).
+        // signal-class-justified: attribution_events represent source-class signals
+        signal_class: 'source' as const,
       }
     })
 

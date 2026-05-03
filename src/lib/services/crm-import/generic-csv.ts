@@ -242,6 +242,15 @@ export const genericCsvAdapter: CrmAdapter = {
   parse: parseGenericCsv,
   preview: previewGenericCsv,
   async commit(args): Promise<CommitResult> {
-    return commitNormalisedRows({ ...args, crmSource: 'generic_csv' })
+    // T5-Rixey-BBB: generic-csv adapter has no idea what kind of
+    // signal each row represents — coordinator-supplied column
+    // mapping describes shape, not class. Default to 'unclassified';
+    // the cluster-compute will use other signals (from-domain,
+    // hear_source, etc.) to credit attribution.
+    return commitNormalisedRows({
+      ...args,
+      crmSource: 'generic_csv',
+      defaultInteractionSignalClass: 'unclassified',
+    })
   },
 }

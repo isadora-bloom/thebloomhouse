@@ -226,6 +226,9 @@ export async function importLeads(args: {
         // before persisting so structured downstream readers (lead-
         // source derivation, AI grounding) never see raw tags.
         const cleanNotes = htmlToText(r.notes)
+        // T5-Rixey-BBB: brain-dump CSV historical notes carry no
+        // class signal — they're free-text the coordinator pasted in.
+        // signal-class-justified: brain-dump CSV historical notes have no class
         await supabase.from('interactions').insert({
           venue_id: venueId,
           wedding_id: wedding.id,
@@ -237,6 +240,7 @@ export async function importLeads(args: {
           timestamp: `${inquiryDate.iso}T00:00:00Z`,
           from_email: email1,
           from_name: r.client_name ?? null,
+          signal_class: 'unclassified',
         })
       }
 

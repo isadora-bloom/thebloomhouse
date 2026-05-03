@@ -159,6 +159,17 @@ export interface NormalisedInteractionRow {
    *  must NOT write to weddings.source directly — see Stream-TT
    *  adapter-as-facts contract. Per migration 113. */
   extracted_identity?: Record<string, unknown> | null
+  /** T5-Rixey-BBB: required class-of-signal declaration. Every
+   *  adapter-written interaction MUST carry one of source / touchpoint
+   *  / crm / outcome / unclassified — the cluster-compute service
+   *  reads this column to find the earliest source-class signal in
+   *  each lead's identity cluster. The CI guard
+   *  (scripts/check-signal-class-declared.mjs) fails the build when
+   *  an insert against interactions does not declare the field. Use
+   *  'unclassified' only when the class is genuinely ambiguous (e.g.
+   *  brain-dump CSVs without provenance) — prefer the most specific
+   *  class that matches the signal's role in the lead journey. */
+  signal_class?: 'source' | 'touchpoint' | 'crm' | 'outcome' | 'unclassified'
 }
 
 export interface NormalisedTourRow {
@@ -169,6 +180,11 @@ export interface NormalisedTourRow {
    *  scheduled-but-not-yet-conducted tours. */
   outcome?: 'pending' | 'completed' | 'booked' | 'lost' | 'cancelled' | 'no_show' | 'rescheduled' | null
   notes?: string | null
+  /** T5-Rixey-BBB: tours are ALWAYS touchpoint class. The shared
+   *  commitNormalisedRows helper hard-codes this — the field exists on
+   *  the row shape so future per-adapter overrides have a slot, but
+   *  tour-class is structural and shouldn't normally be touched. */
+  signal_class?: 'touchpoint'
 }
 
 export interface NormalisedLostDealRow {
@@ -282,10 +298,19 @@ export async function commitNormalisedRows(args: {
    *  so the data-source orphan sweep can split first-party form rows
    *  from email-pipeline rows. Per migration 178. */
   sourceProvenance?: string | null
+  /** T5-Rixey-BBB: default class-of-signal for any per-row interaction
+   *  the adapter doesn't classify itself. Each adapter has a natural
+   *  default (HoneyBook → 'crm', web-form → 'touchpoint',
+   *  tour-scheduler → 'touchpoint', generic-csv → 'unclassified'),
+   *  and individual rows can still override via NormalisedInteractionRow.
+   *  signal_class. Tours are always 'touchpoint' (hard-coded below).
+   *  Lost-deals are always 'outcome'. */
+  defaultInteractionSignalClass?: 'source' | 'touchpoint' | 'crm' | 'outcome' | 'unclassified'
 }): Promise<CommitResult> {
   const { supabase, venueId, rows, crmSource } = args
   const confidenceFlag = args.confidenceFlag ?? 'imported_medium'
   const sourceProvenance = args.sourceProvenance ?? null
+  const defaultInteractionSignalClass = args.defaultInteractionSignalClass ?? 'unclassified'
   const result: CommitResult = {
     ok: true,
     weddingsInserted: 0,
@@ -392,6 +417,15 @@ export async function commitNormalisedRows(args: {
             confidence_flag: confidenceFlag,
             crm_source: crmSource,
             extracted_identity: i.extracted_identity ?? null,
+            // T5-Rixey-BBB: per-row signal_class overrides take
+            // precedence over the adapter's default. Unset rows fall
+            // back to the adapter-supplied default; if the adapter
+            // didn't supply one either, the row lands as 'unclassified'
+            // — the DB-level CHECK accepts it but the CI guard
+            // (scripts/check-signal-class-declared.mjs) flags any
+            // adapter that doesn't justify the lack of a class.
+            // signal-class-justified: shared commit helper plumbs the per-adapter default
+            signal_class: i.signal_class ?? defaultInteractionSignalClass,
           }
         })
         const { error: intErr } = await supabase.from('interactions').insert(interactionPayloads)
@@ -413,6 +447,12 @@ export async function commitNormalisedRows(args: {
           outcome: t.outcome ?? null,
           notes: t.notes ?? null,
           crm_source: crmSource,
+          // T5-Rixey-BBB: tours are ALWAYS touchpoint class — the
+          // lead used a scheduling tool to book a visit AFTER
+          // discovering the venue. They never contribute to first-
+          // touch attribution.
+          // signal-class-justified: tours are structurally always touchpoint
+          signal_class: 'touchpoint' as const,
         }))
         const { error: tourErr } = await supabase.from('tours').insert(tourPayloads)
         if (tourErr) {
@@ -434,6 +474,9 @@ export async function commitNormalisedRows(args: {
           reason_detail: row.lost_deal.reason_detail ?? null,
           competitor_name: row.lost_deal.competitor_name ?? null,
           crm_source: crmSource,
+          // T5-Rixey-BBB: lost-deal records are ALWAYS outcome class.
+          // signal-class-justified: lost-deals are structurally always outcome
+          signal_class: 'outcome' as const,
         })
         if (lostErr) {
           result.errors.push(`lost_deals insert (wedding ${weddingId}): ${lostErr.message}`)

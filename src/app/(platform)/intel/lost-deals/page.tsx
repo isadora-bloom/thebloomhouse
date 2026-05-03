@@ -274,6 +274,9 @@ export default function LostDealsPage() {
         reason: formReason,
         competitor: formCompetitor || null,
         notes: formNotes || null,
+        // T5-Rixey-BBB: lost-deal records are always outcome class.
+        // signal-class-justified: lost-deals are structurally always outcome
+        signal_class: 'outcome',
       })
       if (err) throw err
       setShowModal(false)

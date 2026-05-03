@@ -394,6 +394,9 @@ export default function ToursPage() {
         notes: noteWithCouple || null,
         attendees: formAttendees,
         outcome: 'pending',
+        // T5-Rixey-BBB: tours are always touchpoint class.
+        // signal-class-justified: tours are structurally always touchpoint
+        signal_class: 'touchpoint',
       })
       if (err) throw err
 

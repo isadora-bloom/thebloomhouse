@@ -634,6 +634,11 @@ async function persistRow(
     from_email: externalNumber,
     from_name: null,
     timestamp: occurred,
+    // T5-Rixey-BBB: SMS / voicemail / call signals from OpenPhone
+    // are touchpoints — the lead reached out via a known channel
+    // they discovered the venue through.
+    // signal-class-justified: phone-channel signals are touchpoint
+    signal_class: 'touchpoint',
   }
 
   const { error: interErr } = await supabase

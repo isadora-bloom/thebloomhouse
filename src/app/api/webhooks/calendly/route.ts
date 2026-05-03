@@ -192,6 +192,7 @@ export async function POST(request: NextRequest) {
         .maybeSingle()
 
       if (!existing) {
+        // signal-class-justified: tours are structurally always touchpoint
         await supabase.from('tours').insert({
           venue_id: venueId,
           wedding_id: weddingId,
@@ -202,6 +203,7 @@ export async function POST(request: NextRequest) {
           outcome: 'pending',
           notes: calendlyUri ? `Booked via Calendly: ${calendlyUri}` : 'Booked via Calendly',
           attendees: [],
+          signal_class: 'touchpoint',
         })
         console.log(`[webhook/calendly] Created pending tour row for wedding ${weddingId}`)
       } else {

@@ -159,6 +159,8 @@ export async function importPlatformSignals(args: ImportArgs): Promise<PlatformS
     extracted_identity: Record<string, unknown>
     match_status: 'unmatched'
     source_entry_id: string | null
+    /** T5-Rixey-BBB: every tangential_signal carries a class. */
+    signal_class: 'source' | 'touchpoint' | 'crm' | 'outcome' | 'unclassified'
   }
   const toInsert: InsertRow[] = []
   const seenInBatch = new Set<string>()
@@ -198,6 +200,12 @@ export async function importPlatformSignals(args: ImportArgs): Promise<PlatformS
       extracted_identity,
       match_status: 'unmatched',
       source_entry_id: brainDumpEntryId ?? null,
+      // T5-Rixey-BBB: platform-signals importer feeds tangential_signals
+      // with cross-platform engagement (Knot view, WW saved, IG follow,
+      // Pinterest pin, etc.). All source-class by definition — these
+      // are discovery touches.
+      // signal-class-justified: platform engagement signals are source class
+      signal_class: 'source',
     })
   }
 
@@ -207,6 +215,7 @@ export async function importPlatformSignals(args: ImportArgs): Promise<PlatformS
   const CHUNK = 200
   for (let i = 0; i < toInsert.length; i += CHUNK) {
     const chunk = toInsert.slice(i, i + CHUNK)
+    // signal-class-justified: chunk is a slice of toInsert; each row already carries signal_class:'source' (see push above)
     const { data, error } = await supabase.from('tangential_signals').insert(chunk).select('id')
     if (error) {
       summary.errors.push(`insert chunk @${i}: ${error.message}`)

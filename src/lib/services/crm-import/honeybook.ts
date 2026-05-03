@@ -473,6 +473,13 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
           hear_source_raw: sourceRaw,
           hear_source: recognisedHearSource,
         },
+        // T5-Rixey-BBB: when the HoneyBook "Source" cell maps to a
+        // recognised acquisition channel, this synthetic interaction
+        // IS the source signal — the coordinator typed "The Knot" so
+        // we credit The Knot. When unrecognised, default to 'crm'
+        // class (HoneyBook is the CRM holding the record).
+        // signal-class-justified: per-row override based on Q7-equivalent recognition
+        signal_class: recognisedHearSource ? 'source' : 'crm',
       })
     }
 
@@ -573,7 +580,16 @@ async function commitHoneybook(args: {
   venueId: string
   rows: NormalisedLeadRow[]
 }): Promise<CommitResult> {
-  return commitNormalisedRows({ ...args, crmSource: 'honeybook' })
+  // T5-Rixey-BBB: HoneyBook is a CRM (not an acquisition channel).
+  // Default per-row interaction class is 'crm'. The synthetic
+  // hear-source interaction parseHoneybook produces (lines 458-477)
+  // overrides this to 'source' on a per-row basis when the
+  // coordinator-typed "Source" cell maps to a recognised channel.
+  return commitNormalisedRows({
+    ...args,
+    crmSource: 'honeybook',
+    defaultInteractionSignalClass: 'crm',
+  })
 }
 
 export const honeybookAdapter: CrmAdapter = {

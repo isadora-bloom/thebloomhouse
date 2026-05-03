@@ -806,6 +806,15 @@ function calendlyRowsToNormalised(
       if (r.utmMedium) rowExtractedIdentity.utm_medium = r.utmMedium
 
       const occurredAt = r.startIso ?? r.createdIso ?? new Date().toISOString()
+      // T5-Rixey-BBB: when the Calendly Q7 ("how did you hear about us?")
+      // answer maps to a recognised acquisition channel, this synthetic
+      // interaction IS the source signal — the lead literally told us
+      // where they came from. Otherwise default to 'touchpoint' (the
+      // event itself is just an intake tool).
+      // signal-class-justified: Q7 answer when present is the user-stated source
+      const recognisedFromQ7 =
+        typeof rowExtractedIdentity.hear_source === 'string'
+          && rowExtractedIdentity.hear_source !== ''
       interactions.push({
         occurred_at: occurredAt,
         direction: 'inbound',
@@ -813,6 +822,7 @@ function calendlyRowsToNormalised(
         subject,
         body,
         extracted_identity: rowExtractedIdentity,
+        signal_class: recognisedFromQ7 ? 'source' : 'touchpoint',
       })
 
       if (overrideBucket === 'tour') {
@@ -1086,7 +1096,17 @@ async function commitTourScheduler(args: {
   // deferred per T5-Rixey-II scope. Provider name is already encoded in
   // weddings.source_detail (e.g. "via_honeybook | The Knot") + each
   // interactions.full_body starts with "provider:calendly\n…".
-  return commitNormalisedRows({ ...args, crmSource: 'generic_csv' })
+  //
+  // T5-Rixey-BBB: tour-scheduler interactions default to 'touchpoint'
+  // — Calendly/Acuity is the booking tool. The Q7-derived hear_source
+  // field on the per-row interaction overrides to 'source' below at
+  // the parse step (search this file for `signal_class:` near the
+  // synthetic interaction push).
+  return commitNormalisedRows({
+    ...args,
+    crmSource: 'generic_csv',
+    defaultInteractionSignalClass: 'touchpoint',
+  })
 }
 
 export const tourSchedulerAdapter: CrmAdapter = {

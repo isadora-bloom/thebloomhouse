@@ -69,6 +69,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Log the outbound reply (store the version the recipient actually saw)
+    // T5-Rixey-BBB: outbound venue→lead replies are unclassified for
+    // attribution purposes (they're our outreach, not a lead-side
+    // signal of any class).
+    // signal-class-justified: outbound replies are venue-side, not lead signals
     await supabase.from('interactions').insert({
       venue_id: auth.venueId,
       wedding_id: null,
@@ -81,6 +85,7 @@ export async function POST(request: NextRequest) {
       gmail_thread_id: interaction.gmail_thread_id,
       gmail_message_id: sentMessageId,
       timestamp: new Date().toISOString(),
+      signal_class: 'unclassified',
     })
 
     return NextResponse.json({ success: true, messageId: sentMessageId })
