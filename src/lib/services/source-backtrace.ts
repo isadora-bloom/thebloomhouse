@@ -11,12 +11,41 @@
  * couple finally booked the tour.
  *
  * This service walks the venue's interactions table looking for the
- * EARLIEST inbound email tied to each affected wedding (by name match),
- * then runs that email through detectFormRelay() to recover the real
- * source. Returns a list of candidates the coordinator can review and
- * approve. On approval, applyBacktrace() updates weddings.source AND
- * the wedding's inquiry touchpoint, leaving an audit trail in the
- * touchpoint metadata so a re-run of the same backtrace is idempotent.
+ * EARLIEST inbound email tied to each affected wedding (matched against
+ * the COUPLE'S FULL IDENTITY CLUSTER — partner1, partner2, plus any
+ * linked people row), then runs that email through detectFormRelay()
+ * to recover the real source. Returns a list of candidates the
+ * coordinator can review and approve. On approval, applyBacktrace()
+ * updates weddings.source AND the wedding's inquiry touchpoint, leaving
+ * an audit trail in the touchpoint metadata so a re-run of the same
+ * backtrace is idempotent.
+ *
+ * T5-Rixey-TT redesign (2026-05-02):
+ *
+ *   1. STRUCTURAL notification-sender detection. The previous version
+ *      had a hardcoded SCHEDULING_TOOL_DOMAINS list (calendly.com,
+ *      acuityscheduling.com, etc.). That misses every NEW scheduling
+ *      tool, every marketing-automation service (em.* / bulk.*), every
+ *      autoresponder. Replaced with structural scoring across sender-
+ *      pattern signals, body signals (List-Unsubscribe / "do not reply"
+ *      / "this is an automated"), and known automation patterns. Score
+ *      > 0.5 → discarded.
+ *
+ *   2. Identity-CLUSTER matching, not just primary email. The previous
+ *      version matched only on couple-name tokens. Spouses book tours
+ *      with different emails than the inquiry email; HoneyBook sends
+ *      Client-Info forms from a third email. Now we look up ALL emails
+ *      attached to the wedding's people rows (partner1 / partner2 /
+ *      MOB / FOB / wedding party) and require either an email-cluster
+ *      hit OR a strong full-name match within ±30d of inquiry_date.
+ *
+ *   3. THREE explicit return states (no_match | weak_match |
+ *      confident_match) — the previous version used a 'none'/'low'/'medium'/
+ *      'high' confidence enum but always surfaced every candidate. The
+ *      noise was overwhelming: 124 Rixey rows where most produced
+ *      "Keep Calendly OR set manually" with no real signal. The new
+ *      shape lets the API/UI hide no_match entirely and badge weak_match
+ *      with a "review carefully" warning.
  *
  * Multi-venue safe: takes a venueId, only reads/writes that venue's
  * data. Demo-safe: the caller decides which venue to query.
@@ -74,6 +103,15 @@ export interface BacktraceCandidate {
    *  medium when only the sender domain matched a known platform,
    *  low when only a name match was found, none when we have nothing. */
   confidence: 'high' | 'medium' | 'low' | 'none'
+  /** T5-Rixey-TT: explicit status so the UI/API can route by intent
+   *  rather than guessing from confidence. no_match → hide entirely,
+   *  weak_match → show with warning banner, confident_match → auto-
+   *  applicable. Existing `confidence` is preserved for backward compat. */
+  status: 'no_match' | 'weak_match' | 'confident_match'
+  /** T5-Rixey-TT: human-readable warnings (e.g. "matched only by name,
+   *  no email overlap with the lead's identity cluster") that the UI
+   *  should surface alongside weak_match candidates. */
+  warnings: string[]
 }
 
 interface InteractionRow {
@@ -101,6 +139,7 @@ interface PersonRow {
   wedding_id: string
   first_name: string | null
   last_name: string | null
+  email: string | null
   role: string
 }
 
@@ -119,6 +158,152 @@ function nameTokens(coupleNames: string | null): string[] {
     .split(/\s+/)
     .map((t) => t.trim())
     .filter((t) => t.length >= 3 && !STOP.has(t))
+}
+
+// ---------------------------------------------------------------------------
+// T5-Rixey-TT: structural notification-sender detection
+// ---------------------------------------------------------------------------
+//
+// The old version had a hardcoded list of scheduling-tool domains. That
+// only catches Calendly / Acuity / HoneyBook / Dubsado. New scheduling
+// tools, marketing-automation services (Sendgrid em.*, bulk.*), and
+// generic autoresponders all slip past, get matched as "earliest email,"
+// and then get proposed as the real first-touch source — which is
+// circular (the Calendly notification proposing Calendly) or wrong-
+// person (a marketing blast from List-X identifying List-X as the
+// source).
+//
+// Replacement: score each candidate email on multiple structural
+// signals; discard if the cumulative likelihood crosses a threshold.
+
+/** Structural signals that a sender address is automation rather than
+ *  a real upstream channel email. Each contributes -0.25 to the
+ *  candidate-as-real-first-touch score; cap at -0.75 so a single very-
+ *  obvious notification address (notifications@calendly.com) gets
+ *  flagged confidently without one signal flipping the verdict. */
+const SENDER_PREFIX_PATTERNS = [
+  /^notifications?@/i,
+  /^no[-._]?reply@/i,
+  /^do[-._]?not[-._]?reply@/i,
+  /^auto[-._]?(reply|responder|mailer)?@/i,
+  /^automated@/i,
+  /^postmaster@/i,
+  /^mailer[-._]?daemon@/i,
+  /^bounce[s]?@/i,
+  /^system@/i,
+  /^alerts?@/i,
+]
+
+/** Domains known to be scheduling/CRM/automation plumbing. NOT used
+ *  as a denylist — the Calendly notification, like every other auto-
+ *  generated email, scores high on multiple structural signals so it
+ *  would be filtered anyway. The list is here purely to weight a
+ *  single-domain match in cases where the body/subject is bland. */
+const AUTOMATION_DOMAIN_PATTERNS = [
+  /@calendly\.com$/i,
+  /@acuityscheduling\.com$/i,
+  /@dubsado\.com$/i,
+  /@honeybook\.com$/i,
+  /@crm\.wix\.com$/i,
+  /@bulk\./i,
+  /@em\./i,                // Sendgrid em.<sender>.com
+  /@sendgrid\./i,
+  /@mailchimp\./i,
+  /@mailgun\./i,
+  /@list[s]?\./i,
+  /@notifications?\./i,    // notifications.example.com
+]
+
+/** Body / subject patterns that indicate the message is automation
+ *  rather than a real human or upstream channel email. */
+const AUTOMATION_BODY_PATTERNS = [
+  /\bdo not reply\b/i,
+  /\bthis is an automated\b/i,
+  /\bautomated message\b/i,
+  /\bunsubscribe from this (list|email)\b/i,
+  /\bview this email in your browser\b/i,
+  /\blist[-_\s]*unsubscribe\s*:/i,
+  /\bauto[-_\s]*submitted\s*:\s*(auto-generated|auto-replied)/i,
+  /\bprecedence\s*:\s*(bulk|list)/i,
+  /\bx-mailer\s*:\s*[^\n]*automated/i,
+  /\bnew event scheduled\b/i,           // Calendly notification preamble
+  /\bnew event:\s*.*\bcalendly\b/i,     // Calendly subject pattern
+  /\byou have a new appointment\b/i,    // Acuity notification
+]
+
+interface AutomationScore {
+  /** 0..1 — likelihood the message is automation rather than a real
+   *  upstream channel touch. Discard candidates with score > 0.5. */
+  likelihood: number
+  /** Reasons the score was elevated, kept for debugging/logging. */
+  reasons: string[]
+}
+
+/**
+ * Score the candidate interaction's automation likelihood from the
+ * sender address + subject + body. Used to filter out scheduling-tool
+ * notification emails and marketing-automation blasts before they can
+ * be proposed as the real first-touch source. Returns a likelihood in
+ * [0, 1] — caller discards anything > 0.5.
+ */
+export function scoreAutomationLikelihood(args: {
+  fromEmail: string | null
+  subject: string | null
+  body: string | null
+}): AutomationScore {
+  const reasons: string[] = []
+  let score = 0
+
+  const from = (args.fromEmail ?? '').trim().toLowerCase()
+  const subject = (args.subject ?? '').trim()
+  const body = (args.body ?? '').trim()
+
+  // Sender-prefix signals (each -0.25, capped at -0.75 cumulative so a
+  // single very-obvious prefix doesn't hard-flag if other signals miss).
+  let prefixHits = 0
+  for (const re of SENDER_PREFIX_PATTERNS) {
+    if (re.test(from)) {
+      prefixHits++
+      reasons.push(`sender-prefix:${re.source}`)
+      if (prefixHits >= 3) break
+    }
+  }
+  score += Math.min(prefixHits, 3) * 0.25
+
+  // Domain signals — known automation domain. Single weight 0.4 (a
+  // calendly.com sender + automation body is enough to disqualify).
+  for (const re of AUTOMATION_DOMAIN_PATTERNS) {
+    if (re.test(from)) {
+      score += 0.4
+      reasons.push(`automation-domain:${re.source}`)
+      break
+    }
+  }
+
+  // Body/subject signals (each +0.15, cap at 4 hits = +0.6).
+  let bodyHits = 0
+  const haystack = `${subject}\n${body}`
+  for (const re of AUTOMATION_BODY_PATTERNS) {
+    if (re.test(haystack)) {
+      bodyHits++
+      reasons.push(`body-pattern:${re.source}`)
+      if (bodyHits >= 4) break
+    }
+  }
+  score += Math.min(bodyHits, 4) * 0.15
+
+  // Clamp to [0, 1].
+  score = Math.max(0, Math.min(1, score))
+  return { likelihood: score, reasons }
+}
+
+function isLikelyAutomation(i: InteractionRow): boolean {
+  const s = scoreAutomationLikelihood({
+    fromEmail: i.from_email,
+    subject: i.subject,
+    body: i.full_body ?? i.body_preview,
+  })
+  return s.likelihood > 0.5
 }
 
 /**
@@ -191,22 +376,70 @@ function inferSourceFromSender(fromEmail: string | null): string | null {
 }
 
 /**
- * Sender domains that should NEVER be treated as first-touch
- * evidence. Scheduling-tool emails ARE the thing we're trying to
- * back-trace away from, so picking a Calendly confirmation as the
- * "earliest matching email" would just keep recommending Calendly.
+ * T5-Rixey-TT: collect every email address known to belong to this
+ * wedding's identity cluster. Used to require email-overlap on at
+ * least ONE candidate match, rather than relying purely on name tokens
+ * (which false-match across "Sarah Johnson" the bride and "Sarah
+ * Johnson" the venue's own front-desk emails).
  */
-const SCHEDULING_TOOL_DOMAINS = [
-  'calendly.com',
-  'acuityscheduling.com',
-  'honeybook.com',
-  'dubsado.com',
-]
+function collectClusterEmails(people: PersonRow[]): Set<string> {
+  const out = new Set<string>()
+  for (const p of people) {
+    const e = (p.email ?? '').trim().toLowerCase()
+    if (e && e.includes('@')) out.add(e)
+  }
+  return out
+}
 
-function isSchedulingToolSender(fromEmail: string | null): boolean {
-  if (!fromEmail) return false
-  const lower = fromEmail.toLowerCase()
-  return SCHEDULING_TOOL_DOMAINS.some((d) => lower.includes(`@${d}`) || lower.endsWith(d))
+/** Match an interaction to a cluster: at least one cluster email must
+ *  appear in the From address OR within the body's first ~500 chars
+ *  (covers reply-to / cc / "From: <name> <email>" footers). */
+function matchesCluster(i: InteractionRow, clusterEmails: Set<string>): boolean {
+  if (clusterEmails.size === 0) return false
+  const from = (i.from_email ?? '').toLowerCase()
+  const haystack = [
+    from,
+    (i.body_preview ?? '').toLowerCase(),
+    (i.full_body ?? '').slice(0, 500).toLowerCase(),
+  ].join(' ')
+  for (const e of clusterEmails) {
+    if (haystack.includes(e)) return true
+  }
+  return false
+}
+
+/** Match an interaction to a cluster's name tokens with a strong
+ *  threshold (≥2 distinct tokens hit, e.g. first AND last name) so a
+ *  single-token false-positive doesn't escalate to confident_match. */
+function strongNameMatch(i: InteractionRow, tokens: string[]): boolean {
+  if (tokens.length < 2) return false
+  const haystack = [
+    i.from_email ?? '',
+    i.from_name ?? '',
+    i.subject ?? '',
+    i.body_preview ?? '',
+    i.full_body ?? '',
+  ]
+    .join(' ')
+    .toLowerCase()
+  let hits = 0
+  for (const t of tokens) {
+    if (haystack.includes(t)) hits++
+    if (hits >= 2) return true
+  }
+  return false
+}
+
+/** Date proximity check: the candidate must fall within ±30 days of
+ *  inquiry_date when matching purely on name (not email). Stops weak
+ *  full-name matches from picking up an unrelated email about a
+ *  different couple with the same surname. */
+function withinNameMatchWindow(i: InteractionRow, inquiryDate: Date | null): boolean {
+  if (!inquiryDate) return true   // no inquiry date → can't filter, allow
+  const t = new Date(i.timestamp).getTime()
+  if (Number.isNaN(t)) return false
+  const delta = Math.abs(t - inquiryDate.getTime())
+  return delta <= 30 * 24 * 60 * 60 * 1000
 }
 
 /**
@@ -340,12 +573,18 @@ async function searchGmailForCouple(
  *      weddings whose first-touch email predates the onboarding
  *      backfill window. Skipped if `useLiveGmail: false` is passed
  *      (lets callers preview without burning Gmail quota).
+ *
+ * T5-Rixey-TT: candidates with status='no_match' are FILTERED OUT of
+ * the returned list (the caller's UI doesn't want noise). To get every
+ * wedding regardless of match status (e.g. for an audit dashboard),
+ * pass `{ includeNoMatch: true }`.
  */
 export async function findBacktraceCandidates(
   venueId: string,
-  options: { useLiveGmail?: boolean } = {}
+  options: { useLiveGmail?: boolean; includeNoMatch?: boolean } = {}
 ): Promise<BacktraceCandidate[]> {
   const useLiveGmail = options.useLiveGmail !== false
+  const includeNoMatch = options.includeNoMatch === true
   const sb = createServiceClient()
 
   const { data: weddings, error: wedErr } = await sb
@@ -358,15 +597,15 @@ export async function findBacktraceCandidates(
   if (weddingRows.length === 0) return []
 
 
-  // Join the linked people rows so we have couple names to search by.
-  // people.wedding_id is the FK; partner1/partner2 are the rows that
-  // belong to the couple themselves. Other roles (guests, vendors)
-  // would muddy name search.
+  // Join the linked people rows so we have couple names + EMAILS to
+  // search by. Stream-TT widens beyond partner1/partner2 to ALL roles
+  // — MOB / FOB / wedding-party emails belong to the same identity
+  // cluster and frequently book the tour for the couple. The previous
+  // version restricted to partner1/partner2 only.
   const { data: people } = await sb
     .from('people')
-    .select('wedding_id, first_name, last_name, role')
+    .select('wedding_id, first_name, last_name, email, role')
     .in('wedding_id', weddingRows.map((w) => w.id))
-    .in('role', ['partner1', 'partner2'])
   const peopleByWedding = new Map<string, PersonRow[]>()
   for (const p of (people ?? []) as PersonRow[]) {
     const arr = peopleByWedding.get(p.wedding_id) ?? []
@@ -375,7 +614,11 @@ export async function findBacktraceCandidates(
   }
   for (const w of weddingRows) {
     const ppl = peopleByWedding.get(w.id) ?? []
-    const parts = ppl
+    // couple_names string only includes partner1/partner2 — that's the
+    // human-readable label for the UI; the cluster-email check uses
+    // the wider set.
+    const partners = ppl.filter((p) => p.role === 'partner1' || p.role === 'partner2')
+    const parts = partners
       .map((p) => [p.first_name, p.last_name].filter(Boolean).join(' ').trim())
       .filter(Boolean)
     w.couple_names = parts.join(' & ') || null
@@ -408,6 +651,8 @@ export async function findBacktraceCandidates(
   for (const w of weddingRows) {
     const coupleNames = w.couple_names ?? null
     const tokens = nameTokens(coupleNames)
+    const ppl = peopleByWedding.get(w.id) ?? []
+    const clusterEmails = collectClusterEmails(ppl)
 
     // Search space: this wedding's linked interactions FIRST (they're
     // already attached to this wedding, so name match isn't strictly
@@ -415,14 +660,16 @@ export async function findBacktraceCandidates(
     // name token. Constrain to "before or at the inquiry_date + 1 day"
     // so we don't pick up post-booking emails as the supposed first
     // touch.
-    const inquiryCutoff = w.inquiry_date ? new Date(w.inquiry_date) : new Date(w.created_at)
+    const inquiryDate = w.inquiry_date ? new Date(w.inquiry_date) : new Date(w.created_at)
+    const inquiryCutoff = new Date(inquiryDate)
     inquiryCutoff.setDate(inquiryCutoff.getDate() + 1)
 
-    // Filter out scheduling-tool emails — those would just recommend
-    // Calendly back to itself. The whole point of backtrace is to find
-    // what brought the couple BEFORE they ever booked the tour.
+    // Filter out automation candidates STRUCTURALLY (sender pattern +
+    // body signals + known automation domains). The previous version
+    // had a hardcoded SCHEDULING_TOOL_DOMAINS list; this catches new
+    // tools / autoresponders / marketing blasts too.
     const wedInteractions = (byWedding.get(w.id) ?? []).filter(
-      (i) => new Date(i.timestamp) <= inquiryCutoff && !isSchedulingToolSender(i.from_email)
+      (i) => new Date(i.timestamp) <= inquiryCutoff && !isLikelyAutomation(i)
     )
 
     // Strongest candidate: earliest interaction linked to the wedding
@@ -449,7 +696,9 @@ export async function findBacktraceCandidates(
     // onboarding backfill.
     if (useLiveGmail && (!pick || !pick.score.sourceFromRelay)) {
       const liveHit = await searchGmailForCouple(venueId, tokens, inquiryCutoff)
-      if (liveHit) {
+      // Apply the same automation filter to live-Gmail hits — Gmail
+      // search will happily return Calendly notification emails too.
+      if (liveHit && !isLikelyAutomation(liveHit)) {
         const score = scoreEvidence(liveHit, tokens)
         // Only override the local pick if the live result actually
         // improves things — i.e. matches a relay parser, OR the local
@@ -463,29 +712,63 @@ export async function findBacktraceCandidates(
     let suggested: string | null = null
     let confidence: BacktraceCandidate['confidence'] = 'none'
     let evidence: Evidence | null = null
+    let status: BacktraceCandidate['status'] = 'no_match'
+    const warnings: string[] = []
 
     if (pick) {
       const { i, score } = pick
-      if (score.sourceFromRelay) {
-        suggested = score.sourceFromRelay.source
-        confidence = 'high'
+      // Gate every match against (a) cluster-email overlap OR
+      // (b) strong full-name match within the date window. This is
+      // what stops "Christian Harper" → "Valerie Callaway" wrong-
+      // person matches: Valerie's email isn't in Christian's cluster
+      // and a single shared first-name token doesn't pass the strong-
+      // match check.
+      const hasEmailOverlap = matchesCluster(i, clusterEmails)
+      const hasStrongName = strongNameMatch(i, tokens) && withinNameMatchWindow(i, inquiryDate)
+
+      if (!hasEmailOverlap && !hasStrongName) {
+        // Pick exists but doesn't actually identify THIS couple.
+        // Don't propose anything; leave status=no_match.
+        pick = null
       } else {
-        const inferred = inferSourceFromSender(i.from_email)
-        if (inferred && inferred !== w.source) {
-          // Known-domain match (theknot.com, weddingwire.com, etc.)
-          // without a full relay parser hit. Useful but not as strong
-          // as a relay parse — call it medium.
-          suggested = inferred
-          confidence = 'medium'
+        if (score.sourceFromRelay) {
+          suggested = score.sourceFromRelay.source
+          confidence = 'high'
+        } else {
+          const inferred = inferSourceFromSender(i.from_email)
+          if (inferred && inferred !== w.source) {
+            // Known-domain match (theknot.com, weddingwire.com, etc.)
+            // without a full relay parser hit. Useful but not as strong
+            // as a relay parse — call it medium.
+            suggested = inferred
+            confidence = 'medium'
+          }
         }
-      }
-      evidence = {
-        interactionId: i.id,
-        fromEmail: i.from_email,
-        fromName: i.from_name,
-        subject: i.subject,
-        timestamp: i.timestamp,
-        snippet: makeSnippet(i.body_preview ?? i.full_body),
+        evidence = {
+          interactionId: i.id,
+          fromEmail: i.from_email,
+          fromName: i.from_name,
+          subject: i.subject,
+          timestamp: i.timestamp,
+          snippet: makeSnippet(i.body_preview ?? i.full_body),
+        }
+
+        // Decide status from confidence + match strength.
+        if (suggested && confidence === 'high' && hasEmailOverlap) {
+          status = 'confident_match'
+        } else if (suggested) {
+          status = 'weak_match'
+          if (!hasEmailOverlap) {
+            warnings.push(
+              "Matched on couple's name only — no email overlap with the lead's identity cluster. Review the source email carefully before applying.",
+            )
+          }
+          if (confidence === 'medium') {
+            warnings.push('Only the sender-domain matched a known channel; no upstream form-relay parser confirmed it.')
+          }
+        } else {
+          status = 'no_match'
+        }
       }
     }
 
@@ -503,6 +786,8 @@ export async function findBacktraceCandidates(
       suggestedSource: normalized,
       evidence,
       confidence,
+      status,
+      warnings,
     })
   }
 
@@ -513,7 +798,9 @@ export async function findBacktraceCandidates(
     return bt.localeCompare(at)
   })
 
-  return candidates
+  if (includeNoMatch) return candidates
+  // Default: hide no_match from the queue entirely.
+  return candidates.filter((c) => c.status !== 'no_match')
 }
 
 /**
@@ -530,10 +817,10 @@ export async function findBacktraceCandidates(
  *   - If the wedding's source isn't in WEAK_FIRST_TOUCH_SOURCES,
  *     no-op (only scheduling tools need backtracing).
  *   - Searches local interactions FIRST (cheap), then live Gmail.
- *   - High-confidence relay match → applyBacktrace runs with
+ *   - status='confident_match' → applyBacktrace runs with
  *     backtraced_by='auto' so the audit trail distinguishes
  *     auto-applied from coordinator-confirmed corrections.
- *   - Medium / low / none → returns the candidate without writing.
+ *   - weak_match / no_match → returns the candidate without writing.
  *     The bulk panel and inline override remain available for
  *     manual confirmation.
  *
@@ -560,26 +847,29 @@ export async function backtraceOneWedding(
   if (!wedRow || wedRow.venue_id !== venueId) return null
   if (!wedRow.source || !WEAK_FIRST_TOUCH_SOURCES.has(wedRow.source)) return null
 
-  // Pull this couple's name tokens.
+  // Pull this couple's full identity cluster — name tokens AND every
+  // email associated with the wedding's people rows.
   const { data: people } = await sb
     .from('people')
-    .select('wedding_id, first_name, last_name, role')
+    .select('wedding_id, first_name, last_name, email, role')
     .eq('wedding_id', weddingId)
-    .in('role', ['partner1', 'partner2'])
   const ppl = (people ?? []) as PersonRow[]
-  const coupleNames = ppl
+  const partners = ppl.filter((p) => p.role === 'partner1' || p.role === 'partner2')
+  const coupleNames = partners
     .map((p) => [p.first_name, p.last_name].filter(Boolean).join(' ').trim())
     .filter(Boolean)
     .join(' & ') || null
   const tokens = nameTokens(coupleNames)
-  if (tokens.length === 0) return null
+  const clusterEmails = collectClusterEmails(ppl)
+  if (tokens.length === 0 && clusterEmails.size === 0) return null
 
-  const inquiryCutoff = wedRow.inquiry_date ? new Date(wedRow.inquiry_date) : new Date(wedRow.created_at)
+  const inquiryDate = wedRow.inquiry_date ? new Date(wedRow.inquiry_date) : new Date(wedRow.created_at)
+  const inquiryCutoff = new Date(inquiryDate)
   inquiryCutoff.setDate(inquiryCutoff.getDate() + 1)
 
   // Local first — only this wedding's already-linked inbound emails.
-  // Skip scheduling-tool senders (their confirmation emails would
-  // just recommend Calendly back to itself).
+  // Skip automation senders (their confirmation emails would just
+  // recommend Calendly back to itself).
   const { data: localIxs } = await sb
     .from('interactions')
     .select('id, wedding_id, from_email, from_name, subject, body_preview, full_body, timestamp, direction')
@@ -588,7 +878,7 @@ export async function backtraceOneWedding(
     .eq('direction', 'inbound')
     .order('timestamp', { ascending: true })
   const localCandidates = ((localIxs ?? []) as InteractionRow[])
-    .filter((i) => new Date(i.timestamp) <= inquiryCutoff && !isSchedulingToolSender(i.from_email))
+    .filter((i) => new Date(i.timestamp) <= inquiryCutoff && !isLikelyAutomation(i))
 
   let pick: { i: InteractionRow; score: ReturnType<typeof scoreEvidence> } | null = null
   for (const i of localCandidates) {
@@ -602,7 +892,7 @@ export async function backtraceOneWedding(
 
   if (useLiveGmail && (!pick || !pick.score.sourceFromRelay)) {
     const liveHit = await searchGmailForCouple(venueId, tokens, inquiryCutoff)
-    if (liveHit) {
+    if (liveHit && !isLikelyAutomation(liveHit)) {
       const s = scoreEvidence(liveHit, tokens)
       if (s.sourceFromRelay || !pick) pick = { i: liveHit, score: s }
     }
@@ -611,25 +901,46 @@ export async function backtraceOneWedding(
   let suggestedSource: string | null = null
   let confidence: BacktraceCandidate['confidence'] = 'none'
   let evidence: Evidence | null = null
+  let status: BacktraceCandidate['status'] = 'no_match'
+  const warnings: string[] = []
+
   if (pick) {
     const { i, score } = pick
-    if (score.sourceFromRelay) {
-      suggestedSource = score.sourceFromRelay.source
-      confidence = 'high'
+    const hasEmailOverlap = matchesCluster(i, clusterEmails)
+    const hasStrongName = strongNameMatch(i, tokens) && withinNameMatchWindow(i, inquiryDate)
+
+    if (!hasEmailOverlap && !hasStrongName) {
+      // Don't propose anything — pick doesn't identify this couple.
     } else {
-      const inferred = inferSourceFromSender(i.from_email)
-      if (inferred && inferred !== wedRow.source) {
-        suggestedSource = inferred
-        confidence = 'medium'
+      if (score.sourceFromRelay) {
+        suggestedSource = score.sourceFromRelay.source
+        confidence = 'high'
+      } else {
+        const inferred = inferSourceFromSender(i.from_email)
+        if (inferred && inferred !== wedRow.source) {
+          suggestedSource = inferred
+          confidence = 'medium'
+        }
       }
-    }
-    evidence = {
-      interactionId: i.id,
-      fromEmail: i.from_email,
-      fromName: i.from_name,
-      subject: i.subject,
-      timestamp: i.timestamp,
-      snippet: makeSnippet(i.body_preview ?? i.full_body),
+      evidence = {
+        interactionId: i.id,
+        fromEmail: i.from_email,
+        fromName: i.from_name,
+        subject: i.subject,
+        timestamp: i.timestamp,
+        snippet: makeSnippet(i.body_preview ?? i.full_body),
+      }
+      if (suggestedSource && confidence === 'high' && hasEmailOverlap) {
+        status = 'confident_match'
+      } else if (suggestedSource) {
+        status = 'weak_match'
+        if (!hasEmailOverlap) {
+          warnings.push("Matched on couple's name only — no email overlap with the lead's identity cluster.")
+        }
+        if (confidence === 'medium') {
+          warnings.push('Only the sender-domain matched a known channel; no upstream form-relay parser confirmed it.')
+        }
+      }
     }
   }
 
@@ -642,12 +953,15 @@ export async function backtraceOneWedding(
     suggestedSource: normalized,
     evidence,
     confidence,
+    status,
+    warnings,
   }
 
-  // Auto-apply only on the strongest signal: a form-relay parser
-  // unambiguously identified the upstream channel. Anything weaker
-  // we leave for human review.
-  if (autoApplyHigh && confidence === 'high' && normalized && normalized !== wedRow.source) {
+  // Auto-apply only on confident_match — a form-relay parser
+  // unambiguously identified the upstream channel AND the candidate's
+  // identity-cluster email overlaps. Anything weaker we leave for
+  // human review.
+  if (autoApplyHigh && status === 'confident_match' && normalized && normalized !== wedRow.source) {
     try {
       await applyBacktrace(venueId, weddingId, normalized, 'auto')
     } catch (err) {
@@ -691,6 +1005,10 @@ export async function applyBacktrace(
   const oldSource = (wedding.source as string | null) ?? null
 
   // 1) Update weddings.source — this is the canonical first-touch.
+  // adapter-source-justified: applyBacktrace is the SANCTIONED writer
+  //   for weddings.source corrections (coordinator-confirmed or auto-
+  //   applied confident_match). The CI guard at scripts/check-adapter-
+  //   source-justification.mjs accepts this marker.
   await sb.from('weddings').update({ source: normalized }).eq('id', weddingId)
 
   // 2) Update the inquiry touchpoint. There is exactly one per wedding

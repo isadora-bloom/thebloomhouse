@@ -152,6 +152,13 @@ export interface NormalisedInteractionRow {
   type: 'email' | 'call' | 'voicemail' | 'sms' | 'meeting' | 'web_form'
   subject?: string | null
   body?: string | null
+  /** T5-Rixey-TT: lets adapters write factual attribution data (e.g.
+   *  HoneyBook's "Lead Source" column, Calendly's Q7 "where did you
+   *  hear about us?" answer) into interactions.extracted_identity so
+   *  the lead-source-derivation Priority-2 picks it up. Adapters
+   *  must NOT write to weddings.source directly — see Stream-TT
+   *  adapter-as-facts contract. Per migration 113. */
+  extracted_identity?: Record<string, unknown> | null
 }
 
 export interface NormalisedTourRow {
@@ -293,7 +300,15 @@ export async function commitNormalisedRows(args: {
       const weddingPayload = {
         venue_id: venueId,
         status: row.status ?? 'inquiry',
-        source: row.source ?? 'other',
+        // adapter-source-justified: this is the SHARED commit helper.
+        //   It writes whatever the per-adapter `parse()` returned. Per
+        //   T5-Rixey-TT every adapter that previously wrote a CRM/
+        //   scheduling-tool value here was refactored to write null;
+        //   the lead-source-derivation cron decides the real channel
+        //   from Q7 / web-form / email-domain / UTM in priority order.
+        //   If `row.source` arrives non-null on a future adapter, that
+        //   adapter must add its own justification comment.
+        source: row.source ?? null,
         source_detail: row.source_detail ?? null,
         wedding_date: row.wedding_date ?? null,
         guest_count_estimate: row.guest_count_estimate ?? null,
@@ -359,6 +374,10 @@ export async function commitNormalisedRows(args: {
         // T5-Rixey-RR fix #1: CRM exports often round-trip user-pasted
         // rich text — strip HTML at the writer so structured readers
         // (lead_source derivation regex, AI grounding) never see tags.
+        // T5-Rixey-TT: also passes extracted_identity (factual attribution
+        // metadata from CSVs e.g. HoneyBook's "Lead Source" column,
+        // Calendly's Q7 answer) so lead-source-derivation Priority-2
+        // can read it without adapters touching weddings.source.
         const interactionPayloads = row.interactions.map((i) => {
           const cleanBody = i.body ? htmlToText(i.body) : null
           return {
@@ -372,6 +391,7 @@ export async function commitNormalisedRows(args: {
             timestamp: i.occurred_at,
             confidence_flag: confidenceFlag,
             crm_source: crmSource,
+            extracted_identity: i.extracted_identity ?? null,
           }
         })
         const { error: intErr } = await supabase.from('interactions').insert(interactionPayloads)

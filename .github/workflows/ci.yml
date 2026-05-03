@@ -128,3 +128,5 @@ jobs:
 
       - name: Schema guard — every .upsert onConflict has a matching unique constraint (T5-Rixey-RR)
         run: node scripts/check-on-conflict-constraints.mjs
+      - name: Adapter-as-facts guard — CRM-import adapters cannot write weddings.source (T5-Rixey-TT)
+        run: node scripts/check-adapter-source-justification.mjs
