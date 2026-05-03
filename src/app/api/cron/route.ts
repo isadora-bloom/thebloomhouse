@@ -1148,9 +1148,17 @@ async function refreshAttributionAllVenues(): Promise<Record<string, boolean>> {
       // Calculate source attribution from weddings + marketing_spend.
       // Pull `month` from marketing_spend so we can year-bucket the
       // spend side (matches the wedding-side year extraction below).
+      //
+      // T5-Rixey-WW: pull lead_source FIRST. Stream TT's adapter-as-facts
+      // refactor (migration 187) NULLed weddings.source for any row
+      // stamped with a scheduling-tool / CRM provenance value, on the
+      // contract that lead_source is the canonical attribution column
+      // populated by the lead-source-derivation cron. We keep `source`
+      // as a final fallback so legacy / pre-derivation rows (and venues
+      // not yet migrated) still bucket somewhere.
       const { data: weddings } = await supabase
         .from('weddings')
-        .select('source, status, booking_value, created_at, inquiry_date')
+        .select('lead_source, source, status, booking_value, created_at, inquiry_date')
         .eq('venue_id', id)
 
       const { data: spend } = await supabase
@@ -1168,7 +1176,10 @@ async function refreshAttributionAllVenues(): Promise<Record<string, boolean>> {
       const empty = (): Bucket => ({ inquiries: 0, tours: 0, bookings: 0, revenue: 0, spend: 0 })
 
       for (const w of weddings) {
-        const src = (w.source as string | null) || 'unknown'
+        // Prefer lead_source (post-Stream-TT canonical), fall back to
+        // source (pre-migration-187 rows / venues without derivation
+        // run yet), then 'unknown'.
+        const src = (w.lead_source as string | null) || (w.source as string | null) || 'unknown'
         const dateStr = (w.inquiry_date as string | null) ?? (w.created_at as string | null)
         if (!dateStr) continue
         const year = new Date(dateStr).getUTCFullYear()

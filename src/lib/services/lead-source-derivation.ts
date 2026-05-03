@@ -190,12 +190,31 @@ async function tryPriority2TourQa(
   //   (a) interactions.extracted_identity (jsonb) — may contain
   //       hear_source under a parsed field.
   //   (b) interactions.subject + full_body for the literal Q.
+  //
+  // T5-Rixey-WW: ALSO walk interactions on merged-loser weddings
+  // (weddings.merged_into_id = this.id). Stream-KK reconciliation
+  // collapses Calendly + HoneyBook duplicates into a single winner;
+  // the Calendly side carries the Q7 hear_source on its meeting
+  // interactions, but those interactions stay attached to the LOSER
+  // wedding. Without this expansion, Priority 2 silently misses every
+  // post-merge Calendly Q7 because the winner's direct interaction
+  // set has no hear_source. Constitution invariant: losers are never
+  // hard-deleted (merged_into_id is the soft-delete pointer); their
+  // forensic record SHOULD still inform attribution on the winner.
+  const loserIds: string[] = []
+  const { data: losers } = await supabase
+    .from('weddings')
+    .select('id')
+    .eq('merged_into_id', wedding.id)
+  for (const l of (losers ?? []) as Array<{ id: string }>) loserIds.push(l.id)
+  const wedIdSet = [wedding.id, ...loserIds]
+
   const { data: interactions, error } = await supabase
     .from('interactions')
-    .select('id, subject, full_body, extracted_identity, timestamp, type')
-    .eq('wedding_id', wedding.id)
+    .select('id, subject, full_body, extracted_identity, timestamp, type, wedding_id')
+    .in('wedding_id', wedIdSet)
     .order('timestamp', { ascending: true })
-    .limit(20)
+    .limit(40)
   if (error) return null
 
   for (const i of (interactions ?? []) as Array<Record<string, unknown>>) {
