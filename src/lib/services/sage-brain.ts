@@ -15,6 +15,7 @@
 import { callAI } from '@/lib/ai/client'
 import {
   buildPersonalityPrompt,
+  buildSignoffBlock,
   requireAiName,
   type PersonalityData,
 } from '@/lib/ai/personality-builder'
@@ -302,13 +303,38 @@ async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
     else if (type === 'dimension') dimensions[content] = score
   }
 
+  // T5-Rixey-FFF: portal-Sage chat sign-off uses the same structured
+  // builder as the email brains so a couple seeing Sage's "About me"
+  // panel or any rare email-shaped output never gets a hallucinated
+  // role title or tagline. The aiName here is best-effort
+  // (`config.ai_name as string` may be undefined for rows pre-162) —
+  // we tolerate it because portal-Sage isn't an outbound email path
+  // and never assembles into RFC822, so a missing aiName degrades the
+  // signoff to '<venue>' rather than throwing.
+  const aiName = ((config.ai_name as string | undefined)?.trim()) || 'your AI assistant'
+  const aiEmoji = ((config.ai_emoji as string | undefined) ?? '')
+  const venueName = ((venue as { name?: string }).name as string | undefined) ?? 'the venue'
+  const structuredSignoff = buildSignoffBlock({
+    aiName,
+    aiEmoji,
+    aiRoleTitle: (config.ai_role_title as string | null) ?? null,
+    venueName,
+    signatureTagline: (config.signature_tagline as string | null) ?? null,
+    signatureWebsite: (config.signature_website as string | null) ?? null,
+    signaturePhone:
+      ((config.signature_phone as string | null) ?? null) ||
+      (((venueConfig as { coordinator_phone?: string | null }).coordinator_phone as string | null) ?? null),
+    signatureCloser: (config.signature_closer as string | null) ?? null,
+    signatureTextCapable: (config.signature_text_capable as boolean | null) ?? false,
+  })
+
   return {
     config: config as PersonalityData['config'],
     venue: venue as PersonalityData['venue'],
     venue_config: venueConfig as PersonalityData['venue_config'],
     usps,
     seasonal,
-    signoff: (config.signoff as string) ?? '',
+    signoff: structuredSignoff,
     voice_preferences:
       bannedPhrases.length > 0 || approvedPhrases.length > 0 || Object.keys(dimensions).length > 0
         ? { banned_phrases: bannedPhrases, approved_phrases: approvedPhrases, dimensions }

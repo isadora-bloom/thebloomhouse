@@ -17,6 +17,7 @@
 import { callAI } from '@/lib/ai/client'
 import {
   buildPersonalityPrompt,
+  buildSignoffBlock,
   requireAiName,
   type PersonalityData,
 } from '@/lib/ai/personality-builder'
@@ -172,10 +173,30 @@ async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
 
   // Build sign-off. ai_name is required — throw early so a missing
   // venue_ai_config row can't ship the wrong venue's brand. T5-β.1.
+  //
+  // T5-Rixey-FFF (migration 195): the sign-off is now a STRUCTURED
+  // block built from venue_ai_config columns rather than two
+  // hardcoded lines (aiName + venueName) that left Claude to
+  // hallucinate the role title / tagline / website / phone / "you can
+  // text" line. Falling back to coordinator_phone preserves the
+  // pre-195 behaviour for venues that have not filled in
+  // signature_phone yet.
   const aiName = requireAiName(aiConfig as { ai_name?: string | null }, venueId)
   const aiEmoji = (aiConfig.ai_emoji as string) ?? ''
   const venueName = (venue?.name as string) ?? 'the venue'
-  const signoff = `${aiEmoji ? aiEmoji + ' ' : ''}${aiName}\n${venueName}`
+  const signoff = buildSignoffBlock({
+    aiName,
+    aiEmoji,
+    aiRoleTitle: (aiConfig.ai_role_title as string | null) ?? null,
+    venueName,
+    signatureTagline: (aiConfig.signature_tagline as string | null) ?? null,
+    signatureWebsite: (aiConfig.signature_website as string | null) ?? null,
+    signaturePhone:
+      ((aiConfig.signature_phone as string | null) ?? null) ||
+      ((venueConfig?.coordinator_phone as string | null) ?? null),
+    signatureCloser: (aiConfig.signature_closer as string | null) ?? null,
+    signatureTextCapable: (aiConfig.signature_text_capable as boolean | null) ?? false,
+  })
 
   return {
     config: aiConfig,

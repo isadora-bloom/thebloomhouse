@@ -109,6 +109,217 @@ function getTier(score: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// T5-Rixey-FFF: cohort-aware tier cap.
+//
+// Bug 6 root cause: lead detail simultaneously showed
+//   "100 Hot — high engagement but volatile trajectory"
+//   "Look-alike cohort: 0/10 booked (0%) — comparable leads aren't booking"
+// The cohort-match insight knew the lead was structurally unlikely to
+// convert; the heat score did not. The two intelligence layers
+// disagreed on the same lead, and the coordinator was left to
+// reconcile.
+//
+// Damping is a multiplicative factor on the FINAL heat score AFTER
+// all engagement-event sums + Phase B contribution. We do NOT modify
+// historical lead_score_history rows — those are observations of
+// what the score was at that moment. Future trajectory snapshots
+// will reflect the damped value naturally because they read the
+// post-damping score from weddings.heat_score.
+//
+// Tier cap is separate from the score multiplier: even a damped 70
+// raw score should not be allowed to display as "Hot" when the
+// cohort signal is extreme. The cap clamps the displayed tier
+// downward without further mutating the numeric score, so the chart
+// continues to show the (damped) numeric value while the badge text
+// reflects the structural skepticism.
+// ---------------------------------------------------------------------------
+
+const COHORT_DAMPING_THRESHOLD_LOW = 0.10   // < 10% conversion → 0.5x + cap at warm
+const COHORT_DAMPING_THRESHOLD_MID = 0.20   // < 20% conversion → 0.7x (no tier cap, but lower)
+const COHORT_DAMPING_LOW_MULTIPLIER = 0.5
+const COHORT_DAMPING_MID_MULTIPLIER = 0.7
+const COHORT_MIN_MEMBERS_FOR_DAMPING = 5    // align with cohort-match MIN_COHORT_SIZE
+const COHORT_RECENCY_YEARS = 3              // align with cohort-match RECENCY_CAP_YEARS
+const DAY_MS_FOR_COHORT = 86_400_000
+
+/**
+ * Lightweight cohort-rate fetch for heat damping. NOT the full
+ * cohort-match generator — that one runs an LLM narration, which is
+ * far too expensive to call on every recalculateHeatScore. This
+ * function reuses the SAME cohort criteria (same venue, terminal
+ * status, last 3 years, similar guest_count + season + source) and
+ * returns just the booked / total ratio.
+ *
+ * Returns null when the cohort is too small to be informative; the
+ * caller treats null as "no damping signal" and skips damping
+ * entirely — better to leave heat scoring alone than to damp on a
+ * 1-or-2-member cohort.
+ */
+export async function getCohortBookingRate(
+  supabase: ReturnType<typeof createServiceClient>,
+  venueId: string,
+  weddingId: string,
+): Promise<{ rate: number; nTotal: number; nBooked: number } | null> {
+  // Current lead features.
+  const { data: current } = await supabase
+    .from('weddings')
+    .select('id, guest_count_estimate, source, wedding_date')
+    .eq('id', weddingId)
+    .eq('venue_id', venueId)
+    .maybeSingle()
+  if (!current) return null
+
+  const currentRow = current as {
+    id: string
+    guest_count_estimate: number | null
+    source: string | null
+    wedding_date: string | null
+  }
+  const currentSeason = deriveSeasonForDate(currentRow.wedding_date)
+  const currentGuestCount = currentRow.guest_count_estimate
+  const currentSource = currentRow.source
+
+  // Cohort candidates — same venue, terminal status, last 3 years,
+  // not the current row. Mirrors loadClassicalCohortEvidence in
+  // cohort-match.ts.
+  const cutoff = new Date(Date.now() - COHORT_RECENCY_YEARS * 365 * DAY_MS_FOR_COHORT).toISOString()
+  const { data: candidates } = await supabase
+    .from('weddings')
+    .select('id, status, guest_count_estimate, source, wedding_date')
+    .eq('venue_id', venueId)
+    .neq('id', weddingId)
+    .in('status', ['booked', 'completed', 'lost'])
+    .gte('inquiry_date', cutoff)
+
+  if (!candidates || candidates.length < COHORT_MIN_MEMBERS_FOR_DAMPING) {
+    return null
+  }
+
+  // Score similarity. We use the same weighted dim model as
+  // cohort-match (guest_count z-score + season match + source
+  // match), and take the top 10 to define the cohort. Keeping the
+  // logic identical here means the heat-damping cohort and the
+  // displayed cohort-match insight talk about THE SAME 10 weddings.
+  // If they ever drift, coordinators will see a heat damping that
+  // disagrees with the cohort tile, which is exactly the bug we are
+  // fixing.
+  const guestCounts = candidates
+    .map((c) => (c as { guest_count_estimate: number | null }).guest_count_estimate)
+    .filter((v): v is number => v !== null)
+  const guestStats = computeMeanStd(guestCounts)
+
+  type Cand = {
+    id: string
+    status: string
+    guest_count_estimate: number | null
+    source: string | null
+    wedding_date: string | null
+  }
+  const scored: Array<{ cand: Cand; similarity: number; dimsUsed: number }> = []
+  for (const raw of candidates as Cand[]) {
+    const candSeason = deriveSeasonForDate(raw.wedding_date)
+    let total = 0
+    let weight = 0
+    let dims = 0
+
+    if (currentGuestCount !== null && raw.guest_count_estimate !== null) {
+      const zCurrent = (currentGuestCount - guestStats.mean) / guestStats.std
+      const zCand = (raw.guest_count_estimate - guestStats.mean) / guestStats.std
+      const sim = Math.exp(-Math.abs(zCurrent - zCand))
+      total += sim * 1.0
+      weight += 1.0
+      dims++
+    }
+    if (currentSeason !== null && candSeason !== null) {
+      total += (currentSeason === candSeason ? 1 : 0) * 0.8
+      weight += 0.8
+      dims++
+    }
+    if (currentSource !== null && raw.source !== null) {
+      total += (currentSource === raw.source ? 1 : 0) * 0.5
+      weight += 0.5
+      dims++
+    }
+
+    if (dims === 0 || weight === 0) continue
+    scored.push({ cand: raw, similarity: total / weight, dimsUsed: dims })
+  }
+
+  if (scored.length < COHORT_MIN_MEMBERS_FOR_DAMPING) return null
+
+  const sorted = scored.sort((a, b) => {
+    if (b.similarity !== a.similarity) return b.similarity - a.similarity
+    return b.dimsUsed - a.dimsUsed
+  }).slice(0, 10)
+
+  if (sorted.length < COHORT_MIN_MEMBERS_FOR_DAMPING) return null
+
+  const nBooked = sorted.filter((s) => s.cand.status === 'booked' || s.cand.status === 'completed').length
+  const nTotal = sorted.length
+  return { rate: nBooked / nTotal, nTotal, nBooked }
+}
+
+function deriveSeasonForDate(weddingDate: string | null): 'spring' | 'summer' | 'fall' | 'winter' | null {
+  if (!weddingDate) return null
+  const m = Number(weddingDate.slice(5, 7))
+  if (!m || m < 1 || m > 12) return null
+  if (m >= 3 && m <= 5) return 'spring'
+  if (m >= 6 && m <= 8) return 'summer'
+  if (m >= 9 && m <= 11) return 'fall'
+  return 'winter'
+}
+
+function computeMeanStd(values: number[]): { mean: number; std: number } {
+  const n = values.length
+  if (n === 0) return { mean: 0, std: 1 }
+  const mean = values.reduce((a, b) => a + b, 0) / n
+  if (n < 2) return { mean, std: 1 }
+  const v = values.reduce((acc, x) => acc + (x - mean) * (x - mean), 0) / (n - 1)
+  return { mean, std: Math.sqrt(v) || 1 }
+}
+
+/**
+ * Compute the post-damping score and the cohort-capped tier.
+ *
+ * Returns the input score / tier untouched when no cohort signal is
+ * available (cohort < 5 members) or when the cohort booking rate is
+ * non-pathological (>= 20%). When the rate is below the mid threshold
+ * we apply a multiplicative damping factor on the score; when below
+ * the low threshold we additionally cap the displayed tier at "warm"
+ * regardless of the post-damping numeric.
+ *
+ * Caller is expected to forward `cohort` from `getCohortBookingRate`.
+ */
+export function applyCohortDamping(
+  rawScore: number,
+  cohort: { rate: number; nTotal: number; nBooked: number } | null,
+): { dampedScore: number; cappedTier: string; multiplier: number } {
+  const rawTier = getTier(rawScore)
+  if (!cohort || cohort.nTotal < COHORT_MIN_MEMBERS_FOR_DAMPING) {
+    return { dampedScore: rawScore, cappedTier: rawTier, multiplier: 1.0 }
+  }
+
+  let multiplier = 1.0
+  if (cohort.rate < COHORT_DAMPING_THRESHOLD_LOW) {
+    multiplier = COHORT_DAMPING_LOW_MULTIPLIER
+  } else if (cohort.rate < COHORT_DAMPING_THRESHOLD_MID) {
+    multiplier = COHORT_DAMPING_MID_MULTIPLIER
+  }
+  const dampedScore = Math.round(rawScore * multiplier)
+  let cappedTier = getTier(dampedScore)
+
+  // Tier cap at "warm" when the cohort signal is extreme (< 10%).
+  // Even a damped numeric of 80+ should NOT display as "Hot" when
+  // 9 of 10 comparable leads went elsewhere; the cohort information
+  // is too strong a counter-signal. The numeric stays as computed so
+  // the trajectory chart shows the actual damped value.
+  if (cohort.rate < COHORT_DAMPING_THRESHOLD_LOW) {
+    if (cappedTier === 'hot') cappedTier = 'warm'
+  }
+  return { dampedScore, cappedTier, multiplier }
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -558,8 +769,54 @@ export async function recalculateHeatScore(
   totalScore += Math.min(20, phaseBContribution)
 
   // Clamp score to 0-100
-  const newScore = Math.max(0, Math.min(100, Math.round(totalScore)))
-  const temperatureTier = getTier(newScore)
+  const rawScore = Math.max(0, Math.min(100, Math.round(totalScore)))
+
+  // T5-Rixey-FFF Bug 6: cohort-aware damping. Pull the lookalike
+  // cohort booking rate; when comparable leads aren't booking, damp
+  // the heat score and (if the rate is extreme) cap the displayed
+  // tier. We damp on the FINAL score, not on individual events, so
+  // historical lead_score_history rows retain their original (raw)
+  // observation values — the trajectory chart for this wedding will
+  // show the damping kick in from this snapshot forward, which is
+  // factually accurate (the cohort signal arrived now).
+  let cohort: { rate: number; nTotal: number; nBooked: number } | null = null
+  try {
+    cohort = await getCohortBookingRate(supabase, venueId, weddingId)
+  } catch (err) {
+    // Cohort lookup is enrichment, not critical. Heat scoring still
+    // runs with raw score on lookup failure.
+    console.warn('[heat-mapping] cohort rate lookup failed:', (err as Error).message)
+  }
+
+  const damping = applyCohortDamping(rawScore, cohort)
+  const newScore = damping.dampedScore
+  const temperatureTier = damping.cappedTier
+
+  // Observability: when damping fired, emit a structured event so
+  // operators can audit which weddings were re-rated by the cohort
+  // signal. Stays a console line (no DB write) because heat
+  // recompute runs on every email and we don't want to flood
+  // intelligence_insights with informational rows. The data is
+  // sufficient to reconstruct the decision: venue, wedding, raw vs
+  // damped score, the cohort rate / size, and the resulting tier
+  // cap (if any).
+  if (damping.multiplier !== 1.0 || damping.cappedTier !== getTier(rawScore)) {
+    console.log(
+      JSON.stringify({
+        event: 'heat_score_cohort_damped',
+        venue_id: venueId,
+        wedding_id: weddingId,
+        raw_score: rawScore,
+        damped_score: newScore,
+        multiplier: damping.multiplier,
+        raw_tier: getTier(rawScore),
+        capped_tier: damping.cappedTier,
+        cohort_rate: cohort?.rate ?? null,
+        cohort_n_total: cohort?.nTotal ?? null,
+        cohort_n_booked: cohort?.nBooked ?? null,
+      })
+    )
+  }
 
   // Update wedding record
   await supabase
