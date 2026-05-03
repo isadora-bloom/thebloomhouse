@@ -120,10 +120,13 @@ export async function POST(request: NextRequest) {
 
     // Use upsert on the unique key so re-running the confirm step
     // doesn't double-insert when the coordinator iterates.
+    // T5-Rixey-XX: matched by uq_packages_venue_kind_name_season_guests
+    // (mig 188; NULLS NOT DISTINCT so NULL season / guest band collide
+    // with another NULL row — the migration-178 inline UNIQUE had the
+    // wrong NULLS-DISTINCT semantics for this writer and is dropped).
     const { data, error } = await supabase
       .from('packages')
       .upsert(payloads, {
-        // onConflict-skip-check: T5-Rixey-RR finding — packages has no matching composite unique; needs migration in follow-up
         onConflict: 'venue_id,kind,name,season,guest_count_min,guest_count_max',
         ignoreDuplicates: false,
       })

@@ -346,8 +346,13 @@ export default function BudgetPage() {
     setEditingBudget(false)
     await supabase
       .from('wedding_config')
-      // onConflict-skip-check: T5-Rixey-RR finding — wedding_config(wedding_id) unique missing; (venue_id, wedding_id) exists; needs migration in follow-up
-      .upsert({ wedding_id: weddingId, total_budget: amount }, { onConflict: 'wedding_id' })
+      // T5-Rixey-XX: wedding_config has UNIQUE(venue_id, wedding_id) (mig 017).
+      // ON CONFLICT must name BOTH columns to match the index; payload must
+      // carry venue_id or the insert path violates the NOT NULL constraint.
+      .upsert(
+        { venue_id: venueId, wedding_id: weddingId, total_budget: amount },
+        { onConflict: 'venue_id,wedding_id' },
+      )
   }
 
   // ---- Share toggle ----
@@ -356,8 +361,11 @@ export default function BudgetPage() {
     setShareWithVenue(val)
     await supabase
       .from('wedding_config')
-      // onConflict-skip-check: T5-Rixey-RR finding — wedding_config(wedding_id) unique missing; needs migration in follow-up
-      .upsert({ wedding_id: weddingId, budget_shared: val }, { onConflict: 'wedding_id' })
+      // T5-Rixey-XX: see saveTotalBudget() comment — UNIQUE(venue_id, wedding_id).
+      .upsert(
+        { venue_id: venueId, wedding_id: weddingId, budget_shared: val },
+        { onConflict: 'venue_id,wedding_id' },
+      )
   }
 
   // ---- Item modal ----

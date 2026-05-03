@@ -292,7 +292,7 @@ export default function WeddingWebsitePage() {
   async function saveSettings(updated?: Partial<WebsiteSettings>) {
     setSaving(true)
     const payload = { ...settings, ...updated, wedding_id: weddingId, venue_id: venueId }
-    // onConflict-skip-check: T5-Rixey-RR finding — wedding_website_settings(wedding_id) unique missing; needs migration in follow-up
+    // T5-Rixey-XX: matched by uq_wedding_website_settings_wedding_id (mig 188).
     await supabase.from('wedding_website_settings').upsert(payload, { onConflict: 'wedding_id' })
     if (updated) setSettings(prev => ({ ...prev, ...updated }))
     setSaving(false)
