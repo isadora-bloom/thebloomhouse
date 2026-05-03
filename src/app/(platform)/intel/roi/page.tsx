@@ -305,8 +305,9 @@ export default function ROIDashboardPage() {
         data: Array<{ booking_value: number | null }> | null
       }
 
+      // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
       const pipelineValue = (pipelineData ?? []).reduce(
-        (sum, r) => sum + (r.booking_value ?? 0),
+        (sum, r) => sum + (r.booking_value ?? 0) / 100,
         0
       )
 

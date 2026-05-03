@@ -382,7 +382,9 @@ export async function benchmarkVenue(venueId: string): Promise<BenchmarkComparis
   const totalBooked = weddings.filter((w) => w.status === 'booked').length
   const conversionRate = totalInquiries > 0 ? totalBooked / totalInquiries : null
 
-  const bookingValues = (bookingValueResult.data ?? []).map((w) => w.booking_value as number)
+  // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars
+  // so the comparison against industry_benchmarks (stored in dollars) is meaningful.
+  const bookingValues = (bookingValueResult.data ?? []).map((w) => (w.booking_value as number) / 100)
   const avgBookingValue = bookingValues.length > 0
     ? bookingValues.reduce((a, b) => a + b, 0) / bookingValues.length
     : null

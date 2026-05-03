@@ -304,7 +304,8 @@ function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; 
           {wedding.booking_value != null && (
             <span className="flex items-center gap-1.5 text-sage-600">
               <DollarSign className="w-3.5 h-3.5 text-sage-400" />
-              {fmt$(wedding.booking_value)}
+              {/* booking_value is cents (Bloom convention; T5-Rixey-NN bug #8) */}
+              {fmt$(wedding.booking_value / 100)}
             </span>
           )}
           {totalChecklist > 0 && (
@@ -543,7 +544,9 @@ function NewBookingModal({
           wedding_date: form.weddingDate || null,
           guest_count_estimate: form.guestCount ? parseInt(form.guestCount) : null,
           source: form.source ? normalizeSource(form.source) : null,
-          booking_value: form.estimatedValue ? parseFloat(form.estimatedValue) : null,
+          // T5-Rixey-NN bug #8: weddings.booking_value is in cents per the
+          // Bloom convention. The form input is dollars; convert.
+          booking_value: form.estimatedValue ? Math.round(parseFloat(form.estimatedValue) * 100) : null,
           notes: form.notes || null,
           event_code: code,
           couple_invited_at: form.sendInvite ? new Date().toISOString() : null,
@@ -563,7 +566,9 @@ function NewBookingModal({
               wedding_date: form.weddingDate || null,
               guest_count_estimate: form.guestCount ? parseInt(form.guestCount) : null,
               source: form.source ? normalizeSource(form.source) : null,
-              booking_value: form.estimatedValue ? parseFloat(form.estimatedValue) : null,
+              // T5-Rixey-NN bug #8: weddings.booking_value is in cents per the
+          // Bloom convention. The form input is dollars; convert.
+          booking_value: form.estimatedValue ? Math.round(parseFloat(form.estimatedValue) * 100) : null,
               notes: form.notes || null,
               event_code: retryCode,
               couple_invited_at: form.sendInvite ? new Date().toISOString() : null,

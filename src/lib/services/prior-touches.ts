@@ -51,13 +51,18 @@ export async function getPriorTouches(args: {
   // storefront activity linked by matching).
   const { data: signals } = await supabase
     .from('tangential_signals')
-    .select('signal_type, extracted_identity, source_context, signal_date, created_at')
+    .select('signal_type, extracted_identity, source_platform, source_context, signal_date, created_at')
     .eq('venue_id', venueId)
     .eq('matched_person_id', personId)
     .order('signal_date', { ascending: false, nullsFirst: false })
   for (const s of signals ?? []) {
     const ei = (s.extracted_identity ?? {}) as Record<string, unknown>
-    const platform = String(ei.platform ?? 'other')
+    // T5-Rixey-NN bug #2: storefront-analytics-import + web-form intake
+    // populate the row-level source_platform column instead of
+    // extracted_identity.platform. Fall back so prior-touch labels carry
+    // the real platform name (the_knot / weddingwire / website_form)
+    // rather than a generic 'other'.
+    const platform = String(ei.platform ?? s.source_platform ?? 'other')
     const when = (s.signal_date as string | null) ?? (s.created_at as string)
     if (when > before) continue
     const type = String(s.signal_type ?? 'other')

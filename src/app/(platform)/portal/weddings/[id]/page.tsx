@@ -489,7 +489,8 @@ function OverviewTab({
           </div>
           <div>
             <p className="text-xs text-sage-500">Booking Value</p>
-            <p className="font-medium text-sage-900">{fmt$(wedding.booking_value)}</p>
+            {/* booking_value is cents per Bloom convention (T5-Rixey-NN bug #8) */}
+            <p className="font-medium text-sage-900">{fmt$(wedding.booking_value != null ? wedding.booking_value / 100 : null)}</p>
           </div>
           <div>
             <p className="text-xs text-sage-500">Coordinator</p>

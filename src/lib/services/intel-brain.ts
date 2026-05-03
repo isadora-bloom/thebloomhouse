@@ -1120,7 +1120,8 @@ function formatDataContext(data: VenueDataContext): string {
   if (data.recentWeddings.length > 0) {
     const weddingLines = data.recentWeddings.map((w) => {
       const parts = [`status=${w.status}`, `source=${w.source ?? 'unknown'}`]
-      if (w.booking_value) parts.push(`value=$${w.booking_value}`)
+      // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); show dollars.
+      if (w.booking_value) parts.push(`value=$${(w.booking_value / 100).toFixed(2)}`)
       if (w.guest_count_estimate) parts.push(`guests=${w.guest_count_estimate}`)
       if (w.wedding_date) parts.push(`date=${w.wedding_date}`)
       if (w.inquiry_date) parts.push(`inquiry=${w.inquiry_date}`)

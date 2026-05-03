@@ -210,7 +210,8 @@ function ClientsPageInner() {
         status: w.status,
         source: w.source ?? 'Unknown source',
         eventDate: w.wedding_date,
-        revenue: w.booking_value ?? 0,
+        // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
+        revenue: (w.booking_value ?? 0) / 100,
         coordinator: '--',
         created_at: w.created_at,
         notes: [],

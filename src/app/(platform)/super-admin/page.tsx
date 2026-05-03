@@ -137,7 +137,8 @@ export default function SuperAdminPage() {
       venueStats[w.venue_id].inquiries += 1
       if (w.status === 'booked' || w.status === 'completed') {
         venueStats[w.venue_id].bookings += 1
-        venueStats[w.venue_id].revenue += Number(w.booking_value) || 0
+        // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
+        venueStats[w.venue_id].revenue += (Number(w.booking_value) || 0) / 100
       }
     }
 

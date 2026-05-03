@@ -155,7 +155,8 @@ export default function ForecastsPage() {
       let pipeline = 0
 
       for (const w of qWeddings) {
-        const val = w.booking_value ?? 0
+        // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
+        const val = (w.booking_value ?? 0) / 100
         const weight = WEIGHTS[w.status] ?? 0.3
         if (['contracted', 'completed'].includes(w.status)) {
           contracted += val
@@ -187,19 +188,20 @@ export default function ForecastsPage() {
     totalForecast > 0 ? Math.round((totalContracted / totalForecast) * 100) : 0
 
   // YoY comparison
+  // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
   const thisYearRevenue = weddings
     .filter((w) => {
       const d = w.wedding_date ?? w.created_at
       return d.startsWith(String(new Date().getFullYear())) && ['contracted', 'completed'].includes(w.status)
     })
-    .reduce((s, w) => s + (w.booking_value ?? 0), 0)
+    .reduce((s, w) => s + (w.booking_value ?? 0) / 100, 0)
 
   const lastYearRevenue = weddings
     .filter((w) => {
       const d = w.wedding_date ?? w.created_at
       return d.startsWith(String(new Date().getFullYear() - 1)) && ['contracted', 'completed'].includes(w.status)
     })
-    .reduce((s, w) => s + (w.booking_value ?? 0), 0)
+    .reduce((s, w) => s + (w.booking_value ?? 0) / 100, 0)
 
   const yoyChange = lastYearRevenue > 0 ? ((thisYearRevenue - lastYearRevenue) / lastYearRevenue) * 100 : 0
 

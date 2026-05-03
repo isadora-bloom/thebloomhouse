@@ -745,7 +745,8 @@ function formatMetricValue(metricName: string, value: number): string {
     case 'lost_deal_rate':
       return `${(value * 100).toFixed(1)}%`
     case 'avg_booking_value':
-      return `$${Math.round(value).toLocaleString()}`
+      // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); show dollars.
+      return `$${Math.round(value / 100).toLocaleString()}`
     case 'engagement_rate':
       return `${(value * 100).toFixed(1)}% engagement per inquiry`
     case 'candidate_volume':

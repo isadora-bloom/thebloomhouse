@@ -222,9 +222,10 @@ function CompanyDashboardInner() {
   const totalBookings = ytdWeddings.filter((w) =>
     ['booked', 'contracted', 'completed'].includes(w.status)
   ).length
+  // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
   const totalRevenue = ytdWeddings
     .filter((w) => ['booked', 'contracted', 'completed'].includes(w.status))
-    .reduce((sum, w) => sum + (w.booking_value ?? 0), 0)
+    .reduce((sum, w) => sum + (w.booking_value ?? 0) / 100, 0)
   const avgBookingRate =
     totalInquiries > 0 ? totalBookings / totalInquiries : 0
 
@@ -245,7 +246,8 @@ function CompanyDashboardInner() {
             ['booked', 'contracted', 'completed'].includes(w.status)
           )
         })
-        .reduce((s, w) => s + (w.booking_value ?? 0), 0)
+        // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
+        .reduce((s, w) => s + (w.booking_value ?? 0) / 100, 0)
       months.push({ month: label, revenue: rev })
     }
     return months
@@ -302,9 +304,10 @@ function CompanyDashboardInner() {
       const bookings = bookedList.length
       const tourRate = inquiries > 0 ? tours / inquiries : 0
       const bookingRate = inquiries > 0 ? bookings / inquiries : 0
+      // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
       const avgRevenue =
         bookings > 0
-          ? bookedList.reduce((s, w) => s + (w.booking_value ?? 0), 0) / bookings
+          ? bookedList.reduce((s, w) => s + (w.booking_value ?? 0) / 100, 0) / bookings
           : 0
 
       // Source diversity

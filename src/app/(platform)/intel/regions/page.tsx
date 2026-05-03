@@ -165,7 +165,8 @@ function RegionalAnalyticsPageInner() {
             name: v.name,
             inquiries: vw.length,
             bookings: vb.length,
-            revenue: vb.reduce((s, w) => s + (w.booking_value ?? 0), 0),
+            // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
+            revenue: vb.reduce((s, w) => s + (w.booking_value ?? 0) / 100, 0),
           }
         })
 
@@ -174,7 +175,8 @@ function RegionalAnalyticsPageInner() {
           venueCount: stateVenues.length,
           inquiries: regionWeddings.length,
           bookings: booked.length,
-          revenue: booked.reduce((s, w) => s + (w.booking_value ?? 0), 0),
+          // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
+          revenue: booked.reduce((s, w) => s + (w.booking_value ?? 0) / 100, 0),
           venues: venueDetails,
         }
       })

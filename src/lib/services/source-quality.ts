@@ -144,7 +144,8 @@ export async function computeSourceQuality(
 
     if (!bySource[src]) bySource[src] = { ids: [], revenues: [], frictionHits: 0, referralHits: 0, daysToBook: [] }
     bySource[src].ids.push(w.id as string)
-    if (w.booking_value) bySource[src].revenues.push(Number(w.booking_value))
+    // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); store dollars in revenues array.
+    if (w.booking_value) bySource[src].revenues.push(Number(w.booking_value) / 100)
 
     const ft = w.friction_tags
     if (Array.isArray(ft) && ft.length > 0) bySource[src].frictionHits++

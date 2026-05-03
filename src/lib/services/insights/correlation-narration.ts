@@ -368,13 +368,16 @@ async function loadSeriesForChannels(
   if (tsChannels.length > 0) {
     const { data: ts } = await supabase
       .from('tangential_signals')
-      .select('extracted_identity, signal_date, created_at')
+      .select('extracted_identity, source_platform, signal_date, created_at')
       .eq('venue_id', venueId)
       .or(`signal_date.gte.${start.toISOString()},and(signal_date.is.null,created_at.gte.${start.toISOString()})`)
     const bySeries = new Map<string, Map<string, number>>()
     for (const r of ts ?? []) {
       const ei = (r.extracted_identity ?? {}) as Record<string, unknown>
-      const platform = String(ei.platform ?? 'other')
+      // T5-Rixey-NN bug #2: writers split between extracted_identity.platform
+      // and the row-level source_platform column. Reader prefers ei.platform
+      // (more specific signal) then falls back to source_platform.
+      const platform = String(ei.platform ?? r.source_platform ?? 'other')
       const when = (r.signal_date as string | null) ?? (r.created_at as string)
       const k = new Date(when).toISOString().slice(0, 10)
       const seriesKey = `${platform}_signals`

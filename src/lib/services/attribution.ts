@@ -173,7 +173,8 @@ export async function computeSourceFunnel(
       revenue: 0,
       creditedSources: new Map<string | null, number>(),
     }
-    if (ind.booked) ind.revenue = Number(w.booking_value ?? 0)
+    // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); store dollars in revenue.
+    if (ind.booked) ind.revenue = Number(w.booking_value ?? 0) / 100
 
     // Source credit is model-dependent. Use weddings.source as the
     // canonical first-touch (it's normalized by email-pipeline at

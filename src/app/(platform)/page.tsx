@@ -164,7 +164,8 @@ export default function DashboardPage() {
         .gte('wedding_date', now.toISOString().split('T')[0])
         .lte('wedding_date', oneYear.toISOString().split('T')[0])
       const { data: revData } = await withVenueFilter(revQ as never) as { data: Array<{ booking_value: number | null }> | null }
-      const bookedRevenue = (revData ?? []).reduce((sum, r) => sum + (r.booking_value ?? 0), 0)
+      // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
+      const bookedRevenue = (revData ?? []).reduce((sum, r) => sum + (r.booking_value ?? 0) / 100, 0)
 
       // ---- AI cost this month ----
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
@@ -210,7 +211,8 @@ export default function DashboardPage() {
             if (w.status === 'inquiry') a.inquiries += 1
             if (w.status === 'booked') {
               a.booked += 1
-              a.revenue += w.booking_value ?? 0
+              // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8).
+              a.revenue += (w.booking_value ?? 0) / 100
             }
             aggregates.set(w.venue_id, a)
           }

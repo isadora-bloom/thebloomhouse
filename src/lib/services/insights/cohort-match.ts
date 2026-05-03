@@ -342,9 +342,12 @@ async function loadClassicalCohortEvidence(
       || m.confidence_flag === 'imported_medium',
   ).length
   const n_low_confidence = members.length - n_high_confidence
+  // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8);
+  // convert to dollars before computing median so the prompt + UI display
+  // matches user expectations.
   const bookingValues = members
     .filter((m) => m.outcome === 'booked' && m.booking_value !== null)
-    .map((m) => m.booking_value as number)
+    .map((m) => (m.booking_value as number) / 100)
   const daysToBookValues = members
     .filter((m) => m.days_to_book !== null)
     .map((m) => m.days_to_book as number)

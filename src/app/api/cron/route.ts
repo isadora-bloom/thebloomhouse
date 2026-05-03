@@ -1112,6 +1112,23 @@ async function applyDecayAllVenues(): Promise<
 
 /**
  * Refresh source attribution calculations for all venues.
+ *
+ * T5-Rixey-NN bug #4: pre-fix the cron wrote one row per (venue, source)
+ * tagged period_start = Jan 1 of CURRENT year, but read weddings +
+ * marketing_spend with no period filter. So 24 months of historical
+ * spend rolled into a row labeled "2026" which Sage misreported as
+ * "Jan-May 2026 spend". Now bucket by year: one row per
+ * (venue, source, year) with period_start=<year>-01-01,
+ * period_end=<year>-12-31 (Dec 31 even for the in-progress current
+ * year — keeps the period_start primary key stable across cron ticks).
+ *
+ * T5-Rixey-NN bug #8: weddings.booking_value is ALWAYS in cents per
+ * the Bloom convention (see src/lib/services/crm-import/index.ts:121
+ * + migration 175). The pre-fix sum here treated raw integer dollars
+ * and integer cents identically, producing the $51M phantom-revenue
+ * artifact. Convert booking_value to dollars when summing into
+ * source_attribution.revenue (which is decimal dollars, matching
+ * marketing_spend.amount).
  */
 async function refreshAttributionAllVenues(): Promise<Record<string, boolean>> {
   const supabase = createServiceClient()
@@ -1127,44 +1144,70 @@ async function refreshAttributionAllVenues(): Promise<Record<string, boolean>> {
   for (const v of venues) {
     const id = v.id as string
     try {
-      // Calculate source attribution from weddings + marketing_spend
+      // Calculate source attribution from weddings + marketing_spend.
+      // Pull `month` from marketing_spend so we can year-bucket the
+      // spend side (matches the wedding-side year extraction below).
       const { data: weddings } = await supabase
         .from('weddings')
-        .select('source, status, booking_value, created_at')
+        .select('source, status, booking_value, created_at, inquiry_date')
         .eq('venue_id', id)
 
       const { data: spend } = await supabase
         .from('marketing_spend')
-        .select('source, amount')
+        .select('source, amount, month')
         .eq('venue_id', id)
 
       if (!weddings) { results[id] = false; continue }
 
-      // Group by source
-      const sources = new Map<string, { inquiries: number; tours: number; bookings: number; revenue: number; spend: number }>()
+      // Bucket key: `${year}|${source}`. One source_attribution row per
+      // (venue, source, year). Year is derived from inquiry_date when
+      // present (more accurate first-touch year), else created_at.
+      type Bucket = { inquiries: number; tours: number; bookings: number; revenue: number; spend: number }
+      const buckets = new Map<string, Bucket>()
+      const empty = (): Bucket => ({ inquiries: 0, tours: 0, bookings: 0, revenue: 0, spend: 0 })
 
       for (const w of weddings) {
-        const src = w.source || 'unknown'
-        const existing = sources.get(src) || { inquiries: 0, tours: 0, bookings: 0, revenue: 0, spend: 0 }
-        existing.inquiries++
-        if (['tour_scheduled', 'tour_completed', 'proposal_sent', 'booked', 'completed'].includes(w.status)) existing.tours++
-        if (['booked', 'completed'].includes(w.status)) {
-          existing.bookings++
-          existing.revenue += Number(w.booking_value) || 0
+        const src = (w.source as string | null) || 'unknown'
+        const dateStr = (w.inquiry_date as string | null) ?? (w.created_at as string | null)
+        if (!dateStr) continue
+        const year = new Date(dateStr).getUTCFullYear()
+        if (!Number.isFinite(year)) continue
+        const k = `${year}|${src}`
+        const b = buckets.get(k) ?? empty()
+        b.inquiries++
+        if (['tour_scheduled', 'tour_completed', 'proposal_sent', 'booked', 'completed'].includes(w.status as string)) b.tours++
+        if (['booked', 'completed'].includes(w.status as string)) {
+          b.bookings++
+          // booking_value is cents per Bloom convention; convert to
+          // dollars for source_attribution.revenue.
+          const cents = Number(w.booking_value) || 0
+          b.revenue += cents / 100
         }
-        sources.set(src, existing)
+        buckets.set(k, b)
       }
 
-      // Add spend data
       for (const s of (spend || [])) {
-        const existing = sources.get(s.source) || { inquiries: 0, tours: 0, bookings: 0, revenue: 0, spend: 0 }
-        existing.spend += Number(s.amount) || 0
-        sources.set(s.source, existing)
+        const src = (s.source as string | null) || 'unknown'
+        const monthStr = s.month as string | null
+        if (!monthStr) continue
+        const year = new Date(monthStr).getUTCFullYear()
+        if (!Number.isFinite(year)) continue
+        const k = `${year}|${src}`
+        const b = buckets.get(k) ?? empty()
+        b.spend += Number(s.amount) || 0
+        buckets.set(k, b)
       }
 
-      // Upsert source_attribution records
+      // Upsert one row per (venue, source, year). period_start fixed at
+      // Jan 1 so the unique-index target (venue_id, source, period_start)
+      // stays stable across re-runs (migration 180).
       const now = new Date().toISOString()
-      for (const [source, data] of sources) {
+      for (const [k, data] of buckets) {
+        const [yearStr, source] = k.split('|', 2)
+        const year = Number(yearStr)
+        const periodStart = `${year}-01-01`
+        const periodEnd = `${year}-12-31`
+
         const costPerInquiry = data.inquiries > 0 ? data.spend / data.inquiries : 0
         const costPerBooking = data.bookings > 0 ? data.spend / data.bookings : 0
         const conversionRate = data.inquiries > 0 ? data.bookings / data.inquiries : 0
@@ -1173,8 +1216,8 @@ async function refreshAttributionAllVenues(): Promise<Record<string, boolean>> {
         await supabase.from('source_attribution').upsert({
           venue_id: id,
           source,
-          period_start: new Date(new Date().getFullYear(), 0, 1).toISOString(),
-          period_end: now,
+          period_start: periodStart,
+          period_end: periodEnd,
           spend: data.spend,
           inquiries: data.inquiries,
           tours: data.tours,

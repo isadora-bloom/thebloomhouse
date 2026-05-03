@@ -424,7 +424,8 @@ export default function PortfolioOverviewPage() {
       const allBooked = vWeddings.filter((w) =>
         ['booked', 'contracted', 'completed'].includes(w.status)
       )
-      const totalRevenue = allBooked.reduce((s, w) => s + (w.booking_value ?? 0), 0)
+      // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
+      const totalRevenue = allBooked.reduce((s, w) => s + (w.booking_value ?? 0) / 100, 0)
 
       // This month filters
       const thisMonth = vWeddings.filter(
@@ -434,7 +435,7 @@ export default function PortfolioOverviewPage() {
         ['booked', 'contracted', 'completed'].includes(w.status)
       )
       const revenueThisMonth = bookingsThisMonth.reduce(
-        (s, w) => s + (w.booking_value ?? 0),
+        (s, w) => s + (w.booking_value ?? 0) / 100,
         0
       )
 

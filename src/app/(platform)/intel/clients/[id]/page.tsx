@@ -922,7 +922,8 @@ export default function ClientProfilePage() {
                 <span className="text-xs text-sage-500">Booking Value</span>
               </div>
               <p className="text-sm font-semibold text-sage-900">
-                {wedding.booking_value ? fmt$(wedding.booking_value) : '--'}
+                {/* booking_value is cents per Bloom convention (T5-Rixey-NN bug #8) */}
+                {wedding.booking_value ? fmt$(wedding.booking_value / 100) : '--'}
               </p>
             </div>
             <div className="bg-surface border border-border rounded-xl p-4 shadow-sm">

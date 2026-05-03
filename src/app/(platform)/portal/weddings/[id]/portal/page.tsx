@@ -357,7 +357,8 @@ function DashboardSummary({
       <div className="flex items-center gap-4 text-sm text-sage-600">
         <span>Status: <strong className="text-sage-900 capitalize">{wedding.status}</strong></span>
         {wedding.booking_value && (
-          <span>Booking Value: <strong className="text-sage-900">{fmt$(wedding.booking_value)}</strong></span>
+          /* booking_value is cents per Bloom convention (T5-Rixey-NN bug #8) */
+          <span>Booking Value: <strong className="text-sage-900">{fmt$(wedding.booking_value / 100)}</strong></span>
         )}
         {wedding.theme && (
           <span>Theme: <strong className="text-sage-900">{wedding.theme}</strong></span>

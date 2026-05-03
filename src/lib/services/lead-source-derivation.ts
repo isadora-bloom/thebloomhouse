@@ -185,24 +185,35 @@ async function tryPriority2TourQa(
       ? (ei.hear_source ?? ei.hearSource ?? ei.where_did_you_hear) as string | undefined
       : undefined
     if (hearFromExtracted && typeof hearFromExtracted === 'string') {
-      return {
-        source: normaliseHearSource(hearFromExtracted),
-        priority: 2,
-        confidence: 'high',
-        evidence: {
-          interaction_id: i.id,
-          question: 'where did you hear about us',
-          answer: hearFromExtracted,
-        },
+      const normalised = normaliseHearSource(hearFromExtracted)
+      // T5-Rixey-NN bug #7: never stamp an HTML fragment onto lead_source.
+      if (!looksLikeHtmlFragment(normalised) && normalised) {
+        return {
+          source: normalised,
+          priority: 2,
+          confidence: 'high',
+          evidence: {
+            interaction_id: i.id,
+            question: 'where did you hear about us',
+            answer: hearFromExtracted,
+          },
+        }
       }
     }
     // Body-scan fallback.
-    const body = String(i.full_body ?? '')
+    // T5-Rixey-NN bug #7: web-form bodies can contain raw HTML —
+    // strip tags before regex-matching so '</strong>' / '<br>' / etc.
+    // never leak into the captured answer chunk.
+    const body = stripHtml(String(i.full_body ?? ''))
     const m = body.match(/where did you (?:first )?hear about us[^\n]*[:?]\s*([^\n]{1,200})/i)
     if (m && m[1].trim()) {
       const ans = m[1].trim().replace(/^[-:]\s*/, '')
+      const normalised = normaliseHearSource(ans)
+      // Final guard — if the normalised value still looks like HTML
+      // (defensive, normaliseHearSource already strips tags), skip.
+      if (looksLikeHtmlFragment(normalised) || !normalised) continue
       return {
-        source: normaliseHearSource(ans),
+        source: normalised,
         priority: 2,
         confidence: 'high',
         evidence: {
@@ -332,8 +343,44 @@ async function tryPriority5UtmFromAttributionEvents(
   return null
 }
 
+/**
+ * T5-Rixey-NN bug #7: web-form bodies often contain raw HTML
+ * ("<strong>Where did you hear about us?</strong> The Knot"). The
+ * priority-2 body-regex captures the chunk after "?" and before the
+ * next newline — which can be `</strong>` followed by the actual
+ * answer on a new line. Strip HTML tags + collapse whitespace before
+ * pattern-matching so the canonical channel name surfaces instead of
+ * a tag fragment.
+ */
+function stripHtml(s: string): string {
+  return s
+    .replace(/<[^>]*>/g, ' ')          // strip tags
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Returns true if a derived lead-source value looks like an HTML
+ * fragment (e.g. '</strong>', '<br>', etc.). Such values must never
+ * land in weddings.lead_source — the derivation chain should fall
+ * through to lower-priority strategies. Per T5-Rixey-NN bug #7.
+ */
+function looksLikeHtmlFragment(s: string | null | undefined): boolean {
+  if (!s) return false
+  return /[<>]/.test(s)
+}
+
 function normaliseHearSource(answer: string): string {
-  const a = answer.toLowerCase().trim()
+  // Strip HTML before classifying so '<strong>The Knot</strong>' still
+  // resolves to 'the_knot' and we don't return a literal tag fragment.
+  const cleaned = stripHtml(answer)
+  const a = cleaned.toLowerCase().trim()
+  if (!a) return ''
   if (/knot/.test(a)) return 'the_knot'
   if (/wedding ?wire/.test(a)) return 'weddingwire'
   if (/zola/.test(a)) return 'zola'
@@ -346,7 +393,30 @@ function normaliseHearSource(answer: string): string {
   if (/referr|friend|family|word of mouth/.test(a)) return 'referral'
   if (/wedding planner|planner/.test(a)) return 'planner_referral'
   if (/drove ?by|driving|saw the sign/.test(a)) return 'drive_by'
-  return a.slice(0, 80)
+  // T5-Rixey-NN cleanup pass: previous fallback was `a.slice(0, 80)`
+  // which let unrelated body fragments (Calendly Pro-tip footers,
+  // form-noise) slip through as fake "lead sources". Bail to '' so
+  // the chain falls through to lower-priority strategies. Only return
+  // a free-text answer when it looks like a plausible single-channel
+  // word (≤ 30 chars, no URL fragments, no newlines).
+  if (cleaned.length <= 30 && !/[\n\r]/.test(cleaned) && !/(https?:|view event|pro tip)/i.test(cleaned)) {
+    return cleaned.toLowerCase().trim()
+  }
+  return ''
+}
+
+/**
+ * Reject any derived source that looks like an HTML tag fragment.
+ * Per T5-Rixey-NN bug #7: the priority-2 body-regex was extracting
+ * '</strong>' from web-form HTML bodies. Any candidate containing
+ * '<' or '>' should be discarded so the chain falls through to
+ * lower-priority strategies (email-domain, UTM) instead of stamping
+ * the HTML onto weddings.lead_source.
+ */
+function isAcceptableLeadSource(d: DerivedLeadSource | null): d is DerivedLeadSource {
+  if (!d || !d.source) return false
+  if (looksLikeHtmlFragment(d.source)) return false
+  return true
 }
 
 /** Run the priority chain for one wedding. */
@@ -366,19 +436,19 @@ export async function deriveLeadSourceForWedding(
   }
 
   const p1 = await tryPriority1ExplicitFromSourceRecords(wedding)
-  if (p1?.source) return p1
+  if (isAcceptableLeadSource(p1)) return p1
 
   const p2 = await tryPriority2TourQa(supabase, wedding)
-  if (p2?.source) return p2
+  if (isAcceptableLeadSource(p2)) return p2
 
   const p3 = await tryPriority3WebForm(supabase, wedding)
-  if (p3?.source) return p3
+  if (isAcceptableLeadSource(p3)) return p3
 
   const p4 = await tryPriority4EmailDomain(supabase, wedding)
-  if (p4?.source) return p4
+  if (isAcceptableLeadSource(p4)) return p4
 
   const p5 = await tryPriority5UtmFromAttributionEvents(supabase, wedding)
-  if (p5?.source) return p5
+  if (isAcceptableLeadSource(p5)) return p5
 
   return {
     source: null,

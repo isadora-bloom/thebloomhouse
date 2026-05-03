@@ -160,7 +160,10 @@ export async function importClientList(
       const email = (row.email || '').trim().toLowerCase()
       const weddingDate = parseDate(row.wedding_date || '')
       const guestCount = parseNumber(row.guest_count_estimate || '')
-      const bookingValue = parseNumber(row.booking_value || '')
+      // T5-Rixey-NN bug #8: weddings.booking_value is in cents per the
+      // Bloom convention. parseNumber returns raw dollars; convert.
+      const bookingValueDollars = parseNumber(row.booking_value || '')
+      const bookingValue = bookingValueDollars != null ? Math.round(bookingValueDollars * 100) : null
       const source = row.source ? normalizeSource(row.source) : null
       const notes = row.notes || null
 
@@ -671,7 +674,10 @@ export async function importHistoricalWeddings(
 
       const weddingDate = parseDate(row.wedding_date || '')
       const guestCount = parseNumber(row.guest_count || '')
-      const bookingValue = parseNumber(row.booking_value || '')
+      // T5-Rixey-NN bug #8: weddings.booking_value is in cents per the
+      // Bloom convention. parseNumber returns raw dollars; convert.
+      const bookingValueDollars = parseNumber(row.booking_value || '')
+      const bookingValue = bookingValueDollars != null ? Math.round(bookingValueDollars * 100) : null
       const coupleName = row.couple_name || ''
 
       if (!weddingDate && !coupleName) {

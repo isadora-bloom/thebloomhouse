@@ -79,7 +79,15 @@ function uuidV5(name: string, namespace: string = CORRELATION_CONTEXT_NAMESPACE)
 
 const WINDOW_DAYS = 90
 const LAGS = [0, 3, 5, 7, 14]
-const MIN_NONZERO_DAYS = 20
+// T5-Rixey-NN: lowered from 20 → 12. Stream MM verified that small venues
+// (Rixey, ~191 inquiries / 90d) commonly have valid leading-indicator
+// series with 16-18 nonzero days that the 20-day gate killed outright.
+// 12-of-90 is still a real signal in Pearson terms (the Bonferroni-adjusted
+// critical |r| threshold scales with surviving pair count, so noise pairs
+// will still be filtered downstream). Document choice: prefer "true positive
+// at the cost of one extra Bonferroni pair" over "guaranteed silence on
+// small venues".
+const MIN_NONZERO_DAYS = 12
 // "Notable effect size" floor. The Bonferroni correction
 // (correctedThresholdFor) is computed on top — final threshold =
 // max(CORRELATION_THRESHOLD, Bonferroni-adjusted critical |r|).
@@ -300,15 +308,21 @@ async function buildSeries(supabase: SupabaseClient, venueId: string): Promise<S
   // appear in the wrong day's bucket or get dropped from the analysis
   // entirely. NULL signal_date rows fall through to created_at via the
   // OR below.
+  // T5-Rixey-NN bug #2: writers split between extracted_identity.platform
+  // (older email-pipeline writers) and the row-level source_platform column
+  // (storefront-analytics-import + web-form intake). Reader prefers the
+  // jsonb signal (more specific), then falls back to the row column.
+  // Pre-fix: 553 the_knot storefront signals all collapsed into a single
+  // 'other_signals' channel because the importer only populated source_platform.
   const { data: ts } = await supabase
     .from('tangential_signals')
-    .select('extracted_identity, signal_date, created_at')
+    .select('extracted_identity, source_platform, signal_date, created_at')
     .eq('venue_id', venueId)
     .or(`signal_date.gte.${start.toISOString()},and(signal_date.is.null,created_at.gte.${start.toISOString()})`)
   const tsBySeries = new Map<string, Map<string, number>>()
   for (const r of ts ?? []) {
     const ei = (r.extracted_identity ?? {}) as Record<string, unknown>
-    const platform = String(ei.platform ?? 'other')
+    const platform = String(ei.platform ?? r.source_platform ?? 'other')
     const when = (r.signal_date as string | null) ?? (r.created_at as string)
     const k = dayKey(new Date(when))
     const seriesKey = `${platform}_signals`

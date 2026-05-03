@@ -85,6 +85,18 @@ function coerceNumber(raw: string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/**
+ * Currency coercion for booking_value. Per Bloom convention
+ * (T5-Rixey-NN bug #8), weddings.booking_value is integer cents.
+ * Coordinator-supplied CSV values come in as raw dollars
+ * ("$4,500" / "4500.00" / "4500"), so multiply by 100.
+ */
+function coerceMoneyToCents(raw: string | null | undefined): number | null {
+  const dollars = coerceNumber(raw)
+  if (dollars == null) return null
+  return Math.round(dollars * 100)
+}
+
 function coerceDate(raw: string | null | undefined): string | null {
   if (!raw) return null
   const trimmed = raw.trim()
@@ -172,7 +184,7 @@ async function parseGenericCsv(config: AdapterConfig): Promise<ParseResult> {
       partner2_last_name: get('partner2_last_name'),
       wedding_date: coerceWeddingDate(get('wedding_date')),
       guest_count_estimate: coerceNumber(get('guest_count_estimate')),
-      booking_value: coerceNumber(get('booking_value')),
+      booking_value: coerceMoneyToCents(get('booking_value')),
       status: status ?? 'inquiry',
       source: get('source'),
       source_detail: get('source_detail'),
