@@ -139,6 +139,10 @@
     {
       "path": "/api/cron?job=prune_telemetry",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron?job=derive_lead_source",
+      "schedule": "0 6 * * *"
     }
   ]
 }
