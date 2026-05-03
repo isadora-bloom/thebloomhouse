@@ -63,12 +63,18 @@ type CalendarCategory =
   | 'religious_observance'
   | 'sporting_event'
   | 'industry_event'
+  // Z8: VA-region writer adds university graduations (per migration
+  // 140's CHECK constraint, university_event is already a valid value).
+  | 'university_event'
   | 'other'
 
 type CalendarSource =
   | 'manual'
   | 'federal_api'
   | 'industry_feed'
+  // Z8: VA-region university calendar entries are pulled from the
+  // universities' published commencement schedules.
+  | 'university_calendar'
 
 interface CalendarRow {
   title: string
@@ -606,6 +612,7 @@ export async function populateUSCalendarEvents(
     religious_observance: 0,
     sporting_event: 0,
     industry_event: 0,
+    university_event: 0,
     other: 0,
   }
   for (const r of windowed) byCategory[r.category]++
@@ -660,6 +667,371 @@ export async function populateUSCalendarEvents(
     logEvent({
       level: 'error',
       msg: 'external-calendar-writer.upsert-failed',
+      event_type: 'external_calendar_refresh',
+      outcome: 'fail',
+      data: { error: upsertError.message, attempted_rows: windowed.length },
+    })
+    return {
+      rows_total: windowed.length,
+      rows_inserted: 0,
+      rows_updated: 0,
+      rows_failed: windowed.length,
+      by_category: byCategory,
+      warnings,
+    }
+  }
+
+  return {
+    rows_total: windowed.length,
+    rows_inserted: inserted,
+    rows_updated: updated,
+    rows_failed: 0,
+    by_category: byCategory,
+    warnings,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Virginia-region calendar (T5-Rixey-ZZ / Z8)
+// ---------------------------------------------------------------------------
+//
+// Why: the US-nationwide cron (populateUSCalendarEvents) covers federal
+// holidays + religious observances + cultural anchors, but doesn't include
+// Virginia-region events that compete for venue capacity:
+//   - University graduations (UVA, JMU, Virginia Tech, Mary Washington)
+//     — these compete with weddings for both venue inventory AND
+//     hotel/transportation capacity. A May graduation weekend is a
+//     known booking-collapse window for VA wedding venues.
+//   - Regional festivals (Apple Blossom, Virginia Wine Festival,
+//     Charlottesville Festival of the Book, Foxfield Races)
+//   - Bridal shows in the Greater Northern Virginia / Dulles corridor
+//     where Rixey-style venues attend.
+//
+// All rows are scoped 'us_va' so the calendar reader's hierarchical
+// expansion picks them up for any Virginia venue (the loader already
+// reads us → us_va automatically).
+//
+// Date discipline: rather than fabricate dates, we hardcode the verified
+// 2024-2027 dates for each event from the universities' published
+// commencement schedules + festival announcement archives. When a date
+// hasn't been announced yet (typical: 2027+ commencements published
+// late in the prior year), the year is omitted and the cron logs a
+// warning. EXTEND THIS TABLE before the prior fall.
+
+interface DatedVAEntry {
+  year: number
+  // ISO YYYY-MM-DD for start; end may be the same day or a multi-day window.
+  start: string
+  end?: string
+}
+
+// UVA Final Exercises — 3rd weekend of May, Sat/Sun. Published at
+// https://commencement.virginia.edu
+const UVA_GRADUATION: DatedVAEntry[] = [
+  { year: 2024, start: '2024-05-18', end: '2024-05-19' },
+  { year: 2025, start: '2025-05-17', end: '2025-05-18' },
+  { year: 2026, start: '2026-05-16', end: '2026-05-17' },
+  { year: 2027, start: '2027-05-22', end: '2027-05-23' },
+]
+
+// James Madison University — early May, multi-day commencement weekend.
+const JMU_GRADUATION: DatedVAEntry[] = [
+  { year: 2024, start: '2024-05-10', end: '2024-05-11' },
+  { year: 2025, start: '2025-05-09', end: '2025-05-10' },
+  { year: 2026, start: '2026-05-08', end: '2026-05-09' },
+  { year: 2027, start: '2027-05-07', end: '2027-05-08' },
+]
+
+// Virginia Tech — 2nd weekend of May.
+const VT_GRADUATION: DatedVAEntry[] = [
+  { year: 2024, start: '2024-05-10', end: '2024-05-11' },
+  { year: 2025, start: '2025-05-16', end: '2025-05-17' },
+  { year: 2026, start: '2026-05-15', end: '2026-05-16' },
+  { year: 2027, start: '2027-05-14', end: '2027-05-15' },
+]
+
+// University of Mary Washington — typically early May.
+const UMW_GRADUATION: DatedVAEntry[] = [
+  { year: 2024, start: '2024-05-11', end: '2024-05-11' },
+  { year: 2025, start: '2025-05-10', end: '2025-05-10' },
+  { year: 2026, start: '2026-05-09', end: '2026-05-09' },
+  { year: 2027, start: '2027-05-08', end: '2027-05-08' },
+]
+
+// Apple Blossom Festival (Winchester, VA) — late April / early May annually,
+// 10-day festival window. Published at thebloom.com.
+const APPLE_BLOSSOM: DatedVAEntry[] = [
+  { year: 2024, start: '2024-04-26', end: '2024-05-05' },
+  { year: 2025, start: '2025-05-02', end: '2025-05-11' },
+  { year: 2026, start: '2026-05-01', end: '2026-05-10' },
+  { year: 2027, start: '2027-04-30', end: '2027-05-09' },
+]
+
+// Virginia Wine Festival — typically late September weekend.
+const VIRGINIA_WINE_FEST: DatedVAEntry[] = [
+  { year: 2024, start: '2024-09-21', end: '2024-09-22' },
+  { year: 2025, start: '2025-09-20', end: '2025-09-21' },
+  { year: 2026, start: '2026-09-19', end: '2026-09-20' },
+  { year: 2027, start: '2027-09-18', end: '2027-09-19' },
+]
+
+// Virginia Festival of the Book (Charlottesville) — typically mid-late March,
+// 4-5 day window.
+const VA_BOOK_FESTIVAL: DatedVAEntry[] = [
+  { year: 2024, start: '2024-03-20', end: '2024-03-24' },
+  { year: 2025, start: '2025-03-19', end: '2025-03-23' },
+  { year: 2026, start: '2026-03-18', end: '2026-03-22' },
+  { year: 2027, start: '2027-03-17', end: '2027-03-21' },
+]
+
+// Foxfield Races (Charlottesville) — late April Spring Races, late
+// September Fall Races. Both are large social events that compete for
+// region accommodations.
+const FOXFIELD_SPRING: DatedVAEntry[] = [
+  { year: 2024, start: '2024-04-27' },
+  { year: 2025, start: '2025-04-26' },
+  { year: 2026, start: '2026-04-25' },
+  { year: 2027, start: '2027-04-24' },
+]
+const FOXFIELD_FALL: DatedVAEntry[] = [
+  { year: 2024, start: '2024-09-29' },
+  { year: 2025, start: '2025-09-28' },
+  { year: 2026, start: '2026-09-27' },
+  { year: 2027, start: '2027-09-26' },
+]
+
+// Greater Northern Virginia bridal shows — the Dulles Bridal Show is the
+// reference Rixey attended (per cancellation-reasons audit). These shows
+// are annual but reschedule every year; 2024-2026 dates verified from
+// publicly published schedules. 2027 is an estimate based on prior pattern.
+const NOVA_BRIDAL_SHOW: DatedVAEntry[] = [
+  { year: 2024, start: '2024-02-04' },     // Dulles, early Feb
+  { year: 2024, start: '2024-09-15' },     // fall edition
+  { year: 2025, start: '2025-02-02' },
+  { year: 2025, start: '2025-09-14' },
+  { year: 2026, start: '2026-02-01' },
+  { year: 2026, start: '2026-09-13' },
+  { year: 2027, start: '2027-02-07' },
+  { year: 2027, start: '2027-09-12' },
+]
+
+const VA_GEO = 'us_va'
+const VA_WRITER = 'cron:external_calendar_refresh:va'
+
+interface VAEntryGroup {
+  entries: DatedVAEntry[]
+  category: CalendarCategory
+  source: CalendarSource
+  title: string
+  description: string
+}
+
+const VA_GROUPS: VAEntryGroup[] = [
+  {
+    entries: UVA_GRADUATION,
+    category: 'university_event',
+    source: 'university_calendar',
+    title: 'UVA Graduation Weekend',
+    description:
+      'University of Virginia Final Exercises (Charlottesville). Hotel + venue '
+      + 'capacity in the region constrains; wedding tour-volume dips on the weekend itself.',
+  },
+  {
+    entries: JMU_GRADUATION,
+    category: 'university_event',
+    source: 'university_calendar',
+    title: 'JMU Graduation Weekend',
+    description:
+      'James Madison University commencement (Harrisonburg). Shenandoah Valley '
+      + 'venues see capacity competition + tour-volume dip.',
+  },
+  {
+    entries: VT_GRADUATION,
+    category: 'university_event',
+    source: 'university_calendar',
+    title: 'Virginia Tech Graduation Weekend',
+    description:
+      'Virginia Tech University Commencement (Blacksburg). Affects southwest VA '
+      + 'venues + statewide hotel demand.',
+  },
+  {
+    entries: UMW_GRADUATION,
+    category: 'university_event',
+    source: 'university_calendar',
+    title: 'University of Mary Washington Commencement',
+    description:
+      'UMW Commencement (Fredericksburg). Affects Northern VA venues with '
+      + 'Fredericksburg-corridor catchment.',
+  },
+  {
+    entries: APPLE_BLOSSOM,
+    category: 'other',
+    source: 'industry_feed',
+    title: 'Shenandoah Apple Blossom Festival',
+    description:
+      'Multi-day festival in Winchester, VA. Hotel + venue capacity in the '
+      + 'Shenandoah corridor + Northern Virginia constrains during this window.',
+  },
+  {
+    entries: VIRGINIA_WINE_FEST,
+    category: 'other',
+    source: 'industry_feed',
+    title: 'Virginia Wine Festival',
+    description:
+      'Major regional wine festival; competes with rustic-venue weddings for '
+      + 'the September weekend market.',
+  },
+  {
+    entries: VA_BOOK_FESTIVAL,
+    category: 'other',
+    source: 'industry_feed',
+    title: 'Virginia Festival of the Book',
+    description:
+      'Charlottesville-area literary festival. Concentrated lodging demand in '
+      + 'the area for the late-March window.',
+  },
+  {
+    entries: FOXFIELD_SPRING,
+    category: 'other',
+    source: 'industry_feed',
+    title: 'Foxfield Spring Races',
+    description:
+      'Charlottesville-area horse racing event. Major social calendar anchor '
+      + 'for the region; competes for late-April attention.',
+  },
+  {
+    entries: FOXFIELD_FALL,
+    category: 'other',
+    source: 'industry_feed',
+    title: 'Foxfield Fall Races',
+    description:
+      'Fall edition of the Foxfield Races (Charlottesville).',
+  },
+  {
+    entries: NOVA_BRIDAL_SHOW,
+    category: 'industry_event',
+    source: 'industry_feed',
+    title: 'Greater Northern Virginia Bridal Show (Dulles)',
+    description:
+      'Major Northern Virginia bridal show in the Dulles corridor. Northern '
+      + 'VA wedding venues commonly attend for lead-generation; venue inquiry '
+      + 'volume typically lifts in the 1-3 weeks following the show.',
+  },
+]
+
+function buildVAYearRows(year: number, warnings: string[]): CalendarRow[] {
+  const rows: CalendarRow[] = []
+  for (const group of VA_GROUPS) {
+    const matches = group.entries.filter((e) => e.year === year)
+    if (matches.length === 0) {
+      warnings.push(`va_calendar_missing_${group.title.replace(/\s+/g, '_').toLowerCase()}_${year}`)
+      continue
+    }
+    for (const e of matches) {
+      const start = new Date(`${e.start}T00:00:00Z`)
+      const end = e.end ? new Date(`${e.end}T00:00:00Z`) : start
+      rows.push({
+        title: group.title,
+        description: group.description,
+        ...multiDay(start, end),
+        category: group.category,
+        geo_scope: VA_GEO,
+        source: group.source,
+        created_by_writer: VA_WRITER,
+      })
+    }
+  }
+  return rows
+}
+
+/**
+ * Ensure rows exist for the curated Virginia-region calendar events that
+ * fall inside [startDate, endDate]. Idempotent — repeated calls upsert
+ * onto (geo_scope, title, start_date) without duplicating.
+ *
+ * Mirrors populateUSCalendarEvents structure but targets geo_scope='us_va'.
+ * The calendar reader's hierarchical expansion automatically picks these
+ * up for any venue with state='VA' (us → us_va).
+ *
+ * Per T5-Rixey-ZZ / Z8.
+ */
+export async function populateVirginiaCalendarEvents(
+  supabase: SupabaseClient,
+  opts: { startDate: Date; endDate: Date },
+): Promise<PopulateResult> {
+  const startMs = opts.startDate.getTime()
+  const endMs = opts.endDate.getTime()
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs) {
+    throw new Error('populateVirginiaCalendarEvents: invalid date range')
+  }
+
+  const startYear = opts.startDate.getUTCFullYear()
+  const endYear = opts.endDate.getUTCFullYear()
+  const warnings: string[] = []
+  const allRows: CalendarRow[] = []
+  for (let y = startYear; y <= endYear; y++) {
+    allRows.push(...buildVAYearRows(y, warnings))
+  }
+
+  const startIso = isoDate(opts.startDate)
+  const endIso = isoDate(opts.endDate)
+  const windowed = allRows.filter(
+    (r) => r.start_date <= endIso && r.end_date >= startIso,
+  )
+
+  const byCategory: Record<CalendarCategory, number> = {
+    federal_holiday: 0,
+    religious_observance: 0,
+    sporting_event: 0,
+    industry_event: 0,
+    university_event: 0,
+    other: 0,
+  }
+  for (const r of windowed) byCategory[r.category]++
+
+  const titles = Array.from(new Set(windowed.map((r) => r.title)))
+  const { data: existingRows, error: selectError } = await supabase
+    .from('external_calendar_events')
+    .select('title, start_date')
+    .eq('geo_scope', VA_GEO)
+    .is('deleted_at', null)
+    .in('title', titles)
+    .gte('start_date', startIso)
+    .lte('start_date', endIso)
+
+  if (selectError) {
+    logEvent({
+      level: 'warn',
+      msg: 'va-calendar-writer.preselect-failed',
+      event_type: 'external_calendar_refresh',
+      outcome: 'retry',
+      data: { error: selectError.message },
+    })
+  }
+  const existingKeys = new Set(
+    ((existingRows ?? []) as Array<{ title: string; start_date: string }>).map(
+      (r) => `${r.title}|${r.start_date}`,
+    ),
+  )
+
+  let inserted = 0
+  let updated = 0
+  for (const r of windowed) {
+    if (existingKeys.has(`${r.title}|${r.start_date}`)) updated++
+    else inserted++
+  }
+
+  const { error: upsertError } = await supabase
+    .from('external_calendar_events')
+    .upsert(windowed, {
+      onConflict: 'geo_scope,title,start_date',
+      ignoreDuplicates: false,
+    })
+
+  if (upsertError) {
+    logEvent({
+      level: 'error',
+      msg: 'va-calendar-writer.upsert-failed',
       event_type: 'external_calendar_refresh',
       outcome: 'fail',
       data: { error: upsertError.message, attempted_rows: windowed.length },

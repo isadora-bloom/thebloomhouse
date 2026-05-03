@@ -69,6 +69,9 @@ const SERIES_LABELS: Record<string, string> = {
   // Cultural moments (single channel — venue-confirmed cultural events
   // queue from /intel/cultural-moments).
   cultural_moments: 'Cultural Moments',
+
+  // Government / political events (Stream ZZ — DC-region adjacent venues).
+  government_signals: 'Government Shutdowns / Political Events',
 }
 
 /**
