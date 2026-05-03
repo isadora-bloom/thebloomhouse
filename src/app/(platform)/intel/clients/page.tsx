@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { UpgradeGate } from '@/components/ui/upgrade-gate'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -65,7 +66,11 @@ interface ClientData {
   email: string
   phone: string
   status: string
-  source: string
+  // T5-Rixey-DDD: raw weddings.source enum (snake_case) or null when no
+  // source resolved. Render through formatSourceLabel() at the cell —
+  // do NOT toString() / formatLabel() this field directly or the
+  // coordinator sees raw snake_case + 'Unknown'.
+  source: string | null
   eventDate: string | null
   revenue: number
   coordinator: string
@@ -208,7 +213,15 @@ function ClientsPageInner() {
         email,
         phone,
         status: w.status,
-        source: w.source ?? 'Unknown source',
+        // T5-Rixey-DDD: keep the raw enum here; render through
+        // formatSourceLabel() at the cell so null / empty / unknown all
+        // surface as UNTRACKED_LABEL ('Untracked / Pre-Bloom') and
+        // snake_case values get Title-Cased ('venue_calculator' →
+        // 'Venue Calculator', 'calendly' → 'Calendly'). Pre-fix this
+        // page seeded a literal 'Unknown source' string for nulls and
+        // ran the cell through generic formatLabel(), so it leaked
+        // 'Unknown Source' AND raw snake_case to the coordinator.
+        source: w.source,
         eventDate: w.wedding_date,
         // booking_value is cents per Bloom convention (T5-Rixey-NN bug #8); convert to dollars.
         revenue: (w.booking_value ?? 0) / 100,
@@ -347,7 +360,13 @@ function ClientsPageInner() {
                             <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${statusBadge(c.status)}`}>
                               {formatLabel(c.status)}
                             </span>
-                            <span className="text-sage-600 text-xs">{formatLabel(c.source)}</span>
+                            {/* T5-Rixey-DDD: source MUST go through
+                                formatSourceLabel so snake_case
+                                ('venue_calculator', 'calendly') gets
+                                Title-Cased and null/empty/unknown
+                                surfaces as 'Untracked / Pre-Bloom'
+                                instead of 'Unknown'. */}
+                            <span className="text-sage-600 text-xs">{formatSourceLabel(c.source)}</span>
                             <span className="text-sage-600 text-xs">
                               {c.eventDate ? new Date(c.eventDate).toLocaleDateString() : '--'}
                             </span>

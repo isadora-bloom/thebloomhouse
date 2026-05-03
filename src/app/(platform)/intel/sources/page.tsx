@@ -20,7 +20,12 @@ import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { SpendImporter } from '@/components/intel/spend-importer'
 import { ReEngagementROIPanel } from '@/components/intel/ReEngagementROIPanel'
-import { formatSourceLabel } from '@/lib/utils/format-source-label'
+import {
+  formatSourceLabel,
+  isUntrackedKey,
+  UNTRACKED_LABEL,
+  UNTRACKED_TOOLTIP,
+} from '@/lib/utils/format-source-label'
 import { formatCents } from '@/lib/types/monetary'
 import Link from 'next/link'
 import {
@@ -102,30 +107,20 @@ type SortDir = 'asc' | 'desc'
 
 // ---------------------------------------------------------------------------
 // Source label mapping — single source of truth in
-// src/lib/utils/format-source-label (T5-Rixey-UU Bug E).
-// Local wrapper kept so the caller signature (string-only) stays stable.
+// src/lib/utils/format-source-label (T5-Rixey-UU Bug E + T5-Rixey-DDD).
+// Stream DDD hoisted UNTRACKED_LABEL / UNTRACKED_TOOLTIP / isUntrackedKey
+// out of this page-local code so every render site shares the rule.
+// `formatSourceLabel` itself now returns UNTRACKED_LABEL for null /
+// empty / 'unknown' / '(unknown)' inputs, so the local `formatSource`
+// wrapper that previously branched on isUntrackedKey is unnecessary —
+// just call formatSourceLabel directly.
 //
-// T5-Rixey-VV Y6: the "unknown" / "(unknown)" bucket on this page is
-// architecturally "Untracked / Pre-Bloom" — bookings (mostly via
-// HoneyBook + Calendly) whose original inquiry email predates Gmail
-// OAuth, so we couldn't derive a marketing source. Renaming it surfaces
-// the actionable framing ("run a Gmail backfill / re-attribute
-// scheduling-tool bookings") rather than the blank "Unknown" label.
+// We keep a thin `formatSource` alias so the legions of call sites
+// below don't need a sweep, but the function is now a 1-line passthrough.
 // ---------------------------------------------------------------------------
 
-const UNTRACKED_LABEL = 'Untracked / Pre-Bloom'
-const UNTRACKED_TOOLTIP =
-  "These bookings completed before we had lead-side data (Calendly Q7, web-form, or backfilled Gmail). Run a Gmail historical backfill or click 'Re-attribute Scheduling-Tool Bookings' to try to attribute."
-
-function isUntrackedKey(raw: string | null | undefined): boolean {
-  if (!raw) return true
-  const k = String(raw).trim().toLowerCase()
-  return k === '' || k === 'unknown' || k === '(unknown)'
-}
-
 function formatSource(source: string | null | undefined): string {
-  if (isUntrackedKey(source)) return UNTRACKED_LABEL
-  return formatSourceLabel(source ?? '')
+  return formatSourceLabel(source)
 }
 
 // ---------------------------------------------------------------------------

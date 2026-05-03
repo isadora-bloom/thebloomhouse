@@ -5,6 +5,7 @@ import { createBrowserClient } from '@supabase/ssr'
 import { useScope, scopeVenueFilter } from '@/lib/hooks/use-scope'
 import { computeHealthScore } from '@/lib/intel/health-score'
 import { UpgradeGate } from '@/components/ui/upgrade-gate'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 import {
   Building2,
   TrendingUp,
@@ -254,14 +255,21 @@ function CompanyDashboardInner() {
   }, [weddings])
 
   // ---- Source breakdown ----
+  // T5-Rixey-DDD: bucket BY raw source (snake_case enum) but render
+  // chart labels through formatSourceLabel so 'venue_calculator' →
+  // 'Venue Calculator' and null/empty → 'Untracked / Pre-Bloom' instead
+  // of leaking 'Unknown' or raw snake_case to the pie-chart legend.
   const sourceBreakdown = useMemo(() => {
     const map: Record<string, number> = {}
     for (const w of ytdWeddings) {
-      const src = w.source || 'Unknown'
-      map[src] = (map[src] || 0) + 1
+      const key = w.source ?? '__untracked__'
+      map[key] = (map[key] || 0) + 1
     }
     return Object.entries(map)
-      .map(([name, value]) => ({ name, value }))
+      .map(([key, value]) => ({
+        name: formatSourceLabel(key === '__untracked__' ? null : key),
+        value,
+      }))
       .sort((a, b) => b.value - a.value)
   }, [ytdWeddings])
 
