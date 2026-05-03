@@ -38,7 +38,6 @@ import { runEssentialsSuggester } from '@/lib/services/essentials-suggester'
 import { populateUSCalendarEvents } from '@/lib/services/external-context/calendar-writer'
 import { refreshVoiceDnaForAllVenues } from '@/lib/services/voice-dna-extract'
 import { logEvent } from '@/lib/observability/logger'
-import { deriveLeadSourceAllVenues } from '@/lib/services/lead-source-derivation'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -128,15 +127,6 @@ const VALID_JOBS = [
   // Runs at 02:00 UTC, before the 03:00+ morning crons fire so the
   // pre-burst telemetry is already trimmed.
   'prune_telemetry',
-  // T5-Rixey-KK (2026-05-02). Cross-source lead-source derivation.
-  // For each active wedding (merged_into_id IS NULL) with NULL
-  // lead_source, walks the 6-tier priority chain (source_records →
-  // tour Q&A → web form → email-domain → UTM → no_signal) and writes
-  // the derived value back to weddings.lead_source. Audit trail in
-  // lead_source_derivation_log. Idempotent — race-guarded UPDATE
-  // re-checks NULL on lead_source before writing. Coordinator
-  // override via attribution_priority short-circuits the chain.
-  'derive_lead_source',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -393,16 +383,6 @@ async function runJob(job: JobName): Promise<unknown> {
       // signals / forensic record and are NEVER pruned. Logs counts per
       // table so the cron telemetry shows what was trimmed.
       return runPruneTelemetry()
-
-    case 'derive_lead_source':
-      // T5-Rixey-KK (2026-05-02). Daily 06:00 UTC. Cross-source
-      // lead-source derivation. The reconciliation runner consolidates
-      // duplicate weddings; this derives the canonical first-touch
-      // source for each remaining active wedding via the 6-tier
-      // priority chain. Idempotent: race-guarded UPDATE only writes
-      // when lead_source IS NULL. Coordinator overrides
-      // (attribution_priority) take precedence on every re-run.
-      return deriveLeadSourceAllVenues(createServiceClient())
   }
 }
 

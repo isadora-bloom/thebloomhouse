@@ -1,6 +1,5 @@
 /**
- * CRM-import API (T5-followup-Y / Pattern I closure + T5-Rixey-GG /
- * Stream GG validation flow).
+ * CRM-import API (T5-followup-Y / Pattern I closure).
  *
  * POST /api/onboarding/crm-import
  *   body: {
@@ -8,18 +7,11 @@
  *     csv?: string,
  *     json?: string,
  *     columnMapping?: Record<string, string>,
- *     mode?: 'preview' | 'validate' | 'commit',  (default 'commit')
- *     // Legacy alias for mode='preview':
  *     preview?: boolean,
- *     // Coordinator answers from a previous validate() round, keyed by
- *     // ValidationQuestion.id → choice.id. Per T5-Rixey-GG.
- *     answers?: Record<string, string>,
  *   }
  *
- *   mode='preview'  → parse + return rows for coordinator review (no inserts)
- *   mode='validate' → parse + run validate() (no inserts) — returns
- *                     ValidationQuestion[] for the coordinator to answer
- *   mode='commit'   → parse + applyAnswers() + commit to DB
+ *   preview=true → parse + return rows for coordinator review (no inserts)
+ *   preview=false → parse + commit to weddings/interactions/tours/lost_deals
  *
  * Auth: getPlatformAuth — coordinator-only.
  *
@@ -30,20 +22,33 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { findAdapter, type NormalisedLeadRow } from '@/lib/services/crm-import'
+import {
+  findAdapter,
+  type NormalisedLeadRow,
+  type TourSchedulerProvider,
+} from '@/lib/services/crm-import'
 
-type RequestMode = 'preview' | 'validate' | 'commit'
+const VALID_PROVIDERS: ReadonlySet<TourSchedulerProvider> = new Set([
+  'calendly', 'acuity', 'square_appointments', 'generic_ical', 'custom',
+])
+
+function coerceProvider(raw: string | undefined): TourSchedulerProvider | undefined {
+  if (!raw) return undefined
+  return VALID_PROVIDERS.has(raw as TourSchedulerProvider)
+    ? (raw as TourSchedulerProvider)
+    : undefined
+}
 
 interface RequestBody {
   adapter?: string
   csv?: string
   json?: string
   columnMapping?: Record<string, string>
-  mode?: RequestMode
-  /** Legacy: mode='preview' equivalent. Still supported for the existing UI. */
   preview?: boolean
-  /** Coordinator answers from a previous validate() round. */
-  answers?: Record<string, string>
+  /** T5-Rixey-II: provider hint for the tour-scheduler adapter
+   *  ('calendly' | 'acuity' | 'square_appointments' | 'generic_ical' |
+   *  'custom'). Other adapters ignore this field. */
+  provider?: string
 }
 
 /**
@@ -187,6 +192,10 @@ export async function POST(request: NextRequest) {
     csvText: body.csv,
     jsonText: body.json,
     columnMapping: body.columnMapping,
+    // T5-Rixey-II: only the tour-scheduler adapter consumes `provider`;
+    // others ignore it. We coerce to the canonical union (silently dropping
+    // invalid hints — the adapter falls back to its default in that case).
+    provider: coerceProvider(body.provider),
   })
 
   if (!parsed.ok) {
@@ -200,16 +209,11 @@ export async function POST(request: NextRequest) {
     }, { status: 400 })
   }
 
-  // Resolve effective mode. New API uses `mode`; legacy UI passes
-  // `preview: true` which we keep mapping to mode='preview'.
-  const mode: RequestMode = body.mode ?? (body.preview ? 'preview' : 'commit')
-
-  if (mode === 'preview') {
+  if (body.preview) {
     const previewResult = adapter.preview(parsed.rows)
     return NextResponse.json({
       ok: true,
       preview: true,
-      mode: 'preview',
       adapter: adapter.name,
       total: previewResult.total,
       rows: previewResult.rows,
@@ -218,45 +222,6 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  if (mode === 'validate') {
-    // T5-Rixey-GG: pre-commit coordinator validation pass. Returns
-    // questions the coordinator should answer before committing
-    // (e.g. "12% of unbooked projects have past dates — Lost or
-    // Inquiry?"). The UI collects answers and re-POSTs with mode='commit'.
-    if (!adapter.validate) {
-      // Adapters without a validate() method (generic_csv) — no
-      // questions to ask, fall straight through.
-      return NextResponse.json({
-        ok: true,
-        mode: 'validate',
-        adapter: adapter.name,
-        questions: [],
-        notes: [],
-        skipped: [],
-        warnings: parsed.warnings,
-        total: parsed.rows.length,
-      })
-    }
-    const validation = adapter.validate(parsed.rows)
-    return NextResponse.json({
-      ok: true,
-      mode: 'validate',
-      adapter: adapter.name,
-      total: parsed.rows.length,
-      questions: validation.questions,
-      notes: validation.notes,
-      skipped: validation.skipped,
-      warnings: parsed.warnings,
-    })
-  }
-
-  // mode === 'commit' — apply coordinator answers (if any), then run
-  // the schema-level guard, then commit.
-  const rowsAfterAnswers =
-    body.answers && adapter.applyAnswers
-      ? adapter.applyAnswers(parsed.rows, body.answers)
-      : parsed.rows
-
   // #88 (T5-followup-CC): atomic-ish commit. Supabase JS doesn't expose
   // explicit BEGIN/COMMIT and the per-adapter commit loop writes
   // weddings → people → interactions → tours → lost_deals row-by-row.
@@ -264,7 +229,7 @@ export async function POST(request: NextRequest) {
   // range headcount) committed earlier rows and left orphan weddings
   // shells with no children. Cheapest fix without a server-side RPC:
   // validate every row first, only proceed to commit if 100% pass.
-  const validationErrors = validateAllRows(rowsAfterAnswers)
+  const validationErrors = validateAllRows(parsed.rows)
   if (validationErrors.length > 0) {
     return NextResponse.json({
       ok: false,
@@ -281,7 +246,7 @@ export async function POST(request: NextRequest) {
   const commitResult = await adapter.commit({
     supabase,
     venueId: auth.venueId,
-    rows: rowsAfterAnswers,
+    rows: parsed.rows,
   })
 
   return NextResponse.json({

@@ -34,15 +34,6 @@ interface PreviewRow {
   booking_value?: number | null
 }
 
-/** Pre-commit validation question shape (T5-Rixey-GG / Stream GG). */
-interface ValidationQuestion {
-  id: string
-  question: string
-  choices: Array<{ id: string; label: string; recommended?: boolean }>
-  affectedRowCount: number
-  exampleRows?: string[]
-}
-
 const DEFAULT_MAPPING_TEMPLATE = `{
   "partner1_first_name": "First Name",
   "partner1_last_name":  "Last Name",
@@ -71,11 +62,6 @@ export default function CrmImportPage() {
   const [success, setSuccess] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // T5-Rixey-GG: pre-commit validation state.
-  const [questions, setQuestions] = useState<ValidationQuestion[] | null>(null)
-  const [validationNotes, setValidationNotes] = useState<string[]>([])
-  const [answers, setAnswers] = useState<Record<string, string>>({})
-
   useEffect(() => {
     fetch('/api/onboarding/crm-import')
       .then((r) => r.json())
@@ -96,7 +82,7 @@ export default function CrmImportPage() {
     setSuccess(null)
   }
 
-  async function submit(mode: 'preview' | 'validate' | 'commit') {
+  async function submit(asPreview: boolean) {
     clearMessages()
     if (!csv.trim()) { setErrors(['csv content is empty']); return }
 
@@ -122,8 +108,7 @@ export default function CrmImportPage() {
           adapter: selectedAdapter,
           csv,
           columnMapping,
-          mode,
-          answers: mode === 'commit' ? answers : undefined,
+          preview: asPreview,
         }),
       })
       const data = await res.json()
@@ -134,23 +119,10 @@ export default function CrmImportPage() {
         return
       }
       if (Array.isArray(data.warnings)) setWarnings(data.warnings)
-      if (mode === 'preview') {
+      if (asPreview) {
         setPreview(data.rows ?? [])
         setPreviewTotal(data.total ?? 0)
-        setQuestions(null)
-      } else if (mode === 'validate') {
-        const incoming = (data.questions ?? []) as ValidationQuestion[]
-        setQuestions(incoming)
-        setValidationNotes((data.notes ?? []) as string[])
-        // Pre-fill answers with the recommended choice per question.
-        const defaults: Record<string, string> = {}
-        for (const q of incoming) {
-          const rec = q.choices.find((c) => c.recommended)
-          if (rec) defaults[q.id] = rec.id
-        }
-        setAnswers(defaults)
       } else {
-        // commit
         setSuccess(
           `Imported ${data.weddings_inserted} weddings · ` +
           `${data.interactions_inserted} interactions · ` +
@@ -158,8 +130,6 @@ export default function CrmImportPage() {
           `${data.lost_deals_inserted} lost deals`
         )
         setPreview(null)
-        setQuestions(null)
-        setAnswers({})
         setCsv('')
         if (data.errors?.length) setErrors(data.errors)
       }
@@ -278,29 +248,17 @@ export default function CrmImportPage() {
         </div>
 
         <div className="flex items-center justify-end gap-2">
-          {!preview && !questions ? (
-            <>
-              <button
-                type="button"
-                onClick={() => submit('preview')}
-                disabled={busy || !adapter?.ready}
-                className="inline-flex items-center gap-1.5 rounded border border-sage-200 hover:bg-sage-50 text-sage-700 text-sm font-medium px-3 py-2 disabled:opacity-50"
-              >
-                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                Preview
-              </button>
-              <button
-                type="button"
-                onClick={() => submit('validate')}
-                disabled={busy || !adapter?.ready}
-                className="inline-flex items-center gap-1.5 rounded border border-sage-300 bg-sage-50 hover:bg-sage-100 text-sage-800 text-sm font-medium px-3 py-2 disabled:opacity-50"
-                title="Run pre-commit checks — Bloom may have questions for you before import."
-              >
-                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
-                Validate
-              </button>
-            </>
-          ) : preview && !questions ? (
+          {!preview ? (
+            <button
+              type="button"
+              onClick={() => submit(true)}
+              disabled={busy || !adapter?.ready}
+              className="inline-flex items-center gap-1.5 rounded border border-sage-200 hover:bg-sage-50 text-sage-700 text-sm font-medium px-3 py-2 disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+              Preview
+            </button>
+          ) : (
             <>
               <button
                 type="button"
@@ -311,16 +269,7 @@ export default function CrmImportPage() {
               </button>
               <button
                 type="button"
-                onClick={() => submit('validate')}
-                disabled={busy || preview.length === 0}
-                className="inline-flex items-center gap-1.5 rounded border border-sage-300 bg-sage-50 hover:bg-sage-100 text-sage-800 text-sm font-medium px-3 py-2 disabled:opacity-50"
-              >
-                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
-                Validate first
-              </button>
-              <button
-                type="button"
-                onClick={() => submit('commit')}
+                onClick={() => submit(false)}
                 disabled={busy || preview.length === 0}
                 className="inline-flex items-center gap-1.5 rounded bg-sage-700 hover:bg-sage-800 disabled:opacity-50 text-white text-sm font-medium px-3 py-2"
               >
@@ -328,78 +277,8 @@ export default function CrmImportPage() {
                 Import {previewTotal} rows
               </button>
             </>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={() => { setQuestions(null); setAnswers({}); setValidationNotes([]) }}
-                className="text-sm text-sage-700 hover:bg-sage-50 px-3 py-2 rounded"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => submit('commit')}
-                disabled={busy}
-                className="inline-flex items-center gap-1.5 rounded bg-sage-700 hover:bg-sage-800 disabled:opacity-50 text-white text-sm font-medium px-3 py-2"
-              >
-                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                Import with these answers
-              </button>
-            </>
           )}
         </div>
-
-        {questions && questions.length > 0 && (
-          <div className="border border-amber-200 bg-amber-50/50 rounded-lg p-4 space-y-4">
-            <p className="text-xs font-semibold text-amber-900">
-              Bloom has {questions.length} question{questions.length === 1 ? '' : 's'} before import
-            </p>
-            {questions.map((q) => (
-              <div key={q.id} className="space-y-2">
-                <p className="text-xs text-sage-900">
-                  {q.question}{' '}
-                  <span className="text-sage-500">({q.affectedRowCount} row{q.affectedRowCount === 1 ? '' : 's'})</span>
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {q.choices.map((c) => {
-                    const selected = answers[q.id] === c.id
-                    return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => setAnswers((prev) => ({ ...prev, [q.id]: c.id }))}
-                        className={`text-xs px-2.5 py-1 rounded border ${
-                          selected
-                            ? 'border-sage-700 bg-sage-700 text-white'
-                            : 'border-sage-200 bg-white hover:bg-sage-50 text-sage-700'
-                        }`}
-                      >
-                        {c.label}
-                        {c.recommended && !selected && (
-                          <span className="ml-1 text-[10px] text-sage-500">(recommended)</span>
-                        )}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
-            {validationNotes.length > 0 && (
-              <div className="border-t border-amber-200 pt-3 space-y-1">
-                {validationNotes.map((n, i) => (
-                  <p key={i} className="text-[11px] text-sage-700">{n}</p>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {questions && questions.length === 0 && (
-          <div className="border border-emerald-200 bg-emerald-50/50 rounded-lg p-3 text-xs text-emerald-800">
-            No coordinator questions — looks clean. Click Import when ready.
-          </div>
-        )}
 
         {preview && preview.length > 0 && (
           <div className="border border-sage-200 rounded-lg p-3 bg-sage-50/40 max-h-96 overflow-auto">

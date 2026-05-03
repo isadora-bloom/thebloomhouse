@@ -34,8 +34,68 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-/** Stable identifier for the per-row crm_source column. */
-export type CrmSource = 'honeybook' | 'dubsado' | 'aisle_planner' | 'generic_csv'
+/** Stable identifier for the per-row crm_source column. Mirrors the
+ *  weddings.crm_source CHECK constraint extended by migration 178 to
+ *  include 'web_form' for the T5-Rixey-HH web-form intake adapter. */
+export type CrmSource = 'honeybook' | 'dubsado' | 'aisle_planner' | 'generic_csv' | 'web_form'
+
+/**
+ * T5-Rixey-II: tour-scheduler adapter shared types.
+ *
+ * `TourSchedulerHint` tells the parser which scheduling-tool's column-
+ * shape it's looking at. `ClassifiedEventType` is the per-event-type
+ * bucket the classifier emits — tour vs post-booking-touchpoint vs
+ * other-interaction. Coordinators override the heuristic in the preview
+ * UI; the override map is keyed by exact Event Type Name.
+ *
+ * `RoutedQuestion` is the closed enum of Bloom fields the per-row Q&A
+ * router can target. Anything outside this set is "unknown" and concats
+ * into notes for the coordinator to read post-import.
+ *
+ * Note: tour-scheduler imports COMMIT with crm_source='generic_csv' (the
+ * existing catch-all in migration 178's CHECK enum). Adding a dedicated
+ * 'tour_scheduler' value would require its own migration; deferred per
+ * T5-Rixey-II scope ("No new migration expected from this stream").
+ * Provider-name (calendly / acuity / etc.) is encoded in
+ * weddings.source_detail + interactions.full_body prefix so downstream
+ * surfaces can still distinguish.
+ */
+export type TourSchedulerProvider =
+  | 'calendly'
+  | 'acuity'
+  | 'square_appointments'
+  | 'generic_ical'
+  | 'custom'
+
+/** Hint name passed in via AdapterConfig.provider. Same string set as
+ *  TourSchedulerProvider — the alias keeps adapter-internal code from
+ *  repeating the exhaustive list when it just wants to check the hint. */
+export type TourSchedulerHint = TourSchedulerProvider
+
+export type ClassifiedEventType =
+  | 'tour'
+  | 'post_booking_touchpoint'
+  | 'other_interaction'
+
+export interface EventClassification {
+  bucket: ClassifiedEventType
+  /** Human-readable explanation of why the classifier chose this bucket.
+   *  Surfaces in the preview UI tooltip so coordinators can override
+   *  with context. */
+  reason: string
+}
+
+export type RoutedQuestion =
+  | 'partner1_phone'
+  | 'partner2_name'
+  | 'partner2_email'
+  | 'wedding_date_hint'
+  | 'estimated_guests'
+  | 'lead_source'
+  | 'package_interest'
+  | 'pricing_calculator'
+  | 'meeting_topic'
+  | 'attendees'
 
 /**
  * Canonical Bloom-shape row that adapters produce. Adapters do their
@@ -54,8 +114,8 @@ export interface NormalisedLeadRow {
   partner1_phone?: string | null
   partner2_first_name?: string | null
   partner2_last_name?: string | null
-  partner2_email?: string | null
-  partner2_phone?: string | null
+  partner2_email?: string | null          // T5-Rixey-HH: web-form intake
+  partner2_phone?: string | null          // captures partner2 contact too
   wedding_date?: string | null            // ISO yyyy-mm-dd
   guest_count_estimate?: number | null
   booking_value?: number | null           // in cents (Bloom convention)
@@ -69,41 +129,18 @@ export interface NormalisedLeadRow {
   lost_reason?: string | null
   notes?: string | null
 
-  /** T5-Rixey-GG / migration 175 — extra financial detail. All in cents. */
-  tax_amount?: number | null
-  amount_paid?: number | null
-  gratuity_amount?: number | null
-  refunded_amount?: number | null
-  /** T5-Rixey-GG / migration 175 — provider's primary key, for dedup. */
-  crm_external_id?: string | null
-  /** T5-Rixey-GG / migration 175 — provider-side team assignments. */
-  crm_team_members?: Array<{ name: string | null; email: string | null; role: string | null }> | null
-  /** T5-Rixey-GG / migration 175 — per-row import warnings. */
-  import_warnings?: Array<{ field: string; issue: string; value: unknown }> | null
-
   /** Linked sub-records (each becomes one row in its respective table). */
   interactions?: NormalisedInteractionRow[]
   tours?: NormalisedTourRow[]
   lost_deal?: NormalisedLostDealRow | null
-
-  /** Other people surfaced by the CRM (parents, planners, vendors). Each
-   *  becomes a `people` row with role != partner1/partner2. */
-  others?: NormalisedPersonRow[]
-}
-
-/** Additional people on a wedding row beyond partner1 / partner2. */
-export interface NormalisedPersonRow {
-  first_name: string | null
-  last_name: string | null
-  email: string | null
-  phone: string | null
-  role: string                             // 'parent_mother' / 'planner' / etc.
 }
 
 export interface NormalisedInteractionRow {
   occurred_at: string                      // ISO timestamp
   direction: 'inbound' | 'outbound'
-  type: 'email' | 'call' | 'voicemail' | 'sms'
+  /** Mirrors interactions.type CHECK. 'meeting' added by migration 100,
+   *  'web_form' added by migration 178 (T5-Rixey-HH). */
+  type: 'email' | 'call' | 'voicemail' | 'sms' | 'meeting' | 'web_form'
   subject?: string | null
   body?: string | null
 }
@@ -111,7 +148,10 @@ export interface NormalisedInteractionRow {
 export interface NormalisedTourRow {
   scheduled_at: string                     // ISO timestamp
   tour_type?: 'in_person' | 'virtual' | 'phone' | null
-  outcome?: 'completed' | 'cancelled' | 'no_show' | 'rescheduled' | null
+  /** Mirrors the migration-077 widened tours.outcome CHECK enum. 'pending'
+   *  added 2026-05-02 for T5-Rixey-II — tour-scheduler imports record
+   *  scheduled-but-not-yet-conducted tours. */
+  outcome?: 'pending' | 'completed' | 'booked' | 'lost' | 'cancelled' | 'no_show' | 'rescheduled' | null
   notes?: string | null
 }
 
@@ -153,51 +193,25 @@ export interface AdapterConfig {
   columnMapping?: Record<string, string>   // bloom_field → header_in_csv
   csvText?: string                         // raw CSV content (browser-uploaded)
   jsonText?: string                        // raw JSON content (some exports are JSON)
+  /** T5-Rixey-II: provider hint for the tour-scheduler adapter. Tells
+   *  the parser which scheduler's column-shape it's looking at (calendly
+   *  is fully implemented; the others are scaffolds). Other adapters
+   *  ignore this field. */
+  provider?: TourSchedulerProvider
 }
 
-/**
- * Pre-commit validation question. The adapter's `validate()` method
- * surfaces these to the coordinator BEFORE commit so they can supply
- * defaults for ambiguous decisions (e.g. "12% of projects have no
- * booking date — should they be Lost or Inquiry?"). Per T5-Rixey-GG /
- * Stream GG.
- */
-export interface ValidationQuestion {
-  /** Stable id the UI uses to keep the answer with the question. */
-  id: string
-  /** Coordinator-facing question text. */
-  question: string
-  /** Possible answers — each becomes a button in the UI. */
-  choices: Array<{
-    /** Stable id sent back to the adapter on commit. */
-    id: string
-    /** Coordinator-facing label. */
-    label: string
-    /** Whether this is the recommended default. */
-    recommended?: boolean
-  }>
-  /** Number of rows this question affects. Drives prominence in UI. */
-  affectedRowCount: number
-  /** First few example row identifiers (couple name / source_id) for
-   *  coordinator preview. */
-  exampleRows?: string[]
-}
-
-export interface ValidationResult {
-  questions: ValidationQuestion[]
-  /** Pure-info notes that don't require an answer (e.g. "94 rows have
-   *  Lead Source = Unknown — Bloom will backfill from Calendly data"). */
-  notes: string[]
-  /** Rows that will be skipped at commit time and why. */
-  skipped: Array<{ rowIndex: number; reason: string; identifier?: string | null }>
-}
-
-/** Coordinator answers keyed by ValidationQuestion.id → choice.id. */
-export type ValidationAnswers = Record<string, string>
+/** Identifier the adapter registry exposes to the UI. Most adapters use
+ *  the same string as their crm_source enum value (honeybook, dubsado,
+ *  generic_csv, web_form), but the tour-scheduler adapter uses its own
+ *  identifier ('tour_scheduler') because it commits with crm_source=
+ *  'generic_csv' (no dedicated enum value yet). Registry-name is what
+ *  the API route + UI provider-picker key off; crm_source is what the
+ *  shared commit helper writes to the DB. */
+export type AdapterName = CrmSource | 'tour_scheduler'
 
 export interface CrmAdapter {
-  /** Stable identifier matching the crm_source enum. */
-  name: CrmSource
+  /** Stable identifier exposed to the UI provider-picker. */
+  name: AdapterName
   /** Human-readable label rendered in the UI provider-picker. */
   label: string
   /** Description shown next to the picker entry. */
@@ -207,18 +221,6 @@ export interface CrmAdapter {
   ready: boolean
   parse(config: AdapterConfig): Promise<ParseResult>
   preview(rows: NormalisedLeadRow[]): PreviewResult
-  /**
-   * Optional pre-commit validation pass — the adapter can surface
-   * questions to the coordinator before commit (per T5-Rixey-GG).
-   * Adapters without ambiguity (generic_csv) can omit this.
-   */
-  validate?(rows: NormalisedLeadRow[]): ValidationResult
-  /**
-   * Optional answer-applier — given coordinator answers from
-   * validate(), the adapter mutates / re-shapes rows before commit.
-   * Adapters without validate() can omit this.
-   */
-  applyAnswers?(rows: NormalisedLeadRow[], answers: ValidationAnswers): NormalisedLeadRow[]
   commit(args: {
     supabase: SupabaseClient
     venueId: string
@@ -230,43 +232,20 @@ import { honeybookAdapter } from './honeybook'
 import { dubsadoAdapter } from './dubsado'
 import { aislePlannerAdapter } from './aisleplanner'
 import { genericCsvAdapter } from './generic-csv'
+import { webFormAdapter } from './web-form'
+import { tourSchedulerAdapter } from './tour-scheduler'
 
 export const ADAPTERS: ReadonlyArray<CrmAdapter> = [
   genericCsvAdapter,
   honeybookAdapter,
   dubsadoAdapter,
   aislePlannerAdapter,
+  webFormAdapter,
+  tourSchedulerAdapter,
 ]
 
 export function findAdapter(name: string): CrmAdapter | null {
   return ADAPTERS.find((a) => a.name === name) ?? null
-}
-
-/**
- * Map our richer parsed role strings (parent_mother / planner /
- * coordinator / vendor / wedding_party / officiant / witness / other)
- * into the people.role CHECK enum (partner1 / partner2 / guest /
- * wedding_party / vendor / family). Per T5-Rixey-GG / Stream GG.
- */
-function mapParsedRoleToPeopleRole(parsedRole: string): string {
-  switch (parsedRole) {
-    case 'parent_mother':
-    case 'parent_father':
-      return 'family'
-    case 'planner':
-    case 'coordinator':
-    case 'vendor':
-    case 'officiant':
-      return 'vendor'
-    case 'wedding_party':
-    case 'witness':
-      return 'wedding_party'
-    case 'partner':
-      // Fallback when more than 2 partners parsed (unusual). Treat as guest.
-      return 'guest'
-    default:
-      return 'guest'
-  }
 }
 
 /**
@@ -280,8 +259,17 @@ export async function commitNormalisedRows(args: {
   venueId: string
   rows: NormalisedLeadRow[]
   crmSource: CrmSource
+  /** Override default 'imported_medium' confidence_flag — web-form
+   *  intake passes 'imported_high' since it's first-party data. */
+  confidenceFlag?: 'imported_high' | 'imported_medium' | 'imported_low'
+  /** Override default null — web-form intake passes 'web_form_import'
+   *  so the data-source orphan sweep can split first-party form rows
+   *  from email-pipeline rows. Per migration 178. */
+  sourceProvenance?: string | null
 }): Promise<CommitResult> {
   const { supabase, venueId, rows, crmSource } = args
+  const confidenceFlag = args.confidenceFlag ?? 'imported_medium'
+  const sourceProvenance = args.sourceProvenance ?? null
   const result: CommitResult = {
     ok: true,
     weddingsInserted: 0,
@@ -296,11 +284,7 @@ export async function commitNormalisedRows(args: {
       const weddingPayload = {
         venue_id: venueId,
         status: row.status ?? 'inquiry',
-        // T5-Rixey-GG: source can be NULL for "Unknown" CRM exports —
-        // the source channel is later backfilled from Calendly /
-        // web-inquiry data. Don't force 'other' or downstream attribution
-        // gets a misleading explicit channel for every imported row.
-        source: row.source ?? null,
+        source: row.source ?? 'other',
         source_detail: row.source_detail ?? null,
         wedding_date: row.wedding_date ?? null,
         guest_count_estimate: row.guest_count_estimate ?? null,
@@ -310,16 +294,9 @@ export async function commitNormalisedRows(args: {
         lost_at: row.lost_at ?? null,
         lost_reason: row.lost_reason ?? null,
         notes: row.notes ?? null,
-        // T5-Rixey-GG / migration 175 — extra financial detail.
-        tax_amount: row.tax_amount ?? null,
-        amount_paid: row.amount_paid ?? null,
-        gratuity_amount: row.gratuity_amount ?? null,
-        refunded_amount: row.refunded_amount ?? null,
-        crm_external_id: row.crm_external_id ?? null,
-        crm_team_members: row.crm_team_members ?? null,
-        import_warnings: row.import_warnings ?? null,
-        confidence_flag: 'imported_medium',
+        confidence_flag: confidenceFlag,
         crm_source: crmSource,
+        source_provenance: sourceProvenance,
       }
       const { data: wedding, error: wedErr } = await supabase
         .from('weddings')
@@ -344,11 +321,11 @@ export async function commitNormalisedRows(args: {
           last_name: row.partner1_last_name ?? null,
           email: row.partner1_email ?? null,
           phone: row.partner1_phone ?? null,
-          confidence_flag: 'imported_medium',
+          confidence_flag: confidenceFlag,
           crm_source: crmSource,
         })
       }
-      if (row.partner2_first_name || row.partner2_last_name || row.partner2_email) {
+      if (row.partner2_first_name || row.partner2_last_name) {
         await supabase.from('people').insert({
           venue_id: venueId,
           wedding_id: weddingId,
@@ -357,31 +334,9 @@ export async function commitNormalisedRows(args: {
           last_name: row.partner2_last_name ?? null,
           email: row.partner2_email ?? null,
           phone: row.partner2_phone ?? null,
-          confidence_flag: 'imported_medium',
+          confidence_flag: confidenceFlag,
           crm_source: crmSource,
         })
-      }
-
-      // T5-Rixey-GG: extra people on the wedding (parents, planners,
-      // vendors). The people.role CHECK currently allows
-      // ('partner1', 'partner2', 'guest', 'wedding_party', 'vendor',
-      // 'family'). We map our richer parsed roles into those allowed
-      // values so the insert doesn't violate the constraint.
-      if (row.others?.length) {
-        for (const other of row.others) {
-          const dbRole = mapParsedRoleToPeopleRole(other.role)
-          await supabase.from('people').insert({
-            venue_id: venueId,
-            wedding_id: weddingId,
-            role: dbRole,
-            first_name: other.first_name ?? null,
-            last_name: other.last_name ?? null,
-            email: other.email ?? null,
-            phone: other.phone ?? null,
-            confidence_flag: 'imported_medium',
-            crm_source: crmSource,
-          })
-        }
       }
 
       // interactions
@@ -395,7 +350,7 @@ export async function commitNormalisedRows(args: {
           full_body: i.body ?? null,
           body_preview: (i.body ?? '').slice(0, 200) || null,
           timestamp: i.occurred_at,
-          confidence_flag: 'imported_medium',
+          confidence_flag: confidenceFlag,
           crm_source: crmSource,
         }))
         const { error: intErr } = await supabase.from('interactions').insert(interactionPayloads)
