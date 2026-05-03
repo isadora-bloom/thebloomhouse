@@ -20,6 +20,7 @@ import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { SpendImporter } from '@/components/intel/spend-importer'
 import { ReEngagementROIPanel } from '@/components/intel/ReEngagementROIPanel'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 import Link from 'next/link'
 import {
   BarChart,
@@ -87,36 +88,13 @@ type SortKey = keyof SourceRow
 type SortDir = 'asc' | 'desc'
 
 // ---------------------------------------------------------------------------
-// Source label mapping — turn raw enum values into human-readable names
+// Source label mapping — single source of truth in
+// src/lib/utils/format-source-label (T5-Rixey-UU Bug E).
+// Local wrapper kept so the caller signature (string-only) stays stable.
 // ---------------------------------------------------------------------------
 
-const SOURCE_LABELS: Record<string, string> = {
-  the_knot: 'The Knot',
-  instagram: 'Instagram',
-  weddingwire: 'Wedding Wire',
-  wedding_wire: 'Wedding Wire',
-  google: 'Google',
-  referral: 'Word of Mouth',
-  direct: 'Direct',
-  website: 'Website',
-  walk_in: 'Walk-in',
-  facebook: 'Facebook',
-  zola: 'Zola',
-  phone: 'Phone',
-  calendly: 'Calendly',
-  acuity: 'Acuity',
-  honeybook: 'HoneyBook',
-  here_comes_the_guide: 'Here Comes The Guide',
-  venue_calculator: 'Venue Calculator',
-  other: 'Other',
-}
-
 function formatSource(source: string): string {
-  const key = source.toLowerCase()
-  return (
-    SOURCE_LABELS[key] ??
-    source.charAt(0).toUpperCase() + source.slice(1).replace(/_/g, ' ')
-  )
+  return formatSourceLabel(source)
 }
 
 // ---------------------------------------------------------------------------
@@ -149,14 +127,25 @@ function fmtCount(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
 }
 
+// SOURCE_COLORS is keyed on the FORMATTED label (output of
+// formatSourceLabel). T5-Rixey-UU Bug E migrated 'Wedding Wire' →
+// 'WeddingWire' (spec) and added 'Referral' in addition to
+// 'Word of Mouth'. Both keys are kept so legacy snapshots still
+// resolve a colour.
 const SOURCE_COLORS: Record<string, string> = {
   'The Knot':             '#E8927C',
+  'WeddingWire':          '#7EAAA0',
   'Wedding Wire':         '#7EAAA0',
   'Google':               '#A6894A',
+  'Google Business':      '#A6894A',
+  'Google Ads':           '#A6894A',
   'Instagram':            '#C084A0',
+  'Pinterest':            '#C084A0',
   'Word of Mouth':        '#7D8471',
+  'Referral':             '#7D8471',
   'Direct':               '#5D7A7A',
   'Website':              '#8FA48D',
+  'Website Form':         '#8FA48D',
   'Walk-in':              '#B29A6A',
   'Facebook':             '#6A89B7',
   'Zola':                 '#9B8EC4',
@@ -164,9 +153,11 @@ const SOURCE_COLORS: Record<string, string> = {
   'Calendly':             '#5C8DBC',
   'Acuity':               '#7AA9B7',
   'HoneyBook':            '#D4A24C',
+  'Dubsado':              '#D4A24C',
   'Here Comes The Guide': '#B287C2',
   'Venue Calculator':     '#9D8B6E',
   'Other':                '#9AA098',
+  'Unknown':              '#9AA098',
 }
 
 function getSourceColor(source: string): string {
@@ -1121,7 +1112,7 @@ function ModelComparisonCard({ scope }: ModelComparisonProps) {
               </tr>
             ) : (
               rows.map((row) => {
-                const label = row.source === '(unknown)' ? 'Unknown' : (SOURCE_LABELS[row.source] ?? row.source.replace(/_/g, ' '))
+                const label = row.source === '(unknown)' ? 'Unknown' : formatSource(row.source)
                 return (
                   <tr key={row.source} className="hover:bg-sage-50/30 transition-colors">
                     <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">

@@ -206,27 +206,10 @@ interface ExtractionRow {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function sourceBadge(source: string | null): { bg: string; text: string; label: string } {
-  switch (source) {
-    case 'the_knot':
-      return { bg: 'bg-rose-50', text: 'text-rose-700', label: 'The Knot' }
-    case 'wedding_wire':
-    case 'weddingwire':
-      return { bg: 'bg-blue-50', text: 'text-blue-700', label: 'WeddingWire' }
-    case 'google':
-      return { bg: 'bg-sky-50', text: 'text-sky-700', label: 'Google' }
-    case 'instagram':
-      return { bg: 'bg-pink-50', text: 'text-pink-700', label: 'Instagram' }
-    case 'referral':
-      return { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Referral' }
-    case 'website':
-      return { bg: 'bg-teal-50', text: 'text-teal-700', label: 'Website' }
-    case 'walk_in':
-      return { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Walk-in' }
-    default:
-      return { bg: 'bg-sage-50', text: 'text-sage-600', label: source || 'Unknown' }
-  }
-}
+// T5-Rixey-UU Bug E: removed unused sourceBadge() — the lead detail
+// page renders source via <SourceBadgeEditable> which goes through
+// the shared formatSourceLabel() utility. The local switch had drifted
+// out of sync with the canonical labels and was dead code.
 
 function statusConfig(status: string): { bg: string; text: string; label: string } {
   switch (status) {

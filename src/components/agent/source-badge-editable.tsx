@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { Pencil, Check, X, Loader2 } from 'lucide-react'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 
 /**
  * Editable source badge. Replaces the static `sourceBadge` rendering
@@ -42,29 +43,32 @@ const SELECTABLE_SOURCES = [
   'other',
 ] as const
 
-const SOURCE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  the_knot:             { bg: 'bg-rose-50',    text: 'text-rose-700',    label: 'The Knot' },
-  wedding_wire:         { bg: 'bg-blue-50',    text: 'text-blue-700',    label: 'Wedding Wire' },
-  here_comes_the_guide: { bg: 'bg-violet-50',  text: 'text-violet-700',  label: 'Here Comes The Guide' },
-  zola:                 { bg: 'bg-purple-50',  text: 'text-purple-700',  label: 'Zola' },
-  website:              { bg: 'bg-teal-50',    text: 'text-teal-700',    label: 'Website' },
-  venue_calculator:     { bg: 'bg-amber-50',   text: 'text-amber-700',   label: 'Venue Calculator' },
-  instagram:            { bg: 'bg-pink-50',    text: 'text-pink-700',    label: 'Instagram' },
-  facebook:             { bg: 'bg-indigo-50',  text: 'text-indigo-700',  label: 'Facebook' },
-  google:               { bg: 'bg-sky-50',     text: 'text-sky-700',     label: 'Google' },
-  referral:             { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Word of Mouth' },
-  walk_in:              { bg: 'bg-amber-50',   text: 'text-amber-700',   label: 'Walk-in' },
-  direct:               { bg: 'bg-slate-50',   text: 'text-slate-700',   label: 'Direct' },
-  calendly:             { bg: 'bg-blue-50',    text: 'text-blue-700',    label: 'Calendly' },
-  acuity:               { bg: 'bg-cyan-50',    text: 'text-cyan-700',    label: 'Acuity' },
-  honeybook:            { bg: 'bg-amber-50',   text: 'text-amber-700',   label: 'HoneyBook' },
-  dubsado:              { bg: 'bg-stone-50',   text: 'text-stone-700',   label: 'Dubsado' },
-  other:                { bg: 'bg-sage-50',    text: 'text-sage-600',    label: 'Other' },
+// T5-Rixey-UU Bug E: pill colours stay per-source for visual
+// scanability, but labels always come from formatSourceLabel().
+const SOURCE_STYLES: Record<string, { bg: string; text: string }> = {
+  the_knot:             { bg: 'bg-rose-50',    text: 'text-rose-700' },
+  wedding_wire:         { bg: 'bg-blue-50',    text: 'text-blue-700' },
+  here_comes_the_guide: { bg: 'bg-violet-50',  text: 'text-violet-700' },
+  zola:                 { bg: 'bg-purple-50',  text: 'text-purple-700' },
+  website:              { bg: 'bg-teal-50',    text: 'text-teal-700' },
+  venue_calculator:     { bg: 'bg-amber-50',   text: 'text-amber-700' },
+  instagram:            { bg: 'bg-pink-50',    text: 'text-pink-700' },
+  facebook:             { bg: 'bg-indigo-50',  text: 'text-indigo-700' },
+  google:               { bg: 'bg-sky-50',     text: 'text-sky-700' },
+  referral:             { bg: 'bg-emerald-50', text: 'text-emerald-700' },
+  walk_in:              { bg: 'bg-amber-50',   text: 'text-amber-700' },
+  direct:               { bg: 'bg-slate-50',   text: 'text-slate-700' },
+  calendly:             { bg: 'bg-blue-50',    text: 'text-blue-700' },
+  acuity:               { bg: 'bg-cyan-50',    text: 'text-cyan-700' },
+  honeybook:            { bg: 'bg-amber-50',   text: 'text-amber-700' },
+  dubsado:              { bg: 'bg-stone-50',   text: 'text-stone-700' },
+  other:                { bg: 'bg-sage-50',    text: 'text-sage-600' },
 }
 
 function styleFor(source: string | null): { bg: string; text: string; label: string } {
-  if (!source) return { bg: 'bg-sage-50', text: 'text-sage-500', label: 'Unknown' }
-  return SOURCE_STYLES[source] ?? { bg: 'bg-sage-50', text: 'text-sage-600', label: source.replace(/_/g, ' ') }
+  if (!source) return { bg: 'bg-sage-50', text: 'text-sage-500', label: formatSourceLabel(null) }
+  const style = SOURCE_STYLES[source] ?? { bg: 'bg-sage-50', text: 'text-sage-600' }
+  return { ...style, label: formatSourceLabel(source) }
 }
 
 interface AuditTrail {

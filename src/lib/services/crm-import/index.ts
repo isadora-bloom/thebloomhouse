@@ -129,6 +129,13 @@ export interface NormalisedLeadRow {
   lost_reason?: string | null
   notes?: string | null
 
+  /** Per-row import-time warnings the coordinator should review.
+   *  Schema: { field, issue, value }[] — see migration 175. T5-Rixey-UU
+   *  Bug G adds couple_name 'unparseable_concat' warnings when the
+   *  splitter can't confidently break a glued name like
+   *  "Megandcooperrosenberg". */
+  import_warnings?: Array<{ field: string; issue: string; value?: string | null }> | null
+
   /** Linked sub-records (each becomes one row in its respective table). */
   interactions?: NormalisedInteractionRow[]
   tours?: NormalisedTourRow[]
@@ -297,6 +304,12 @@ export async function commitNormalisedRows(args: {
         confidence_flag: confidenceFlag,
         crm_source: crmSource,
         source_provenance: sourceProvenance,
+        // T5-Rixey-UU Bug G: pass per-row import_warnings through to
+        // the weddings.import_warnings jsonb so the coordinator-facing
+        // 'needs review' badge surfaces on the leads page.
+        import_warnings: row.import_warnings && row.import_warnings.length > 0
+          ? row.import_warnings
+          : null,
       }
       const { data: wedding, error: wedErr } = await supabase
         .from('weddings')

@@ -19,6 +19,7 @@ import {
   Tag,
   Loader2,
 } from 'lucide-react'
+import { formatSourceLabel } from '@/lib/utils/format-source-label'
 
 /**
  * Wedding journey timeline — renders a chronological feed of every
@@ -87,29 +88,12 @@ const ACTOR_LABEL: Record<JourneyActor, string> = {
   unknown: '—',
 }
 
-const SOURCE_LABEL: Record<string, string> = {
-  the_knot: 'The Knot',
-  wedding_wire: 'Wedding Wire',
-  here_comes_the_guide: 'Here Comes The Guide',
-  zola: 'Zola',
-  website: 'Website',
-  venue_calculator: 'Venue Calculator',
-  instagram: 'Instagram',
-  facebook: 'Facebook',
-  google: 'Google',
-  referral: 'Word of Mouth',
-  walk_in: 'Walk-in',
-  direct: 'Direct',
-  calendly: 'Calendly',
-  acuity: 'Acuity',
-  honeybook: 'HoneyBook',
-  dubsado: 'Dubsado',
-  other: 'Other',
-}
-
+// T5-Rixey-UU Bug E: source-label rendering centralised in
+// src/lib/utils/format-source-label. Returns null when the value is
+// missing so the caller can suppress the chip entirely.
 function formatSource(s: string | null | undefined): string | null {
   if (!s) return null
-  return SOURCE_LABEL[s] ?? s.replace(/_/g, ' ')
+  return formatSourceLabel(s)
 }
 
 function formatTimestamp(iso: string): string {
