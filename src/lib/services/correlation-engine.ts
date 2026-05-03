@@ -29,10 +29,53 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createHash } from 'node:crypto'
 import { loadFredSeries } from './external-context/fred'
 import { loadCulturalMomentsSeries } from './external-context/cultural-moments'
 import { loadCalendarSeries } from './external-context/calendar'
 import { bonferroniCriticalR } from './external-context/stats'
+
+/**
+ * Stable namespace UUID for correlation context_id derivation. RFC 4122
+ * §4.3 requires a namespace UUID for v5 derivation; this constant is
+ * the project-private namespace for "correlation pair → uuid" mapping.
+ * Generated once (random v4) and frozen — changing it would re-key
+ * every existing correlation insight row, so don't.
+ */
+const CORRELATION_CONTEXT_NAMESPACE = 'd6b5c1fa-21d9-4f7d-9c3e-5d6e8a1b2c34'
+
+/**
+ * Derive a deterministic UUID from a name string using a name-based
+ * scheme. Node's `crypto` doesn't ship a v5 helper directly, so we
+ * implement RFC 4122 §4.3: SHA-1(namespace_bytes || name_bytes), take
+ * the first 16 bytes, set version (5) and variant (RFC 4122) bits.
+ *
+ * Same input → same UUID forever, which is exactly what
+ * intelligence_insights.context_id needs for the correlation upsert
+ * key (channel pair + lag must collapse to one stable row across
+ * cron runs). Bug it replaces (corr:<a>|<b> string crammed into a
+ * uuid column) was P1: any insert on a real-prod schema would 22P02
+ * before reaching the row.
+ */
+function uuidV5(name: string, namespace: string = CORRELATION_CONTEXT_NAMESPACE): string {
+  const nsHex = namespace.replace(/-/g, '')
+  const nsBytes = Buffer.from(nsHex, 'hex')
+  const nameBytes = Buffer.from(name, 'utf8')
+  const hash = createHash('sha1').update(Buffer.concat([nsBytes, nameBytes])).digest()
+  const bytes = Buffer.from(hash.subarray(0, 16))
+  // Set version to 5 (top 4 bits of byte 6).
+  bytes[6] = (bytes[6] & 0x0f) | 0x50
+  // Set variant to RFC 4122 (top 2 bits of byte 8 → 10).
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = bytes.toString('hex')
+  return (
+    hex.slice(0, 8) + '-' +
+    hex.slice(8, 12) + '-' +
+    hex.slice(12, 16) + '-' +
+    hex.slice(16, 20) + '-' +
+    hex.slice(20, 32)
+  )
+}
 
 const WINDOW_DAYS = 90
 const LAGS = [0, 3, 5, 7, 14]
@@ -493,8 +536,21 @@ export async function computeCorrelationsForVenue(args: {
   // Write to intelligence_insights — upsert by (venue_id, insight_type,
   // context_id=pair_key) so re-runs refresh the same row rather than
   // duplicating.
+  //
+  // P1 fix (Stream BB / T5-Rixey-JJ): context_id is `uuid` (migration
+  // 080). The previous build wrote `'corr:<a>|<b>'` here, which Postgres
+  // rejects with `22P02 invalid input syntax for type uuid` — the engine
+  // could not write any rows in production. Derive a stable v5 UUID
+  // from the channel pair + lag instead so the insert lands AND
+  // re-runs upsert deterministically (same channel pair + lag always
+  // produces the same UUID).
+  //
+  // No backfill: Stream BB confirmed no production writes have occurred
+  // since the column type tightened, so there are no orphan rows to
+  // re-key.
   for (const ins of deduped) {
-    const contextId = `corr:${[ins.channelA, ins.channelB].sort().join('|')}`
+    const pairKey = `${[ins.channelA, ins.channelB].sort().join('|')}|${ins.lagDays}`
+    const contextId = uuidV5(pairKey)
     const row = {
       venue_id: venueId,
       insight_type: 'correlation',
@@ -509,9 +565,13 @@ export async function computeCorrelationsForVenue(args: {
         lag_days: ins.lagDays,
         r: ins.r,
         window_days: WINDOW_DAYS,
+        // Audit: keep the pre-hash key visible so a coordinator (or
+        // future reader) can reverse-engineer which pair the UUID
+        // belongs to without re-running the engine.
+        pair_key: pairKey,
       },
       status: 'new',
-      context_id: contextId as unknown as string,
+      context_id: contextId,
     }
     const { data: existing } = await supabase
       .from('intelligence_insights')

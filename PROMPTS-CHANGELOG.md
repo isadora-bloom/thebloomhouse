@@ -77,6 +77,17 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
   narration generator. Sonnet-tier; deterministic fallback runs when
   cost ceiling pauses the venue.
 
+### cancellation-classifier (`cancellation-classifier.prompt.v1.0`)
+- **v1.0** (2026-05-02) — T5-Rixey-JJ. Free-text → enum classifier for
+  tour cancellation reasons. Mirrors migration 176's extended CHECK
+  enum (lost_to_competitor / venue_unavailable / health_emergency
+  added beyond migration 166's original 8). Two-stage: heuristic over
+  the dominant Rixey Calendly patterns first, then LLM (Sonnet, tier-1
+  content, cost-ceiling-gated, FNV-1a-cached) for the long tail.
+  Returns `{ reason, note, confidence: 'high'|'medium'|'low' }`.
+  Empty / 'n/a' / single-char inputs short-circuit to 'other' / 'low'.
+  Gated venues fall back to heuristic-only.
+
 ### voice-dna-extract (`voice-dna-extract.prompt.v1.0`)
 - **v1.0** (2026-05-02) — T5-θ.3. Extracts greetings, signoffs, pet
   phrases, punctuation tics, voice rules, and sentence rhythm from a
