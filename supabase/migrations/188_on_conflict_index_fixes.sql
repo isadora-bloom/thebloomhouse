@@ -36,25 +36,17 @@ COMMENT ON INDEX public.uq_bar_planning_wedding_id IS
   '(src/app/_couple-pages/bar/page.tsx). Per T5-Rixey-XX / RR finding.';
 
 -- ---------------------------------------------------------------------------
--- timeline — couple-portal timeline blob (one row per wedding,
--- config_json holds the full timeline doc).
--- Writer: src/app/_couple-pages/timeline/page.tsx upserts
--- {venue_id, wedding_id, config_json}; reader at chat/page.tsx +
--- public/wedding-website both use .maybeSingle(). Schema in migration 004.
---
--- Note: the table also has per-event columns (time/title/sort_order)
--- from the original Rixey-portal port — those rows are populated by a
--- different surface (portal/weddings/[id]/page.tsx reads them by
--- sort_order). The writer's upsert path uses config_json blob model;
--- adding the unique index enforces one-row-per-wedding for that path.
--- The mixed schema is a separate cleanup, out of scope for XX.
+-- timeline — DEFERRED. Demo data has duplicate wedding_id rows
+-- (ab000000-...001 has 13 rows; 44444444-...0109 has 7) because the
+-- table is used in TWO modes by different surfaces:
+--   1. couple-portal timeline writer: one row per wedding with
+--      config_json blob (via ON CONFLICT(wedding_id))
+--   2. portal/weddings/[id] reader: per-event rows with
+--      time/title/sort_order
+-- Adding UNIQUE(wedding_id) breaks mode 2. Out of scope for XX.
+-- The mixed-schema cleanup is its own stream — until then the writer's
+-- ON CONFLICT silent-no-ops on dup rows; flagged in CI guard skip list.
 -- ---------------------------------------------------------------------------
-CREATE UNIQUE INDEX IF NOT EXISTS uq_timeline_wedding_id
-  ON public.timeline (wedding_id);
-
-COMMENT ON INDEX public.uq_timeline_wedding_id IS
-  'One row per wedding. Matches ON CONFLICT in couple-portal timeline '
-  '(src/app/_couple-pages/timeline/page.tsx). Per T5-Rixey-XX / RR finding.';
 
 -- ---------------------------------------------------------------------------
 -- wedding_website_settings — couple-portal wedding-website settings
