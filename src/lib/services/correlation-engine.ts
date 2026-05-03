@@ -78,6 +78,13 @@ function uuidV5(name: string, namespace: string = CORRELATION_CONTEXT_NAMESPACE)
 }
 
 const WINDOW_DAYS = 90
+// Stream QQ (2026-05-02): widening hook. The default 90d window is the
+// production cron cadence — it matches "last quarter of activity" and
+// keeps the Bonferroni penalty bounded. But the WeddingWire-cancellation
+// event landed in Feb 2025 so a 90d window run in May 2026 can't see
+// it; for ad-hoc historical-significance runs we accept a windowDaysOverride
+// up to MAX_WINDOW_DAYS. Cron path stays at 90d.
+const MAX_WINDOW_DAYS = 730
 const LAGS = [0, 3, 5, 7, 14]
 // T5-Rixey-NN: lowered from 20 → 12. Stream MM verified that small venues
 // (Rixey, ~191 inquiries / 90d) commonly have valid leading-indicator
@@ -253,9 +260,13 @@ interface Series {
   values: Map<string, number>
 }
 
-async function buildSeries(supabase: SupabaseClient, venueId: string): Promise<Series[]> {
+async function buildSeries(
+  supabase: SupabaseClient,
+  venueId: string,
+  windowDays: number = WINDOW_DAYS,
+): Promise<Series[]> {
   const now = new Date()
-  const start = new Date(now.getTime() - WINDOW_DAYS * 86400e3)
+  const start = new Date(now.getTime() - windowDays * 86400e3)
 
   const series: Series[] = []
 
@@ -414,10 +425,10 @@ async function getVenueGeoScope(
  * Per Playbook ARCH-19.5 / T2-C requirement: "Add multiple-comparisons
  * correction + per-venue significance threshold to correlation engine."
  */
-function correctedThresholdFor(numChannels: number): number {
+function correctedThresholdFor(numChannels: number, windowDays: number = WINDOW_DAYS): number {
   if (numChannels < 2) return CORRELATION_THRESHOLD
   const numTests = numChannels * (numChannels - 1) * LAGS.length
-  const bonferroniR = bonferroniCriticalR(numTests, WINDOW_DAYS, FAMILY_ALPHA)
+  const bonferroniR = bonferroniCriticalR(numTests, windowDays, FAMILY_ALPHA)
   return Math.max(CORRELATION_THRESHOLD, Math.min(0.85, bonferroniR))
 }
 
@@ -476,15 +487,23 @@ export async function computeCorrelationsForVenue(args: {
   supabase: SupabaseClient
   venueId: string
   maxInsights?: number
+  /** Stream QQ: opt-in override for ad-hoc historical-significance
+   *  runs. Defaults to WINDOW_DAYS (90) so the cron path is unchanged.
+   *  Capped at MAX_WINDOW_DAYS to bound the Bonferroni penalty. */
+  windowDaysOverride?: number
 }): Promise<CorrelationInsight[]> {
   const { supabase, venueId } = args
   const maxInsights = args.maxInsights ?? 5
+  const windowDays = Math.max(
+    1,
+    Math.min(MAX_WINDOW_DAYS, args.windowDaysOverride ?? WINDOW_DAYS),
+  )
 
-  const series = await buildSeries(supabase, venueId)
+  const series = await buildSeries(supabase, venueId, windowDays)
   if (series.length < 2) return []
 
   const now = new Date()
-  const start = new Date(now.getTime() - WINDOW_DAYS * 86400e3)
+  const start = new Date(now.getTime() - windowDays * 86400e3)
   const days = enumerateDays(start, now)
   const arrays = new Map<string, number[]>()
   for (const s of series) arrays.set(s.channel, seriesToArray(s, days))
@@ -495,7 +514,7 @@ export async function computeCorrelationsForVenue(args: {
   // together don't trip false-positive correlations from sheer test
   // volume. Replaces the bare CORRELATION_THRESHOLD constant on the
   // hot path.
-  const familyThreshold = correctedThresholdFor(names.length)
+  const familyThreshold = correctedThresholdFor(names.length, windowDays)
 
   for (let i = 0; i < names.length; i++) {
     for (let j = 0; j < names.length; j++) {
@@ -524,7 +543,7 @@ export async function computeCorrelationsForVenue(args: {
       const headline = best.lag === 0
         ? `${humanA} correlates with ${humanB} (r=${best.r.toFixed(2)})`
         : `${humanA} precedes ${humanB} by ${best.lag} days (r=${best.r.toFixed(2)})`
-      const body = `${humanA} and ${humanB} ${direction} ${lagPhrase} over the last ${WINDOW_DAYS} days (correlation ${best.r.toFixed(2)}). ${
+      const body = `${humanA} and ${humanB} ${direction} ${lagPhrase} over the last ${windowDays} days (correlation ${best.r.toFixed(2)}). ${
         best.lag > 0
           ? `A spike in ${humanA} has tended to predict a move in ${humanB} about ${best.lag} days later.`
           : 'Movements appear synchronous.'
@@ -584,7 +603,7 @@ export async function computeCorrelationsForVenue(args: {
         channel_b: ins.channelB,
         lag_days: ins.lagDays,
         r: ins.r,
-        window_days: WINDOW_DAYS,
+        window_days: windowDays,
         // Audit: keep the pre-hash key visible so a coordinator (or
         // future reader) can reverse-engineer which pair the UUID
         // belongs to without re-running the engine.
