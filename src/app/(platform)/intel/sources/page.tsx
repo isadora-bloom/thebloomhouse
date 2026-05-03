@@ -253,7 +253,19 @@ function TableSkeleton() {
 interface PhaseBPanelsProps {
   scope: ReturnType<typeof useScope>
   windowDays: ScorecardWindow
+  // T5-Rixey-LLL B9: multi-touch panel runs on its OWN window
+  // (different question — "of all my booked weddings, how multi-
+  // platform was the journey?" wants a long lifetime view, not
+  // the tactical 90d the scorecard uses).
+  multiTouchWindowDays: MultiTouchWindow
+  onMultiTouchWindowChange: (w: MultiTouchWindow) => void
 }
+
+// T5-Rixey-LLL B9: independent window for the Multi-touch Split panel.
+// Same option set as the scorecard but a separate type so the two can't
+// accidentally cross-couple. 'all' projects to a far-past iso (effectively
+// no lower bound) for the attribution_events query.
+type MultiTouchWindow = 90 | 365 | 'all'
 
 interface NonConvertingRow {
   id: string
@@ -289,7 +301,7 @@ const TRACKED_PLATFORM_SOURCES_FOR_FLAG = [
   'facebook',
 ] as const
 
-function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
+function PhaseBIntelPanels({ scope, windowDays, multiTouchWindowDays, onMultiTouchWindowChange }: PhaseBPanelsProps) {
   const [conflictCount, setConflictCount] = useState<number | null>(null)
   const [batchLeadCount, setBatchLeadCount] = useState<number | null>(null)
   const [nonConverting, setNonConverting] = useState<NonConvertingRow[]>([])
@@ -300,6 +312,7 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
   // scope before the panel evaporated.
   const isVenueScope = scope.level === 'venue' && Boolean(scope.venueId)
   const [loading, setLoading] = useState(isVenueScope)
+  const [multiTouchLoading, setMultiTouchLoading] = useState(isVenueScope)
 
   useEffect(() => {
     if (scope.loading) return
@@ -308,7 +321,6 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
       setConflictCount(0)
       setBatchLeadCount(0)
       setNonConverting([])
-      setMultiTouch([])
       return
     }
     let cancelled = false
@@ -322,7 +334,7 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
       setLoading(true)
       const venueId = scope.venueId!
 
-      const [conflictRes, cohortRes, attribRes] = await Promise.all([
+      const [conflictRes, cohortRes] = await Promise.all([
         // 1. Conflict count.
         sb
           .from('attribution_events')
@@ -345,13 +357,6 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
           .gte('last_seen', windowStartIso)
           .order('last_seen', { ascending: false })
           .limit(25),
-        // 3. Multi-touch — window-bound by decided_at. PC.4 fix #4.
-        sb
-          .from('attribution_events')
-          .select('wedding_id, source_platform')
-          .eq('venue_id', venueId)
-          .is('reverted_at', null)
-          .gte('decided_at', windowStartIso),
       ])
 
       if (cancelled) return
@@ -395,10 +400,51 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
       }
       if (cancelled) return
       setBatchLeadCount(batchLeads)
+      setLoading(false)
+    })()
+
+    return () => { cancelled = true }
+  }, [scope.level, scope.venueId, scope.loading, isVenueScope, windowDays])
+
+  // T5-Rixey-LLL B9: multi-touch panel runs on its OWN window — separate
+  // effect so flipping the panel's selector doesn't refetch the conflict
+  // count / non-converting cohort / batch-lead diff.
+  useEffect(() => {
+    if (scope.loading) return
+    if (!isVenueScope) {
+      setMultiTouchLoading(false)
+      setMultiTouch([])
+      setBookedAttributed(0)
+      return
+    }
+    let cancelled = false
+    const sb = createBrowserClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    )
+    // 'all' → effectively no lower bound (epoch-ish iso) so the
+    // attribution_events query covers full venue history.
+    const mtWindowStartIso = multiTouchWindowDays === 'all'
+      ? new Date(0).toISOString()
+      : new Date(Date.now() - multiTouchWindowDays * 86_400_000).toISOString()
+
+    ;(async () => {
+      setMultiTouchLoading(true)
+      const venueId = scope.venueId!
+
+      // Multi-touch — window-bound by decided_at. PC.4 fix #4.
+      const { data: attribData } = await sb
+        .from('attribution_events')
+        .select('wedding_id, source_platform')
+        .eq('venue_id', venueId)
+        .is('reverted_at', null)
+        .gte('decided_at', mtWindowStartIso)
+
+      if (cancelled) return
 
       // Multi-touch grouping: count distinct platforms per wedding.
       const platformsByWedding = new Map<string, Set<string>>()
-      for (const e of ((attribRes.data ?? []) as Array<{ wedding_id: string; source_platform: string }>)) {
+      for (const e of ((attribData ?? []) as Array<{ wedding_id: string; source_platform: string }>)) {
         const set = platformsByWedding.get(e.wedding_id) ?? new Set<string>()
         set.add(e.source_platform)
         platformsByWedding.set(e.wedding_id, set)
@@ -408,7 +454,7 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
       // multi-platform was their journey?" Need to fetch wedding
       // statuses for the IDs.
       const weddingIds = Array.from(platformsByWedding.keys())
-      let bookedSet = new Set<string>()
+      const bookedSet = new Set<string>()
       if (weddingIds.length > 0) {
         const CHUNK = 100
         for (let i = 0; i < weddingIds.length; i += CHUNK) {
@@ -423,6 +469,8 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
           }
         }
       }
+
+      if (cancelled) return
 
       const bucketCounts = new Map<number, number>()
       for (const wid of bookedSet) {
@@ -439,11 +487,11 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
       }
       setMultiTouch(buckets)
       setBookedAttributed(total)
-      setLoading(false)
+      setMultiTouchLoading(false)
     })()
 
     return () => { cancelled = true }
-  }, [scope.level, scope.venueId, scope.loading, isVenueScope, windowDays])
+  }, [scope.level, scope.venueId, scope.loading, isVenueScope, multiTouchWindowDays])
 
   if (scope.level !== 'venue') {
     return null
@@ -456,16 +504,13 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
       </div>
     )
   }
-  // Empty when there's literally nothing to show — better than a
-  // bunch of empty cards.
-  if (
-    (conflictCount ?? 0) === 0 &&
-    (batchLeadCount ?? 0) === 0 &&
-    nonConverting.length === 0 &&
-    multiTouch.length === 0
-  ) {
-    return null
-  }
+  // T5-Rixey-LLL B9: previously this section short-circuited when
+  // every tile was empty (incl. multiTouch.length === 0). The
+  // multi-touch panel now owns its own window selector, so always
+  // render at venue scope — the coordinator must be able to toggle
+  // 90d → 1y → All time even when the current window has zero
+  // buckets. `MultiTouchSplitPanel` itself renders an explanatory
+  // empty state (with the selector visible) when buckets are empty.
 
   return (
     <div className="space-y-4">
@@ -507,7 +552,13 @@ function PhaseBIntelPanels({ scope, windowDays }: PhaseBPanelsProps) {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <NonConvertingCohortPanel rows={nonConverting} />
-        <MultiTouchSplitPanel buckets={multiTouch} totalBooked={bookedAttributed} />
+        <MultiTouchSplitPanel
+          buckets={multiTouch}
+          totalBooked={bookedAttributed}
+          windowDays={multiTouchWindowDays}
+          onWindowChange={onMultiTouchWindowChange}
+          loading={multiTouchLoading}
+        />
       </div>
     </div>
   )
@@ -556,21 +607,61 @@ function NonConvertingCohortPanel({ rows }: { rows: NonConvertingRow[] }) {
   )
 }
 
-function MultiTouchSplitPanel({ buckets, totalBooked }: { buckets: MultiTouchBucket[]; totalBooked: number }) {
+function MultiTouchSplitPanel({
+  buckets,
+  totalBooked,
+  windowDays,
+  onWindowChange,
+  loading,
+}: {
+  buckets: MultiTouchBucket[]
+  totalBooked: number
+  // T5-Rixey-LLL B9
+  windowDays: MultiTouchWindow
+  onWindowChange: (w: MultiTouchWindow) => void
+  loading: boolean
+}) {
+  const windowLabel =
+    windowDays === 90 ? 'last 90 days' : windowDays === 365 ? 'last 1 year' : 'all time'
   return (
     <div className="bg-surface border border-border rounded-xl shadow-sm">
       <div className="px-5 py-3 border-b border-border">
-        <h3 className="font-heading text-base font-semibold text-sage-900 flex items-center gap-2">
-          <Layers className="w-4 h-4 text-sage-600" />
-          Multi-touch journey split
-        </h3>
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="font-heading text-base font-semibold text-sage-900 flex items-center gap-2">
+            <Layers className="w-4 h-4 text-sage-600" />
+            Multi-touch journey split
+          </h3>
+          {/* T5-Rixey-LLL B9: independent window — coordinators usually
+              want the lifetime view here, not the 90d the scorecard
+              uses. Default 1y (set at the page level). */}
+          <select
+            value={String(windowDays)}
+            onChange={(e) => {
+              const v = e.target.value
+              const next: MultiTouchWindow = v === 'all' ? 'all' : (parseInt(v, 10) as MultiTouchWindow)
+              onWindowChange(next)
+            }}
+            className="text-xs border border-sage-200 rounded-md px-2 py-1 bg-surface text-sage-700"
+            title="Window for the multi-touch coverage view (independent of the Source Quality scorecard window)"
+          >
+            <option value="90">90d</option>
+            <option value="365">1y</option>
+            <option value="all">All time</option>
+          </select>
+        </div>
         <p className="text-xs text-sage-500 mt-0.5">
-          Of {totalBooked} booked lead{totalBooked === 1 ? '' : 's'} with platform-signal coverage, how many distinct platforms each touched.
+          Of {totalBooked} booked lead{totalBooked === 1 ? '' : 's'} with platform-signal coverage in the {windowLabel}, how many distinct platforms each touched.
         </p>
       </div>
-      {buckets.length === 0 ? (
+      {loading ? (
+        <div className="px-5 py-6">
+          <div className="h-3 bg-sage-50 rounded animate-pulse mb-2" />
+          <div className="h-3 bg-sage-50 rounded animate-pulse mb-2 w-3/4" />
+          <div className="h-3 bg-sage-50 rounded animate-pulse w-1/2" />
+        </div>
+      ) : buckets.length === 0 ? (
         <div className="px-5 py-6 text-center text-xs text-sage-500">
-          No booked weddings have platform-signal attribution yet. Once Phase B matches ramp up, distribution shows up here.
+          No booked weddings have platform-signal attribution in this window. Try widening to 1 year or All time, or wait for Phase B matches to ramp up.
         </div>
       ) : (
         <div className="px-5 py-4 space-y-2">
@@ -1252,6 +1343,26 @@ export default function SourceAttributionPage() {
   // multi-touch split, non-converting cohort, and conflict tile
   // all see the same window. Default 90d (locked).
   const [windowDays, setWindowDays] = useState<ScorecardWindow>(90)
+  // T5-Rixey-LLL B9: independent window for the Multi-touch Split
+  // panel. Default 1y (different question — coordinator wants the
+  // lifetime view, not the tactical 90d). Persisted as URL param
+  // `multitouch_window` so deep-links round-trip.
+  const [multiTouchWindowDays, setMultiTouchWindowDays] = useState<MultiTouchWindow>(() => {
+    if (typeof window === 'undefined') return 365
+    const raw = new URLSearchParams(window.location.search).get('multitouch_window')
+    if (raw === '90') return 90
+    if (raw === '365') return 365
+    if (raw === 'all') return 'all'
+    return 365
+  })
+  // Mirror state into the URL on change. Use replaceState so we don't
+  // pollute browser back-button history with every flip.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    url.searchParams.set('multitouch_window', String(multiTouchWindowDays))
+    window.history.replaceState({}, '', url.toString())
+  }, [multiTouchWindowDays])
 
   // ---- Fetch data ----
   // Funnel rows come from the multi-touch attribution endpoint (reads
@@ -1587,22 +1698,34 @@ export default function SourceAttributionPage() {
     if (sourceRows.length === 0) return []
     const items: InsightItem[] = []
 
-    // T5-Rixey-VV Y3: degenerate-state guard. When every channel shows
-    // $0 revenue, the leverage and ROI math both produce nonsense
-    // (∞ best AND -100% worst on the same channel). Surface the data
-    // gap as a SINGLE insight instead of generating mutually
-    // contradictory ones.
-    const maxRevenue = sourceRows.reduce((m, r) => Math.max(m, r.revenue), 0)
-    if (maxRevenue <= 0) {
+    // T5-Rixey-LLL B4: tighten the degenerate-state guard. The original
+    // VV Y3 guard (max(row.revenue) <= 0) didn't fire for Rixey because
+    // sourceRows.revenue comes from the funnel API and is non-zero on a
+    // few rows even when no SINGLE channel has both demand AND credited
+    // revenue. Result: the panel emitted both "The Knot is your best
+    // channel at $0/lead" (HIGH) AND "The Knot has the lowest ROI at
+    // -100%" (MEDIUM) on the same row.
+    //
+    // New rule: surface the data-gap insight if EITHER
+    //   (a) totalRevenue (the page-level total computed from
+    //       weddingsRollup) is <= 0, OR
+    //   (b) no row has BOTH inquiries > 0 AND revenue > 0 — i.e. no
+    //       channel jointly demonstrates demand and credited revenue,
+    //       which is the precondition for any "best at $X/lead" claim
+    //       to be meaningful.
+    const hasJointEvidence = sourceRows.some((r) => r.inquiries > 0 && r.revenue > 0)
+    if (totalRevenue <= 0 || !hasJointEvidence) {
       items.push({
         icon: 'warning',
-        text: "Revenue not yet flowing into the rollup — check that booking_value is populated and the source_attribution rollup ran since the latest data load.",
+        text: "Revenue not yet flowing into the per-channel rollup — check that booking_value is populated, attribution touchpoints exist, and the source_attribution rollup ran since the latest data load.",
         priority: 'high',
       })
       return items
     }
 
-    // Best performing source (by revenue per inquiry)
+    // Best performing source (by revenue per inquiry). Belt-and-braces:
+    // suppress this insight when best.revenue === 0 even after the
+    // gap-guard above, since "best at $0/lead" is degenerate math.
     const withInquiries = sourceRows.filter((r) => r.inquiries > 0)
     if (withInquiries.length > 0) {
       const best = [...withInquiries].sort((a, b) => {
@@ -1610,12 +1733,14 @@ export default function SourceAttributionPage() {
         const bRev = b.inquiries > 0 ? b.revenue / b.inquiries : 0
         return bRev - aRev
       })[0]
-      const revPerLead = best.inquiries > 0 ? Math.round(best.revenue / best.inquiries) : 0
-      items.push({
-        icon: 'trend_up',
-        text: `${best.source_name} is your best channel at $${revPerLead.toLocaleString()}/lead in revenue`,
-        priority: 'high',
-      })
+      if (best.revenue > 0) {
+        const revPerLead = Math.round(best.revenue / best.inquiries)
+        items.push({
+          icon: 'trend_up',
+          text: `${best.source_name} is your best channel at $${revPerLead.toLocaleString()}/lead in revenue`,
+          priority: 'high',
+        })
+      }
     }
 
     // Worst ROI source (among those with spend)
@@ -1629,12 +1754,23 @@ export default function SourceAttributionPage() {
       })
     }
 
-    // Sources with inquiries but zero bookings
+    // T5-Rixey-LLL B10: roll the per-source zero-booking warnings into a
+    // SINGLE banner. Previously the loop emitted one item per channel
+    // with inquiries>0 and bookings=0 — six channels in that state
+    // turned the panel into spam. Coordinator goes to the comparison
+    // table to triage.
     const zeroBookings = sourceRows.filter((r) => r.inquiries > 0 && r.bookings === 0)
-    for (const src of zeroBookings) {
+    if (zeroBookings.length === 1) {
+      const src = zeroBookings[0]
       items.push({
         icon: 'warning',
         text: `${src.source_name} generated ${src.inquiries} inquiries but no bookings — investigate conversion blockers`,
+        priority: 'medium',
+      })
+    } else if (zeroBookings.length > 1) {
+      items.push({
+        icon: 'warning',
+        text: `${zeroBookings.length} channels generated inquiries but no bookings — open the Source Comparison table to investigate.`,
         priority: 'medium',
       })
     }
@@ -1790,7 +1926,12 @@ export default function SourceAttributionPage() {
       <SourceQualityScorecard scope={scope} windowDays={windowDays} onWindowChange={setWindowDays} />
 
       {/* ---- Phase C / PC.2: candidate-driven intelligence panels ---- */}
-      <PhaseBIntelPanels scope={scope} windowDays={windowDays} />
+      <PhaseBIntelPanels
+        scope={scope}
+        windowDays={windowDays}
+        multiTouchWindowDays={multiTouchWindowDays}
+        onMultiTouchWindowChange={setMultiTouchWindowDays}
+      />
       {scope.level === 'venue' && <ReEngagementROIPanel />}
 
       {/* ---- Compare Attribution Models (Phase 4 P4.4) ---- */}
