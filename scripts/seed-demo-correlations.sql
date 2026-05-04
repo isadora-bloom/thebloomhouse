@@ -375,6 +375,150 @@ INSERT INTO external_calendar_events (
   '2027-05-09', '2027-05-09', 'other', 'us', 0, 'manual', 'cron:external_calendar_refresh')
 ON CONFLICT (geo_scope, title, start_date) WHERE deleted_at IS NULL DO NOTHING;
 
+-- ----------------------------------------------------------------------------
+-- BB.4  intelligence_insights — distribute 3 more pairs across the other
+--        3 demo venues (Crestwood Farm, The Glass House, Rose Hill Gardens)
+-- ----------------------------------------------------------------------------
+-- Stream RRR (#84 / #98). Per spec the demo cookie hard-pins venue=Hawthorne
+-- (see DEMO_VENUE_ID in src/lib/api/auth-helpers.ts), but the
+-- DEMO_VENUE_ALLOWLIST contains all 4 Crestwood Collection venues. A YC
+-- demo that scope-switches to one of the other three should not see an
+-- empty page either, so we seed at least one correlation pair per venue
+-- with a different macro driver for variety on the slide.
+--
+-- Pair distribution:
+--   Crestwood Farm  (22222222-...0202): The Knot storefront × inquiries
+--   The Glass House (22222222-...0203): CPI × booking_value (negative)
+--   Rose Hill Gns   (22222222-...0204): government shutdown × cancellations
+--
+-- All idempotent on (venue_id, insight_type, context_id, cache_key).
+-- created_at = 2026-04-25 keeps them inside the 14d narration RECENT
+-- window so a Refresh click doesn't re-narrate them and burn LLM budget.
+INSERT INTO intelligence_insights (
+  id, venue_id, insight_type, category, title, body, action,
+  priority, confidence, data_points,
+  status, context_id, surface_layer, surface_priority,
+  cache_key, last_classical_signature,
+  llm_model_used, prompt_version_used,
+  created_at, updated_at
+) VALUES
+-- Story 6 engine: Crestwood Farm — The Knot storefront activity → inquiries
+('cd000003-0000-0000-0000-000000000006',
+ '22222222-2222-2222-2222-222222222202',
+ 'correlation', 'market',
+ 'the_knot_storefront_views and inquiries are correlated (r=0.55, lag 14d)',
+ 'Crestwood Farm''s The Knot storefront-view volume preceded venue inquiry lift by 14 days (Pearson r=0.55, n=90 days). Storefront refresh cycles correlate with mid-tier inquiry uplift.',
+ NULL, 'medium', 0.775,
+ '{"channel_a":"the_knot_storefront_views","channel_b":"inquiries","lag_days":14,"r":0.55,"window_days":90}'::jsonb,
+ 'new', 'cd000013-0000-0000-0000-000000000006', 'on_demand', 71,
+ 'demo0006', '{}'::jsonb,
+ 'demo-seed', 'demo-seed.v1',
+ '2026-04-25 12:00:00+00', '2026-04-25 12:00:00+00'),
+-- Story 7 engine: The Glass House — CPI → booking value (negative)
+('cd000003-0000-0000-0000-000000000007',
+ '22222222-2222-2222-2222-222222222203',
+ 'correlation', 'pricing',
+ 'fred_CPIAUCSL and booking_value are inversely correlated (r=-0.45, lag 90d)',
+ 'CPI moved up 1.4% YoY through Q1; The Glass House mean booked-event value softened with a 90-day lag (Pearson r=-0.45, n=120 days).',
+ NULL, 'medium', 0.725,
+ '{"channel_a":"fred_CPIAUCSL","channel_b":"booking_value","lag_days":90,"r":-0.45,"window_days":120}'::jsonb,
+ 'new', 'cd000013-0000-0000-0000-000000000007', 'on_demand', 67,
+ 'demo0007', '{}'::jsonb,
+ 'demo-seed', 'demo-seed.v1',
+ '2026-04-25 12:00:00+00', '2026-04-25 12:00:00+00'),
+-- Story 8 engine: Rose Hill Gardens — government shutdown → cancellations
+('cd000003-0000-0000-0000-000000000008',
+ '22222222-2222-2222-2222-222222222204',
+ 'correlation', 'market',
+ 'government_shutdown and cancellations are correlated (r=0.55, lag 7d)',
+ 'The Sept 2025 federal government shutdown coincided with a measurable Rose Hill Gardens tour-cancellation spike with a 7-day lag (Pearson r=0.55, n=60 days). DC-metro federal-employee couples reschedule in-tour activity during pay-uncertainty windows.',
+ NULL, 'high', 0.775,
+ '{"channel_a":"government_shutdown","channel_b":"cancellations","lag_days":7,"r":0.55,"window_days":60}'::jsonb,
+ 'new', 'cd000013-0000-0000-0000-000000000008', 'on_demand', 82,
+ 'demo0008', '{}'::jsonb,
+ 'demo-seed', 'demo-seed.v1',
+ '2026-04-25 12:00:00+00', '2026-04-25 12:00:00+00')
+ON CONFLICT (venue_id, insight_type, context_id, cache_key) WHERE cache_key IS NOT NULL DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- BB.5  intelligence_insights — narration rows for the 3 new venues
+-- ----------------------------------------------------------------------------
+INSERT INTO intelligence_insights (
+  id, venue_id, insight_type, category, title, body, action,
+  priority, confidence, data_points,
+  status, context_id, surface_layer, surface_priority,
+  cache_key, last_classical_signature,
+  llm_model_used, prompt_version_used,
+  created_at, updated_at
+) VALUES
+-- Story 6 narration: Crestwood Farm — Knot storefront → inquiries
+('cd000004-0000-0000-0000-000000000006',
+ '22222222-2222-2222-2222-222222222202',
+ 'correlation_narration', 'market',
+ 'The Knot storefront views preceded Crestwood Farm inquiry lift by 2 weeks',
+ 'Crestwood Farm''s The Knot storefront-view volume preceded Crestwood Farm''s inquiry uplift by 14 days (Pearson r=0.55, n=90 days). Storefront photo + copy refreshes published in early March showed up as Q2 inquiries by the third week of March.',
+ 'Schedule a quarterly storefront refresh on The Knot — the 14-day lag means refresh-week activity will surface as inquiries by mid-month. Focus on the cover photo + tagline.',
+ 'medium', 0.775,
+ ('{"channelA":"the_knot_storefront_views","channelB":"inquiries",'
+  || '"channelALabel":"The Knot storefront views","channelBLabel":"inquiries",'
+  || '"lagDays":14,"r":0.55,"pValue":0.005,"windowDays":90,'
+  || '"weakSignal":false,'
+  || '"correlationId":"cd000003-0000-0000-0000-000000000006",'
+  || '"seriesASummary":{"nonZeroDays":68,"min":0,"max":42,"earliest":18,"latest":33},'
+  || '"seriesBSummary":{"nonZeroDays":52,"min":0,"max":3,"earliest":1,"latest":2},'
+  || '"seriesA":[{"dayKey":"2026-02-01","value":18},{"dayKey":"2026-03-01","value":31},{"dayKey":"2026-04-01","value":33}],'
+  || '"seriesB":[{"dayKey":"2026-02-15","value":1},{"dayKey":"2026-03-15","value":2},{"dayKey":"2026-04-15","value":2}]}'
+ )::jsonb,
+ 'new', 'cd000003-0000-0000-0000-000000000006', 'on_demand', 71,
+ 'demonarr06', '{}'::jsonb,
+ 'demo-seed', 'correlation-narration.prompt.v1.0',
+ '2026-04-25 12:05:00+00', '2026-04-25 12:05:00+00'),
+-- Story 7 narration: Glass House — CPI → booking value
+('cd000004-0000-0000-0000-000000000007',
+ '22222222-2222-2222-2222-222222222203',
+ 'correlation_narration', 'pricing',
+ 'CPI inflation pressure dragged The Glass House booked-event values down with a 90-day lag',
+ 'CPI rose roughly 1.4% YoY through Q1 2026. The Glass House''s mean booked-event value softened by about 6% with a 90-day lag (Pearson r=-0.45, n=120 days). The Glass House''s premium-tier mix is the slowest-responding of the four venues to macro pressure.',
+ 'Hold on raising base package pricing through the next CPI release. Test add-on attach-rate uplift instead — the lag suggests booked-event-value pressure is real but slow.',
+ 'medium', 0.725,
+ ('{"channelA":"fred_CPIAUCSL","channelB":"booking_value",'
+  || '"channelALabel":"CPI (year-over-year)","channelBLabel":"booked-event value",'
+  || '"lagDays":90,"r":-0.45,"pValue":0.012,"windowDays":120,'
+  || '"weakSignal":false,'
+  || '"correlationId":"cd000003-0000-0000-0000-000000000007",'
+  || '"seriesASummary":{"nonZeroDays":120,"min":2.8,"max":3.6,"earliest":2.9,"latest":3.4},'
+  || '"seriesBSummary":{"nonZeroDays":42,"min":11500,"max":14200,"earliest":13800,"latest":12950},'
+  || '"seriesA":[{"dayKey":"2026-01-01","value":2.9},{"dayKey":"2026-02-01","value":3.1},{"dayKey":"2026-03-01","value":3.3},{"dayKey":"2026-04-01","value":3.4}],'
+  || '"seriesB":[{"dayKey":"2026-01-15","value":13800},{"dayKey":"2026-02-15","value":13400},{"dayKey":"2026-03-15","value":13100},{"dayKey":"2026-04-15","value":12950}]}'
+ )::jsonb,
+ 'new', 'cd000003-0000-0000-0000-000000000007', 'on_demand', 67,
+ 'demonarr07', '{}'::jsonb,
+ 'demo-seed', 'correlation-narration.prompt.v1.0',
+ '2026-04-25 12:05:00+00', '2026-04-25 12:05:00+00'),
+-- Story 8 narration: Rose Hill Gardens — government shutdown → cancellations
+('cd000004-0000-0000-0000-000000000008',
+ '22222222-2222-2222-2222-222222222204',
+ 'correlation_narration', 'market',
+ 'Federal government shutdown coincided with a Rose Hill Gardens cancellation spike one week later',
+ 'The Sept 2025 federal government shutdown coincided with a 23% spike in Rose Hill Gardens tour-cancellations one week later (Pearson r=0.55, n=60 days). Rose Hill''s Loudoun County / NoVA catchment is heavy on federal-employee couples; pay-uncertainty windows ripple into in-tour activity within a week.',
+ 'When the next federal shutdown is announced, proactively offer rescheduling on Rose Hill tours scheduled the following week. Soft-sell rebookings rather than fight the cancellation curve.',
+ 'high', 0.775,
+ ('{"channelA":"government_shutdown","channelB":"cancellations",'
+  || '"channelALabel":"federal government shutdown days","channelBLabel":"tour cancellations",'
+  || '"lagDays":7,"r":0.55,"pValue":0.003,"windowDays":60,'
+  || '"weakSignal":false,'
+  || '"correlationId":"cd000003-0000-0000-0000-000000000008",'
+  || '"seriesASummary":{"nonZeroDays":21,"min":0,"max":1,"earliest":0,"latest":0},'
+  || '"seriesBSummary":{"nonZeroDays":18,"min":0,"max":3,"earliest":1,"latest":1},'
+  || '"seriesA":[{"dayKey":"2025-09-30","value":1},{"dayKey":"2025-10-15","value":1},{"dayKey":"2025-10-21","value":0}],'
+  || '"seriesB":[{"dayKey":"2025-10-07","value":2},{"dayKey":"2025-10-22","value":3},{"dayKey":"2025-10-28","value":1}]}'
+ )::jsonb,
+ 'new', 'cd000003-0000-0000-0000-000000000008', 'on_demand', 82,
+ 'demonarr08', '{}'::jsonb,
+ 'demo-seed', 'correlation-narration.prompt.v1.0',
+ '2026-04-25 12:05:00+00', '2026-04-25 12:05:00+00')
+ON CONFLICT (venue_id, insight_type, context_id, cache_key) WHERE cache_key IS NOT NULL DO NOTHING;
+
 -- ============================================================================
--- END T5-followup-BB
+-- END T5-followup-BB / Stream RRR (#84 + #98)
 -- ============================================================================
