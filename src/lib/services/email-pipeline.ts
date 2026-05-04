@@ -50,6 +50,52 @@ import { normalizeSource } from '@/lib/services/normalize-source'
 import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
 
 // ---------------------------------------------------------------------------
+// Stream WWW (migration 205): UTM extraction from extracted_identity
+// ---------------------------------------------------------------------------
+//
+// Some inbound relays (notably The Knot's outbound emails) carry UTM
+// keys in their tracking links, and the body-identity-extract step
+// stamps these into interactions.extracted_identity.utm_*. This helper
+// reads them off a JSON-shaped extractedIdentity and returns a typed
+// UTM bundle that the wedding-create + wedding-update paths use to
+// stamp weddings.utm_* columns. Per the migration-205 column COMMENTs,
+// the never-overwrite policy is enforced at the application layer
+// (the caller checks existing UTM presence before patching).
+
+interface UtmBundle {
+  utm_source?: string | null
+  utm_medium?: string | null
+  utm_campaign?: string | null
+  utm_term?: string | null
+  utm_content?: string | null
+}
+
+const UTM_BUNDLE_KEYS: ReadonlyArray<keyof UtmBundle> = [
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+]
+
+function extractUtmFromExtractedIdentity(
+  identity: object | null | undefined,
+): UtmBundle {
+  if (!identity || typeof identity !== 'object') return {}
+  const out: UtmBundle = {}
+  // Cast to the indexable shape since ExtractedIdentity itself doesn't
+  // declare utm_* fields — those land via downstream extenders that
+  // tee additional UTM keys onto the same JSONB column on the
+  // interactions row. Reading by string key is safe because the
+  // typeof guard above ensures it's an object, and we only accept
+  // string values.
+  const bag = identity as Record<string, unknown>
+  for (const key of UTM_BUNDLE_KEYS) {
+    const v = bag[key]
+    if (typeof v === 'string' && v.trim().length > 0) {
+      out[key] = v.trim()
+    }
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
 // Structured error logging
 // ---------------------------------------------------------------------------
 
@@ -1085,6 +1131,16 @@ export async function processIncomingEmail(
     // last-resort fallback when the Date header is missing or
     // unparseable.
     const inquiryDateValue = chooseEventTime(email.date) ?? new Date().toISOString()
+    // Stream WWW (migration 205): mine extracted_identity for UTM
+    // parameters. Some inbound relays (notably The Knot's outbound
+    // emails) carry UTM keys in their tracking links, and the
+    // body-extraction step on every email pulls these into
+    // extracted_identity.utm_*. Stamp them onto the wedding row at
+    // create time. The never-overwrite policy applies to UPDATE paths
+    // below — at INSERT, no prior value exists.
+    const utmFromIdentity = extractUtmFromExtractedIdentity(extractedIdentity)
+    const hasUtmAtCreate = !!(utmFromIdentity.utm_source || utmFromIdentity.utm_medium
+      || utmFromIdentity.utm_campaign || utmFromIdentity.utm_term || utmFromIdentity.utm_content)
     const { data: newWedding } = await supabase
       .from('weddings')
       .insert({
@@ -1102,6 +1158,16 @@ export async function processIncomingEmail(
         estimated_guests: parsedEstimatedGuests,
         heat_score: 0,
         temperature_tier: 'cool',
+        // Stream WWW: UTM from extracted_identity. utm_first_seen_at
+        // anchors to inquiry_date so the "earliest UTM signal" stamp
+        // tracks the email arrival, not wall-clock NOW (which would
+        // drift on a Gmail backfill).
+        utm_source: utmFromIdentity.utm_source ?? null,
+        utm_medium: utmFromIdentity.utm_medium ?? null,
+        utm_campaign: utmFromIdentity.utm_campaign ?? null,
+        utm_term: utmFromIdentity.utm_term ?? null,
+        utm_content: utmFromIdentity.utm_content ?? null,
+        utm_first_seen_at: hasUtmAtCreate ? inquiryDateValue : null,
       })
       .select('id')
       .single()
@@ -1315,9 +1381,13 @@ export async function processIncomingEmail(
   } else if (weddingId && parsedEventDate) {
     // Existing wedding — backfill any extracted date / guest count that
     // wasn't already known. Never overwrite a manually-entered value.
+    // Stream WWW (migration 205): same never-overwrite rule for
+    // utm_*. If the wedding already carries any UTM (e.g. a prior
+    // form submission stamped it), a later email's extracted UTM
+    // does NOT replace it — the original acquisition channel wins.
     const { data: existingWedding } = await supabase
       .from('weddings')
-      .select('wedding_date, guest_count_estimate, estimated_guests')
+      .select('wedding_date, guest_count_estimate, estimated_guests, utm_source, utm_medium, utm_campaign, utm_term, utm_content')
       .eq('id', weddingId)
       .single()
     const patch: Record<string, unknown> = {}
@@ -1337,6 +1407,31 @@ export async function processIncomingEmail(
       parsedEstimatedGuests
     ) {
       patch.estimated_guests = parsedEstimatedGuests
+    }
+    // Stream WWW: backfill UTM only when EVERY existing column is
+    // NULL. Per-column "fill if NULL" would let a partial second-
+    // signal corrupt a coherent first signal (e.g. a knot-Email's
+    // utm_medium overwriting a Google-Ads campaign's blank
+    // utm_medium). Treat the UTM bundle as an atomic unit.
+    const existingHasAnyUtm = !!(existingWedding && (
+      (existingWedding as { utm_source?: string | null }).utm_source
+      || (existingWedding as { utm_medium?: string | null }).utm_medium
+      || (existingWedding as { utm_campaign?: string | null }).utm_campaign
+      || (existingWedding as { utm_term?: string | null }).utm_term
+      || (existingWedding as { utm_content?: string | null }).utm_content
+    ))
+    if (!existingHasAnyUtm) {
+      const utmFromIdentity = extractUtmFromExtractedIdentity(extractedIdentity)
+      const hasNewUtm = !!(utmFromIdentity.utm_source || utmFromIdentity.utm_medium
+        || utmFromIdentity.utm_campaign || utmFromIdentity.utm_term || utmFromIdentity.utm_content)
+      if (hasNewUtm) {
+        patch.utm_source = utmFromIdentity.utm_source ?? null
+        patch.utm_medium = utmFromIdentity.utm_medium ?? null
+        patch.utm_campaign = utmFromIdentity.utm_campaign ?? null
+        patch.utm_term = utmFromIdentity.utm_term ?? null
+        patch.utm_content = utmFromIdentity.utm_content ?? null
+        patch.utm_first_seen_at = chooseEventTime(email.date) ?? new Date().toISOString()
+      }
     }
     if (Object.keys(patch).length > 0) {
       await supabase.from('weddings').update(patch).eq('id', weddingId)

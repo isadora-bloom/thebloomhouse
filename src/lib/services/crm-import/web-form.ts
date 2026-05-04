@@ -125,6 +125,12 @@ export interface FormHint {
   /** Free-text lead-intent column ("Would you like to..."). */
   intentColumn?: string
 
+  /** Stream WWW: optional column carrying the referrer URL (full URL,
+   *  may include UTM parameters in its query string). When present,
+   *  parseUtmFromRow() extracts UTM keys from the URL's query string
+   *  in addition to direct utm_* columns. */
+  referrerColumn?: string
+
   /** Columns that should be excluded from the readable interaction body
    *  (purely numeric helpers, calculated subtotals, etc.). */
   ignoreColumns?: string[]
@@ -345,6 +351,106 @@ function splitFullName(raw: string | null | undefined): { first: string | null; 
 }
 
 // ---------------------------------------------------------------------------
+// Stream WWW: UTM extraction.
+//
+// Forms ship UTM either as direct columns (utm_source / utm_medium / etc.,
+// case-insensitive — Typeform / Jotform export them lower-case, Google
+// Forms preserves the question prompt) or embedded in a referrer URL's
+// query string (e.g. "https://venue.com/inquire?utm_source=knot").
+//
+// extractUtmFromRow walks BOTH paths:
+//   1. Find any header that looks like utm_<key> (case-insensitive,
+//      with optional whitespace).
+//   2. If a referrer column is configured AND has a value, parse its
+//      query string and pull utm_* keys from there too. Direct columns
+//      win over referrer-URL extraction (the form had a dedicated field
+//      for it, so it's more reliable).
+//
+// Returns { utm_source, utm_medium, utm_campaign, utm_term, utm_content }
+// — any subset that was actually present. Empty result = no UTM in this row.
+// ---------------------------------------------------------------------------
+
+export interface UtmFields {
+  utm_source?: string | null
+  utm_medium?: string | null
+  utm_campaign?: string | null
+  utm_term?: string | null
+  utm_content?: string | null
+}
+
+const UTM_KEYS: ReadonlyArray<keyof UtmFields> = [
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+]
+
+function parseUtmFromUrl(rawUrl: string | null | undefined): UtmFields {
+  if (!rawUrl) return {}
+  try {
+    // The URL constructor accepts both absolute URLs and ?-prefixed
+    // query strings via a base. Try absolute first; fall back to
+    // base + path-relative for raw query strings like "?utm_source=knot".
+    let url: URL
+    try {
+      url = new URL(String(rawUrl).trim())
+    } catch {
+      url = new URL(String(rawUrl).trim(), 'https://placeholder.invalid')
+    }
+    const out: UtmFields = {}
+    for (const key of UTM_KEYS) {
+      // searchParams keys are case-sensitive, but UTM keys are
+      // canonically lowercase. Walk every entry once and lowercase
+      // for the match so "Utm_Source" / "UTM_SOURCE" both land.
+      for (const [k, v] of url.searchParams.entries()) {
+        if (k.toLowerCase() === key && v) {
+          out[key] = v
+          break
+        }
+      }
+    }
+    return out
+  } catch {
+    // Malformed URL — degrade gracefully, no UTM.
+    return {}
+  }
+}
+
+function extractUtmFromRow(args: {
+  hdr: HeaderIndex
+  row: string[]
+  referrerColumnIdx: number
+}): UtmFields {
+  const { hdr, row, referrerColumnIdx } = args
+  const out: UtmFields = {}
+
+  // Path 1: scan headers for case-insensitive utm_<key> matches.
+  // Walk every header so "Utm_Source", "UTM Source", "utm_source"
+  // all land. Match against the canonical lowercase key set.
+  for (let i = 0; i < hdr.raw.length; i++) {
+    const headerNorm = hdr.raw[i].trim().toLowerCase().replace(/\s+/g, '_')
+    for (const key of UTM_KEYS) {
+      if (headerNorm === key && !out[key]) {
+        const v = (row[i] ?? '').trim()
+        if (v && v !== '...') out[key] = v
+      }
+    }
+  }
+
+  // Path 2: if a referrer URL column is configured AND has a value,
+  // parse query string. Direct columns win — only fill in keys that
+  // path 1 didn't already populate.
+  if (referrerColumnIdx >= 0) {
+    const referrerRaw = (row[referrerColumnIdx] ?? '').trim()
+    if (referrerRaw) {
+      const fromUrl = parseUtmFromUrl(referrerRaw)
+      for (const key of UTM_KEYS) {
+        if (!out[key] && fromUrl[key]) out[key] = fromUrl[key]
+      }
+    }
+  }
+
+  return out
+}
+
+// ---------------------------------------------------------------------------
 // Header indexing — case-insensitive, exact-match-first, then substring.
 // ---------------------------------------------------------------------------
 
@@ -483,6 +589,10 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
   const idxNotes         = findColumn(hdr, hint.notesColumn)
   const idxTotal         = findColumn(hdr, hint.calculatedTotalColumn)
   const idxIntent        = findColumn(hdr, hint.intentColumn)
+  // Stream WWW: optional referrer URL column for UTM extraction.
+  // Direct utm_<key> headers are detected scan-style in
+  // extractUtmFromRow and don't need an upfront resolve.
+  const idxReferrer      = findColumn(hdr, hint.referrerColumn)
 
   if (idxContactEmail < 0 && idxContactName < 0) {
     return {
@@ -607,6 +717,14 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
     if (totalRaw) weddingNotesParts.push(`Calculated total: ${totalRaw}`)
     const weddingNotes = weddingNotesParts.join('\n') || null
 
+    // Stream WWW: extract UTM parameters per row. Walks both direct
+    // utm_<key> headers (case-insensitive) and the optional referrer-
+    // URL column's query string. Direct columns win when both are
+    // present. Empty result {} means no UTM in this submission —
+    // wedding row lands with utm_source NULL, attribution falls back
+    // to the existing derivation chain.
+    const utm = extractUtmFromRow({ hdr, row: data, referrerColumnIdx: idxReferrer })
+
     // T5-Rixey-TT adapter-as-facts: web-form intake leaves
     // weddings.source NULL. The factual provenance lives in
     // crm_source='web_form' + source_detail (provider name) + the
@@ -656,6 +774,15 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
       lost_at: null,
       lost_reason: null,
       notes: weddingNotes,
+      // Stream WWW: thread UTM into NormalisedLeadRow. The shared
+      // commitNormalisedRows helper writes these to weddings.utm_*
+      // and stamps utm_first_seen_at = submissionIso when any UTM
+      // is present.
+      utm_source: utm.utm_source ?? null,
+      utm_medium: utm.utm_medium ?? null,
+      utm_campaign: utm.utm_campaign ?? null,
+      utm_term: utm.utm_term ?? null,
+      utm_content: utm.utm_content ?? null,
       interactions: [interaction],
       tours: [],
       lost_deal: null,
