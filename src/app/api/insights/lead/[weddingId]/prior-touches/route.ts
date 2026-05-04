@@ -19,8 +19,9 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
 import { getPriorTouches } from '@/lib/services/prior-touches'
+import { redactError } from '@/lib/observability/redact'
 
 export async function GET(
   _request: NextRequest,
@@ -44,7 +45,18 @@ export async function GET(
   }
   const venueId = wedding.venue_id as string
 
-  if (!demo) {
+  if (demo) {
+    // Demo-mode authz (#85, T5-followup-QQQ): the bloom_demo cookie is
+    // an open bypass on this route. Any caller could ask for prior
+    // touches on any wedding by UUID and read tier-1 data on real
+    // production venues. Restrict demo callers to the Crestwood
+    // Collection's 4 venues; the wedding's owning venue must be in the
+    // allowlist. Mirrors the parent /api/insights/lead/[weddingId]
+    // route's pattern.
+    if (!isDemoVenueAllowed(venueId)) {
+      return NextResponse.json({ error: 'forbidden' }, { status: 403 })
+    }
+  } else {
     const platform = await getPlatformAuth()
     if (!platform) {
       return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
@@ -91,9 +103,13 @@ export async function GET(
     })
     return NextResponse.json(summary)
   } catch (err) {
-    console.error('[insights/prior-touches] lookup failed:', err)
+    // #86 (T5-followup-QQQ): redact PII from both the stdout log AND
+    // the response body. getPriorTouches → Supabase / downstream errors
+    // can echo couple emails, phone numbers, and quoted message text.
+    // Wrap with redactError before serialising to either sink.
+    console.error('[insights/prior-touches] lookup failed:', redactError(err))
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Unknown error' },
+      { error: redactError(err) },
       { status: 500 }
     )
   }
