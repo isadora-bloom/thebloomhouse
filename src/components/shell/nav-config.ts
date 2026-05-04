@@ -24,7 +24,7 @@ import {
   // Intel
   LayoutDashboard, Lightbulb, AlertTriangle,
   TrendingUp, Sparkles as TrendsIcon, Star,
-  MapPinIcon, XCircle, Megaphone, Share2, LineChart,
+  MapPinIcon, XCircle, Share2, LineChart,
   MessageSquareText, GitMerge, UserCheck, Send,
   // Sage's Brain
   Sparkles, Mic, GraduationCap, ScrollText,
@@ -192,10 +192,16 @@ export const MODE_WEDDINGS: ModeConfig = {
 // Pages covered: /intel/dashboard, /intel/insights, /intel/anomalies,
 // /intel/market-pulse, /intel/nlq, /intel/briefings, /intel/sources,
 // /intel/roi, /intel/reach, /intel/trends, /intel/reviews,
-// /intel/voice-dna, /intel/tours, /intel/lost-deals, /intel/campaigns,
-// /intel/social, /intel/capacity, /intel/forecasts, /intel/health,
+// /intel/voice-dna, /intel/tours, /intel/lost-deals,
+// /intel/social, /intel/forecasts, /intel/health,
 // /intel/clients, /intel/clients/[id], /intel/matching,
 // /intel/annotations, /intel/team-compare, /intel/macro-correlations (T5-θ.1)
+//
+// Hidden from sidebar (route still reachable by direct URL):
+//   /intel/campaigns — superseded by /intel/sources attribution view
+//                      (Stream ZZZ, 2026-05-03)
+//   /intel/capacity  — retired; redirects to /intel/portfolio
+//                      (Stream ZZZ, 2026-05-03)
 //
 // Org-level intel pages (/intel/portfolio, /intel/company, /intel/team,
 // /intel/regions, /intel/benchmark) move to ORG_ADMIN gear menu — they
@@ -228,7 +234,9 @@ export const MODE_INTEL: ModeConfig = {
         { label: 'Macro Correlations', href: '/intel/macro-correlations', icon: GitMerge, badge: 'AI' },
         { label: 'Marketing Reach', href: '/intel/reach', icon: BarChart3 },
         { label: 'Tours', href: '/intel/tours', icon: MapPinIcon },
-        { label: 'Capacity', href: '/intel/capacity', icon: CalendarRange },
+        // Capacity removed from nav 2026-05-03 (Stream ZZZ) — page had no
+        // live writer, only read from a seed-only feature flag. Route
+        // redirects to /intel/portfolio for any old bookmarks.
         // Revenue Forecasts hidden 2026-05-04 — the page sums pipeline ×
         // fixed weights by wedding_date quarter, which produces a
         // hockey-stick into the current quarter and meaningless tails
@@ -247,7 +255,9 @@ export const MODE_INTEL: ModeConfig = {
         { label: 'Sources & ROI', href: '/intel/sources', icon: TrendingUp },
         { label: 'ROI dashboard', href: '/intel/roi', icon: BarChart3 },
         { label: 'Lost Deals', href: '/intel/lost-deals', icon: XCircle },
-        { label: 'Campaigns', href: '/intel/campaigns', icon: Megaphone },
+        // Campaigns removed from nav 2026-05-03 (Stream ZZZ). Manual
+        // campaign CRUD is superseded by /intel/sources attribution.
+        // Route at /intel/campaigns stays reachable by direct URL.
       ],
     },
     {
@@ -496,6 +506,13 @@ export interface GearItem {
   icon: ComponentType<{ className?: string }>
   /** Minimum role to see this item. */
   requiresRole?: 'group_admin' | 'org_admin' | 'super_admin'
+  /**
+   * Hide unless the active scope is at this level or higher.
+   * `'group'` means visible at group OR company scope (hidden at venue);
+   * `'company'` means visible at company scope only.
+   * Items without this field render at every scope.
+   */
+  requiresScope?: 'group' | 'company'
 }
 
 export interface GearGroup {
@@ -520,7 +537,10 @@ export const GEAR_GROUPS: GearGroup[] = [
       { label: 'Benchmark', href: '/intel/benchmark', icon: BarChart3, requiresRole: 'group_admin' },
       { label: 'Company View', href: '/intel/company', icon: Building2, requiresRole: 'org_admin' },
       { label: 'Team Performance', href: '/intel/team', icon: Users, requiresRole: 'group_admin' },
-      { label: 'Regions', href: '/intel/regions', icon: MapPin, requiresRole: 'org_admin' },
+      // Regions hidden at single-venue scope 2026-05-03 (Stream ZZZ) —
+      // for single-venue tenants the page is one card with no
+      // comparison surface. Visible at group / company scope only.
+      { label: 'Regions', href: '/intel/regions', icon: MapPin, requiresRole: 'org_admin', requiresScope: 'group' },
     ],
   },
   {
