@@ -321,6 +321,38 @@ export async function commitNormalisedRows(args: {
   }
 
   for (const row of rows) {
+    // #88 (Stream PPP, 2026-05-03): per-row client-side rollback. The
+    // route-level pre-commit validation (validateAllRows) already catches
+    // the easy DB-constraint violations (status enum, guests range,
+    // unparseable dates) BEFORE any insert. But a row can still fail
+    // mid-insert from constraints validateAllRows can't see (RLS
+    // misconfig, FK violation if wedding_id was somehow recycled, a
+    // future CHECK constraint we haven't taught the validator about).
+    // Pre-fix: when interactions / tours / lost_deals failed, the
+    // already-inserted weddings + people rows stayed orphaned and the
+    // batch summary said "X interactions inserted" without the
+    // corresponding wedding shells.
+    //
+    // Fix: track the wedding_id we just inserted; if any child insert
+    // fails or an unexpected throw happens further down, DELETE the
+    // wedding row and rely on ON DELETE CASCADE (every child table
+    // declares ON DELETE CASCADE off weddings(id) per migrations 002 +
+    // 004) to clean up people / interactions / tours / lost_deals
+    // children that did make it through. Counters are decremented to
+    // match so the summary still tells the truth.
+    let insertedWeddingId: string | null = null
+    let rowAborted = false
+    const rollbackRow = async (reason: string): Promise<void> => {
+      if (!insertedWeddingId) return
+      try {
+        await supabase.from('weddings').delete().eq('id', insertedWeddingId)
+      } catch (rollbackErr) {
+        result.errors.push(
+          `rollback failed for wedding ${insertedWeddingId} (after ${reason}): ` +
+          (rollbackErr instanceof Error ? rollbackErr.message : 'unknown'),
+        )
+      }
+    }
     try {
       const weddingPayload = {
         venue_id: venueId,
@@ -365,6 +397,7 @@ export async function commitNormalisedRows(args: {
       }
       result.weddingsInserted += 1
       const weddingId = wedding.id as string
+      insertedWeddingId = weddingId
 
       // people: insert primary partner if we have any name/email
       if (row.partner1_first_name || row.partner1_last_name || row.partner1_email) {
@@ -430,12 +463,20 @@ export async function commitNormalisedRows(args: {
         })
         const { error: intErr } = await supabase.from('interactions').insert(interactionPayloads)
         if (intErr) {
+          // #88 rollback: kill the wedding (and cascade-clean the
+          // people row we may have just inserted) so we don't leave a
+          // shell with no email history attached.
           result.errors.push(`interactions insert (wedding ${weddingId}): ${intErr.message}`)
           result.ok = false
+          await rollbackRow('interactions insert failed')
+          result.weddingsInserted = Math.max(0, result.weddingsInserted - 1)
+          insertedWeddingId = null
+          rowAborted = true
         } else {
           result.interactionsInserted += interactionPayloads.length
         }
       }
+      if (rowAborted) continue
 
       // tours
       if (row.tours?.length) {
@@ -456,12 +497,23 @@ export async function commitNormalisedRows(args: {
         }))
         const { error: tourErr } = await supabase.from('tours').insert(tourPayloads)
         if (tourErr) {
+          // #88 rollback: tours failed → wipe wedding + cascade clean
+          // any interactions / people we already wrote for this row.
           result.errors.push(`tours insert (wedding ${weddingId}): ${tourErr.message}`)
           result.ok = false
+          await rollbackRow('tours insert failed')
+          result.weddingsInserted = Math.max(0, result.weddingsInserted - 1)
+          result.interactionsInserted = Math.max(
+            0,
+            result.interactionsInserted - (row.interactions?.length ?? 0),
+          )
+          insertedWeddingId = null
+          rowAborted = true
         } else {
           result.toursInserted += tourPayloads.length
         }
       }
+      if (rowAborted) continue
 
       // lost_deals (only if status='lost' AND a lost_deal payload exists)
       if (row.lost_deal && (row.status === 'lost' || row.lost_at)) {
@@ -479,8 +531,22 @@ export async function commitNormalisedRows(args: {
           signal_class: 'outcome' as const,
         })
         if (lostErr) {
+          // #88 rollback: lost-deals failed → wipe wedding + cascade
+          // clean every other child the row had written so far.
           result.errors.push(`lost_deals insert (wedding ${weddingId}): ${lostErr.message}`)
           result.ok = false
+          await rollbackRow('lost_deals insert failed')
+          result.weddingsInserted = Math.max(0, result.weddingsInserted - 1)
+          result.interactionsInserted = Math.max(
+            0,
+            result.interactionsInserted - (row.interactions?.length ?? 0),
+          )
+          result.toursInserted = Math.max(
+            0,
+            result.toursInserted - (row.tours?.length ?? 0),
+          )
+          insertedWeddingId = null
+          rowAborted = true
         } else {
           result.lostDealsInserted += 1
         }
@@ -489,6 +555,23 @@ export async function commitNormalisedRows(args: {
       const msg = err instanceof Error ? err.message : 'unknown commit error'
       result.errors.push(msg)
       result.ok = false
+      // #88 rollback: anything thrown post-wedding-insert means the
+      // children we wrote so far are orphans relative to a wedding
+      // shell that could be partially populated. Drop the wedding +
+      // cascade-clean. Counters are decremented to match the truth.
+      if (insertedWeddingId) {
+        await rollbackRow(`unexpected throw: ${msg}`)
+        result.weddingsInserted = Math.max(0, result.weddingsInserted - 1)
+        result.interactionsInserted = Math.max(
+          0,
+          result.interactionsInserted - (row.interactions?.length ?? 0),
+        )
+        result.toursInserted = Math.max(
+          0,
+          result.toursInserted - (row.tours?.length ?? 0),
+        )
+        insertedWeddingId = null
+      }
     }
   }
 
