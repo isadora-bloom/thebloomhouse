@@ -45,6 +45,7 @@ export interface DayStep {
     | 'kb_seed' | 'readiness_check' | 'manual' | 'pricing_history_ui'
     | 'crm_import_ui' | 'sage_identity' | 'forbidden_topics' | 'tone_preferences'
     | 'web_form_import_ui' | 'extract_packages_ui' | 'tour_scheduler_import_ui'
+    | 'utm_tagging'
   /** External admin surface where the coordinator does the actual
    *  work for this step. Page renders this as a "Go to surface" link
    *  so coordinators don't have to memorise where each piece lives.
@@ -142,6 +143,27 @@ export const PROJECT_PLAN: DayPlan[] = [
         actionKey: 'web_form_import_ui',
         linkHref: '/onboarding/web-form-import',
         linkLabel: 'Open web-form import',
+      },
+      {
+        // Stream WWW (migration 205): UTM-tracking readiness step.
+        // Before the web form starts capturing UTM, the embed code on
+        // the venue's site has to actually pass UTM through. Once the
+        // landing page preserves them (most paid-ad campaigns auto-tag
+        // with utm_source / utm_medium / utm_campaign), every
+        // submission lands a wedding row with the original acquisition
+        // channel attached — and Bloom's never-overwrite policy keeps
+        // it intact through HoneyBook contract import.
+        //
+        // The actual configuration is one-time HTML / link change on
+        // the venue's site, not a Bloom UI surface. Step is informational
+        // (linkHref=null) — coordinator marks done after dropping the
+        // tracking template into their landing page.
+        key: 'utm_tagging',
+        label: 'Add UTM tracking to your web form',
+        description:
+          'Before submissions can carry their original acquisition channel, your landing page or embed code has to preserve UTM parameters from the inbound link. Standard pattern:\n\n  https://yourvenue.com/inquire?utm_source=knot&utm_campaign=storefront\n\nFor Google Ads / Meta Ads, enable auto-tagging at the campaign level — the platforms set the UTM keys for you. Once tagged inquiries start flowing, Bloom captures every UTM key on form submission and preserves it through HoneyBook contract import (never overwrites a non-NULL UTM value), so your Google Ads spend gets credit for the bookings it actually drove.',
+        actionKey: 'utm_tagging',
+        linkHref: null,
       },
       {
         key: 'tour_scheduler_import',

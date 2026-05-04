@@ -83,9 +83,16 @@ export async function computeSourceQuality(
   // of bookings in the last 90 days," not all-time. PC.4 fix #1:
   // before this, the window selector silently did nothing for the
   // Quality view.
+  // Stream WWW (migration 205): include utm_source on the projection so
+  // downstream first-touch logic has access to the captured ad-channel
+  // signal. We do NOT change the default first-touch grouping here —
+  // grouping continues to read attribution_events.source_platform with
+  // wedding.source as the legacy fallback. utm_source is exposed on the
+  // wedding-row type so the next stream (XXX) can promote it ahead of
+  // wedding.source when it lands as a candidate first-touch.
   const { data: weddings } = await supabase
     .from('weddings')
-    .select('id, source, booking_value, friction_tags, referred_by, status, inquiry_date, booked_at')
+    .select('id, source, booking_value, friction_tags, referred_by, status, inquiry_date, booked_at, utm_source')
     .eq('venue_id', venueId)
     .not('source', 'is', null)
     .gte('booked_at', windowStartIso)

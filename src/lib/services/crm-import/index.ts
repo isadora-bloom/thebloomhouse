@@ -138,6 +138,20 @@ export interface NormalisedLeadRow {
    *  "Megandcooperrosenberg". */
   import_warnings?: Array<{ field: string; issue: string; value?: string | null }> | null
 
+  /** Stream WWW (migration 205): UTM parameters captured from inbound
+   *  form payloads (web-form adapter) or extracted_identity payloads
+   *  (email-pipeline). The shared commitNormalisedRows helper writes
+   *  these straight to weddings.utm_* and stamps utm_first_seen_at on
+   *  first-time stamp. Per the migration-205 column COMMENT, downstream
+   *  importers MUST NOT overwrite a non-NULL value at the application
+   *  layer — preserves the original acquisition channel even after a
+   *  HoneyBook contract lands. */
+  utm_source?: string | null
+  utm_medium?: string | null
+  utm_campaign?: string | null
+  utm_term?: string | null
+  utm_content?: string | null
+
   /** Linked sub-records (each becomes one row in its respective table). */
   interactions?: NormalisedInteractionRow[]
   tours?: NormalisedTourRow[]
@@ -354,6 +368,18 @@ export async function commitNormalisedRows(args: {
       }
     }
     try {
+      // Stream WWW (migration 205): UTM stamping at create time.
+      // Inserts always carry whatever UTM the adapter parsed — this is
+      // a NEW row, so there's no "previous" value to preserve. The
+      // never-overwrite policy applies on UPDATE paths (HoneyBook /
+      // tour-scheduler adapters that touch existing weddings, see also
+      // email-pipeline). When utm_source is non-null we stamp
+      // utm_first_seen_at = inquiry_date so the "earliest UTM signal
+      // observed" anchor reflects the form-submission moment, not
+      // wall-clock NOW (which would drift on a backfill import).
+      // signal-class-justified: UTM stamping at adapter create-time, not source-channel write
+      const hasUtm = !!(row.utm_source || row.utm_medium || row.utm_campaign || row.utm_term || row.utm_content)
+      const inquiryDateForRow = row.inquiry_date ?? new Date().toISOString()
       const weddingPayload = {
         venue_id: venueId,
         status: row.status ?? 'inquiry',
@@ -370,7 +396,7 @@ export async function commitNormalisedRows(args: {
         wedding_date: row.wedding_date ?? null,
         guest_count_estimate: row.guest_count_estimate ?? null,
         booking_value: row.booking_value ?? null,
-        inquiry_date: row.inquiry_date ?? new Date().toISOString(),
+        inquiry_date: inquiryDateForRow,
         booked_at: row.booked_at ?? null,
         lost_at: row.lost_at ?? null,
         lost_reason: row.lost_reason ?? null,
@@ -384,6 +410,16 @@ export async function commitNormalisedRows(args: {
         import_warnings: row.import_warnings && row.import_warnings.length > 0
           ? row.import_warnings
           : null,
+        // Stream WWW: UTM columns. Always written on insert (no prior
+        // value to preserve). utm_first_seen_at anchors to the inquiry
+        // date when ANY utm key is present — the form-submission moment
+        // is the canonical "first observed" point.
+        utm_source: row.utm_source ?? null,
+        utm_medium: row.utm_medium ?? null,
+        utm_campaign: row.utm_campaign ?? null,
+        utm_term: row.utm_term ?? null,
+        utm_content: row.utm_content ?? null,
+        utm_first_seen_at: hasUtm ? inquiryDateForRow : null,
       }
       const { data: wedding, error: wedErr } = await supabase
         .from('weddings')
