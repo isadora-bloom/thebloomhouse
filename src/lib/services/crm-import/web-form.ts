@@ -68,7 +68,14 @@ import type {
   CommitResult,
   CrmSource,
 } from './index'
-import { commitNormalisedRows } from './index'
+// Dynamic import below at call site — see commitWebForm(). Importing
+// commitNormalisedRows statically here creates a load-time cycle with
+// ./index (index.ts imports webFormAdapter; web-form imports
+// commitNormalisedRows). Webpack tolerated the cycle; Turbopack throws
+// "Cannot access 'p' before initialization" during page-data collection
+// for /api/onboarding/extract-packages because the cycle resolves to an
+// uninitialized binding at module-eval time. Dynamic import defers the
+// resolution to call time, after both modules have finished evaluating.
 import { parseCsvRows } from '@/lib/services/brain-dump-csv-shape'
 import { type Cents, asDollars, dollarsToCents } from '@/lib/types/monetary'
 import {
@@ -702,6 +709,7 @@ async function commitWebForm(args: {
   // about source_provenance — easiest path is to patch after the fact.
   // We collect the inserted wedding ids by pulling rows that were just
   // tagged crm_source='web_form' since the call.
+  const { commitNormalisedRows } = await import('./index')
   const baseResult = await commitNormalisedRows({
     ...args,
     crmSource: 'web_form',
