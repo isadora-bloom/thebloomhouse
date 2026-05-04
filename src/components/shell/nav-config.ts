@@ -229,7 +229,15 @@ export const MODE_INTEL: ModeConfig = {
         { label: 'Marketing Reach', href: '/intel/reach', icon: BarChart3 },
         { label: 'Tours', href: '/intel/tours', icon: MapPinIcon },
         { label: 'Capacity', href: '/intel/capacity', icon: CalendarRange },
-        { label: 'Forecasts', href: '/intel/forecasts', icon: LineChart },
+        // Revenue Forecasts hidden 2026-05-04 — the page sums pipeline ×
+        // fixed weights by wedding_date quarter, which produces a
+        // hockey-stick into the current quarter and meaningless tails
+        // ($4K projected for Q1 2028) because future-quarter inquiries
+        // don't exist yet. Coordinator decisions need real seasonal
+        // forecasting, not pipeline-snapshot-mislabeled-as-forecast.
+        // Route still exists at /intel/forecasts (reachable via direct
+        // URL) so the underlying service can be reused if a real
+        // forecasting stream replaces this page.
       ],
     },
     {
