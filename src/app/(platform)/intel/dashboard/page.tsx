@@ -97,7 +97,10 @@ function formatMetricValue(name: string, value: number): string {
     case 'lost_deal_rate':
       return `${(value * 100).toFixed(1)}%`
     case 'avg_booking_value':
-      return `$${Math.round(value).toLocaleString()}`
+      // Stream YYY: avg_booking_value is stored as cents in
+      // anomaly_alerts.current_value/baseline_value (mirrors weddings.booking_value
+      // which is cents per Bloom convention). Divide by 100 before rendering.
+      return `$${Math.round(value / 100).toLocaleString()}`
     case 'pipeline_heat_avg':
       return `${Math.round(value)}`
     default:

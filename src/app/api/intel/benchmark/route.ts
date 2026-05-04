@@ -203,8 +203,12 @@ export async function GET(req: NextRequest) {
 
     const bookingRate = totalInquiries > 0 ? bookings / totalInquiries : null
 
+    // Stream YYY: weddings.booking_value is cents per Bloom convention
+    // (T5-Rixey-NN bug #8). Convert to dollars here so the page's fmt$
+    // displays correctly (~$15K, not $1.5M). Mirrors /intel/clients's
+    // (w.booking_value ?? 0) / 100 pattern.
     const revenueValues = bookedList
-      .map((w) => Number(w.booking_value) || 0)
+      .map((w) => (Number(w.booking_value) || 0) / 100)
       .filter((n) => n > 0)
     const avgRevenue = revenueValues.length > 0
       ? revenueValues.reduce((a, b) => a + b, 0) / revenueValues.length
