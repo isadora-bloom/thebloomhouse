@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { generateSageResponse } from '@/lib/services/sage-brain'
+import { generateSageResponse, detectChatHumanRequest, routeChatToHuman } from '@/lib/services/sage-brain'
 import { extractPlanningDecisions, savePlanningNotes, extractAndSaveAINotes } from '@/lib/services/planning-extraction'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { runEscalationCheck } from '@/lib/services/escalation-detector'
@@ -181,6 +181,56 @@ export async function POST(request: NextRequest) {
       } catch (err) {
         console.warn('[api/portal/sage] File context extraction failed (non-blocking):', err)
       }
+    }
+
+    // -----------------------------------------------------------------------
+    // 3-pre. Stream EEEE: human-escalation request. Mirrors the email
+    // pipeline's "HUMAN REQUESTED in subject" fast-path. If the couple
+    // explicitly asks for a human, we don't run the LLM at all — we
+    // log the user message, fire engagement_event + admin_notification
+    // via routeChatToHuman, save a canned acknowledgement, and return.
+    // No tokens burned, no chance of Sage talking past the request.
+    // -----------------------------------------------------------------------
+    if (detectChatHumanRequest(message)) {
+      // Persist the user's request so the conversation history stays
+      // accurate.
+      await supabase.from('sage_conversations').insert({
+        venue_id: venueId,
+        wedding_id: weddingId || null,
+        role: 'user',
+        content: message,
+        confidence_score: null,
+        flagged_uncertain: true,
+      })
+
+      const cannedResponse = await routeChatToHuman({
+        venueId,
+        weddingId: weddingId || null,
+        message,
+      })
+
+      const { data: cannedSageMsg } = await supabase
+        .from('sage_conversations')
+        .insert({
+          venue_id: venueId,
+          wedding_id: weddingId || null,
+          role: 'assistant',
+          content: cannedResponse,
+          model_used: null,
+          tokens_used: 0,
+          cost: 0,
+          confidence_score: 100,
+          flagged_uncertain: true,
+        })
+        .select('id')
+        .single()
+
+      return NextResponse.json({
+        response: cannedResponse,
+        confidence: 100,
+        conversationId: cannedSageMsg?.id || null,
+        humanRequested: true,
+      })
     }
 
     // -----------------------------------------------------------------------

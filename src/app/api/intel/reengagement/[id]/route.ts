@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/gmail'
+import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
 
 /**
  * POST /api/intel/reengagement/[id]
@@ -83,7 +84,12 @@ export async function POST(
     // bespoke. Keeping subject generic prevents a Knot/IG name
     // from sneaking into a venue-direct cold email.
     const subject = 'A note from the team'
-    const messageId = await sendEmail(auth.venueId, recipient, subject, sentText)
+    // Stream EEEE: re-engagement emails ARE Sage-drafted outbound, so
+    // the disclosure footer applies. Without this, cold re-engagement
+    // bypassed the only legal-disclosure surface in the product.
+    const disclosureCtx = await fetchDisclosureContext(auth.venueId)
+    const bodyWithDisclosure = appendAIDisclosure(sentText, disclosureCtx)
+    const messageId = await sendEmail(auth.venueId, recipient, subject, bodyWithDisclosure)
     if (!messageId) {
       return NextResponse.json({ error: 'Gmail send failed' }, { status: 500 })
     }

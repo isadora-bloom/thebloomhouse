@@ -142,3 +142,6 @@ jobs:
 
       - name: HTML-strip guard — every full_body / body_preview writer routes through htmlToText (T5-Rixey-RR Layer 3)
         run: node scripts/check-html-stripped-at-writer.mjs
+
+      - name: Sage disclosure guard — every outbound Sage send routes through appendAIDisclosure (Stream EEEE)
+        run: node scripts/check-sage-disclosure-enforced.mjs
