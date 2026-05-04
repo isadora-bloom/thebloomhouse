@@ -164,10 +164,20 @@ export async function computeSourceQuality(
   }> = {}
 
   for (const w of weddings ?? []) {
-    // Prefer attribution_events.source_platform (B-15 fix); fall back
-    // to wedding.source for legacy rows without attribution data.
+    // Stream XXX precedence (most-trusted to least):
+    //   1. weddings.utm_source — form-captured at inbound (Stream WWW /
+    //      mig 205). Never overwritten by HoneyBook import.
+    //   2. attribution_events.source_platform WHERE is_first_touch=true
+    //      — cluster-attribution decision (B-15). Survives HoneyBook
+    //      overwrite of weddings.source on booking.
+    //   3. weddings.source — legacy first-touch field; last resort for
+    //      pre-attribution-pipeline / manual-entry weddings.
+    // The funnel API in attribution.ts uses the same chain — the two
+    // surfaces (Source Quality scorecard, Source Comparison funnel)
+    // must agree on how a booking is credited.
     const src =
-      firstTouchByWedding.get(w.id as string)
+      (w.utm_source as string | null)
+        ?? firstTouchByWedding.get(w.id as string)
         ?? (w.source as string)
         ?? 'unknown'
     const status = (w.status as string) ?? ''

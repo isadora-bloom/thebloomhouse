@@ -74,6 +74,15 @@ interface TouchpointRow {
 interface WeddingRow {
   id: string
   source: string | null
+  /** Stream WWW (mig 205): UTM source captured at the inbound moment by
+   *  the form itself. When present, this is the most-trusted answer for
+   *  "where did this couple come from" — beats both the cluster-level
+   *  attribution_events first-touch decision (which can be wrong on
+   *  ambiguous Tier-2 matches) and weddings.source (legacy field that
+   *  HoneyBook contract import overwrites with 'honeybook' on booking,
+   *  destroying the original ad-driven channel). UTM is populated by the
+   *  inbound form and is never overwritten by downstream pipelines. */
+  utm_source: string | null
   status: string | null
   booking_value: Cents | number | null
   inquiry_date: string | null
@@ -122,12 +131,44 @@ export async function computeSourceFunnel(
   // wedding-rollup correctly excluded it.
   const wedRowsTuple = await sb
     .from('weddings')
-    .select('id, source, status, booking_value, inquiry_date')
+    .select('id, source, utm_source, status, booking_value, inquiry_date')
     .eq('venue_id', venueId)
     .is('merged_into_id', null)
   const wedRows = (wedRowsTuple.data ?? []) as WeddingRow[]
   const wedById = new Map<string, WeddingRow>()
   for (const w of wedRows) wedById.set(w.id, w)
+
+  // ---- Fetch first-touch attribution_events for this venue ----
+  // Stream XXX: weddings.source is the LEGACY first-touch field —
+  // HoneyBook contract import overwrites it with 'honeybook' when a
+  // wedding books, destroying the original ad-driven channel signal.
+  // The truthful first-touch answer lives in attribution_events: every
+  // booked wedding that came in via Knot / Google / WW has a row with
+  // is_first_touch=true and source_platform set to the actual
+  // acquisition channel — even after HoneyBook hand-off. Building a
+  // wedding_id → source_platform map here lets the model branches below
+  // promote it ahead of weddings.source.
+  //
+  // Filter to source-class signals only (mig 200) — Calendly /
+  // touchpoint-class first-touch rows shouldn't credit acquisition
+  // channels. Filter reverted_at IS NULL — coordinator overrides /
+  // candidate re-clustering can mark old first-touch rows as superseded.
+  const firstTouchByWedding = new Map<string, string>()
+  const ftRowsTuple = await sb
+    .from('attribution_events')
+    .select('wedding_id, source_platform, signal_class')
+    .eq('venue_id', venueId)
+    .eq('is_first_touch', true)
+    .is('reverted_at', null)
+  for (const r of (ftRowsTuple.data ?? []) as Array<{ wedding_id: string; source_platform: string | null; signal_class: string | null }>) {
+    if (!r.source_platform) continue
+    if (r.signal_class && r.signal_class !== 'source') continue
+    // Multiple first-touch rows shouldn't happen (the trigger enforces
+    // it), but if they do the first row wins; downstream invariant
+    // detection handles the duplicate.
+    if (firstTouchByWedding.has(r.wedding_id)) continue
+    firstTouchByWedding.set(r.wedding_id, r.source_platform)
+  }
 
   // ---- Fetch every touchpoint for this venue ----
   // The wedding cohort is filtered post-fetch by inquiry date if a
@@ -216,10 +257,27 @@ export async function computeSourceFunnel(
     // booking_value is branded Cents (T5-Rixey-RR fix #5); store dollars in revenue.
     if (ind.booked) ind.revenue = centsToDollars(asCents(Number(w.booking_value ?? 0)))
 
-    // Source credit is model-dependent. Use weddings.source as the
-    // canonical first-touch (it's normalized by email-pipeline at
-    // wedding-creation time, single source of truth) and the
-    // touchpoint's source field for last-touch / linear.
+    // Source credit is model-dependent. The first-touch answer follows
+    // the Stream XXX precedence chain (most-trusted to least):
+    //
+    //   1. weddings.utm_source — captured at the inbound moment by the
+    //      form itself (Stream WWW / mig 205). Never overwritten by
+    //      HoneyBook contract import or any downstream pipeline. Wins
+    //      over everything when populated.
+    //   2. attribution_events.source_platform WHERE is_first_touch =
+    //      true (Stream XXX). The cluster-attribution decision —
+    //      survives the HoneyBook overwrite that mutates
+    //      weddings.source = 'honeybook' on booking. Without this,
+    //      Knot / Google / WW-driven bookings get credited to HoneyBook
+    //      because the legacy field was rewritten at contract-import
+    //      time.
+    //   3. weddings.source — legacy field, pre-attribution-pipeline
+    //      first-touch storage. Used only as last resort for weddings
+    //      created before attribution tracking landed (and for manual
+    //      entries that never accumulated attribution_events rows).
+    //
+    // Same precedence is applied as the fallback in last_touch / linear
+    // when no source-class touchpoint exists for the wedding's journey.
     //
     // T5-Rixey-KKK: last_touch + linear MUST filter to signal_class
     // = 'source' touchpoints. Mig 200 stamped every wedding_touchpoints
@@ -229,15 +287,10 @@ export async function computeSourceFunnel(
     // channel, and Stream TT explicitly NULLed weddings.source for
     // Calendly to encode that. The pre-fix Rixey numbers were
     // Calendly: 17 last_touch / 9.8 linear bookings; truth is 0/0.
-    //
-    // The wedding.source fallback below is intentional: if NO source-
-    // class touchpoint exists in the journey but the wedding row
-    // carries an attribution-pipeline-decided source, that's still
-    // the most authoritative answer. Calendly weddings have w.source
-    // = NULL per Stream TT, so the fallback correctly produces null
-    // (counted as '(unknown)') and Calendly gets zero credit.
+    const firstTouchPlatform = firstTouchByWedding.get(w.id) ?? null
+    const trustedFirstTouch = w.utm_source ?? firstTouchPlatform ?? w.source ?? null
     if (model === 'first_touch') {
-      ind.creditedSources.set(w.source ?? null, 1)
+      ind.creditedSources.set(trustedFirstTouch, 1)
     } else if (model === 'last_touch') {
       // Filter to source-class touchpoints + drop the contract_signed
       // (outcome) row when picking last-touch-before-booking. tps is
@@ -246,7 +299,9 @@ export async function computeSourceFunnel(
       const lastBeforeBooking = ind.booked
         ? [...sourceTps].reverse().find((t) => !STEP_TOUCH_TYPES.contract_signed.has(t.touch_type))
         : sourceTps[sourceTps.length - 1]
-      ind.creditedSources.set(lastBeforeBooking?.source ?? w.source ?? null, 1)
+      // Fallback chain when no usable touchpoint: utm_source >
+      // attribution_events first-touch > weddings.source.
+      ind.creditedSources.set(lastBeforeBooking?.source ?? trustedFirstTouch, 1)
     } else if (model === 'linear') {
       // Distinct SOURCE-class sources across the journey, equal weight.
       const sources = new Set<string | null>()
@@ -255,11 +310,10 @@ export async function computeSourceFunnel(
         sources.add(t.source ?? null)
       }
       // Always include the wedding's first-touch even if it isn't on a
-      // touchpoint (rare but possible after merges). When no source-
-      // class touchpoint AND no wedding.source exists, the credit
-      // bucket is null → '(unknown)' which is correct: there is no
-      // attributable acquisition channel.
-      sources.add(w.source ?? null)
+      // touchpoint (rare but possible after merges). Apply the full
+      // precedence chain so the linear-credit set reflects the most-
+      // trusted first-touch signal we have.
+      sources.add(trustedFirstTouch)
       const weight = 1 / sources.size
       for (const s of sources) ind.creditedSources.set(s, weight)
     }
