@@ -22,7 +22,8 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
+import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
+import { redact } from '@/lib/observability/redact'
 
 const MAX_BATCH = 100
 
@@ -88,6 +89,14 @@ export async function POST(request: NextRequest) {
     if (!venueId) {
       return NextResponse.json({ error: 'venueId required in demo' }, { status: 400 })
     }
+    // Demo authz (#85, T5-followup-QQQ): the bloom_demo cookie is an
+    // open bypass — any caller could pass a real production venue UUID
+    // and read its cached risk-flag insights (tier-1 narrations).
+    // Restrict to the Crestwood Collection's 4 venues. Mirrors the
+    // /api/insights/venue and /api/insights/lead/[weddingId] pattern.
+    if (!isDemoVenueAllowed(venueId)) {
+      return NextResponse.json({ error: 'forbidden' }, { status: 403 })
+    }
   } else {
     const platform = await getPlatformAuth()
     if (!platform) {
@@ -111,7 +120,11 @@ export async function POST(request: NextRequest) {
     .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
 
   if (error) {
-    console.error('[insights/risk-flags] query failed:', error.message)
+    // #86 (T5-followup-QQQ): redact error.message before stdout. Supabase
+    // PostgREST errors can echo filter values (the wedding UUIDs we
+    // passed) and table content from RLS messages. Defense-in-depth so
+    // we don't bypass the OPS-21.3.3 tier-1-never-in-logs invariant.
+    console.error('[insights/risk-flags] query failed:', redact(error.message))
     return NextResponse.json({ error: 'query_failed' }, { status: 500 })
   }
 
