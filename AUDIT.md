@@ -744,15 +744,14 @@ HoneyBook / Dubsado. Grouped below by role.
   figure out what she's doing."
 - **Critical take:** Same morale risk as /team.
 
-### `/intel/capacity` — "Capacity & Yield"
+### `/intel/capacity` — RETIRED 2026-05-03 (Stream ZZZ)
 
-- **Purpose:** Date-by-date view of bookings vs. capacity. Yield
-  (revenue per available date) over time.
-- **External inputs:** None external.
-- **Surface:** Calendar heatmap, yield-per-date metrics.
-- **User actions:** Click a date → see bookings.
-- **Value:** "Peak Saturdays in June are 100% booked — can we raise
-  prices?" answered here.
+The page had no live writer — read exclusively from
+`venue_config.feature_flags.capacity_2026`, populated only by the
+deleted `supabase/seed-capacity.sql`. Real venues saw empty cards;
+demo venues silently rendered seed numbers as live. Route now redirects
+to `/intel/portfolio`. Replace the use case with portfolio-level
+booking analytics.
 
 ## Market / competitive
 

@@ -232,6 +232,12 @@ export default function CampaignsPage() {
 
   return (
     <div className="space-y-8">
+      {/* Superseded notice — Stream ZZZ, 2026-05-03. Page removed from
+          sidebar; route stays reachable for coordinators with bookmarks
+          on legacy manual-entry data. */}
+      <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-900">
+        Manual campaign entry — superseded by Sources & ROI for any venue with attribution data flowing. Newer attribution-driven view is at <a href="/intel/sources" className="font-medium underline underline-offset-2 hover:text-amber-700">/intel/sources</a>.
+      </div>
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div>

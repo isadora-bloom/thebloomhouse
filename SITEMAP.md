@@ -45,8 +45,8 @@
 | `/intel/dashboard` | Intel dashboard home |
 | `/intel/annotations` | Data annotations |
 | `/intel/briefings` | AI-generated briefings |
-| `/intel/campaigns` | Marketing campaigns |
-| `/intel/capacity` | Venue capacity planning |
+| `/intel/campaigns` | Marketing campaigns (hidden from sidebar 2026-05-03; superseded by `/intel/sources`) |
+| `/intel/capacity` | Retired 2026-05-03 — redirects to `/intel/portfolio` |
 | `/intel/clients` | Client list |
 | `/intel/clients/[id]` | Individual client detail |
 | `/intel/company` | Company overview |

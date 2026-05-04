@@ -7,6 +7,8 @@ import { Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { GEAR_GROUPS } from './nav-config'
 
+type ScopeLevel = 'venue' | 'group' | 'company'
+
 type Role = 'coordinator' | 'group_admin' | 'org_admin' | 'super_admin' | 'venue_manager' | 'readonly' | 'couple' | 'owner' | 'admin' | 'manager' | 'viewer'
 
 /**
@@ -21,7 +23,7 @@ type Role = 'coordinator' | 'group_admin' | 'org_admin' | 'super_admin' | 'venue
  * scoped to their group (the Org admin pages themselves enforce this;
  * this component only controls visibility).
  */
-export function GearMenu() {
+export function GearMenu({ scopeLevel = 'venue' }: { scopeLevel?: ScopeLevel } = {}) {
   const [role, setRole] = useState<Role | null>(null)
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -82,6 +84,13 @@ export function GearMenu() {
     return false
   }
 
+  function inScope(required?: 'group' | 'company'): boolean {
+    if (!required) return true
+    if (required === 'company') return scopeLevel === 'company'
+    // 'group' — visible at group OR company, hidden at single-venue scope
+    return scopeLevel === 'group' || scopeLevel === 'company'
+  }
+
   return (
     <div ref={ref} className="relative">
       <button
@@ -99,7 +108,7 @@ export function GearMenu() {
       {open && (
         <div className="absolute right-0 top-full mt-1 w-64 rounded-lg border border-border bg-warm-white shadow-lg z-40 py-2">
           {GEAR_GROUPS.map((group) => {
-            const visible = group.items.filter((i) => canSee(i.requiresRole))
+            const visible = group.items.filter((i) => canSee(i.requiresRole) && inScope(i.requiresScope))
             if (visible.length === 0) return null
             return (
               <div key={group.title} className="py-1">

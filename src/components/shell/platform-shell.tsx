@@ -80,7 +80,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
           <ModeStrip />
           <div className="flex items-center gap-2">
             <ScopeIndicator />
-            <GearMenu />
+            <GearMenu scopeLevel={scopeLevel} />
           </div>
         </div>
         <div className="p-6 lg:p-8 max-w-7xl mx-auto">{children}</div>
