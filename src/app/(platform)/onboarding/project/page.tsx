@@ -14,9 +14,12 @@ import {
   Rocket,
   ChevronRight,
   Sparkles,
+  Info,
+  Clock,
 } from 'lucide-react'
 import { PROJECT_PLAN, TOTAL_DAYS, type DayStep, detectDay1Completion } from '@/lib/services/onboarding-project'
 import { BackfillChecklist } from '@/components/onboarding/backfill-checklist'
+import { useAiName } from '@/lib/hooks/use-ai-name'
 
 // ---------------------------------------------------------------------------
 // 5-day onboarding project flow (T2-A / Playbook Part 18).
@@ -79,6 +82,11 @@ function formatDate(iso: string | null): string {
 export default function OnboardingProjectPage() {
   const venueId = useVenueId()
   const supabase = createClient()
+  // T5-followup-EE (#92): aiName surfaces as ✓ / ✗ on the Go Live
+  // checklist below. The activateLive gate auto-backfills a name from
+  // venues.name when missing, but the coordinator-facing explainer
+  // shows the literal status so they understand what the gate verifies.
+  const aiName = useAiName()
   const [project, setProject] = useState<ProjectState | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -473,6 +481,16 @@ export default function OnboardingProjectPage() {
             <Rocket className="w-5 h-5" />
             Go Live
           </h2>
+          {/* T5-followup-EE (#92): readiness-gate explainer. The
+              activateLive() server-side gate runs four checks before
+              flipping the venue live; coordinators previously had to
+              read the source to know what the button verified. The
+              checklist below mirrors the gate exactly so a failed
+              activation is never a surprise. */}
+          <GoLiveChecklist
+            project={project}
+            aiName={aiName}
+          />
           {project.readiness_passed_at ? (
             <>
               <p className="text-sm text-sage-700">
@@ -679,5 +697,107 @@ function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, o
         })}
       </ul>
     </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Go Live readiness checklist (T5-followup-EE / #92)
+// ---------------------------------------------------------------------------
+//
+// activateLive() in lib/services/onboarding-project.ts gates the
+// server-side flip on a small set of checks. Coordinators previously
+// had to read the source to know what the Activate button verified —
+// failures came back as a single error string after the click. This
+// checklist mirrors the gate so the verdict is visible BEFORE pressing
+// the button.
+//
+// Checks (in order, matching activateLive()):
+//   1. Day 5 reached (status = go_live_pending). Always ✓ when this
+//      block renders — the parent only mounts at go_live_pending.
+//   2. Readiness gate run (project.readiness_passed_at IS NOT NULL).
+//   3. AI assistant name set (venue_ai_config.ai_name). The gate auto-
+//      backfills "<Venue> Concierge" when missing, so this is ⏳ rather
+//      than ✗ when unset.
+//   4. 12-month backfill (paid venues, score >= 80). Detail lives in
+//      <BackfillChecklist /> rendered above; we link to it rather than
+//      refetching here.
+
+function GoLiveChecklist({
+  project,
+  aiName,
+}: {
+  project: ProjectState
+  aiName: string
+}) {
+  // useAiName() returns 'your AI assistant' when venue_ai_config.ai_name
+  // is NULL — that's the gate's "missing" state. Real venue names never
+  // collide with this literal because it's whitespace-prefixed.
+  const aiNameSet = aiName !== 'your AI assistant'
+  const readinessPassed = Boolean(project.readiness_passed_at)
+
+  type CheckStatus = 'pass' | 'fail' | 'pending'
+  interface Check {
+    label: string
+    status: CheckStatus
+    detail: string
+  }
+
+  const checks: Check[] = [
+    {
+      label: 'Day 5 reached',
+      status: 'pass',
+      detail: 'Project status is go_live_pending — all five days advanced.',
+    },
+    {
+      label: 'Readiness gate passed',
+      status: readinessPassed ? 'pass' : 'fail',
+      detail: readinessPassed
+        ? `Passed ${formatDate(project.readiness_passed_at)}.`
+        : 'Run the readiness gate (Day 5 step 2). It evaluates data-volume thresholds across Internal Context, Forensic Record, and Voice DNA.',
+    },
+    {
+      label: 'AI assistant name set',
+      status: aiNameSet ? 'pass' : 'pending',
+      detail: aiNameSet
+        ? `Set to "${aiName}".`
+        : 'Auto-backfilled to "<Venue> Concierge" if you skip — set it now via Settings → Personality to keep the venue voice on-brand.',
+    },
+    {
+      label: '12-month backfill (paid venues, ≥ 80%)',
+      status: 'pending',
+      detail: 'See the backfill checklist above. Free / starter venues skip this check; paid venues must reach 80/100 before the gate releases.',
+    },
+  ]
+
+  return (
+    <details className="rounded border border-sage-200 bg-warm-white px-3 py-2">
+      <summary className="text-xs font-medium text-sage-700 cursor-pointer hover:text-sage-900 flex items-center gap-1.5">
+        <Info className="w-3.5 h-3.5" />
+        What this checks before activating
+      </summary>
+      <ul className="mt-2 space-y-1.5 text-xs text-sage-600">
+        {checks.map((c, i) => (
+          <li key={i} className="flex items-start gap-2">
+            <span className="mt-0.5 shrink-0">
+              {c.status === 'pass' ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" aria-label="passed" />
+              ) : c.status === 'fail' ? (
+                <Circle className="w-3.5 h-3.5 text-red-500" aria-label="failed" />
+              ) : (
+                <Clock className="w-3.5 h-3.5 text-amber-500" aria-label="pending" />
+              )}
+            </span>
+            <span>
+              <span className="font-medium text-sage-800">{c.label}.</span>{' '}
+              <span className="text-sage-600">{c.detail}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-[11px] text-sage-500">
+        Server-side enforcement lives in <code className="font-mono text-[10px] bg-sage-50 px-1 rounded">activateLive()</code>;
+        a failed check returns the same detail in the activation error.
+      </p>
+    </details>
   )
 }
