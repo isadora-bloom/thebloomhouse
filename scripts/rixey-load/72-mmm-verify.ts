@@ -1,5 +1,23 @@
 /**
- * T5-Rixey-MMM verification script.
+ * T5-Rixey-MMM verification script (extended for Stream SSS).
+ *
+ * Stream SSS extension (2026-05-03)
+ * --------------------------------
+ * MMM recovers `booking_value` from calculator-estimate emails but
+ * leaves `weddings.source` untouched. SSS extends the calculator-extract
+ * branch so when the hit comes from a universal third-party calculator
+ * (interactivecalculator.com) AND `source` is currently NULL, source
+ * is backfilled to `'venue_calculator'`. Venue-templated estimate
+ * emails (sent from the venue's own domain) remain ambiguous and DO
+ * NOT trigger source backfill.
+ *
+ * Additional asserts in section H:
+ *   - Paige & Tanner ends the run with `source = 'venue_calculator'`
+ *     (interactivecalculator.com hit; was NULL pre-SSS).
+ *   - Taylor's source is unchanged (his hit is venue-templated → SSS
+ *     leaves source alone; whatever source he had pre-run stays).
+ *   - Print before/after counts of Rixey weddings carrying
+ *     `source = 'venue_calculator'`.
  *
  * Runs recoverBookedDataForVenue against Rixey and prints a per-bucket
  * recovery report. Three buckets per the audit at scripts/rixey-load/
@@ -40,13 +58,21 @@ import { readFileSync } from 'node:fs'
 
 function loadEnv() {
   const env: Record<string, string> = { ...process.env } as Record<string, string>
-  try {
-    const raw = readFileSync('.env.local', 'utf8')
-    for (const line of raw.split('\n')) {
-      const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
-      if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '')
+  // Worktree's CWD doesn't carry .env.local; fall back to the main
+  // repo's copy (the worktree shares the same Supabase project).
+  const candidates = ['.env.local', 'C:\\Users\\Ismar\\bloom-house\\.env.local']
+  for (const c of candidates) {
+    try {
+      const raw = readFileSync(c, 'utf8')
+      for (const line of raw.split('\n')) {
+        const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
+        if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '')
+      }
+      break
+    } catch {
+      // try next path
     }
-  } catch {}
+  }
   return env
 }
 
@@ -116,8 +142,40 @@ async function main() {
     console.log(`  Bucket C Grace & Jared:         ${grace ? 'YES' : 'no'}`)
   }
 
+  // SSS pre-run: capture Paige & Taylor's actual current source values
+  // independent of whether they're in the candidate set. The source
+  // backfill applies even when booking_value was already recovered on
+  // a prior MMM run — so we MUST query the full venue rows here, not
+  // just preCandidates (which filters on bv-missing). UUID columns
+  // can't be ILIKE'd; pull venue rows + filter by id-prefix in JS.
+  const { data: rixeyAllPre } = await sb
+    .from('weddings')
+    .select('id, source')
+    .eq('venue_id', RIXEY_VENUE_ID)
+    .is('merged_into_id', null)
+  const rixeyAllPreRows = (rixeyAllPre ?? []) as Array<{ id: string; source: string | null }>
+  const prePaigeRow = rixeyAllPreRows.find((w) => w.id.startsWith(BUCKET_A_PAIGE_TANNER_PREFIX))
+  const preTaylorRow = rixeyAllPreRows.find((w) => w.id.startsWith(BUCKET_A_TAYLOR_PREFIX))
+  const prePaigeSource: string | null = prePaigeRow ? prePaigeRow.source : null
+  const preTaylorSource: string | null = preTaylorRow ? preTaylorRow.source : null
+  console.log(`  pre-SSS Paige source:           ${prePaigeSource ?? '(NULL)'}`)
+  console.log(`  pre-SSS Taylor source:          ${preTaylorSource ?? '(NULL)'}`)
+
+  // SSS pre-run: count of weddings with source = 'venue_calculator'.
+  const { count: preVcCount } = await sb
+    .from('weddings')
+    .select('id', { count: 'exact', head: true })
+    .eq('venue_id', RIXEY_VENUE_ID)
+    .is('merged_into_id', null)
+    .eq('source', 'venue_calculator')
+  console.log(`  pre-SSS source='venue_calculator' count: ${preVcCount ?? 0}`)
+
   // ---- C) Run the recovery sweep ----
   console.log('\n--- C) Running recoverBookedDataForVenue ---')
+  // Capture a sentinel timestamp BEFORE the run so section H can
+  // filter the audit log to only rows produced by this verify run
+  // (older MMM-only rows pre-date the SSS evidence shape).
+  const recoveryStartedAt = new Date().toISOString()
   const { recoverBookedDataForVenue } = await import('../../src/lib/services/booked-data-recovery.js')
   const report = await recoverBookedDataForVenue(sb, RIXEY_VENUE_ID)
   console.log(`  total_candidates : ${report.totalCandidates}`)
@@ -223,6 +281,123 @@ async function main() {
   const calendlyMerges = report.merged.filter((m) => m.capability === 'honeybook_dedup_merge')
   console.log(`  HoneyBook-dedup merges executed: ${calendlyMerges.length}`)
   console.log(`  no_match outcomes: ${report.noMatch.length}`)
+
+  // ---- H) Stream SSS: source-backfill validation ----
+  console.log('\n--- H) Stream SSS: weddings.source backfill validation ---')
+
+  const { data: rixeyAllPost } = await sb
+    .from('weddings')
+    .select('id, source')
+    .eq('venue_id', RIXEY_VENUE_ID)
+    .is('merged_into_id', null)
+  const rixeyAllPostRows = (rixeyAllPost ?? []) as Array<{ id: string; source: string | null }>
+
+  const postPaige = rixeyAllPostRows.find((w) => w.id.startsWith(BUCKET_A_PAIGE_TANNER_PREFIX))
+  const postTaylor = rixeyAllPostRows.find((w) => w.id.startsWith(BUCKET_A_TAYLOR_PREFIX))
+
+  // H.1 — Paige & Tanner should now carry source = 'venue_calculator'.
+  // The recovery email is from contact@interactivecalculator.com which
+  // the SSS classifier flags as universal. Pre-SSS source was NULL so
+  // backfill should fire. If pre-SSS source was already non-NULL, SSS
+  // should NOT have overwritten — log + skip the assertion.
+  if (!postPaige) {
+    console.log('  SKIP: Paige & Tanner row not present (merged or absent)')
+  } else if (prePaigeSource != null) {
+    console.log(
+      `  Paige pre-SSS source was non-NULL ('${prePaigeSource}') — SSS must not overwrite`,
+    )
+    if (postPaige.source === prePaigeSource) {
+      pass(`Paige source unchanged ('${postPaige.source}') — no overwrite`)
+    } else {
+      fail(`Paige source CHANGED from '${prePaigeSource}' to '${postPaige.source}'`)
+    }
+  } else if (postPaige.source === 'venue_calculator') {
+    pass(`Paige & Tanner now carries source='venue_calculator' (was NULL)`)
+  } else {
+    fail(
+      `Paige & Tanner source did NOT flip to 'venue_calculator'. ` +
+        `pre='${prePaigeSource ?? '(NULL)'}' post='${postPaige.source ?? '(NULL)'}'`,
+    )
+  }
+
+  // H.2 — Taylor's hit is venue-templated (hello@rixeymanor.com); SSS
+  // must NOT auto-set source for him. Whatever he had pre-run must
+  // remain.
+  if (!postTaylor) {
+    console.log('  SKIP: Taylor row not present (merged or absent)')
+  } else {
+    const preT = preTaylorSource ?? null
+    const postT = postTaylor.source ?? null
+    if (preT === postT) {
+      pass(`Taylor source unchanged ('${postT ?? '(NULL)'}') — venue-templated, ambiguous origin`)
+    } else if (preT == null && postT === 'venue_calculator') {
+      // The brief notes Taylor MAY already have had source set from a
+      // different recovery pass; auto-flipping his NULL → venue_calculator
+      // is ONLY allowed when the hit is universal. Taylor's hit is
+      // venue-templated, so this is a regression.
+      fail(`Taylor source flipped NULL → 'venue_calculator' on a venue-templated hit (regression)`)
+    } else {
+      // Other transitions (e.g. another stream wrote source between
+      // pre and post snapshots) are informational only.
+      console.log(`  Taylor source: pre='${preT ?? '(NULL)'}' → post='${postT ?? '(NULL)'}' (informational)`)
+    }
+  }
+
+  // H.3 — Total count of Rixey weddings carrying source='venue_calculator'.
+  const { count: postVcCount } = await sb
+    .from('weddings')
+    .select('id', { count: 'exact', head: true })
+    .eq('venue_id', RIXEY_VENUE_ID)
+    .is('merged_into_id', null)
+    .eq('source', 'venue_calculator')
+  const delta = (postVcCount ?? 0) - (preVcCount ?? 0)
+  console.log(`  source='venue_calculator' before SSS: ${preVcCount ?? 0}`)
+  console.log(`  source='venue_calculator' after  SSS: ${postVcCount ?? 0}`)
+  console.log(`  delta (weddings flipped to venue_calculator): ${delta >= 0 ? '+' : ''}${delta}`)
+
+  // H.4 — Audit-log shape: every calculator_extract row produced by
+  // THIS run should carry evidence.inferred_source. Older log rows
+  // (pre-SSS) pre-date the inferred_source field by design and are
+  // not failures — filter to attempted_at >= recoveryStartedAt.
+  const { data: calcLogs } = await sb
+    .from('booked_data_recovery_log')
+    .select('wedding_id, capability, outcome, evidence, attempted_at')
+    .eq('venue_id', RIXEY_VENUE_ID)
+    .eq('capability', 'calculator_extract')
+    .gte('attempted_at', recoveryStartedAt)
+    .order('attempted_at', { ascending: false })
+    .limit(50)
+  const calcLogRows = (calcLogs ?? []) as Array<{
+    wedding_id: string
+    capability: string
+    outcome: string
+    evidence: Record<string, unknown> | null
+    attempted_at: string
+  }>
+  if (calcLogRows.length === 0) {
+    console.log('  (no calculator_extract rows produced by this verify run)')
+  } else {
+    const withInferred = calcLogRows.filter(
+      (r) => r.evidence && typeof r.evidence === 'object' && 'inferred_source' in r.evidence,
+    )
+    if (withInferred.length === calcLogRows.length) {
+      pass(`every calculator_extract log row from this run (${calcLogRows.length}) carries evidence.inferred_source`)
+    } else {
+      fail(
+        `${calcLogRows.length - withInferred.length} of ${calcLogRows.length} ` +
+          `calculator_extract rows from this run missing evidence.inferred_source`,
+      )
+    }
+    // Show sample decisions for the operator's eye.
+    const decisionCounts = new Map<string, number>()
+    for (const r of withInferred) {
+      const d = String((r.evidence as Record<string, unknown>).inferred_source ?? 'unknown')
+      decisionCounts.set(d, (decisionCounts.get(d) ?? 0) + 1)
+    }
+    for (const [d, n] of decisionCounts.entries()) {
+      console.log(`    inferred_source='${d}': ${n}`)
+    }
+  }
 
   console.log(exitCode === 0 ? '\nAll checks passed.' : '\nFailures detected.')
   process.exit(exitCode)

@@ -143,15 +143,50 @@ export type RecoveryOutcome = 'recovered' | 'merged' | 'no_match' | 'error'
 
 export type RecoveryConfidence = 'high' | 'medium' | 'low' | null
 
+/**
+ * Calculator-sender classification — drives the post-recovery
+ * `weddings.source` inference (Stream SSS).
+ *
+ *   - 'universal'        — interactivecalculator.com (or another
+ *                          third-party calculator vendor in
+ *                          UNIVERSAL_CALCULATOR_DOMAINS). The hit is
+ *                          unambiguous proof the lead came through the
+ *                          venue's calculator funnel; safe to set
+ *                          weddings.source = 'venue_calculator' when
+ *                          source is currently NULL.
+ *   - 'venue_templated'  — venue's own automation (e.g. hello@
+ *                          rixeymanor.com sending an estimate-shaped
+ *                          subject). The lead may have arrived via
+ *                          web_form, direct, coordinator routing, etc;
+ *                          there's no single right answer for source,
+ *                          so SSS leaves source untouched.
+ */
+export type CalculatorSenderClass = 'universal' | 'venue_templated'
+
 export interface CalculatorExtractResult {
   valueCents: number | null
   sourceInteractionId: string | null
   confidence: 'high' | 'medium' | null
+  /**
+   * Which sender bucket fired. Null when no calculator-style email
+   * matched at all. SSS uses this to decide whether weddings.source
+   * should be backfilled to 'venue_calculator'.
+   */
+  senderClass: CalculatorSenderClass | null
+  /**
+   * The source value inferred from the sender class. 'venue_calculator'
+   * for universal hits, null for venue-templated hits (ambiguous;
+   * source-of-truth lives wherever the original capture decided).
+   * Caller must still respect the "do not overwrite an existing
+   * non-NULL source" rule.
+   */
+  inferredSource: 'venue_calculator' | null
   evidence: {
     subject?: string
     dollar_amounts?: number[]
     picked_amount?: number
     from_email?: string
+    sender_class?: CalculatorSenderClass
   }
 }
 
@@ -313,7 +348,14 @@ export async function extractBookingValueFromCalculatorEmails(
     .maybeSingle()
 
   if (!weddingRow) {
-    return { valueCents: null, sourceInteractionId: null, confidence: null, evidence: {} }
+    return {
+      valueCents: null,
+      sourceInteractionId: null,
+      confidence: null,
+      senderClass: null,
+      inferredSource: null,
+      evidence: {},
+    }
   }
 
   const venueId = weddingRow.venue_id as string
@@ -357,7 +399,14 @@ export async function extractBookingValueFromCalculatorEmails(
     .limit(200)
 
   if (!interactions || interactions.length === 0) {
-    return { valueCents: null, sourceInteractionId: null, confidence: null, evidence: {} }
+    return {
+      valueCents: null,
+      sourceInteractionId: null,
+      confidence: null,
+      senderClass: null,
+      inferredSource: null,
+      evidence: {},
+    }
   }
 
   type InteractionRow = {
@@ -374,6 +423,7 @@ export async function extractBookingValueFromCalculatorEmails(
     dollar_amounts: number[]
     picked: number | null
     confidence: 'high' | 'medium'
+    senderClass: CalculatorSenderClass
   }> = []
 
   for (const raw of interactions as InteractionRow[]) {
@@ -417,25 +467,51 @@ export async function extractBookingValueFromCalculatorEmails(
     const subjectHasPlausible = pickBookingValue(subjectAmounts) != null
     const confidence: 'high' | 'medium' = subjectHasPlausible ? 'high' : 'medium'
 
-    candidates.push({ row: raw, dollar_amounts: allAmounts, picked, confidence })
+    // Sender-class assignment. Universal third-party domains (e.g.
+    // interactivecalculator.com) take priority — if the email arrived
+    // FROM such a domain it's an inquiry-funnel signal regardless of
+    // whether the venue's own automation also handles estimate emails.
+    // The venue-templated fallback only applies when the universal
+    // bucket didn't match.
+    const senderClass: CalculatorSenderClass = isUniversalCalc ? 'universal' : 'venue_templated'
+
+    candidates.push({ row: raw, dollar_amounts: allAmounts, picked, confidence, senderClass })
   }
 
   if (candidates.length === 0) {
-    return { valueCents: null, sourceInteractionId: null, confidence: null, evidence: {} }
+    return {
+      valueCents: null,
+      sourceInteractionId: null,
+      confidence: null,
+      senderClass: null,
+      inferredSource: null,
+      evidence: {},
+    }
   }
 
   // The latest matching interaction wins (interactions list is already
   // ordered newest-first).
   const winner = candidates[0]
+  // Source-inference rule (Stream SSS):
+  //   - universal hit       → 'venue_calculator' (third-party calculator
+  //                           SaaS is unambiguous funnel attribution)
+  //   - venue_templated hit → null (could be web_form, direct,
+  //                           coordinator, etc; orchestrator must NOT
+  //                           overwrite source in this case)
+  const inferredSource: 'venue_calculator' | null =
+    winner.senderClass === 'universal' ? 'venue_calculator' : null
   return {
     valueCents: winner.picked,
     sourceInteractionId: winner.row.id,
     confidence: winner.confidence,
+    senderClass: winner.senderClass,
+    inferredSource,
     evidence: {
       subject: winner.row.subject ?? '',
       dollar_amounts: winner.dollar_amounts,
       picked_amount: winner.picked ?? undefined,
       from_email: (winner.row.from_email ?? '').toLowerCase().trim(),
+      sender_class: winner.senderClass,
     },
   }
 }
@@ -757,16 +833,24 @@ export async function recoverBookedDataForVenue(
   supabase: SupabaseClient,
   venueId: string,
 ): Promise<RecoveryReport> {
-  // Pull all booked / completed weddings with missing booking_value.
-  // The filter mirrors the audit: status booked/completed,
-  // merged_into_id IS NULL, booking_value IS NULL OR booking_value = 0.
+  // Pull all booked / completed weddings with missing booking_value
+  // OR missing source. Pre-SSS the filter only chased booking_value
+  // gaps (NULL or 0); SSS extends the candidate set so a wedding
+  // whose value MMM previously recovered but whose source is still
+  // NULL gets re-processed. The calculator-extract branch is
+  // idempotent (same UPDATE re-writes the same booking_value) so
+  // touching a value-recovered wedding a second time is safe — the
+  // SSS gain is the source backfill.
+  //
+  // Filter: status booked/completed, merged_into_id IS NULL,
+  // (booking_value IS NULL OR booking_value = 0 OR source IS NULL).
   const { data: rows, error } = await supabase
     .from('weddings')
-    .select('id, crm_source, booking_value')
+    .select('id, crm_source, booking_value, source')
     .eq('venue_id', venueId)
     .in('status', ['booked', 'completed'])
     .is('merged_into_id', null)
-    .or('booking_value.is.null,booking_value.eq.0')
+    .or('booking_value.is.null,booking_value.eq.0,source.is.null')
 
   if (error) {
     console.error(`[booked-data-recovery] candidate fetch failed for venue ${venueId}:`, error.message)
@@ -780,7 +864,12 @@ export async function recoverBookedDataForVenue(
     }
   }
 
-  const candidates = (rows ?? []) as Array<{ id: string; crm_source: string | null; booking_value: number | null }>
+  const candidates = (rows ?? []) as Array<{
+    id: string
+    crm_source: string | null
+    booking_value: number | null
+    source: string | null
+  }>
   const report: RecoveryReport = {
     venueId,
     totalCandidates: candidates.length,
@@ -791,7 +880,17 @@ export async function recoverBookedDataForVenue(
   }
 
   for (const w of candidates) {
-    const result = await recoverOneWedding(supabase, venueId, w.id, w.crm_source)
+    // Per-wedding "missing booking_value" flag drives whether the
+    // dedup-merge / honeybook-export-recover branches are eligible.
+    // SSS broadened the candidate filter to ALSO pick up weddings
+    // that already have booking_value but a NULL source, so we
+    // can't blindly run dedup against them — merging an already-
+    // valued wedding into a HoneyBook duplicate would tomb-stone
+    // legitimate data. Pass the bv-missing flag through so the
+    // single-wedding orchestrator can short-circuit dedup +
+    // export-recover for source-only candidates.
+    const bvMissing = w.booking_value == null || w.booking_value === 0
+    const result = await recoverOneWedding(supabase, venueId, w.id, w.crm_source, bvMissing)
     if (result.outcome === 'recovered') report.recovered.push(result)
     else if (result.outcome === 'merged') report.merged.push(result)
     else if (result.outcome === 'no_match') report.noMatch.push(result)
@@ -805,14 +904,29 @@ export async function recoverBookedDataForVenue(
  * Single-wedding orchestration. Runs capabilities in priority order
  * and stops at the first success. Always writes one log row per
  * outcome — recovered / merged / no_match / error.
+ *
+ * @param bookingValueMissing — true when the wedding has NULL or 0
+ *   booking_value (the original MMM filter). False for SSS-only
+ *   candidates pulled into the set on source-NULL grounds. When
+ *   false, capabilities 1 (dedup-merge) and 3 (honeybook-export-
+ *   recover) are skipped because they only ever write booking_value
+ *   and would risk overwriting / merging a wedding that already
+ *   carries real contract data. Capability 2 (calculator-extract)
+ *   still runs because it can backfill source even when bv is set.
  */
 async function recoverOneWedding(
   supabase: SupabaseClient,
   venueId: string,
   weddingId: string,
   crmSource: string | null,
+  bookingValueMissing: boolean = true,
 ): Promise<RecoveryReportItem> {
   // Capability 1: HoneyBook duplicate.
+  // Skip dedup-merge for "source only" SSS candidates (booking_value
+  // already populated). Merging a fully-valued wedding into a
+  // HoneyBook duplicate would tomb-stone real data — dedup is only
+  // safe to run when the source row has nothing of value to lose.
+  if (bookingValueMissing) {
   try {
     const dedup = await findHoneyBookDuplicateForWedding(supabase, weddingId)
     if (dedup.duplicateWeddingId && dedup.confidence === 'high') {
@@ -878,14 +992,101 @@ async function recoverOneWedding(
     // Continue to capability 2 — error in capability 1 should NOT
     // block the calculator extractor.
   }
+  } // end if (bookingValueMissing) for capability 1
 
   // Capability 2: calculator extract.
   try {
     const calc = await extractBookingValueFromCalculatorEmails(supabase, weddingId)
     if (calc.valueCents != null) {
+      // Stream SSS source-backfill: when the hit was a universal
+      // calculator vendor (interactivecalculator.com et al) AND
+      // weddings.source is currently NULL, fold source =
+      // 'venue_calculator' into the same UPDATE. This preserves the
+      // "infer when we have nothing, don't argue with what's there"
+      // rule — non-NULL sources are NEVER overwritten, and the
+      // venue-templated branch (ambiguous lead origin) leaves source
+      // untouched.
+      //
+      // The decision is recorded against `evidence.inferred_source` so
+      // coordinators auditing the recovery log can see whether SSS
+      // touched source and why ('venue_calculator' / 'kept_existing' /
+      // 'ambiguous_venue_templated').
+      const { data: currentRow } = await supabase
+        .from('weddings')
+        .select('source, booking_value')
+        .eq('id', weddingId)
+        .maybeSingle()
+      const existingSource = (currentRow?.source ?? null) as string | null
+      const existingBv = (currentRow?.booking_value ?? null) as number | null
+
+      let inferredSourceDecision:
+        | 'venue_calculator'
+        | 'kept_existing'
+        | 'ambiguous_venue_templated' = 'ambiguous_venue_templated'
+
+      // Build the UPDATE payload conditionally. Stream SSS may pull
+      // a wedding into the candidate set purely on source-NULL
+      // grounds (booking_value already populated). In that case we
+      // must NOT overwrite the existing booking_value — only stamp
+      // source when the inferred-source rule allows it. The
+      // `bookingValueMissing` flag carries that intent down from the
+      // outer orchestrator.
+      const updatePayload: { booking_value?: number; source?: string } = {}
+      if (bookingValueMissing || existingBv == null || existingBv === 0) {
+        updatePayload.booking_value = calc.valueCents
+      }
+
+      if (calc.inferredSource === 'venue_calculator') {
+        if (existingSource == null) {
+          updatePayload.source = 'venue_calculator'
+          inferredSourceDecision = 'venue_calculator'
+        } else {
+          inferredSourceDecision = 'kept_existing'
+        }
+      }
+
+      // If neither booking_value nor source needs writing, skip the
+      // UPDATE altogether (avoids a no-op write). Still log the
+      // attempt so the audit trail records that we evaluated the
+      // wedding and decided no action was needed.
+      if (Object.keys(updatePayload).length === 0) {
+        const enrichedNoopEvidence = {
+          ...calc.evidence,
+          inferred_source: inferredSourceDecision,
+          existing_source: existingSource,
+          existing_booking_value: existingBv,
+          skipped_update_reason: 'nothing_to_write',
+        }
+        await logAttempt(supabase, {
+          venueId,
+          weddingId,
+          capability: 'calculator_extract',
+          outcome: 'no_match',
+          recoveredValueCents: calc.valueCents,
+          sourceInteractionId: calc.sourceInteractionId,
+          confidence: calc.confidence,
+          evidence: enrichedNoopEvidence,
+        })
+        return {
+          weddingId,
+          capability: 'calculator_extract',
+          outcome: 'no_match',
+          recoveredValueCents: null,
+          duplicateWeddingId: null,
+          confidence: calc.confidence,
+          errorMessage: null,
+        }
+      }
+
+      const enrichedEvidence = {
+        ...calc.evidence,
+        inferred_source: inferredSourceDecision,
+        existing_source: existingSource,
+      }
+
       const { error: writeErr } = await supabase
         .from('weddings')
-        .update({ booking_value: calc.valueCents })
+        .update(updatePayload)
         .eq('id', weddingId)
 
       if (writeErr) {
@@ -897,7 +1098,7 @@ async function recoverOneWedding(
           recoveredValueCents: calc.valueCents,
           sourceInteractionId: calc.sourceInteractionId,
           confidence: calc.confidence,
-          evidence: calc.evidence,
+          evidence: enrichedEvidence,
           errorMessage: writeErr.message,
         })
         return {
@@ -919,7 +1120,7 @@ async function recoverOneWedding(
         recoveredValueCents: calc.valueCents,
         sourceInteractionId: calc.sourceInteractionId,
         confidence: calc.confidence,
-        evidence: calc.evidence,
+        evidence: enrichedEvidence,
       })
       return {
         weddingId,
@@ -938,8 +1139,10 @@ async function recoverOneWedding(
   }
 
   // Capability 3: HoneyBook export-payload recovery (only when the
-  // wedding came from a HoneyBook import).
-  if (crmSource === 'honeybook') {
+  // wedding came from a HoneyBook import). Skip for "source-only"
+  // SSS candidates — capability 3 writes booking_value, which a
+  // source-only candidate already has.
+  if (crmSource === 'honeybook' && bookingValueMissing) {
     try {
       const recover = await recoverHoneyBookValueFromExportPayload(supabase, weddingId)
       if (recover.valueCents != null) {
