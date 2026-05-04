@@ -175,10 +175,32 @@ export async function computeSourceFunnel(
     // only tour_conducted, not the matching tour_booked. This makes
     // the funnel monotonically non-increasing the way users expect to
     // read it.
+    //
+    // T5-Rixey-UUU: the `booked` indicator requires BOTH a
+    // contract_signed touchpoint AND a terminal status
+    // (booked/completed). Per Bloom doctrine, status is the truth —
+    // the temporal layer (GGG tour-outcome classifier, weddings.status)
+    // is the canonical state. Touchpoints are events, not state. A
+    // contract_signed touchpoint can exist with a cancelled / lost /
+    // tour_scheduled status (touchpoint was wrong, late, or reversed
+    // post-cancellation). Without this gate, computeSourceFunnel
+    // disagrees with /api/intel/sources/wedding-rollup which counts
+    // bookings via status only — and the Sources page reads from
+    // both. Concrete bug shape on Rixey: wedding dce937fe-… has
+    // source=the_knot + a contract_signed touchpoint but status=
+    // cancelled, so wedding-rollup correctly says 0 Knot bookings
+    // while computeSourceFunnel said 1. Status wins.
+    //
+    // The other steps (tour_booked / tour_conducted / proposal_sent)
+    // intentionally DO NOT get a status gate — those are pre-terminal
+    // states and a wedding can legitimately reach tour_conducted
+    // while sitting at status='tour_scheduled' or similar.
     const rawProposal = tps.some((t) => STEP_TOUCH_TYPES.proposal_sent.has(t.touch_type))
     const rawTourConducted = tps.some((t) => STEP_TOUCH_TYPES.tour_conducted.has(t.touch_type))
     const rawTourBooked = tps.some((t) => STEP_TOUCH_TYPES.tour_booked.has(t.touch_type))
-    const booked = tps.some((t) => STEP_TOUCH_TYPES.contract_signed.has(t.touch_type))
+    const status = (w.status as string | null) ?? ''
+    const isTerminal = status === 'booked' || status === 'completed'
+    const booked = isTerminal && tps.some((t) => STEP_TOUCH_TYPES.contract_signed.has(t.touch_type))
     const proposal_sent = rawProposal || booked
     const tour_conducted = rawTourConducted || proposal_sent
     const tour_booked = rawTourBooked || tour_conducted

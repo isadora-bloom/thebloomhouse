@@ -2031,7 +2031,7 @@ export default function SourceAttributionPage() {
                         className={`w-4 h-4 text-sage-500 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
                         aria-hidden
                       />
-                      <span className="sr-only">{isExpanded ? 'Collapse' : 'Expand'} {row.source_name}</span>
+                      <span className="sr-only select-none" style={{ userSelect: 'none' }}>{isExpanded ? 'Collapse' : 'Expand'} {row.source_name}</span>
                     </td>
                     <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
                       <div
