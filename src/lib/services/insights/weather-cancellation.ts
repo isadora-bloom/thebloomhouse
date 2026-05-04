@@ -28,6 +28,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { redactError } from '@/lib/observability/redact'
 
 export interface WeatherCancellationResult {
   ok: boolean
@@ -383,7 +384,7 @@ export async function analyzeWeatherCancellationsAllVenues(
     try {
       out[id] = await analyzeWeatherCancellations(supabase, id)
     } catch (err) {
-      console.error('[weather-cancellation]', id, err instanceof Error ? err.message : err)
+      console.error('[weather-cancellation]', id, redactError(err))
       out[id] = { ok: false }
     }
   }

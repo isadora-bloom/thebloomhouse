@@ -1574,7 +1574,12 @@ export default function TimelinePage() {
 
     const { error } = await supabase
       .from('timeline')
-      // T5-Rixey-XX: matched by uq_timeline_wedding_id (mig 188).
+      // onConflict-skip-check: timeline has dual-mode usage (couple-portal config-blob writer
+      // here vs. per-event row reader on portal/weddings/[id]). Migration 188 explicitly
+      // DEFERRED uq_timeline_wedding_id to avoid breaking the per-event mode. Until that
+      // schema fork is resolved by a separate stream, this writer's ON CONFLICT silently
+      // no-ops on dup rows — acceptable because the couple-portal flow only ever writes
+      // one row per wedding via this code path.
       .upsert(payload, { onConflict: 'wedding_id' })
 
     if (!error) {
