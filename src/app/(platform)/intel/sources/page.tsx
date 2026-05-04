@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createBrowserClient } from '@supabase/ssr'
 import {
@@ -14,6 +14,7 @@ import {
   Activity,
   ArrowRight,
   Layers,
+  ChevronRight,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
@@ -29,8 +30,6 @@ import {
 import { formatCents } from '@/lib/types/monetary'
 import Link from 'next/link'
 import {
-  BarChart,
-  Bar,
   LineChart,
   Line,
   XAxis,
@@ -1339,6 +1338,13 @@ export default function SourceAttributionPage() {
   const [error, setError] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('inquiries')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  // T5-Rixey-Wave-14-TTT: per-row expansion in the Source Comparison
+  // table. Replaces the standalone "Cost per Booking by Source" bar
+  // chart and "Funnel by Source" sub-cards — both were redrawing data
+  // already present in the table row. Click the disclosure triangle on
+  // a row to see the full inquiry → tour-booked → tour-held → proposal
+  // → booked funnel + cost-per-booking math for that source.
+  const [expandedRow, setExpandedRow] = useState<string | null>(null)
   // PC.4 fix #4: window state lifted to page so the scorecard,
   // multi-touch split, non-converting cohort, and conflict tile
   // all see the same window. Default 90d (locked).
@@ -1632,19 +1638,6 @@ export default function SourceAttributionPage() {
     }
   }
 
-  // ---- Cost per booking chart data ----
-  const costPerBookingData = sortedRows
-    .filter((r) => r.bookings > 0)
-    .sort((a, b) => a.cost_per_booking - b.cost_per_booking)
-    .map((r) => ({
-      source:
-        scope.level !== 'venue' && r.venue_name
-          ? `${r.source_name} · ${r.venue_name}`
-          : r.source_name,
-      costPerBooking: Math.round(r.cost_per_booking),
-      fill: getSourceColor(r.source_name),
-    }))
-
   // ---- Spend over time chart data ----
   const spendOverTimeData = (() => {
     const monthMap = new Map<string, Record<string, number>>()
@@ -1937,59 +1930,6 @@ export default function SourceAttributionPage() {
       {/* ---- Compare Attribution Models (Phase 4 P4.4) ---- */}
       <ModelComparisonCard scope={scope} />
 
-      {/* ---- Cost per Booking Chart ---- */}
-      {loading ? (
-        <ChartSkeleton />
-      ) : costPerBookingData.length > 0 ? (
-        <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
-          <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2">
-            <BarChart3 className="w-5 h-5 text-sage-600" />
-            Cost per Booking by Source
-          </h2>
-          <p className="text-xs text-sage-500 mb-4 mt-1">
-            Showing:{' '}
-            {scope.level === 'company'
-              ? `all venues — ${scope.companyName}`
-              : scope.level === 'group'
-              ? scope.groupName
-              : scope.venueName}
-          </p>
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={costPerBookingData} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E8E4DF" vertical={false} />
-                <XAxis
-                  dataKey="source"
-                  tick={{ fontSize: 12, fill: '#6A7060' }}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 12, fill: '#6A7060' }}
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(v) => `$${v}`}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#FFFFFF',
-                    border: '1px solid #E8E4DF',
-                    borderRadius: '8px',
-                    fontSize: '13px',
-                  }}
-                  formatter={(value) => [`$${Number(value).toLocaleString()}`, 'Cost per Booking']}
-                />
-                <Bar
-                  dataKey="costPerBooking"
-                  radius={[6, 6, 0, 0]}
-                  fill="#7D8471"
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      ) : null}
-
       {/* ---- Source Comparison Table ---- */}
       {loading ? (
         <TableSkeleton />
@@ -2023,6 +1963,10 @@ export default function SourceAttributionPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-sage-50/50">
+                  {/* T5-Rixey-Wave-14-TTT: leading expander column. No
+                      sort, no header label — just the disclosure
+                      affordance. */}
+                  <th className="w-8 px-2 py-3" aria-label="Expand row" />
                   {([
                     ['source_name', 'Source'],
                     ['spend', 'Spend'],
@@ -2059,8 +2003,36 @@ export default function SourceAttributionPage() {
                   // the Untracked / Pre-Bloom row so coordinators
                   // understand it's a data-coverage gap, not noise.
                   const isUntracked = row.source_name === UNTRACKED_LABEL
+                  // T5-Rixey-Wave-14-TTT: expansion key is source_key +
+                  // venue_id so cross-venue rows with the same source
+                  // (e.g. Google × Hawthorne, Google × Crestwood)
+                  // toggle independently in company/group views.
+                  const rowKey = `${row.source_key}::${row.venue_id ?? 'all'}`
+                  const isExpanded = expandedRow === rowKey
+                  // Funnel cells reused from the deleted "Funnel by
+                  // Source" section. Same data, just relocated.
+                  const funnelCells: Array<[string, number]> = [
+                    ['Inquiries', row.inquiries],
+                    ['Tours Booked', row.tours_booked],
+                    ['Tours Held', row.tours_conducted],
+                    ['Proposals', row.proposals_sent],
+                    ['Booked', row.bookings],
+                  ]
+                  const funnelMax = row.inquiries || 1
+                  const costPerTour = row.tours_booked > 0 ? row.spend / row.tours_booked : 0
                   return (
-                  <tr key={row.source_key} className="hover:bg-sage-50/30 transition-colors">
+                  <Fragment key={rowKey}>
+                  <tr
+                    className="hover:bg-sage-50/30 transition-colors cursor-pointer"
+                    onClick={() => setExpandedRow(isExpanded ? null : rowKey)}
+                  >
+                    <td className="w-8 px-2 py-3 align-middle">
+                      <ChevronRight
+                        className={`w-4 h-4 text-sage-500 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                        aria-hidden
+                      />
+                      <span className="sr-only">{isExpanded ? 'Collapse' : 'Expand'} {row.source_name}</span>
+                    </td>
                     <td className="px-4 py-3 font-medium text-sage-900 whitespace-nowrap">
                       <div
                         className="flex items-center gap-2"
@@ -2084,7 +2056,7 @@ export default function SourceAttributionPage() {
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmtCount(row.bookings)}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums font-medium">{fmt$(row.revenue)}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmt$(row.cost_per_inquiry)}</td>
-                    <td className="px-4 py-3 text-sage-700 tabular-nums">{row.tours_booked > 0 ? fmt$(row.spend / row.tours_booked) : '—'}</td>
+                    <td className="px-4 py-3 text-sage-700 tabular-nums">{row.tours_booked > 0 ? fmt$(costPerTour) : '—'}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmt$(row.cost_per_booking)}</td>
                     <td className="px-4 py-3 text-sage-700 tabular-nums">{fmtPct(row.conversion_rate)}</td>
                     <td className="px-4 py-3 tabular-nums">
@@ -2093,85 +2065,123 @@ export default function SourceAttributionPage() {
                       </span>
                     </td>
                   </tr>
+                  {isExpanded && (
+                    <tr className="bg-sage-50/30">
+                      <td colSpan={14} className="px-6 py-5">
+                        <div className="space-y-5">
+                          {/* Funnel — relocated from the deleted "Funnel
+                              by Source" section. Same 5-step visual,
+                              shown only for the chosen row. */}
+                          <div>
+                            <div className="flex items-center gap-2 mb-2 text-xs uppercase tracking-wide text-sage-500">
+                              <BarChart3 className="w-3.5 h-3.5" />
+                              <span>
+                                Funnel · attributed by{' '}
+                                {model === 'first_touch' ? 'first-touch' : model === 'last_touch' ? 'last-touch' : 'linear'} model
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-9 gap-1.5 items-center">
+                              {funnelCells.map(([label, value], idx) => (
+                                <Fragment key={label}>
+                                  <div className="sm:col-span-1 col-span-1">
+                                    <div className="h-9 bg-white rounded border border-border overflow-hidden">
+                                      <div
+                                        className="h-full transition-all"
+                                        style={{
+                                          width: `${Math.max((value / funnelMax) * 100, 4)}%`,
+                                          backgroundColor: getSourceColor(row.source_name),
+                                          opacity: 0.7,
+                                        }}
+                                      />
+                                    </div>
+                                    <div className="flex items-center justify-between mt-1 px-0.5">
+                                      <span className="text-[10px] uppercase tracking-wide text-sage-500">{label}</span>
+                                      <span className="text-xs font-medium text-sage-700 tabular-nums">{fmtCount(value)}</span>
+                                    </div>
+                                  </div>
+                                  {idx < funnelCells.length - 1 && (
+                                    <div className="hidden sm:flex sm:col-span-1 items-center justify-center pb-4">
+                                      <ArrowRight className="w-3.5 h-3.5 text-sage-400" />
+                                    </div>
+                                  )}
+                                </Fragment>
+                              ))}
+                            </div>
+                            {row.inquiries > 0 && (
+                              <div className="mt-2 text-xs text-sage-600">
+                                <span className="font-medium text-sage-900">{fmtPct(row.conversion_rate)}</span>{' '}
+                                inquiry-to-booking conversion
+                                {row.tours_booked > 0 && (
+                                  <>
+                                    {' · '}
+                                    <span className="font-medium text-sage-900">
+                                      {fmtPct(row.tours_booked / row.inquiries)}
+                                    </span>{' '}
+                                    inquiry → tour booked
+                                  </>
+                                )}
+                                {row.tours_conducted > 0 && row.tours_booked > 0 && (
+                                  <>
+                                    {' · '}
+                                    <span className="font-medium text-sage-900">
+                                      {fmtPct(row.tours_conducted / row.tours_booked)}
+                                    </span>{' '}
+                                    tour booked → tour held
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Cost per booking math — relocated from the
+                              deleted bar chart. Show the explicit
+                              spend / bookings = $X calculation. */}
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <div className="bg-white border border-border rounded-lg p-3">
+                              <div className="text-[10px] uppercase tracking-wide text-sage-500 mb-1">Cost per Booking</div>
+                              {row.bookings > 0 ? (
+                                <div className="text-sm text-sage-700">
+                                  <span className="font-semibold text-sage-900 tabular-nums">{fmt$(row.spend)}</span>
+                                  <span className="text-sage-500"> spend</span>
+                                  <span className="text-sage-400"> ÷ </span>
+                                  <span className="font-semibold text-sage-900 tabular-nums">{fmtCount(row.bookings)}</span>
+                                  <span className="text-sage-500"> booked</span>
+                                  <span className="text-sage-400"> = </span>
+                                  <span className="font-bold text-sage-900 tabular-nums">{fmt$(row.cost_per_booking)}</span>
+                                </div>
+                              ) : (
+                                <div className="text-sm text-sage-500">No bookings attributed yet — cost-per-booking unavailable.</div>
+                              )}
+                            </div>
+                            <div className="bg-white border border-border rounded-lg p-3">
+                              <div className="text-[10px] uppercase tracking-wide text-sage-500 mb-1">Conversion Rate</div>
+                              <div className="text-sm text-sage-700">
+                                <span className="font-bold text-sage-900 tabular-nums">{fmtPct(row.conversion_rate)}</span>
+                                <span className="text-sage-500"> inquiries → booked</span>
+                              </div>
+                            </div>
+                            <div className="bg-white border border-border rounded-lg p-3">
+                              <div className="text-[10px] uppercase tracking-wide text-sage-500 mb-1">ROI</div>
+                              <div className="text-sm text-sage-700">
+                                <span className={`font-bold tabular-nums ${row.roi >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                  {row.roi > 0 ? '+' : ''}{fmtPct(row.roi)}
+                                </span>
+                                <span className="text-sage-500">
+                                  {' '}
+                                  ({fmt$(row.revenue)} revenue {row.spend > 0 ? `vs ${fmt$(row.spend)} spend` : '— no spend recorded'})
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                   )
                 })}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {/* ---- Funnel by Source ---- */}
-      {!loading && sortedRows.length > 0 && (
-        <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
-          <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2">
-            <BarChart3 className="w-5 h-5 text-sage-600" />
-            Funnel by Source
-          </h2>
-          <p className="text-xs text-sage-500 mb-4 mt-1">
-            Inquiry → Tour Booked → Tour Held → Proposal → Booked, attributed by{' '}
-            {model === 'first_touch' ? 'first-touch' : model === 'last_touch' ? 'last-touch' : 'linear'} model.
-          </p>
-          <div className="space-y-3">
-            {sortedRows
-              .filter((r) => r.inquiries > 0)
-              .slice(0, 8)
-              .map((row) => {
-                const max = row.inquiries || 1
-                const cells: Array<[string, number]> = [
-                  ['Inquiries', row.inquiries],
-                  ['Tours Booked', row.tours_booked],
-                  ['Tours Held', row.tours_conducted],
-                  ['Proposals', row.proposals_sent],
-                  ['Booked', row.bookings],
-                ]
-                const isUntracked = row.source_name === UNTRACKED_LABEL
-                return (
-                  <div key={row.source_key}>
-                    <div
-                      className="flex items-center gap-2 mb-1.5"
-                      title={isUntracked ? UNTRACKED_TOOLTIP : undefined}
-                    >
-                      <div
-                        className="w-2.5 h-2.5 rounded-full shrink-0"
-                        style={{ backgroundColor: getSourceColor(row.source_name) }}
-                      />
-                      <span className="text-sm font-medium text-sage-900">
-                        {row.source_name}
-                      </span>
-                      {scope.level !== 'venue' && (
-                        <VenueChip venueName={row.venue_name} />
-                      )}
-                      <span className="text-xs text-sage-500">
-                        · {fmtPct(row.conversion_rate)} conversion
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-5 gap-1.5">
-                      {cells.map(([label, value]) => {
-                        const pct = (value / max) * 100
-                        return (
-                          <div key={label} className="relative">
-                            <div className="h-8 bg-sage-50 rounded overflow-hidden">
-                              <div
-                                className="h-full rounded transition-all"
-                                style={{
-                                  width: `${Math.max(pct, 4)}%`,
-                                  backgroundColor: getSourceColor(row.source_name),
-                                  opacity: 0.7,
-                                }}
-                              />
-                            </div>
-                            <div className="flex items-center justify-between mt-1 px-0.5">
-                              <span className="text-[10px] uppercase tracking-wide text-sage-500">{label}</span>
-                              <span className="text-xs font-medium text-sage-700 tabular-nums">{fmtCount(value)}</span>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )
-              })}
           </div>
         </div>
       )}
