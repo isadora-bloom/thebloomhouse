@@ -242,8 +242,13 @@ export const PROJECT_PLAN: DayPlan[] = [
         description:
           'Walks every booked / completed wedding with missing booking_value and tries three recovery paths: dedup against HoneyBook duplicates, calculator-estimate email extract, and HoneyBook export-payload recover. The daily booked_data_recovery cron handles the bulk; this step surfaces the residual count so the coordinator can mark the unrecoverable ones as coordinator-supplied. (Per-row "Mark coordinator-supplied" affordance lands in a follow-up stream — for now the readiness page links here and shows the count.)',
         actionKey: 'manual',
-        linkHref: '/onboarding/recover-booked-data',
-        linkLabel: 'Open recovery review',
+        // No linkHref yet — the per-row "Mark coordinator-supplied" UI is a
+        // follow-up stream. Setting linkHref breaks the onboarding step
+        // because /onboarding/recover-booked-data does not exist; the
+        // server route at /api/admin/recover-booked-data is service-role
+        // only. The cron handles the bulk; this step is informational
+        // until the coordinator UI lands.
+        linkHref: null,
       },
       {
         key: 'readiness_gate',

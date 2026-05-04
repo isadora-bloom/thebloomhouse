@@ -34,21 +34,109 @@ interface Probe {
 
 const probes: Probe[] = [
   {
-    migration: '190',
-    file: 'supabase/migrations/190_weather_data_extension.sql',
-    describe: 'weather_data extension columns',
+    migration: '173',
+    file: 'supabase/migrations/173_essentials_org_defaults.sql',
+    describe: 'org_essentials_preferences table',
     isApplied: async (sb) => {
-      const { error } = await sb.from('weather_data').select('region, severity_score').limit(1)
+      const { error } = await sb.from('org_essentials_preferences').select('id').limit(1)
+      if (!error) return true
+      return !/relation .* does not exist/i.test(error.message)
+    },
+  },
+  {
+    migration: '175',
+    file: 'supabase/migrations/175_weddings_crm_import_fields.sql',
+    describe: 'weddings CRM import fields (tax_amount, amount_paid, gratuity_amount, refunded_amount, crm_external_id, crm_team_members, import_warnings)',
+    isApplied: async (sb) => {
+      const { error } = await sb.from('weddings').select('tax_amount, crm_external_id').limit(1)
       if (!error) return true
       return !/column .* does not exist/i.test(error.message)
     },
   },
   {
+    migration: '177',
+    file: 'supabase/migrations/177_identity_reconciliation.sql',
+    describe: 'identity_reconciliation_log table',
+    isApplied: async (sb) => {
+      const { error } = await sb.from('identity_reconciliation_log').select('id').limit(1)
+      if (!error) return true
+      return !/relation .* does not exist/i.test(error.message)
+    },
+  },
+  {
+    migration: '178',
+    file: 'supabase/migrations/178_web_form_intake.sql',
+    describe: 'web_form_submissions table',
+    isApplied: async (sb) => {
+      const { error } = await sb.from('web_form_submissions').select('id').limit(1)
+      if (!error) return true
+      return !/relation .* does not exist/i.test(error.message)
+    },
+  },
+  {
+    migration: '179',
+    file: 'supabase/migrations/179_voice_signal_date.sql',
+    describe: 'voice_training_responses.signal_date + voice_preferences.signal_date',
+    isApplied: async (sb) => {
+      const { error } = await sb.from('voice_training_responses').select('signal_date').limit(1)
+      if (!error) return true
+      return !/column .* does not exist/i.test(error.message)
+    },
+  },
+  {
+    migration: '181',
+    file: 'supabase/migrations/181_booking_value_normalize.sql',
+    describe: 'booking_value normalization (one-shot dollar→cents data fix)',
+    isApplied: async (sb) => {
+      // 181 is a one-shot data normalization, not a schema change. Probe
+      // by checking whether any non-zero booking_value rows still sit in
+      // the dollars-encoded band (1–99,999 cents = $0.01–$999, almost
+      // never a real wedding). Zero such rows = migration done.
+      const { count, error } = await sb
+        .from('weddings')
+        .select('id', { count: 'exact', head: true })
+        .gt('booking_value', 0)
+        .lt('booking_value', 100000)
+      if (error) return false
+      return (count ?? 0) === 0
+    },
+  },
+  {
+    migration: '182',
+    file: 'supabase/migrations/182_weddings_lead_source_attempted_at.sql',
+    describe: 'weddings.lead_source_derivation_attempted_at',
+    isApplied: async (sb) => {
+      const { error } = await sb.from('weddings').select('lead_source_derivation_attempted_at').limit(1)
+      if (!error) return true
+      return !/column .* does not exist/i.test(error.message)
+    },
+  },
+  {
+    migration: '190',
+    file: 'supabase/migrations/190_weather_data_extension.sql',
+    describe: 'weather_data composite index + Rixey lat/lon (Stream ZZ)',
+    isApplied: async (sb) => {
+      // 190 doesn't add columns — it adds idx_weather_data_venue_date and
+      // sets Rixey's lat/lon. Probe by checking Rixey's row has lat/lon
+      // populated. (Earlier probe checked weather_data.region which doesn't
+      // exist in 190 at all — false negative on every run.)
+      const { data, error } = await sb
+        .from('venues')
+        .select('latitude, longitude')
+        .eq('id', 'f3d10226-4c5c-47ad-b89b-98ad63842492')
+        .maybeSingle()
+      if (error) return false
+      return data?.latitude != null && data?.longitude != null
+    },
+  },
+  {
     migration: '195',
     file: 'supabase/migrations/195_venue_signature_fields.sql',
-    describe: 'venues signature fields',
+    describe: 'venue_ai_config signature fields',
     isApplied: async (sb) => {
-      const { error } = await sb.from('venues').select('ai_role_title').limit(1)
+      // 195's columns landed on venue_ai_config, not venues. Earlier probe
+      // checked venues.ai_role_title — false negative on every run.
+      const { error } = await sb.from('venue_ai_config').select('ai_role_title').limit(1)
       if (!error) return true
       return !/column .* does not exist/i.test(error.message)
     },

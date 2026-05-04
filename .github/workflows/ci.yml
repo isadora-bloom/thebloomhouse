@@ -139,3 +139,6 @@ jobs:
 
       - name: Cluster-attribution guard — every signal-class table writer declares signal_class (T5-Rixey-BBB)
         run: node scripts/check-signal-class-declared.mjs
+
+      - name: HTML-strip guard — every full_body / body_preview writer routes through htmlToText (T5-Rixey-RR Layer 3)
+        run: node scripts/check-html-stripped-at-writer.mjs
