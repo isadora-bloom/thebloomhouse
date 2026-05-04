@@ -47,6 +47,7 @@ import { logEvent } from '@/lib/observability/logger'
 import { computeAttributionParityAllVenues } from '@/lib/services/attribution-parity'
 import { mergePeopleAliasesAllVenues } from '@/lib/services/people-merge-aliases'
 import { classifyTourOutcomesAllVenues } from '@/lib/services/tour-outcome-classifier'
+import { recoverBookedDataAllVenues } from '@/lib/services/booked-data-recovery'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -177,6 +178,22 @@ const VALID_JOBS = [
   // toward false negatives — when uncertain, leaves 'pending' so the
   // coordinator review surfaces it. Bug 12.
   'tour_outcome_classifier',
+  // T5-Rixey-MMM (2026-05-03). Booked-data recovery sweep — for every
+  // venue, walks weddings with status booked/completed AND
+  // (booking_value IS NULL OR = 0) AND merged_into_id IS NULL, and
+  // tries three capabilities in order: HoneyBook duplicate dedup
+  // (HIGH-confidence partner-name + date match → merge source into
+  // HoneyBook record), calculator-estimate extract (largest dollar
+  // amount from latest interactivecalculator.com OR venue-domain
+  // estimate email), HoneyBook export-payload recover (extract from
+  // the import interaction's extracted_identity blob). Every attempt
+  // logs to booked_data_recovery_log. Sequenced 03:00 UTC — BEFORE
+  // tour_outcome_classifier (06:00 UTC) so dedup-merged rows aren't
+  // re-evaluated by the classifier as standalone weddings. Pure
+  // regex extraction; no AI call. Idempotent — orchestrator filter
+  // restricts to missing-bv weddings so successful recoveries are
+  // not re-attempted on subsequent days.
+  'booked_data_recovery',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -483,6 +500,20 @@ async function runJob(job: JobName): Promise<unknown> {
       // already classified. Backfills the existing pending-tour
       // backlog automatically the first time it runs.
       return classifyTourOutcomesAllVenues(createServiceClient())
+
+    case 'booked_data_recovery':
+      // T5-Rixey-MMM (2026-05-03). Booked-data recovery — universal
+      // back-fill for missing booking_value across booked / completed
+      // weddings on every onboarding venue. Three capabilities run in
+      // priority order: HoneyBook duplicate dedup (HIGH confidence →
+      // merge), calculator-estimate extract (largest plausible $
+      // amount from interactivecalculator.com OR venue-domain
+      // estimate emails), HoneyBook export-payload recover (extract
+      // from the import interaction's extracted_identity blob).
+      // Logs every attempt to booked_data_recovery_log. Pure regex —
+      // no AI. Sequenced 03:00 UTC, BEFORE tour_outcome_classifier
+      // (06:00) so dedup-merged rows are not re-classified.
+      return recoverBookedDataAllVenues()
   }
 }
 

@@ -237,6 +237,15 @@ export const PROJECT_PLAN: DayPlan[] = [
         linkLabel: 'Open knowledge base',
       },
       {
+        key: 'recover_booked_data',
+        label: 'Recover historical booking values',
+        description:
+          'Walks every booked / completed wedding with missing booking_value and tries three recovery paths: dedup against HoneyBook duplicates, calculator-estimate email extract, and HoneyBook export-payload recover. The daily booked_data_recovery cron handles the bulk; this step surfaces the residual count so the coordinator can mark the unrecoverable ones as coordinator-supplied. (Per-row "Mark coordinator-supplied" affordance lands in a follow-up stream — for now the readiness page links here and shows the count.)',
+        actionKey: 'manual',
+        linkHref: '/onboarding/recover-booked-data',
+        linkLabel: 'Open recovery review',
+      },
+      {
         key: 'readiness_gate',
         label: 'Run readiness gate',
         description:
