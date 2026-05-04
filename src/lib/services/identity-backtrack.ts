@@ -536,6 +536,10 @@ async function autoLinkCandidate(args: {
         is_first_touch: false,
         bucket,
         conflict_with_legacy_source: bucket === 'attribution' ? conflictFlag : null,
+        // Attribution rows always represent source-class signals — that's
+        // what they exist to credit. Declared explicitly per BBB doctrine
+        // (migration 192) instead of relying on the column default.
+        signal_class: 'source' as const,
       }
     })
 
@@ -1069,6 +1073,9 @@ export async function applyBacktrackLink(
         is_first_touch: false,
         bucket,
         conflict_with_legacy_source: bucket === 'attribution' ? conflictFlag : null,
+        // Attribution rows always represent source-class signals — see
+        // sibling insert above for the BBB doctrine reference.
+        signal_class: 'source' as const,
       }
     })
   if (insertRows.length > 0) {

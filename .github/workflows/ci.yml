@@ -136,3 +136,6 @@ jobs:
 
       - name: RLS guard — no getSupabase().from('weddings') on coordinator pages (T5-Rixey-JJJ)
         run: node scripts/check-no-browser-weddings-fetch.mjs
+
+      - name: Cluster-attribution guard — every signal-class table writer declares signal_class (T5-Rixey-BBB)
+        run: node scripts/check-signal-class-declared.mjs
