@@ -14,7 +14,7 @@
 
 meta:
   initial_snapshot: "2026-04-30"
-  last_updated: "2026-05-02"
+  last_updated: "2026-05-05"
   cells_total: 150
   # Snapshot counts captured at initial audit. Live counts drift as
   # cells move; query this YAML or the audit folder for current state.
@@ -377,6 +377,19 @@ meta:
 #            Day-4 onboarding wire-up (migration 168).
 #            ARCH-18.3-B doctrine-only→partial. Closes yc-partner.md
 #            HIGH 9. Confirmation review step is the follow-up.
+#
+# 2026-05-05 — Phase 0 doctrine drift cleanup (no code change):
+#   LIMB-17.4-D partial→enforced. Verified Bonferroni-corrected critical
+#   |r| live in correlation-engine.ts:446-474 (correctedThresholdFor) +
+#   stats.ts:31-66 (Acklam inverse-normal + Cornish-Fisher t-correction).
+#   Cell notes were stale.
+#   ARCH-20.5.1 partial→enforced. Verified FloatingBrainDump mounted in
+#   platform-shell.tsx:88 with global Cmd+K hotkey. Cell notes were stale.
+#   Five other cells the audit agents claimed "enforced" actually had
+#   real gaps the agents missed (STAGE-10.2.18 disclosure timing,
+#   LIMB-16.2.1-D no AI-output integration test, LIMB-17.2.3 universal
+#   hardcoded terms, LIMB-17.4-B FRED national-only, LIMB-17.2.5 census
+#   only). Each picked up in its respective phase.
 
 # ===================================================================
 # PART 2 — POINT ZERO & FORENSIC RECORD
@@ -1110,10 +1123,10 @@ cells:
     severity: medium
 
   - id: LIMB-17.4-D
-    status: partial
+    status: enforced
     owner: Isadora
     target: significance threshold filters noise
-    notes: "Hardcoded |r|≥0.6, not configurable. No multiple-comparisons correction."
+    notes: "Bonferroni-corrected critical |r| live. correctedThresholdFor() in correlation-engine.ts:446-474 derives Bonferroni-adjusted critical |r| via Acklam inverse-normal + Cornish-Fisher t-correction in stats.ts:31-66. Final threshold = max(CORRELATION_THRESHOLD floor 0.6, Bonferroni critical r). Union-of-lags approach (ALL_LAGS_UNION=[0,7,14,30,60,90,180]) bounds penalty across wider search space. Closed by Phase 0 verification 2026-05-05."
     severity: medium
 
   - id: LIMB-17.5
@@ -1531,10 +1544,10 @@ cells:
     severity: low
 
   - id: ARCH-20.5.1
-    status: partial
+    status: enforced
     owner: Isadora
     target: brain-dump intake on every meaningful surface
-    notes: "FloatingBrainDump on every coordinator surface (good)."
+    notes: "FloatingBrainDump mounted globally in platform-shell.tsx:88 → appears on every authenticated platform page. Cmd+K/Ctrl+K hotkey + context-aware path-prefill (lead detail, leads list, pipeline, learning, sources, cultural-moments). Closed by Phase 0 verification 2026-05-05."
 
   - id: ARCH-20.5.2
     status: partial
