@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/gmail'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 /**
  * POST /api/intel/reengagement/[id]
@@ -19,6 +20,10 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
+  // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
+  const plan = await requirePlan(req, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const { id: actionId } = await context.params

@@ -8,6 +8,7 @@ import { checkEscalationForVenue } from '@/config/escalation-keywords'
 import { callAIVision, CLAUDE_MODEL } from '@/lib/ai/client'
 import { rateLimit, secondsUntil } from '@/lib/rate-limit'
 import { getCoupleAuth, getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 // ---------------------------------------------------------------------------
 // Rate limit: 20 requests per 15 minutes per wedding (falls back to venue or
@@ -25,6 +26,15 @@ const SAGE_RATE_WINDOW_SEC = 15 * 60 // 15 minutes
 
 export async function POST(request: NextRequest) {
   try {
+    // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
+    // Sage couple-portal chat is gated at the 'intelligence' tier
+    // (sage + couple_portal features in plan-tiers.ts). Venues on
+    // starter cannot expose Sage to their couples. Demo cookie path
+    // bypasses inside requirePlan. requirePlan resolves the venueId
+    // from user_profiles which works for the couple role too.
+    const plan = await requirePlan(request, 'intelligence')
+    if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
     const body = await request.json()
     const { venueId, weddingId, message, fileUrl, fileContext } = body
 

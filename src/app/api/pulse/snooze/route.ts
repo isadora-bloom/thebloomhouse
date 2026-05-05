@@ -16,12 +16,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 const VALID_ITEM_KEY = /^(notif|anomaly|insight):[0-9a-f-]{36}$/i
 
 const DISMISS_TTL_MS = 90 * 86_400_000
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
 
@@ -52,6 +57,10 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
 
@@ -100,6 +109,10 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
 

@@ -4,6 +4,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { recomputeFirstTouch } from '@/lib/services/candidate-resolver'
 import { recalculateHeatScore } from '@/lib/services/heat-mapping'
 import { normalizeSource } from '@/lib/services/normalize-source'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 /**
  * Attribution mutation endpoint (Phase B / PB.12 fixes #2 + #3).
@@ -43,6 +44,10 @@ interface AcceptComputedBody {
 }
 
 export async function POST(req: NextRequest) {
+  // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
+  const plan = await requirePlan(req, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 

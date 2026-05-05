@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
 import { redact } from '@/lib/observability/redact'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 const MAX_BATCH = 100
 
@@ -52,6 +53,10 @@ export interface RiskSummary {
 }
 
 export async function POST(request: NextRequest) {
+  // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   let body: { weddingIds?: unknown }
   try {
     body = (await request.json()) as { weddingIds?: unknown }

@@ -14,10 +14,17 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
 import { aggregatePulseFull } from '@/lib/services/pulse-aggregator'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 const DEMO_VENUE_ID = '22222222-2222-2222-2222-222222222201'
 
 export async function GET(request: NextRequest) {
+  // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
+  // Pulse aggregates intelligence_insights + anomaly_alerts, both are
+  // intelligence-tier features. Demo cookie path bypasses inside requirePlan.
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const supabase = createServiceClient()
   const demo = await isDemoMode()
 

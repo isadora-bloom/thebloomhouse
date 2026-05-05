@@ -19,8 +19,15 @@ import { generateStrengthAreaCohort } from '@/lib/services/insights/strength-are
 import { gateForBrainCall, nextUtcMidnightIso } from '@/lib/services/cost-ceiling'
 import { newCorrelationId } from '@/lib/observability/logger'
 import { redactError } from '@/lib/observability/redact'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 export async function GET(request: NextRequest) {
+  // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
+  // Demo cookie path bypasses inside requirePlan (mirrors usePlanTier
+  // which defaults to 'enterprise' for demo).
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const supabase = createServiceClient()
   const demo = await isDemoMode()
 

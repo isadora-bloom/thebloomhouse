@@ -6,6 +6,7 @@ import {
   extractSpendFromText,
   type SpendRow,
 } from '@/lib/services/marketing-spend'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 /**
  * POST /api/intel/spend
@@ -26,6 +27,10 @@ import {
  * ?preview=true query — default is commit.
  */
 export async function POST(request: NextRequest) {
+  // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

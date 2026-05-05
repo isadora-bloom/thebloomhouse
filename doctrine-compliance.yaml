@@ -390,6 +390,21 @@ meta:
 #   LIMB-16.2.1-D no AI-output integration test, LIMB-17.2.3 universal
 #   hardcoded terms, LIMB-17.4-B FRED national-only, LIMB-17.2.5 census
 #   only). Each picked up in its respective phase.
+#
+# 2026-05-05 — PROJECT-AUDIT-V2 GAP-12 closure (API-layer plan_tier
+#   enforcement). UI gating via UpgradeGate was bypassable with a
+#   scripted fetch — a starter-tier coordinator could curl
+#   /api/intel/* and read paid-tier narrations + writes. requirePlan()
+#   already existed at src/lib/auth/require-plan.ts; the gap was
+#   coverage. Added the call to 16 routes that were missing it across
+#   /api/intel, /api/insights, /api/pulse, /api/portal/sage. Also
+#   hardened the helper itself: explicit isDemo early-return (mirrors
+#   usePlanTier's enterprise default for demo cookie), recordCounter
+#   ('plan_gate_block', { tier, route, reason, current_tier }) on
+#   every block path so we can graph tier-bypass attempts. New CI
+#   guard scripts/check-plan-enforcement.mjs walks the four scan dirs
+#   and fails CI if any route.ts ships without import + call of
+#   requirePlan — regression-proofs GAP-12 against future routes.
 
 # ===================================================================
 # PART 2 — POINT ZERO & FORENSIC RECORD

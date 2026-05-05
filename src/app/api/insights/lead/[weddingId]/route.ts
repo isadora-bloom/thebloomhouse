@@ -26,11 +26,17 @@ import { generateCohortMatch } from '@/lib/services/insights/cohort-match'
 import { gateForBrainCall, nextUtcMidnightIso } from '@/lib/services/cost-ceiling'
 import { newCorrelationId } from '@/lib/observability/logger'
 import { redactError } from '@/lib/observability/redact'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ weddingId: string }> },
 ) {
+  // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
+  // Demo cookie path bypasses inside requirePlan (mirrors usePlanTier).
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const { weddingId } = await params
   if (!weddingId || !/^[0-9a-f-]{36}$/i.test(weddingId)) {
     return NextResponse.json({ error: 'invalid_wedding_id' }, { status: 400 })
