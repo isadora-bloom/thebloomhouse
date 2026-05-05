@@ -174,7 +174,10 @@ export async function POST(request: NextRequest) {
         },
       },
       allow_promotion_codes: true,
-      success_url: `${origin}/settings/billing?success=true&session_id={CHECKOUT_SESSION_ID}`,
+      // Send the user to a dedicated server-rendered success page that
+      // re-fetches the session from Stripe before showing anything. This
+      // page must NEVER trust client-side state for plan_tier / amount.
+      success_url: `${origin}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${origin}/pricing?canceled=true`,
     })
 

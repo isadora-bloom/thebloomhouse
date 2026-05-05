@@ -12,9 +12,24 @@ import {
   Sparkles,
   ExternalLink,
   Calendar,
+  Download,
+  Receipt,
 } from 'lucide-react'
 import { PLANS, planForTier } from '@/lib/billing/plans'
 import type { PlanTier } from '@/lib/hooks/use-plan-tier'
+
+interface InvoiceRow {
+  id: string
+  number: string | null
+  status: string | null
+  amountDue: number
+  amountPaid: number
+  currency: string
+  created: string | null
+  paidAt: string | null
+  hostedInvoiceUrl: string | null
+  invoicePdfUrl: string | null
+}
 
 interface SubscriptionSummary {
   venueId: string
@@ -87,6 +102,8 @@ function BillingPageInner() {
   const [sub, setSub] = useState<SubscriptionSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [portalLoading, setPortalLoading] = useState(false)
+  const [invoices, setInvoices] = useState<InvoiceRow[]>([])
+  const [invoicesLoading, setInvoicesLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
@@ -104,7 +121,22 @@ function BillingPageInner() {
         if (!cancelled) setLoading(false)
       }
     }
+    async function loadInvoices() {
+      setInvoicesLoading(true)
+      try {
+        const res = await fetch('/api/stripe/invoices')
+        const data = await res.json()
+        if (res.ok && Array.isArray(data?.invoices)) {
+          if (!cancelled) setInvoices(data.invoices as InvoiceRow[])
+        }
+      } catch {
+        // Invoice history is supplementary — don't surface errors.
+      } finally {
+        if (!cancelled) setInvoicesLoading(false)
+      }
+    }
     load()
+    loadInvoices()
     return () => { cancelled = true }
   }, [])
 
@@ -275,6 +307,108 @@ function BillingPageInner() {
                 </Link>
               </div>
             </>
+          )}
+        </div>
+
+        {/* Invoice history */}
+        <div className="bg-white rounded-xl border border-sage-100 p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-heading text-lg font-bold text-sage-900 flex items-center gap-2">
+              <Receipt className="w-5 h-5 text-sage-500" />
+              Invoices
+            </h3>
+            {invoices.length > 0 && (
+              <span className="text-xs text-sage-500">
+                Last {invoices.length} {invoices.length === 1 ? 'invoice' : 'invoices'}
+              </span>
+            )}
+          </div>
+
+          {invoicesLoading ? (
+            <div className="flex items-center gap-2 text-sm text-sage-500 py-3">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Loading invoices...
+            </div>
+          ) : invoices.length === 0 ? (
+            <p className="text-sm text-sage-500 py-3">
+              No invoices yet. Once you start a paid plan, your receipts will
+              appear here.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs uppercase tracking-wider text-sage-500 border-b border-sage-100">
+                    <th className="py-2 pr-4 font-medium">Invoice</th>
+                    <th className="py-2 pr-4 font-medium">Date</th>
+                    <th className="py-2 pr-4 font-medium">Amount</th>
+                    <th className="py-2 pr-4 font-medium">Status</th>
+                    <th className="py-2 font-medium text-right">Receipt</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoices.map((inv) => {
+                    const statusTone =
+                      inv.status === 'paid'
+                        ? 'bg-green-100 text-green-700'
+                        : inv.status === 'open' || inv.status === 'uncollectible'
+                          ? 'bg-amber-100 text-amber-700'
+                          : inv.status === 'void' || inv.status === 'draft'
+                            ? 'bg-sage-100 text-sage-600'
+                            : 'bg-sage-100 text-sage-600'
+                    return (
+                      <tr key={inv.id} className="border-b border-sage-100 last:border-0">
+                        <td className="py-3 pr-4 font-mono text-xs text-sage-700">
+                          {inv.number ?? inv.id.slice(0, 12)}
+                        </td>
+                        <td className="py-3 pr-4 text-sage-700">
+                          {formatDate(inv.created)}
+                        </td>
+                        <td className="py-3 pr-4 text-sage-900 font-medium">
+                          {formatMoney(
+                            inv.status === 'paid' ? inv.amountPaid : inv.amountDue,
+                            inv.currency
+                          )}
+                        </td>
+                        <td className="py-3 pr-4">
+                          <span
+                            className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusTone}`}
+                          >
+                            {inv.status ?? '—'}
+                          </span>
+                        </td>
+                        <td className="py-3 text-right">
+                          <div className="inline-flex items-center gap-3">
+                            {inv.hostedInvoiceUrl && (
+                              <a
+                                href={inv.hostedInvoiceUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sage-700 hover:text-sage-900 inline-flex items-center gap-1 text-xs"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                View
+                              </a>
+                            )}
+                            {inv.invoicePdfUrl && (
+                              <a
+                                href={inv.invoicePdfUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sage-700 hover:text-sage-900 inline-flex items-center gap-1 text-xs"
+                              >
+                                <Download className="w-3 h-3" />
+                                PDF
+                              </a>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
