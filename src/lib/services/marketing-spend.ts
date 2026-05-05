@@ -21,6 +21,12 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 
+/**
+ * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
+ * See PROMPTS-CHANGELOG.md for version history.
+ */
+export const MARKETING_SPEND_PROMPT_VERSION = 'marketing-spend.prompt.v1.0'
+
 export interface SpendRow {
   source: string
   month: string // YYYY-MM-01 — first of the spend month
@@ -209,6 +215,7 @@ Extract any marketing spend references. Respond with JSON only.`,
       venueId,
       taskType: 'spend_extraction',
       maxTokens: 600,
+      promptVersion: MARKETING_SPEND_PROMPT_VERSION,
     })
     const candidates = Array.isArray(parsed.rows) ? parsed.rows : []
     const rows: SpendRow[] = []

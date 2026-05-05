@@ -19,6 +19,12 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 
+/**
+ * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
+ * See PROMPTS-CHANGELOG.md for version history.
+ */
+export const ANOMALY_DETECTION_PROMPT_VERSION = 'anomaly-detection.prompt.v1.0'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -722,6 +728,7 @@ in renovation, or pricing changed, those are more likely than generic funnel cau
       temperature: 0.3,
       venueId,
       taskType: 'anomaly_explanation',
+      promptVersion: ANOMALY_DETECTION_PROMPT_VERSION,
     })
 
     return result

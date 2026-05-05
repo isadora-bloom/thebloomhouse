@@ -15,6 +15,40 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 
 // ---------------------------------------------------------------------------
+// SerpAPI in-memory cache (24h TTL — OPS-21.4.5)
+//
+// SerpAPI charges per call. The cron fetches 8 terms × N venues daily;
+// retries, duplicate cron fires, and onboarding backfills for venues in
+// the same metro would re-fetch identical data multiple times. A 24h
+// process-local cache eliminates all duplicate calls within the same
+// serverless warm window. Key: `serp:${term}:${geo}` — geographic scope
+// is the discriminator, not venue, because trends data is metro-wide.
+// ---------------------------------------------------------------------------
+
+const serpCache = new Map<string, { data: unknown; expiresAt: number }>()
+const SERP_TTL_MS = 24 * 60 * 60 * 1000  // 24 hours
+
+function getCachedSerpResult(key: string): unknown | null {
+  const entry = serpCache.get(key)
+  if (!entry || Date.now() > entry.expiresAt) {
+    serpCache.delete(key)
+    return null
+  }
+  return entry.data
+}
+
+function setCachedSerpResult(key: string, data: unknown): void {
+  // Evict expired entries before inserting when cache is growing large
+  if (serpCache.size > 500) {
+    const now = Date.now()
+    for (const [k, v] of serpCache) {
+      if (now > v.expiresAt) serpCache.delete(k)
+    }
+  }
+  serpCache.set(key, { data, expiresAt: Date.now() + SERP_TTL_MS })
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -102,6 +136,22 @@ async function fetchSerpAPITrends(
   apiKey: string,
   dateRange: TrendsDateRange = 'today 3-m',
 ): Promise<{ week: string; interest: number }[]> {
+  // Check in-memory cache first (24h TTL). Key includes dateRange so
+  // '3-m' and '12-m' backfill calls are cached independently.
+  const cacheKey = `serp:${term}:${geo}:${dateRange}`
+  const cached = getCachedSerpResult(cacheKey)
+  if (cached !== null) {
+    console.log(JSON.stringify({
+      msg: 'serp cache hit',
+      term,
+      geo,
+      dateRange,
+      event_type: 'serp_cache_hit',
+      outcome: 'ok',
+    }))
+    return cached as { week: string; interest: number }[]
+  }
+
   const params = new URLSearchParams({
     engine: 'google_trends',
     q: term,
@@ -141,7 +191,7 @@ async function fetchSerpAPITrends(
   const timeline = body.interest_over_time?.timeline_data
   if (!timeline || timeline.length === 0) return []
 
-  return timeline.map((point) => {
+  const points = timeline.map((point) => {
     // The date string can be "Mar 2 – 8, 2026" — grab the first date portion
     const rawDate = point.date.split('–')[0].trim()
     // Parse to a stable ISO date for the week start
@@ -153,6 +203,11 @@ async function fetchSerpAPITrends(
     const interest = point.values?.[0]?.extracted_value ?? 0
     return { week, interest }
   })
+
+  // Store in cache for subsequent calls within 24h
+  setCachedSerpResult(cacheKey, points)
+
+  return points
 }
 
 // ---------------------------------------------------------------------------

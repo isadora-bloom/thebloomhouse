@@ -8,6 +8,12 @@
 
 import { callAIJson } from '@/lib/ai/client'
 
+/**
+ * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
+ * See PROMPTS-CHANGELOG.md for version history.
+ */
+export const EXTRACTION_PROMPT_VERSION = 'extraction.prompt.v1.0'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -384,6 +390,7 @@ Be precise. Only extract what is explicitly stated or clearly implied. Do not gu
     // with a fixed schema. Sonnet was overkill for this workload.
     // OPS-21.4.2.
     tier: 'haiku',
+    promptVersion: EXTRACTION_PROMPT_VERSION,
   })
 
   // Normalize the extracted date if present

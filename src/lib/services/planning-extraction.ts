@@ -18,6 +18,12 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 
+/**
+ * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
+ * See PROMPTS-CHANGELOG.md for version history.
+ */
+export const PLANNING_EXTRACTION_PROMPT_VERSION = 'planning-extraction.prompt.v1.0'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -276,6 +282,7 @@ export async function extractPlanningNotesAI(
       maxTokens: 1000,
       temperature: 0.1,
       taskType: 'planning_extraction',
+      promptVersion: PLANNING_EXTRACTION_PROMPT_VERSION,
     })
 
     if (!Array.isArray(aiNotes)) return []

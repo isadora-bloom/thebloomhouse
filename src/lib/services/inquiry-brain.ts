@@ -101,6 +101,30 @@ export interface DraftResult {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Module-level personality cache — keyed by venueId. Venue config and voice
+// settings change only when the coordinator updates their profile, so a
+// 5-minute TTL eliminates the 6 parallel Supabase queries that loadPersonalityData
+// fires on every inquiry/follow-up generation without meaningful staleness risk.
+const personalityCache = new Map<string, { data: PersonalityData; expiresAt: number }>()
+
+async function loadPersonalityDataCached(venueId: string): Promise<PersonalityData> {
+  const cached = personalityCache.get(venueId)
+  if (cached && Date.now() < cached.expiresAt) return cached.data
+
+  const data = await loadPersonalityData(venueId)
+
+  // Evict stale entries when the cache grows large (>200 venues) to prevent
+  // unbounded memory growth in long-running serverless instances.
+  if (personalityCache.size > 200) {
+    const now = Date.now()
+    for (const [k, v] of personalityCache) {
+      if (now > v.expiresAt) personalityCache.delete(k)
+    }
+  }
+  personalityCache.set(venueId, { data, expiresAt: Date.now() + 5 * 60 * 1000 })
+  return data
+}
+
 /**
  * Load the full personality data from the database for a venue.
  * Assembles venue_ai_config, venue info, USPs, seasonal content,
@@ -374,7 +398,7 @@ export async function generateInquiryDraft(
   } = options
 
   // Step 1: Load personality data and build Layer 1 + 2 prompt
-  const personalityData = await loadPersonalityData(venueId)
+  const personalityData = await loadPersonalityDataCached(venueId)
   const personalityPrompt = buildPersonalityPrompt(personalityData)
   const phraseStyle = (personalityData.config.phrase_style as string) ?? 'warm'
 
@@ -658,7 +682,7 @@ export async function generateFollowUp(
   const supabase = createServiceClient()
 
   // Load personality
-  const personalityData = await loadPersonalityData(venueId)
+  const personalityData = await loadPersonalityDataCached(venueId)
   const personalityPrompt = buildPersonalityPrompt(personalityData)
   const phraseStyle = (personalityData.config.phrase_style as string) ?? 'warm'
 

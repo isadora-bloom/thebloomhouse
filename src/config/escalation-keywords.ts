@@ -92,10 +92,11 @@ export function checkEscalation(text: string): { shouldEscalate: boolean; matche
 // Per-venue keyword cache. Coordinator edits land via the admin UI
 // (DELETE / INSERT), at which point invalidateVenueEscalationCache(venueId)
 // must fire so the next check sees the new rules immediately. Without
-// invalidation a 5-minute TTL keeps stale rules around — acceptable for
-// a coordinator-tweak surface but not great. Keep TTL conservative.
+// invalidation the TTL keeps stale rules around briefly — 2 minutes is
+// short enough that a newly-added forbidden topic takes effect quickly
+// while still cutting the per-email DB round-trip on high-volume inboxes.
 const VENUE_KEYWORD_CACHE = new Map<string, { keywords: string[]; expiresAt: number }>();
-const VENUE_KEYWORD_TTL_MS = 5 * 60 * 1000;
+const VENUE_KEYWORD_TTL_MS = 2 * 60 * 1000;
 
 export function invalidateVenueEscalationCache(venueId: string): void {
   VENUE_KEYWORD_CACHE.delete(venueId);

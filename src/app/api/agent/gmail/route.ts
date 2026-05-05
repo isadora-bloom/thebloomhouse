@@ -2,6 +2,8 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { NextRequest, NextResponse } from 'next/server'
 import { getOAuthUrl, handleOAuthCallback, getGmailClient, getConnections } from '@/lib/services/gmail'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
+import { createLogger, newCorrelationId } from '@/lib/observability/logger'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // GET — Two modes:
@@ -10,14 +12,19 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 // ---------------------------------------------------------------------------
 
 export async function GET(request: NextRequest) {
+  const start = Date.now()
+  const correlationId = newCorrelationId()
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  const log = createLogger({ venueId: auth.venueId, correlationId, actor: 'coordinator' })
+
   try {
     const { searchParams } = new URL(request.url)
     const action = searchParams.get('action')
+    log.info('gmail.connections.get', { event_type: 'gmail_connections_get', outcome: 'ok', data: { action } })
 
     // --- Generate OAuth URL ---
     if (action === 'auth-url') {
@@ -113,7 +120,7 @@ export async function GET(request: NextRequest) {
 
     const primary = connections.find((c) => c.is_primary)
 
-    return NextResponse.json({
+    const payload = {
       connected: connections.some((c) => c.status === 'active'),
       email: primary?.email_address ?? connections[0]?.email_address ?? undefined,
       lastSync: syncState?.last_sync_at ?? null,
@@ -132,9 +139,21 @@ export async function GET(request: NextRequest) {
         userName: c.user_id ? userMap[c.user_id] ?? null : null,
         createdAt: c.created_at,
       })),
+    }
+    log.info('gmail.connections.list.ok', {
+      event_type: 'gmail_connections_list',
+      outcome: 'ok',
+      latency_ms: Date.now() - start,
+      data: { connection_count: connections.length },
     })
+    return NextResponse.json(payload)
   } catch (err) {
-    console.error('[api/agent/gmail] GET error:', err)
+    log.error('gmail.connections.get.error', {
+      event_type: 'gmail_connections_get',
+      outcome: 'fail',
+      latency_ms: Date.now() - start,
+      data: { error: redactError(err) },
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -145,10 +164,15 @@ export async function GET(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
+  const start = Date.now()
+  const correlationId = newCorrelationId()
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  const log = createLogger({ venueId: auth.venueId, correlationId, actor: 'coordinator' })
+  log.info('gmail.oauth.callback.start', { event_type: 'gmail_oauth_callback', outcome: 'ok' })
 
   try {
     const body = await request.json()
@@ -206,6 +230,12 @@ export async function POST(request: NextRequest) {
       .eq('venue_id', auth.venueId)
       .maybeSingle()
 
+    log.info('gmail.oauth.callback.ok', {
+      event_type: 'gmail_oauth_callback',
+      outcome: 'ok',
+      latency_ms: Date.now() - start,
+      data: { connectionId },
+    })
     return NextResponse.json({
       success: true,
       connected: true,
@@ -214,7 +244,12 @@ export async function POST(request: NextRequest) {
       lastSync: syncState?.last_sync_at ?? null,
     })
   } catch (err) {
-    console.error('[api/agent/gmail] POST error:', err)
+    log.error('gmail.oauth.callback.error', {
+      event_type: 'gmail_oauth_callback',
+      outcome: 'fail',
+      latency_ms: Date.now() - start,
+      data: { error: redactError(err) },
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -226,15 +261,24 @@ export async function POST(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export async function DELETE(request: NextRequest) {
+  const start = Date.now()
+  const correlationId = newCorrelationId()
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  const log = createLogger({ venueId: auth.venueId, correlationId, actor: 'coordinator' })
+
   try {
     const { searchParams } = new URL(request.url)
     const connectionId = searchParams.get('connectionId')
     const supabase = createServiceClient()
+    log.info('gmail.connections.delete.start', {
+      event_type: 'gmail_connections_delete',
+      outcome: 'ok',
+      data: { connectionId: connectionId ?? 'all' },
+    })
 
     if (connectionId) {
       // Delete a specific connection
@@ -245,7 +289,12 @@ export async function DELETE(request: NextRequest) {
         .eq('venue_id', auth.venueId)
 
       if (connError) {
-        console.error('[api/agent/gmail] Failed to delete connection:', connError.message)
+        log.error('gmail.connections.delete.error', {
+          event_type: 'gmail_connections_delete',
+          outcome: 'fail',
+          latency_ms: Date.now() - start,
+          data: { error: redactError(connError), connectionId },
+        })
         return NextResponse.json({ error: 'Failed to disconnect Gmail account' }, { status: 500 })
       }
 
@@ -276,7 +325,12 @@ export async function DELETE(request: NextRequest) {
           .eq('venue_id', auth.venueId)
       }
 
-      console.log(`[api/agent/gmail] Disconnected connection ${connectionId} for venue ${auth.venueId}`)
+      log.info('gmail.connections.delete.ok', {
+        event_type: 'gmail_connections_delete',
+        outcome: 'ok',
+        latency_ms: Date.now() - start,
+        data: { connectionId },
+      })
       return NextResponse.json({ success: true })
     }
 
@@ -292,7 +346,12 @@ export async function DELETE(request: NextRequest) {
       .eq('venue_id', auth.venueId)
 
     if (tokenError) {
-      console.error('[api/agent/gmail] Failed to clear tokens:', tokenError.message)
+      log.error('gmail.connections.delete-all.error', {
+        event_type: 'gmail_connections_delete',
+        outcome: 'fail',
+        latency_ms: Date.now() - start,
+        data: { error: redactError(tokenError) },
+      })
       return NextResponse.json({ error: 'Failed to disconnect Gmail' }, { status: 500 })
     }
 
@@ -301,11 +360,20 @@ export async function DELETE(request: NextRequest) {
       .delete()
       .eq('venue_id', auth.venueId)
 
-    console.log(`[api/agent/gmail] Gmail fully disconnected for venue ${auth.venueId}`)
+    log.info('gmail.connections.delete-all.ok', {
+      event_type: 'gmail_connections_delete',
+      outcome: 'ok',
+      latency_ms: Date.now() - start,
+    })
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[api/agent/gmail] DELETE error:', err)
+    log.error('gmail.connections.delete.error', {
+      event_type: 'gmail_connections_delete',
+      outcome: 'fail',
+      latency_ms: Date.now() - start,
+      data: { error: redactError(err) },
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -316,14 +384,23 @@ export async function DELETE(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export async function PATCH(request: NextRequest) {
+  const start = Date.now()
+  const correlationId = newCorrelationId()
   const auth = await getPlatformAuth()
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  const log = createLogger({ venueId: auth.venueId, correlationId, actor: 'coordinator' })
+
   try {
     const body = await request.json()
     const { connectionId, isPrimary, label, syncEnabled } = body
+    log.info('gmail.connections.patch.start', {
+      event_type: 'gmail_connections_patch',
+      outcome: 'ok',
+      data: { connectionId },
+    })
 
     if (!connectionId) {
       return NextResponse.json({ error: 'Missing connectionId' }, { status: 400 })
@@ -354,12 +431,29 @@ export async function PATCH(request: NextRequest) {
       .eq('venue_id', auth.venueId)
 
     if (error) {
+      log.error('gmail.connections.patch.error', {
+        event_type: 'gmail_connections_patch',
+        outcome: 'fail',
+        latency_ms: Date.now() - start,
+        data: { error: redactError(error), connectionId },
+      })
       return NextResponse.json({ error: 'Failed to update connection' }, { status: 500 })
     }
 
+    log.info('gmail.connections.patch.ok', {
+      event_type: 'gmail_connections_patch',
+      outcome: 'ok',
+      latency_ms: Date.now() - start,
+      data: { connectionId },
+    })
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[api/agent/gmail] PATCH error:', err)
+    log.error('gmail.connections.patch.error', {
+      event_type: 'gmail_connections_patch',
+      outcome: 'fail',
+      latency_ms: Date.now() - start,
+      data: { error: redactError(err) },
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

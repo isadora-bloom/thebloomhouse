@@ -21,6 +21,22 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 - **MINOR** — wording / instruction refinement that holds the
   contract. Bumps still get a changelog row.
 
+## 2026-05-05
+
+| Module | Old | New | Reason |
+|--------|-----|-----|--------|
+| anomaly-detection | — | v1.0 | Initial versioning (T1-E / OPS-21.5.1) |
+| brain-dump | — | v1.0 | Initial versioning (T1-E / OPS-21.5.1) |
+| briefings (weekly) | — | v1.0 | Initial versioning (T1-E / OPS-21.5.1) |
+| briefings (monthly) | — | v1.0 | Initial versioning (T1-E / OPS-21.5.1) |
+| candidate-ai-adjudicator | — | v1.0 | Initial versioning (T1-E / OPS-21.5.1) |
+| daily-digest | — | v1.0 | Initial versioning (T1-E / OPS-21.5.1) |
+| data-detection | — | v1.0 | Initial versioning (T1-E / OPS-21.5.1) |
+| extraction | — | v1.0 | Initial versioning (T1-E / OPS-21.5.1) |
+| planning-extraction | — | v1.0 | Initial versioning (T1-E / OPS-21.5.1) |
+| marketing-spend | — | v1.0 | Initial versioning (T1-E / OPS-21.5.1) |
+| bar-recipe-extract | — | v1.0 | Initial versioning; image path rewired through callAIVision (T1-E / OPS-21.5.1) |
+
 ## Per-brain history
 
 ### inquiry-brain (`inquiry-brain.prompt.v1.1`)
@@ -109,6 +125,52 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
   (outbound emails contain couple PII + sometimes family context).
   Sonnet-tier for the nuanced extraction; Haiku is too brittle on
   free-text style identification at this batch size.
+
+### anomaly-detection (`anomaly-detection.prompt.v1.0`)
+- **v1.0** (2026-05-05) — Initial versioning baseline. AI hypothesis generation
+  for metric anomalies with Internal Context bundle (absences, operational state,
+  pricing changes, marketing channels). Haiku tier.
+
+### brain-dump (`brain-dump.prompt.v1.0`)
+- **v1.0** (2026-05-05) — Initial versioning baseline. 7-intent classifier
+  (client_note / availability / analytics / staff_observation / operational_note /
+  knowledge_base_import / ambiguous). Haiku tier, tier-1 content.
+
+### briefings (`briefings.prompt.v1.0` / `briefings.monthly.v1.0`)
+- **v1.0** (2026-05-05) — Initial versioning baseline. Weekly briefing uses
+  `BRIEFING_PROMPT_VERSION`; monthly uses `MONTHLY_BRIEFING_PROMPT_VERSION`.
+  ANTI-19.9-A numbers-discipline guard in both prompts.
+
+### candidate-ai-adjudicator (`candidate-ai-adjudicator.prompt.v1.0`)
+- **v1.0** (2026-05-05) — Initial versioning baseline. Tier 2 ambiguous-match
+  adjudicator: bounded JSON schema (match_wedding_id + confidence + reasoning).
+  Haiku tier per OPS-21.4.2.
+
+### daily-digest (`daily-digest.prompt.v1.0`)
+- **v1.0** (2026-05-05) — Initial versioning baseline. 2-3 sentence morning
+  summary for coordinator. Sonnet tier.
+
+### data-detection (`data-detection.prompt.v1.0`)
+- **v1.0** (2026-05-05) — Initial versioning baseline. Covers both detectDataType
+  (24-class classification) and mapColumns (source→target dict). Haiku tier.
+
+### extraction (`extraction.prompt.v1.0`)
+- **v1.0** (2026-05-05) — Initial versioning baseline. Structured signal extraction
+  from inquiry email bodies (30-field schema). Haiku tier.
+
+### planning-extraction (`planning-extraction.prompt.v1.0`)
+- **v1.0** (2026-05-05) — Initial versioning baseline. Wedding planning decision
+  extraction from Sage chat messages (8-category schema). Sonnet tier.
+
+### marketing-spend (`marketing-spend.prompt.v1.0`)
+- **v1.0** (2026-05-05) — Initial versioning baseline. Free-text → structured
+  spend rows (source / month / amount). Sonnet tier.
+
+### bar-recipe-extract (`bar-recipe-extract.prompt.v1.0`)
+- **v1.0** (2026-05-05) — Initial versioning baseline. Covers URL extraction
+  (via callAIJson) and upload extraction. Image uploads rewired through callAIVision
+  so circuit breaker and cost logging apply. PDF path retains direct SDK call
+  (document block) with manual api_costs insert + promptVersion. Sonnet tier.
 
 ## Adding a new brain prompt
 

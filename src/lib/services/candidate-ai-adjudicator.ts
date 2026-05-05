@@ -30,6 +30,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson } from '@/lib/ai/client'
 
+/**
+ * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
+ * See PROMPTS-CHANGELOG.md for version history.
+ */
+export const CANDIDATE_ADJUDICATOR_PROMPT_VERSION = 'candidate-ai-adjudicator.prompt.v1.0'
+
 export interface CandidateContextForAI {
   id: string
   source_platform: string
@@ -165,6 +171,7 @@ export async function adjudicateAmbiguousMatch(args: {
     venueId,
     taskType: 'tier2_adjudicator',
     tier: 'haiku',
+    promptVersion: CANDIDATE_ADJUDICATOR_PROMPT_VERSION,
   })
   return {
     match_wedding_id: response.match_wedding_id,

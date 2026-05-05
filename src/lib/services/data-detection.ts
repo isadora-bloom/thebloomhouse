@@ -10,6 +10,12 @@
 
 import { callAIJson } from '@/lib/ai/client'
 
+/**
+ * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
+ * See PROMPTS-CHANGELOG.md for version history.
+ */
+export const DATA_DETECTION_PROMPT_VERSION = 'data-detection.prompt.v1.0'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -349,6 +355,7 @@ Social posts always have platform names and engagement metrics.`,
     // Haiku tier per OPS-21.4.2: 24-class classification with bounded
     // schema (type + confidence + description). ARCH-19.8-B.
     tier: 'haiku',
+    promptVersion: DATA_DETECTION_PROMPT_VERSION,
   })
 
   return {
@@ -490,6 +497,7 @@ Rules:
     // Haiku tier per OPS-21.4.2: bounded structured-output extraction
     // (source name → target name dict). ARCH-19.8-B.
     tier: 'haiku',
+    promptVersion: DATA_DETECTION_PROMPT_VERSION,
   })
 
   return mapping

@@ -13,6 +13,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
+import { withAiCache } from '@/lib/ai/cache'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { detectTrendDeviations } from './trends'
 import { getWeatherForDateRange } from './weather'
@@ -20,6 +21,15 @@ import { getLatestIndicators, calculateDemandScore } from './economics'
 import { getActiveAlerts } from './anomaly-detection'
 import { sendEmail as sendGmail } from './gmail'
 import { sendEmail as sendTransactionalEmail } from './email'
+
+/**
+ * Prompt revision identifiers. Per Playbook OPS-21.5.1 / T1-E.
+ * Bump when the corresponding system prompt changes so the in-memory
+ * cache (withAiCache) invalidates on prompt updates.
+ * See PROMPTS-CHANGELOG.md for version history.
+ */
+export const BRIEFING_PROMPT_VERSION = 'briefings.prompt.v1.0'
+const MONTHLY_BRIEFING_PROMPT_VERSION = 'briefings.monthly.v1.0'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -403,16 +413,8 @@ export async function generateWeeklyBriefing(
         .join('\n')
     : 'No active anomaly alerts.'
 
-  // Call AI to generate the briefing narrative
-  const aiResult = await callAIJson<{
-    summary: string
-    trend_highlights: string[]
-    weather_outlook: string
-    anomaly_summary: string[]
-    recommendations: string[]
-  }>({
-    systemPrompt: WEEKLY_SYSTEM_PROMPT,
-    userPrompt: `Weekly data for the venue (last 7 days):
+  // Build the user prompt outside the cache wrapper so the key is stable.
+  const weeklyUserPrompt = `Weekly data for the venue (last 7 days):
 
 METRICS (current week):
 - New inquiries: ${metrics.new_inquiries}
@@ -451,12 +453,30 @@ PLATFORM SIGNAL HEALTH (last 7 days):
 - High-funnel non-converting: ${phaseB.highFunnelNonConverting} candidates engaged deeply but didn't inquire
 - Conflicts to review: ${phaseB.openConflicts}
 
-Generate the weekly briefing.`,
-    maxTokens: 1500,
-    temperature: 0.4,
-    venueId,
-    taskType: 'weekly_briefing',
-  })
+Generate the weekly briefing.`
+
+  // Call AI to generate the briefing narrative.
+  // withAiCache de-dupes concurrent cron fires + coordinator "Refresh"
+  // clicks within the 5-min default TTL. Cache key is venue + date
+  // window start + prompt version (so prompt bumps invalidate the cache).
+  const aiResult = await withAiCache(
+    `briefing:${venueId}:${fromDate}:${BRIEFING_PROMPT_VERSION}`,
+    () => callAIJson<{
+      summary: string
+      trend_highlights: string[]
+      weather_outlook: string
+      anomaly_summary: string[]
+      recommendations: string[]
+    }>({
+      systemPrompt: WEEKLY_SYSTEM_PROMPT,
+      userPrompt: weeklyUserPrompt,
+      maxTokens: 1500,
+      temperature: 0.4,
+      venueId,
+      taskType: 'weekly_briefing',
+      promptVersion: BRIEFING_PROMPT_VERSION,
+    }),
+  )
 
   // Connective II / fix #2: pull structured anomaly details from
   // the live alerts so the email + dashboard render the AI's
@@ -592,17 +612,8 @@ export async function generateMonthlyBriefing(
         .join('\n')
     : 'No active anomaly alerts.'
 
-  // Call AI to generate the monthly briefing
-  const aiResult = await callAIJson<{
-    summary: string
-    trend_highlights: string[]
-    weather_outlook: string
-    anomaly_summary: string[]
-    recommendations: string[]
-    strategic_recommendations: string[]
-  }>({
-    systemPrompt: MONTHLY_SYSTEM_PROMPT,
-    userPrompt: `Monthly data for the venue (last 30 days):
+  // Build the user prompt outside the cache wrapper.
+  const monthlyUserPrompt = `Monthly data for the venue (last 30 days):
 
 CURRENT MONTH METRICS:
 - New inquiries: ${currentMetrics.new_inquiries}
@@ -634,12 +645,29 @@ ${weatherSummary}
 ANOMALY ALERTS:
 ${alertSummary}
 
-Generate the monthly briefing with strategic recommendations.`,
-    maxTokens: 2000,
-    temperature: 0.4,
-    venueId,
-    taskType: 'monthly_briefing',
-  })
+Generate the monthly briefing with strategic recommendations.`
+
+  // Call AI to generate the monthly briefing.
+  // withAiCache absorbs double-fires within the 5-min default TTL.
+  const aiResult = await withAiCache(
+    `briefing:monthly:${venueId}:${currentFrom}:${MONTHLY_BRIEFING_PROMPT_VERSION}`,
+    () => callAIJson<{
+      summary: string
+      trend_highlights: string[]
+      weather_outlook: string
+      anomaly_summary: string[]
+      recommendations: string[]
+      strategic_recommendations: string[]
+    }>({
+      systemPrompt: MONTHLY_SYSTEM_PROMPT,
+      userPrompt: monthlyUserPrompt,
+      maxTokens: 2000,
+      temperature: 0.4,
+      venueId,
+      taskType: 'monthly_briefing',
+      promptVersion: MONTHLY_BRIEFING_PROMPT_VERSION,
+    }),
+  )
 
   // Assemble the full content object
   const content: MonthlyBriefingContent = {

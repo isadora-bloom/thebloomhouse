@@ -31,6 +31,12 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+
+/**
+ * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
+ * See PROMPTS-CHANGELOG.md for version history.
+ */
+export const BRAIN_DUMP_PROMPT_VERSION = 'brain-dump.prompt.v1.0'
 import { createNotification } from '@/lib/services/admin-notifications'
 import {
   patternSignature,
@@ -180,6 +186,7 @@ Classify and extract according to the schema. Respond with JSON only.`
     maxTokens: 800,
     contentTier: 1,
     tier: 'haiku',
+    promptVersion: BRAIN_DUMP_PROMPT_VERSION,
   })
 
   return parsed

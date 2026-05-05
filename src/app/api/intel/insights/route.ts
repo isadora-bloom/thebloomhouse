@@ -3,6 +3,8 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { resolveScopeVenueIds } from '@/lib/api/resolve-platform-scope'
 import { createServiceClient } from '@/lib/supabase/service'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { createLogger, newCorrelationId } from '@/lib/observability/logger'
+import { redactError } from '@/lib/observability/redact'
 
 // ---------------------------------------------------------------------------
 // GET — Fetch intelligence insights for the current venue
@@ -10,6 +12,9 @@ import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 // ---------------------------------------------------------------------------
 
 export async function GET(req: NextRequest) {
+  const start = Date.now()
+  const correlationId = newCorrelationId()
+
   const plan = await requirePlan(req, 'intelligence')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
@@ -17,6 +22,9 @@ export async function GET(req: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  const log = createLogger({ venueId: auth.venueId, correlationId, actor: 'coordinator' })
+  log.info('intel.insights.fetch.start', { event_type: 'intel_insights_fetch', outcome: 'ok' })
 
   const sp = req.nextUrl.searchParams
   const limit = Math.min(Number(sp.get('limit') || '25'), 100)
@@ -66,7 +74,12 @@ export async function GET(req: NextRequest) {
   const { data, count, error } = await query
 
   if (error) {
-    console.error('Insights fetch error:', error)
+    log.error('intel.insights.fetch.error', {
+      event_type: 'intel_insights_fetch',
+      outcome: 'fail',
+      latency_ms: Date.now() - start,
+      data: { error: redactError(error) },
+    })
     return NextResponse.json({ error: 'Failed to fetch insights' }, { status: 500 })
   }
 
@@ -100,6 +113,13 @@ export async function GET(req: NextRequest) {
       .eq('status', 'dismissed')
       .gte('dismissed_at', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()),
   ])
+
+  log.info('intel.insights.fetch.ok', {
+    event_type: 'intel_insights_fetch',
+    outcome: 'ok',
+    latency_ms: Date.now() - start,
+    data: { total: count ?? 0, returned: sorted.length },
+  })
 
   return NextResponse.json({
     insights: sorted,

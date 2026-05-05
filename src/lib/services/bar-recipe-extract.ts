@@ -20,9 +20,21 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk'
-import { callAIJson } from '@/lib/ai/client'
+import { callAIJson, callAIVision, CLAUDE_MODEL } from '@/lib/ai/client'
+import {
+  recordCall,
+  shouldSkip,
+  isFallbackForced,
+  isFallbackDisabled,
+} from '@/lib/ai/circuit-breaker'
 import { createServiceClient } from '@/lib/supabase/service'
 import { calculateCost } from '@/lib/ai/cost-tracker'
+
+/**
+ * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
+ * See PROMPTS-CHANGELOG.md for version history.
+ */
+export const BAR_RECIPE_PROMPT_VERSION = 'bar-recipe-extract.prompt.v1.0'
 
 // ---------------------------------------------------------------------------
 // Types — match rixey-portal's shape so the existing Bar Planner UI
@@ -92,19 +104,11 @@ Rules:
 - Do not invent ingredients that aren't there.
 - Output JSON only. No markdown fences, no commentary.`
 
-const VISION_MODEL = 'claude-sonnet-4-20250514'
 const VISION_TIMEOUT_MS = 45_000
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function getAnthropic(): Anthropic {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY is not set')
-  }
-  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-}
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -172,26 +176,30 @@ async function fetchReadableText(url: string): Promise<string> {
 }
 
 /**
- * Fire-and-forget API cost log. Mirrors the pattern used inside callAI* so
- * vision-or-document calls land in the same `api_costs` table.
+ * Fire-and-forget API cost log for the PDF document path, which cannot go
+ * through callAIVision (image-only). Mirrors the logUsage helper in client.ts
+ * so PDF calls land in the same `api_costs` table with a versioned row per
+ * T1-E / OPS-21.5.1.
  */
-async function logVisionUsage(
+async function logPdfUsage(
   venueId: string,
   inputTokens: number,
   outputTokens: number,
-  taskType: string
+  taskType: string,
+  promptVersion?: string,
 ) {
   try {
-    const cost = calculateCost(VISION_MODEL, inputTokens, outputTokens)
+    const cost = calculateCost(CLAUDE_MODEL, inputTokens, outputTokens)
     const supabase = createServiceClient()
     await supabase.from('api_costs').insert({
       venue_id: venueId,
       service: 'anthropic',
-      model: VISION_MODEL,
+      model: CLAUDE_MODEL,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       cost,
       context: taskType,
+      prompt_version: promptVersion ?? null,
     })
   } catch {
     // never block the caller
@@ -332,6 +340,7 @@ export async function extractRecipeFromUrl(
     temperature: 0.1,
     venueId,
     taskType: 'bar_recipe_extract_url',
+    promptVersion: BAR_RECIPE_PROMPT_VERSION,
   })
 
   // Derive a fallback name from the URL slug if the model omitted one.
@@ -374,52 +383,89 @@ export async function extractRecipeFromBuffer(
   }
 
   const base64 = buffer.toString('base64')
-  const anthropic = getAnthropic()
 
-  // Anthropic SDK supports `document` blocks for PDFs and `image` blocks for
-  // images. callAIVision is image-only, so we call the SDK directly here and
-  // log usage to api_costs ourselves.
-  const userContent = isPdf
-    ? [
-        {
-          type: 'document' as const,
-          source: { type: 'base64' as const, media_type: 'application/pdf' as const, data: base64 },
-        },
-        { type: 'text' as const, text: 'Extract the cocktail recipe from this document. Return JSON only.' },
-      ]
-    : [
-        {
-          type: 'image' as const,
-          source: { type: 'base64' as const, media_type: mimeType as SupportedImageType, data: base64 },
-        },
-        { type: 'text' as const, text: 'Extract the cocktail recipe from this image. Return JSON only.' },
-      ]
-
-  const response = await withTimeout(
-    anthropic.messages.create({
-      model: VISION_MODEL,
-      max_tokens: 1200,
-      system: EXTRACTION_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userContent }],
-    }),
-    VISION_TIMEOUT_MS,
-    'Anthropic vision call'
-  )
-
-  const text = response.content[0]?.type === 'text' ? response.content[0].text : ''
-  logVisionUsage(
-    venueId,
-    response.usage.input_tokens,
-    response.usage.output_tokens,
-    'bar_recipe_extract_upload'
-  )
-
-  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
   let parsed: unknown
-  try {
-    parsed = JSON.parse(cleaned)
-  } catch {
-    throw new RecipeValidationError('AI response was not valid JSON.')
+
+  if (isImage) {
+    // Images: route through callAIVision so the circuit breaker, OpenAI
+    // fallback, and cost logging all apply. promptVersion threads through
+    // for audit trail (T1-E / OPS-21.5.1).
+    const result = await callAIVision({
+      systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+      userPrompt: 'Extract the cocktail recipe from this image. Return JSON only.',
+      imageBase64: base64,
+      mediaType: mimeType as SupportedImageType,
+      maxTokens: 1200,
+      venueId,
+      taskType: 'bar_recipe_extract_upload',
+      promptVersion: BAR_RECIPE_PROMPT_VERSION,
+    })
+    const cleaned = result.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+    try {
+      parsed = JSON.parse(cleaned)
+    } catch {
+      throw new RecipeValidationError('AI response was not valid JSON.')
+    }
+  } else {
+    // PDFs: Anthropic SDK `document` block — callAIVision is image-only so
+    // we call the SDK directly here. We manually check the circuit breaker
+    // first and log to api_costs via logPdfUsage so this path is observable
+    // and protected alongside every other AI call (T1-F / T1-E).
+    const skipClaude = isFallbackForced() || shouldSkip('anthropic')
+    if (skipClaude) {
+      if (isFallbackDisabled()) {
+        throw new Error('AI config conflict: AI_FORCE_FALLBACK and AI_DISABLE_FALLBACK both set.')
+      }
+      throw new Error(
+        'AI unavailable: Anthropic circuit breaker is open. PDF extraction requires Anthropic (no document-block fallback).'
+      )
+    }
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+      throw new Error('ANTHROPIC_API_KEY is not set')
+    }
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+    const userContent = [
+      {
+        type: 'document' as const,
+        source: { type: 'base64' as const, media_type: 'application/pdf' as const, data: base64 },
+      },
+      { type: 'text' as const, text: 'Extract the cocktail recipe from this document. Return JSON only.' },
+    ]
+
+    let response: Awaited<ReturnType<typeof anthropic.messages.create>>
+    try {
+      response = await withTimeout(
+        anthropic.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 1200,
+          system: EXTRACTION_SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userContent }],
+        }),
+        VISION_TIMEOUT_MS,
+        'Anthropic PDF document call'
+      )
+      recordCall('anthropic', true)
+    } catch (err) {
+      recordCall('anthropic', false)
+      throw err
+    }
+
+    const text = response.content[0]?.type === 'text' ? response.content[0].text : ''
+    logPdfUsage(
+      venueId,
+      response.usage.input_tokens,
+      response.usage.output_tokens,
+      'bar_recipe_extract_upload_pdf',
+      BAR_RECIPE_PROMPT_VERSION,
+    )
+
+    const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+    try {
+      parsed = JSON.parse(cleaned)
+    } catch {
+      throw new RecipeValidationError('AI response was not valid JSON.')
+    }
   }
 
   const normalised = normaliseExtraction(parsed, 'Uploaded Recipe')

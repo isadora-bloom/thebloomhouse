@@ -15,12 +15,20 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import { callAI } from '@/lib/ai/client'
+import { withAiCache } from '@/lib/ai/cache'
 import { sendEmail as sendGmail } from '@/lib/services/gmail'
 import { sendEmail as sendTransactionalEmail } from '@/lib/services/email'
 import {
   enabledCategories,
   type DigestPreferences,
 } from '@/lib/services/digest-preferences'
+
+/**
+ * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
+ * Bump when the system prompt changes so withAiCache invalidates on prompt updates.
+ * See PROMPTS-CHANGELOG.md for version history.
+ */
+export const DAILY_DIGEST_PROMPT_VERSION = 'daily-digest.prompt.v1.0'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -407,12 +415,16 @@ export async function generateDigest(
   }
 
   // ---- AI summary ----
-  const summaryResult = await callAI({
-    systemPrompt:
-      'You are a concise morning briefing assistant for a wedding venue coordinator. ' +
-      'Write a 2-3 sentence summary of their day. Be warm, direct, and actionable. ' +
-      'If there are items needing attention, lead with those. No markdown.',
-    userPrompt: `Venue: ${venueName}
+  // withAiCache de-dupes concurrent per-user digest calls that hit the
+  // same venue on the same day (two coordinators clicking Send at once,
+  // legacy + per-user path both firing). Cache key is venue + date +
+  // prompt version; 5-min default TTL from withAiCache covers the window.
+  // Only the LLM call is cached; all DB queries above run fresh every time.
+  const digestSystemPrompt =
+    'You are a concise morning briefing assistant for a wedding venue coordinator. ' +
+    'Write a 2-3 sentence summary of their day. Be warm, direct, and actionable. ' +
+    'If there are items needing attention, lead with those. No markdown.'
+  const digestUserPrompt = `Venue: ${venueName}
 Coordinator: ${coordinatorName}
 Date: ${todayStr}
 
@@ -424,12 +436,20 @@ Alerts: ${alerts.length > 0 ? alerts.join('; ') : 'None'}
 New engagement events: ${engagementResult.count ?? 0}
 ${sections.briefing_highlight ? `Weekly briefing insight: ${sections.briefing_highlight}` : ''}
 
-Write the morning summary.`,
-    maxTokens: 200,
-    temperature: 0.4,
-    venueId,
-    taskType: 'daily_digest',
-  })
+Write the morning summary.`
+
+  const summaryResult = await withAiCache(
+    `digest:${venueId}:${todayStr}:${DAILY_DIGEST_PROMPT_VERSION}`,
+    () => callAI({
+      systemPrompt: digestSystemPrompt,
+      userPrompt: digestUserPrompt,
+      maxTokens: 200,
+      temperature: 0.4,
+      venueId,
+      taskType: 'daily_digest',
+      promptVersion: DAILY_DIGEST_PROMPT_VERSION,
+    }),
+  )
 
   return {
     venue_name: venueName,
