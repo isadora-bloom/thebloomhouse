@@ -8,6 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:desktop": "playwright test --project=chromium-desktop",
     "test:e2e:mobile": "playwright test --project=chromium-mobile",
@@ -51,10 +53,12 @@
     "@playwright/test": "^1.59.1",
     "@tailwindcss/postcss": "^4.2.2",
     "@typescript-eslint/parser": "^8.59.2",
+    "@vitest/coverage-v8": "^2.2.0",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.1",
     "postcss": "^8.5.8",
     "tailwindcss": "^4.2.2",
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "vitest": "^2.2.0"
   }
 }
