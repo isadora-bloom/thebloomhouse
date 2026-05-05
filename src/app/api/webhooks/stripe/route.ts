@@ -5,6 +5,7 @@ import { planTierForPriceId } from '@/lib/billing/plans'
 import { getStripe, isStripeConfigured } from '@/lib/stripe'
 import { redact, redactError } from '@/lib/observability/redact'
 import { recordCounter } from '@/lib/observability/metrics'
+import { sendEmail } from '@/lib/services/email'
 import type Stripe from 'stripe'
 
 // ---------------------------------------------------------------------------
@@ -154,6 +155,49 @@ async function writeAdminNotification(
   } catch (err) {
     // Notification writes are best-effort — never block a webhook ack.
     console.warn('[webhook/stripe] writeAdminNotification failed:', redactError(err))
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Email helper — sends a payment-issue alert to the venue's primary email.
+//
+// Only fires for high-priority notification types (payment_failed and
+// subscription_past_due). Low-priority events (subscription_active,
+// plan changes, etc.) only write to admin_notifications — no email.
+//
+// The recipient is venues.owner_email, which is set during onboarding and
+// is the primary coordinator / owner address for venue-wide notifications.
+// If owner_email is NULL on the row (legacy venues), the send is skipped
+// and a warning is logged — we don't fall back to venue_config here because
+// we'd need an extra DB round-trip, and the in-app notification still fires.
+//
+// Email is best-effort: a failure here never blocks the webhook ack.
+// ---------------------------------------------------------------------------
+
+const EMAIL_ALERT_TYPES = new Set(['payment_failed', 'subscription_past_due'])
+
+async function sendPaymentAlertEmail(opts: {
+  venueId: string
+  ownerEmail: string | null | undefined
+  subject: string
+  body: string
+}): Promise<void> {
+  const { venueId, ownerEmail, subject, body } = opts
+  if (!ownerEmail) {
+    console.warn(`[webhook/stripe] sendPaymentAlertEmail: no owner_email for venue ${venueId} — skipping email`)
+    return
+  }
+  try {
+    const html = `<p>${body.replace(/\n/g, '<br>')}</p>`
+    const result = await sendEmail({ to: ownerEmail, subject, html, text: body })
+    if (!result.ok) {
+      console.warn(`[webhook/stripe] sendPaymentAlertEmail failed for venue ${venueId}:`, result.error)
+    } else {
+      console.log(`[webhook/stripe] Payment alert email sent to ${ownerEmail} for venue ${venueId} (id=${result.id})`)
+    }
+  } catch (err) {
+    // Never block the webhook ack on email failures.
+    console.warn(`[webhook/stripe] sendPaymentAlertEmail threw for venue ${venueId}:`, redactError(err))
   }
 }
 
@@ -356,17 +400,50 @@ export async function POST(request: NextRequest) {
           .maybeSingle()
         const previousTier = (existing?.plan_tier as string | undefined) ?? null
 
+        // Build the venues update including subscription_status (migration 211).
+        // past_due_since is stamped only on the FIRST past_due transition so
+        // the 7-day grace window is stable across retries. It is cleared when
+        // the subscription returns to active or trialing.
+        const now = new Date().toISOString()
+        const subscriptionStatus = subscription.status
+        const isNowPastDue = subscriptionStatus === 'past_due'
+        const isNowActive = subscriptionStatus === 'active' || subscriptionStatus === 'trialing'
+
+        // Read existing past_due_since to decide whether to stamp it.
+        const { data: existingVenue } = await supabase
+          .from('venues')
+          .select('past_due_since, subscription_status')
+          .eq('id', venueId)
+          .maybeSingle()
+
+        const wasPastDue = existingVenue?.subscription_status === 'past_due'
+        // Stamp past_due_since only on the FIRST entry into past_due.
+        // Clear it when returning to active/trialing.
+        let pastDueSinceValue: string | null | undefined
+        if (isNowPastDue && !wasPastDue) {
+          pastDueSinceValue = now  // first transition into past_due
+        } else if (isNowActive && wasPastDue) {
+          pastDueSinceValue = null  // returning to good standing — clear the timestamp
+        }
+        // Otherwise leave past_due_since unchanged (undefined = don't overwrite)
+
+        const venueUpdate: Record<string, unknown> = {
+          plan_tier: planTier,
+          stripe_subscription_id: subscription.id,
+          stripe_customer_id:
+            typeof subscription.customer === 'string'
+              ? subscription.customer
+              : subscription.customer.id,
+          subscription_status: subscriptionStatus,
+          updated_at: now,
+        }
+        if (pastDueSinceValue !== undefined) {
+          venueUpdate.past_due_since = pastDueSinceValue
+        }
+
         const { error } = await supabase
           .from('venues')
-          .update({
-            plan_tier: planTier,
-            stripe_subscription_id: subscription.id,
-            stripe_customer_id:
-              typeof subscription.customer === 'string'
-                ? subscription.customer
-                : subscription.customer.id,
-            updated_at: new Date().toISOString(),
-          })
+          .update(venueUpdate)
           .eq('id', venueId)
 
         if (error) {
@@ -411,6 +488,28 @@ export async function POST(request: NextRequest) {
           })
         }
 
+        // Send an email when the subscription first enters past_due so the
+        // coordinator knows to update their payment method before the grace
+        // period expires (7 days — enforced in require-plan.ts).
+        if (isNowPastDue && !wasPastDue) {
+          const { data: venueRow } = await supabase
+            .from('venues')
+            .select('owner_email')
+            .eq('id', venueId)
+            .maybeSingle()
+          const pastDueBody =
+            `Your Bloom subscription payment is overdue (subscription ${subscription.id}).\n\n` +
+            `You have a 7-day grace period before access to paid features is restricted. ` +
+            `Please update your payment method as soon as possible.\n\n` +
+            `Manage billing at: https://app.thebloomhouse.ai/settings/billing`
+          await sendPaymentAlertEmail({
+            venueId,
+            ownerEmail: venueRow?.owner_email,
+            subject: 'Action required: payment issue with your Bloom subscription',
+            body: pastDueBody,
+          })
+        }
+
         break
       }
 
@@ -423,7 +522,8 @@ export async function POST(request: NextRequest) {
           break
         }
 
-        // Downgrade to starter tier on cancellation.
+        // Downgrade to starter tier on cancellation. Also clear subscription_status
+        // and past_due_since (migration 211) so require-plan.ts sees a clean state.
         // NOTE: 'starter' is the free/baseline tier in our schema. The
         // venues.plan_tier CHECK constraint only allows
         // ('starter', 'intelligence', 'enterprise') — there is no 'free' value.
@@ -432,6 +532,8 @@ export async function POST(request: NextRequest) {
           .update({
             plan_tier: 'starter',
             stripe_subscription_id: null,
+            subscription_status: 'canceled',
+            past_due_since: null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', venueId)
@@ -476,27 +578,46 @@ export async function POST(request: NextRequest) {
 
         // Resolve venue via stripe_customer_id. The invoice doesn't carry
         // venue metadata directly so we need this lookup.
+        // Also fetch owner_email so we can send the payment-failure alert email.
         if (customerId) {
           const { data: venue } = await supabase
             .from('venues')
-            .select('id, name')
+            .select('id, name, owner_email')
             .eq('stripe_customer_id', customerId)
             .maybeSingle()
 
           if (venue?.id) {
             const amount = (invoice.amount_due ?? 0) / 100
             const currency = (invoice.currency ?? 'usd').toUpperCase()
+            const notifBody =
+              `Stripe could not collect ${currency} ${amount.toFixed(2)} (invoice ${invoice.id}). ` +
+              `Attempt ${invoice.attempt_count ?? 1}. Update your payment method at /settings/billing ` +
+              `to keep your subscription active.`
             await writeAdminNotification(supabase, {
               venueId: venue.id as string,
               type: 'payment_failed',
               title: 'Payment failed — action required',
-              body:
-                `Stripe could not collect ${currency} ${amount.toFixed(2)} (invoice ${invoice.id}). ` +
-                `Attempt ${invoice.attempt_count ?? 1}. Update your payment method at /settings/billing ` +
-                `to keep your subscription active.`,
+              body: notifBody,
               priority: 'high',
               dedupKey: invoice.id ?? `${customerId}:payment_failed`,
             })
+
+            // Send email alert for high-priority payment_failed events (Fix 6 / Wave B).
+            // The EMAIL_ALERT_TYPES guard keeps email sends narrow —
+            // only payment_failed and subscription_past_due trigger outbound mail.
+            if (EMAIL_ALERT_TYPES.has('payment_failed')) {
+              const emailBody =
+                `A payment of ${currency} ${amount.toFixed(2)} failed for your Bloom subscription ` +
+                `(invoice ${invoice.id}, attempt ${invoice.attempt_count ?? 1}).\n\n` +
+                `Please update your payment method to avoid service interruption.\n\n` +
+                `Manage billing at: https://app.thebloomhouse.ai/settings/billing`
+              await sendPaymentAlertEmail({
+                venueId: venue.id as string,
+                ownerEmail: venue.owner_email,
+                subject: 'Action required: payment issue with your Bloom subscription',
+                body: emailBody,
+              })
+            }
           } else {
             console.warn(
               `[webhook/stripe] payment_failed: no venue found for customer ${customerId}`
