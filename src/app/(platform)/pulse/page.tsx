@@ -10,6 +10,10 @@
  *
  * MVP ships as a flat priority-sorted feed. Snooze + escalate-to-
  * brain-dump are follow-up features that build on the same source.
+ *
+ * Phase 6 FIX 3: realtime subscription on admin_notifications so new
+ * notifications (auto-send cap, Gmail token errors, etc.) appear without
+ * a manual refresh.
  */
 
 import { useEffect, useState, useCallback } from 'react'
@@ -19,6 +23,7 @@ import {
   Clock, X, PauseCircle, PlayCircle,
 } from 'lucide-react'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
+import { createClient } from '@/lib/supabase/client'
 
 type PulseSource = 'notification' | 'anomaly' | 'insight'
 type PulsePriority = 'critical' | 'high' | 'medium' | 'low'
@@ -88,6 +93,9 @@ export default function PulsePage() {
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<PulseSource | 'all'>('all')
   const [busyKey, setBusyKey] = useState<string | null>(null)
+  // venueId is captured from the first API response and used for the
+  // realtime subscription so new notifications appear without a manual refresh.
+  const [venueId, setVenueId] = useState<string | null>(null)
 
   async function snooze(itemKey: string, days: number) {
     setBusyKey(itemKey)
@@ -136,9 +144,11 @@ export default function PulsePage() {
     try {
       const res = await fetch('/api/pulse')
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = (await res.json()) as { items: PulseItem[]; pausedBanner: PulsePausedBanner | null }
+      const json = (await res.json()) as { venueId?: string; items: PulseItem[]; pausedBanner: PulsePausedBanner | null }
       setItems(json.items)
       setPausedBanner(json.pausedBanner ?? null)
+      // Capture venueId on first load for the realtime subscription.
+      if (json.venueId) setVenueId(json.venueId)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load pulse')
@@ -194,6 +204,27 @@ export default function PulsePage() {
   }
 
   useEffect(() => { refresh() }, [refresh])
+
+  // Phase 6 FIX 3: Realtime subscription on admin_notifications.
+  // When a new notification arrives for this venue (e.g. auto-send cap
+  // reached, Gmail token expired), refetch the full pulse so the
+  // coordinator sees it immediately without a manual refresh.
+  useEffect(() => {
+    if (!venueId) return
+    const supabase = createClient()
+    const channel = supabase
+      .channel(`pulse-${venueId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'admin_notifications',
+        filter: `venue_id=eq.${venueId}`,
+      }, () => {
+        refresh()
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [venueId, refresh])
 
   const visible = filter === 'all' ? items : items.filter((it) => it.source === filter)
 

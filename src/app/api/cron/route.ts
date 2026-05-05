@@ -158,7 +158,14 @@ const VALID_JOBS = [
   // that runs both prune_telemetry AND prune_rate_limits in one tick.
   // Replaces the two separate Vercel cron entries (was 41, now 40).
   // Runs at 02:00 UTC — before the 03:00+ morning crons fire.
+  // Phase 6 brain-dump gap (2026-05-05): also runs prune_brain_dump_stale
+  // inside runPruneMaintenance. No new Vercel cron entry (count is at 40).
   'prune_maintenance',
+  // Phase 6 brain-dump gap (2026-05-05). Marks brain_dump_entries stuck in
+  // needs_clarification for >30 days as 'abandoned'. Merged into
+  // prune_maintenance so vercel.json stays at 40 (Pro limit). Kept as a
+  // valid job name for manual invocations and local testing.
+  'prune_brain_dump_stale',
   // T5-Rixey-BBB (2026-05-02). Side-by-side parity scan: writes one
   // attribution_parity_log row per active wedding per run with the
   // legacy 7-tier chain output AND the new identity-cluster compute
@@ -517,10 +524,19 @@ async function runJob(job: JobName): Promise<unknown> {
     case 'prune_maintenance':
       // Phase 1 audit Fix 2 (2026-05-05). Consolidated nightly maintenance
       // cron: runs prune_telemetry + prune_rate_limits in one tick so the
-      // Vercel Pro cron count stays at 40 (limit). Runs 02:00 UTC before
-      // the 03:00+ morning crons. Both sub-jobs are idempotent — running
-      // them together vs separately is equivalent.
+      // Vercel Pro cron count stays at 40 (limit). Phase 6 (2026-05-05)
+      // also runs prune_brain_dump_stale in the same tick.
+      // Runs 02:00 UTC before the 03:00+ morning crons. All sub-jobs are
+      // idempotent — running them together vs separately is equivalent.
       return runPruneMaintenance()
+
+    case 'prune_brain_dump_stale':
+      // Phase 6 brain-dump gap (2026-05-05). Mark stale clarifications as
+      // 'abandoned' after 30 days. Merged into prune_maintenance for the
+      // nightly Vercel cron (cron count is at the 40 Pro-plan limit).
+      // This case is kept so the job can be triggered manually via
+      // GET /api/cron?job=prune_brain_dump_stale for one-off runs.
+      return runPruneBrainDumpStale()
 
     case 'tour_outcome_classifier':
       // T5-Rixey-GGG (2026-05-02). For each tour with outcome IN
@@ -606,16 +622,24 @@ async function runPruneRateLimits(): Promise<{ rows_deleted: number }> {
 /**
  * Phase 1 audit Fix 2 (2026-05-05). Combined nightly maintenance cron.
  * Runs prune_telemetry + prune_rate_limits in a single tick so we stay
- * within the Vercel Pro cron limit of 40. Each sub-job is independently
- * error-handled so one failure doesn't suppress the other.
+ * within the Vercel Pro cron limit of 40.
+ *
+ * Phase 6 brain-dump gap (2026-05-05): also runs prune_brain_dump_stale
+ * in the same tick so stale clarifications are cleaned up without
+ * needing a separate Vercel cron entry.
+ *
+ * Each sub-job is independently error-handled so one failure doesn't
+ * suppress the others.
  */
 async function runPruneMaintenance(): Promise<{
   telemetry: Awaited<ReturnType<typeof runTelemetryRetentionPrune>>
   rate_limits: { rows_deleted: number }
+  brain_dump_stale: { rows_abandoned: number }
 }> {
-  const [telemetry, rate_limits] = await Promise.allSettled([
+  const [telemetry, rate_limits, brain_dump_stale] = await Promise.allSettled([
     runTelemetryRetentionPrune(),
     runPruneRateLimits(),
+    runPruneBrainDumpStale(),
   ])
 
   const telemetryResult =
@@ -640,7 +664,46 @@ async function runPruneMaintenance(): Promise<{
           return { rows_deleted: 0 }
         })()
 
-  return { telemetry: telemetryResult, rate_limits: rateLimitsResult }
+  const brainDumpStaleResult =
+    brain_dump_stale.status === 'fulfilled'
+      ? brain_dump_stale.value
+      : (() => {
+          console.error('[prune_maintenance] brain_dump_stale prune failed:', brain_dump_stale.reason)
+          return { rows_abandoned: 0 }
+        })()
+
+  return { telemetry: telemetryResult, rate_limits: rateLimitsResult, brain_dump_stale: brainDumpStaleResult }
+}
+
+/**
+ * Phase 6 brain-dump gap (2026-05-05). Marks brain_dump_entries entries
+ * stuck in needs_clarification for > 30 days as 'abandoned'.
+ *
+ * Rationale: clarification entries that go unanswered for 30 days are
+ * permanently orphaned — the coordinator has moved on or the context is
+ * stale. Leaving them as needs_clarification inflates the clarification
+ * queue and blocks any aggregate metrics that count pending entries.
+ * 'abandoned' keeps the row for audit purposes without cluttering the
+ * live queue.
+ *
+ * Uses brain_dump_entries_cleanup_idx (migration 213) so the scan is
+ * cheap even at large table sizes.
+ */
+async function runPruneBrainDumpStale(): Promise<{ rows_abandoned: number }> {
+  const adminClient = createServiceClient()
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  const now = new Date().toISOString()
+  const { data, error } = await adminClient
+    .from('brain_dump_entries')
+    .update({ parse_status: 'abandoned', updated_at: now })
+    .eq('parse_status', 'needs_clarification')
+    .lt('created_at', cutoff)
+    .select('id')
+  if (error) {
+    console.error('[prune_brain_dump_stale] update failed:', error.message)
+    return { rows_abandoned: 0 }
+  }
+  return { rows_abandoned: (data ?? []).length }
 }
 
 // Stream PPP (2026-05-03): the inline runPruneTelemetry helper that used
@@ -1203,6 +1266,128 @@ async function refreshQualitySignalsAllVenues(): Promise<Record<string, number>>
  */
 const POLL_CHUNK_SIZE = 20
 
+/**
+ * Phase 6 FIX 1: After flushing auto-sends for a venue, check whether the
+ * daily cap has been reached for any enabled auto-send rule. If so, fire a
+ * coordinator notification at most once per day per venue using dedup_key.
+ *
+ * Why here and not inside email-pipeline.ts: the pipeline only knows whether
+ * THIS specific email was blocked by the cap. The cron flush pass is the
+ * natural aggregation point to describe the venue-wide paused state.
+ */
+async function checkAndNotifyAutoSendCap(venueId: string): Promise<void> {
+  try {
+    const supabase = createServiceClient()
+    const today = new Date().toISOString().slice(0, 10)
+    const dedupKey = `auto_send_cap:${venueId}:${today}`
+
+    // Fetch all enabled auto-send rules for this venue.
+    const { data: rules } = await supabase
+      .from('auto_send_rules')
+      .select('context, daily_limit')
+      .eq('venue_id', venueId)
+      .eq('enabled', true)
+
+    if (!rules || rules.length === 0) return
+
+    const todayStart = new Date()
+    todayStart.setHours(0, 0, 0, 0)
+
+    // Check each context — fire once if ANY context hit its cap today.
+    let capHit = false
+    for (const rule of rules) {
+      const context = rule.context as string
+      const limit = rule.daily_limit as number
+      if (!limit || limit <= 0) continue
+
+      const { count } = await supabase
+        .from('drafts')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .eq('auto_sent', true)
+        .eq('context_type', context)
+        .gte('created_at', todayStart.toISOString())
+
+      if ((count ?? 0) >= limit) {
+        capHit = true
+        break
+      }
+    }
+
+    if (!capHit) return
+
+    // Insert with ON CONFLICT DO NOTHING via dedup_key partial UNIQUE index
+    // (migration 209). 23505 = already inserted today — silently swallow.
+    const { error } = await supabase.from('admin_notifications').insert({
+      venue_id: venueId,
+      type: 'auto_send_cap_reached',
+      title: 'Auto-send paused',
+      body: `Your venue reached its daily auto-send limit. Emails are queued and will resume tomorrow.`,
+      priority: 'high',
+      dedup_key: dedupKey,
+    })
+
+    if (error) {
+      const code = (error as unknown as { code?: string }).code
+      if (code !== '23505') {
+        console.error('[cron] auto_send_cap notification failed:', error.message)
+      }
+    }
+  } catch (err) {
+    // Best-effort — never let notification errors block the poll.
+    console.error('[cron] checkAndNotifyAutoSendCap failed:', err)
+  }
+}
+
+/**
+ * Phase 6 FIX 2: After the email poll, check for Gmail connections in error
+ * state (token refresh failed). Fire a coordinator notification at most once
+ * per connection per day using dedup_key so they know to reconnect.
+ *
+ * gmail.ts stamps status='error' on a connection whenever ensureFreshTokens
+ * throws (invalid_grant, network failure, etc.). This cron pass surfaces it.
+ */
+async function checkAndNotifyGmailTokenErrors(venueId: string): Promise<void> {
+  try {
+    const supabase = createServiceClient()
+
+    const { data: errorConns } = await supabase
+      .from('gmail_connections')
+      .select('id, email_address, error_message')
+      .eq('venue_id', venueId)
+      .eq('status', 'error')
+
+    if (!errorConns || errorConns.length === 0) return
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    for (const conn of errorConns) {
+      const connId = conn.id as string
+      const emailAddress = conn.email_address as string
+      const dedupKey = `gmail_token_expired:${connId}:${today}`
+
+      // Insert with ON CONFLICT DO NOTHING. 23505 = already fired today.
+      const { error } = await supabase.from('admin_notifications').insert({
+        venue_id: venueId,
+        type: 'gmail_token_expired',
+        title: 'Gmail reconnection needed',
+        body: `Your Gmail inbox (${emailAddress}) is disconnected. Reconnect at Settings → Gmail to resume email processing.`,
+        priority: 'urgent',
+        dedup_key: dedupKey,
+      })
+
+      if (error) {
+        const code = (error as unknown as { code?: string }).code
+        if (code !== '23505') {
+          console.error('[cron] gmail_token_expired notification failed:', error.message)
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[cron] checkAndNotifyGmailTokenErrors failed:', err)
+  }
+}
+
 async function pollEmailsAllVenues(): Promise<Record<string, number>> {
   const supabase = createServiceClient()
 
@@ -1217,11 +1402,12 @@ async function pollEmailsAllVenues(): Promise<Record<string, number>> {
     if (row.venue_id) venueIds.add(row.venue_id as string)
   }
 
+  // Union with ALL gmail_connections (any status) so a venue whose
+  // connection just flipped to 'error' is still included — we need
+  // to run checkAndNotifyGmailTokenErrors for it.
   const { data: connectionRows } = await supabase
     .from('gmail_connections')
     .select('venue_id')
-    .eq('sync_enabled', true)
-    .eq('status', 'active')
 
   for (const row of connectionRows ?? []) {
     if (row.venue_id) venueIds.add(row.venue_id as string)
@@ -1242,6 +1428,10 @@ async function pollEmailsAllVenues(): Promise<Record<string, number>> {
         const result = await processAllNewEmails(id)
         // Flush any pending auto-sends whose 5-minute delay has elapsed
         const flushed = await flushPendingAutoSends(id)
+        // Phase 6 FIX 1: notify if daily auto-send cap was hit today.
+        await checkAndNotifyAutoSendCap(id)
+        // Phase 6 FIX 2: notify if a Gmail connection has a token error.
+        await checkAndNotifyGmailTokenErrors(id)
         return { id, count: result.processed + flushed }
       })
     )
