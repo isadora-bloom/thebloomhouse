@@ -5,11 +5,12 @@
  * at the time this was written). Transcripts are persisted to the
  * `sage_conversations` table (role in ('user','assistant')), rate limiting is
  * keyed by `sage:<weddingId-or-venueId>` with 20 / 15min via the
- * `increment_rate_limit` RPC from migration 053.
+ * `check_rate_limit` RPC from migration 207 (replaces the legacy 053
+ * `increment_rate_limit` RPC + `rate_limits` table that 207 drops).
  *
  * These helpers let the spec:
  *   - seed budget / checklist / timeline rows that getWeddingContext() reads
- *   - clean up any rate_limits rows created under a test prefix
+ *   - clean up any rate_limit_buckets rows created under a test prefix
  *   - clean up sage_conversations rows created during the test
  */
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
@@ -28,8 +29,8 @@ function admin(): SupabaseClient {
 }
 
 /**
- * A per-test prefix for rate_limits keys so cleanup can scope safely without
- * touching any real/other-test rows in the shared Supabase project.
+ * A per-test prefix for rate_limit_buckets keys so cleanup can scope safely
+ * without touching any real/other-test rows in the shared Supabase project.
  */
 export function testRateLimitPrefix(ctx: TestContext): string {
   return `e2e-sage-${ctx.testId}:`
@@ -37,23 +38,23 @@ export function testRateLimitPrefix(ctx: TestContext): string {
 
 export async function clearRateLimitKey(key: string): Promise<void> {
   try {
-    await admin().from('rate_limits').delete().eq('key', key)
+    await admin().from('rate_limit_buckets').delete().eq('key', key)
   } catch {
     /* ignore */
   }
 }
 
 /**
- * Cleans up every rate_limits row whose key starts with our per-test prefix.
- * Also cleans specific keys that the Sage endpoint itself would have created
- * (sage:<weddingId>) when running the end-to-end enforcement test.
+ * Cleans up every rate_limit_buckets row whose key starts with our per-test
+ * prefix. Also cleans specific keys that the Sage endpoint itself would have
+ * created (sage:<weddingId>) when running the end-to-end enforcement test.
  */
 export async function cleanupRateLimits(ctx: TestContext, extraKeys: string[] = []): Promise<void> {
   try {
     const prefix = testRateLimitPrefix(ctx)
-    await admin().from('rate_limits').delete().like('key', `${prefix}%`)
+    await admin().from('rate_limit_buckets').delete().like('key', `${prefix}%`)
     for (const k of extraKeys) {
-      await admin().from('rate_limits').delete().eq('key', k)
+      await admin().from('rate_limit_buckets').delete().eq('key', k)
     }
   } catch (e) {
     console.warn('cleanupRateLimits warning:', e)

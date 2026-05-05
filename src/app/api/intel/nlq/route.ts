@@ -4,7 +4,7 @@ import {
   markQueryHelpful,
 } from '@/lib/services/intel-brain'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { rateLimit, secondsUntil } from '@/lib/rate-limit'
+import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'
 
@@ -39,7 +39,8 @@ export async function POST(request: NextRequest) {
   }
 
   // Rate limit by user ID (authenticated endpoint)
-  const rl = await rateLimit(`nlq:${auth.userId}`, {
+  const rl = await checkRateLimit({
+    key: `nlq:${auth.userId}`,
     limit: NLQ_RATE_LIMIT,
     windowSec: NLQ_RATE_WINDOW_SEC,
   })

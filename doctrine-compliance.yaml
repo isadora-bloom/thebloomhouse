@@ -390,6 +390,24 @@ meta:
 #   LIMB-16.2.1-D no AI-output integration test, LIMB-17.2.3 universal
 #   hardcoded terms, LIMB-17.4-B FRED national-only, LIMB-17.2.5 census
 #   only). Each picked up in its respective phase.
+#
+# 2026-05-05 — PROJECT-AUDIT-V2 BUG-12 closed (durable rate limiter):
+#   Migration 208_rate_limit_buckets.sql replaces the legacy 053
+#   `rate_limits` table + `increment_rate_limit` RPC with a true
+#   sliding-window limiter on `rate_limit_buckets` + `check_rate_limit`
+#   RPC. The 053 artefacts are dropped IN 207 (no shim, single code path
+#   local + prod per task contract). src/lib/rate-limit.ts rewritten
+#   around the new API: `checkRateLimit({ key, limit, windowSec }) →
+#   { ok, remaining, resetAt }`. Failure mode is fail-OPEN with
+#   redactError() + recordCounter('rate_limit_infra_error') so we never
+#   silently degrade to in-memory (which under Vercel = no enforcement).
+#   Allow / deny paths bump rate_limit_allow / rate_limit_deny counters
+#   for dashboard surfacing. Two callsites swapped in the same commit:
+#   src/app/api/portal/sage/route.ts (BUG-12 primary target) and
+#   src/app/api/intel/nlq/route.ts. New cron `prune_rate_limits` (02:30
+#   UTC) calls public.prune_rate_limit_buckets() to drop rows whose
+#   updated_at < now() - 7d. OPS-21.4.4 notes updated to record the
+#   limiter half of "caching/limiting on hot paths."
 
 # ===================================================================
 # PART 2 — POINT ZERO & FORENSIC RECORD
@@ -1751,7 +1769,7 @@ cells:
     status: partial
     owner: Isadora
     target: caching mandatory
-    notes: "src/lib/ai/cache.ts (2026-05-01): in-memory TTL cache with single-flight de-duplication for AI responses. aiCacheKey hashes (systemPrompt + userPrompt + model + temperature + promptVersion) via FNV-1a 32-bit (same algorithm as insights/confidence.ts buildCacheKey for consistency). withAiCache wrapper covers the cron-misconfig + concurrent-coordinator double-fire cases — two parallel callers for the same key share one Anthropic call. 5-min default TTL aligned with Anthropic's prompt-cache window. LRU eviction at MAX_ENTRIES=256 (touch-order). Process-local Map (no Redis) — right trade-off for serverless functions where shared cache infra would dwarf the savings. 22 unit assertions (key sensitivity, TTL expiry, LRU eviction, singleflight de-dup, post-expiry re-run). PARTIAL: caller adoption pending — withAiCache exists but isn't wired into briefings / daily-digest / coordinator-refresh paths yet. T3 named insights have their own DB-backed cache via persistInsight + lookupCachedInsight (different layer)."
+    notes: "src/lib/ai/cache.ts (2026-05-01): in-memory TTL cache with single-flight de-duplication for AI responses. aiCacheKey hashes (systemPrompt + userPrompt + model + temperature + promptVersion) via FNV-1a 32-bit (same algorithm as insights/confidence.ts buildCacheKey for consistency). withAiCache wrapper covers the cron-misconfig + concurrent-coordinator double-fire cases — two parallel callers for the same key share one Anthropic call. 5-min default TTL aligned with Anthropic's prompt-cache window. LRU eviction at MAX_ENTRIES=256 (touch-order). Process-local Map (no Redis) — right trade-off for serverless functions where shared cache infra would dwarf the savings. 22 unit assertions (key sensitivity, TTL expiry, LRU eviction, singleflight de-dup, post-expiry re-run). PARTIAL: caller adoption pending — withAiCache exists but isn't wired into briefings / daily-digest / coordinator-refresh paths yet. T3 named insights have their own DB-backed cache via persistInsight + lookupCachedInsight (different layer). RATE-LIMIT half (PROJECT-AUDIT-V2 BUG-12, 2026-05-05): /api/sage + /api/intel/nlq are durably rate-limited via Postgres-backed sliding-window limiter (migration 208 + src/lib/rate-limit.ts checkRateLimit). Replaces in-memory Map limiter that broke under Vercel horizontal scale. Fails OPEN with redactError + recordCounter('rate_limit_infra_error') so a Postgres outage doesn't silently degrade to no-enforcement. Daily prune cron (prune_rate_limits 02:30 UTC) keeps the bucket table small."
     severity: high
 
   - id: OPS-21.4.5

@@ -20,7 +20,7 @@ import {
  *
  * This spec verifies the four invariants Sage depends on:
  *
- *   a) Rate limiter atomicity. `increment_rate_limit(key, limit, window_sec)`
+ *   a) Rate limiter atomicity. `check_rate_limit(key, limit, window_sec)`
  *      is called 20x in a burst with limit=5 and must return exactly 5
  *      allowed=true rows — proof that the RPC's UPSERT serialises rather
  *      than races (BUG-12, migration 053).
@@ -38,7 +38,7 @@ import {
  *      rows written under venue A's wedding are NOT returned when filtering
  *      by venue B — a minimal tenancy guard at the data layer.
  *
- *   d) Rate-limit enforcement end-to-end. After pre-filling the rate_limits
+ *   d) Rate-limit enforcement end-to-end. After pre-filling the rate_limit_buckets
  *      row to the cap, /api/portal/sage returns 429 Too Many Requests.
  *
  * Notes:
@@ -62,12 +62,12 @@ function admin(): SupabaseClient {
 }
 
 /**
- * Probes whether migration 053 has been applied. When missing, all rate-limit
+ * Probes whether migration 207 has been applied. When missing, all rate-limit
  * assertions are skipped with a TODO rather than hard-failing — the migration
  * has to be run before the live app can enforce limits either.
  */
 async function rateLimitsTableExists(): Promise<boolean> {
-  const { error } = await admin().from('rate_limits').select('key').limit(1)
+  const { error } = await admin().from('rate_limit_buckets').select('key').limit(1)
   return !error
 }
 
@@ -90,22 +90,22 @@ test.describe('§9 Sage (couple chat)', () => {
   // a) Rate limiter atomicity
   // ---------------------------------------------------------------------------
 
-  test('a) increment_rate_limit is atomic under burst (20 parallel, limit=5 => 5 allowed)', async () => {
+  test('a) check_rate_limit is atomic under burst (20 parallel, limit=5 => 5 allowed)', async () => {
     if (!(await rateLimitsTableExists())) {
-      test.skip(true, 'TODO: migration 053_rate_limits.sql not applied to this Supabase project — rate_limits table + increment_rate_limit RPC missing. Apply the migration to enable this test.')
+      test.skip(true, 'TODO: migration 207_rate_limit_buckets.sql not applied to this Supabase project — rate_limit_buckets table + check_rate_limit RPC missing. Apply the migration to enable this test.')
     }
     const key = `${testRateLimitPrefix(ctx)}atomic`
     const limit = 5
     const windowSec = 60
 
     // Ensure no prior state
-    await admin().from('rate_limits').delete().eq('key', key)
+    await admin().from('rate_limit_buckets').delete().eq('key', key)
 
     const burst = 20
     const results = await Promise.all(
       Array.from({ length: burst }).map(() =>
         admin()
-          .rpc('increment_rate_limit', {
+          .rpc('check_rate_limit', {
             p_key: key,
             p_limit: limit,
             p_window_sec: windowSec,
@@ -127,13 +127,16 @@ test.describe('§9 Sage (couple chat)', () => {
     ).toBe(limit)
     expect(deniedCount).toBe(burst - limit)
 
-    // The row's final count should equal burst (every call increments).
+    // Sliding-window semantics: the bucket holds at most `limit` hits — once
+    // we hit the cap, denied calls do NOT append. So the final hits-array
+    // length is exactly `limit`, NOT `burst` (the legacy fixed-window
+    // semantics from migration 053).
     const { data: row } = await admin()
-      .from('rate_limits')
-      .select('count')
+      .from('rate_limit_buckets')
+      .select('hits')
       .eq('key', key)
       .single()
-    expect(Number(row?.count)).toBe(burst)
+    expect(Array.isArray(row?.hits) ? (row!.hits as unknown[]).length : -1).toBe(limit)
   })
 
   // ---------------------------------------------------------------------------
@@ -299,22 +302,25 @@ test.describe('§9 Sage (couple chat)', () => {
 
   test('d) /api/portal/sage returns 429 once the window cap is hit', async ({ baseURL }) => {
     if (!(await rateLimitsTableExists())) {
-      test.skip(true, 'TODO: migration 053_rate_limits.sql not applied — endpoint currently falls through to "allow" on RPC error (graceful degradation), so 429 cannot be asserted until the migration is run.')
+      test.skip(true, 'TODO: migration 207_rate_limit_buckets.sql not applied — endpoint currently falls through to "allow" on RPC error (fail-open on infra error), so 429 cannot be asserted until the migration is run.')
     }
     const { orgId } = await createTestOrg(ctx)
     const { venueId } = await createTestVenue(ctx, { orgId })
     const wedding = await createTestWedding(ctx, { venueId })
 
     // The endpoint uses key=`sage:${weddingId || venueId || 'anonymous'}`
-    // with limit=20 / windowSec=900. Pre-fill rate_limits so the next call
-    // trips the cap without burning 20 LLM requests.
+    // with limit=20 / windowSec=900. Pre-fill rate_limit_buckets with `limit`
+    // recent unix-second hits so the next call trips the cap without burning
+    // 20 LLM requests.
     const rlKey = `sage:${wedding.weddingId}`
     extraRateLimitKeys.push(rlKey)
-    await admin().from('rate_limits').delete().eq('key', rlKey)
-    const { error: preErr } = await admin().from('rate_limits').insert({
+    const nowSec = Math.floor(Date.now() / 1000)
+    const fullHits = Array.from({ length: 20 }, (_, i) => nowSec - i)
+    await admin().from('rate_limit_buckets').delete().eq('key', rlKey)
+    const { error: preErr } = await admin().from('rate_limit_buckets').insert({
       key: rlKey,
-      window_start: new Date().toISOString(),
-      count: 20, // == limit, so next increment => 21 > 20 => denied
+      hits: fullHits,
+      window_start: new Date(nowSec * 1000).toISOString(),
       updated_at: new Date().toISOString(),
     })
     expect(preErr).toBeNull()

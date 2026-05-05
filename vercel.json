@@ -145,6 +145,10 @@
       "schedule": "0 2 * * *"
     },
     {
+      "path": "/api/cron?job=prune_rate_limits",
+      "schedule": "30 2 * * *"
+    },
+    {
       "path": "/api/cron?job=compute_attribution_parity",
       "schedule": "0 5 * * *"
     },
