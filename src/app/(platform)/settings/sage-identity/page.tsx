@@ -49,6 +49,10 @@ interface SageIdentityForm {
   ai_custom_purpose: string
   ai_opener_shape: SageOpenerShape
   tour_booking_links: TourLink[]
+  // Stream EEEE: human-escalation address printed in the outbound
+  // footer's "or email <addr> directly" sentence. Required at save
+  // time — saving without it surfaces a clear error.
+  escalation_email: string
 }
 
 const EMPTY_FORM: SageIdentityForm = {
@@ -58,6 +62,7 @@ const EMPTY_FORM: SageIdentityForm = {
   ai_custom_purpose: '',
   ai_opener_shape: SAGE_DEFAULTS.ai_opener_shape,
   tour_booking_links: [],
+  escalation_email: '',
 }
 
 export default function SageIdentityPage() {
@@ -76,13 +81,18 @@ export default function SageIdentityPage() {
       setLoading(true)
       setError(null)
       try {
-        const [{ data: cfg, error: cfgErr }, { data: venue }] = await Promise.all([
+        const [{ data: cfg, error: cfgErr }, { data: venue }, { data: venueCfg }] = await Promise.all([
           supabase
             .from('venue_ai_config')
-            .select('ai_name, ai_role, ai_purposes, ai_custom_purpose, ai_opener_shape, tour_booking_links')
+            .select('ai_name, ai_role, ai_purposes, ai_custom_purpose, ai_opener_shape, tour_booking_links, escalation_email')
             .eq('venue_id', venueId)
             .maybeSingle(),
           supabase.from('venues').select('name').eq('id', venueId).maybeSingle(),
+          supabase
+            .from('venue_config')
+            .select('coordinator_email')
+            .eq('venue_id', venueId)
+            .maybeSingle(),
         ])
 
         if (cfgErr) throw cfgErr
@@ -100,6 +110,15 @@ export default function SageIdentityPage() {
                 is_default: l.is_default === true,
               }))
           : []
+        // Default suggestion for escalation_email: the venue's primary
+        // coordinator email (already used to contact couples on legacy
+        // venues). Coordinator can override at any time, but pre-filling
+        // means a venue that already has the column set elsewhere never
+        // sees an empty required field.
+        const cfgEscalation =
+          (cfg as { escalation_email?: string | null } | null)?.escalation_email?.trim() || ''
+        const fallbackEscalation =
+          (venueCfg as { coordinator_email?: string | null } | null)?.coordinator_email?.trim() || ''
         setForm({
           ai_name: cfg?.ai_name ?? SAGE_DEFAULTS.ai_name,
           ai_role: (cfg?.ai_role ?? SAGE_DEFAULTS.ai_role) as SageRole,
@@ -107,6 +126,7 @@ export default function SageIdentityPage() {
           ai_custom_purpose: cfg?.ai_custom_purpose ?? '',
           ai_opener_shape: (cfg?.ai_opener_shape ?? SAGE_DEFAULTS.ai_opener_shape) as SageOpenerShape,
           tour_booking_links: parsedLinks,
+          escalation_email: cfgEscalation || fallbackEscalation,
         })
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load')
@@ -151,6 +171,20 @@ export default function SageIdentityPage() {
       setError('Give your AI assistant a name (any short word will do — e.g. Ivy, Aria, Sage).')
       return
     }
+    // Stream EEEE: escalation_email is required. The footer attached
+    // to every Sage outbound email tells couples "or email <addr>
+    // directly" — without an address we'd ship a broken sentence,
+    // and without a real human path we'd ship a footer that lies.
+    const escalationTrimmed = form.escalation_email.trim()
+    if (!escalationTrimmed) {
+      setError('Add an escalation email — the address Sage points couples to when they need a human.')
+      return
+    }
+    // Light syntactic check — anything past this hits Postgres on save.
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(escalationTrimmed)) {
+      setError('Escalation email needs to look like an email address (something@example.com).')
+      return
+    }
     setSaving(true)
     setError(null)
     setSaved(false)
@@ -188,6 +222,7 @@ export default function SageIdentityPage() {
           ai_custom_purpose: form.ai_custom_purpose.trim() || null,
           ai_opener_shape: form.ai_opener_shape,
           tour_booking_links: cleanLinks,
+          escalation_email: escalationTrimmed,
         })
         .eq('venue_id', venueId)
       if (upErr) throw upErr
@@ -231,6 +266,27 @@ export default function SageIdentityPage() {
           className="w-full max-w-xs border border-border rounded-lg px-3 py-2.5 bg-warm-white text-sage-900 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
         />
         <p className="text-xs text-sage-500">What couples will call your assistant. Defaults to {SAGE_DEFAULTS.ai_name}.</p>
+      </section>
+
+      {/* Escalation email — printed in every outbound footer */}
+      <section className="space-y-2">
+        <label className="block text-sm font-medium text-sage-800">
+          Escalation email <span className="text-rose-600">*</span>
+        </label>
+        <input
+          type="email"
+          value={form.escalation_email}
+          onChange={(e) => setForm({ ...form, escalation_email: e.target.value })}
+          placeholder="coordinator@yourvenue.com"
+          required
+          className="w-full max-w-md border border-border rounded-lg px-3 py-2.5 bg-warm-white text-sage-900 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+        />
+        <p className="text-xs text-sage-500">
+          The address {form.ai_name || 'Sage'} points couples to when they need a human. Printed in every outbound email
+          ("or email {form.escalation_email || '<address>'} directly") and in the chat sign-off. Required — saving without
+          this is blocked. Couples can also reply to any thread with "HUMAN REQUESTED" in the subject; that goes to your
+          coordinator dashboard automatically.
+        </p>
       </section>
 
       {/* Role */}

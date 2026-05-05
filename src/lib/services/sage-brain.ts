@@ -22,11 +22,131 @@ import {
 import { buildSageIntelligenceContext } from './sage-intelligence'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
-export const BRAIN_PROMPT_VERSION = 'sage-brain.prompt.v1.0'
+export const BRAIN_PROMPT_VERSION = 'sage-brain.prompt.v1.1'
 import { searchKnowledgeBase } from './knowledge-base'
 import { createServiceClient } from '@/lib/supabase/service'
+import { createNotification } from '@/lib/services/admin-notifications'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
 import { getSageTaskPrompt } from '@/config/prompts/task-prompts-sage'
+
+// ---------------------------------------------------------------------------
+// Stream EEEE: human-escalation detection + chat sign-off
+// ---------------------------------------------------------------------------
+//
+// Email pipeline parity. The footer Sage attaches to every outbound email
+// tells couples how to reach a human; the couple-portal chat needs the
+// same affordance. Two pieces:
+//
+//   1. SAGE_HUMAN_REQUEST_PATTERN — matches the chat phrasings a couple
+//      naturally uses to ask out of Sage. Mirrors the email pipeline's
+//      HUMAN REQUESTED subject route, but in conversational form. Tested
+//      examples that MUST match:
+//        - "I'd like a human"
+//        - "I'd like to talk to a human"
+//        - "I'd like to speak to a person"
+//        - "Talk to a person please"
+//        - "Speak to a human"
+//        - "Connect me with a real person"
+//        - "Connect me with a coordinator"
+//      And NOT match a generic message that uses "human" descriptively
+//      ("This is a humane policy" / "What human size is the venue?").
+//
+//   2. CHAT_SIGNOFF_TEMPLATE — appended after every Sage chat response.
+//      Renders the AI name + venue + role and the inline escalation
+//      affordance. No mailto: link — chat can just text the magic phrase.
+export const SAGE_HUMAN_REQUEST_PATTERN =
+  /I'?d like (?:a |to talk to a |to speak to a )?human|talk to (?:a )?(?:person|human)|speak to (?:a )?(?:person|human)|connect me with .* (?:real person|human|coordinator)/i
+
+/** Pure helper — returns true when a chat message asks for a human.
+ *  Exported for the route to short-circuit before the LLM call (mirrors
+ *  the email pipeline's humanRequested fast-path). */
+export function detectChatHumanRequest(message: string | null | undefined): boolean {
+  if (!message) return false
+  return SAGE_HUMAN_REQUEST_PATTERN.test(message)
+}
+
+/** Build the chat sign-off + escalation reminder appended to every
+ *  Sage chat response. Coordinator is optional — when missing, the
+ *  reminder still works ("type 'I'd like a human' any time and the
+ *  team will step in"). */
+export function buildChatSignoff(opts: {
+  aiName: string
+  venueName: string
+  aiRole?: string | null
+  coordinatorName?: string | null
+}): string {
+  const role = (opts.aiRole && /\bAI\b/i.test(opts.aiRole) ? opts.aiRole.trim() : 'AI assistant')
+  const stepIn = opts.coordinatorName && opts.coordinatorName.trim()
+    ? `${opts.coordinatorName.trim()} step in`
+    : 'the team step in'
+  return `\n\n—\nI'm ${opts.aiName}, ${opts.venueName}'s ${role}. Type "I'd like a human" any time and I'll have ${stepIn}.`
+}
+
+/** Route a chat human-request to the coordinator. Mirrors the email
+ *  pipeline's humanRequested fast-path: writes an engagement_events row
+ *  + an admin_notifications row, both best-effort. The sage-conversation
+ *  message rows are still the responsibility of the caller (the route),
+ *  same way the email-pipeline still owns the interaction insert.
+ *
+ *  Returns the canned response the route should send to the couple. */
+export async function routeChatToHuman(opts: {
+  venueId: string
+  weddingId: string | null
+  message: string
+  conversationId?: string | null
+  aiName?: string | null
+}): Promise<string> {
+  const supabase = createServiceClient()
+  const aiName = opts.aiName?.trim() || 'I'
+
+  try {
+    // engagement_events — direction='inbound', points=0 (this is not a
+    // heat signal). Best-effort. Bare insert (not heat-mapping batch)
+    // because we don't want to recalculate heat scores for a chat
+    // escalation.
+    const ePayload: Record<string, unknown> = {
+      venue_id: opts.venueId,
+      wedding_id: opts.weddingId,
+      event_type: 'human_requested',
+      direction: 'inbound',
+      points: 0,
+      occurred_at: new Date().toISOString(),
+      metadata: {
+        via: 'sage_chat',
+        message_excerpt: opts.message.slice(0, 240),
+        conversation_id: opts.conversationId ?? null,
+      },
+    }
+    await supabase.from('engagement_events').insert(ePayload)
+  } catch (err) {
+    console.warn('[sage-brain] human_requested engagement_event insert failed:', err)
+  }
+
+  try {
+    await createNotification({
+      venueId: opts.venueId,
+      weddingId: opts.weddingId ?? undefined,
+      type: 'human_requested',
+      title: `Human requested in ${aiName} chat`,
+      body: JSON.stringify({
+        weddingId: opts.weddingId,
+        conversationId: opts.conversationId ?? null,
+        excerpt: opts.message.slice(0, 240),
+        via: 'sage_chat',
+      }),
+    })
+  } catch (err) {
+    console.warn('[sage-brain] human_requested notification failed:', err)
+  }
+
+  // Canned response. Stays warm, names the next step explicitly so the
+  // couple knows the message landed somewhere a human will see.
+  return (
+    `Got it — I'm flagging this for your coordinator right now. ` +
+    `They'll see your message shortly and follow up directly. ` +
+    `In the meantime feel free to share any context that'd help them respond faster.`
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -474,8 +594,29 @@ export async function generateSageResponse(
 
   const confidence = assessConfidence(result.text, kbMatch)
 
+  // Stream EEEE: chat-surface parity with the email footer. Every
+  // response Sage gives in the couple portal ends with the same
+  // sign-off + escalation reminder as the email disclosure. Idempotent
+  // — if the model accidentally added the marker phrase already
+  // (extremely rare but cheap to guard), don't double-append.
+  const cfg = personalityData.config as {
+    ai_role?: string | null
+  }
+  const venueName = (personalityData.venue as { name?: string | null }).name?.trim() || 'the venue'
+  const coordinatorName =
+    (personalityData.venue_config as { coordinator_name?: string | null }).coordinator_name ?? null
+  const signoff = buildChatSignoff({
+    aiName: aiNameForTask,
+    venueName,
+    aiRole: cfg.ai_role ?? null,
+    coordinatorName,
+  })
+  const responseWithSignoff = result.text.includes('Type "I\'d like a human"')
+    ? result.text
+    : `${result.text.trimEnd()}${signoff}`
+
   return {
-    response: result.text,
+    response: responseWithSignoff,
     confidence,
     tokensUsed: result.inputTokens + result.outputTokens,
     cost: result.cost,

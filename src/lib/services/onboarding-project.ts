@@ -76,9 +76,9 @@ export const PROJECT_PLAN: DayPlan[] = [
       },
       {
         key: 'sage_identity',
-        label: "Set Sage's name + sending email",
+        label: "Set Sage's name + sending email + escalation address",
         description:
-          'Pick the AI assistant name (white-label or Sage default) and the email address it sends from. Without these every draft ships with the brand-leak fallback. Auto-detects completion when venue_ai_config has both ai_name and ai_email set.',
+          'Pick the AI assistant name (white-label or Sage default), the email address it sends from, and the escalation address printed in Sage\'s outbound footer for "need a human?" routing. Without these, drafts ship with the brand-leak fallback and the escalation footer falls back silently to coordinator_email. Auto-detects completion when venue_ai_config has ai_name + ai_email + escalation_email all set.',
         actionKey: 'sage_identity',
         linkHref: '/settings/sage-identity',
         linkLabel: 'Open Sage identity',
@@ -602,19 +602,30 @@ export async function detectDay1Completion(
     if (!error && data && data.length > 0) done.add('gmail_oauth')
   } catch { /* swallow */ }
 
-  // sage_identity — venue_ai_config has both ai_name AND ai_email set.
-  // ai_name has a fallback default ('Sage') so we require ai_email
-  // specifically — coordinator must have made an explicit choice to
-  // count this as configured.
+  // sage_identity — venue_ai_config has ai_name AND ai_email AND
+  // escalation_email all set. ai_name has a fallback default ('Sage')
+  // so we require ai_email specifically — coordinator must have made
+  // an explicit choice for that. Stream EEEE adds escalation_email
+  // (migration 206): the address printed in Sage's outbound footer
+  // for the "need a human?" route. The renderer falls back to
+  // coordinator_email then owner_email at footer-render time, but the
+  // step is only marked done when the explicit column is populated —
+  // legacy rows without it still need coordinator action.
   try {
     const { data, error } = await supabase
       .from('venue_ai_config')
-      .select('ai_name, ai_email')
+      .select('ai_name, ai_email, escalation_email')
       .eq('venue_id', venueId)
       .maybeSingle()
     const aiName = (data as { ai_name?: string | null } | null)?.ai_name
     const aiEmail = (data as { ai_email?: string | null } | null)?.ai_email
-    if (!error && aiName && aiName.trim() && aiEmail && aiEmail.trim()) {
+    const escalationEmail = (data as { escalation_email?: string | null } | null)?.escalation_email
+    if (
+      !error &&
+      aiName && aiName.trim() &&
+      aiEmail && aiEmail.trim() &&
+      escalationEmail && escalationEmail.trim()
+    ) {
       done.add('sage_identity')
     }
   } catch { /* swallow */ }

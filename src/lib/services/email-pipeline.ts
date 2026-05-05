@@ -96,6 +96,37 @@ function extractUtmFromExtractedIdentity(
 }
 
 // ---------------------------------------------------------------------------
+// Stream EEEE: HUMAN REQUESTED escalation detection
+// ---------------------------------------------------------------------------
+//
+// Sage's outbound footer (ai-disclosure v3) tells couples they can drop
+// Sage entirely by replying with "HUMAN REQUESTED" in the subject. This
+// regex detects that on inbound classification:
+//
+//   - Case-insensitive ("HUMAN REQUESTED", "human requested", "Human-Requested")
+//   - Allows space, underscore, or dash between the two words
+//   - Word-boundary anchored so a forwarded subject like
+//     "Re: photos of human-requested locations" doesn't false-positive
+//     (the boundary check passes for "human requested" but the second
+//     word boundary is REQUIRED right after — `human-requested` lands
+//     on a word char, so the trailing \b matches)
+//
+// When matched: the pipeline persists the inbound interaction (so the
+// thread is complete in the inbox) but skips draft generation entirely
+// (no LLM cost), fires an admin_notifications row so the coordinator
+// sees the request immediately, and records an engagement_events row
+// for the forensic trail.
+export const HUMAN_REQUESTED_SUBJECT_PATTERN = /\bHUMAN[\s_-]+REQUESTED\b/i
+
+/** Pure helper — returns true when a subject contains the escalation
+ *  marker. Exported for the verify script and any future external
+ *  caller (e.g. Gmail label automation). */
+export function detectHumanRequested(subject: string | null | undefined): boolean {
+  if (!subject) return false
+  return HUMAN_REQUESTED_SUBJECT_PATTERN.test(subject)
+}
+
+// ---------------------------------------------------------------------------
 // Structured error logging
 // ---------------------------------------------------------------------------
 
@@ -843,16 +874,31 @@ export async function processIncomingEmail(
   if (filterHit?.action === 'ignore') {
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
+  // Stream EEEE: human-escalation request. Detected on the raw subject
+  // before any LLM work. When set, the pipeline will:
+  //   1. Persist the interaction (the thread view stays complete)
+  //   2. Skip draft generation entirely (no LLM tokens burned)
+  //   3. Insert an engagement_events row of type 'human_requested'
+  //   4. Fire an admin_notifications row so the coordinator sees it
+  //      on their dashboard in real time
+  // The detection runs AT THE SUBJECT level — couples explicitly opt
+  // OUT of Sage by following the footer instructions, and we honour
+  // that request loudly.
+  const humanRequested = detectHumanRequested(email.subject)
+
   // Either filter can trigger no_draft; skipDraft is the union. The
   // onboarding backfill path sets opts.skipDraft so 90-day historical
   // imports classify + score + persist without drafting a reply to
   // every old email. Scheduling-tool emails (Calendly etc.) always
   // skip draft — we never want Sage to reply to a Calendly confirmation.
+  // humanRequested also forces skipDraft so a couple who explicitly
+  // asked for a human doesn't get an autonomous reply anyway.
   const skipDraft =
     opts?.skipDraft === true ||
     filterHit?.action === 'no_draft' ||
     earlyFilterHit?.action === 'no_draft' ||
-    Boolean(schedulingEvent)
+    Boolean(schedulingEvent) ||
+    humanRequested
 
   // Check if already processed — by Gmail id AND by content fingerprint
   // so multi-connection venues don't triple-insert the same inbound email.
@@ -914,8 +960,26 @@ export async function processIncomingEmail(
   // form is a new inquiry by definition) and we already have structured
   // fields. Saves tokens and avoids the classifier mis-bucketing a
   // marketplace email as "vendor" or "other".
+  //
+  // Stream EEEE: humanRequested ALSO skips the classifier. The couple
+  // explicitly opted out of Sage by following the footer instructions;
+  // we owe them zero AI cost on this thread, including the router-brain
+  // tokens. The synthesised classification keeps the rest of the
+  // pipeline's contract intact (heat-mapping skips it because skipDraft
+  // is true, but a deterministic value beats an LLM call we don't need).
   let classification: ClassificationResult
-  if (formLead) {
+  if (humanRequested) {
+    classification = {
+      classification: 'inquiry_reply',
+      confidence: 100,
+      extractedData: {
+        urgencyLevel: 'high',
+        sentiment: 'neutral',
+        questions: [],
+        source: 'direct',
+      },
+    }
+  } else if (formLead) {
     classification = synthClassificationFromFormLead(formLead)
   } else {
     try {
@@ -1054,6 +1118,111 @@ export async function processIncomingEmail(
   }
 
   const interactionId = interaction.id as string
+
+  // Stream EEEE: human-escalation fast-path. The interaction is now
+  // persisted (the inbox thread is complete), so we record the
+  // forensic trail (engagement_event + admin_notification) and
+  // return — skipping intelligence_extractions, signal_inference,
+  // booking_signal, heat_signal_record, and draft generation. The
+  // coordinator owns the response from here.
+  //
+  // engagement_events: type 'human_requested', direction 'inbound',
+  // metadata carries the interaction reference so the dashboard can
+  // jump straight to the email. Best-effort — a notification failure
+  // mustn't lose the interaction.
+  //
+  // admin_notifications: type 'human_requested' so coordinator UIs
+  // can filter / pin / colour-code distinctly from the auto-send
+  // pending stream. Title surfaces sender + thread; body carries the
+  // interaction id + subject excerpt for the click-through.
+  if (humanRequested) {
+    try {
+      // direction='inbound' — couple sent us this email asking for a
+      // human. correlation_id stamps the forensic chain.
+      if (weddingId) {
+        await recordEngagementEventsBatch(
+          venueId,
+          weddingId,
+          [
+            {
+              eventType: 'human_requested',
+              metadata: {
+                interaction_id: interactionId,
+                subject: email.subject,
+                from_email: fromEmail,
+                from_name: fromName,
+                via: 'subject_marker',
+              },
+            },
+          ],
+          'inbound',
+          email.date,
+          correlationId
+        )
+      } else {
+        // No wedding yet (cold sender): write the engagement_event
+        // directly, weddingless, so the trail still exists.
+        const ePayload: Record<string, unknown> = {
+          venue_id: venueId,
+          wedding_id: null,
+          event_type: 'human_requested',
+          direction: 'inbound',
+          points: 0,
+          occurred_at: email.date,
+          metadata: {
+            interaction_id: interactionId,
+            subject: email.subject,
+            from_email: fromEmail,
+            from_name: fromName,
+            via: 'subject_marker',
+          },
+        }
+        if (correlationId) ePayload.correlation_id = correlationId
+        await supabase.from('engagement_events').insert(ePayload)
+      }
+    } catch (err) {
+      await logPipelineError(venueId, 'human_requested_event', err, {
+        interactionId,
+        weddingId,
+      })
+    }
+
+    try {
+      await createNotification({
+        venueId,
+        weddingId: weddingId ?? undefined,
+        type: 'human_requested',
+        title: `Human requested: ${fromName || fromEmail}`,
+        body: JSON.stringify({
+          interactionId,
+          weddingId,
+          fromEmail,
+          fromName,
+          threadId: email.threadId,
+          subject: email.subject,
+          excerpt: email.body.slice(0, 240),
+        }),
+        correlationId,
+      })
+    } catch (err) {
+      await logPipelineError(venueId, 'human_requested_notification', err, {
+        interactionId,
+      })
+    }
+
+    log.info('pipeline.human_requested', {
+      event_type: 'email_pipeline.human_requested',
+      outcome: 'skip',
+      data: { messageId: email.messageId, interactionId, reason: 'human_requested' },
+    })
+
+    return {
+      interactionId,
+      draftId: null,
+      classification: classification.classification,
+      autoSent: false,
+    }
+  }
 
   // Step 5a: Spam early-return. Per Playbook 10.2 step 6, spam falls
   // out of the pipeline before any intelligence work runs. The
