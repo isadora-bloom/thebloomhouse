@@ -67,6 +67,12 @@ interface NotificationRow {
   wedding_id: string | null
   created_at: string
   read: boolean
+  /** Stored priority column (migration 207). Populated by the Stripe webhook
+   *  handler and other writers. We read this directly instead of inferring
+   *  from `type` so the partial index WHERE priority IN ('high','urgent')
+   *  is actually used. Falls back to `notificationPriority(type)` when NULL
+   *  (rows written before migration 207, or writers that didn't set it). */
+  priority: string | null
 }
 
 interface AnomalyRow {
@@ -199,20 +205,38 @@ export async function aggregatePulseFull(
 
   const items: PulseItem[] = []
 
-  // Notifications.
+  // Notifications. Select the stored `priority` column (added in migration
+  // 207) so the partial index WHERE priority IN ('high','urgent') gets used.
+  // Pre-207 rows have priority=NULL and fall back to type inference.
   const { data: notifs } = await supabase
     .from('admin_notifications')
-    .select('id, type, title, body, wedding_id, created_at, read')
+    .select('id, type, title, body, wedding_id, created_at, read, priority')
     .eq('venue_id', venueId)
     .eq('read', false)
     .gte('created_at', sinceIso)
     .order('created_at', { ascending: false })
     .limit(limit)
   for (const n of ((notifs ?? []) as NotificationRow[])) {
+    // Map the stored priority string to a PulsePriority. 'urgent' (Stripe
+    // webhook value) maps to 'critical'; 'normal'/'low' map to 'medium'/'low'.
+    // Fall back to type-based inference for pre-207 rows where priority IS NULL.
+    let resolvedPriority: PulsePriority
+    if (n.priority === 'urgent') {
+      resolvedPriority = 'critical'
+    } else if (n.priority === 'high') {
+      resolvedPriority = 'high'
+    } else if (n.priority === 'low') {
+      resolvedPriority = 'low'
+    } else if (n.priority === 'normal') {
+      resolvedPriority = 'medium'
+    } else {
+      // NULL or unknown value — legacy fallback.
+      resolvedPriority = notificationPriority(n.type)
+    }
     items.push({
       id: `notif:${n.id}`,
       source: 'notification',
-      priority: notificationPriority(n.type),
+      priority: resolvedPriority,
       title: n.title,
       body: n.body,
       href: notificationHref(n.type, n.wedding_id),

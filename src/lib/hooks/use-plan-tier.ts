@@ -29,10 +29,20 @@ export {
  * `venueId` and `isDemo` come from `VenueScopeProvider` (server-resolved
  * + client-mutable), so a scope switch via `useScopeMutator()` triggers
  * an immediate re-fetch of plan_tier without a full page reload.
+ *
+ * Phase 1 audit fixes:
+ * - Default tier is now 'starter' (not 'enterprise') so gates don't flash
+ *   open while loading — guards should fail closed.
+ * - Supabase realtime subscription on the venues row means a Stripe webhook
+ *   upgrade propagates to the sidebar without a page reload.
+ * - Window focus listener refetches when the coordinator returns from the
+ *   Stripe payment page in another tab.
  */
 export function usePlanTier() {
   const { venueId, isDemo } = useVenueScope()
-  const [tier, setTier] = useState<PlanTier>('enterprise') // default until DB responds
+  // Default to 'starter' so feature gates fail closed during the initial
+  // fetch instead of momentarily showing paid-tier content.
+  const [tier, setTier] = useState<PlanTier>('starter')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -52,20 +62,54 @@ export function usePlanTier() {
     let cancelled = false
     setLoading(true)
     const supabase = createClient()
-    supabase
-      .from('venues')
-      .select('plan_tier')
-      .eq('id', venueId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (cancelled) return
-        if (data?.plan_tier) {
-          setTier(data.plan_tier as PlanTier)
-        }
-        setLoading(false)
-      })
+
+    function fetchTier() {
+      if (cancelled) return
+      supabase
+        .from('venues')
+        .select('plan_tier')
+        .eq('id', venueId)
+        .maybeSingle()
+        .then(({ data }) => {
+          if (cancelled) return
+          if (data?.plan_tier) {
+            setTier(data.plan_tier as PlanTier)
+          }
+          setLoading(false)
+        })
+    }
+
+    fetchTier()
+
+    // Realtime: when the Stripe webhook lands and updates venues.plan_tier
+    // the sidebar reflects the new tier immediately without a page reload.
+    const channel = supabase
+      .channel(`venue-plan:${venueId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'venues',
+          filter: `id=eq.${venueId}`,
+        },
+        () => {
+          fetchTier()
+        },
+      )
+      .subscribe()
+
+    // Focus listener: coordinator was on the Stripe payment page in another
+    // tab — re-check the tier when they switch back.
+    function onFocus() {
+      fetchTier()
+    }
+    window.addEventListener('focus', onFocus)
+
     return () => {
       cancelled = true
+      window.removeEventListener('focus', onFocus)
+      supabase.removeChannel(channel)
     }
   }, [venueId, isDemo])
 

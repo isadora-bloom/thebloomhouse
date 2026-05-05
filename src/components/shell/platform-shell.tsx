@@ -8,6 +8,7 @@ import { DemoBanner } from './demo-banner'
 import { ScopeIndicator } from './scope-indicator'
 import { UserMenu } from './user-menu'
 import { FloatingBrainDump } from './floating-brain-dump'
+import { NotificationBell } from './notification-bell'
 import { useVenueScope } from '@/lib/contexts/venue-scope-context'
 
 /**
@@ -28,7 +29,7 @@ const STANDALONE_ROUTES = ['/onboarding', '/setup']
 
 export function PlatformShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const { isDemo, level: scopeLevel } = useVenueScope()
+  const { isDemo, level: scopeLevel, venueId } = useVenueScope()
   const isStandalone = STANDALONE_ROUTES.some((route) => pathname.startsWith(route))
 
   if (isStandalone) {
@@ -63,6 +64,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
           <ModeStrip />
           <div className="flex items-center gap-2">
             <ScopeIndicator />
+            <NotificationBell venueId={venueId} />
             <GearMenu scopeLevel={scopeLevel} />
           </div>
         </div>

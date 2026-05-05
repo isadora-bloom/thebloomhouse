@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { usePlanTier, type PlanTier, TIER_DISPLAY } from '@/lib/hooks/use-plan-tier'
 import { Lock, Sparkles } from 'lucide-react'
 import { useVenueScope } from '@/lib/contexts/venue-scope-context'
@@ -52,10 +53,13 @@ export function UpgradeGate({
           You&apos;re currently on{' '}
           <span className="font-semibold">{current.name}</span>.
         </p>
-        <button className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-sage-600 text-white text-sm font-medium hover:bg-sage-700 transition-colors">
+        <Link
+          href={`/pricing?tier=${requiredTier}`}
+          className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-sage-600 text-white text-sm font-medium hover:bg-sage-700 transition-colors"
+        >
           <Sparkles className="w-4 h-4" />
           Upgrade to {required.name}
-        </button>
+        </Link>
       </div>
     </div>
   )
