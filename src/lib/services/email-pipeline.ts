@@ -143,7 +143,8 @@ async function logPipelineError(
   venueId: string | null,
   stage: string,
   err: unknown,
-  context: Record<string, unknown> = {}
+  context: Record<string, unknown> = {},
+  correlationId?: string | null
 ): Promise<void> {
   // Supabase PostgrestErrors aren't `instanceof Error` — they're plain
   // objects with { message, code, details, hint }. Stringifying them
@@ -173,6 +174,7 @@ async function logPipelineError(
       message: message.slice(0, 2000),
       stack_trace: stack?.slice(0, 4000) ?? null,
       context,
+      correlation_id: correlationId ?? null,
     })
   } catch (insertErr) {
     console.error('[pipeline] logPipelineError insert failed:', insertErr)
@@ -1073,7 +1075,7 @@ export async function processIncomingEmail(
         threadId: email.threadId,
         fromEmail,
         subject: email.subject?.slice(0, 200),
-      })
+      }, correlationId)
       return { interactionId: null, draftId: null, classification: 'error', autoSent: false }
     }
   }
@@ -1102,7 +1104,7 @@ export async function processIncomingEmail(
       await logPipelineError(venueId, 'contact_lookup', err, {
         messageId: email.messageId,
         fromEmail,
-      })
+      }, correlationId)
     }
   }
 
@@ -1183,7 +1185,7 @@ export async function processIncomingEmail(
       threadId: email.threadId,
       fromEmail,
       classification: classification.classification,
-    })
+    }, correlationId)
     return { interactionId: null, draftId: null, classification: classification.classification, autoSent: false }
   }
 
@@ -1273,7 +1275,7 @@ export async function processIncomingEmail(
       await logPipelineError(venueId, 'human_requested_event', err, {
         interactionId,
         weddingId,
-      })
+      }, correlationId)
     }
 
     try {
@@ -1296,7 +1298,7 @@ export async function processIncomingEmail(
     } catch (err) {
       await logPipelineError(venueId, 'human_requested_notification', err, {
         interactionId,
-      })
+      }, correlationId)
     }
 
     log.info('pipeline.human_requested', {
@@ -1511,7 +1513,7 @@ export async function processIncomingEmail(
         await logPipelineError(venueId, 'initial_inquiry_record', err, {
           weddingId,
           interactionId,
-        })
+        }, correlationId)
       }
 
       // Multi-touch journey: record the inquiry as the first touchpoint.
@@ -1802,7 +1804,7 @@ export async function processIncomingEmail(
           interactionId,
           weddingId,
           events: heatEvents.map((e) => e.eventType),
-        })
+        }, correlationId)
       }
     }
   }
@@ -2021,7 +2023,7 @@ export async function processIncomingEmail(
     } catch (err) {
       await logPipelineError(venueId, 'scheduling_identity_resolve', err, {
         interactionId, inviteeEmail: schedulingEvent.inviteeEmail,
-      })
+      }, correlationId)
     }
   }
 
@@ -2152,7 +2154,7 @@ export async function processIncomingEmail(
     } catch (err) {
       await logPipelineError(venueId, 'scheduling_tool_wedding_create', err, {
         interactionId, fromEmail, inviteeName: schedulingEvent.inviteeName,
-      })
+      }, correlationId)
     }
   }
 
@@ -2386,7 +2388,7 @@ export async function processIncomingEmail(
         weddingId,
         schedulingSource: schedulingEvent.source,
         kind: schedulingEvent.kind,
-      })
+      }, correlationId)
     }
   }
 
@@ -2406,7 +2408,7 @@ export async function processIncomingEmail(
       await logPipelineError(venueId, 'signal_inference', err, {
         interactionId,
         weddingId,
-      })
+      }, correlationId)
     }
   }
 
@@ -2423,7 +2425,7 @@ export async function processIncomingEmail(
     await logPipelineError(venueId, 'knowledge_gaps_record', err, {
       interactionId,
       weddingId,
-    })
+    }, correlationId)
   }
 
   // Step 5b: Booking-confirmation detection (coordinator prompt, never
@@ -2548,7 +2550,7 @@ export async function processIncomingEmail(
     await logPipelineError(venueId, 'booking_signal_detect', err, {
       interactionId,
       weddingId,
-    })
+    }, correlationId)
   }
 
   // Step 6: Route to appropriate brain for draft generation
@@ -2606,7 +2608,7 @@ export async function processIncomingEmail(
         interactionId,
         fromEmail,
         classification: emailClassification,
-      })
+      }, correlationId)
     }
   } else if (emailClassification === 'client_message') {
     if (weddingId) {
@@ -2634,7 +2636,7 @@ export async function processIncomingEmail(
           interactionId,
           weddingId,
           fromEmail,
-        })
+        }, correlationId)
       }
     }
   }
@@ -2724,7 +2726,7 @@ export async function processIncomingEmail(
             await logPipelineError(venueId, 'autosend_stage_transition', autoSendUpdateErr, {
               draftId,
               interactionId,
-            })
+            }, correlationId)
             // Do not create a notification or mark autoSent — the draft
             // stays in 'pending' for manual approval.
           } else {
@@ -2758,7 +2760,7 @@ export async function processIncomingEmail(
         await logPipelineError(venueId, 'autosend_check', err, {
           draftId,
           interactionId,
-        })
+        }, correlationId)
       }
     }
   }

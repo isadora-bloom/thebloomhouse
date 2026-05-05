@@ -59,6 +59,8 @@ function extractAttachmentMeta(rawText: string): { name: string; type: string; p
   return { name: legacy[1].trim(), type: legacy[2].trim(), path: legacy[3].trim() }
 }
 
+const FILE_SIZE_CAP_BYTES = 5 * 1024 * 1024 // 5 MB
+
 async function readAttachedFileText(
   supabase: ReturnType<typeof createServiceClient>,
   path: string
@@ -66,6 +68,12 @@ async function readAttachedFileText(
   try {
     const { data, error } = await supabase.storage.from('brain-dump').download(path)
     if (error || !data) return null
+    // OOM guard (GAP H4): check blob size before converting to a string.
+    // A 10 MB CSV would allocate a 10 MB string on the Vercel function
+    // heap before the 40 k char truncation runs. Check the blob first.
+    if (data.size > FILE_SIZE_CAP_BYTES) {
+      return `[File too large for inline processing — ${(data.size / 1024 / 1024).toFixed(1)} MB exceeds the 5 MB limit. Trim the file or paste the relevant section as text.]`
+    }
     const text = await data.text()
     if (!text) return null
     return text.length > FILE_CONTENT_CAP ? text.slice(0, FILE_CONTENT_CAP) + '\n... (truncated)' : text

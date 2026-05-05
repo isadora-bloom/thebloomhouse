@@ -11,6 +11,7 @@ import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { getCoupleAuth, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { verifyDemoToken, DEMO_TOKEN_COOKIE, DEMO_VENUE_ID as DEMO_VENUE_CONSTANT } from '@/lib/services/demo-token'
+import { createLogger } from '@/lib/observability/logger'
 
 // ---------------------------------------------------------------------------
 // Rate limit: 20 requests per 15 minutes per wedding (falls back to venue or
@@ -120,7 +121,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Rate limit by wedding ID (or venue ID for non-wedding queries)
+    // Rate limit by wedding ID (or venue ID for non-wedding queries).
+    // GAP M1: if weddingId is absent the key falls back to venueId,
+    // which is shared across ALL weddings for that venue. Log a warning
+    // so the fallback is visible in Vercel logs rather than silent.
+    if (!weddingId) {
+      const log = createLogger({ venueId, actor: 'sage.rate_limit' })
+      log.warn('sage.rate-limit.venue-fallback', {
+        event_type: 'sage.rate_limit',
+        outcome: 'skip',
+        data: { reason: 'no weddingId — rate limit key is venue-scoped, shared across all weddings', venueId },
+      })
+    }
     const rateLimitId = weddingId || venueId || 'anonymous'
     const rl = await checkRateLimit({
       key: `sage:${rateLimitId}`,

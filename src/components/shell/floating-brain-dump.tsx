@@ -174,6 +174,17 @@ export function FloatingBrainDump() {
     let inputType: 'text' | 'image' | 'pdf' | 'csv' = 'text'
     if (file) {
       try {
+        // Client-side size guard (GAP H4): reject before uploading so
+        // the Vercel function never downloads a file it cannot process.
+        // Mirror of the server-side FILE_SIZE_CAP_BYTES (5 MB).
+        const MAX_BYTES = 5 * 1024 * 1024
+        if (file.size > MAX_BYTES) {
+          setState({
+            kind: 'error',
+            message: `File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum size is 5 MB. Trim the file or paste the relevant section as text.`,
+          })
+          return
+        }
         const supabase = getSupabase()
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
         const path = `${venueId}/${crypto.randomUUID()}-${safeName}`
