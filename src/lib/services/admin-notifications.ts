@@ -50,6 +50,12 @@ export async function createNotification(options: {
   type: string
   title: string
   body?: string
+  /** Priority controls visibility in the notification bell (which shows
+   *  'high' and 'urgent' only) and in the pulse aggregator. Defaults to
+   *  'normal' so existing callers that don't pass priority are not
+   *  silently dropped from the bell — they land in the full list but not
+   *  the high-priority badge count. */
+  priority?: 'urgent' | 'high' | 'normal' | 'low'
   /** T5-eta.3: forensic-chain correlation id from the request scope.
    *  Lets a coordinator query "every notification fired while
    *  processing this inbound email" with one id. Optional — many
@@ -101,6 +107,7 @@ export async function createNotification(options: {
       type: options.type,
       title: options.title,
       body: options.body ?? null,
+      priority: options.priority ?? 'normal',
     }
     if (options.correlationId) insertPayload.correlation_id = options.correlationId
 

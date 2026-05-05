@@ -113,6 +113,9 @@ async function detectResponseTimeConversion(
       const responseTime = new Date(w.first_response_at as string).getTime()
       const diffMinutes = (responseTime - inquiryTime) / 60_000
 
+      // Skip rows where inquiry_date is after first_response_at (data corruption)
+      if (diffMinutes < 0) continue
+
       let bucket: string
       if (diffMinutes < 30) bucket = '<30min'
       else if (diffMinutes < 60) bucket = '30-60min'
@@ -845,7 +848,11 @@ async function detectPipelineStalls(
         if (['lost', 'cancelled'].includes(h.status as string)) lostCount++
       }
     }
-    const baselineLossRate = totalResolved > 0 ? lostCount / totalResolved : 0.4 // default assumption
+    // Guard: fewer than 5 resolved leads makes any baseline unreliable.
+    // baselineLossRate = 0 when guard fails; downstream at-risk revenue calc is suppressed.
+    const baselineLossRate = totalResolved >= 5
+      ? lostCount / totalResolved
+      : 0
 
     const insights: InsightCandidate[] = []
 
@@ -864,31 +871,41 @@ async function detectPipelineStalls(
         .join(', ')
 
       // Estimate at-risk revenue (stalled leads lose at higher rate)
-      const stalledLossRate = Math.min(baselineLossRate * 1.5, 0.85)
+      // Only compute when we have a reliable baseline (>= 5 resolved leads)
+      const hasReliableLossRate = totalResolved >= 5
+      const stalledLossRate = hasReliableLossRate ? Math.min(baselineLossRate * 1.5, 0.85) : 0
       const atRiskRevenue = totalStalledValue * stalledLossRate
 
       const priority: InsightCandidate['priority'] =
         totalStalled >= 5 ? 'critical' :
           totalStalled >= 3 ? 'high' : 'medium'
 
+      // Title: only show dollar amount when loss-rate baseline is reliable
+      const riskLabel = hasReliableLossRate && atRiskRevenue > 0
+        ? formatDollars(atRiskRevenue) + ' at risk'
+        : 'action needed'
+
       insights.push({
         insight_type: 'risk',
         category: 'lead_conversion',
-        title: `${totalStalled} lead${totalStalled > 1 ? 's' : ''} stalled for 14+ days — ${totalStalledValue > 0 ? formatDollars(atRiskRevenue) + ' at risk' : 'revenue at risk'}`,
+        title: `${totalStalled} lead${totalStalled > 1 ? 's' : ''} stalled for 14+ days — ${riskLabel}`,
         body: `${totalStalled} active leads haven't moved forward in over ${STALL_THRESHOLD_DAYS} days: ${stageBreakdown}. ` +
-          `Based on your historical data, leads that stall this long convert at a significantly lower rate. ` +
-          (totalStalledValue > 0 ? `These leads represent ${formatDollars(totalStalledValue)} in potential revenue. ` : '') +
+          (hasReliableLossRate
+            ? `Based on your historical data, leads that stall this long convert at a significantly lower rate. `
+            : `Stalled leads are at elevated risk of going cold. `) +
+          (totalStalledValue > 0 && hasReliableLossRate ? `These leads represent ${formatDollars(totalStalledValue)} in potential revenue. ` : '') +
           `Every additional day of inaction makes recovery less likely.`,
         action: `Review each stalled lead this week. For "proposal_sent" leads, call directly — email hasn't worked. For "tour_scheduled" leads, confirm or reschedule. For "inquiry" leads, try a different channel (text, phone, social).`,
         priority,
         confidence: 0.8, // Pipeline stalls are highly concrete
-        impact_score: atRiskRevenue,
+        impact_score: hasReliableLossRate ? atRiskRevenue : undefined,
         data_points: {
           total_stalled: totalStalled,
           total_stalled_value: totalStalledValue,
           stall_threshold_days: STALL_THRESHOLD_DAYS,
-          at_risk_revenue: Math.round(atRiskRevenue),
-          baseline_loss_rate: pct(baselineLossRate, 1),
+          at_risk_revenue: hasReliableLossRate ? Math.round(atRiskRevenue) : null,
+          baseline_loss_rate: hasReliableLossRate ? pct(baselineLossRate, 1) : null,
+          historical_sample_size: totalResolved,
           stages: Object.fromEntries(stalledByStage),
           total_active_pipeline: weddings.length,
         },
@@ -1134,6 +1151,13 @@ async function detectLostDealPatterns(
             actionText += `Look for patterns in timing, source, and stage. There may be a fixable process issue.`
           }
 
+          const lostReasonConfidence = confidenceFromN(lostDeals.length, 8, 20)
+          // Confidence gate: skip insight entirely when sample is too small to be meaningful
+          if (lostReasonConfidence >= 0.3) {
+          let lostReasonPriority: InsightCandidate['priority'] = topReason[1].count >= 5 ? 'high' : 'medium'
+          // Downgrade priority when confidence is insufficient to support it
+          if (lostReasonConfidence < 0.5 && lostReasonPriority === 'high') lostReasonPriority = 'medium'
+
           insights.push({
             insight_type: 'recommendation',
             category: 'lead_conversion',
@@ -1141,8 +1165,8 @@ async function detectLostDealPatterns(
             body: `The leading reason for lost deals is "${topReasonName}", accounting for ${topReason[1].count} of your ${lostDeals.length} recorded losses (${topReasonPct}%).${bodyExtra} ` +
               `This concentration in a single reason suggests a systematic issue rather than random loss.`,
             action: actionText,
-            priority: topReason[1].count >= 5 ? 'high' : 'medium',
-            confidence: confidenceFromN(lostDeals.length, 8, 20),
+            priority: lostReasonPriority,
+            confidence: lostReasonConfidence,
             data_points: {
               total_lost_deals: lostDeals.length,
               reason_breakdown: Object.fromEntries(
@@ -1156,6 +1180,7 @@ async function detectLostDealPatterns(
             compared_to: 'internal_losses',
             expires_at: expiresInDays(30),
           })
+          } // end confidence gate
         }
       }
     }
@@ -1196,7 +1221,12 @@ async function detectLostDealPatterns(
         const worstSource = sourceLossRates[0]
         const bestSource = sourceLossRates[sourceLossRates.length - 1]
 
-        if (worstSource.lossRate - bestSource.lossRate > 0.2 && worstSource.lossRate > 0.5) {
+        const sourceConfidence = confidenceFromN(worstSource.total)
+        if (worstSource.lossRate - bestSource.lossRate > 0.2 && worstSource.lossRate > 0.5 && sourceConfidence >= 0.3) {
+          // Determine priority with confidence gate: downgrade 'high' when confidence < 0.5
+          let sourcePriority: InsightCandidate['priority'] = worstSource.lossRate > 0.7 ? 'high' : 'medium'
+          if (sourceConfidence < 0.5 && sourcePriority === 'high') sourcePriority = 'medium'
+
           insights.push({
             insight_type: 'risk',
             category: 'source_attribution',
@@ -1205,8 +1235,8 @@ async function detectLostDealPatterns(
               `compared to ${bestSource.source} at ${pct(bestSource.lossRate, 1)}% (${bestSource.lost} of ${bestSource.total}). ` +
               `This suggests either the leads from ${worstSource.source} aren't a good fit, or the way you handle them needs adjustment.`,
             action: `Review your ${worstSource.source} listing/profile. Are expectations being set correctly? Are you attracting the right budget and style of couple? Consider adding pre-qualifying questions.`,
-            priority: worstSource.lossRate > 0.7 ? 'high' : 'medium',
-            confidence: confidenceFromN(worstSource.total),
+            priority: sourcePriority,
+            confidence: sourceConfidence,
             data_points: {
               source_loss_rates: sourceLossRates.map(s => ({
                 source: s.source,
@@ -1337,19 +1367,21 @@ async function detectPortalEngagementQuality(
       .select('wedding_id, couple_signed_off')
       .eq('venue_id', venueId)
 
-    let avgFinalisations = 7 // default assumption: 7 of 14 sections at midpoint
-    if (allFinalisations && allFinalisations.length > 0) {
-      const perWedding = new Map<string, number>()
-      for (const f of allFinalisations) {
-        if (f.couple_signed_off) {
-          const wid = f.wedding_id as string
-          perWedding.set(wid, (perWedding.get(wid) || 0) + 1)
-        }
+    // Guard: fewer than 5 finalisation rows means no meaningful benchmark exists.
+    // Skip the entire readiness detector rather than defaulting to a made-up average.
+    if (!allFinalisations || allFinalisations.length < 5) return []
+
+    let avgFinalisations = 7 // will be overwritten below
+    const perWeddingFin = new Map<string, number>()
+    for (const f of allFinalisations) {
+      if (f.couple_signed_off) {
+        const wid = f.wedding_id as string
+        perWeddingFin.set(wid, (perWeddingFin.get(wid) || 0) + 1)
       }
-      if (perWedding.size > 0) {
-        const vals = [...perWedding.values()]
-        avgFinalisations = vals.reduce((s, v) => s + v, 0) / vals.length
-      }
+    }
+    if (perWeddingFin.size > 0) {
+      const vals = [...perWeddingFin.values()]
+      avgFinalisations = vals.reduce((s, v) => s + v, 0) / vals.length
     }
 
     const insights: InsightCandidate[] = []
@@ -1693,14 +1725,13 @@ async function detectCoupleReadiness(
       }
     }
 
-    // Calculate overall average across all weddings (need at least 5 for meaningful baseline)
+    // Calculate overall average across all weddings (need at least 3 for meaningful baseline)
     const allCounts = [...finByWedding.values()]
-    if (allCounts.length < 5) {
-      // Not enough historical data to compare against — use reasonable defaults
+    if (allCounts.length < 3) {
+      // Not enough historical finalisation data to benchmark couples against — skip detector
+      return []
     }
-    const overallAvg = allCounts.length >= 3
-      ? allCounts.reduce((s, v) => s + v, 0) / allCounts.length
-      : 7 // default midpoint assumption
+    const overallAvg = allCounts.reduce((s, v) => s + v, 0) / allCounts.length
 
     // Get checklist completion for upcoming weddings
     const weddingIds = upcomingWeddings.map(w => w.id as string)

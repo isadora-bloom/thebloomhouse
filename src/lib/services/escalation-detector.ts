@@ -116,6 +116,7 @@ export async function runEscalationCheck(
       type: 'escalation',
       title: `Escalation: "${matchedKeyword}" from ${coupleName}`,
       body: `Detected in ${sourceLabel}: "${excerpt}"${linkSuffix}`,
+      priority: 'urgent',
     })
 
     return { escalated: true, matchedKeyword }

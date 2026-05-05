@@ -1484,6 +1484,27 @@ export async function processIncomingEmail(
         }
       }
 
+      // Notify coordinators of the new inquiry so the bell shows it.
+      // Priority 'normal' — not urgent, but coordinators should see every
+      // new lead. The 5-minute dedup window in createNotification handles
+      // accidental double-fires on the same email.
+      try {
+        await createNotification({
+          venueId,
+          weddingId,
+          type: 'inquiry_received',
+          title: 'New inquiry',
+          body: `New inquiry from ${fromName ?? fromEmail}`,
+          priority: 'normal',
+          correlationId,
+        })
+      } catch (err) {
+        await logPipelineError(venueId, 'inquiry_received_notification', err, {
+          weddingId,
+          interactionId,
+        }, correlationId)
+      }
+
       // Create initial engagement event + trigger heat recalculation.
       // Without the recalc, weddings.heat_score sat at 0 despite the
       // +40 initial_inquiry event existing — leads page hid them behind

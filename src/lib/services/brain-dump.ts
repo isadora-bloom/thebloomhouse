@@ -285,6 +285,7 @@ export async function routeBrainDump(args: {
         rawText,
         submittedBy,
       }),
+      priority: 'high',
     })
     await supabase
       .from('brain_dump_entries')
@@ -327,6 +328,7 @@ export async function routeBrainDump(args: {
         noteBody,
         rawText,
       }),
+      priority: 'high',
     })
     await supabase
       .from('brain_dump_entries')
@@ -359,6 +361,7 @@ export async function routeBrainDump(args: {
         action,
         rawText,
       }),
+      priority: 'high',
     })
     await supabase
       .from('brain_dump_entries')
@@ -468,6 +471,7 @@ export async function routeBrainDump(args: {
         type: 'brain_dump_kb_import_confirm',
         title: `Confirm ${rows.length} Q/A row${rows.length === 1 ? '' : 's'} for the knowledge base`,
         body: JSON.stringify({ entryId, rowCount: rows.length, sample: rows.slice(0, 3) }),
+        priority: 'high',
       })
       await supabase
         .from('brain_dump_entries')
@@ -532,6 +536,7 @@ export async function routeBrainDump(args: {
       type: 'brain_dump_operational_note_confirm',
       title: 'Confirm operational note',
       body: JSON.stringify({ entryId, noteBody, rawText }),
+      priority: 'high',
     })
     await supabase
       .from('brain_dump_entries')
@@ -574,6 +579,7 @@ export async function routeBrainDump(args: {
           rows: extract.rows,
           rawText,
         }),
+        priority: 'high',
       })
       await supabase
         .from('brain_dump_entries')
@@ -600,6 +606,7 @@ export async function routeBrainDump(args: {
         question: 'I classified this as analytics data but couldn\'t pull clean (source, month, amount) rows. Want to reclassify or import manually at /intel/sources?',
         rawText,
       }),
+      priority: 'high',
     })
     await supabase
       .from('brain_dump_entries')
