@@ -14,7 +14,7 @@ import {
   CalendarCheck,
   ArrowRightLeft,
 } from 'lucide-react'
-import { useScope } from '@/lib/hooks/use-scope'
+import { useScope, useScopeMutator } from '@/lib/hooks/use-scope'
 import { UpgradeGate } from '@/components/ui/upgrade-gate'
 
 // ---------------------------------------------------------------------------
@@ -100,21 +100,6 @@ function healthBg(score: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Scope cookie helper (matches scope-selector.tsx)
-// ---------------------------------------------------------------------------
-
-function switchToVenueScope(venueId: string, venueName: string, companyName?: string) {
-  const scope = {
-    level: 'venue' as const,
-    venueId,
-    venueName,
-    companyName,
-  }
-  document.cookie = `bloom_scope=${encodeURIComponent(JSON.stringify(scope))}; path=/; max-age=${60 * 60 * 24 * 365}`
-  document.cookie = `bloom_venue=${venueId}; path=/; max-age=${60 * 60 * 24 * 365}`
-}
-
-// ---------------------------------------------------------------------------
 // Wrapper + Gate
 // ---------------------------------------------------------------------------
 
@@ -133,6 +118,7 @@ export default function BenchmarkPageWrapper() {
 function BenchmarkInner() {
   const router = useRouter()
   const scope = useScope()
+  const setScope = useScopeMutator()
 
   const [data, setData] = useState<BenchmarkResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -399,9 +385,21 @@ function BenchmarkInner() {
                     <td className="px-6 py-4">
                       <button
                         onClick={() => {
-                          switchToVenueScope(v.venueId, v.venueName, scope.companyName)
+                          // Switch via the in-memory scope store (no
+                          // full reload). router.refresh fires inside
+                          // useScopeMutator so server components on
+                          // the destination page render against the
+                          // new cookie.
+                          setScope({
+                            level: 'venue',
+                            venueId: v.venueId,
+                            venueName: v.venueName,
+                            orgId: scope.orgId ?? null,
+                            orgName: scope.companyName ?? null,
+                            groupId: null,
+                            groupName: null,
+                          })
                           router.push('/intel/dashboard')
-                          window.location.reload()
                         }}
                         className="font-medium text-sage-900 hover:text-sage-700 hover:underline transition-colors text-left"
                       >

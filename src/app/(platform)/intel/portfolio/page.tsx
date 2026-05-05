@@ -14,7 +14,7 @@ import {
   X,
   Plus,
 } from 'lucide-react'
-import { useScope } from '@/lib/hooks/use-scope'
+import { useScope, useScopeMutator } from '@/lib/hooks/use-scope'
 import { computeHealthScore } from '@/lib/intel/health-score'
 
 // ---------------------------------------------------------------------------
@@ -312,6 +312,7 @@ function HealthBreakdownPanel({
 export default function PortfolioOverviewPage() {
   const router = useRouter()
   const scope = useScope()
+  const setScope = useScopeMutator()
   // Portfolio always shows all org venues (scopeVenueFilter not used here)
 
   const [venues, setVenues] = useState<VenueRow[]>([])
@@ -656,16 +657,21 @@ export default function PortfolioOverviewPage() {
               {/* Clickable card body */}
               <button
                 onClick={() => {
-                  // Carry the user's actual company name across the
-                  // scope switch — hardcoding "The Crestwood Collection"
-                  // here stamped the demo org name onto every real
-                  // venue's cookie. scope.companyName comes from
-                  // organisations.name resolved by useScope.
-                  const companyName = scope.companyName ?? null
-                  document.cookie = `bloom_scope=${encodeURIComponent(JSON.stringify({ level: 'venue', venueId: vc.id, venueName: vc.name, companyName, orgId: scope.orgId }))}; path=/; max-age=${60 * 60 * 24 * 365}`
-                  document.cookie = `bloom_venue=${vc.id}; path=/; max-age=${60 * 60 * 24 * 365}`
+                  // Switch scope via the in-memory store + cookie write
+                  // (no full-page reload). `useScopeMutator` propagates
+                  // the change to every consumer synchronously and
+                  // schedules a router.refresh so server components
+                  // re-render against the new cookie.
+                  setScope({
+                    level: 'venue',
+                    venueId: vc.id,
+                    venueName: vc.name,
+                    orgId: scope.orgId ?? null,
+                    orgName: scope.companyName ?? null,
+                    groupId: null,
+                    groupName: null,
+                  })
                   router.push('/intel/dashboard')
-                  window.location.reload()
                 }}
                 className="w-full text-left p-6 pb-4"
               >

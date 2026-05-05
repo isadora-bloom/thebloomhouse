@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { FONT_PAIRS, getFontUrl } from '@/config/fonts'
-import { useScope, type Scope } from '@/lib/hooks/use-scope'
+import { useScope, useScopeMutator, type Scope } from '@/lib/hooks/use-scope'
 import {
   Settings, Palette, Type, Save, Eye, Building2, User, Clock, DollarSign,
   Layers, ArrowRight, Plus, Trash2, Image as ImageIcon, X, Plug,
@@ -118,11 +118,23 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
-function switchToVenue(venueId: string, venueName: string, companyName?: string) {
-  const newScope = { level: 'venue', venueId, venueName, companyName }
-  document.cookie = `bloom_scope=${encodeURIComponent(JSON.stringify(newScope))}; path=/; max-age=${60 * 60 * 24 * 365}`
-  document.cookie = `bloom_venue=${venueId}; path=/; max-age=${60 * 60 * 24 * 365}`
-  window.location.reload()
+function useSwitchToVenue() {
+  // Hook wrapper around `useScopeMutator` so the call site reads
+  // `switchToVenue(...)` like before. Avoids `window.location.reload()`
+  // — the store update propagates to every consumer synchronously and
+  // `router.refresh()` re-renders server components against the new
+  // cookie (GAP-09).
+  const setScope = useScopeMutator()
+  return function switchToVenue(venueId: string, venueName: string, companyName?: string) {
+    setScope({
+      level: 'venue',
+      venueId,
+      venueName,
+      orgName: companyName ?? null,
+      groupId: null,
+      groupName: null,
+    })
+  }
 }
 
 export default function SettingsPage() {
@@ -1046,6 +1058,7 @@ interface BrandVenue {
 }
 
 function BrandSettings({ scope }: { scope: Scope & { loading: boolean } }) {
+  const switchToVenue = useSwitchToVenue()
   const [venues, setVenues] = useState<BrandVenue[]>([])
   const [orgId, setOrgId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)

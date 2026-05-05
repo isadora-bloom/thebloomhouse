@@ -1,6 +1,5 @@
 'use client'
 
-import { useState, useEffect } from 'react'
 import { usePathname } from 'next/navigation'
 import { SidebarV2 } from './sidebar-v2'
 import { ModeStrip } from './mode-strip'
@@ -9,6 +8,7 @@ import { DemoBanner } from './demo-banner'
 import { ScopeIndicator } from './scope-indicator'
 import { UserMenu } from './user-menu'
 import { FloatingBrainDump } from './floating-brain-dump'
+import { useVenueScope } from '@/lib/contexts/venue-scope-context'
 
 /**
  * Client wrapper for the platform layout.
@@ -18,34 +18,17 @@ import { FloatingBrainDump } from './floating-brain-dump'
  * `bloom_nav_v2` feature flag and the legacy Sidebar + flat top bar
  * were removed). Standalone routes still render only a minimal top
  * bar with the user menu so users can sign out from inside a wizard.
+ *
+ * `isDemo` and `scopeLevel` are read from `VenueScopeProvider` (server-
+ * resolved) instead of the previous empty-deps `useEffect` cookie read,
+ * so a scope change via `useScopeMutator` propagates here without a
+ * full reload (GAP-09).
  */
 const STANDALONE_ROUTES = ['/onboarding', '/setup']
 
-function useIsDemo(): boolean {
-  const [isDemo, setIsDemo] = useState(false)
-  useEffect(() => {
-    setIsDemo(document.cookie.split('; ').some((c) => c === 'bloom_demo=true'))
-  }, [])
-  return isDemo
-}
-
-function useScopeLevel(): 'venue' | 'group' | 'company' {
-  const [level, setLevel] = useState<'venue' | 'group' | 'company'>('venue')
-  useEffect(() => {
-    try {
-      const raw = document.cookie.split('; ').find((c) => c.startsWith('bloom_scope='))?.split('=')[1]
-      if (!raw) return
-      const parsed = JSON.parse(decodeURIComponent(raw)) as { level?: string }
-      if (parsed?.level === 'group' || parsed?.level === 'company') setLevel(parsed.level)
-    } catch { /* ignore */ }
-  }, [])
-  return level
-}
-
 export function PlatformShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const isDemo = useIsDemo()
-  const scopeLevel = useScopeLevel()
+  const { isDemo, level: scopeLevel } = useVenueScope()
   const isStandalone = STANDALONE_ROUTES.some((route) => pathname.startsWith(route))
 
   if (isStandalone) {
