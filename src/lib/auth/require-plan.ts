@@ -8,6 +8,7 @@ import {
   type PlanTier,
 } from '@/lib/auth/plan-tiers'
 import { recordCounter } from '@/lib/observability/metrics'
+import { verifyDemoToken, DEMO_TOKEN_COOKIE } from '@/lib/services/demo-token'
 
 // ---------------------------------------------------------------------------
 // requirePlan — API-layer plan tier enforcement (PROJECT-AUDIT-V2 GAP-12).
@@ -56,13 +57,14 @@ export async function requirePlan(
 ): Promise<RequirePlanResult> {
   const route = routeNameFromRequest(request)
 
-  // Demo mode bypass — EXPLICIT early return. The bloom_demo cookie
-  // unlocks every paid feature in the product (it's how the YC demo +
-  // landing-page /demo entry work). Mirrors usePlanTier's default of
-  // 'enterprise' on the client. Without this branch, demo coordinators
-  // would 403 on /api/intel/* the moment they hit a paid feature.
+  // Demo mode bypass — EXPLICIT early return. A valid HMAC-signed
+  // bloom_demo_token cookie (HttpOnly, server-minted) unlocks every paid
+  // feature in the product for the YC demo and landing-page /demo flows.
+  // Raw cookie forgery (DevTools) no longer works because the unsigned
+  // `bloom_demo=true` value is never checked here.
   const cookieStore = await cookies()
-  if (cookieStore.get('bloom_demo')?.value === 'true') {
+  const demoVerify = verifyDemoToken(cookieStore.get(DEMO_TOKEN_COOKIE)?.value)
+  if (demoVerify.ok) {
     return { ok: true, isDemo: true }
   }
 

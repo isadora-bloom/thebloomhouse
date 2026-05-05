@@ -2,6 +2,7 @@ import { cache } from 'react'
 import { cookies } from 'next/headers'
 import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { verifyDemoToken, DEMO_TOKEN_COOKIE } from '@/lib/services/demo-token'
 
 // ---------------------------------------------------------------------------
 // resolvePlatformScope
@@ -170,9 +171,10 @@ async function _resolvePlatformScope(): Promise<PlatformScope | null> {
   const cookieStore = await cookies()
   const scopeCookie = parseScopeCookie(cookieStore.get('bloom_scope')?.value)
 
-  // 1. Demo mode — no auth, no validation, Hawthorne. Names inline so
-  // we avoid a DB roundtrip on every demo page.
-  if (cookieStore.get('bloom_demo')?.value === 'true') {
+  // 1. Demo mode — verified via HMAC-signed token (HttpOnly, server-minted).
+  // The venueId in the verified payload is authoritative; the const below is
+  // a belt-and-suspenders cross-check against the expected demo venue.
+  if (verifyDemoToken(cookieStore.get(DEMO_TOKEN_COOKIE)?.value).ok) {
     return {
       venueId: DEMO_VENUE_ID,
       orgId: DEMO_ORG_ID,

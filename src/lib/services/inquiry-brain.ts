@@ -32,7 +32,7 @@ import { resolveSageIdentity, renderOpenerConstraints } from '@/lib/services/sag
  * line to the EXTRACTED DATA context block so Sage knows whether to ask
  * for headcount or skip it. Pairs with weddings.estimated_guests.
  */
-export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.1'
+export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.2'
 import { selectPhrase } from '@/lib/ai/phrase-selector'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
@@ -69,6 +69,13 @@ export interface InquiryDraftOptions {
    *       | 'website' | 'direct' | (legacy) any other free-form string
    */
   source?: string
+  /**
+   * The Gmail address that received this inquiry (looked up from
+   * interactions.gmail_connection_id → gmail_connections.email_address).
+   * When provided, Sage can reference the specific inbox in its reply
+   * (e.g. "you reached out to partner@venue.com") for multi-Gmail venues.
+   */
+  receivedAtAddress?: string
   /** Correlation id from the upstream pipeline (T1-G). Logged onto
    *  api_costs and downstream draft rows. */
   correlationId?: string
@@ -362,6 +369,7 @@ export async function generateInquiryDraft(
     extractedData,
     taskType = 'new_inquiry',
     source,
+    receivedAtAddress,
     correlationId,
   } = options
 
@@ -478,6 +486,14 @@ export async function generateInquiryDraft(
     if (sourceGuidance) {
       contextBlock += `\n\n## SOURCE GUIDANCE:\n${sourceGuidance}`
     }
+  }
+
+  // Surface which Gmail inbox received this inquiry so Sage can reference
+  // the correct address when relevant (e.g. multi-Gmail venues where
+  // partner@venue.com handles elopements and hello@venue.com handles
+  // full events).
+  if (receivedAtAddress) {
+    contextBlock += `\n- Received at inbox: ${receivedAtAddress}`
   }
 
   if (greeting) {

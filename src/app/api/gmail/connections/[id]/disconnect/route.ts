@@ -16,6 +16,7 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { recordCounter } from '@/lib/observability/metrics'
 import { redactError } from '@/lib/observability/redact'
+import { createNotification } from '@/lib/services/admin-notifications'
 
 async function revokeAtGoogle(token: string): Promise<boolean> {
   try {
@@ -59,13 +60,14 @@ export async function DELETE(
     id: string
     venue_id: string
     is_primary: boolean
+    email_address: string | null
     gmail_tokens: { refresh_token?: string; access_token?: string } | null
   }
   let row: ConnectionRow | null = null
   try {
     const { data, error } = await supabase
       .from('gmail_connections')
-      .select('id, venue_id, is_primary, gmail_tokens')
+      .select('id, venue_id, is_primary, email_address, gmail_tokens')
       .eq('id', id)
       .maybeSingle()
     if (error) throw error
@@ -145,6 +147,23 @@ export async function DELETE(
       had_token: Boolean(revokeTarget),
     },
   })
+
+  // Notify the coordinator so they know their inbox is no longer connected.
+  // Writes an admin_notifications row of type 'gmail_disconnected' so the
+  // coordinator sees a banner in the Agent dashboard.
+  try {
+    const emailLabel = row.email_address ?? `connection ${id.slice(0, 8)}`
+    await createNotification({
+      venueId: auth.venueId,
+      type: 'gmail_disconnected',
+      title: 'Gmail inbox disconnected',
+      body: `${emailLabel} has been disconnected. Sage can no longer poll or send from this inbox. Reconnect in Settings → Agent → Gmail Connections.`,
+    })
+  } catch (err) {
+    // Non-fatal — the disconnect succeeded; notification failure should
+    // not block the response.
+    console.warn('[gmail/disconnect] notification write failed:', redactError(err))
+  }
 
   return NextResponse.json({ ok: true, revokedAtGoogle })
 }

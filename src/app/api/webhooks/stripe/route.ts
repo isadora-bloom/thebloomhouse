@@ -19,10 +19,22 @@ import type Stripe from 'stripe'
 // for canonical validation. Otherwise we fall back to a manual HMAC check
 // so the endpoint keeps working even if the SDK isn't initialised.
 //
-// Idempotency: every processed event id is recorded in `stripe_events`
-// (migration 054). Repeated deliveries of the same id short-circuit BEFORE
-// any side effects fire. All DB writes are also individually safe to
-// re-run if the idempotency table is missing or the row insert raced.
+// Idempotency — state-machine pattern (migration 209, Phase 1 audit Fix 2):
+//   stripe_events now has a processed_at TIMESTAMPTZ column.
+//   - On first delivery: INSERT row with processed_at = NULL (claim).
+//     Run all side-effects. Then UPDATE processed_at = now() to mark done.
+//   - On retry after crash: the row exists (no 23505) with processed_at IS
+//     NULL — fall through and re-run side-effects, then set processed_at.
+//   - On retry after success: SELECT shows processed_at IS NOT NULL — return
+//     200 immediately without re-running side-effects.
+//   This closes the strand-venue-forever window where INSERT succeeded but
+//   the venue UPDATE threw and the retry previously short-circuited on
+//   the unique constraint before re-applying the tier change.
+//
+// Notification dedup (migration 209, Phase 1 audit Fix 2):
+//   admin_notifications.dedup_key (TEXT) + partial UNIQUE index on
+//   (venue_id, type, dedup_key) WHERE dedup_key IS NOT NULL.
+//   INSERT ... ON CONFLICT DO NOTHING replaces the ILIKE body scan.
 //
 // Observability:
 //   - recordCounter('stripe_webhook_event', { dimension: { type, outcome } })
@@ -88,11 +100,14 @@ interface NotifyOpts {
   body: string
   priority?: 'low' | 'normal' | 'high' | 'urgent'
   /**
-   * Stable dedup key — typically the Stripe object id (e.g. sub_..., in_...).
-   * If a notification with the same venue + type + dedupKey already exists
-   * within the last 24h we skip the insert. This handles webhook replays
-   * for events we've already surfaced (idempotency table is the primary
-   * guard — this is a belt-and-braces secondary).
+   * Stable dedup key — typically '<stripe_event_id>:<notif_type>'.
+   * When set, the INSERT uses ON CONFLICT (venue_id, type, dedup_key)
+   * WHERE dedup_key IS NOT NULL DO NOTHING (partial UNIQUE index added by
+   * migration 209). This replaces the previous ILIKE body-scan dedup which
+   * caused sequential scans and was fragile to body-text changes.
+   *
+   * The stripe_events state-machine (processed_at) is the primary guard;
+   * this is a belt-and-braces secondary for notification dedup specifically.
    */
   dedupKey?: string
 }
@@ -103,27 +118,39 @@ async function writeAdminNotification(
 ): Promise<void> {
   try {
     if (opts.dedupKey) {
-      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-      const { data: existing } = await supabase
-        .from('admin_notifications')
-        .select('id')
-        .eq('venue_id', opts.venueId)
-        .eq('type', opts.type)
-        .gte('created_at', since)
-        .ilike('body', `%${opts.dedupKey}%`)
-        .limit(1)
-      if (existing && existing.length > 0) {
-        return
+      // Use ON CONFLICT DO NOTHING against the partial UNIQUE index
+      // (venue_id, type, dedup_key) WHERE dedup_key IS NOT NULL.
+      // This is a single INSERT — no read-before-write, no sequential scan.
+      const { error } = await supabase.from('admin_notifications').insert({
+        venue_id: opts.venueId,
+        type: opts.type,
+        title: opts.title,
+        body: opts.body,
+        priority: opts.priority ?? 'normal',
+        dedup_key: opts.dedupKey,
+      })
+      // 23505 = unique violation from the partial index = already inserted.
+      // Not an error from our perspective — silently swallow it.
+      if (error) {
+        const code = (error as unknown as { code?: string }).code
+        if (code !== '23505') {
+          console.warn('[webhook/stripe] writeAdminNotification failed:', redactError(error))
+        }
       }
+      return
     }
 
-    await supabase.from('admin_notifications').insert({
+    // No dedup key — plain insert (existing behaviour for non-deduped paths).
+    const { error } = await supabase.from('admin_notifications').insert({
       venue_id: opts.venueId,
       type: opts.type,
       title: opts.title,
       body: opts.body,
       priority: opts.priority ?? 'normal',
     })
+    if (error) {
+      console.warn('[webhook/stripe] writeAdminNotification failed:', redactError(error))
+    }
   } catch (err) {
     // Notification writes are best-effort — never block a webhook ack.
     console.warn('[webhook/stripe] writeAdminNotification failed:', redactError(err))
@@ -199,8 +226,17 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
-    // ---- Idempotency: short-circuit duplicate deliveries ----
-    // Insert the event id; if it already exists we've processed it before.
+    // ---- Idempotency: state-machine pattern (migration 209) ----
+    //
+    // stripe_events has three states per event id:
+    //   (a) Row absent          — first delivery. INSERT, then run side-effects.
+    //   (b) Row present, processed_at IS NULL  — prior run claimed the row but
+    //       crashed before finishing. Re-run side-effects, then set processed_at.
+    //   (c) Row present, processed_at IS NOT NULL — fully processed. Skip.
+    //
+    // Step 1: try INSERT. Two outcomes:
+    //   - Success (201) → state (a), proceed.
+    //   - 23505 unique violation → row already exists, check processed_at (b vs c).
     {
       const { error: idemErr } = await supabase
         .from('stripe_events')
@@ -208,22 +244,36 @@ export async function POST(request: NextRequest) {
           id: event.id,
           type: event.type,
           payload: event as unknown as Record<string, unknown>,
+          // processed_at intentionally omitted — stays NULL until side-effects done.
         })
 
       if (idemErr) {
-        // 23505 = unique violation = already processed
         const code = (idemErr as unknown as { code?: string }).code
         if (code === '23505') {
-          console.log(`[webhook/stripe] Duplicate event ${event.id} — acknowledging`)
-          outcome = 'duplicate'
-          await recordCounter('stripe_webhook_event', { dimension: { type: event.type, outcome } })
-          return NextResponse.json({ received: true, duplicate: true })
+          // Row exists. Check processed_at to distinguish (b) vs (c).
+          const { data: existing } = await supabase
+            .from('stripe_events')
+            .select('processed_at')
+            .eq('id', event.id)
+            .maybeSingle()
+
+          if (existing && existing.processed_at !== null) {
+            // State (c): fully processed. Short-circuit.
+            console.log(`[webhook/stripe] Duplicate event ${event.id} (processed_at=${existing.processed_at}) — acknowledging`)
+            outcome = 'duplicate'
+            await recordCounter('stripe_webhook_event', { dimension: { type: event.type, outcome } })
+            return NextResponse.json({ received: true, duplicate: true })
+          }
+          // State (b): claimed but not finished. Fall through and re-run
+          // side-effects below, then we'll stamp processed_at at the end.
+          console.log(`[webhook/stripe] Retrying incomplete event ${event.id} (processed_at=null)`)
+        } else {
+          // Table may not exist yet (migration 054 not applied) — log and continue,
+          // falling back to "update is safe to re-run" semantics.
+          // Redact: idempotency insert errors can include constraint
+          // detail referencing the event payload.
+          console.warn('[webhook/stripe] Idempotency insert failed (continuing):', redact(idemErr.message))
         }
-        // Table may not exist yet (migration 054 not applied) — log and continue,
-        // falling back to "update is safe to re-run" semantics.
-        // Redact: idempotency insert errors can include constraint
-        // detail referencing the event payload.
-        console.warn('[webhook/stripe] Idempotency insert failed (continuing):', redact(idemErr.message))
       }
     }
 
@@ -460,6 +510,22 @@ export async function POST(request: NextRequest) {
       default:
         console.log(`[webhook/stripe] Unhandled event type: ${event.type}`)
         outcome = 'unhandled'
+    }
+
+    // ---- Step 2: stamp processed_at now that all side-effects have succeeded ----
+    // This completes the state-machine transition from NULL → timestamp.
+    // Failures here are non-fatal: the next retry will re-run side-effects
+    // (idempotent) then attempt to stamp again. Worst case: a notification
+    // is written twice, caught by the dedup_key UNIQUE index.
+    if (eventType) {
+      const { error: stampErr } = await supabase
+        .from('stripe_events')
+        .update({ processed_at: new Date().toISOString() })
+        .eq('id', event.id)
+        .is('processed_at', null)
+      if (stampErr) {
+        console.warn('[webhook/stripe] processed_at stamp failed (non-fatal):', redact(stampErr.message))
+      }
     }
 
     // Always return 200 to acknowledge receipt (Stripe retries on non-2xx)

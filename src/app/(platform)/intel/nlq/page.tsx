@@ -267,6 +267,24 @@ export default function NaturalLanguageQueryPage() {
         body: JSON.stringify({ query: trimmed }),
       })
 
+      if (res.status === 429) {
+        const retryAfterHeader = res.headers.get('Retry-After')
+        const seconds = retryAfterHeader ? parseInt(retryAfterHeader, 10) : 60
+        const safeSeconds = isNaN(seconds) ? 60 : seconds
+        const rateLimitMsg: NLQMessage = {
+          id: `ratelimit-${Date.now()}`,
+          role: 'assistant',
+          content: `You have reached the query limit. Try again in ${safeSeconds} second${safeSeconds === 1 ? '' : 's'}.`,
+          queryId: null,
+          tokensUsed: null,
+          cost: null,
+          helpful: null,
+          created_at: new Date().toISOString(),
+        }
+        setMessages((prev) => [...prev, rateLimitMsg])
+        return
+      }
+
       if (!res.ok) throw new Error('Failed to query')
       const data = await res.json()
 

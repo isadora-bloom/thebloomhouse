@@ -77,7 +77,7 @@ export function GmailConnectionStatus({ venueId }: Props) {
 
   function reconnect() {
     const returnTo = '/agent/inbox'
-    window.location.href = `/api/auth/gmail?returnTo=${encodeURIComponent(returnTo)}`
+    window.location.href = `/api/gmail/oauth/start?returnTo=${encodeURIComponent(returnTo)}`
   }
 
   if (state === 'none') {

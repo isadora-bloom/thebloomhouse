@@ -189,13 +189,34 @@ export async function GET(request: NextRequest) {
   // --- Upsert connection row (idempotent on venue_id + email_address) ---
   const supabase = createServiceClient()
 
-  const { data: existingPrimary } = await supabase
+  // Check whether this specific email already has a row (re-auth case).
+  // If so, preserve its existing is_primary value — we must not flip it
+  // to false when a venue re-auths their primary connection.
+  const { data: existingRow } = await supabase
     .from('gmail_connections')
-    .select('id')
+    .select('id, is_primary')
     .eq('venue_id', venueId)
-    .eq('is_primary', true)
-    .limit(1)
+    .eq('email_address', emailAddress)
     .maybeSingle()
+
+  // If this is a brand-new email (no existing row), check whether ANY
+  // primary already exists for the venue so we can decide whether to
+  // mark this one primary.
+  let computedIsPrimary: boolean
+  if (existingRow) {
+    // Re-auth of an existing connection: preserve the stored is_primary.
+    computedIsPrimary = existingRow.is_primary as boolean
+  } else {
+    // New email for this venue: primary only when no other primary exists.
+    const { data: anyPrimary } = await supabase
+      .from('gmail_connections')
+      .select('id')
+      .eq('venue_id', venueId)
+      .eq('is_primary', true)
+      .limit(1)
+      .maybeSingle()
+    computedIsPrimary = !anyPrimary
+  }
 
   const gmailTokens = {
     access_token: tokens.access_token,
@@ -219,7 +240,7 @@ export async function GET(request: NextRequest) {
         user_id: userId,
         email_address: emailAddress,
         gmail_tokens: gmailTokens,
-        is_primary: !existingPrimary,
+        is_primary: computedIsPrimary,
         sync_enabled: missingScopes.length === 0,
         status,
         error_message: errorMessage,

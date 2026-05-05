@@ -3,11 +3,12 @@ import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { cookies } from 'next/headers'
 import Link from 'next/link'
 import { Flower2, LayoutDashboard, Heart, ArrowRight } from 'lucide-react'
+import { verifyDemoToken, DEMO_TOKEN_COOKIE } from '@/lib/services/demo-token'
 
 export default async function WelcomePage() {
   // If in demo mode, send to the dashboard
   const cookieStore = await cookies()
-  if (cookieStore.get('bloom_demo')?.value === 'true') {
+  if (verifyDemoToken(cookieStore.get(DEMO_TOKEN_COOKIE)?.value).ok) {
     redirect('/')
   }
 

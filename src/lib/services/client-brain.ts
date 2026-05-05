@@ -23,7 +23,7 @@ import {
 import { selectPhrase } from '@/lib/ai/phrase-selector'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
-export const BRAIN_PROMPT_VERSION = 'client-brain.prompt.v1.0'
+export const BRAIN_PROMPT_VERSION = 'client-brain.prompt.v1.1'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
 import { CLIENT_RULES, getClientTaskPrompt } from '@/config/prompts/task-prompts-client'
@@ -46,6 +46,12 @@ export interface ClientDraftOptions {
     body: string
   }
   taskType: string
+  /**
+   * The Gmail address that received this client message (looked up from
+   * interactions.gmail_connection_id → gmail_connections.email_address).
+   * Sage can reference the inbox when relevant for multi-Gmail venues.
+   */
+  receivedAtAddress?: string
   /** Correlation id from upstream caller (T1-G). */
   correlationId?: string
 }
@@ -288,7 +294,7 @@ async function loadWeddingContext(weddingId: string): Promise<string> {
 export async function generateClientDraft(
   options: ClientDraftOptions
 ): Promise<DraftResult> {
-  const { venueId, contactEmail, weddingId, message, taskType, correlationId } = options
+  const { venueId, contactEmail, weddingId, message, taskType, receivedAtAddress, correlationId } = options
 
   // Load personality (Layer 1 + 2)
   const personalityData = await loadPersonalityData(venueId)
@@ -316,6 +322,12 @@ export async function generateClientDraft(
 
   // Build the context block
   let contextBlock = `\n\n## CLIENT'S EMAIL:\n\nFrom: ${message.from}\nSubject: ${message.subject}\n\n${message.body.slice(0, 3000)}`
+
+  // Surface which Gmail inbox received this message so Sage can reference
+  // the correct address when relevant (multi-Gmail venues).
+  if (receivedAtAddress) {
+    contextBlock += `\n\n## INBOX CONTEXT:\nThis message was received at: ${receivedAtAddress}`
+  }
 
   if (weddingContext) {
     contextBlock += `\n\n## WEDDING DETAILS:\n${weddingContext}`

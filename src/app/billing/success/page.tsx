@@ -8,6 +8,7 @@ import { getStripe, isStripeConfigured } from '@/lib/stripe'
 import { planTierForPriceId, planForTier } from '@/lib/billing/plans'
 import type { PlanTier } from '@/lib/auth/plan-tiers'
 import type Stripe from 'stripe'
+import { verifyDemoToken, DEMO_TOKEN_COOKIE } from '@/lib/services/demo-token'
 
 // ---------------------------------------------------------------------------
 // /billing/success — server-rendered checkout confirmation (GAP-02).
@@ -75,9 +76,9 @@ export default async function BillingSuccessPage({ searchParams }: PageProps) {
     notFound()
   }
 
-  // Demo cookie users don't have real Stripe sessions — send them home.
+  // Demo token users don't have real Stripe sessions — send them home.
   const cookieStore = await cookies()
-  if (cookieStore.get('bloom_demo')?.value === 'true') {
+  if (verifyDemoToken(cookieStore.get(DEMO_TOKEN_COOKIE)?.value).ok) {
     redirect('/settings/billing')
   }
 

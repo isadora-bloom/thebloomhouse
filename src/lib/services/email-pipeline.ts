@@ -1119,6 +1119,25 @@ export async function processIncomingEmail(
 
   const interactionId = interaction.id as string
 
+  // Resolve the email address of the Gmail connection that received this
+  // email. Used to populate receivedAtAddress in the brain prompts so
+  // Sage knows which inbox the inquiry landed in (multi-Gmail venues).
+  // Best-effort — failure leaves receivedAtAddress undefined, which is
+  // safe (the brain falls back to no inbox context).
+  let receivedAtAddress: string | undefined
+  if (email.connectionId) {
+    try {
+      const { data: connRow } = await supabase
+        .from('gmail_connections')
+        .select('email_address')
+        .eq('id', email.connectionId)
+        .maybeSingle()
+      receivedAtAddress = (connRow?.email_address as string) ?? undefined
+    } catch {
+      // Non-fatal — skip inbox context on failure.
+    }
+  }
+
   // Stream EEEE: human-escalation fast-path. The interaction is now
   // persisted (the inbox thread is complete), so we record the
   // forensic trail (engagement_event + admin_notification) and
@@ -2503,6 +2522,9 @@ export async function processIncomingEmail(
         // so first-touch replies can acknowledge the discovery channel
         // instead of treating every inquiry identically.
         source: detectedSource,
+        // Tell Sage which inbox received the inquiry so it can reference
+        // the correct address for multi-Gmail venues.
+        receivedAtAddress,
         correlationId,
       })
 
@@ -2529,6 +2551,8 @@ export async function processIncomingEmail(
             body: email.body,
           },
           taskType: 'client_reply',
+          // Tell Sage which inbox received the message.
+          receivedAtAddress,
           correlationId,
         })
 
@@ -2646,6 +2670,10 @@ export async function processIncomingEmail(
                 toName: fromName,
                 subject: draftSubject,
                 threadId: email.threadId,
+                // Pass the inbound connectionId so flushPendingAutoSends
+                // can reply FROM the same Gmail account that received the
+                // inquiry (multi-Gmail fix).
+                connectionId: email.connectionId ?? null,
                 sendAt,
                 confidenceScore,
                 source: detectedSource,
@@ -2827,6 +2855,7 @@ export async function flushPendingAutoSends(venueId: string): Promise<number> {
       toEmail: string
       subject: string
       threadId?: string
+      connectionId?: string | null
       sendAt: string
     }
     try {
@@ -2889,7 +2918,10 @@ export async function flushPendingAutoSends(venueId: string): Promise<number> {
           details.toEmail,
           details.subject,
           appendAIDisclosure(draft.draft_body, disclosureCtx),
-          details.threadId
+          details.threadId,
+          // Use the inbound connection so the reply comes from the
+          // same Gmail account that received the original inquiry.
+          details.connectionId ?? undefined
         )
       } catch (err) {
         sendError = err
@@ -3210,16 +3242,20 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
     throw new Error(`Draft ${draftId} is not approved (status: ${draft.status})`)
   }
 
-  // Get the thread ID from the original interaction (for reply threading)
+  // Get the thread ID and inbound connectionId from the original interaction.
+  // The connectionId ensures the reply goes out FROM the same Gmail account
+  // that received the inquiry (multi-Gmail fix).
   let threadId: string | undefined
+  let inboundConnectionId: string | undefined
   if (draft.interaction_id) {
     const { data: interaction } = await supabase
       .from('interactions')
-      .select('gmail_thread_id')
+      .select('gmail_thread_id, gmail_connection_id')
       .eq('id', draft.interaction_id)
       .single()
 
     threadId = (interaction?.gmail_thread_id as string) ?? undefined
+    inboundConnectionId = (interaction?.gmail_connection_id as string) ?? undefined
   }
 
   // Send via Gmail. Approved drafts MUST go through the venue's authenticated
@@ -3232,7 +3268,8 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
     draft.to_email as string,
     draft.subject as string,
     appendAIDisclosure(draft.draft_body as string, disclosureCtx),
-    threadId
+    threadId,
+    inboundConnectionId
   )
 
   if (!sentMessageId) {

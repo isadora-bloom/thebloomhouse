@@ -463,6 +463,25 @@ export default function SageChatPage() {
           }),
         })
 
+        if (res.status === 429) {
+          const retryAfterHeader = res.headers.get('Retry-After')
+          const seconds = retryAfterHeader ? parseInt(retryAfterHeader, 10) : 60
+          const safeSeconds = isNaN(seconds) ? 60 : seconds
+          // Remove the optimistic user bubble (the user can retry from the input)
+          setMessages((prev) => prev.filter((m) => m.id !== tempId))
+          const rateLimitMsg: Message = {
+            id: `ratelimit-${Date.now()}`,
+            role: 'assistant',
+            content: `You have reached the message limit. Try again in ${safeSeconds} second${safeSeconds === 1 ? '' : 's'}.`,
+            confidence_score: null,
+            created_at: new Date().toISOString(),
+          }
+          setMessages((prev) => [...prev, rateLimitMsg])
+          // Put the user's text back so they can re-send later
+          setInput(text.trim())
+          return
+        }
+
         if (!res.ok) {
           throw new Error('Failed to send message')
         }

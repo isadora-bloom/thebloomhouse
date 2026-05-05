@@ -150,9 +150,15 @@ const VALID_JOBS = [
   'prune_telemetry',
   // PROJECT-AUDIT-V2 BUG-12 (2026-05-05). Daily sweep of the
   // rate_limit_buckets table — drops rows whose updated_at < now() - 7d.
-  // Runs at 02:30 UTC, after prune_telemetry, before the 03:00+ morning
-  // crons. Calls public.prune_rate_limit_buckets() (migration 208).
+  // Kept as a valid job name for manual invocations / local testing.
+  // The Vercel cron now uses prune_maintenance to keep the cron count
+  // under the Pro plan limit of 40.
   'prune_rate_limits',
+  // Phase 1 audit Fix 2 (2026-05-05). Unified nightly maintenance cron
+  // that runs both prune_telemetry AND prune_rate_limits in one tick.
+  // Replaces the two separate Vercel cron entries (was 41, now 40).
+  // Runs at 02:00 UTC — before the 03:00+ morning crons fire.
+  'prune_maintenance',
   // T5-Rixey-BBB (2026-05-02). Side-by-side parity scan: writes one
   // attribution_parity_log row per active wedding per run with the
   // legacy 7-tier chain output AND the new identity-cluster compute
@@ -505,8 +511,16 @@ async function runJob(job: JobName): Promise<unknown> {
       // rate_limit_buckets table (migration 208). Drops rows whose
       // updated_at < now() - 7d. Conservative: every active limiter has
       // windowSec <= 1h, so a 7d retention can never evict a row that's
-      // about to be re-checked. Runs 02:30 UTC, after prune_telemetry.
+      // about to be re-checked. Kept for manual/local invocation.
       return runPruneRateLimits()
+
+    case 'prune_maintenance':
+      // Phase 1 audit Fix 2 (2026-05-05). Consolidated nightly maintenance
+      // cron: runs prune_telemetry + prune_rate_limits in one tick so the
+      // Vercel Pro cron count stays at 40 (limit). Runs 02:00 UTC before
+      // the 03:00+ morning crons. Both sub-jobs are idempotent — running
+      // them together vs separately is equivalent.
+      return runPruneMaintenance()
 
     case 'tour_outcome_classifier':
       // T5-Rixey-GGG (2026-05-02). For each tour with outcome IN
@@ -587,6 +601,46 @@ async function runPruneRateLimits(): Promise<{ rows_deleted: number }> {
     return { rows_deleted: 0 }
   }
   return { rows_deleted: Number(data ?? 0) }
+}
+
+/**
+ * Phase 1 audit Fix 2 (2026-05-05). Combined nightly maintenance cron.
+ * Runs prune_telemetry + prune_rate_limits in a single tick so we stay
+ * within the Vercel Pro cron limit of 40. Each sub-job is independently
+ * error-handled so one failure doesn't suppress the other.
+ */
+async function runPruneMaintenance(): Promise<{
+  telemetry: Awaited<ReturnType<typeof runTelemetryRetentionPrune>>
+  rate_limits: { rows_deleted: number }
+}> {
+  const [telemetry, rate_limits] = await Promise.allSettled([
+    runTelemetryRetentionPrune(),
+    runPruneRateLimits(),
+  ])
+
+  const telemetryResult =
+    telemetry.status === 'fulfilled'
+      ? telemetry.value
+      : (() => {
+          console.error('[prune_maintenance] telemetry prune failed:', telemetry.reason)
+          return {
+            api_costs_deleted: 0,
+            cron_runs_deleted: 0,
+            metered_events_deleted: 0,
+            lead_score_history_deleted: 0,
+            errors: [String(telemetry.reason)],
+          }
+        })()
+
+  const rateLimitsResult =
+    rate_limits.status === 'fulfilled'
+      ? rate_limits.value
+      : (() => {
+          console.error('[prune_maintenance] rate_limits prune failed:', rate_limits.reason)
+          return { rows_deleted: 0 }
+        })()
+
+  return { telemetry: telemetryResult, rate_limits: rateLimitsResult }
 }
 
 // Stream PPP (2026-05-03): the inline runPruneTelemetry helper that used

@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getFontUrl, getFontVars } from '@/config/fonts'
 import { CoupleShell } from '@/components/couple/couple-shell'
+import { verifyDemoToken, DEMO_TOKEN_COOKIE } from '@/lib/services/demo-token'
 
 /**
  * Resolve the venue slug from (in priority order):
@@ -22,7 +23,7 @@ async function resolveVenueSlug(): Promise<string | null> {
 
   // Demo mode is the only context where falling back to a known slug is
   // acceptable. Anywhere else returns null so the caller 404s.
-  if (cookieStore.get('bloom_demo')?.value === 'true') return 'hawthorne-manor'
+  if (verifyDemoToken(cookieStore.get(DEMO_TOKEN_COOKIE)?.value).ok) return 'hawthorne-manor'
 
   return null
 }

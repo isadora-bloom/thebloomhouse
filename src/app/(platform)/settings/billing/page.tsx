@@ -14,6 +14,7 @@ import {
   Calendar,
   Download,
   Receipt,
+  Activity,
 } from 'lucide-react'
 import { PLANS, planForTier } from '@/lib/billing/plans'
 import type { PlanTier } from '@/lib/hooks/use-plan-tier'
@@ -29,6 +30,13 @@ interface InvoiceRow {
   paidAt: string | null
   hostedInvoiceUrl: string | null
   invoicePdfUrl: string | null
+}
+
+interface UsageItem {
+  label: string
+  used: number
+  limit: number
+  windowLabel: string
 }
 
 interface SubscriptionSummary {
@@ -104,6 +112,8 @@ function BillingPageInner() {
   const [portalLoading, setPortalLoading] = useState(false)
   const [invoices, setInvoices] = useState<InvoiceRow[]>([])
   const [invoicesLoading, setInvoicesLoading] = useState(true)
+  const [usage, setUsage] = useState<UsageItem[]>([])
+  const [usageLoading, setUsageLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
@@ -135,8 +145,23 @@ function BillingPageInner() {
         if (!cancelled) setInvoicesLoading(false)
       }
     }
+    async function loadUsage() {
+      setUsageLoading(true)
+      try {
+        const res = await fetch('/api/billing/usage')
+        const data = await res.json()
+        if (res.ok && Array.isArray(data?.items)) {
+          if (!cancelled) setUsage(data.items as UsageItem[])
+        }
+      } catch {
+        // Usage is supplementary — don't surface errors.
+      } finally {
+        if (!cancelled) setUsageLoading(false)
+      }
+    }
     load()
     loadInvoices()
+    loadUsage()
     return () => { cancelled = true }
   }, [])
 
@@ -408,6 +433,55 @@ function BillingPageInner() {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+
+        {/* Usage dashboard */}
+        <div className="bg-white rounded-xl border border-sage-100 p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-heading text-lg font-bold text-sage-900 flex items-center gap-2">
+              <Activity className="w-5 h-5 text-sage-500" />
+              Usage
+            </h3>
+            <span className="text-xs text-sage-500">Last 24 hours</span>
+          </div>
+
+          {usageLoading ? (
+            <div className="flex items-center gap-2 text-sm text-sage-500 py-3">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Loading usage...
+            </div>
+          ) : usage.length === 0 ? (
+            <p className="text-sm text-sage-500 py-3">No usage data available.</p>
+          ) : (
+            <div className="space-y-3">
+              {usage.map((item) => {
+                const pct = Math.min(100, Math.round((item.used / item.limit) * 100))
+                const barColor =
+                  pct >= 90
+                    ? 'bg-red-400'
+                    : pct >= 70
+                      ? 'bg-amber-400'
+                      : 'bg-sage-400'
+                return (
+                  <div key={item.label}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm text-sage-700">{item.label}</span>
+                      <span className="text-xs text-sage-500">
+                        {item.used} / {item.limit}{' '}
+                        <span className="text-sage-400">{item.windowLabel}</span>
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-sage-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${barColor}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>

@@ -314,7 +314,7 @@ export default function AgentSettingsPage() {
   }, [fetchGmailStatus])
 
   // ---- Gmail OAuth callback result handler ----
-  // The new /api/auth/gmail flow redirects back with ?gmail=connected or
+  // /api/gmail/oauth/callback redirects back with ?gmail=connected or
   // ?gmail=error&reason=...
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -349,11 +349,11 @@ export default function AgentSettingsPage() {
   }, [])
 
   // ---- Gmail connect ----
-  // Redirects through /api/auth/gmail which handles OAuth + CSRF state.
+  // Redirects through /api/gmail/oauth/start which handles OAuth + HMAC state.
   function connectGmail() {
     setGmailConnecting(true)
     const returnTo = '/agent/settings'
-    window.location.href = `/api/auth/gmail?returnTo=${encodeURIComponent(returnTo)}`
+    window.location.href = `/api/gmail/oauth/start?returnTo=${encodeURIComponent(returnTo)}`
   }
 
   // ---- Gmail disconnect (all or specific connection) ----
@@ -362,10 +362,8 @@ export default function AgentSettingsPage() {
     try {
       // New per-connection disconnect path that revokes the Google token
       if (connectionId) {
-        const res = await fetch('/api/auth/gmail/disconnect', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ connectionId }),
+        const res = await fetch(`/api/gmail/connections/${connectionId}/disconnect`, {
+          method: 'DELETE',
         })
         const data = await res.json()
         if (data.ok) {

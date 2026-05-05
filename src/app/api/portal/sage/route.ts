@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { generateSageResponse, detectChatHumanRequest, routeChatToHuman } from '@/lib/services/sage-brain'
 import { extractPlanningDecisions, savePlanningNotes, extractAndSaveAINotes } from '@/lib/services/planning-extraction'
@@ -7,8 +8,9 @@ import { runEscalationCheck } from '@/lib/services/escalation-detector'
 import { checkEscalationForVenue } from '@/config/escalation-keywords'
 import { callAIVision, CLAUDE_MODEL } from '@/lib/ai/client'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
-import { getCoupleAuth, getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
+import { getCoupleAuth, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
+import { verifyDemoToken, DEMO_TOKEN_COOKIE, DEMO_VENUE_ID as DEMO_VENUE_CONSTANT } from '@/lib/services/demo-token'
 
 // ---------------------------------------------------------------------------
 // Rate limit: 20 requests per 15 minutes per wedding (falls back to venue or
@@ -36,13 +38,43 @@ export async function POST(request: NextRequest) {
     if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
     const body = await request.json()
-    const { venueId, weddingId, message, fileUrl, fileContext } = body
+    // venueId is resolved below — body value is only trusted for authenticated
+    // (non-demo) callers. Demo callers have their venueId bound to the signed
+    // token payload so a starter-tier coordinator cannot pass their real venue.
+    const { weddingId, message, fileUrl, fileContext } = body
 
-    if (!venueId || !message) {
+    if (!message) {
       return NextResponse.json(
         { error: 'venueId and message are required' },
         { status: 400 }
       )
+    }
+
+    // -----------------------------------------------------------------------
+    // Demo venueId binding: extract from the HMAC-verified token. Ignoring
+    // body.venueId in demo mode prevents a starter-tier coordinator from
+    // passing their real venueId and getting free Intelligence-tier Sage.
+    // -----------------------------------------------------------------------
+    const cookieStore = await cookies()
+    const demoTokenResult = verifyDemoToken(cookieStore.get(DEMO_TOKEN_COOKIE)?.value)
+    const demo = demoTokenResult.ok
+
+    const venueId: string = demoTokenResult.ok
+      ? demoTokenResult.payload.demo_venue_id
+      : (body.venueId as string | undefined) ?? ''
+
+    if (!venueId) {
+      return NextResponse.json(
+        { error: 'venueId and message are required' },
+        { status: 400 }
+      )
+    }
+
+    // Belt-and-suspenders: demo sessions may only access Crestwood demo venues.
+    // The token payload already pins the venueId server-side; this guard covers
+    // any future token migration where payload.venueId is not Hawthorne.
+    if (demo && venueId !== DEMO_VENUE_CONSTANT) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
     // -----------------------------------------------------------------------
@@ -51,7 +83,6 @@ export async function POST(request: NextRequest) {
     // endpoint trusted body values, which let any authenticated user read
     // any wedding's sage_conversations history.
     // -----------------------------------------------------------------------
-    const demo = await isDemoMode()
     if (!demo) {
       // Try couple auth first (most common caller). Couples may only chat
       // about their own wedding at their own venue.

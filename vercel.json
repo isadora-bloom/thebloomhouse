@@ -141,12 +141,8 @@
       "schedule": "15 0 * * *"
     },
     {
-      "path": "/api/cron?job=prune_telemetry",
+      "path": "/api/cron?job=prune_maintenance",
       "schedule": "0 2 * * *"
-    },
-    {
-      "path": "/api/cron?job=prune_rate_limits",
-      "schedule": "30 2 * * *"
     },
     {
       "path": "/api/cron?job=compute_attribution_parity",

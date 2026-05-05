@@ -788,13 +788,13 @@ export default function OnboardingPage() {
   }
 
   // ---- Gmail OAuth ----
-  // Uses /api/auth/gmail which redirects to Google consent, then comes back
-  // to /api/auth/gmail/callback, which redirects here with ?gmail=connected
+  // Uses /api/gmail/oauth/start which redirects to Google consent, then comes
+  // back to /api/gmail/oauth/callback, which redirects here with ?gmail=connected
   // or ?gmail=error&reason=...
   function handleGmailConnect() {
     setGmailLoading(true)
     const returnTo = '/onboarding'
-    window.location.href = `/api/auth/gmail?returnTo=${encodeURIComponent(returnTo)}`
+    window.location.href = `/api/gmail/oauth/start?returnTo=${encodeURIComponent(returnTo)}`
   }
 
   async function handleGmailDisconnect() {
@@ -815,10 +815,8 @@ export default function OnboardingPage() {
         return
       }
 
-      const res = await fetch('/api/auth/gmail/disconnect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connectionId: primary.id }),
+      const res = await fetch(`/api/gmail/connections/${primary.id}/disconnect`, {
+        method: 'DELETE',
       })
       const data = await res.json()
       if (data.ok) {

@@ -2,6 +2,7 @@ import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
+import { verifyDemoToken, DEMO_TOKEN_COOKIE } from '@/lib/services/demo-token'
 
 // ---------------------------------------------------------------------------
 // Demo mode constants — used when bloom_demo cookie is set
@@ -40,11 +41,12 @@ export function isDemoVenueAllowed(venueId: string | null | undefined): boolean 
 }
 
 /**
- * Check if the current request is in demo mode (bloom_demo cookie set).
+ * Check if the current request is in demo mode via HMAC-signed token.
+ * The legacy `bloom_demo=true` string value is never trusted here.
  */
 export async function isDemoMode(): Promise<boolean> {
   const cookieStore = await cookies()
-  return cookieStore.get('bloom_demo')?.value === 'true'
+  return verifyDemoToken(cookieStore.get(DEMO_TOKEN_COOKIE)?.value).ok
 }
 
 // ---------------------------------------------------------------------------
