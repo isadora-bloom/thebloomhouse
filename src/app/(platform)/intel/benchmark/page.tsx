@@ -352,7 +352,7 @@ function BenchmarkInner() {
             </p>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="min-w-[640px] w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-warm-white">
                   {(

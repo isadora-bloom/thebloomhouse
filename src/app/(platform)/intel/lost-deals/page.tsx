@@ -448,7 +448,7 @@ export default function LostDealsPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="min-w-[640px] w-full text-sm">
                 <thead>
                   <tr className="border-b border-border bg-warm-white">
                     <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Stage</th>

@@ -337,7 +337,7 @@ function ClientsPageInner() {
       ) : (
         <div className="bg-surface border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="min-w-[640px] w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-warm-white">
                   <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-sage-600">Client</th>

@@ -452,7 +452,8 @@ function BudgetSection({ items }: { items: BudgetItem[] }) {
           </p>
         </div>
       </div>
-      <table className="w-full text-xs">
+      <div className="overflow-x-auto">
+      <table className="min-w-[400px] w-full text-xs">
         <thead>
           <tr className="border-b border-sage-100">
             <th className="text-left py-1.5 text-sage-500 font-medium">Category</th>
@@ -474,6 +475,7 @@ function BudgetSection({ items }: { items: BudgetItem[] }) {
             ))}
         </tbody>
       </table>
+      </div>
       {items.length === 0 && <p className="text-sm text-sage-400 italic">No budget items yet.</p>}
     </div>
   )
@@ -503,8 +505,8 @@ function GuestSection({ guests }: { guests: Guest[] }) {
         </span>
       </div>
       {guests.length > 0 && (
-        <div className="max-h-48 overflow-y-auto">
-          <table className="w-full text-xs">
+        <div className="max-h-48 overflow-y-auto overflow-x-auto">
+          <table className="min-w-[400px] w-full text-xs">
             <thead className="sticky top-0 bg-surface">
               <tr className="border-b border-sage-100">
                 <th className="text-left py-1.5 text-sage-500 font-medium">Name</th>

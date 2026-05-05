@@ -191,8 +191,8 @@ export default function IdentityWindowsPage() {
         </div>
       )}
 
-      <div className="rounded-lg border border-sage-200 bg-white">
-        <table className="w-full text-sm">
+      <div className="rounded-lg border border-sage-200 bg-white overflow-x-auto">
+        <table className="min-w-[640px] w-full text-sm">
           <thead className="bg-sage-50 text-xs text-sage-600 uppercase">
             <tr>
               <th className="text-left px-4 py-2">Platform</th>
