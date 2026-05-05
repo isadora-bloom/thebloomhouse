@@ -151,7 +151,7 @@ const VALID_JOBS = [
   // PROJECT-AUDIT-V2 BUG-12 (2026-05-05). Daily sweep of the
   // rate_limit_buckets table — drops rows whose updated_at < now() - 7d.
   // Runs at 02:30 UTC, after prune_telemetry, before the 03:00+ morning
-  // crons. Calls public.prune_rate_limit_buckets() (migration 207).
+  // crons. Calls public.prune_rate_limit_buckets() (migration 208).
   'prune_rate_limits',
   // T5-Rixey-BBB (2026-05-02). Side-by-side parity scan: writes one
   // attribution_parity_log row per active wedding per run with the
@@ -502,7 +502,7 @@ async function runJob(job: JobName): Promise<unknown> {
 
     case 'prune_rate_limits':
       // PROJECT-AUDIT-V2 BUG-12 (2026-05-05). Daily sweep of the
-      // rate_limit_buckets table (migration 207). Drops rows whose
+      // rate_limit_buckets table (migration 208). Drops rows whose
       // updated_at < now() - 7d. Conservative: every active limiter has
       // windowSec <= 1h, so a 7d retention can never evict a row that's
       // about to be re-checked. Runs 02:30 UTC, after prune_telemetry.

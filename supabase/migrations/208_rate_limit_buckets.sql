@@ -1,5 +1,5 @@
 -- ---------------------------------------------------------------------------
--- 207_rate_limit_buckets.sql  (PROJECT-AUDIT-V2 BUG-12)
+-- 208_rate_limit_buckets.sql  (PROJECT-AUDIT-V2 BUG-12)
 --
 -- Durable, sliding-window rate limiter backed by Postgres. Replaces the
 -- earlier `rate_limits` table (migration 053) AND every in-memory Map-based

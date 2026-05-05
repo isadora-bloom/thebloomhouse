@@ -6,7 +6,7 @@
  * own Map and horizontal scale defeated the limit entirely.
  *
  * Backed by Postgres (table `rate_limit_buckets`, RPC `check_rate_limit`,
- * migration 207). Sliding window: each key keeps a jsonb array of unix-
+ * migration 208). Sliding window: each key keeps a jsonb array of unix-
  * second timestamps; the RPC evicts entries outside the window then
  * conditionally appends `now()` if the in-window count is under limit.
  *
