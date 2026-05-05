@@ -762,10 +762,78 @@ export async function processIncomingEmail(
   // we don't double-parse the body.
   let schedulingEvent: SchedulingEvent | null = schedulingPreCheck
 
+  // Step 1a.7: Forwarded-email detection. When a coordinator forwards a
+  // client email from another inbox into the Bloom-connected address, the
+  // From header is the coordinator's own address — which is in ownEmails.
+  // Without this step the self-loop guard below would classify it as an
+  // outbound and the entire inquiry would silently vanish (no draft, no
+  // escalation, no interaction row). This check runs BEFORE 1b so that a
+  // confirmed forwarded email is exempted from the self-loop test entirely
+  // and routed into the normal inbound/inquiry brain path instead.
+  //
+  // Detection criteria (any one match is sufficient):
+  //   1. Subject line begins with "Fwd:" or "FW:" (case-insensitive)
+  //   2. Body contains the Gmail forwarding chrome:
+  //      "---------- Forwarded message ----------"
+  //   3. Body contains the Apple Mail / Outlook forwarding chrome:
+  //      "Begin forwarded message:"
+  //
+  // When detected we also try to extract the original sender from the
+  // forwarding headers embedded in the body (the "From: Name <email>"
+  // line that appears after the chrome marker).
+  const isForwardedEmail = (() => {
+    const subjectLower = email.subject.toLowerCase().trim()
+    if (subjectLower.startsWith('fwd:') || subjectLower.startsWith('fw:')) return true
+    if (email.body.includes('---------- Forwarded message ----------')) return true
+    if (email.body.includes('Begin forwarded message:')) return true
+    return false
+  })()
+
+  // Extract the original sender from the forwarded body headers when
+  // present. The forwarding chrome embeds a "From: Name <email>" line
+  // immediately after the chrome marker. We look for that pattern in the
+  // portion of the body that appears after the chrome marker (or across
+  // the whole body for FW: subject-only forwards where the full original
+  // headers may be at the top).
+  let forwardedOriginalSender: string | null = null
+  if (isForwardedEmail) {
+    // Locate the chrome marker and scan from there; fall back to full body.
+    const chromeMarkerGmail = '---------- Forwarded message ----------'
+    const chromeMarkerApple = 'Begin forwarded message:'
+    const gmailIdx = email.body.indexOf(chromeMarkerGmail)
+    const appleIdx = email.body.indexOf(chromeMarkerApple)
+    const scanFrom = gmailIdx !== -1
+      ? gmailIdx + chromeMarkerGmail.length
+      : appleIdx !== -1
+        ? appleIdx + chromeMarkerApple.length
+        : 0
+    const bodySlice = email.body.slice(scanFrom)
+    // Match "From: Display Name <email@example.com>" or "From: email@example.com"
+    const fromLineMatch = bodySlice.match(/^From:\s*.+?<([^>]+)>/im)
+      ?? bodySlice.match(/^From:\s*([\w.+%-]+@[\w.-]+\.[a-z]{2,})/im)
+    if (fromLineMatch) {
+      forwardedOriginalSender = fromLineMatch[1].trim().toLowerCase()
+    }
+
+    log.info('pipeline.forwarded_email_detected', {
+      event_type: 'forwarded_email_detected',
+      outcome: 'ok',
+      data: {
+        rawFrom: rawFromEmail,
+        originalSender: forwardedOriginalSender,
+        subject: email.subject,
+      },
+    })
+  }
+
   // Identity priority:
   //   1. Form-relay parser's extracted lead email (Knot, WW, Zola,
   //      calculator) — most reliable when the parser fires
   //   2. Scheduling-event's invitee email (Calendly + friends)
+  //   2.5 Forwarded-email original sender extracted from forwarding
+  //      chrome headers (Step 1a.7). More reliable than the body
+  //      extractor because it reads the explicit "From:" line in the
+  //      forwarding block rather than scanning free text.
   //   3. Universal body-extracted primary email — used when the From
   //      header is a venue-own alias (the calculator orphan pattern)
   //      or a known shared relay; otherwise the From is the prospect
@@ -776,13 +844,13 @@ export async function processIncomingEmail(
   const fromEmail =
     formLead?.leadEmail ??
     schedulingEvent?.inviteeEmail ??
+    forwardedOriginalSender ??
     (useExtractedFallback ? extractedIdentity.primary_email! : rawFromEmail)
-  // When a form relay or scheduling tool fires, the raw From display
-  // name is the platform / venue / tool name (e.g. "Rixey Manor", "Zola
-  // Vendor Communication", "Calendly"), not the prospect. Falling back
-  // to that would stamp the tool's own name onto the new lead. Use the
-  // parsed name or nothing.
-  const fromName = formLead?.leadName ?? schedulingEvent?.inviteeName ?? (formLead || schedulingEvent ? null : rawFromName)
+  // When a form relay, scheduling tool, or forwarded email fires, the
+  // raw From display name is the platform / venue / coordinator name,
+  // not the prospect. Falling back to that would stamp the wrong name
+  // onto the new lead. Use the parsed name or nothing.
+  const fromName = formLead?.leadName ?? schedulingEvent?.inviteeName ?? (formLead || schedulingEvent || isForwardedEmail ? null : rawFromName)
 
   // Step 1a.6: Content-based auto-ignore and machine-mail detection.
   // Runs only when no form-relay or scheduling-event fired — these
@@ -819,8 +887,10 @@ export async function processIncomingEmail(
   // actually Sage's outbounds, slipped through the guard, then signal-
   // inference fired tour_requested events on Sage's own marketing copy).
   // Skipped for form-relay matches — those intentionally have a venue-
-  // owned From.
-  const isOwnOutbound = !formLead && (
+  // owned From. Also skipped for forwarded emails (Step 1a.7) — those
+  // have a venue-owned From by construction but carry a real client
+  // inquiry that Sage must process as inbound.
+  const isOwnOutbound = !formLead && !isForwardedEmail && (
     ownEmails.has(rawFromEmail)
     || (email.labels ?? []).some((l) => l.toUpperCase() === 'SENT')
   )

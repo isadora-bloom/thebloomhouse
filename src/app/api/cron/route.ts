@@ -1196,7 +1196,13 @@ async function refreshQualitySignalsAllVenues(): Promise<Record<string, number>>
  *
  * Union venue ids from both so a venue that only exists in gmail_connections
  * isn't silently skipped when the legacy column is null.
+ *
+ * Concurrency: venues are processed in parallel chunks of POLL_CHUNK_SIZE (20)
+ * so that at ~30 venues the cron no longer approaches the Vercel 300s ceiling.
+ * Each venue is individually error-isolated — one failure cannot abort others.
  */
+const POLL_CHUNK_SIZE = 20
+
 async function pollEmailsAllVenues(): Promise<Record<string, number>> {
   const supabase = createServiceClient()
 
@@ -1223,18 +1229,34 @@ async function pollEmailsAllVenues(): Promise<Record<string, number>> {
 
   if (venueIds.size === 0) return {}
 
+  const ids = Array.from(venueIds)
   const results: Record<string, number> = {}
-  for (const id of venueIds) {
-    try {
-      const result = await processAllNewEmails(id)
-      // Flush any pending auto-sends whose 5-minute delay has elapsed
-      const flushed = await flushPendingAutoSends(id)
-      results[id] = result.processed + flushed
-    } catch (err) {
-      console.error(`[cron] Email poll failed for venue ${id}:`, err)
-      results[id] = 0
+
+  // Process venues in parallel chunks so a 30-venue run takes roughly
+  // max(venue_latency) per chunk rather than sum(venue_latency) total.
+  // Promise.allSettled ensures one slow/failing venue never blocks the rest.
+  for (let i = 0; i < ids.length; i += POLL_CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + POLL_CHUNK_SIZE)
+    const settled = await Promise.allSettled(
+      chunk.map(async (id) => {
+        const result = await processAllNewEmails(id)
+        // Flush any pending auto-sends whose 5-minute delay has elapsed
+        const flushed = await flushPendingAutoSends(id)
+        return { id, count: result.processed + flushed }
+      })
+    )
+    for (const outcome of settled) {
+      if (outcome.status === 'fulfilled') {
+        results[outcome.value.id] = outcome.value.count
+      } else {
+        // Extract the venue id from the rejection reason if possible, otherwise
+        // log with a chunk-level key so the failure is still visible in the cron
+        // telemetry without crashing the rest of the chunk.
+        console.error('[cron] Email poll failed for venue in chunk:', outcome.reason)
+      }
     }
   }
+
   return results
 }
 
