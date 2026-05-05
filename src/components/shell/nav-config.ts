@@ -470,6 +470,7 @@ export const MODE_SAGE: ModeConfig = {
       subtitle: 'Gmail, Omi, integrations',
       venueOnly: true,
       items: [
+        { label: 'Gmail', href: '/settings/gmail', icon: Mail },
         { label: 'Audio Capture', href: '/settings/audio-capture', icon: Inbox },
         { label: 'OpenPhone (SMS)', href: '/settings/openphone', icon: Phone },
       ],
