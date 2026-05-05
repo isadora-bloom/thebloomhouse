@@ -6,7 +6,7 @@ import { createNotification } from '@/lib/services/admin-notifications'
 import { runEscalationCheck } from '@/lib/services/escalation-detector'
 import { checkEscalationForVenue } from '@/config/escalation-keywords'
 import { callAIVision, CLAUDE_MODEL } from '@/lib/ai/client'
-import { rateLimit, secondsUntil } from '@/lib/rate-limit'
+import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { getCoupleAuth, getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
@@ -81,7 +81,8 @@ export async function POST(request: NextRequest) {
 
     // Rate limit by wedding ID (or venue ID for non-wedding queries)
     const rateLimitId = weddingId || venueId || 'anonymous'
-    const rl = await rateLimit(`sage:${rateLimitId}`, {
+    const rl = await checkRateLimit({
+      key: `sage:${rateLimitId}`,
       limit: SAGE_RATE_LIMIT,
       windowSec: SAGE_RATE_WINDOW_SEC,
     })

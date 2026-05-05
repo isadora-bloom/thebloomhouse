@@ -1,7 +1,7 @@
 // Wipe all non-demo data (venues, orgs, user_profiles) in prod Supabase.
 // Preserves: is_demo=true venues + organisations, auth users (none exist),
 // and any global/reference tables (market_intelligence, industry_benchmarks,
-// rate_limits, stripe_events).
+// rate_limit_buckets, stripe_events).
 //
 // Usage:
 //   node scripts/wipe-real-data.mjs              # dry-run (default)

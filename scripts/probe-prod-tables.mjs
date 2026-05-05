@@ -14,7 +14,7 @@ const probes = [
   ['022', 'venue_group_members'],
   ['049', 'team_invitations'],
   ['050', 'gmail_connections'],
-  ['053', 'rate_limits'],
+  ['207', 'rate_limit_buckets'],
   ['054', 'stripe_events'],
 ]
 // Use a real select (not head:true) — head+count returns OK with count=null

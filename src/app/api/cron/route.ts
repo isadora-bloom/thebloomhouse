@@ -148,6 +148,11 @@ const VALID_JOBS = [
   // Runs at 02:00 UTC, before the 03:00+ morning crons fire so the
   // pre-burst telemetry is already trimmed.
   'prune_telemetry',
+  // PROJECT-AUDIT-V2 BUG-12 (2026-05-05). Daily sweep of the
+  // rate_limit_buckets table — drops rows whose updated_at < now() - 7d.
+  // Runs at 02:30 UTC, after prune_telemetry, before the 03:00+ morning
+  // crons. Calls public.prune_rate_limit_buckets() (migration 207).
+  'prune_rate_limits',
   // T5-Rixey-BBB (2026-05-02). Side-by-side parity scan: writes one
   // attribution_parity_log row per active wedding per run with the
   // legacy 7-tier chain output AND the new identity-cluster compute
@@ -495,6 +500,14 @@ async function runJob(job: JobName): Promise<unknown> {
       // testable + reusable from a future audit page.
       return runTelemetryRetentionPrune()
 
+    case 'prune_rate_limits':
+      // PROJECT-AUDIT-V2 BUG-12 (2026-05-05). Daily sweep of the
+      // rate_limit_buckets table (migration 207). Drops rows whose
+      // updated_at < now() - 7d. Conservative: every active limiter has
+      // windowSec <= 1h, so a 7d retention can never evict a row that's
+      // about to be re-checked. Runs 02:30 UTC, after prune_telemetry.
+      return runPruneRateLimits()
+
     case 'tour_outcome_classifier':
       // T5-Rixey-GGG (2026-05-02). For each tour with outcome IN
       // ('pending', NULL) AND scheduled_at + duration < now(), walk
@@ -560,6 +573,20 @@ async function runPrunePulseSnoozes(): Promise<{
     expired_snoozes_deleted: (snoozeDel ?? []).length,
     expired_dismisses_deleted: (dismissDel ?? []).length,
   }
+}
+
+// PROJECT-AUDIT-V2 BUG-12 (2026-05-05). Rate-limit bucket sweep — calls
+// the SQL helper public.prune_rate_limit_buckets() which DELETEs rows
+// whose updated_at < now() - 7 days. The active limiters have
+// windowSec <= 1h so a 7d retention is a comfortable safety margin.
+async function runPruneRateLimits(): Promise<{ rows_deleted: number }> {
+  const supabase = createServiceClient()
+  const { data, error } = await supabase.rpc('prune_rate_limit_buckets')
+  if (error) {
+    console.error('[prune_rate_limits] RPC failed:', error.message)
+    return { rows_deleted: 0 }
+  }
+  return { rows_deleted: Number(data ?? 0) }
 }
 
 // Stream PPP (2026-05-03): the inline runPruneTelemetry helper that used

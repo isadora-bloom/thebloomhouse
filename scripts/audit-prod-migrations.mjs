@@ -22,7 +22,7 @@ const tables = [
   ['venue_group_members', ['id', 'group_id', 'venue_id']],
   ['team_invitations', ['id', 'org_id', 'venue_id', 'email', 'role', 'token', 'status', 'expires_at']],
   ['gmail_connections', ['id', 'venue_id', 'email', 'access_token']],
-  ['rate_limits', ['id', 'bucket', 'identifier']],
+  ['rate_limit_buckets', ['key', 'hits', 'window_start', 'updated_at']],
   ['stripe_events', ['id', 'event_id', 'type']],
   // Intelligence
   ['intelligence_insights', ['id', 'venue_id', 'category', 'title', 'insight']],

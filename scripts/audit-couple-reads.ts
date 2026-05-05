@@ -47,7 +47,7 @@ const SEED_ONLY = new Set([
   'seating_assignments',
   'wedding_sequences',
 ])
-const MIG_DML = new Set(['rate_limits'])
+const MIG_DML = new Set(['rate_limit_buckets'])
 const RENAMED_AWAY = new Set([
   'booked_dates', // → venue_availability (073)
   'wedding_timeline', // dropped (076)
