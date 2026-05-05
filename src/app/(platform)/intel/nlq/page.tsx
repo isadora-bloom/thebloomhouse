@@ -182,18 +182,26 @@ export default function NaturalLanguageQueryPage() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   // ---- Load history from natural_language_queries table ----
   const loadHistory = useCallback(async () => {
+    setError(null)
     try {
       const supabase = createClient()
-      const { data } = await supabase
+      const { data, error: fetchErr } = await supabase
         .from('natural_language_queries')
         .select('id, query_text, response_text, tokens_used, cost, helpful, created_at')
         .order('created_at', { ascending: true })
         .limit(50)
+
+      if (fetchErr) {
+        setError(fetchErr.message)
+        setLoading(false)
+        return
+      }
 
       if (data) {
         const msgs: NLQMessage[] = []
@@ -223,6 +231,7 @@ export default function NaturalLanguageQueryPage() {
       }
     } catch (err) {
       console.error('Failed to load NLQ history:', err)
+      setError(err instanceof Error ? err.message : 'Failed to load conversation history')
     } finally {
       setLoading(false)
     }
@@ -390,11 +399,16 @@ export default function NaturalLanguageQueryPage() {
 
       {/* Chat area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto py-6 space-y-5">
+        {error && (
+          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 mb-4">
+            Failed to load data: {error}. Please refresh or contact support if this persists.
+          </div>
+        )}
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin text-sage-400" />
           </div>
-        ) : messages.length === 0 ? (
+        ) : messages.length === 0 && !error ? (
           /* Empty state with suggested questions */
           <div className="text-center py-12">
             <div className="w-16 h-16 bg-sage-50 rounded-full flex items-center justify-center mx-auto mb-4">
