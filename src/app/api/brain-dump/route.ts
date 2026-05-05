@@ -469,10 +469,29 @@ export async function POST(request: NextRequest) {
             })
           }
           const q = `Screenshot parsed as ${v.analytics.source ?? 'platform'} ${v.analytics.metric ?? 'metrics'} with ${v.analytics.rows.length} data points. Confirm from the Notifications page.`
+          // Build routed_to: always record the pending analytics; append
+          // identity_signals if any were co-extracted. This ensures the
+          // audit trail reflects what was written even though the analytics
+          // themselves are still pending coordinator confirmation.
+          const routedTo: Array<{ table: string; action: string; id: string | null }> = [
+            {
+              table: 'source_attribution',
+              action: `vision_analytics_pending:${v.analytics.rows.length}`,
+              id: null,
+            },
+          ]
+          if (identitySummary && identitySummary.written > 0) {
+            routedTo.push({
+              table: 'tangential_signals',
+              action: `identity_signals:${identitySummary.written}`,
+              id: null,
+            })
+          }
           await supabase.from('brain_dump_entries').update({
             parse_status: 'needs_clarification',
             clarification_question: q,
             parse_result: { vision: v, identitySummary },
+            routed_to: routedTo,
             parsed_at: new Date().toISOString(),
           }).eq('id', entry.id)
           return NextResponse.json({
