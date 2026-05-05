@@ -397,13 +397,15 @@ export default function NaturalLanguageQueryPage() {
         </div>
       </div>
 
+      {/* Always-visible error, outside scroll container */}
+      {error && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 mx-4 mb-2">
+          Could not load conversation history. You can still ask new questions below.
+        </div>
+      )}
+
       {/* Chat area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto py-6 space-y-5">
-        {error && (
-          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 mb-4">
-            Failed to load data: {error}. Please refresh or contact support if this persists.
-          </div>
-        )}
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin text-sage-400" />
