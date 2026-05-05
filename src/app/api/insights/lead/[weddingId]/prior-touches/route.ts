@@ -22,11 +22,16 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
 import { getPriorTouches } from '@/lib/services/prior-touches'
 import { redactError } from '@/lib/observability/redact'
+import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ weddingId: string }> },
 ) {
+  // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
+  const plan = await requirePlan(request, 'intelligence')
+  if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
+
   const { weddingId } = await params
   if (!weddingId || !/^[0-9a-f-]{36}$/i.test(weddingId)) {
     return NextResponse.json({ error: 'invalid_wedding_id' }, { status: 400 })

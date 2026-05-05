@@ -395,7 +395,7 @@ meta:
 #   Migration 208_rate_limit_buckets.sql replaces the legacy 053
 #   `rate_limits` table + `increment_rate_limit` RPC with a true
 #   sliding-window limiter on `rate_limit_buckets` + `check_rate_limit`
-#   RPC. The 053 artefacts are dropped IN 207 (no shim, single code path
+#   RPC. The 053 artefacts are dropped IN 208 (no shim, single code path
 #   local + prod per task contract). src/lib/rate-limit.ts rewritten
 #   around the new API: `checkRateLimit({ key, limit, windowSec }) →
 #   { ok, remaining, resetAt }`. Failure mode is fail-OPEN with
@@ -408,6 +408,21 @@ meta:
 #   UTC) calls public.prune_rate_limit_buckets() to drop rows whose
 #   updated_at < now() - 7d. OPS-21.4.4 notes updated to record the
 #   limiter half of "caching/limiting on hot paths."
+#
+# 2026-05-05 — PROJECT-AUDIT-V2 GAP-12 closure (API-layer plan_tier
+#   enforcement). UI gating via UpgradeGate was bypassable with a
+#   scripted fetch — a starter-tier coordinator could curl
+#   /api/intel/* and read paid-tier narrations + writes. requirePlan()
+#   already existed at src/lib/auth/require-plan.ts; the gap was
+#   coverage. Added the call to 16 routes that were missing it across
+#   /api/intel, /api/insights, /api/pulse, /api/portal/sage. Also
+#   hardened the helper itself: explicit isDemo early-return (mirrors
+#   usePlanTier's enterprise default for demo cookie), recordCounter
+#   ('plan_gate_block', { tier, route, reason, current_tier }) on
+#   every block path so we can graph tier-bypass attempts. New CI
+#   guard scripts/check-plan-enforcement.mjs walks the four scan dirs
+#   and fails CI if any route.ts ships without import + call of
+#   requirePlan — regression-proofs GAP-12 against future routes.
 
 # ===================================================================
 # PART 2 — POINT ZERO & FORENSIC RECORD

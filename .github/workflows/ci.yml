@@ -145,3 +145,6 @@ jobs:
 
       - name: Sage disclosure guard — every outbound Sage send routes through appendAIDisclosure (Stream EEEE)
         run: node scripts/check-sage-disclosure-enforced.mjs
+
+      - name: Plan-tier enforcement guard — every paid-tier API route calls requirePlan (PROJECT-AUDIT-V2 GAP-12)
+        run: node scripts/check-plan-enforcement.mjs
