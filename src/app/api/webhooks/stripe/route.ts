@@ -4,13 +4,15 @@ import { createHmac, timingSafeEqual } from 'crypto'
 import { planTierForPriceId } from '@/lib/billing/plans'
 import { getStripe, isStripeConfigured } from '@/lib/stripe'
 import { redact, redactError } from '@/lib/observability/redact'
+import { recordCounter } from '@/lib/observability/metrics'
 import type Stripe from 'stripe'
 
 // ---------------------------------------------------------------------------
-// Stripe webhook handler
+// Stripe webhook handler (GAP-02)
 //
 // Handles subscription lifecycle events to keep venues.plan_tier in sync
-// with Stripe billing status.
+// with Stripe billing status, and writes admin_notifications rows so
+// coordinators see plan changes / payment failures in their feed.
 //
 // Signature validation: Uses Stripe's signing scheme (v1 HMAC-SHA256).
 // When STRIPE_SECRET_KEY is set we prefer stripe.webhooks.constructEvent()
@@ -18,7 +20,16 @@ import type Stripe from 'stripe'
 // so the endpoint keeps working even if the SDK isn't initialised.
 //
 // Idempotency: every processed event id is recorded in `stripe_events`
-// (migration 054). Repeated deliveries of the same id short-circuit.
+// (migration 054). Repeated deliveries of the same id short-circuit BEFORE
+// any side effects fire. All DB writes are also individually safe to
+// re-run if the idempotency table is missing or the row insert raced.
+//
+// Observability:
+//   - recordCounter('stripe_webhook_event', { dimension: { type, outcome } })
+//     fires on every event so the metrics-aggregate view shows
+//     processed / duplicate / unhandled / error counts per type.
+//   - All catches use redactError() to keep PII out of stdout (Stripe
+//     errors can echo signature material + payload fragments).
 // ---------------------------------------------------------------------------
 
 /**
@@ -65,10 +76,67 @@ function verifyStripeSignature(
 }
 
 // ---------------------------------------------------------------------------
+// Notification helper — writes a coordinator notification with idempotency.
+// We use a stable composite key (venue_id + type + entity reference) so
+// repeated webhook deliveries don't spam the feed.
+// ---------------------------------------------------------------------------
+
+interface NotifyOpts {
+  venueId: string
+  type: string
+  title: string
+  body: string
+  priority?: 'low' | 'normal' | 'high' | 'urgent'
+  /**
+   * Stable dedup key — typically the Stripe object id (e.g. sub_..., in_...).
+   * If a notification with the same venue + type + dedupKey already exists
+   * within the last 24h we skip the insert. This handles webhook replays
+   * for events we've already surfaced (idempotency table is the primary
+   * guard — this is a belt-and-braces secondary).
+   */
+  dedupKey?: string
+}
+
+async function writeAdminNotification(
+  supabase: ReturnType<typeof createServiceClient>,
+  opts: NotifyOpts
+): Promise<void> {
+  try {
+    if (opts.dedupKey) {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const { data: existing } = await supabase
+        .from('admin_notifications')
+        .select('id')
+        .eq('venue_id', opts.venueId)
+        .eq('type', opts.type)
+        .gte('created_at', since)
+        .ilike('body', `%${opts.dedupKey}%`)
+        .limit(1)
+      if (existing && existing.length > 0) {
+        return
+      }
+    }
+
+    await supabase.from('admin_notifications').insert({
+      venue_id: opts.venueId,
+      type: opts.type,
+      title: opts.title,
+      body: opts.body,
+      priority: opts.priority ?? 'normal',
+    })
+  } catch (err) {
+    // Notification writes are best-effort — never block a webhook ack.
+    console.warn('[webhook/stripe] writeAdminNotification failed:', redactError(err))
+  }
+}
+
+// ---------------------------------------------------------------------------
 // POST — Handle Stripe webhook events
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
+  let outcome: 'processed' | 'duplicate' | 'unhandled' | 'invalid_signature' | 'invalid_event' | 'error' = 'processed'
+  let eventType: string | null = null
   try {
     const rawBody = await request.text()
 
@@ -80,6 +148,8 @@ export async function POST(request: NextRequest) {
     if (webhookSecret) {
       if (!sig) {
         console.warn('[webhook/stripe] Missing stripe-signature header')
+        outcome = 'invalid_signature'
+        await recordCounter('stripe_webhook_event', { dimension: { type: 'unknown', outcome } })
         return NextResponse.json({ error: 'Missing signature' }, { status: 401 })
       }
 
@@ -92,12 +162,16 @@ export async function POST(request: NextRequest) {
           // Stripe constructEvent errors can echo signature material
           // and (less commonly) payload fragments. Redact before stdout.
           console.warn('[webhook/stripe] constructEvent failed:', redactError(err))
+          outcome = 'invalid_signature'
+          await recordCounter('stripe_webhook_event', { dimension: { type: 'unknown', outcome } })
           return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
         }
       } else {
         // Fallback — manual HMAC
         if (!verifyStripeSignature(rawBody, sig, webhookSecret)) {
           console.warn('[webhook/stripe] Invalid webhook signature')
+          outcome = 'invalid_signature'
+          await recordCounter('stripe_webhook_event', { dimension: { type: 'unknown', outcome } })
           return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
         }
         event = JSON.parse(rawBody) as Stripe.Event
@@ -111,8 +185,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (!event) {
+      outcome = 'invalid_event'
+      await recordCounter('stripe_webhook_event', { dimension: { type: 'unknown', outcome } })
       return NextResponse.json({ error: 'Invalid event' }, { status: 400 })
     }
+
+    eventType = event.type
 
     console.log(`[webhook/stripe] Received event: ${event.type}`, {
       id: event.id,
@@ -137,6 +215,8 @@ export async function POST(request: NextRequest) {
         const code = (idemErr as unknown as { code?: string }).code
         if (code === '23505') {
           console.log(`[webhook/stripe] Duplicate event ${event.id} — acknowledging`)
+          outcome = 'duplicate'
+          await recordCounter('stripe_webhook_event', { dimension: { type: event.type, outcome } })
           return NextResponse.json({ received: true, duplicate: true })
         }
         // Table may not exist yet (migration 054 not applied) — log and continue,
@@ -148,6 +228,64 @@ export async function POST(request: NextRequest) {
     }
 
     switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object as Stripe.Checkout.Session
+
+        // client_reference_id is the venue id we set during checkout creation.
+        // Fall back to subscription metadata if missing.
+        const venueId =
+          (session.client_reference_id as string | null) ||
+          (session.metadata?.venue_id as string | undefined) ||
+          null
+
+        if (!venueId) {
+          console.warn('[webhook/stripe] checkout.session.completed missing venue_id:', session.id)
+          break
+        }
+
+        // Persist customer + subscription IDs eagerly so the success page
+        // and /api/stripe/subscription have something to read even if the
+        // subsequent customer.subscription.created event is delayed.
+        const customerId =
+          typeof session.customer === 'string'
+            ? session.customer
+            : session.customer?.id ?? null
+        const subscriptionId =
+          typeof session.subscription === 'string'
+            ? session.subscription
+            : session.subscription?.id ?? null
+
+        const update: Record<string, unknown> = {
+          updated_at: new Date().toISOString(),
+        }
+        if (customerId) update.stripe_customer_id = customerId
+        if (subscriptionId) update.stripe_subscription_id = subscriptionId
+
+        if (Object.keys(update).length > 1) {
+          const { error } = await supabase
+            .from('venues')
+            .update(update)
+            .eq('id', venueId)
+          if (error) {
+            console.error(
+              `[webhook/stripe] checkout.session.completed venue update failed for ${venueId}:`,
+              redact(error.message)
+            )
+          }
+        }
+
+        await writeAdminNotification(supabase, {
+          venueId,
+          type: 'subscription_activated',
+          title: 'Subscription activated',
+          body: `Checkout completed (session ${session.id}). Plan features will unlock momentarily as we sync with Stripe.`,
+          priority: 'normal',
+          dedupKey: session.id,
+        })
+
+        break
+      }
+
       case 'customer.subscription.created':
       case 'customer.subscription.updated': {
         const subscription = event.data.object as Stripe.Subscription
@@ -159,6 +297,14 @@ export async function POST(request: NextRequest) {
         }
 
         const planTier = mapSubscriptionToTier(subscription)
+
+        // Read the current tier first so we can detect a change and notify.
+        const { data: existing } = await supabase
+          .from('venues')
+          .select('plan_tier')
+          .eq('id', venueId)
+          .maybeSingle()
+        const previousTier = (existing?.plan_tier as string | undefined) ?? null
 
         const { error } = await supabase
           .from('venues')
@@ -177,8 +323,42 @@ export async function POST(request: NextRequest) {
           // Update errors can reference column values including
           // stripe_customer_id (PII-adjacent). Redact before stdout.
           console.error(`[webhook/stripe] Failed to update venue ${venueId}:`, redact(error.message))
-        } else {
-          console.log(`[webhook/stripe] Updated venue ${venueId} to plan: ${planTier}`)
+          throw error
+        }
+
+        console.log(`[webhook/stripe] Updated venue ${venueId} to plan: ${planTier}`)
+
+        // Notify on a tier change (upgrade or downgrade). Skip notifications
+        // for "noise" updates that don't change the visible plan.
+        if (previousTier && previousTier !== planTier) {
+          const direction =
+            (previousTier === 'starter' && planTier !== 'starter') ||
+            (previousTier === 'intelligence' && planTier === 'enterprise')
+              ? 'upgraded'
+              : 'changed'
+          await writeAdminNotification(supabase, {
+            venueId,
+            type: `subscription_${direction}`,
+            title: `Plan ${direction}: ${previousTier} → ${planTier}`,
+            body:
+              `Your venue plan is now ${planTier}. ` +
+              `Manage billing at /settings/billing. (subscription ${subscription.id})`,
+            priority: 'normal',
+            dedupKey: subscription.id,
+          })
+        }
+
+        if (subscription.cancel_at_period_end) {
+          await writeAdminNotification(supabase, {
+            venueId,
+            type: 'subscription_cancellation_scheduled',
+            title: 'Subscription cancellation scheduled',
+            body:
+              `Your ${planTier} plan is set to cancel at the end of the current billing period. ` +
+              `You can resume anytime from /settings/billing. (subscription ${subscription.id})`,
+            priority: 'high',
+            dedupKey: `${subscription.id}:cancel_scheduled`,
+          })
         }
 
         break
@@ -208,39 +388,90 @@ export async function POST(request: NextRequest) {
 
         if (error) {
           console.error(`[webhook/stripe] Failed to downgrade venue ${venueId}:`, redact(error.message))
-        } else {
-          console.log(`[webhook/stripe] Downgraded venue ${venueId} to starter tier`)
+          throw error
         }
+
+        console.log(`[webhook/stripe] Downgraded venue ${venueId} to starter tier`)
+
+        await writeAdminNotification(supabase, {
+          venueId,
+          type: 'subscription_canceled',
+          title: 'Subscription canceled — downgraded to Starter',
+          body:
+            'Your paid subscription has ended and your venue is back on the Starter plan. ' +
+            'Re-subscribe anytime at /pricing. (subscription ' + subscription.id + ')',
+          priority: 'high',
+          dedupKey: subscription.id,
+        })
 
         break
       }
 
       case 'invoice.payment_failed': {
-        // Log only — Stripe will retry and eventually transition the
-        // subscription to past_due/unpaid/canceled. We let those events
-        // drive any downgrade so we don't boot paying customers for a
-        // transient card decline.
+        // Stripe retries automatically — we surface the failure to the
+        // coordinator so they can update their card before the eventual
+        // past_due → canceled transition (which downgrades the plan).
         const invoice = event.data.object as Stripe.Invoice
+        const customerId =
+          typeof invoice.customer === 'string'
+            ? invoice.customer
+            : invoice.customer?.id ?? null
+
         console.warn('[webhook/stripe] invoice.payment_failed', {
           id: invoice.id,
-          customer: invoice.customer,
+          customer: customerId,
           amount_due: invoice.amount_due,
           attempt_count: invoice.attempt_count,
         })
+
+        // Resolve venue via stripe_customer_id. The invoice doesn't carry
+        // venue metadata directly so we need this lookup.
+        if (customerId) {
+          const { data: venue } = await supabase
+            .from('venues')
+            .select('id, name')
+            .eq('stripe_customer_id', customerId)
+            .maybeSingle()
+
+          if (venue?.id) {
+            const amount = (invoice.amount_due ?? 0) / 100
+            const currency = (invoice.currency ?? 'usd').toUpperCase()
+            await writeAdminNotification(supabase, {
+              venueId: venue.id as string,
+              type: 'payment_failed',
+              title: 'Payment failed — action required',
+              body:
+                `Stripe could not collect ${currency} ${amount.toFixed(2)} (invoice ${invoice.id}). ` +
+                `Attempt ${invoice.attempt_count ?? 1}. Update your payment method at /settings/billing ` +
+                `to keep your subscription active.`,
+              priority: 'high',
+              dedupKey: invoice.id ?? `${customerId}:payment_failed`,
+            })
+          } else {
+            console.warn(
+              `[webhook/stripe] payment_failed: no venue found for customer ${customerId}`
+            )
+          }
+        }
+
         break
       }
 
       default:
         console.log(`[webhook/stripe] Unhandled event type: ${event.type}`)
+        outcome = 'unhandled'
     }
 
     // Always return 200 to acknowledge receipt (Stripe retries on non-2xx)
+    await recordCounter('stripe_webhook_event', { dimension: { type: event.type, outcome } })
     return NextResponse.json({ received: true })
   } catch (err) {
     // Top-level catch can include serialized event payloads with PII.
     // Redact before stdout — this is the highest-risk surface in the
     // Stripe webhook for accidental leakage.
     console.error('[webhook/stripe] Error processing webhook:', redactError(err))
+    outcome = 'error'
+    await recordCounter('stripe_webhook_event', { dimension: { type: eventType ?? 'unknown', outcome } })
     return NextResponse.json(
       { error: 'Webhook processing failed' },
       { status: 500 }
