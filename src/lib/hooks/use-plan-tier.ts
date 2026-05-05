@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { useVenueId } from './use-venue-id'
+import { useVenueScope } from '@/lib/contexts/venue-scope-context'
 import {
   tierHasFeature,
   tierMeetsMinimum,
@@ -25,15 +25,18 @@ export {
 /**
  * Reads the current venue's plan_tier from the database.
  * Returns tier + loading state + utility functions.
+ *
+ * `venueId` and `isDemo` come from `VenueScopeProvider` (server-resolved
+ * + client-mutable), so a scope switch via `useScopeMutator()` triggers
+ * an immediate re-fetch of plan_tier without a full page reload.
  */
 export function usePlanTier() {
-  const venueId = useVenueId()
+  const { venueId, isDemo } = useVenueScope()
   const [tier, setTier] = useState<PlanTier>('enterprise') // default until DB responds
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     // In demo mode, always show enterprise (full feature set)
-    const isDemo = document.cookie.split('; ').some((c) => c === 'bloom_demo=true')
     if (isDemo) {
       setTier('enterprise')
       setLoading(false)
@@ -46,6 +49,8 @@ export function usePlanTier() {
       return
     }
 
+    let cancelled = false
+    setLoading(true)
     const supabase = createClient()
     supabase
       .from('venues')
@@ -53,12 +58,16 @@ export function usePlanTier() {
       .eq('id', venueId)
       .maybeSingle()
       .then(({ data }) => {
+        if (cancelled) return
         if (data?.plan_tier) {
           setTier(data.plan_tier as PlanTier)
         }
         setLoading(false)
       })
-  }, [venueId])
+    return () => {
+      cancelled = true
+    }
+  }, [venueId, isDemo])
 
   return {
     tier,

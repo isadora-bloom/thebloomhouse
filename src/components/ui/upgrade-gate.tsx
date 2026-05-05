@@ -1,10 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import { usePlanTier, type PlanTier, TIER_DISPLAY } from '@/lib/hooks/use-plan-tier'
 import { Lock, Sparkles } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
-import { useScope } from '@/lib/hooks/use-scope'
+import { useVenueScope } from '@/lib/contexts/venue-scope-context'
 
 /**
  * Wraps page content and shows an upgrade prompt if the current venue's
@@ -12,6 +10,10 @@ import { useScope } from '@/lib/hooks/use-scope'
  * via venue_ai_config.ai_name so the AI assistant is referenced by its
  * per-venue configured name (e.g. "Give Ivy deeper market visibility" for
  * an Oakwood coordinator).
+ *
+ * `aiName` comes straight from VenueScopeProvider (server-resolved at
+ * the same time as venueName) so we don't burn a client-side roundtrip
+ * to venue_ai_config and we don't race the scope-selector.
  */
 export function UpgradeGate({
   requiredTier,
@@ -23,21 +25,7 @@ export function UpgradeGate({
   children: React.ReactNode
 }) {
   const { tier, loading, meetsMinimum } = usePlanTier()
-  const scope = useScope()
-  const [aiName, setAiName] = useState<string>('your AI assistant')
-
-  useEffect(() => {
-    if (scope.loading || !scope.venueId) return
-    const supabase = createClient()
-    supabase
-      .from('venue_ai_config')
-      .select('ai_name')
-      .eq('venue_id', scope.venueId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data?.ai_name) setAiName(data.ai_name as string)
-      })
-  }, [scope.loading, scope.venueId])
+  const { aiName } = useVenueScope()
 
   if (loading) return null
   if (meetsMinimum(requiredTier)) return <>{children}</>
