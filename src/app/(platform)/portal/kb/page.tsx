@@ -603,7 +603,7 @@ export default function KnowledgeBasePage() {
       ) : (
         <div className="bg-surface border border-border rounded-xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="min-w-[640px] w-full text-sm">
               <thead className="bg-sage-50 border-b border-border">
                 <tr className="text-left text-xs font-semibold text-sage-700 uppercase tracking-wide">
                   <th className="px-4 py-3">Category</th>

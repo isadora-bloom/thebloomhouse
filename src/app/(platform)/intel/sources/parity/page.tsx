@@ -299,7 +299,8 @@ export default function AttributionParityPage() {
         {divergencePairs.length === 0 ? (
           <div className="text-slate-500 text-sm">No divergences in latest scan.</div>
         ) : (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="min-w-[400px] w-full text-sm">
             <thead>
               <tr className="text-left border-b border-slate-200 text-slate-600">
                 <th className="py-2 font-medium">Chain (current)</th>
@@ -320,6 +321,7 @@ export default function AttributionParityPage() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
@@ -333,7 +335,8 @@ export default function AttributionParityPage() {
         {topDivergences.length === 0 ? (
           <div className="text-slate-500 text-sm">No real-source divergences in latest scan.</div>
         ) : (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="min-w-[640px] w-full text-sm">
             <thead>
               <tr className="text-left border-b border-slate-200 text-slate-600">
                 <th className="py-2 font-medium">Wedding</th>
@@ -364,6 +367,7 @@ export default function AttributionParityPage() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 

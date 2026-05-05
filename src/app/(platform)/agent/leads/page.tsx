@@ -747,7 +747,7 @@ export default function LeadsPage() {
       ) : (
         <div className="bg-surface border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="min-w-[640px] w-full">
               <thead>
                 <tr className="border-b border-border">
                   <th className="text-left px-4 py-3">

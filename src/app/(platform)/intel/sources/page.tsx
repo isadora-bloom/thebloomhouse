@@ -922,7 +922,7 @@ function SourceQualityScorecard({ scope, windowDays, onWindowChange }: Scorecard
       )}
 
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="min-w-[640px] w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-sage-50/50">
               {(() => {
@@ -1236,7 +1236,7 @@ function ModelComparisonCard({ scope }: ModelComparisonProps) {
       )}
 
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="min-w-[640px] w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-sage-50/50">
               <th className="px-4 py-3 text-left font-medium text-sage-600">Source</th>
@@ -1960,7 +1960,7 @@ export default function SourceAttributionPage() {
             </p>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="min-w-[640px] w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-sage-50/50">
                   {/* T5-Rixey-Wave-14-TTT: leading expander column. No

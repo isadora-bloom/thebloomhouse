@@ -985,7 +985,8 @@ function BudgetTab({ items }: { items: BudgetRow[] }) {
 
       {/* Categories table */}
       {items.length > 0 ? (
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="min-w-[640px] w-full text-sm">
           <thead>
             <tr className="border-b border-sage-200">
               <th className="text-left py-2 text-xs text-sage-500 font-medium">Category</th>
@@ -1018,6 +1019,7 @@ function BudgetTab({ items }: { items: BudgetRow[] }) {
             </tr>
           </tfoot>
         </table>
+        </div>
       ) : (
         <div className="text-center py-8">
           <DollarSign className="w-10 h-10 text-sage-300 mx-auto mb-3" />
