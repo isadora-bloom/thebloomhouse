@@ -81,9 +81,9 @@ export async function trackCoordinatorAction(
       ? (existing.bookings_closed ?? 0) + 1
       : (existing.bookings_closed ?? 0)
 
-    if (inquiries > 0) {
-      updates.conversion_rate = Number(((bookings / inquiries) * 100).toFixed(2))
-    }
+    updates.conversion_rate = inquiries < 1
+      ? null
+      : Number(((bookings / inquiries) * 100).toFixed(2))
 
     await supabase
       .from('consultant_metrics')
@@ -99,9 +99,9 @@ export async function trackCoordinatorAction(
       inquiries_handled: 0,
       tours_booked: 0,
       bookings_closed: 0,
-      conversion_rate: 0,
-      avg_response_time_minutes: 0,
-      avg_booking_value: 0,
+      conversion_rate: null,
+      avg_response_time_minutes: null,
+      avg_booking_value: null,
       [column]: 1,
       calculated_at: new Date().toISOString(),
     }
@@ -154,9 +154,9 @@ export async function trackResponseTime(
       inquiries_handled: 0,
       tours_booked: 0,
       bookings_closed: 0,
-      conversion_rate: 0,
+      conversion_rate: null,
       avg_response_time_minutes: responseTimeMinutes,
-      avg_booking_value: 0,
+      avg_booking_value: null,
       calculated_at: new Date().toISOString(),
     })
   }

@@ -234,17 +234,18 @@ export async function getMarketContext(venueId: string): Promise<MarketContext> 
   let seasonalIndex: number | null = null
   let seasonalLabel: string | null = null
 
-  if (market?.inquirySeasonality && market.inquirySeasonality.length === 12) {
-    seasonalIndex = market.inquirySeasonality[currentMonth]
-    if (seasonalIndex !== null) {
-      const pctDiff = Math.round((seasonalIndex - 1.0) * 100)
-      if (pctDiff > 0) {
-        seasonalLabel = `${pctDiff}% above seasonal average`
-      } else if (pctDiff < 0) {
-        seasonalLabel = `${Math.abs(pctDiff)}% below seasonal average`
-      } else {
-        seasonalLabel = 'at seasonal average'
-      }
+  seasonalIndex = Array.isArray(market?.inquirySeasonality) && market.inquirySeasonality.length === 12
+    ? market.inquirySeasonality[currentMonth] // currentMonth is 0-indexed, array is 0-indexed
+    : null
+
+  if (seasonalIndex !== null) {
+    const pctDiff = Math.round((seasonalIndex - 1.0) * 100)
+    if (pctDiff > 0) {
+      seasonalLabel = `${pctDiff}% above seasonal average`
+    } else if (pctDiff < 0) {
+      seasonalLabel = `${Math.abs(pctDiff)}% below seasonal average`
+    } else {
+      seasonalLabel = 'at seasonal average'
     }
   }
 
@@ -296,21 +297,22 @@ export async function getMarketContextDirect(
 
   const benchmarks = (benchmarkRows ?? []).map(toBenchmarkRow)
 
-  const currentMonth = new Date().getMonth()
+  const currentMonth = new Date().getMonth() // 0-11
   let seasonalIndex: number | null = null
   let seasonalLabel: string | null = null
 
-  if (market?.inquirySeasonality && market.inquirySeasonality.length === 12) {
-    seasonalIndex = market.inquirySeasonality[currentMonth]
-    if (seasonalIndex !== null) {
-      const pctDiff = Math.round((seasonalIndex - 1.0) * 100)
-      if (pctDiff > 0) {
-        seasonalLabel = `${pctDiff}% above seasonal average`
-      } else if (pctDiff < 0) {
-        seasonalLabel = `${Math.abs(pctDiff)}% below seasonal average`
-      } else {
-        seasonalLabel = 'at seasonal average'
-      }
+  seasonalIndex = Array.isArray(market?.inquirySeasonality) && market.inquirySeasonality.length === 12
+    ? market.inquirySeasonality[currentMonth] // currentMonth is 0-indexed, array is 0-indexed
+    : null
+
+  if (seasonalIndex !== null) {
+    const pctDiff = Math.round((seasonalIndex - 1.0) * 100)
+    if (pctDiff > 0) {
+      seasonalLabel = `${pctDiff}% above seasonal average`
+    } else if (pctDiff < 0) {
+      seasonalLabel = `${Math.abs(pctDiff)}% below seasonal average`
+    } else {
+      seasonalLabel = 'at seasonal average'
     }
   }
 

@@ -111,7 +111,7 @@ const METRICS: Record<string, MetricConfig> = {
 //   imported_high     : 1.0  (CRM full-identity rows are real)
 //   imported_medium   : 1.0  (CRM partial — still real)
 //   imported_low      : 0.3  (Gmail backfill — classifier-inferred)
-//   manual            : 0.5  (coordinator entered, but no pipeline trace)
+//   manual            : 0.1  (coordinator entered, but no pipeline trace — most error-prone)
 //   null/legacy       : 1.0  (don't punish pre-T2-A rows)
 function heatRespectsConfidence(): boolean {
   const v = process.env.HEAT_RESPECTS_CONFIDENCE
@@ -124,7 +124,7 @@ const CONFIDENCE_WEIGHT: Record<string, number> = {
   imported_high: 1.0,
   imported_medium: 1.0,
   imported_low: 0.3,
-  manual: 0.5,
+  manual: 0.1,
 }
 
 function weightForConfidence(flag: string | null | undefined): number {
@@ -191,13 +191,19 @@ async function queryMetric(
       }
       if (!data || data.length === 0) return null
 
+      let validCount = 0
       const totalMinutes = data.reduce((sum, row) => {
-        const inquiry = new Date(row.inquiry_date as string).getTime()
-        const response = new Date(row.first_response_at as string).getTime()
-        return sum + (response - inquiry) / 60_000
+        const inquiryDate = new Date(row.inquiry_date as string)
+        const firstResponseAt = new Date(row.first_response_at as string)
+        const diffMs = firstResponseAt.getTime() - inquiryDate.getTime()
+        if (diffMs < 0) return sum // skip rows where response predates inquiry (data error)
+        validCount++
+        const diffMinutes = diffMs / 60_000
+        return sum + diffMinutes
       }, 0)
 
-      return totalMinutes / data.length
+      if (validCount === 0) return null
+      return totalMinutes / validCount
     }
 
     // ----- tour_conversion: count(tour_date not null) / count(inquiry_date) -----
@@ -337,6 +343,7 @@ async function queryMetric(
       // (and accurate) blip rather than a critical alert.
       const respectConfidence = heatRespectsConfidence()
       let engagementCount: number
+      let engagementSampleSize: number // raw unweighted count for minimum-sample guard
       if (respectConfidence) {
         const { data: rows, error: engError } = await supabase
           .from('engagement_events')
@@ -349,7 +356,9 @@ async function queryMetric(
           console.error(`[anomaly] Error querying engagement_rate events:`, engError.message)
           return null
         }
-        engagementCount = ((rows ?? []) as Array<{ confidence_flag: string | null }>).reduce(
+        const typedRows = (rows ?? []) as Array<{ confidence_flag: string | null }>
+        engagementSampleSize = typedRows.length
+        engagementCount = typedRows.reduce(
           (sum, r) => sum + weightForConfidence(r.confidence_flag),
           0,
         )
@@ -365,8 +374,13 @@ async function queryMetric(
           console.error(`[anomaly] Error querying engagement_rate events:`, engError.message)
           return null
         }
-        engagementCount = count ?? 0
+        engagementSampleSize = count ?? 0
+        engagementCount = engagementSampleSize
       }
+
+      // Skip engagement_rate anomaly if insufficient sample — a 0→0.3 shift
+      // caused by confidence weighting on only 1-2 real events is not a real anomaly.
+      if (engagementSampleSize < 5) return null
 
       const { count: inquiryCount, error: inqError } = await supabase
         .from('weddings')

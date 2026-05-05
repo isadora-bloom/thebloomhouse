@@ -14,7 +14,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 // produce a reliable answer — we return a friendly empty-state instead.
 // ---------------------------------------------------------------------------
 
-const NLQ_MIN_WEDDINGS = 10
+const NLQ_MIN_WEDDINGS = 25
 
 // ---------------------------------------------------------------------------
 // Rate limit for NLQ (more expensive than Sage chat): 10 requests per 15
@@ -77,9 +77,16 @@ export async function POST(request: NextRequest) {
 
     const n = weddingCount ?? 0
     if (n < NLQ_MIN_WEDDINGS) {
+      // Venues between 15-25 weddings get a more encouraging, specific message.
+      // Below 15 they get the generic "not enough data" block.
+      const answer = n >= 15
+        ? `Your venue has ${n} weddings on record. Bloom needs at least ${NLQ_MIN_WEDDINGS} bookings to generate reliable pattern analysis. Keep building your history and check back soon.`
+        : null
       return NextResponse.json({
-        answer: null,
+        answer,
         needs_more_data: true,
+        insufficient_data: true,
+        confidence: null,
         wedding_count: n,
         message: `We need at least ${NLQ_MIN_WEDDINGS} weddings to answer reliably. You have ${n}. Come back after logging a few more inquiries.`,
       })

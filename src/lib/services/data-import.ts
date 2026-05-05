@@ -165,9 +165,18 @@ export async function importClientList(
       // Bloom convention. parseNumber returns raw dollars; convert.
       // T5-Rixey-RR fix #5: branded types make the unit explicit so a
       // future copy-paste can't drop the *100 again.
-      const bookingValueDollars = parseNumber(row.booking_value || '')
-      const bookingValue: Cents | null = bookingValueDollars != null
-        ? dollarsToCents(asDollars(bookingValueDollars))
+      // Phase 5 fix: if the CSV column name already signals cents
+      // (e.g. "booking_value_cents" or "bookingvaluecents"), skip the
+      // *100 conversion to prevent double-conversion.
+      const rawBookingColName = Object.keys(rows[i]).find((k) => {
+        const lk = k.toLowerCase()
+        return lk.includes('booking') && lk.includes('value')
+      }) ?? 'booking_value'
+      const isCentsColumn = rawBookingColName.toLowerCase().includes('_cents') ||
+                            rawBookingColName.toLowerCase().endsWith('cents')
+      const bookingValueRaw = parseNumber(row.booking_value || '')
+      const bookingValue: Cents | null = bookingValueRaw != null
+        ? (isCentsColumn ? (bookingValueRaw as Cents) : dollarsToCents(asDollars(bookingValueRaw)))
         : null
       const source = row.source ? normalizeSource(row.source) : null
       const notes = row.notes || null
@@ -685,9 +694,18 @@ export async function importHistoricalWeddings(
       // Bloom convention. parseNumber returns raw dollars; convert.
       // T5-Rixey-RR fix #5: branded types make the unit explicit so a
       // future copy-paste can't drop the *100 again.
-      const bookingValueDollars = parseNumber(row.booking_value || '')
-      const bookingValue: Cents | null = bookingValueDollars != null
-        ? dollarsToCents(asDollars(bookingValueDollars))
+      // Phase 5 fix: if the CSV column name already signals cents
+      // (e.g. "booking_value_cents" or "bookingvaluecents"), skip the
+      // *100 conversion to prevent double-conversion.
+      const rawBookingColNameH = Object.keys(rows[i]).find((k) => {
+        const lk = k.toLowerCase()
+        return lk.includes('booking') && lk.includes('value')
+      }) ?? 'booking_value'
+      const isCentsColumnH = rawBookingColNameH.toLowerCase().includes('_cents') ||
+                             rawBookingColNameH.toLowerCase().endsWith('cents')
+      const bookingValueRawH = parseNumber(row.booking_value || '')
+      const bookingValue: Cents | null = bookingValueRawH != null
+        ? (isCentsColumnH ? (bookingValueRawH as Cents) : dollarsToCents(asDollars(bookingValueRawH)))
         : null
       const coupleName = row.couple_name || ''
 

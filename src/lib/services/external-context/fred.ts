@@ -72,8 +72,10 @@ export async function loadFredSeries(
   const out: ExternalChannelSeries[] = []
   for (const seriesId of seriesIds) {
     const raw = bySeriesRaw.get(seriesId) ?? []
-    if (raw.length === 0) continue
     const sorted = [...raw].sort((a, b) => a.date.localeCompare(b.date))
+    if (!sorted || sorted.length === 0) {
+      continue // no data to fill — callers must handle empty series gracefully
+    }
     const points: SeriesPoint[] = []
 
     // Forward-fill into a per-day grid. FRED monthly series produce
