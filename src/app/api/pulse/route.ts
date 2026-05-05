@@ -11,12 +11,12 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth, isDemoMode } from '@/lib/api/auth-helpers'
+import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { aggregatePulseFull } from '@/lib/services/pulse-aggregator'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
-
-const DEMO_VENUE_ID = '22222222-2222-2222-2222-222222222201'
+import { verifyDemoToken, DEMO_TOKEN_COOKIE, DEMO_VENUE_ID } from '@/lib/services/demo-token'
 
 export async function GET(request: NextRequest) {
   // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
@@ -26,14 +26,22 @@ export async function GET(request: NextRequest) {
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const supabase = createServiceClient()
-  const demo = await isDemoMode()
+
+  // GAP-C2: demo venueId must come from the verified signed token, never from
+  // the query param. A demo-authenticated user passing ?venueId=<real-uuid>
+  // would otherwise read any venue's pulse data for free.
+  const cookieStore = await cookies()
+  const demoResult = verifyDemoToken(cookieStore.get(DEMO_TOKEN_COOKIE)?.value)
 
   let venueId: string
-  if (demo) {
-    venueId = request.nextUrl.searchParams.get('venueId') ?? DEMO_VENUE_ID
+  if (demoResult.ok) {
+    // Locked to the venue embedded in the verified token — query param ignored.
+    venueId = DEMO_VENUE_ID
   } else {
     const auth = await getPlatformAuth()
     if (!auth) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+    // auth.venueId is read from the user's DB profile — the query param is
+    // never consulted for non-demo coordinators either.
     venueId = auth.venueId
   }
 
