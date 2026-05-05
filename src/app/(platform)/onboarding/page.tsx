@@ -777,9 +777,23 @@ export default function OnboardingPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  function handleSkip() {
+  async function handleSkip() {
     setError(null)
     if (currentStep === STEPS.length - 1) {
+      // Skipping the final step must still finalize the venue — same writes
+      // that handleNext/saveStep case 5 performs: mark venue active and set
+      // onboarding_completed so the dashboard doesn't redirect back here.
+      const venueId = VENUE_ID
+      if (venueId) {
+        await supabase
+          .from('venues')
+          .update({ status: 'active', updated_at: new Date().toISOString() })
+          .eq('id', venueId)
+        await supabase
+          .from('venue_config')
+          .update({ onboarding_completed: true, updated_at: new Date().toISOString() })
+          .eq('venue_id', venueId)
+      }
       window.location.href = '/'
     } else {
       setCurrentStep((prev) => prev + 1)
@@ -967,6 +981,23 @@ export default function OnboardingPage() {
         <div className="text-center">
           <div className="animate-spin w-8 h-8 border-2 border-sage-300 border-t-sage-600 rounded-full mx-auto mb-4" />
           <p className="text-sage-600 text-sm">Setting up your workspace...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Guard: if scope resolved but venue is now null (e.g. user switched venue
+  // mid-onboarding), stop rendering the form and surface a recoverable message
+  // instead of letting saveStep silently fail or the page crash on VENUE_ID!.
+  if (!VENUE_ID) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-warm-white">
+        <div className="text-center max-w-sm mx-auto px-6">
+          <AlertCircle className="w-8 h-8 text-sage-400 mx-auto mb-4" />
+          <p className="text-sage-800 font-medium mb-1">No venue selected</p>
+          <p className="text-sage-500 text-sm">
+            Please select a venue from the scope selector at the top of the page before continuing onboarding.
+          </p>
         </div>
       </div>
     )
