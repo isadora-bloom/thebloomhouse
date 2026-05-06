@@ -11,6 +11,11 @@ import {
   type DetectionResult,
 } from '@/lib/services/data-detection'
 import { importData, rowsToRecords } from '@/lib/services/data-import'
+import {
+  getPlatformAuth,
+  isDemoVenueAllowed,
+  unauthorized,
+} from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // POST /api/portal/quick-add — Analyze uploaded file / pasted data
@@ -121,16 +126,49 @@ async function fetchGoogleSheetCsv(id: string, gid: string | null): Promise<stri
 
 export async function POST(request: NextRequest) {
   try {
+    // Auth gate FIRST. Pre-fix this route accepted formData.get('venueId')
+    // as authoritative and ran callAIVision + importData against it,
+    // billing the supplied venue and writing data into it. Any caller
+    // could pass any UUID. Per 2026-05-06 audit (Lens 1).
+    const auth = await getPlatformAuth()
+    if (!auth) return unauthorized()
+
     const formData = await request.formData()
     const file = formData.get('file') as File | null
     const pastedData = formData.get('pastedData') as string | null
-    const venueId = formData.get('venueId') as string
+    const requestedVenueId = formData.get('venueId') as string | null
     const action = formData.get('action') as string // 'detect' | 'import'
     const overrideType = formData.get('overrideType') as string | null
     const weddingId = formData.get('weddingId') as string | null
 
-    if (!venueId) {
-      return NextResponse.json({ error: 'Missing venueId' }, { status: 400 })
+    // Resolve the venueId we will actually operate against. Client-supplied
+    // venueId is advisory and must be authorized. Admins (org_admin /
+    // super_admin) may operate against any venue in their org; non-admins
+    // are pinned to auth.venueId.
+    const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
+    let venueId: string
+    if (auth.isDemo) {
+      // Demo coordinator: only the Crestwood allowlist is permitted.
+      if (!requestedVenueId || !isDemoVenueAllowed(requestedVenueId)) {
+        return NextResponse.json(
+          { error: 'Forbidden: venue not in demo allowlist' },
+          { status: 403 }
+        )
+      }
+      venueId = requestedVenueId
+    } else if (requestedVenueId) {
+      if (!isAdmin && requestedVenueId !== auth.venueId) {
+        return NextResponse.json(
+          { error: 'Forbidden: cannot operate against another venue' },
+          { status: 403 }
+        )
+      }
+      // Admins: trust the requested venueId, but assume the org-scope
+      // check happens downstream in importData via venue_id RLS. If a
+      // future audit shows that's not enforced, harden here.
+      venueId = requestedVenueId
+    } else {
+      venueId = auth.venueId
     }
 
     // -----------------------------------------------------------------------

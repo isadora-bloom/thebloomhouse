@@ -1,28 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI } from '@/lib/ai/client'
+import {
+  getPlatformAuth,
+  isDemoVenueAllowed,
+  unauthorized,
+} from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // POST — Generate proactive review response draft
-// Body: { eventFeedbackId, venueId }
+// Body: { eventFeedbackId } — venueId is derived from the feedback record
+// after authorization, NOT trusted from client input. Pre-fix this route
+// accepted body.venueId as authoritative; an attacker could pass another
+// venue's eventFeedbackId together with their own venueId, causing the
+// route to fetch the OTHER venue's feedback and overwrite their
+// proactive_response_draft with attacker-controlled AI output (multi-
+// tenant write tampering + read leak). Per 2026-05-06 audit (Lens 1).
 // Returns: { draft }
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
-    const { eventFeedbackId, venueId } = body
+    const auth = await getPlatformAuth()
+    if (!auth) return unauthorized()
 
-    if (!eventFeedbackId || !venueId) {
+    const body = await request.json()
+    const { eventFeedbackId } = body
+
+    if (!eventFeedbackId) {
       return NextResponse.json(
-        { error: 'eventFeedbackId and venueId are required' },
+        { error: 'eventFeedbackId is required' },
         { status: 400 }
       )
     }
 
     const supabase = createServiceClient()
 
-    // Fetch the feedback record
+    // Fetch the feedback record FIRST. We do not trust any client-supplied
+    // venueId — venue ownership comes from the row itself.
     const { data: feedback, error: fbErr } = await supabase
       .from('event_feedback')
       .select('*')
@@ -33,6 +48,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Feedback not found' },
         { status: 404 }
+      )
+    }
+
+    // Authorization: the authenticated user must have access to the
+    // feedback's venue. Demo allowlist applies only to demo cookies.
+    // Non-admins must match auth.venueId; admins (org_admin / super_admin)
+    // may access any venue (RLS policies on dependent reads add a
+    // belt-and-suspenders check).
+    const venueId = feedback.venue_id as string
+    const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
+    if (auth.isDemo) {
+      if (!isDemoVenueAllowed(venueId)) {
+        return NextResponse.json(
+          { error: 'Forbidden: feedback belongs to a non-demo venue' },
+          { status: 403 }
+        )
+      }
+    } else if (!isAdmin && venueId !== auth.venueId) {
+      return NextResponse.json(
+        { error: 'Forbidden: feedback belongs to another venue' },
+        { status: 403 }
       )
     }
 
