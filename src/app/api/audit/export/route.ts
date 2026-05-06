@@ -73,7 +73,21 @@ export async function POST(request: NextRequest) {
   }
 
   // Always log, even if rate-limited — we want the bypass attempt
-  // itself to leave a trail.
+  // itself to leave a trail. Server-trusted fields (rate_limited,
+  // attribution metadata) MUST go AFTER the user-supplied details
+  // spread so a caller can't post `{details:{rate_limited:false}}`
+  // and overwrite the audit row's truth. (Round-2 audit caught
+  // this bandaid — the original order had user input winning.)
+  const callerDetails = (body.details && typeof body.details === 'object')
+    ? Object.fromEntries(
+        Object.entries(body.details).filter(([k]) => {
+          // Strip any caller-supplied keys that collide with server-
+          // set fields. Belt-and-braces in case the spread order is
+          // ever flipped back by a future edit.
+          return !['rate_limited', 'filename', 'format', 'beacon_ip'].includes(k)
+        }),
+      )
+    : {}
   await logRead({
     venueId,
     weddingId: weddingId ?? undefined,
@@ -82,10 +96,10 @@ export async function POST(request: NextRequest) {
     mode,
     rowCount: typeof body.rowCount === 'number' ? body.rowCount : undefined,
     details: {
+      ...callerDetails,
       filename: typeof body.filename === 'string' ? body.filename.slice(0, 200) : null,
       format: typeof body.format === 'string' ? body.format.slice(0, 32) : null,
       rate_limited: !rl.ok,
-      ...(body.details ?? {}),
     },
   })
 

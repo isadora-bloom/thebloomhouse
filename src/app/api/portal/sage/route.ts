@@ -190,47 +190,49 @@ export async function POST(request: NextRequest) {
     // the Supabase Storage CDN of this project (derived from the env
     // URL), so a malicious couple cannot point Sage at internal /
     // metadata / arbitrary external services. Per 2026-05-06 audit
-    // Lens 8 (top-3 fix #2). Validation happens before any fetch — a
-    // failure skips the file-extraction block but does not break the
-    // chat reply path.
-    let fileUrlIsSafe = false
+    // Lens 8.
+    //
+    // 2026-05-06 round-2 audit caught a redirect bypass: pre-fix the
+    // initial assertSafeUrl ran but the actual fetch followed redirects
+    // automatically — a signed Storage URL 302'ing to attacker-host
+    // would still be fetched. Fixed by routing through safeFetch (which
+    // validates EVERY hop). The Storage allowlist is preserved across
+    // hops, so any 3xx leaving the allowlisted host is rejected.
     if (fileUrl && !resolvedFileContext) {
-      const { assertSafeUrl, UnsafeUrlError } = await import('@/lib/security/safe-fetch')
-      const supabaseHost = (() => {
-        try {
-          const u = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '')
-          return u.hostname
-        } catch {
-          return ''
-        }
-      })()
-      const fileUrlAllowlist = supabaseHost ? [supabaseHost] : ['supabase.co']
-      try {
-        await assertSafeUrl(fileUrl, { hostAllowlist: fileUrlAllowlist })
-        fileUrlIsSafe = true
-      } catch (err) {
-        if (err instanceof UnsafeUrlError) {
-          console.warn('[api/portal/sage] rejected unsafe fileUrl:', err.reason)
-        } else {
-          console.warn('[api/portal/sage] fileUrl validation failed:', err)
-        }
-      }
-    }
-
-    if (fileUrl && !resolvedFileContext && fileUrlIsSafe) {
       // Attempt to extract text from the uploaded file
       try {
         const supabase = createServiceClient()
+        const { safeFetch, UnsafeUrlError } = await import('@/lib/security/safe-fetch')
+        const supabaseHost = (() => {
+          try {
+            const u = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '')
+            return u.hostname
+          } catch {
+            return ''
+          }
+        })()
+        const fileUrlAllowlist = supabaseHost ? [supabaseHost] : ['supabase.co']
 
         // Determine if image or PDF based on URL extension
         const urlLower = fileUrl.toLowerCase()
         const isImage = /\.(jpg|jpeg|png|webp)/.test(urlLower)
         const isPdf = /\.pdf/.test(urlLower)
 
+        const safeFetchFile = async () => {
+          try {
+            return await safeFetch(fileUrl, {}, { hostAllowlist: fileUrlAllowlist })
+          } catch (err) {
+            if (err instanceof UnsafeUrlError) {
+              console.warn('[api/portal/sage] rejected unsafe fileUrl:', err.reason)
+              return null
+            }
+            throw err
+          }
+        }
+
         if (isImage) {
-          // Download and convert to base64 for vision analysis
-          const response = await fetch(fileUrl)
-          if (response.ok) {
+          const response = await safeFetchFile()
+          if (response && response.ok) {
             const arrayBuffer = await response.arrayBuffer()
             const base64 = Buffer.from(arrayBuffer).toString('base64')
             const contentType = response.headers.get('content-type') || 'image/jpeg'
@@ -250,15 +252,13 @@ export async function POST(request: NextRequest) {
             resolvedFileContext = extractResult.text
           }
         } else if (isPdf) {
-          // Download PDF and try to extract text
-          const response = await fetch(fileUrl)
-          if (response.ok) {
+          const response = await safeFetchFile()
+          if (response && response.ok) {
             const blob = await response.blob()
             const text = await blob.text()
             if (text && text.length > 50 && !text.includes('%PDF')) {
               resolvedFileContext = text
             } else {
-              // PDF binary — note limitation
               resolvedFileContext = `[PDF file uploaded: The file appears to be a binary PDF. Direct text extraction is limited. The user may need to share specific sections as images for full analysis.]`
             }
           }

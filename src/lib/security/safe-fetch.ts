@@ -133,18 +133,48 @@ export async function assertSafeUrl(
 }
 
 /**
- * fetch() wrapper that calls assertSafeUrl first. Use directly when you
- * want one-shot fetch with SSRF protection. For redirect-following code
- * paths (e.g. brain-dump's handler), call assertSafeUrl on EACH hop
- * separately — passing redirect: 'manual' and re-validating.
+ * fetch() wrapper that calls assertSafeUrl first AND on every redirect
+ * hop. Sets redirect: 'manual' so the runtime cannot transparently
+ * follow a 302 into a private IP — every Location header is re-
+ * validated through assertSafeUrl before the next request fires.
+ *
+ * Throws UnsafeUrlError if the original URL or any redirect target
+ * fails the SSRF check. Throws on redirect chains longer than
+ * MAX_REDIRECTS (default 5) to avoid infinite loops.
+ *
+ * Use this for ANY user-influenced URL on the server. The pre-2026-
+ * 05-06 sage route called bare fetch(fileUrl) after assertSafeUrl —
+ * that's a bandaid (audit Lens 8 round 2). The right shape is one
+ * fetcher that handles both up-front and redirect validation.
  */
 export async function safeFetch(
   url: string,
   init: RequestInit = {},
-  options: AssertSafeUrlOptions = {},
+  options: AssertSafeUrlOptions & { maxRedirects?: number } = {},
 ): Promise<Response> {
-  await assertSafeUrl(url, options)
-  return fetch(url, init)
+  const maxRedirects = options.maxRedirects ?? 5
+  let currentUrl = url
+  let hops = 0
+  while (true) {
+    await assertSafeUrl(currentUrl, options)
+    const response = await fetch(currentUrl, { ...init, redirect: 'manual' })
+    // Manual redirect: 3xx with a Location header. We re-validate the
+    // target before issuing the next request.
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location')
+      if (!location) {
+        throw new UnsafeUrlError(`redirect ${response.status} without Location header`, currentUrl)
+      }
+      hops++
+      if (hops > maxRedirects) {
+        throw new UnsafeUrlError(`exceeded max redirects (${maxRedirects})`, url)
+      }
+      // Resolve relative redirects against currentUrl.
+      currentUrl = new URL(location, currentUrl).toString()
+      continue
+    }
+    return response
+  }
 }
 
 // ----------------------------------------------------------------------
