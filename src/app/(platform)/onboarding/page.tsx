@@ -1737,7 +1737,9 @@ export default function OnboardingPage() {
                       disabled={backfillRunning}
                       className="shrink-0 px-4 py-2 rounded-lg bg-sage-600 text-white text-xs font-medium hover:bg-sage-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
-                      {backfillRunning ? 'Importing…' : 'Import 90 days'}
+                      {backfillRunning
+                        ? `Importing… (${backfillStats.processed} so far)`
+                        : 'Import 90 days'}
                     </button>
                   )}
                   {backfillDone && (
@@ -1832,13 +1834,27 @@ export default function OnboardingPage() {
               </button>
 
               <div className="flex items-center gap-3">
-                <button
-                  onClick={handleSkip}
-                  className="flex items-center gap-1.5 text-sm font-medium text-sage-400 hover:text-sage-600 transition-colors"
-                >
-                  <SkipForward className="w-3.5 h-3.5" />
-                  Skip
-                </button>
+                <div className="flex flex-col items-end leading-tight">
+                  <button
+                    onClick={handleSkip}
+                    className="flex items-center gap-1.5 text-sm font-medium text-sage-400 hover:text-sage-600 transition-colors"
+                  >
+                    <SkipForward className="w-3.5 h-3.5" />
+                    Skip
+                  </button>
+                  <span className="text-[10px] text-sage-400 mt-0.5">
+                    {(() => {
+                      const key = STEPS[currentStep]?.key
+                      if (key === 'basics')    return '(complete later in Settings → Venue)'
+                      if (key === 'gmail')     return '(complete later in Settings → Gmail)'
+                      if (key === 'voice')     return '(complete later in Voice Training)'
+                      if (key === 'knowledge') return '(complete later in Knowledge Base)'
+                      if (key === 'test')      return '(complete later from your inbox)'
+                      if (key === 'launch')    return '(complete later in Settings)'
+                      return '(complete later in Settings)'
+                    })()}
+                  </span>
+                </div>
                 <button
                   onClick={handleNext}
                   disabled={
