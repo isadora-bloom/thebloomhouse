@@ -2712,9 +2712,27 @@ export async function processIncomingEmail(
         // model safety, but a hostile inquirer could still try to
         // hijack the auto-reply. Pass the signal through to the
         // eligibility check, which blocks auto-send when set.
-        const injectionSuspected =
-          containsInjectionAttempt(email.subject) ||
-          containsInjectionAttempt(email.body)
+        const subjectInjection = containsInjectionAttempt(email.subject)
+        const bodyInjection = containsInjectionAttempt(email.body)
+        const injectionSuspected = subjectInjection || bodyInjection
+
+        // Round-3 audit follow-up #48: persist the signal on the
+        // wedding so follow-up sequences (which fire later, on a
+        // schedule, with no fresh inbound) also block auto-send.
+        // Stamp once — leave existing value alone if already set
+        // (multiple injection-flagged inbounds shouldn't overwrite
+        // the original timestamp / reason).
+        if (injectionSuspected && weddingId) {
+          const reason = subjectInjection ? 'injection_subject' : 'injection_body'
+          await supabase
+            .from('weddings')
+            .update({
+              auto_send_blocked_at: new Date().toISOString(),
+              auto_send_block_reason: reason,
+            })
+            .eq('id', weddingId)
+            .is('auto_send_blocked_at', null)
+        }
 
         // Confidence scale conversion now happens INSIDE
         // checkAutoSendEligible (Repair K, 2026-05-01). Pass raw

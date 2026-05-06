@@ -350,6 +350,21 @@ export async function generateFollowUps(venueId: string): Promise<number> {
       // venue has the slider off (the default), drafts simply remain
       // 'pending' for coordinator approval — same shape as before.
       try {
+        // Round-3 audit follow-up #48: read the wedding's persisted
+        // injection block. If a prior inbound on this wedding tripped
+        // a prompt-injection signal (mig 219), every follow-up auto-
+        // send must continue to be blocked until a coordinator clears
+        // it. Without this, the round-2 protection had a hole:
+        // follow-ups schedule outbound nudges with no fresh inbound,
+        // so containsInjectionAttempt at scheduling time would never
+        // re-trigger.
+        const { data: weddingBlock } = await supabase
+          .from('weddings')
+          .select('auto_send_blocked_at')
+          .eq('id', followUp.weddingId)
+          .maybeSingle()
+        const injectionSuspected = !!weddingBlock?.auto_send_blocked_at
+
         const eligibility = await checkAutoSendEligible(venueId, {
           contextType: 'inquiry',
           // Pass raw brain confidence — checkAutoSendEligible normalises
@@ -361,6 +376,7 @@ export async function generateFollowUps(venueId: string): Promise<number> {
           // satisfies the INV-15 gate. Required (no default).
           direction: 'inbound',
           weddingId: followUp.weddingId,
+          injectionSuspected,
         })
 
         if (eligibility.eligible) {

@@ -26,11 +26,16 @@ function err(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status })
 }
 
-async function rateLimit(request: NextRequest, action: 'search_guest' | 'rsvp') {
+async function rateLimit(request: NextRequest, action: 'search_guest' | 'rsvp' | 'public_read') {
   const ip = clientIpForRateLimit(request)
+  // Limits chosen to allow legitimate use without enabling mass scraping:
+  //   public_read 600/hr — enough for a couple's friends/family to browse
+  //   search_guest 60/hr — limits enumeration via name search
+  //   rsvp 10/hr — well above what one guest needs
+  const limits = { public_read: 600, search_guest: 60, rsvp: 10 } as const
   return checkRateLimit({
     key: `wedding-website:${action}:${ip}`,
-    limit: action === 'rsvp' ? 10 : 60,
+    limit: limits[action],
     windowSec: 3600,
   })
 }
@@ -169,6 +174,12 @@ export async function GET(request: NextRequest) {
     }
 
     // ---- Full website data (PUBLIC, slug-only) ----
+    // Slugs are user-chosen and predictable; rate-limit scrape patterns
+    // even though the response itself is meant to be public. Per round-2
+    // audit follow-up #37.
+    const rlPublic = await rateLimit(request, 'public_read')
+    if (!rlPublic.ok) return rateLimited(rlPublic)
+
     const website = await getPublishedWebsite(supabase, slug)
     if (!website) return err('Wedding website not found or not published', 404)
     const weddingId = website.wedding_id
