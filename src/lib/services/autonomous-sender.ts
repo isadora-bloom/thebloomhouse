@@ -58,6 +58,15 @@ interface AutoSendCheck {
    * prior interactions on the same wedding and reject if any exist.
    */
   weddingId?: string
+  /**
+   * Set true when the inbound email triggered a high-confidence prompt-
+   * injection signal (containsInjectionAttempt). When set, auto-send is
+   * blocked unconditionally — a malicious inbound that survives the
+   * sanitization wrapper still triggers an ineligible decision so a
+   * coordinator reviews the draft before any reply leaves. Round-2
+   * audit follow-up #36.
+   */
+  injectionSuspected?: boolean
 }
 
 interface AutoSendResult {
@@ -222,6 +231,21 @@ export async function checkAutoSendEligible(
     return {
       eligible: false,
       reason: `Auto-send blocked: direction is '${draft.direction}', not 'inbound' (INV-15)`,
+    }
+  }
+
+  // Check 0c: Prompt-injection containment. When the inbound email
+  // matched containsInjectionAttempt the eligibility decision is
+  // unconditional ineligible — a competitor or hostile inquirer
+  // could have injected directives into the email body intended to
+  // hijack the auto-reply. The draft is still saved for coordinator
+  // review (the wrapping in inquiry-brain neutralised the directives
+  // for the model output) but it does NOT auto-send. Round-2 audit
+  // follow-up #36.
+  if (draft.injectionSuspected) {
+    return {
+      eligible: false,
+      reason: 'Auto-send blocked: inbound email contained a prompt-injection signal',
     }
   }
 

@@ -2705,6 +2705,16 @@ export async function processIncomingEmail(
       // pending sends. Coordinators can cancel via the notification UI.
       try {
         const { checkAutoSendEligible } = await import('@/lib/services/autonomous-sender')
+        const { containsInjectionAttempt } = await import('@/lib/security/prompt-sanitize')
+
+        // Round-2 audit follow-up #36: detect prompt-injection on the
+        // raw inbound. inquiry-brain.ts already wraps the body for
+        // model safety, but a hostile inquirer could still try to
+        // hijack the auto-reply. Pass the signal through to the
+        // eligibility check, which blocks auto-send when set.
+        const injectionSuspected =
+          containsInjectionAttempt(email.subject) ||
+          containsInjectionAttempt(email.body)
 
         // Confidence scale conversion now happens INSIDE
         // checkAutoSendEligible (Repair K, 2026-05-01). Pass raw
@@ -2719,6 +2729,7 @@ export async function processIncomingEmail(
           // path — the calling site only fires for inbound classifications.
           direction: 'inbound',
           weddingId: weddingId ?? undefined,
+          injectionSuspected,
         })
 
         if (eligibility.eligible) {
