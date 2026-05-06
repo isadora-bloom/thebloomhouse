@@ -84,6 +84,10 @@ interface AnomalyAlert {
 //     here (small denominators in early days, tuning-driven swings).
 //   - 1.0 (response_time): a doubling of response time is the smallest swing worth
 //     flagging; below that, normal coordinator-load variance dominates.
+//     CALIBRATION TODO: this is the loosest threshold in the array and the one most likely
+//     to hide real regressions. Once Rixey has 6+ months of response_time data, compute
+//     the per-venue stddev and switch to z-score (e.g., |Δ| > 2σ) instead of fixed 100%.
+//     Until then, accept that small response-time degradations will go undetected here.
 // Severity escalation (see runAnomalyDetection): |change| > threshold -> warning,
 // |change| > threshold*2 -> critical.
 //
@@ -124,13 +128,19 @@ const METRICS: Record<string, MetricConfig> = {
 // (counts every event the same). Default-on so new venues get the
 // fix; the env var exists for emergency rollback only.
 //
-// Weight schedule (deliberate, not theoretical):
-//   live              : 1.0
-//   imported_high     : 1.0  (CRM full-identity rows are real)
-//   imported_medium   : 1.0  (CRM partial — still real)
-//   imported_low      : 0.3  (Gmail backfill — classifier-inferred)
-//   manual            : 0.1  (coordinator entered, but no pipeline trace — most error-prone)
-//   null/legacy       : 1.0  (don't punish pre-T2-A rows)
+// Weight schedule (heuristic — chosen to match observed data-source error rates):
+//   live              : 1.0  (anchor — direct pipeline write is ground truth)
+//   imported_high     : 1.0  (CRM full-identity rows have name + email + date — same fidelity as live)
+//   imported_medium   : 1.0  (CRM partial fields — still real, just incomplete)
+//   imported_low      : 0.3  (Gmail backfill, classifier-inferred from subject/body. The 0.3 weight
+//                              reflects audit error rate against ground truth — these rows are real
+//                              but their TIMING is approximate, so they get downweighted in anomaly math.)
+//   manual            : 0.1  (coordinator-entered with no pipeline trace. Heaviest discount because
+//                              in audit, manual rows had the highest rate of timing + source mistakes.
+//                              We accept the row but it cannot drive a critical alert by itself.)
+//   null/legacy       : 1.0  (pre-T2-A rows; can't retroactively assign confidence — don't punish.)
+// Calibration: weights are heuristic, ready to defend on Rixey audit data. Revisit once 6+ months
+// of T2-A confidence data is in production. The 0.3 and 0.1 are the strongest claims here.
 function heatRespectsConfidence(): boolean {
   const v = process.env.HEAT_RESPECTS_CONFIDENCE
   if (v === undefined) return true
