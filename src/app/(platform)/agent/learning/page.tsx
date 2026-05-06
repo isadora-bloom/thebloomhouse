@@ -653,6 +653,19 @@ export default function EmailLearningPage() {
       </div>
 
       {/* ---------------------------------------------------------------- */}
+      {/* Voice training threshold hint                                    */}
+      {/* Mirrors VOICE_TRAINING_MIN_SAMPLES in inquiry-brain.ts. Until    */}
+      {/* the trained corpus crosses 5 samples, the brains skip the       */}
+      {/* learning-feedback prompt block to avoid noisy bias.             */}
+      {/* ---------------------------------------------------------------- */}
+      {!loading && approvedCount + editedCount < 5 && (
+        <p className="text-xs text-amber-600">
+          {aiName} needs at least 5 trained examples (approved or edited drafts) before using
+          your voice. ({approvedCount + editedCount}/5)
+        </p>
+      )}
+
+      {/* ---------------------------------------------------------------- */}
       {/* Learning Curve                                                   */}
       {/* ---------------------------------------------------------------- */}
       {!loading && weeklyData.length > 0 && (

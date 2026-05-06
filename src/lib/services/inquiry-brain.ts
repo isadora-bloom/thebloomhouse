@@ -41,6 +41,17 @@ import { searchKnowledgeBase } from '@/lib/services/knowledge-base'
 import { buildSageIntelligenceContext } from '@/lib/services/sage-intelligence'
 import { getApprovedPhrases } from '@/lib/services/review-language'
 import { getLearningContext, getVoicePreferences } from '@/lib/services/learning'
+import { logEvent } from '@/lib/observability/logger'
+
+/**
+ * Minimum number of "good" trained examples (approved + edited drafts)
+ * before the learning corpus is injected into the prompt. With 1-2
+ * samples the bias is noise — it makes Sage's replies LESS consistent
+ * than zero training. Below threshold we still inject coordinator-curated
+ * voice preferences (banned/approved phrases) since those are explicit,
+ * not learned. Re-exported so client-brain.ts shares the same value.
+ */
+export const VOICE_TRAINING_MIN_SAMPLES = 5
 
 // ---------------------------------------------------------------------------
 // Types
@@ -596,25 +607,47 @@ export async function generateInquiryDraft(
 
     const sections: string[] = []
 
-    if (learningContext.goodExamples.length > 0) {
-      const examples = learningContext.goodExamples
-        .map((ex) => `Subject: ${ex.subject}\n${ex.body.slice(0, 400)}`)
-        .join('\n---\n')
-      sections.push(`### Approved Draft Examples\nThese drafts were approved by the coordinator. Follow their tone and structure:\n${examples}`)
+    // Voice-training bias only kicks in once the corpus crosses
+    // VOICE_TRAINING_MIN_SAMPLES. Below threshold the auto-collected
+    // feedback (good drafts, rejection reasons, edit patterns) is noise
+    // that makes Sage LESS consistent than zero training.
+    const goodSampleCount = learningContext.goodExamples.length
+    if (goodSampleCount >= VOICE_TRAINING_MIN_SAMPLES) {
+      if (learningContext.goodExamples.length > 0) {
+        const examples = learningContext.goodExamples
+          .map((ex) => `Subject: ${ex.subject}\n${ex.body.slice(0, 400)}`)
+          .join('\n---\n')
+        sections.push(`### Approved Draft Examples\nThese drafts were approved by the coordinator. Follow their tone and structure:\n${examples}`)
+      }
+
+      if (learningContext.rejectionReasons.length > 0) {
+        const reasons = learningContext.rejectionReasons.map((r) => `- ${r}`).join('\n')
+        sections.push(`### Patterns to Avoid\nThese are reasons drafts were rejected. Do NOT repeat these mistakes:\n${reasons}`)
+      }
+
+      if (learningContext.editPatterns.length > 0) {
+        const patterns = learningContext.editPatterns
+          .map((p) => `Original: "${p.original.slice(0, 200)}"\nCorrected to: "${p.edited.slice(0, 200)}"`)
+          .join('\n---\n')
+        sections.push(`### Common Corrections\nThe coordinator typically makes these kinds of edits. Incorporate them upfront:\n${patterns}`)
+      }
+    } else {
+      logEvent({
+        level: 'info',
+        msg: 'voice_training_below_threshold',
+        venueId,
+        event_type: 'sage.voice_training',
+        outcome: 'skip',
+        data: {
+          surface: 'inquiry_brain.first_response',
+          samples: goodSampleCount,
+          threshold: VOICE_TRAINING_MIN_SAMPLES,
+        },
+      })
     }
 
-    if (learningContext.rejectionReasons.length > 0) {
-      const reasons = learningContext.rejectionReasons.map((r) => `- ${r}`).join('\n')
-      sections.push(`### Patterns to Avoid\nThese are reasons drafts were rejected. Do NOT repeat these mistakes:\n${reasons}`)
-    }
-
-    if (learningContext.editPatterns.length > 0) {
-      const patterns = learningContext.editPatterns
-        .map((p) => `Original: "${p.original.slice(0, 200)}"\nCorrected to: "${p.edited.slice(0, 200)}"`)
-        .join('\n---\n')
-      sections.push(`### Common Corrections\nThe coordinator typically makes these kinds of edits. Incorporate them upfront:\n${patterns}`)
-    }
-
+    // Coordinator-curated voice preferences (banned/approved phrases)
+    // are explicit, not learned — inject regardless of sample count.
     if (voicePrefs.bannedPhrases.length > 0) {
       sections.push(`### Banned Phrases\nNEVER use these phrases: ${voicePrefs.bannedPhrases.join(', ')}`)
     }
@@ -797,23 +830,41 @@ export async function generateFollowUp(
 
     const sections: string[] = []
 
-    if (learningContext.goodExamples.length > 0) {
-      const examples = learningContext.goodExamples
-        .map((ex) => `Subject: ${ex.subject}\n${ex.body.slice(0, 400)}`)
-        .join('\n---\n')
-      sections.push(`### Approved Draft Examples\n${examples}`)
-    }
+    // See VOICE_TRAINING_MIN_SAMPLES doc above — gate auto-learned
+    // feedback on the threshold; coordinator-curated phrases pass.
+    const goodSampleCount = learningContext.goodExamples.length
+    if (goodSampleCount >= VOICE_TRAINING_MIN_SAMPLES) {
+      if (learningContext.goodExamples.length > 0) {
+        const examples = learningContext.goodExamples
+          .map((ex) => `Subject: ${ex.subject}\n${ex.body.slice(0, 400)}`)
+          .join('\n---\n')
+        sections.push(`### Approved Draft Examples\n${examples}`)
+      }
 
-    if (learningContext.rejectionReasons.length > 0) {
-      const reasons = learningContext.rejectionReasons.map((r) => `- ${r}`).join('\n')
-      sections.push(`### Patterns to Avoid\n${reasons}`)
-    }
+      if (learningContext.rejectionReasons.length > 0) {
+        const reasons = learningContext.rejectionReasons.map((r) => `- ${r}`).join('\n')
+        sections.push(`### Patterns to Avoid\n${reasons}`)
+      }
 
-    if (learningContext.editPatterns.length > 0) {
-      const patterns = learningContext.editPatterns
-        .map((p) => `Original: "${p.original.slice(0, 200)}"\nCorrected to: "${p.edited.slice(0, 200)}"`)
-        .join('\n---\n')
-      sections.push(`### Common Corrections\n${patterns}`)
+      if (learningContext.editPatterns.length > 0) {
+        const patterns = learningContext.editPatterns
+          .map((p) => `Original: "${p.original.slice(0, 200)}"\nCorrected to: "${p.edited.slice(0, 200)}"`)
+          .join('\n---\n')
+        sections.push(`### Common Corrections\n${patterns}`)
+      }
+    } else {
+      logEvent({
+        level: 'info',
+        msg: 'voice_training_below_threshold',
+        venueId,
+        event_type: 'sage.voice_training',
+        outcome: 'skip',
+        data: {
+          surface: 'inquiry_brain.follow_up',
+          samples: goodSampleCount,
+          threshold: VOICE_TRAINING_MIN_SAMPLES,
+        },
+      })
     }
 
     if (voicePrefs.bannedPhrases.length > 0) {
