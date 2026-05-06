@@ -121,7 +121,21 @@ async function fetchWithCaps(url: string): Promise<{
   let currentUrl = url
 
   try {
+    // SSRF defense: validate the initial URL AND each redirect hop. Per
+    // 2026-05-06 audit Lens 8 — the redirect loop was the TOCTOU vector.
+    // assertSafeUrl throws UnsafeUrlError for private/link-local/loopback
+    // IPs and non-https protocols.
+    const { assertSafeUrl, UnsafeUrlError } = await import('@/lib/security/safe-fetch')
     while (true) {
+      try {
+        await assertSafeUrl(currentUrl)
+      } catch (err) {
+        if (err instanceof UnsafeUrlError) {
+          return { ok: false, reason: err.reason }
+        }
+        throw err
+      }
+
       const resp = await fetch(currentUrl, {
         method: 'GET',
         redirect: 'manual',

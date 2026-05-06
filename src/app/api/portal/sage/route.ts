@@ -186,7 +186,38 @@ export async function POST(request: NextRequest) {
 
     let resolvedFileContext = fileContext || ''
 
+    // SSRF defense for couple-supplied fileUrl. Scope the allowlist to
+    // the Supabase Storage CDN of this project (derived from the env
+    // URL), so a malicious couple cannot point Sage at internal /
+    // metadata / arbitrary external services. Per 2026-05-06 audit
+    // Lens 8 (top-3 fix #2). Validation happens before any fetch — a
+    // failure skips the file-extraction block but does not break the
+    // chat reply path.
+    let fileUrlIsSafe = false
     if (fileUrl && !resolvedFileContext) {
+      const { assertSafeUrl, UnsafeUrlError } = await import('@/lib/security/safe-fetch')
+      const supabaseHost = (() => {
+        try {
+          const u = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '')
+          return u.hostname
+        } catch {
+          return ''
+        }
+      })()
+      const fileUrlAllowlist = supabaseHost ? [supabaseHost] : ['supabase.co']
+      try {
+        await assertSafeUrl(fileUrl, { hostAllowlist: fileUrlAllowlist })
+        fileUrlIsSafe = true
+      } catch (err) {
+        if (err instanceof UnsafeUrlError) {
+          console.warn('[api/portal/sage] rejected unsafe fileUrl:', err.reason)
+        } else {
+          console.warn('[api/portal/sage] fileUrl validation failed:', err)
+        }
+      }
+    }
+
+    if (fileUrl && !resolvedFileContext && fileUrlIsSafe) {
       // Attempt to extract text from the uploaded file
       try {
         const supabase = createServiceClient()
