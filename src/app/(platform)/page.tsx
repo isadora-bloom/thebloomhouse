@@ -288,7 +288,11 @@ export default function DashboardPage() {
     },
     {
       label: 'Booked Revenue (12mo)',
-      value: `$${(stats.bookedRevenue / 1000).toFixed(0)}k`,
+      value: (
+        <span title={`$${stats.bookedRevenue.toLocaleString('en-US', { maximumFractionDigits: 0 })}`}>
+          ${(stats.bookedRevenue / 1000).toFixed(0)}k
+        </span>
+      ),
       icon: TrendingUp,
       color: 'text-emerald-600',
       bg: 'bg-emerald-50',

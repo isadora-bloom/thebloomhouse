@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
       // Venues between 15-25 weddings get a more encouraging, specific message.
       // Below 15 they get the generic "not enough data" block.
       const answer = n >= 15
-        ? `Your venue has ${n} weddings on record. Bloom needs at least ${NLQ_MIN_WEDDINGS} bookings to generate reliable pattern analysis. Keep building your history and check back soon.`
+        ? `Your venue has ${n} weddings on record. Bloom needs at least ${NLQ_MIN_WEDDINGS} weddings to generate reliable pattern analysis. Keep building your history and check back soon.`
         : null
       return NextResponse.json({
         answer,

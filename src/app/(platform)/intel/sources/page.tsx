@@ -675,8 +675,11 @@ function MultiTouchSplitPanel({
                   style={{ width: `${(b.pct * 100).toFixed(1)}%` }}
                 />
               </div>
-              <span className="w-16 shrink-0 text-right text-sage-700 tabular-nums">
+              <span className="shrink-0 text-right text-sage-700 tabular-nums">
                 {b.weddings} · {(b.pct * 100).toFixed(0)}%
+                {totalBooked < 5 && (
+                  <span className="ml-1 text-[10px] text-amber-600 normal-nums">(small sample, n={totalBooked})</span>
+                )}
               </span>
             </div>
           ))}
