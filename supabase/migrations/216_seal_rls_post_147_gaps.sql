@@ -133,13 +133,21 @@ END $$;
 -- check_rate_limit is plpgsql (not SECURITY DEFINER) but is called
 -- exclusively via createServiceClient() in src/lib/rate-limit.ts:168
 -- and src/app/api/cron/route.ts:614, both of which bypass RLS. Default-
--- deny is correct.
+-- deny is correct. IF EXISTS guard handles the case where a future
+-- migration renames or drops the table.
 -- ----------------------------------------------------------------------
-ALTER TABLE public.rate_limits ENABLE ROW LEVEL SECURITY;
-
--- No anon or authenticated policies. Service role bypasses RLS so the
--- in-product rate limiter continues to work. If a future feature needs
--- coordinator-visible rate-limit telemetry, add a SELECT policy then.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = 'rate_limits'
+  ) THEN
+    EXECUTE 'ALTER TABLE public.rate_limits ENABLE ROW LEVEL SECURITY';
+    RAISE NOTICE 'Step 2A: RLS enabled on rate_limits';
+  ELSE
+    RAISE NOTICE 'Step 2A: skipping rate_limits (table not present)';
+  END IF;
+END $$;
 
 -- ----------------------------------------------------------------------
 -- STEP 2B: stripe_events (054). Platform-level. Service-role only.
@@ -147,9 +155,18 @@ ALTER TABLE public.rate_limits ENABLE ROW LEVEL SECURITY;
 -- createServiceClient() (mig 209 hardening confirmed). Coordinators
 -- have no use case for raw Stripe payload access.
 -- ----------------------------------------------------------------------
-ALTER TABLE public.stripe_events ENABLE ROW LEVEL SECURITY;
-
--- No policies. Default-deny.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = 'stripe_events'
+  ) THEN
+    EXECUTE 'ALTER TABLE public.stripe_events ENABLE ROW LEVEL SECURITY';
+    RAISE NOTICE 'Step 2B: RLS enabled on stripe_events';
+  ELSE
+    RAISE NOTICE 'Step 2B: skipping stripe_events (table not present)';
+  END IF;
+END $$;
 
 -- ----------------------------------------------------------------------
 -- STEP 2C: booked_data_recovery_log (201). Wedding-scoped audit log.
@@ -159,24 +176,35 @@ ALTER TABLE public.stripe_events ENABLE ROW LEVEL SECURITY;
 -- access is service-role-only today.
 --
 -- Defensive: if a future page attempts a direct browser-side read via
--- createClient() (anon-key supabase-js), the policy below scopes it to
--- the user's venue via the standard 056 pattern. is_super_admin()
--- gives the platform team visibility.
+-- createClient() (anon-key supabase-js), the policy below scopes via
+-- the canonical post-141 pattern: user_visible_venue_ids() handles
+-- both single-venue (user_profiles.venue_id) and org-wide (org_id)
+-- visibility, plus super_admin bypass. user_profiles.id IS the
+-- auth.users(id) FK (mig 001), so user_visible_venue_ids() does the
+-- correct lookup internally.
 -- ----------------------------------------------------------------------
-ALTER TABLE public.booked_data_recovery_log ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "booked_data_recovery_log_authenticated_select"
-  ON public.booked_data_recovery_log;
-
-CREATE POLICY "booked_data_recovery_log_authenticated_select"
-  ON public.booked_data_recovery_log
-  FOR SELECT TO authenticated
-  USING (
-    public.is_super_admin()
-    OR venue_id IN (
-      SELECT up.venue_id FROM public.user_profiles up WHERE up.user_id = auth.uid()
-    )
-  );
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = 'booked_data_recovery_log'
+  ) THEN
+    EXECUTE 'ALTER TABLE public.booked_data_recovery_log ENABLE ROW LEVEL SECURITY';
+    EXECUTE 'DROP POLICY IF EXISTS "booked_data_recovery_log_authenticated_select" ON public.booked_data_recovery_log';
+    EXECUTE $p$
+      CREATE POLICY "booked_data_recovery_log_authenticated_select"
+        ON public.booked_data_recovery_log
+        FOR SELECT TO authenticated
+        USING (
+          venue_id IN (SELECT public.user_visible_venue_ids())
+          OR public.is_super_admin()
+        )
+    $p$;
+    RAISE NOTICE 'Step 2C: RLS enabled + auth-select policy on booked_data_recovery_log';
+  ELSE
+    RAISE NOTICE 'Step 2C: skipping booked_data_recovery_log (table not present)';
+  END IF;
+END $$;
 
 -- No INSERT/UPDATE/DELETE policies for authenticated. Writes are
 -- service-role only (the recovery cron). Audit logs are immutable
@@ -190,15 +218,29 @@ CREATE POLICY "booked_data_recovery_log_authenticated_select"
 -- in a server component if/when the /pricing page surfaces "X of 25
 -- spots remaining." No anon access needed today.
 --
+-- IF EXISTS guard: as of 2026-05-06 verification, mig 215 is in the
+-- repo working tree but not yet applied to prod. This block becomes
+-- a no-op until 215 is applied. After 215 lands in prod, re-run 216
+-- (idempotent) to seal the table. Or include this guard in 215 itself.
+--
 -- If a future requirement makes anon read necessary, add:
 --   CREATE POLICY "founding_member_counter_anon_select"
 --     ON public.founding_member_counter
 --     FOR SELECT TO anon USING (true);
 -- and document why on the change.
 -- ----------------------------------------------------------------------
-ALTER TABLE public.founding_member_counter ENABLE ROW LEVEL SECURITY;
-
--- No policies. Default-deny.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = 'founding_member_counter'
+  ) THEN
+    EXECUTE 'ALTER TABLE public.founding_member_counter ENABLE ROW LEVEL SECURITY';
+    RAISE NOTICE 'Step 2D: RLS enabled on founding_member_counter';
+  ELSE
+    RAISE NOTICE 'Step 2D: skipping founding_member_counter (table not present — mig 215 not yet applied)';
+  END IF;
+END $$;
 
 -- ----------------------------------------------------------------------
 -- STEP 3: Sanity verification. Logs any of the tables in scope that
