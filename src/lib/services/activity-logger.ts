@@ -48,6 +48,55 @@ export async function logActivity(options: {
 }
 
 // ---------------------------------------------------------------------------
+// logRead — audit log for bulk reads / exports
+//
+// Per 2026-05-06 audit Lens 8 top-3 fix #1:
+// > "Read-side audit log on tier-1 reads + rate-limit/anomaly on bulk
+// >  exports. The blast radius from a compromised coordinator login is
+// >  'every couple, every venue they touch, silently.' Without this you
+// >  cannot answer 'did anyone exfil yesterday' — which is question 1
+// >  on every breach response."
+//
+// Tier-1 tables (PII / health-adjacent / financial):
+//   weddings, guest_list, allergy_registry, contracts, sage_conversations,
+//   interactions (full email bodies), people
+//
+// Use logRead at any coordinator surface that fetches a SET of tier-1
+// rows (single-row reads on a detail page are fine). Bulk reads + CSV
+// exports are the threat. activity_type follows the convention
+// 'read_<table>' or 'export_<table>'.
+// ---------------------------------------------------------------------------
+
+export async function logRead(options: {
+  venueId: string
+  weddingId?: string
+  userId?: string
+  /** Logical table or surface being read (e.g. 'guest_list', 'weddings'). */
+  resource: string
+  /** 'view' for opening a page, 'export' for downloads, 'bulk_read' for batched fetches. */
+  mode: 'view' | 'export' | 'bulk_read'
+  /** Approximate row count, for spotting volume anomalies. */
+  rowCount?: number
+  /** Free-form context (filename, format, filters applied). */
+  details?: Record<string, unknown>
+}): Promise<void> {
+  // Fire-and-forget. Failure to log must not block the user-facing
+  // operation — but we WILL emit a console error so a stuck logger
+  // surfaces in observability.
+  return logActivity({
+    venueId: options.venueId,
+    weddingId: options.weddingId,
+    userId: options.userId,
+    activityType: `${options.mode}_${options.resource}`,
+    entityType: options.resource,
+    details: {
+      ...(options.details ?? {}),
+      row_count: options.rowCount ?? null,
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------
 // getRecentActivity — fetch recent activity entries
 // ---------------------------------------------------------------------------
 

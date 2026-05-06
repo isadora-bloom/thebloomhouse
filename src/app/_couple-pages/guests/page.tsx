@@ -796,7 +796,7 @@ export default function GuestListPage() {
       plus_one_meal_choice: g.plus_one_meal_choice || '',
       plus_one_dietary: g.plus_one_dietary || '',
     }))
-    exportToCsv('guest-list.csv', columns, rows)
+    exportToCsv('guest-list.csv', columns, rows, { auditResource: 'guest_list' })
   }
 
   // ---- Bulk actions ----

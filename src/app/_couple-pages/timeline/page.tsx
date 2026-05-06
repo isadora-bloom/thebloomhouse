@@ -1612,7 +1612,7 @@ export default function TimelinePage() {
       notes: e.notes || '',
     }))
     const dateStr = new Date().toISOString().split('T')[0]
-    exportToCsv(`timeline-${slug}-${dateStr}.csv`, columns, rows)
+    exportToCsv(`timeline-${slug}-${dateStr}.csv`, columns, rows, { auditResource: 'timeline' })
   }
 
   // ---- Reset to defaults ----

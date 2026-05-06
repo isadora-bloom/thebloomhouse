@@ -503,7 +503,7 @@ export default function BudgetPage() {
       notes: i.notes || '',
     }))
     const dateStr = new Date().toISOString().split('T')[0]
-    exportToCsv(`budget-${slug}-${dateStr}.csv`, columns, rows)
+    exportToCsv(`budget-${slug}-${dateStr}.csv`, columns, rows, { auditResource: 'budget' })
   }
 
   // ---- Render ----
