@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { sendEmail } from '@/lib/services/email'
+import { getPlatformAuth, unauthorized } from '@/lib/api/auth-helpers'
 
 /**
  * POST /api/portal/invite-couple
@@ -24,17 +25,54 @@ import { sendEmail } from '@/lib/services/email'
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
-    const { weddingId, venueId, email, partnerEmail, eventCode, coupleName } = body
+    // Auth gate. Pre-fix this route would send a Resend-billed branded
+    // invitation email to any address with any eventCode against any
+    // venue's branding, AND stamp couple_invited_at on any wedding.
+    // Resend-quota abuse + impersonation surface. Per 2026-05-06 audit
+    // Lens 1.
+    const auth = await getPlatformAuth()
+    if (!auth) return unauthorized()
 
-    if (!weddingId || !venueId || !email || !eventCode) {
+    const body = await request.json()
+    const { weddingId, venueId: requestedVenueId, email, partnerEmail, eventCode, coupleName } = body
+
+    if (!weddingId || !email || !eventCode) {
       return NextResponse.json(
-        { error: 'Missing required fields: weddingId, venueId, email, eventCode' },
+        { error: 'Missing required fields: weddingId, email, eventCode' },
         { status: 400 }
       )
     }
 
     const supabase = createServiceClient()
+
+    // Derive venueId from the wedding row, not from the request body.
+    // Then verify auth ownership.
+    const { data: wedding } = await supabase
+      .from('weddings')
+      .select('venue_id')
+      .eq('id', weddingId)
+      .maybeSingle()
+
+    if (!wedding) {
+      return NextResponse.json({ error: 'Wedding not found' }, { status: 404 })
+    }
+
+    const venueId = wedding.venue_id as string
+    const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
+    if (!isAdmin && venueId !== auth.venueId) {
+      return NextResponse.json(
+        { error: 'Forbidden: wedding belongs to another venue' },
+        { status: 403 }
+      )
+    }
+    // If the caller supplied venueId, it MUST match the wedding's
+    // venue_id (catches client-side bugs without breaking the contract).
+    if (requestedVenueId && requestedVenueId !== venueId) {
+      return NextResponse.json(
+        { error: 'venueId does not match wedding owner' },
+        { status: 400 }
+      )
+    }
 
     // Pull venue + branding + AI name in one round trip.
     const [{ data: venue }, { data: venueConfig }, { data: aiConfig }] = await Promise.all([

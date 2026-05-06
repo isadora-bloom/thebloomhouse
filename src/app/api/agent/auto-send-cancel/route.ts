@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { getPlatformAuth, unauthorized } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // Auto-Send Cancel API
@@ -8,11 +9,17 @@ import { createServiceClient } from '@/lib/supabase/service'
 //   Body: { notificationId, draftId }
 //
 // Marks the admin_notification as read and the draft as rejected with
-// reason 'cancelled_auto_send'.
+// reason 'cancelled_auto_send'. Auth: coordinator must own the draft's
+// venue. Pre-fix any caller could pass any draftId/notificationId and
+// reject another venue's pending draft + write a feedback record into
+// that venue's draft_feedback table. Per 2026-05-06 audit Lens 1.
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await getPlatformAuth()
+    if (!auth) return unauthorized()
+
     const body = await request.json()
     const { notificationId, draftId } = body as {
       notificationId: string
@@ -27,6 +34,28 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = createServiceClient()
+
+    // Ownership pre-check: verify the draft belongs to a venue the
+    // authenticated user can access. Admins bypass — they may operate
+    // across the org. Demo mode: confined to the Crestwood allowlist
+    // (already enforced by getPlatformAuth returning isDemo=true with
+    // a fixed venueId, so the eq check below holds).
+    const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
+    const { data: draftOwnership } = await supabase
+      .from('drafts')
+      .select('venue_id')
+      .eq('id', draftId)
+      .maybeSingle()
+
+    if (!draftOwnership) {
+      return NextResponse.json({ error: 'Draft not found' }, { status: 404 })
+    }
+    if (!isAdmin && draftOwnership.venue_id !== auth.venueId) {
+      return NextResponse.json(
+        { error: 'Forbidden: draft belongs to another venue' },
+        { status: 403 }
+      )
+    }
 
     // Conditional cancel: only transition if the draft is still in
     // auto_send_pending. Once the flush cron has claimed it
