@@ -49,8 +49,8 @@ export function buildCoupleSidebarSections(base: string): NavSection[] {
         { label: 'Guest List', href: `${base}/guests`, icon: Users },
         { label: 'RSVP Settings', href: `${base}/rsvp-settings`, icon: ClipboardCheck },
         { label: 'Seating', href: `${base}/seating`, icon: Armchair },
-        { label: 'Table Map', href: `${base}/table-map`, icon: Table2 },
-        { label: 'Tables', href: `${base}/tables`, icon: Table2 },
+        { label: 'Floor Plan', href: `${base}/table-map`, icon: Table2 },
+        { label: 'Table Sizes', href: `${base}/tables`, icon: Table2 },
         { label: 'Wedding Party', href: `${base}/party`, icon: UsersRound },
         { label: 'Allergies', href: `${base}/allergies`, icon: ShieldAlert },
         { label: 'Guest Care', href: `${base}/guest-care`, icon: HeartHandshake },
@@ -85,18 +85,18 @@ export function buildCoupleSidebarSections(base: string): NavSection[] {
       items: [
         { label: 'Wedding Details', href: `${base}/wedding-details`, icon: Heart },
         { label: 'Venue Inventory', href: `${base}/venue-inventory`, icon: Package },
-        { label: 'Picks', href: `${base}/picks`, icon: ShoppingBag },
+        { label: 'Saved Items', href: `${base}/picks`, icon: ShoppingBag },
       ],
     },
     {
-      title: 'Outputs',
+      title: 'Documents & Booking',
       items: [
-        { label: 'Website', href: `${base}/website`, icon: Globe },
-        { label: 'Downloads', href: `${base}/downloads`, icon: Download },
-        { label: 'Resources', href: `${base}/resources`, icon: BookOpen },
+        { label: 'Contracts', href: `${base}/contracts`, icon: FileSignature },
         { label: 'Booking', href: `${base}/booking`, icon: CalendarPlus },
         { label: 'Final Review', href: `${base}/final-review`, icon: ClipboardList },
-        { label: 'Contracts', href: `${base}/contracts`, icon: FileSignature },
+        { label: 'Wedding Website', href: `${base}/website`, icon: Globe },
+        { label: 'Downloads', href: `${base}/downloads`, icon: Download },
+        { label: 'Resources', href: `${base}/resources`, icon: BookOpen },
       ],
     },
     {
@@ -106,13 +106,25 @@ export function buildCoupleSidebarSections(base: string): NavSection[] {
       ],
     },
     {
-      title: 'After the Day',
+      title: 'After Your Wedding',
       items: [
         { label: 'Day-of Memories', href: `${base}/day-of-memories`, icon: Camera },
       ],
     },
   ]
 }
+
+/**
+ * Sections that should be collapsed by default for new couples.
+ * Sarah's first-impression audit (#38): 37 links across 8 sections
+ * with all opened was overwhelming. Most-used-early sections stay
+ * open; far-future sections collapse until expanded.
+ */
+const DEFAULT_COLLAPSED = new Set([
+  'Day-of',
+  'Wedding Details',
+  'After Your Wedding',
+])
 
 // ---------------------------------------------------------------------------
 // Sidebar component
@@ -131,7 +143,9 @@ interface CoupleSidebarProps {
 
 export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: CoupleSidebarProps) {
   const pathname = usePathname()
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
+    () => new Set(DEFAULT_COLLAPSED),
+  )
   const sections = buildCoupleSidebarSections(base)
 
   // Compute Final Review badge: show when wedding is within 6 weeks (42 days)
