@@ -28,9 +28,15 @@ import {
   BarChart3,
   Table2,
   Tag,
+  Info,
 } from 'lucide-react'
 import { TagChip, type TagChipData } from '@/components/couple/tag-chip'
 import { TagPicker } from '@/components/couple/tag-picker'
+import {
+  loadSeatingConfig,
+  EMPTY_SEATING_CONFIG,
+  type VenueSeatingConfig,
+} from '@/lib/services/couple-portal-config'
 
 // TODO: Get from auth session
 // ---------------------------------------------------------------------------
@@ -115,6 +121,7 @@ export default function SeatingChartPage() {
   const [tables, setTables] = useState<SeatingTable[]>([])
   const [guests, setGuests] = useState<Guest[]>([])
   const [floorPlanUrl, setFloorPlanUrl] = useState<string | null>(null)
+  const [venueSeatingConfig, setVenueSeatingConfig] = useState<VenueSeatingConfig>(EMPTY_SEATING_CONFIG)
   const [loading, setLoading] = useState(true)
 
   // Tag data
@@ -146,7 +153,7 @@ export default function SeatingChartPage() {
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
     if (!weddingId || !venueId) return
-    const [tablesRes, guestsRes, configRes, tagsRes] = await Promise.all([
+    const [tablesRes, guestsRes, configRes, tagsRes, seatingConfig] = await Promise.all([
       supabase
         .from('seating_tables')
         .select('*')
@@ -167,7 +174,9 @@ export default function SeatingChartPage() {
         .select('id, tag_name, color')
         .eq('wedding_id', weddingId)
         .order('created_at', { ascending: true }),
+      loadSeatingConfig(supabase, venueId),
     ])
+    setVenueSeatingConfig(seatingConfig)
 
     if (tablesRes.data) setTables(tablesRes.data as unknown as SeatingTable[])
     if (guestsRes.data) setGuests(guestsRes.data as unknown as Guest[])
@@ -398,6 +407,22 @@ export default function SeatingChartPage() {
           Add Table
         </button>
       </div>
+
+      {/* Venue admin notes */}
+      {venueSeatingConfig.notes_to_couples && (
+        <div
+          className="rounded-xl border p-4 flex items-start gap-3"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--couple-primary) 6%, white)',
+            borderColor: 'color-mix(in srgb, var(--couple-primary) 18%, transparent)',
+          }}
+        >
+          <Info className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--couple-primary)' }} />
+          <p className="text-sm text-gray-700 whitespace-pre-line">
+            {venueSeatingConfig.notes_to_couples}
+          </p>
+        </div>
+      )}
 
       {/* Stats Bar */}
       {(tables.length > 0 || guests.length > 0) && (

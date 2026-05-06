@@ -33,6 +33,7 @@ interface PresetTable {
 interface SeatingConfig {
   venue_spaces: string[]
   preset_tables: PresetTable[]
+  notes_to_couples: string
 }
 
 interface PageState {
@@ -45,6 +46,7 @@ const DEFAULT_STATE: PageState = {
   seating: {
     venue_spaces: [],
     preset_tables: [],
+    notes_to_couples: '',
   },
 }
 
@@ -298,6 +300,7 @@ export default function SeatingConfigPage() {
           seating: {
             venue_spaces: (sc.venue_spaces as string[]) ?? [],
             preset_tables: (sc.preset_tables as PresetTable[]) ?? [],
+            notes_to_couples: (sc.notes_to_couples as string) ?? '',
           },
         }
         setState(loaded)
@@ -397,6 +400,7 @@ export default function SeatingConfigPage() {
       flags.seating_config = {
         venue_spaces: state.seating.venue_spaces,
         preset_tables: state.seating.preset_tables,
+        notes_to_couples: state.seating.notes_to_couples,
       }
 
       const { error: updateErr } = await supabase
@@ -619,6 +623,26 @@ export default function SeatingConfigPage() {
                   seating: { ...prev.seating, preset_tables: t },
                 }))
               }
+            />
+          </ConfigSection>
+
+          {/* Notes to Couples */}
+          <ConfigSection title="Notes to Couples" icon={FileText}>
+            <p className="text-sm text-sage-600 mb-2">
+              Free-text guidance shown on the couple portal Seating Chart page (e.g.
+              &ldquo;Head table seats up to 10. Sweetheart table is on the dance-floor side.&rdquo;).
+            </p>
+            <textarea
+              value={state.seating.notes_to_couples}
+              onChange={(e) =>
+                setState((prev) => ({
+                  ...prev,
+                  seating: { ...prev.seating, notes_to_couples: e.target.value },
+                }))
+              }
+              placeholder="e.g., We recommend round tables of 8 in the Barn. Head table is set against the back wall."
+              rows={4}
+              className="w-full px-3 py-2 bg-warm-white border border-border rounded-lg text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 transition-colors resize-none"
             />
           </ConfigSection>
         </div>

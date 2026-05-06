@@ -462,3 +462,21 @@ export async function loadStaffingConfig(
   const { flags } = await loadFlags(supabase, venueId)
   return mapStaffingConfig(flags)
 }
+
+export async function loadRoomsConfig(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: SupabaseClient<any, 'public', any>,
+  venueId: string
+): Promise<VenueRoomsConfig> {
+  const { flags } = await loadFlags(supabase, venueId)
+  return mapRoomsConfig(flags)
+}
+
+export async function loadSeatingConfig(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: SupabaseClient<any, 'public', any>,
+  venueId: string
+): Promise<VenueSeatingConfig> {
+  const { flags } = await loadFlags(supabase, venueId)
+  return mapSeatingConfig(flags)
+}

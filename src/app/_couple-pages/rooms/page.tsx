@@ -33,6 +33,11 @@ import {
   Tag,
 } from 'lucide-react'
 import { TagChip, type TagChipData } from '@/components/couple/tag-chip'
+import {
+  loadRoomsConfig,
+  EMPTY_ROOMS_CONFIG,
+  type VenueRoomsConfig,
+} from '@/lib/services/couple-portal-config'
 
 // TODO: Get from auth session
 // ---------------------------------------------------------------------------
@@ -232,6 +237,9 @@ export default function RoomAssignmentsPage() {
   const [hotelTag, setHotelTag] = useState<TagChipData | null>(null)
   const [hotelTaggedGuestIds, setHotelTaggedGuestIds] = useState<Set<string>>(new Set())
 
+  // Venue admin config (notes_to_couples)
+  const [venueRoomsConfig, setVenueRoomsConfig] = useState<VenueRoomsConfig>(EMPTY_ROOMS_CONFIG)
+
   // General
   const [loading, setLoading] = useState(true)
   const [expandedBlocks, setExpandedBlocks] = useState(true)
@@ -242,7 +250,7 @@ export default function RoomAssignmentsPage() {
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
     if (!weddingId) return
-    const [assignmentsRes, guestsRes, hotelTagRes] = await Promise.all([
+    const [assignmentsRes, guestsRes, hotelTagRes, roomsConfig] = await Promise.all([
       supabase
         .from('bedroom_assignments')
         .select('*')
@@ -259,7 +267,9 @@ export default function RoomAssignmentsPage() {
         .eq('wedding_id', weddingId)
         .ilike('tag_name', 'hotel')
         .limit(1),
+      venueId ? loadRoomsConfig(supabase, venueId) : Promise.resolve(EMPTY_ROOMS_CONFIG),
     ])
+    setVenueRoomsConfig(roomsConfig)
 
     if (assignmentsRes.data) {
       const rows = assignmentsRes.data as Record<string, unknown>[]
@@ -299,7 +309,7 @@ export default function RoomAssignmentsPage() {
     }
 
     setLoading(false)
-  }, [supabase, weddingId])
+  }, [supabase, weddingId, venueId])
 
   // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
@@ -428,6 +438,22 @@ export default function RoomAssignmentsPage() {
           Manage hotel room blocks, on-site accommodations, and track where your guests are staying.
         </p>
       </div>
+
+      {/* Venue admin notes */}
+      {venueRoomsConfig.notes_to_couples && (
+        <div
+          className="rounded-xl border p-4 flex items-start gap-3"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--couple-primary) 6%, white)',
+            borderColor: 'color-mix(in srgb, var(--couple-primary) 18%, transparent)',
+          }}
+        >
+          <Info className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--couple-primary)' }} />
+          <p className="text-sm text-gray-700 whitespace-pre-line">
+            {venueRoomsConfig.notes_to_couples}
+          </p>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
