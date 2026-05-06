@@ -27,6 +27,11 @@ import {
   Tag,
 } from 'lucide-react'
 import { TagChip, type TagChipData } from '@/components/couple/tag-chip'
+import {
+  loadShuttleConfig,
+  EMPTY_SHUTTLE_CONFIG,
+  type VenueShuttleConfig,
+} from '@/lib/services/couple-portal-config'
 
 // TODO: Get from auth session
 // ---------------------------------------------------------------------------
@@ -178,6 +183,10 @@ export default function TransportationPage() {
   const [showPreSuggestions, setShowPreSuggestions] = useState(false)
   const [showPostSuggestions, setShowPostSuggestions] = useState(false)
 
+  // Venue-side admin config (provider, notes_to_couples)
+  const [venueShuttleConfig, setVenueShuttleConfig] =
+    useState<VenueShuttleConfig>(EMPTY_SHUTTLE_CONFIG)
+
   // Inline editing
   const [editField, setEditField] = useState<{ id: string; field: string } | null>(null)
   const [editValue, setEditValue] = useState('')
@@ -199,17 +208,13 @@ export default function TransportationPage() {
   // ---- Fetch ----
   const fetchRuns = useCallback(async () => {
     if (!weddingId || !venueId) return
-    const [runsRes, configRes, timelineRes] = await Promise.all([
+    const [runsRes, shuttleConfig, timelineRes] = await Promise.all([
       supabase
         .from('shuttle_schedule')
         .select('*')
         .eq('wedding_id', weddingId)
         .order('sort_order', { ascending: true }),
-      supabase
-        .from('venue_config')
-        .select('feature_flags')
-        .eq('venue_id', venueId)
-        .maybeSingle(),
+      loadShuttleConfig(supabase, venueId),
       // Migration 076 consolidated wedding_timeline → weddings. ceremony_start
       // and reception_end now live on the parent wedding row.
       supabase
@@ -223,24 +228,21 @@ export default function TransportationPage() {
       setRuns(runsRes.data as ShuttleRun[])
     }
 
-    let loadedSuggestions: string[] = []
-    if (configRes.data) {
-      const flags = (configRes.data.feature_flags ?? {}) as Record<string, unknown>
-      const sc = (flags.shuttle_config ?? {}) as Record<string, unknown>
-      const pickupLocations = sc.pickup_locations as Array<{ name?: string }> | undefined
-      if (pickupLocations) {
-        loadedSuggestions = pickupLocations.map((l) => l.name || '').filter(Boolean)
-        setPickupSuggestions(loadedSuggestions)
-      }
-      if (sc.available_shuttles) {
-        setShuttleCount(sc.available_shuttles as number)
-      }
-      if (sc.seats_per_shuttle) {
-        setSeatsPerShuttle(sc.seats_per_shuttle as number)
-      }
-      if (typeof sc.arrival_buffer_minutes === 'number') {
-        setArrivalBufferMinutes(sc.arrival_buffer_minutes as number)
-      }
+    setVenueShuttleConfig(shuttleConfig)
+    const loadedSuggestions: string[] = shuttleConfig.pickup_locations
+      .map((l) => l.name)
+      .filter((n): n is string => !!n)
+    if (loadedSuggestions.length > 0) {
+      setPickupSuggestions(loadedSuggestions)
+    }
+    if (shuttleConfig.available_shuttles) {
+      setShuttleCount(shuttleConfig.available_shuttles)
+    }
+    if (shuttleConfig.seats_per_shuttle) {
+      setSeatsPerShuttle(shuttleConfig.seats_per_shuttle)
+    }
+    if (shuttleConfig.arrival_buffer_minutes !== null) {
+      setArrivalBufferMinutes(shuttleConfig.arrival_buffer_minutes)
     }
 
     // Pre-populate generator inputs with sensible defaults so the user
@@ -761,6 +763,28 @@ export default function TransportationPage() {
         <p className="text-gray-500 text-sm">
           Plan shuttle runs for your guests before the ceremony and at the end of the night.
         </p>
+        {(venueShuttleConfig.shuttle_provider || venueShuttleConfig.notes_to_couples) && (
+          <div
+            className="mt-4 rounded-xl border p-4 flex items-start gap-3"
+            style={{
+              backgroundColor: 'color-mix(in srgb, var(--couple-primary) 6%, white)',
+              borderColor: 'color-mix(in srgb, var(--couple-primary) 18%, transparent)',
+            }}
+          >
+            <Info className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--couple-primary)' }} />
+            <div className="text-sm text-gray-700 space-y-1">
+              {venueShuttleConfig.shuttle_provider && (
+                <p>
+                  <span className="font-medium">Preferred provider:</span>{' '}
+                  {venueShuttleConfig.shuttle_provider}
+                </p>
+              )}
+              {venueShuttleConfig.notes_to_couples && (
+                <p className="whitespace-pre-line">{venueShuttleConfig.notes_to_couples}</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Shuttle Tag Stat + Auto-populate */}

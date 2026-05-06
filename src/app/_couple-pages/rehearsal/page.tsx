@@ -8,6 +8,11 @@ import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import {
+  loadRehearsalConfig,
+  EMPTY_REHEARSAL_CONFIG,
+  type VenueRehearsalConfig,
+} from '@/lib/services/couple-portal-config'
+import {
   CalendarDays,
   Save,
   Check,
@@ -369,7 +374,7 @@ export default function RehearsalPage() {
   const [loading, setLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [dirty, setDirty] = useState(false)
-  const [venueSpaceOptions, setVenueSpaceOptions] = useState<string[]>([])
+  const [venueConfig, setVenueConfig] = useState<VenueRehearsalConfig>(EMPTY_REHEARSAL_CONFIG)
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const supabase = createClient()
@@ -377,17 +382,13 @@ export default function RehearsalPage() {
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
     if (!weddingId || !venueId) return
-    const [rehearsalRes, configRes] = await Promise.all([
+    const [rehearsalRes, rehearsalConfig] = await Promise.all([
       supabase
         .from('rehearsal_dinner')
         .select('*')
         .eq('wedding_id', weddingId)
         .maybeSingle(),
-      supabase
-        .from('venue_config')
-        .select('feature_flags')
-        .eq('venue_id', venueId)
-        .maybeSingle(),
+      loadRehearsalConfig(supabase, venueId),
     ])
 
     if (rehearsalRes.data) {
@@ -440,12 +441,7 @@ export default function RehearsalPage() {
       })
     }
 
-    if (configRes.data) {
-      const flags = (configRes.data.feature_flags ?? {}) as Record<string, unknown>
-      if (flags.rehearsal_space_options) {
-        setVenueSpaceOptions(flags.rehearsal_space_options as string[])
-      }
-    }
+    setVenueConfig(rehearsalConfig)
 
     setLoading(false)
   }, [supabase, weddingId, venueId])
@@ -566,6 +562,22 @@ export default function RehearsalPage() {
         </p>
       </div>
 
+      {/* Venue notes — coordinator-authored */}
+      {venueConfig.notes_to_couples && (
+        <div
+          className="rounded-xl border p-4 flex items-start gap-3"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--couple-primary) 6%, white)',
+            borderColor: 'color-mix(in srgb, var(--couple-primary) 18%, transparent)',
+          }}
+        >
+          <Info className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--couple-primary)' }} />
+          <p className="text-sm text-gray-700 whitespace-pre-line">
+            {venueConfig.notes_to_couples}
+          </p>
+        </div>
+      )}
+
       {/* ================================================================ */}
       {/* Step 1: Location Type */}
       {/* ================================================================ */}
@@ -668,10 +680,10 @@ export default function RehearsalPage() {
             </h2>
 
             {/* Venue space */}
-            {venueSpaceOptions.length > 0 ? (
+            {venueConfig.venue_spaces.length > 0 ? (
               <ToggleGroup
                 label="Venue Space"
-                options={venueSpaceOptions}
+                options={venueConfig.venue_spaces}
                 value={data.venue_space}
                 onChange={(v) => updateField('venue_space', v)}
                 icon={<MapPin className="w-4 h-4 text-gray-400" />}
@@ -684,6 +696,18 @@ export default function RehearsalPage() {
                 placeholder="e.g., Patio, Ballroom, Kitchen"
                 icon={<MapPin className="w-3.5 h-3.5 text-gray-400" />}
               />
+            )}
+            {venueConfig.max_guests !== null && venueConfig.max_guests > 0 && (
+              <p className="text-xs text-gray-500 flex items-center gap-1">
+                <Info className="w-3 h-3" />
+                Max guests for at-venue rehearsal: {venueConfig.max_guests}
+              </p>
+            )}
+            {venueConfig.linen_info && (
+              <p className="text-xs text-gray-500 flex items-center gap-1">
+                <Info className="w-3 h-3" />
+                Linens: {venueConfig.linen_info}
+              </p>
             )}
           </div>
 
@@ -702,7 +726,7 @@ export default function RehearsalPage() {
           <div className="p-5 space-y-3">
             <ToggleGroup
               label="Food"
-              options={VENUE_FOOD_OPTIONS}
+              options={venueConfig.food_options.length > 0 ? venueConfig.food_options : VENUE_FOOD_OPTIONS}
               value={data.food_type}
               onChange={(v) => updateField('food_type', v)}
               icon={<Utensils className="w-4 h-4 text-gray-400" />}

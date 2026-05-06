@@ -28,6 +28,11 @@ import {
   Ruler,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import {
+  loadTablesConfig,
+  EMPTY_TABLES_CONFIG,
+  type VenueTablesConfig,
+} from '@/lib/services/couple-portal-config'
 
 // TODO: Get from auth session
 // ---------------------------------------------------------------------------
@@ -337,18 +342,23 @@ export default function TablesPage() {
   const [tables, setTables] = useState<WeddingTables>(DEFAULT_TABLES)
   const [loading, setLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
+  const [venueTablesConfig, setVenueTablesConfig] =
+    useState<VenueTablesConfig>(EMPTY_TABLES_CONFIG)
 
   const supabase = createClient()
 
   // ---- Fetch ----
   const fetchTables = useCallback(async () => {
     if (!weddingId || !venueId) return
-    const { data, error } = await supabase
-      .from('wedding_tables')
-      .select('*')
-      .eq('wedding_id', weddingId)
-      .eq('venue_id', venueId)
-      .maybeSingle()
+    const [{ data, error }, venueConfig] = await Promise.all([
+      supabase
+        .from('wedding_tables')
+        .select('*')
+        .eq('wedding_id', weddingId)
+        .eq('venue_id', venueId)
+        .maybeSingle(),
+      loadTablesConfig(supabase, venueId),
+    ])
 
     if (!error && data) {
       setTables({
@@ -360,6 +370,7 @@ export default function TablesPage() {
         extra_tables: mergeExtras(data.extra_tables),
       })
     }
+    setVenueTablesConfig(venueConfig)
     setLoading(false)
   }, [supabase, weddingId, venueId])
 
@@ -528,8 +539,49 @@ export default function TablesPage() {
         <span className="text-amber-500 mt-0.5 shrink-0">ℹ️</span>
         <p className="text-sm text-amber-800">
           This is a rough guide to help your venue or planner build your table layout map and to help you budget for table linens. Your coordinator will create the final floor plan based on your selections here.
+          {venueTablesConfig.max_capacity !== null && venueTablesConfig.max_capacity > 0 && (
+            <>
+              {' '}
+              <span className="font-medium">
+                Max seated capacity at this venue: {venueTablesConfig.max_capacity} guests.
+              </span>
+            </>
+          )}
         </p>
       </div>
+
+      {/* Venue linen guidance — shown when admin has configured linens */}
+      {(venueTablesConfig.linen_notes || venueTablesConfig.linen_colors.length > 0) && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-3">
+          <h2 className="text-sm font-semibold flex items-center gap-1.5 text-gray-800">
+            <Palette className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
+            Linen Options From Your Venue
+          </h2>
+          {venueTablesConfig.linen_colors.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {venueTablesConfig.linen_colors.map((c, i) => (
+                <span
+                  key={c.id ?? `${c.name}-${i}`}
+                  className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-gray-200 text-xs text-gray-700 bg-white"
+                >
+                  {c.hex && (
+                    <span
+                      className="w-3 h-3 rounded-full border border-gray-200"
+                      style={{ backgroundColor: c.hex }}
+                    />
+                  )}
+                  {c.name}
+                </span>
+              ))}
+            </div>
+          )}
+          {venueTablesConfig.linen_notes && (
+            <p className="text-sm text-gray-600 whitespace-pre-line">
+              {venueTablesConfig.linen_notes}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Section 1: Guest Count */}
       <Section title="Guest Count" icon={Users}>

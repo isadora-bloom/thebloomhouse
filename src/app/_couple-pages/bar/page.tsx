@@ -27,6 +27,11 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import {
+  loadBarConfig,
+  EMPTY_BAR_CONFIG,
+  type VenueBarConfig,
+} from '@/lib/services/couple-portal-config'
 
 // TODO: Get from auth session
 // ---------------------------------------------------------------------------
@@ -612,6 +617,9 @@ export default function BarPlannerPage() {
   const [notes, setNotes] = useState({ calculator: '', list: '', recipes: '' })
   const [showCalcSummary, setShowCalcSummary] = useState(false)
 
+  // Venue admin config (notes, packages, bar_mode)
+  const [venueBarConfig, setVenueBarConfig] = useState<VenueBarConfig>(EMPTY_BAR_CONFIG)
+
   const notesTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const supabase = createClient()
 
@@ -620,11 +628,11 @@ export default function BarPlannerPage() {
   const loadData = useCallback(async () => {
     if (!weddingId || !venueId) return
     try {
-      const [shoppingRes, recipesRes, planRes, configRes] = await Promise.all([
+      const [shoppingRes, recipesRes, planRes, barConfig] = await Promise.all([
         supabase.from('bar_shopping_list').select('*').eq('wedding_id', weddingId).order('category').order('item_name'),
         supabase.from('bar_recipes').select('*').eq('wedding_id', weddingId).order('created_at', { ascending: true }),
         supabase.from('bar_planning').select('*').eq('wedding_id', weddingId).maybeSingle(),
-        supabase.from('venue_config').select('bar_model, feature_flags').eq('venue_id', venueId).maybeSingle(),
+        loadBarConfig(supabase, venueId),
       ])
       if (shoppingRes.data) setItems(shoppingRes.data as ShoppingItem[])
       if (recipesRes.data) setRecipes(recipesRes.data as Recipe[])
@@ -645,24 +653,17 @@ export default function BarPlannerPage() {
           recipes: p.notes_recipes || '',
         })
       }
-      // Read venue bar config — set default bar type based on venue's bar model
-      if (configRes.data) {
-        const barModel = configRes.data.bar_model as string | null
-        if (barModel === 'in_house') {
-          // In-house bars typically offer full bar
-          setBarType('full')
-        }
-        // Also check feature_flags for bar-specific overrides
-        const flags = (configRes.data.feature_flags ?? {}) as Record<string, unknown>
-        const barConfig = flags.bar_config as Record<string, unknown> | undefined
-        if (barConfig) {
-          if (barConfig.default_bar_type && BAR_TYPES.some(b => b.key === barConfig.default_bar_type)) {
-            setBarType(barConfig.default_bar_type as BarTypeKey)
-          }
-          if (typeof barConfig.default_guest_count === 'number' && !planRes.data?.guest_count) {
-            setGuests(barConfig.default_guest_count)
-          }
-        }
+      // Apply venue admin config
+      setVenueBarConfig(barConfig)
+      if (barConfig.bar_model === 'in_house') {
+        // In-house bars typically offer full bar
+        setBarType('full')
+      }
+      if (barConfig.default_bar_type && BAR_TYPES.some(b => b.key === barConfig.default_bar_type)) {
+        setBarType(barConfig.default_bar_type as BarTypeKey)
+      }
+      if (barConfig.default_guest_count !== null && !planRes.data?.guest_count) {
+        setGuests(barConfig.default_guest_count)
       }
     } catch (err) {
       console.error('[BarPlanner] Load failed:', err)
@@ -1023,6 +1024,67 @@ export default function BarPlannerPage() {
         </h1>
         <p className="text-gray-500 text-sm">Calculate quantities, build a shopping list, and add cocktail recipes.</p>
       </div>
+
+      {/* Venue admin notes */}
+      {venueBarConfig.notes_to_couples && (
+        <div
+          className="rounded-xl border p-4 flex items-start gap-3"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--couple-primary) 6%, white)',
+            borderColor: 'color-mix(in srgb, var(--couple-primary) 18%, transparent)',
+          }}
+        >
+          <Info className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--couple-primary)' }} />
+          <p className="text-sm text-gray-700 whitespace-pre-line">
+            {venueBarConfig.notes_to_couples}
+          </p>
+        </div>
+      )}
+
+      {/* Venue-defined bar packages — shown when admin set bar_mode to 'package' */}
+      {venueBarConfig.bar_mode === 'package' && venueBarConfig.packages.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-4">
+          <div>
+            <h2
+              className="text-sm font-semibold flex items-center gap-1.5"
+              style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+            >
+              <Wine className="w-4 h-4" />
+              Available Bar Packages
+            </h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Your venue offers these pre-configured bar packages. Talk to your coordinator to select one.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {venueBarConfig.packages.map((pkg) => (
+              <div key={pkg.id} className="border border-gray-100 rounded-lg p-3">
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="font-medium text-gray-800">{pkg.name}</p>
+                  {typeof pkg.price_per_guest === 'number' && (
+                    <p className="text-sm tabular-nums text-gray-700">
+                      ${pkg.price_per_guest}/guest
+                    </p>
+                  )}
+                </div>
+                {pkg.description && (
+                  <p className="text-sm text-gray-600 mt-1">{pkg.description}</p>
+                )}
+                {pkg.inclusions && pkg.inclusions.length > 0 && (
+                  <ul className="text-xs text-gray-500 mt-2 space-y-0.5">
+                    {pkg.inclusions.map((inc, i) => (
+                      <li key={i} className="flex items-start gap-1">
+                        <Check className="w-3 h-3 mt-0.5 shrink-0" />
+                        <span>{inc}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-gray-200">

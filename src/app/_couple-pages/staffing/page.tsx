@@ -24,13 +24,18 @@ import {
   Hand,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import {
+  loadStaffingConfig,
+  EMPTY_STAFFING_CONFIG,
+  type VenueStaffingConfig,
+} from '@/lib/services/couple-portal-config'
 
 // ---------------------------------------------------------------------------
-// Per-person per-day rates by wedding year. 2026 weddings are grandfathered
-// at the legacy Rixey $350 rate; 2027+ pick up Bloom's standard $400 rate.
-// We derive the rate from weddings.wedding_date.year when possible and fall
-// back to the current year so an unbooked / undated calculator preview still
-// produces a reasonable number.
+// Per-person per-day rate. Source of truth is
+// `venue_config.feature_flags.staffing_config.staff_rate` set by the
+// coordinator on /portal/staffing-config. If the venue hasn't filled it in
+// yet, we fall back to a year-based default: 2026 weddings grandfathered at
+// the legacy Rixey $350 rate; 2027+ pick up Bloom's standard $400.
 // ---------------------------------------------------------------------------
 
 const RATE_2026 = 350
@@ -39,6 +44,14 @@ const RATE_2027_PLUS = 400
 function rateForYear(year: number | null | undefined): number {
   if (!year || year <= 2026) return RATE_2026
   return RATE_2027_PLUS
+}
+
+function resolveStaffRate(
+  venueRate: number | null,
+  weddingYear: number | null
+): number {
+  if (typeof venueRate === 'number' && venueRate > 0) return venueRate
+  return rateForYear(weddingYear)
 }
 
 // ---------------------------------------------------------------------------
@@ -254,10 +267,12 @@ export default function StaffingCalculatorPage() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [venueStaffingConfig, setVenueStaffingConfig] =
+    useState<VenueStaffingConfig>(EMPTY_STAFFING_CONFIG)
 
   const supabase = createClient()
   const TOTAL_STEPS = 6
-  const STAFF_RATE = rateForYear(weddingYear)
+  const STAFF_RATE = resolveStaffRate(venueStaffingConfig.staff_rate, weddingYear)
 
   // Load existing calculator state + the wedding's date (to derive the
   // year-based per-person rate) and guest count (for the initial
@@ -265,7 +280,7 @@ export default function StaffingCalculatorPage() {
   const loadData = useCallback(async () => {
     if (!weddingId) return
     try {
-      const [{ data: wedding }, { data: existing }] = await Promise.all([
+      const [{ data: wedding }, { data: existing }, staffingConfig] = await Promise.all([
         supabase
           .from('weddings')
           .select('wedding_date, guest_count_estimate')
@@ -277,7 +292,12 @@ export default function StaffingCalculatorPage() {
           .eq('wedding_id', weddingId)
           .eq('role', '_calculator')
           .maybeSingle(),
+        venueId
+          ? loadStaffingConfig(supabase, venueId)
+          : Promise.resolve(EMPTY_STAFFING_CONFIG),
       ])
+
+      setVenueStaffingConfig(staffingConfig)
 
       // Year drives the rate (2026 = $350, 2027+ = $400).
       if (wedding?.wedding_date) {
@@ -314,7 +334,7 @@ export default function StaffingCalculatorPage() {
     } finally {
       setLoading(false)
     }
-  }, [supabase, weddingId])
+  }, [supabase, weddingId, venueId])
 
   // BUG-04A: wait for weddingId before firing fetch.
   useEffect(() => {
@@ -970,6 +990,22 @@ export default function StaffingCalculatorPage() {
         </h1>
         <p className="text-gray-500 text-sm">Estimate how many staff you will need for your wedding weekend.</p>
       </div>
+
+      {/* Venue admin notes */}
+      {venueStaffingConfig.notes_to_couples && (
+        <div
+          className="rounded-xl border p-4 flex items-start gap-3"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--couple-primary) 6%, white)',
+            borderColor: 'color-mix(in srgb, var(--couple-primary) 18%, transparent)',
+          }}
+        >
+          <Info className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--couple-primary)' }} />
+          <p className="text-sm text-gray-700 whitespace-pre-line">
+            {venueStaffingConfig.notes_to_couples}
+          </p>
+        </div>
+      )}
 
       {/* Progress bar */}
       <div className="flex gap-1">
