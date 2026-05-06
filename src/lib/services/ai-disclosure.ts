@@ -56,6 +56,14 @@ export interface DisclosureContext {
    *  second sentence is OMITTED entirely — better to lose one line
    *  than ship a broken `mailto:` with no recipient. */
   escalationEmail?: string | null
+  /** Migration 214: coordinator-authored free-text email signature
+   *  appended literally between the body and the disclosure footer.
+   *  When null / empty / whitespace-only, no signature block is added —
+   *  output is identical to pre-214 behaviour. The double-append guard
+   *  is body.endsWith(signature) before the disclosure step (handled
+   *  inside appendAIDisclosure) so retries on auto_send_pending don't
+   *  stack signatures. */
+  emailSignature?: string | null
 }
 
 function buildFooter(ctx: DisclosureContext): string {
@@ -86,11 +94,36 @@ ${signoff}${escalationLine}
 ${AI_DISCLOSURE_MARKER_V3}`.trimEnd()
 }
 
+/** Append the venue's free-text email signature to a body if one is set.
+ *  Migration 214. Idempotent: if the body already ends with the trimmed
+ *  signature (e.g. an auto-send retry where the previous attempt already
+ *  composed the final body but Gmail returned null), we don't append a
+ *  second copy. Plain text only by design — HTML signatures introduce
+ *  spam-filter risk. */
+function appendEmailSignature(body: string, signature: string | null | undefined): string {
+  const sig = signature?.trim()
+  if (!sig) return body
+  const trimmed = body.trimEnd()
+  // Double-append guard. Compare against trimmed-end of body so trailing
+  // whitespace differences don't slip a duplicate through.
+  if (trimmed.endsWith(sig)) return body
+  return `${trimmed}\n\n${sig}`
+}
+
 /** Append the AI disclosure footer to an email body. Idempotent across
- *  v1 / v2 / v3 markers so migration and retries don't double-disclose. */
+ *  v1 / v2 / v3 markers so migration and retries don't double-disclose.
+ *
+ *  Order of operations (migration 214):
+ *    1. body
+ *    2. coordinator email_signature (skipped when empty)
+ *    3. AI disclosure footer
+ *  The signature sits BETWEEN the body and the disclosure so the legal
+ *  footer is always the last block — couples scanning for the "AI"
+ *  disclosure don't have to read past a long custom signature. */
 export function appendAIDisclosure(body: string, ctx: DisclosureContext = {}): string {
   if (ALL_MARKERS.some((m) => body.includes(m))) return body
-  const trimmed = body.trimEnd()
+  const withSignature = appendEmailSignature(body, ctx.emailSignature)
+  const trimmed = withSignature.trimEnd()
   return `${trimmed}\n\n${buildFooter(ctx)}\n`
 }
 
@@ -120,7 +153,7 @@ export async function fetchDisclosureContext(venueId: string): Promise<Disclosur
     const [{ data: cfg }, { data: venue }, { data: venueCfg }] = await Promise.all([
       supabase
         .from('venue_ai_config')
-        .select('ai_name, ai_role, escalation_email')
+        .select('ai_name, ai_role, escalation_email, email_signature')
         .eq('venue_id', venueId)
         .maybeSingle(),
       supabase.from('venues').select('name, owner_email').eq('id', venueId).maybeSingle(),
@@ -141,6 +174,7 @@ export async function fetchDisclosureContext(venueId: string): Promise<Disclosur
       role: (cfg?.ai_role as string | undefined) ?? null,
       venueName: (venue?.name as string | undefined) ?? null,
       escalationEmail,
+      emailSignature: (cfg?.email_signature as string | undefined) ?? null,
     }
   } catch {
     return {}

@@ -85,6 +85,12 @@ export interface VenueAIConfig {
   signature_website: string | null
   signature_phone: string | null
   signature_text_capable: boolean
+  // Free-text email signature appended literally between body and AI
+  // disclosure footer at send time (migration 214). Distinct from the
+  // structured signature_* fields above, which the brain uses to compose
+  // an in-prompt sign-off — email_signature is appended post-generation
+  // and the model never sees it.
+  email_signature: string | null
   created_at: string
   updated_at: string
 }

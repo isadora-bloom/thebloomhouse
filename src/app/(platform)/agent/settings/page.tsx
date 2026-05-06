@@ -58,9 +58,12 @@ interface VenueAIConfig {
   venue_id: string
   follow_up_style: string
   max_follow_ups: number
+  // Migration 214: free-text signature appended to outbound emails.
+  // Loaded + saved on the "Email Signature" tab. Plain-text only.
+  email_signature: string | null
 }
 
-type TabKey = 'auto-send' | 'gmail' | 'follow-ups' | 'self-knowledge'
+type TabKey = 'auto-send' | 'gmail' | 'follow-ups' | 'signature' | 'self-knowledge'
 
 const SOURCES = [
   { value: 'all', label: 'All Sources' },
@@ -262,7 +265,7 @@ export default function AgentSettingsPage() {
         .maybeSingle(),
       supabase
         .from('venue_ai_config')
-        .select('id, venue_id, follow_up_style, max_follow_ups')
+        .select('id, venue_id, follow_up_style, max_follow_ups, email_signature')
         .eq('venue_id', VENUE_ID)
         .maybeSingle(),
       supabase
@@ -515,6 +518,32 @@ export default function AgentSettingsPage() {
     setTimeout(() => setSaveMessage(null), 3000)
   }
 
+  // ---- Save email signature (migration 214) ----
+  // Persists venue_ai_config.email_signature. Plain text only — the
+  // outbound pipeline appends this verbatim between the body and the
+  // AI-disclosure footer. Empty string normalises to null so the
+  // pipeline's "skip when blank" branch fires.
+  async function saveEmailSignature() {
+    if (!aiConfig) return
+    setSaving(true)
+    setSaveMessage(null)
+
+    const trimmed = (aiConfig.email_signature ?? '').trim()
+    const next = trimmed.length === 0 ? null : aiConfig.email_signature
+
+    const { error } = await supabase
+      .from('venue_ai_config')
+      .update({
+        email_signature: next,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', aiConfig.id)
+
+    setSaveMessage(error ? 'Failed to save email signature.' : 'Email signature saved.')
+    setSaving(false)
+    setTimeout(() => setSaveMessage(null), 3000)
+  }
+
   // ---- Trigger email sync ----
   async function triggerSync() {
     setSyncing(true)
@@ -566,6 +595,7 @@ export default function AgentSettingsPage() {
     { key: 'auto-send', label: 'Auto-Send Rules', icon: <Zap className="w-4 h-4" /> },
     { key: 'gmail', label: 'Gmail Connection', icon: <Mail className="w-4 h-4" /> },
     { key: 'follow-ups', label: 'Follow-Up Sequences', icon: <CalendarClock className="w-4 h-4" /> },
+    { key: 'signature', label: 'Email Signature', icon: <Pencil className="w-4 h-4" /> },
     { key: 'self-knowledge', label: 'Self-Knowledge Insights', icon: <Brain className="w-4 h-4" /> },
   ]
 
@@ -1084,6 +1114,74 @@ export default function AgentSettingsPage() {
                     className={inputClasses + ' max-w-[100px]'}
                   />
                   <span className="text-sm text-sage-600">follow-up emails maximum</span>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ================================================================== */}
+      {/* Email Signature Tab (migration 214)                                 */}
+      {/* ================================================================== */}
+      {activeTab === 'signature' && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-heading text-xl font-semibold text-sage-900">Email Signature</h2>
+              <p className="text-sm text-sage-500 mt-1">
+                Appended to every outbound email — auto-sends, approved drafts, and re-engagements.
+              </p>
+            </div>
+            <button
+              onClick={saveEmailSignature}
+              disabled={saving || !aiConfig}
+              className="flex items-center gap-2 bg-sage-500 hover:bg-sage-600 disabled:opacity-50 text-white font-medium rounded-lg px-5 py-2.5 transition-colors text-sm"
+            >
+              <Save className="w-4 h-4" />
+              {saving ? 'Saving...' : 'Save Signature'}
+            </button>
+          </div>
+
+          {!aiConfig ? (
+            <div className="bg-surface border border-border rounded-xl p-12 text-center">
+              <Pencil className="w-12 h-12 text-sage-300 mx-auto mb-4" />
+              <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">No AI configuration found</h3>
+              <p className="text-sm text-sage-500">Complete venue onboarding to configure the signature.</p>
+            </div>
+          ) : (
+            <>
+              <div className="bg-surface border border-border rounded-xl p-6 shadow-sm space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-sage-700">Signature</label>
+                  <p className="text-xs text-sage-500">
+                    Appended to every outbound email. Plain text only. Leave empty to skip.
+                  </p>
+                  <textarea
+                    value={aiConfig.email_signature ?? ''}
+                    onChange={(e) =>
+                      setAiConfig({ ...aiConfig, email_signature: e.target.value })
+                    }
+                    rows={6}
+                    placeholder={'— Sage\nHawthorne Manor\nhello@hawthorne.com'}
+                    className="w-full rounded-md border border-border px-3 py-2 text-sm font-mono bg-warm-white focus:ring-2 focus:ring-sage-300 focus:border-sage-500 outline-none transition-colors"
+                  />
+                  <p className="text-xs text-sage-400">
+                    Tip: include venue name, contact email, and physical address for spam-filter trust.
+                  </p>
+                </div>
+              </div>
+
+              {/* Helpful context — reassures the coordinator that the
+                  legal disclosure footer is independent of this signature. */}
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+                <Shield className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-amber-800">AI disclosure stays automatic</p>
+                  <p className="text-xs text-amber-700 mt-1 leading-relaxed">
+                    The required &ldquo;AI assistant&rdquo; disclosure footer is appended after your signature on every send.
+                    You don&apos;t need to (and shouldn&apos;t) include it here.
+                  </p>
                 </div>
               </div>
             </>
