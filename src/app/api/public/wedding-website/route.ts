@@ -107,6 +107,35 @@ export async function GET(request: NextRequest) {
 
     const supabase = createServiceClient()
 
+    // ---- Read-only checklist (TOKEN-GATED) ----
+    // Tier-A #44: a read-only share link the primary couple sends to
+    // their partner / family / planner. Same share_token model as
+    // guest search; this surface returns the wedding's checklist for
+    // anyone who has the URL. Read-only by design — no completion or
+    // editing without the in-portal couple session.
+    if (action === 'checklist') {
+      const rl = await rateLimit(request, 'search_guest')
+      if (!rl.ok) return rateLimited(rl)
+
+      if (!token) {
+        return err('Wedding website not found or not published', 404)
+      }
+      const website = await getPublishedWebsiteWithToken(supabase, slug, token)
+      if (!website) return err('Wedding website not found or not published', 404)
+
+      const { data: items } = await supabase
+        .from('checklist_items')
+        .select('id, title, category, due_date, is_completed, completed_at, description, sort_order')
+        .eq('wedding_id', website.wedding_id)
+        .order('sort_order')
+
+      return json({
+        couple_names: website.couple_names,
+        wedding_date: website.wedding_date,
+        items: items ?? [],
+      })
+    }
+
     // ---- Guest search (TOKEN-GATED) ----
     if (action === 'search_guest') {
       const rl = await rateLimit(request, 'search_guest')

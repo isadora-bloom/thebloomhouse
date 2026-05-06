@@ -178,10 +178,17 @@ function formatDueDate(dateStr: string | null): { text: string; color: string } 
 // ---------------------------------------------------------------------------
 
 export default function ChecklistPage() {
-  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
+  const { venueId, weddingId, slug, loading: contextLoading } = useCoupleContext()
   const [items, setItems] = useState<ChecklistItem[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  // Tier-A #44: read-only checklist share link. The token comes from
+  // wedding_website_settings.share_token (mig 218); fetched lazily on
+  // share-button click.
+  const [shareUrl, setShareUrl] = useState<string | null>(null)
+  const [shareCopied, setShareCopied] = useState(false)
+  const [shareError, setShareError] = useState<string | null>(null)
+  const [generatingShare, setGeneratingShare] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<ChecklistFormData>(EMPTY_FORM)
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
@@ -430,15 +437,77 @@ export default function ChecklistPage() {
             {completedItems} of {totalItems} tasks complete
           </p>
         </div>
-        <button
-          onClick={openAdd}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
-          style={{ backgroundColor: 'var(--couple-primary)' }}
-        >
-          <Plus className="w-4 h-4" />
-          Add Task
-        </button>
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={async () => {
+              setShareError(null)
+              setShareCopied(false)
+              if (shareUrl) {
+                // Already generated — copy again.
+                try {
+                  await navigator.clipboard.writeText(shareUrl)
+                  setShareCopied(true)
+                  setTimeout(() => setShareCopied(false), 2000)
+                } catch {
+                  // clipboard blocked — leave link visible.
+                }
+                return
+              }
+              setGeneratingShare(true)
+              try {
+                const supabase = createClient()
+                const { data, error } = await supabase
+                  .from('wedding_website_settings')
+                  .select('share_token')
+                  .eq('wedding_id', weddingId as string)
+                  .maybeSingle()
+                if (error || !data?.share_token) {
+                  setShareError('Couldn\'t generate share link. Ask your venue to publish your wedding website first.')
+                  return
+                }
+                const url = `${window.location.origin}/w/${slug}/checklist?t=${encodeURIComponent(data.share_token as string)}`
+                setShareUrl(url)
+                try {
+                  await navigator.clipboard.writeText(url)
+                  setShareCopied(true)
+                  setTimeout(() => setShareCopied(false), 2000)
+                } catch {
+                  // clipboard blocked — link is shown below.
+                }
+              } finally {
+                setGeneratingShare(false)
+              }
+            }}
+            disabled={generatingShare || !weddingId}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+            title="Read-only link to share with your partner / family"
+          >
+            {generatingShare ? '...' : shareCopied ? 'Copied!' : 'Share read-only link'}
+          </button>
+          <button
+            onClick={openAdd}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
+            style={{ backgroundColor: 'var(--couple-primary)' }}
+          >
+            <Plus className="w-4 h-4" />
+            Add Task
+          </button>
+        </div>
       </div>
+
+      {(shareUrl || shareError) && (
+        <div className={`rounded-lg border p-3 text-xs ${shareError ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-gray-50 border-gray-200 text-gray-600'}`}>
+          {shareError ? (
+            <p>{shareError}</p>
+          ) : (
+            <div className="space-y-1">
+              <p className="font-medium text-gray-700">Read-only share link:</p>
+              <p className="font-mono break-all text-gray-500">{shareUrl}</p>
+              <p>Send this to your partner / family. They&apos;ll see the checklist without needing an account. Editing still requires logging in.</p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Progress Header */}
       <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
