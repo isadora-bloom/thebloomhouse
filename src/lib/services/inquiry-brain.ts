@@ -472,8 +472,35 @@ export async function generateInquiryDraft(
   const taskPrompt = getTaskPrompt(taskType)
 
   // Step 6: Build context block (Layer 4)
+  //
+  // Prompt-injection containment (audit Lens 8 #3): the email body is
+  // attacker-controlled — the most dangerous case is auto-send firing
+  // a reply on a malicious "inquiry" forwarded by a competitor or
+  // hostile actor. Wrap the body in explicit untrusted markers so the
+  // model treats it as data, not instructions. Subject is also
+  // attacker-controlled but capped, so we sanitize it too.
   const season = getSeasonFromDate(extractedData.eventDate)
-  let contextBlock = `\n\n## INCOMING EMAIL:\n\nFrom: ${inquiry.from}\nSubject: ${inquiry.subject}\n\n${inquiry.body.slice(0, 3000)}`
+  const { sanitizeUserContent, wrapUntrustedContent, containsInjectionAttempt } =
+    await import('@/lib/security/prompt-sanitize')
+
+  const safeSubject = sanitizeUserContent(inquiry.subject).content
+  const wrappedBody = wrapUntrustedContent(
+    inquiry.body.slice(0, 3000),
+    'inquiry_body',
+  ).wrapped
+
+  let contextBlock = `\n\n## INCOMING EMAIL:\n\nFrom: ${inquiry.from}\nSubject: ${safeSubject}\n\n${wrappedBody}`
+
+  if (containsInjectionAttempt(inquiry.body) || containsInjectionAttempt(inquiry.subject)) {
+    // Surface to logs. Auto-send eligibility checks elsewhere may want
+    // to consult this signal (out of scope for this PR — flagged as
+    // follow-up: feed into auto_send_rules eligibility).
+    console.warn('[inquiry-brain] possible prompt-injection attempt in inbound email', {
+      from: inquiry.from,
+      subjectLength: inquiry.subject.length,
+      bodyLength: inquiry.body.length,
+    })
+  }
 
   contextBlock += `\n\n## EXTRACTED DATA:\n- Questions detected: ${extractedData.questions.length > 0 ? extractedData.questions.join('; ') : 'None specific'}`
   if (extractedData.eventDate) contextBlock += `\n- Event date: ${extractedData.eventDate}`

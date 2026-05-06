@@ -567,13 +567,41 @@ export async function generateSageResponse(
   // Build messages array with conversation history. The assistant role
   // label MUST use the venue's configured ai_name — feeding the literal
   // "Sage:" into the transcript would brand-leak across venues (T5-β.3).
+  //
+  // Prompt-injection containment (audit Lens 8 #3): every couple-
+  // authored message is sanitized for role-prefix spoofing and system-
+  // tag injection. The current message is wrapped in explicit markers
+  // so the model has a hard boundary between trusted instructions and
+  // untrusted user data. Assistant turns are NOT sanitized (they're
+  // model output, already trusted).
+  const { sanitizeUserContent, wrapUntrustedContent, containsInjectionAttempt } =
+    await import('@/lib/security/prompt-sanitize')
+
   const messages = conversationHistory
-    .map((msg) => `${msg.role === 'user' ? 'Couple' : aiNameForTask}: ${msg.content}`)
+    .map((msg) => {
+      if (msg.role === 'user') {
+        const safe = sanitizeUserContent(msg.content).content
+        return `Couple: ${safe}`
+      }
+      return `${aiNameForTask}: ${msg.content}`
+    })
     .join('\n\n')
 
+  const wrappedCurrent = wrapUntrustedContent(message, 'couple_message').wrapped
+
   const userPrompt = messages
-    ? `${messages}\n\nCouple: ${message}`
-    : `Couple: ${message}`
+    ? `${messages}\n\nCouple just sent the following message:\n${wrappedCurrent}`
+    : `Couple just sent the following message:\n${wrappedCurrent}`
+
+  // Log injection attempts for telemetry. Don't block — the wrapping
+  // contains the attack and a false positive shouldn't break a couple's
+  // chat. Future: surface to escalation queue.
+  if (containsInjectionAttempt(message)) {
+    console.warn('[sage-brain] possible prompt-injection attempt in couple message', {
+      venueId,
+      length: message.length,
+    })
+  }
 
   // Generate response. Tier 1: sage-brain's intelligence context can
   // include family-context Sage notes (sage_context_notes records
