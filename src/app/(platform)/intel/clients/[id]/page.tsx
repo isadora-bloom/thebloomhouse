@@ -609,7 +609,13 @@ export default function ClientProfilePage() {
     const supabase = createClient()
 
     try {
-      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes, codeRes, notesRes, feedbackRes, toursRes, activityRes, extractionsRes] = await Promise.all([
+      // Two-stage fetch. draft_feedback has no wedding_id column (only
+      // draft_id) so we must fetch drafts first, then feedback by the
+      // resulting draft_ids. Pre-fix this used `.in('draft_id', [weddingId])`
+      // as a placeholder, which compared draft.id to wedding.id and never
+      // matched — every wedding's draft-feedback panel was silently empty.
+      // Per 2026-05-06 audit Lens 1 (intel/clients/[id]:665).
+      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes, codeRes, notesRes, toursRes, activityRes, extractionsRes] = await Promise.all([
         supabase
           .from('weddings')
           .select('*')
@@ -656,13 +662,6 @@ export default function ClientProfilePage() {
           .select('id, category, content, source_message, status, created_at')
           .eq('wedding_id', weddingId)
           .eq('venue_id', VENUE_ID)
-          .order('created_at', { ascending: false })
-          .limit(50),
-        supabase
-          .from('draft_feedback')
-          .select('id, draft_id, action, rejection_reason, created_at')
-          .eq('venue_id', VENUE_ID)
-          .in('draft_id', [weddingId]) // Placeholder — we'll filter in JS after fetching drafts
           .order('created_at', { ascending: false })
           .limit(50),
         supabase
