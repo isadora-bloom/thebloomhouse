@@ -354,6 +354,7 @@ export default function OnboardingPage() {
   const [currentStep, setCurrentStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
   // Step 1: Venue Basics
   const [basics, setBasics] = useState<VenueBasics>({
@@ -779,10 +780,27 @@ export default function OnboardingPage() {
 
   async function handleSkip() {
     setError(null)
+    setSuccessMessage(null)
+
+    // Save whatever partial data the user has entered before skipping.
+    // saveStep reads currentStep from closure, validates, and returns false
+    // on hard errors (e.g. step 0 requires valid ai_email + owner_email).
+    // We swallow those errors — the user explicitly chose to skip.
+    try {
+      await saveStep()
+    } catch {
+      // Ignore save errors — user explicitly chose to skip
+    }
+    // Clear any validation error that saveStep may have written to state;
+    // the user is skipping, so surfacing the error would be confusing.
+    setError(null)
+
     if (currentStep === STEPS.length - 1) {
       // Skipping the final step must still finalize the venue — same writes
       // that handleNext/saveStep case 5 performs: mark venue active and set
       // onboarding_completed so the dashboard doesn't redirect back here.
+      // saveStep() above already does this for step 5, but if it returned
+      // false (no venueId) we duplicate the guard here to be safe.
       const venueId = VENUE_ID
       if (venueId) {
         await supabase
@@ -794,7 +812,14 @@ export default function OnboardingPage() {
           .update({ onboarding_completed: true, updated_at: new Date().toISOString() })
           .eq('venue_id', venueId)
       }
-      window.location.href = '/'
+      // Show a completion banner before redirecting so the coordinator knows
+      // what happened and where to finish the remaining setup.
+      setSuccessMessage(
+        "You're all set! You can complete the remaining setup from your Settings page."
+      )
+      setTimeout(() => {
+        window.location.href = '/'
+      }, 2500)
     } else {
       setCurrentStep((prev) => prev + 1)
       window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -1023,6 +1048,14 @@ export default function OnboardingPage() {
             <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700 flex items-start gap-2">
               <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
               <span>{error}</span>
+            </div>
+          )}
+
+          {/* Success banner (shown on final-step skip before redirect) */}
+          {successMessage && (
+            <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800 flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0 text-green-600" />
+              <span>{successMessage}</span>
             </div>
           )}
 
