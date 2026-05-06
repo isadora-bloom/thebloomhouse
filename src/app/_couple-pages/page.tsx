@@ -192,7 +192,7 @@ function getCountdownMessage(days: number | null): string | null {
   if (days < 100) return "The home stretch! Let's make sure nothing's missed."
   if (days < 200) return 'Things are coming together. Time for details!'
   if (days < 400) return "Plenty of time to plan. Let's lock in the big stuff."
-  return 'You have all the time in the world. Start dreaming!'
+  return 'Plenty of time. We\'ll send the next thing to do when it matters.'
 }
 
 function timeAgo(dateStr: string): string {
@@ -221,11 +221,16 @@ export default function CoupleDashboard() {
   const [showPhotoPrompt, setShowPhotoPrompt] = useState(false)
   const [dismissedAlerts, setDismissedAlerts] = useState<AlertId[]>([])
 
-  // Load dismissed alerts from sessionStorage on mount
+  // Round-3 audit follow-up #42 (Sarah audit): pre-fix this used
+  // sessionStorage which clears on every browser-tab close. The
+  // wedding-day moment was: "I open this app at 4pm Saturday and
+  // see all the same setup nags I dismissed at 14 months out."
+  // localStorage persists across sessions so dismissed setup-card
+  // nags stay dismissed.
   useEffect(() => {
     if (typeof window === 'undefined') return
     try {
-      const raw = sessionStorage.getItem('bloom_dismissed_alerts')
+      const raw = localStorage.getItem('bloom_dismissed_alerts')
       if (raw) {
         const parsed = JSON.parse(raw)
         if (Array.isArray(parsed)) setDismissedAlerts(parsed as AlertId[])
@@ -240,7 +245,7 @@ export default function CoupleDashboard() {
       if (prev.includes(id)) return prev
       const next = [...prev, id]
       try {
-        sessionStorage.setItem('bloom_dismissed_alerts', JSON.stringify(next))
+        localStorage.setItem('bloom_dismissed_alerts', JSON.stringify(next))
       } catch {
         // ignore
       }
@@ -589,12 +594,21 @@ export default function CoupleDashboard() {
             <Users className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
             <span className="text-sm text-gray-500 font-medium">Guests</span>
           </div>
-          <p className="text-3xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
-            {data.guestsAttending}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">
-            {data.guestsPending} pending
-          </p>
+          {data.guestsAttending === 0 && data.guestsPending === 0 ? (
+            <>
+              <p className="text-3xl font-bold tabular-nums text-gray-300">—</p>
+              <p className="text-xs text-gray-400 mt-1">Add when you&apos;re ready</p>
+            </>
+          ) : (
+            <>
+              <p className="text-3xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
+                {data.guestsAttending}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                {data.guestsPending} pending
+              </p>
+            </>
+          )}
         </div>
 
         {/* Budget */}
@@ -603,12 +617,21 @@ export default function CoupleDashboard() {
             <DollarSign className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
             <span className="text-sm text-gray-500 font-medium">Budget</span>
           </div>
-          <p className="text-3xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
-            {fmt$(budgetRemaining)}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">
-            remaining of {fmt$(budgetTotalNum)}
-          </p>
+          {budgetTotalNum === 0 ? (
+            <>
+              <p className="text-3xl font-bold tabular-nums text-gray-300">—</p>
+              <p className="text-xs text-gray-400 mt-1">Set a target when you&apos;re ready</p>
+            </>
+          ) : (
+            <>
+              <p className="text-3xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
+                {fmt$(budgetRemaining)}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                remaining of {fmt$(budgetTotalNum)}
+              </p>
+            </>
+          )}
         </div>
 
         {/* Checklist */}
@@ -617,18 +640,27 @@ export default function CoupleDashboard() {
             <CheckSquare className="w-4 h-4" style={{ color: 'var(--couple-primary)' }} />
             <span className="text-sm text-gray-500 font-medium">Checklist</span>
           </div>
-          <p className="text-3xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
-            {checklistPercent}%
-          </p>
-          <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all"
-              style={{
-                width: `${checklistPercent}%`,
-                backgroundColor: 'var(--couple-primary)',
-              }}
-            />
-          </div>
+          {checklistPercent === 0 ? (
+            <>
+              <p className="text-3xl font-bold tabular-nums text-gray-300">—</p>
+              <p className="text-xs text-gray-400 mt-1">No tasks yet</p>
+            </>
+          ) : (
+            <>
+              <p className="text-3xl font-bold tabular-nums" style={{ color: 'var(--couple-primary)' }}>
+                {checklistPercent}%
+              </p>
+              <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{
+                    width: `${checklistPercent}%`,
+                    backgroundColor: 'var(--couple-primary)',
+                  }}
+                />
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -756,30 +788,44 @@ export default function CoupleDashboard() {
             <Clock className="w-4 h-4 inline mr-2" />
             Day-Of Snapshot
           </h2>
-          <div className="space-y-3">
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Ceremony</span>
-              <span className="font-medium text-gray-800">
-                {data.timelineCeremonyTime || 'Not set'}
-              </span>
+          {/* Round-3 audit follow-up #41 (Sarah audit): pre-fix this
+              showed "Not set, Not set, Not set" for new couples — the
+              snapshot read accusatory rather than welcoming. Hide
+              individual rows when empty; if everything is empty, show
+              a single friendly empty state. */}
+          {!data.timelineCeremonyTime && !data.timelineReceptionEnd &&
+           !data.timelineDinnerType && data.timelineEventsCount === 0 ? (
+            <p className="text-sm text-gray-400 italic">
+              Your venue will fill this in as the day approaches. Nothing for you to do here yet.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {data.timelineCeremonyTime && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">Ceremony</span>
+                  <span className="font-medium text-gray-800">{data.timelineCeremonyTime}</span>
+                </div>
+              )}
+              {data.timelineReceptionEnd && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">Reception End</span>
+                  <span className="font-medium text-gray-800">{data.timelineReceptionEnd}</span>
+                </div>
+              )}
+              {data.timelineDinnerType && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">Dinner</span>
+                  <span className="font-medium text-gray-800">{data.timelineDinnerType}</span>
+                </div>
+              )}
+              {data.timelineEventsCount > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">Timeline Events</span>
+                  <span className="font-medium text-gray-800">{data.timelineEventsCount}</span>
+                </div>
+              )}
             </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Reception End</span>
-              <span className="font-medium text-gray-800">
-                {data.timelineReceptionEnd || 'Not set'}
-              </span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Dinner</span>
-              <span className="font-medium text-gray-800">
-                {data.timelineDinnerType || 'Not set'}
-              </span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Timeline Events</span>
-              <span className="font-medium text-gray-800">{data.timelineEventsCount}</span>
-            </div>
-          </div>
+          )}
         </div>
 
         {/* Checklist Progress Card */}

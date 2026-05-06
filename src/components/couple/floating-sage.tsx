@@ -1,10 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { MessageCircle, X, Send, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
+
+const INTERACTED_KEY = 'bloom_sage_pill_interacted'
 
 export function FloatingSage({ venueSlug }: { venueSlug: string }) {
   const pathname = usePathname()
@@ -13,6 +15,30 @@ export function FloatingSage({ venueSlug }: { venueSlug: string }) {
   const [open, setOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
+  // Round-3 audit follow-up #37 (Sarah audit): the pill animated
+  // forever, distracting from the rest of the page especially at low
+  // brightness. Bounce until the couple has interacted with it once,
+  // then sit still. localStorage persists across sessions so a couple
+  // who's already noticed the pill on their phone doesn't get the
+  // bounce again next visit.
+  const [hasInteracted, setHasInteracted] = useState<boolean>(true)
+
+  useEffect(() => {
+    try {
+      setHasInteracted(localStorage.getItem(INTERACTED_KEY) === '1')
+    } catch {
+      setHasInteracted(false)
+    }
+  }, [])
+
+  function markInteracted() {
+    setHasInteracted(true)
+    try {
+      localStorage.setItem(INTERACTED_KEY, '1')
+    } catch {
+      // localStorage blocked — accept the residual bounce.
+    }
+  }
 
   // Don't show on the chat page itself
   const chatPath = `/couple/${venueSlug}/chat`
@@ -30,11 +56,15 @@ export function FloatingSage({ venueSlug }: { venueSlug: string }) {
     <>
       {/* Floating button */}
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          markInteracted()
+          setOpen(!open)
+        }}
         className={cn(
           'fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full shadow-lg flex items-center justify-center transition-all no-print',
           'hover:scale-105 active:scale-95',
-          open ? 'rotate-0' : 'animate-subtle-bounce'
+          // Bounce only until first interaction; static after.
+          !open && !hasInteracted && 'animate-subtle-bounce'
         )}
         style={{ backgroundColor: 'var(--couple-accent, #A6894A)' }}
         title={`Ask ${aiName}`}
