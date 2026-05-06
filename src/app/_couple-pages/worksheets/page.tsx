@@ -421,6 +421,20 @@ export default function WorksheetsPage() {
         <p className="text-gray-500 text-sm">
           Work through these together. There are no wrong answers.
         </p>
+        {/* Round-3 audit follow-up #39 (Sarah audit): Sarah closed
+            this page on first tap because the 8-section Pinterest
+            exercise reads as 40 minutes of mandatory homework.
+            Defer-friendly affordance: tell the couple they can come
+            back to this whenever, that nothing here is required, and
+            that their venue does not need it filled in. */}
+        <div className="mt-3 flex items-start gap-2 rounded-lg bg-gray-50 border border-gray-100 px-3 py-2">
+          <span className="text-base leading-none mt-0.5">💭</span>
+          <p className="text-xs text-gray-600 leading-relaxed">
+            Optional. These prompts are for you and your partner —
+            your venue does not need any of this filled in. Skip
+            anything that is not your style and come back any time.
+          </p>
+        </div>
       </div>
 
       {/* Progress Bar */}

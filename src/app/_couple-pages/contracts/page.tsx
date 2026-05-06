@@ -17,6 +17,7 @@ import {
   ChevronUp,
   FileImage,
   File,
+  FileSignature,
   Sparkles,
   AlertCircle,
   CheckCircle,
@@ -708,7 +709,9 @@ export default function ContractsPage() {
             Contracts & Documents
           </h1>
           <p className="text-gray-500 text-sm">
-            Upload vendor contracts and let AI extract the important details.
+            {totalContracts === 0
+              ? 'Just your venue contract for now. Add vendor contracts here as you sign them — no rush.'
+              : 'Upload vendor contracts and let AI extract the important details.'}
           </p>
         </div>
         <button
@@ -721,9 +724,34 @@ export default function ContractsPage() {
           style={{ backgroundColor: 'var(--couple-primary)' }}
         >
           <Plus className="w-4 h-4" />
-          Upload Contract
+          {totalContracts === 0 ? 'Upload First Contract' : 'Upload Contract'}
         </button>
       </div>
+
+      {/* Round-3 audit follow-up #40 (Sarah audit): pre-fix the page
+          surfaced "force majeure / indemnify / act of god" key-term
+          highlights regardless of state. Sarah hit this two weeks in
+          with one signed venue contract and bounced — the framing
+          assumed she had nine vendor PDFs to triage. Now: when no
+          contracts exist, show a friendly explainer that the page
+          will become useful as she signs vendors, NOT a list of
+          legalese-trigger words. */}
+      {totalContracts === 0 && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 text-center">
+          <FileSignature className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+          <h2
+            className="text-lg font-semibold mb-1"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+          >
+            Nothing here yet — and that&apos;s fine
+          </h2>
+          <p className="text-sm text-gray-500 max-w-md mx-auto">
+            Once you sign with a caterer, photographer, DJ, or florist, drop their
+            contracts here. We&apos;ll pull out the key dates, deposits, and
+            cancellation terms so you don&apos;t have to re-read them at midnight.
+          </p>
+        </div>
+      )}
 
       {/* Stats */}
       {totalContracts > 0 && (
