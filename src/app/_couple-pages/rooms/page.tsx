@@ -932,8 +932,17 @@ export default function RoomAssignmentsPage() {
                     onChange={(e) => setBlockForm({ ...blockForm, rooms_reserved: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:border-transparent"
                     style={{ '--tw-ring-color': 'var(--couple-primary)' } as React.CSSProperties}
-                    placeholder="10"
+                    placeholder={
+                      venueRoomsConfig.default_block_size != null
+                        ? String(venueRoomsConfig.default_block_size)
+                        : '10'
+                    }
                   />
+                  {venueRoomsConfig.default_block_size != null && (
+                    <p className="mt-1 text-[11px] text-gray-400">
+                      Venue suggests {venueRoomsConfig.default_block_size} rooms by default.
+                    </p>
+                  )}
                 </div>
               </div>
 

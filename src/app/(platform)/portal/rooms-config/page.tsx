@@ -53,6 +53,7 @@ interface RoomsConfig {
   on_site_rooms: OnSiteRoom[]
   partner_hotels: PartnerHotel[]
   notes_to_couples: string
+  default_block_size: number | null
 }
 
 const DEFAULT_CONFIG: RoomsConfig = {
@@ -60,6 +61,7 @@ const DEFAULT_CONFIG: RoomsConfig = {
   on_site_rooms: [],
   partner_hotels: [],
   notes_to_couples: '',
+  default_block_size: null,
 }
 
 function generateId(): string {
@@ -487,6 +489,10 @@ export default function RoomsConfigPage() {
           on_site_rooms: (rc.on_site_rooms as OnSiteRoom[]) ?? [],
           partner_hotels: (rc.partner_hotels as PartnerHotel[]) ?? [],
           notes_to_couples: (rc.notes_to_couples as string) ?? '',
+          default_block_size:
+            typeof rc.default_block_size === 'number' && Number.isFinite(rc.default_block_size)
+              ? (rc.default_block_size as number)
+              : null,
         }
         setConfig(loaded)
         setOriginalConfig(loaded)
@@ -526,6 +532,7 @@ export default function RoomsConfigPage() {
         on_site_rooms: config.on_site_rooms,
         partner_hotels: config.partner_hotels,
         notes_to_couples: config.notes_to_couples,
+        default_block_size: config.default_block_size,
       }
 
       const { error: updateErr } = await supabase
@@ -690,6 +697,31 @@ export default function RoomsConfigPage() {
               />
             </ConfigSection>
           )}
+
+          {/* Couple Defaults */}
+          <ConfigSection title="Couple Defaults" icon={BedDouble}>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-sage-800">
+                Default room block size
+              </label>
+              <p className="text-xs text-sage-500">
+                Suggested number of rooms to block by default. Couples can adjust per wedding.
+              </p>
+              <input
+                type="number"
+                min={0}
+                value={config.default_block_size ?? ''}
+                onChange={(e) =>
+                  update(
+                    'default_block_size',
+                    e.target.value === '' ? null : parseInt(e.target.value, 10),
+                  )
+                }
+                placeholder="e.g., 10"
+                className="w-32 rounded-md border border-border bg-warm-white px-3 py-2 text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 transition-colors"
+              />
+            </div>
+          </ConfigSection>
 
           {/* Notes to Couples */}
           <ConfigSection title="Notes to Couples" icon={FileText}>

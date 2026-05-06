@@ -16,6 +16,7 @@ import { InsightFeed } from '@/components/intel/insight-feed'
 import { BrainDumpQueue } from '@/components/portal/brain-dump-queue'
 import { UpcomingMeetings } from '@/components/platform/upcoming-meetings'
 import { PostOnboardingChecklist } from '@/components/shell/post-onboarding-checklist'
+import { HoneybookStaleBanner } from '@/components/shell/honeybook-stale-banner'
 import { htmlToText } from '@/lib/utils/html-text'
 
 interface Stats {
@@ -342,6 +343,12 @@ export default function DashboardPage() {
           <span className="hidden sm:inline">Quick Add</span>
         </Link>
       </div>
+
+      {/* Stale HoneyBook re-import nudge — surfaces only when the venue
+          already has HoneyBook-sourced weddings AND the most recent one
+          is 30+ days old. Mutually exclusive with the post-onboarding
+          checklist's HoneyBook row, which only renders when count is zero. */}
+      <HoneybookStaleBanner />
 
       {/* Post-onboarding checklist — Calendly / HoneyBook / voice / team /
           signature. Renders only at venue scope and only when at least

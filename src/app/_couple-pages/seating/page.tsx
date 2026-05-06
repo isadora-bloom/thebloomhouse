@@ -34,6 +34,7 @@ import { TagChip, type TagChipData } from '@/components/couple/tag-chip'
 import { TagPicker } from '@/components/couple/tag-picker'
 import {
   loadSeatingConfig,
+  loadFloorPlan,
   EMPTY_SEATING_CONFIG,
   type VenueSeatingConfig,
 } from '@/lib/services/couple-portal-config'
@@ -153,7 +154,7 @@ export default function SeatingChartPage() {
   // ---- Fetch ----
   const fetchData = useCallback(async () => {
     if (!weddingId || !venueId) return
-    const [tablesRes, guestsRes, configRes, tagsRes, seatingConfig] = await Promise.all([
+    const [tablesRes, guestsRes, floorPlan, tagsRes, seatingConfig] = await Promise.all([
       supabase
         .from('seating_tables')
         .select('*')
@@ -164,11 +165,7 @@ export default function SeatingChartPage() {
         .select('id, table_assignment, rsvp_status, plus_one_name, group_name, first_name, last_name')
         .eq('wedding_id', weddingId)
         .order('created_at', { ascending: true }),
-      supabase
-        .from('venue_config')
-        .select('feature_flags')
-        .eq('venue_id', venueId)
-        .maybeSingle(),
+      loadFloorPlan(supabase, venueId),
       supabase
         .from('guest_tags')
         .select('id, tag_name, color')
@@ -180,11 +177,8 @@ export default function SeatingChartPage() {
 
     if (tablesRes.data) setTables(tablesRes.data as unknown as SeatingTable[])
     if (guestsRes.data) setGuests(guestsRes.data as unknown as Guest[])
-    if (configRes.data) {
-      const flags = (configRes.data.feature_flags ?? {}) as Record<string, unknown>
-      if (flags.floor_plan_url) {
-        setFloorPlanUrl(flags.floor_plan_url as string)
-      }
+    if (floorPlan.url) {
+      setFloorPlanUrl(floorPlan.url)
     }
 
     // Tags
