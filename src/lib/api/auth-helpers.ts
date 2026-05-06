@@ -180,8 +180,15 @@ export async function assertCanAccessVenue(
 
   if (auth.isDemo) {
     if (!DEMO_VENUE_ALLOWLIST.has(venueId)) {
-      return { ok: false, reason: 'venue not in demo allowlist' }
+      return { ok: false, reason: 'venue access denied' }
     }
+    return { ok: true, venueId }
+  }
+
+  // super_admin first so platform-team accesses are distinguishable
+  // from "happens to match my home venue" if we ever add audit logging
+  // on the bypass path. Per round-3 audit ordering note.
+  if (auth.role === 'super_admin') {
     return { ok: true, venueId }
   }
 
@@ -189,31 +196,36 @@ export async function assertCanAccessVenue(
     return { ok: true, venueId }
   }
 
-  if (auth.role === 'super_admin') {
-    return { ok: true, venueId }
-  }
-
-  if (auth.role === 'org_admin' && auth.orgId) {
+  if (auth.role === 'org_admin') {
+    if (!auth.orgId) {
+      // Data-corruption signal: an org_admin without an orgId
+      // shouldn't exist in normal flows. Log it loudly so ops can
+      // find the bad row.
+      console.warn('[assertCanAccessVenue] org_admin user has null orgId', {
+        userId: auth.userId,
+        attemptedVenueId: venueId,
+      })
+      return { ok: false, reason: 'venue access denied' }
+    }
     // Verify the target venue is within the admin's org. Service-role
-    // query — we want truth, not RLS-filtered. The pg_policies on
-    // venues authorize org-admin reads but bypassing keeps this robust
-    // against future policy churn.
+    // query — we want truth, not RLS-filtered.
     const service = createServiceClient()
     const { data: targetVenue } = await service
       .from('venues')
       .select('org_id')
       .eq('id', venueId)
       .maybeSingle()
-    if (!targetVenue) {
-      return { ok: false, reason: 'venue not found' }
-    }
-    if (targetVenue.org_id !== auth.orgId) {
-      return { ok: false, reason: 'venue belongs to another organisation' }
+    // Per round-3 audit: collapse "not found" vs "belongs to another
+    // org" to a single response so an authenticated org_admin can't
+    // probe UUIDs to distinguish the two states. Principle of least
+    // information.
+    if (!targetVenue || targetVenue.org_id !== auth.orgId) {
+      return { ok: false, reason: 'venue access denied' }
     }
     return { ok: true, venueId }
   }
 
-  return { ok: false, reason: 'venue belongs to another venue' }
+  return { ok: false, reason: 'venue access denied' }
 }
 
 export function forbidden(reason: string) {

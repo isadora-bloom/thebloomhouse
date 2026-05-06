@@ -227,33 +227,77 @@ function isPrivateIPv6(ip: string): boolean {
   // ff00::/8 — multicast
   if (lower.startsWith('ff')) return true
 
-  // ::ffff:0:0/96 — IPv4-mapped IPv6. Two address forms:
-  //   dotted-quad: ::ffff:127.0.0.1
-  //   compact hex: ::ffff:7f00:1   (equivalent to 127.0.0.1)
-  // Round-2 audit caught the missing hex-form check. Block the entire
-  // /96 prefix for safety: any address starting ::ffff: is mapped IPv4
-  // and should be evaluated against IPv4 private ranges. If parsing
-  // the trailing portion fails we fail closed (treat as private).
-  if (lower.startsWith('::ffff:')) {
-    const tail = lower.slice('::ffff:'.length)
-    // Dotted-quad form?
-    const dotted = tail.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
-    if (dotted) return isPrivateIPv4(dotted[1])
-    // Compact hex form: aaaa:bbbb where aaaa and bbbb are 1-4 hex chars.
-    const hex = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
-    if (hex) {
-      const a = parseInt(hex[1], 16)
-      const b = parseInt(hex[2], 16)
-      if (Number.isNaN(a) || Number.isNaN(b)) return true
-      const v4 = `${(a >> 8) & 0xff}.${a & 0xff}.${(b >> 8) & 0xff}.${b & 0xff}`
-      return isPrivateIPv4(v4)
-    }
-    // Unknown shape inside ::ffff: — fail closed.
-    return true
-  }
+  // ::ffff:0:0/96 — IPv4-mapped IPv6. Three forms to cover:
+  //   compact dotted-quad:  ::ffff:127.0.0.1
+  //   compact hex:          ::ffff:7f00:1
+  //   full canonical:       0:0:0:0:0:ffff:7f00:1
+  //                         0000:0000:0000:0000:0000:ffff:7f00:0001
+  // Round-3 audit caught the full-form gap. Normalise via the 8-group
+  // expansion: IF the address (after expanding "::") has 8 groups
+  // where groups 1-5 are zero and group 6 is ffff, it's a mapped IPv4
+  // regardless of how the user spelled it.
+  const v4Mapped = extractMappedIPv4(lower)
+  if (v4Mapped !== null) return isPrivateIPv4(v4Mapped)
 
   // 64:ff9b::/96 — IPv4/IPv6 translation (NAT64). Block the whole prefix.
   if (lower.startsWith('64:ff9b:')) return true
 
   return false
+}
+
+/**
+ * If `ip` is an IPv4-mapped IPv6 address in any standard spelling,
+ * return the dotted-quad. Else null.
+ *
+ * Handles:
+ *   - ::ffff:127.0.0.1
+ *   - ::ffff:7f00:1
+ *   - 0:0:0:0:0:ffff:127.0.0.1
+ *   - 0000:0000:0000:0000:0000:ffff:7f00:0001
+ *
+ * Returns null on any parse failure (caller treats null as "not a
+ * mapped v4" — falls through to subsequent IPv6 checks).
+ */
+function extractMappedIPv4(lower: string): string | null {
+  // Optional embedded IPv4 in the last 4 octets.
+  const v4Re = /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/
+  const v4Match = lower.match(v4Re)
+  let head = lower
+  let trailingV4: string | null = null
+  if (v4Match) {
+    trailingV4 = v4Match[1]
+    head = lower.slice(0, lower.length - v4Match[0].length).replace(/:$/, '')
+  }
+
+  // Expand "::" — at most one occurrence.
+  let groups: string[]
+  if (head.includes('::')) {
+    const [pre, post] = head.split('::')
+    const preGroups = pre ? pre.split(':').filter((g) => g !== '') : []
+    const postGroups = post ? post.split(':').filter((g) => g !== '') : []
+    // Total groups must be 8 for full IPv6, OR 6 if a v4 tail follows.
+    const expectedGroups = trailingV4 ? 6 : 8
+    const fillCount = expectedGroups - preGroups.length - postGroups.length
+    if (fillCount < 0) return null
+    groups = [...preGroups, ...Array(fillCount).fill('0'), ...postGroups]
+  } else {
+    groups = head.split(':').filter((g) => g !== '')
+    if (trailingV4 && groups.length !== 6) return null
+    if (!trailingV4 && groups.length !== 8) return null
+  }
+
+  // Mapped-IPv4 prefix: first 5 groups all zero, group 6 is ffff.
+  if (groups.length < 6) return null
+  for (let i = 0; i < 5; i++) {
+    if (parseInt(groups[i], 16) !== 0) return null
+  }
+  if (parseInt(groups[5], 16) !== 0xffff) return null
+
+  if (trailingV4) return trailingV4
+  // groups[6] and groups[7] hold the 32-bit IPv4 in big-endian.
+  if (groups.length !== 8) return null
+  const a = parseInt(groups[6], 16)
+  const b = parseInt(groups[7], 16)
+  if (Number.isNaN(a) || Number.isNaN(b)) return null
+  return `${(a >> 8) & 0xff}.${a & 0xff}.${(b >> 8) & 0xff}.${b & 0xff}`
 }
