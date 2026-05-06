@@ -934,7 +934,7 @@ export default function CoupleDashboard() {
       </div>
 
       {/* AI Chat Prompt */}
-      <Link href="/chat" className="block group">
+      <Link href={`/couple/${SLUG}/chat`} className="block group">
         <div
           className="rounded-xl p-6 transition-shadow hover:shadow-md border-2"
           style={{

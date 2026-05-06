@@ -15,7 +15,8 @@
     "test:e2e:mobile": "playwright test --project=chromium-mobile",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:report": "playwright show-report e2e/report"
+    "test:e2e:report": "playwright show-report e2e/report",
+    "check:links": "node scripts/check-internal-links.mjs"
   },
   "keywords": [],
   "author": "",

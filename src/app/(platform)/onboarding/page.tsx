@@ -1793,21 +1793,21 @@ export default function OnboardingPage() {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <a
-                    href="/settings/team-invitations"
+                    href="/settings/team"
                     className="flex flex-col gap-1 rounded-lg border border-border bg-surface px-3 py-2.5 hover:border-sage-300 transition-colors"
                   >
                     <span className="text-sm font-medium text-sage-900">Invite your team</span>
                     <span className="text-xs text-sage-500">Coordinators can review drafts alongside you.</span>
                   </a>
                   <a
-                    href="/settings/calendly"
+                    href="/onboarding/project"
                     className="flex flex-col gap-1 rounded-lg border border-border bg-surface px-3 py-2.5 hover:border-sage-300 transition-colors"
                   >
                     <span className="text-sm font-medium text-sage-900">Connect Calendly</span>
                     <span className="text-xs text-sage-500">Tours auto-log to the Intelligence tour pipeline.</span>
                   </a>
                   <a
-                    href="/settings/brand"
+                    href="/onboarding/project"
                     className="flex flex-col gap-1 rounded-lg border border-border bg-surface px-3 py-2.5 hover:border-sage-300 transition-colors"
                   >
                     <span className="text-sm font-medium text-sage-900">Upload logo &amp; colours</span>
