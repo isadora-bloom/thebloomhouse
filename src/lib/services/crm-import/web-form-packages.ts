@@ -103,7 +103,7 @@ function stripPricing(raw: string): string {
   return raw.replace(/:\s*\$?\d[\d,.]*\s*$/, '').trim()
 }
 
-/** Pull "$2000" / "2000" / ": 10" → 2000. */
+/** Pull "$2000" / "2000" / ": 10" → 2000. Returns the dollar amount (NOT cents). */
 function trailingNumber(raw: string): number | null {
   const m = raw.match(/:\s*\$?(\d[\d,]*\.?\d*)\s*$/)
   if (!m) return null
@@ -121,13 +121,13 @@ function trailingNumber(raw: string): number | null {
 function parsePackageCell(raw: string, columnHeader: string): ProposedPackage | null {
   const trimmed = raw.trim()
   if (!trimmed || trimmed === '0' || trimmed === '...') return null
-  const cents = trailingNumber(trimmed)
+  const dollars = trailingNumber(trimmed)
   const name = stripPricing(trimmed) || trimmed
   return {
     kind: 'package',
     name,
     season: detectSeason(name),
-    price_cents: cents != null ? cents * 100 : null,
+    price_cents: dollars != null ? dollars * 100 : null,
     source_text: trimmed,
     source_column: columnHeader,
     occurrences: 1,
@@ -145,16 +145,16 @@ function parseUpgradeCell(raw: string, columnHeader: string): ProposedPackage[] 
     // as a no-op echo of the package above.
     if (/^normal wedding package/i.test(seg)) return []
     // Skip cells that are obviously a no-op (": 0").
-    const cents = trailingNumber(seg)
+    const dollars = trailingNumber(seg)
     const name = stripPricing(seg) || seg
-    if (cents === 0 || cents == null) return []
+    if (dollars === 0 || dollars == null) return []
     const band = detectGuestBand(name)
     return [{
       kind: 'upgrade' as const,
       name,
       guest_count_min: band.min,
       guest_count_max: band.max,
-      price_cents: cents * 100,
+      price_cents: dollars * 100,
       source_text: seg,
       source_column: columnHeader,
       occurrences: 1,
