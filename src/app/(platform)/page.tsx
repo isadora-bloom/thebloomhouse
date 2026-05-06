@@ -15,6 +15,7 @@ import { MarketContextCard } from '@/components/intel/market-context-card'
 import { InsightFeed } from '@/components/intel/insight-feed'
 import { BrainDumpQueue } from '@/components/portal/brain-dump-queue'
 import { UpcomingMeetings } from '@/components/platform/upcoming-meetings'
+import { PostOnboardingChecklist } from '@/components/shell/post-onboarding-checklist'
 import { htmlToText } from '@/lib/utils/html-text'
 
 interface Stats {
@@ -341,6 +342,13 @@ export default function DashboardPage() {
           <span className="hidden sm:inline">Quick Add</span>
         </Link>
       </div>
+
+      {/* Post-onboarding checklist — Calendly / HoneyBook / voice / team /
+          signature. Renders only at venue scope and only when at least
+          one item is incomplete. Auto-hides for 7 days when dismissed. */}
+      {scope.level === 'venue' && scope.venueId && (
+        <PostOnboardingChecklist venueId={scope.venueId} />
+      )}
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
