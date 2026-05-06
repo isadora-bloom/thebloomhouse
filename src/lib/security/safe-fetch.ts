@@ -53,12 +53,41 @@ const DEFAULT_PROTOCOLS: readonly SafeFetchProtocol[] = ['https:']
  * UnsafeUrlError on any failure mode. Network roundtrip: one DNS
  * lookup per call (cached by the OS resolver — cheap).
  *
- * NOTE: this does NOT mitigate DNS-rebinding attacks. For that you
- * additionally need to pin the resolved IP and pass it to fetch via
- * a custom agent. We accept the residual risk for now because the
- * Vercel runtime doesn't expose a clean way to pin the agent and
- * the immediate threat (cloud metadata + loopback exfil) is closed
- * by the simple resolution check.
+ * KNOWN LIMITATION — DNS rebinding (Tier-A audit follow-up #47,
+ * documented but not mitigated in code).
+ *
+ * The check is "resolve the hostname once, validate, then fetch."
+ * A malicious authoritative DNS server can return DIFFERENT IPs
+ * across queries: a public IP for our validation lookup, then a
+ * private IP (169.254.169.254, 127.0.0.1, etc.) for fetch's own
+ * resolution moments later. The fetch's resolution is NOT subject
+ * to our validation.
+ *
+ * Real mitigation requires either:
+ *   (a) Pinning the resolved IP and rewriting the URL host so fetch
+ *       hits the IP literal, OR
+ *   (b) A custom fetch dispatcher (undici Agent) with a connect()
+ *       that re-validates the resolved address.
+ *
+ * Both are blocked on Vercel Edge runtime, which doesn't expose
+ * undici Agent or Socket-level controls. Node-runtime routes could
+ * use option (b) but it would diverge from Edge routes' behaviour
+ * which is worse than uniform "documented residual risk."
+ *
+ * Why we accept the risk for now:
+ *   - All current callers either use a host allowlist (sage route
+ *     restricts to Supabase Storage CDN — DNS-rebinding within that
+ *     domain would require breaking Supabase's DNS) or fetch from
+ *     coordinator-paste content (brain-dump-url; the threat actor
+ *     in that path is the coordinator themselves, who has easier
+ *     attacks available).
+ *   - The immediate, scripted-attack threat (cloud-metadata exfil
+ *     via 169.254.169.254 redirect) IS closed by the per-hop
+ *     validation in safeFetch.
+ *
+ * When this becomes a hard requirement (e.g. a self-hosted move off
+ * Vercel, or a customer with DNS-rebinding in their threat model),
+ * implement option (b) and remove this comment block.
  */
 export async function assertSafeUrl(
   rawUrl: string,
