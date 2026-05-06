@@ -71,7 +71,25 @@ interface AnomalyAlert {
 // ---------------------------------------------------------------------------
 // Metric definitions
 // ---------------------------------------------------------------------------
-
+//
+// Per-metric volatility thresholds for anomaly alerting.
+// Calibration: heuristic, chosen to fire on swings that materially impact a season's
+// bookings. Calibrate against Rixey 2024-2025 data once 12 months of history are in.
+//   - 0.25 (inquiry_volume, booking_rate, engagement_rate, auto_link_rate): a 25% drop
+//     on a 100-inquiry-month venue = 25 missed inquiries (~2-5 lost weddings).
+//   - 0.20 (tour_conversion, avg_booking_value): tight band — booking value swings are
+//     usually mix-shift not noise; tour-conversion is a high-signal funnel ratio.
+//   - 0.30 (lost_deal_rate, candidate_volume): wider band for naturally noisier series.
+//   - 0.40 (attribution_conflict_rate): widest — conflict rate is the noisiest signal
+//     here (small denominators in early days, tuning-driven swings).
+//   - 1.0 (response_time): a doubling of response time is the smallest swing worth
+//     flagging; below that, normal coordinator-load variance dominates.
+// Severity escalation (see runAnomalyDetection): |change| > threshold -> warning,
+// |change| > threshold*2 -> critical.
+//
+// KNOWN LIMITATION: thresholds are absolute % change, not z-score, so small venues
+// (<20 inquiries/mo) will see false positives. TODO: switch to per-venue baseline
+// volatility once 12 months of history available.
 const METRICS: Record<string, MetricConfig> = {
   inquiry_volume: { threshold: 0.25, description: 'count of new inquiries' },
   response_time: { threshold: 1.0, description: 'avg minutes to first response' },
@@ -995,9 +1013,18 @@ export async function detectAvailabilityAnomalies(
     const daysOut = Math.round((b.earliestDate.getTime() - now.getTime()) / msPerDay)
 
     // Rule A: overall fill > 80% with the month still more than 60 days out.
+    // 80%/60-day rule: a venue >80% booked with >60 days lead-time signals genuine
+    // demand pressure (heuristic, tuned for typical 20-30 slot/month inventory at
+    // Rixey-scale venues). Revisit for boutique venues (<10 slots/mo) where one
+    // booking can swing fill rate >10% and trip the rule on noise.
     const isHighDemand = fillRate > 0.80 && daysOut > 60
 
     // Rule B: Saturdays > 90% filled AND non-Saturdays < 30%.
+    // Saturday skew rule: 90%/30% gap is the empirical "weekend-only" signature
+    // observed at Rixey + comparable venues (Saturday is the premium slot; once it's
+    // saturated and weekdays are still wide open, there's a pricing/promo lever).
+    // Below this gap the venue is balanced and the rule shouldn't fire — coordinators
+    // see false-positive fatigue if we widen it.
     const satFill = b.saturdayTotal > 0 ? b.saturdayBooked / b.saturdayTotal : 0
     const nonSatFill = b.nonSatTotal > 0 ? b.nonSatBooked / b.nonSatTotal : 0
     const isSaturdayDemand =

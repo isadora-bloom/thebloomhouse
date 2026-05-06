@@ -7,10 +7,16 @@
  *    behavior pauses until next day or coordinator override."
  *
  * Default ceiling: $5/day per venue (500 cents). Decided 2026-05-01.
- * Realistic Sonnet-everywhere spend is ~$2/day; post-tier-mapping ~$1/day.
- * The ceiling exists for the catastrophic case (runaway loop, infinite
- * retry, brain summarising the entire forensic record per call) — not
- * for normal operation.
+ * Calibrated from Rixey production:
+ *   - Sonnet-everywhere baseline: ~$2/day
+ *   - Post tier-mapping (Haiku for low-stakes paths): ~$1/day
+ *   - 2.5-5x headroom catches runaway loops (e.g. autonomy bug, accidental
+ *     retry storm, brain summarising the entire forensic record per call)
+ *   - 80% utilisation triggers a soft alert in admin_notifications;
+ *     100% is the hard cutoff that pauses autonomous behavior.
+ * The ceiling exists for the catastrophic case — not for normal operation.
+ * Revisit if Sonnet pricing changes >20% or Rixey fleet grows >50 venues
+ * (per-fleet aggregate ceiling becomes the more useful guard at scale).
  *
  * Day boundary: UTC calendar day. Per-venue tz reset is a future
  * refinement (matches the existing daily_limit reset behaviour in

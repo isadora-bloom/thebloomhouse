@@ -12,6 +12,19 @@
  * - avgReviewRating (0..5):       5 = 100, 4.5 = 90
  * - sourceCount (diversity):      1 source = 50, 5+ sources = 100
  * - bookingPace (0..1):           ratio of bookings vs target
+ *
+ * Scale anchors (heuristic, calibrate against Rixey 2024-2025 data when 6+ months are in):
+ *   - 0.30 booking conversion = "perfect": industry norm for premium venues is 20-35%
+ *     (midpoint chosen). Above 30% the score saturates at 100 via clamp().
+ *   - 30min -> 240min response window: <30min reads as "instant", >4h reads as "neglected"
+ *     per inquiry-lifecycle research (faster-is-better curve flattens beyond ~30min, and
+ *     beyond 4h the lead is materially colder regardless of follow-up quality).
+ *   - source diversity caps at 5 (50 + 4*12.5 = 100): venues with >5 active channels are
+ *     rare today; revisit if the Rixey portfolio outgrows this.
+ * All three scale factors are observable in code (not pulled from a benchmarks table) so a
+ * partner question can be answered: "we picked midpoints, plan to recalibrate from real
+ * data after 6 months." NOTE: avgReviewRating uses a linear /5 scale and bookingPace is a
+ * pass-through ratio — both are tautological (no anchor needed beyond the source units).
  */
 
 export interface HealthScoreInputs {
