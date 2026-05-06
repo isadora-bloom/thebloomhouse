@@ -763,8 +763,7 @@ export default function OnboardingPage() {
     const success = await saveStep()
     if (success) {
       if (currentStep === STEPS.length - 1) {
-        // Final step — redirect to dashboard
-        window.location.href = '/'
+        window.location.href = '/?onboarding=complete'
       } else {
         setCurrentStep((prev) => prev + 1)
         window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -818,7 +817,7 @@ export default function OnboardingPage() {
         "You're all set! You can complete the remaining setup from your Settings page."
       )
       setTimeout(() => {
-        window.location.href = '/'
+        window.location.href = '/?onboarding=complete'
       }, 2500)
     } else {
       setCurrentStep((prev) => prev + 1)
