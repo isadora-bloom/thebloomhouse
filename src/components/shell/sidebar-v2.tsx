@@ -16,6 +16,7 @@ import {
   type NavSection,
   type NavItem,
 } from './nav-config'
+import { SetupProgressPill } from './setup-progress-pill'
 
 /**
  * T5-β.2 white-label substitution. nav-config.ts is a static module so
@@ -210,6 +211,15 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
             <span className="ml-1 text-[10px] text-sage-400">{allCount}</span>
           </button>
         </div>
+      </div>
+
+      {/* Onboarding-status indicator — sits above the nav so coordinators
+          mid-onboarding always see a "Resume onboarding" doorway, and
+          coordinators who just finished get a confirmation badge. Only
+          renders at venue scope; demo and long-since-complete venues
+          render nothing. */}
+      <div className="pt-3">
+        <SetupProgressPill />
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-5">
