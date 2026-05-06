@@ -292,6 +292,7 @@ export default function CoupleDashboard() {
           upcomingChecklist,
           allTimeline,
           messages,
+          interactionsRes,
           contractsRes,
           bookedVendorsRes,
         ] = await Promise.all([
@@ -318,12 +319,26 @@ export default function CoupleDashboard() {
             .select('id, title, time, category')
             .eq('wedding_id', wid)
             .order('time', { ascending: true }),
+          // Round-3 audit follow-up #43 (Sarah audit): pre-fix this
+          // only read in-portal `messages`. The venue owner's actual
+          // emails (via Gmail) land in `interactions`, so the dashboard
+          // showed "No messages yet" while the owner had just emailed.
+          // Cut-scope fix: read both, merge in JS, surface the 3 most
+          // recent. We only show OUTBOUND interactions (venue → couple)
+          // since the couple's own inbound emails would be self-quotes.
           supabase
             .from('messages')
             .select('id, content, sender_role, created_at')
             .eq('wedding_id', wid)
             .order('created_at', { ascending: false })
-            .limit(3),
+            .limit(5),
+          supabase
+            .from('interactions')
+            .select('id, subject, body_preview, direction, timestamp')
+            .eq('wedding_id', wid)
+            .eq('direction', 'outbound')
+            .order('timestamp', { ascending: false })
+            .limit(5),
           supabase
             .from('contracts')
             .select('id', { count: 'exact', head: true })
@@ -394,7 +409,27 @@ export default function CoupleDashboard() {
           timelineDinnerType: dinnerItem?.title || null,
           timelineEventsCount: allTimelineItems.length,
           upcomingTasks: (upcomingChecklist.data || []) as DashboardData['upcomingTasks'],
-          recentMessages: (messages.data || []) as DashboardData['recentMessages'],
+          // Round-3 #43: merge in-portal messages + outbound venue
+          // emails (from interactions) sorted by recency. The portal's
+          // "Recent Messages" card now reflects the actual venue
+          // communication, not just in-portal chat.
+          recentMessages: (() => {
+            const portalMsgs = (messages.data ?? []).map((m: { id: string; content: string; sender_role: string | null; created_at: string }) => ({
+              id: m.id,
+              content: m.content,
+              sender_role: m.sender_role,
+              created_at: m.created_at,
+            }))
+            const emailMsgs = (interactionsRes.data ?? []).map((i: { id: string; subject: string | null; body_preview: string | null; timestamp: string }) => ({
+              id: i.id,
+              content: i.subject ? `${i.subject}\n${i.body_preview ?? ''}`.trim() : (i.body_preview ?? ''),
+              sender_role: 'venue' as const,
+              created_at: i.timestamp,
+            }))
+            return [...portalMsgs, ...emailMsgs]
+              .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+              .slice(0, 3) as DashboardData['recentMessages']
+          })(),
           couplePhotoUrl: (wedding as { couple_photo_url?: string | null }).couple_photo_url || null,
           guestListCount: guestList.length,
           contractsCount: contractsRes.count ?? 0,
