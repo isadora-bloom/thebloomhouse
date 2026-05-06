@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { clientIpForRateLimit } from '@/lib/security/client-ip'
 
 // ---------------------------------------------------------------------------
 // /api/public/vendor-portal — Token-based vendor self-service (no auth)
@@ -18,12 +19,8 @@ const SHORT_FIELD_MAX = 500          // contact_email, contact_phone
 const PORTFOLIO_PHOTOS_MAX = 8
 const PORTFOLIO_PHOTO_URL_MAX = 1000
 
-function clientIp(request: NextRequest): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
-}
-
 async function rateLimit(request: NextRequest, prefix: 'get' | 'patch') {
-  const ip = clientIp(request)
+  const ip = clientIpForRateLimit(request)
   return checkRateLimit({
     key: `vendor-portal:${prefix}:${ip}`,
     limit: prefix === 'patch' ? 30 : 120,

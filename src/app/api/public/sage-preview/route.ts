@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI } from '@/lib/ai/client'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { clientIpForRateLimit } from '@/lib/security/client-ip'
 
 // ---------------------------------------------------------------------------
 // POST /api/public/sage-preview — Public Sage preview chat (no auth)
@@ -12,8 +13,7 @@ import { checkRateLimit } from '@/lib/rate-limit'
 export async function POST(request: NextRequest) {
   // GAP-H3: IP-based rate limit — 30 requests per hour per IP. This endpoint
   // is unauthenticated; without a limit, scripted abuse can drain AI budget.
-  const ip =
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
+  const ip = clientIpForRateLimit(request)
   const rl = await checkRateLimit({
     key: `sage-preview:${ip}`,
     limit: 30,

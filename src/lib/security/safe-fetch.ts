@@ -226,8 +226,34 @@ function isPrivateIPv6(ip: string): boolean {
   if (lower.startsWith('fc') || lower.startsWith('fd')) return true
   // ff00::/8 — multicast
   if (lower.startsWith('ff')) return true
-  // ::ffff:x.x.x.x — IPv4-mapped — extract and re-check as IPv4
-  const v4mapped = lower.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
-  if (v4mapped) return isPrivateIPv4(v4mapped[1])
+
+  // ::ffff:0:0/96 — IPv4-mapped IPv6. Two address forms:
+  //   dotted-quad: ::ffff:127.0.0.1
+  //   compact hex: ::ffff:7f00:1   (equivalent to 127.0.0.1)
+  // Round-2 audit caught the missing hex-form check. Block the entire
+  // /96 prefix for safety: any address starting ::ffff: is mapped IPv4
+  // and should be evaluated against IPv4 private ranges. If parsing
+  // the trailing portion fails we fail closed (treat as private).
+  if (lower.startsWith('::ffff:')) {
+    const tail = lower.slice('::ffff:'.length)
+    // Dotted-quad form?
+    const dotted = tail.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
+    if (dotted) return isPrivateIPv4(dotted[1])
+    // Compact hex form: aaaa:bbbb where aaaa and bbbb are 1-4 hex chars.
+    const hex = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+    if (hex) {
+      const a = parseInt(hex[1], 16)
+      const b = parseInt(hex[2], 16)
+      if (Number.isNaN(a) || Number.isNaN(b)) return true
+      const v4 = `${(a >> 8) & 0xff}.${a & 0xff}.${(b >> 8) & 0xff}.${b & 0xff}`
+      return isPrivateIPv4(v4)
+    }
+    // Unknown shape inside ::ffff: — fail closed.
+    return true
+  }
+
+  // 64:ff9b::/96 — IPv4/IPv6 translation (NAT64). Block the whole prefix.
+  if (lower.startsWith('64:ff9b:')) return true
+
   return false
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { clientIpForRateLimit } from '@/lib/security/client-ip'
 
 // ---------------------------------------------------------------------------
 // Public wedding website API
@@ -25,12 +26,8 @@ function err(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status })
 }
 
-function clientIp(request: NextRequest): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
-}
-
 async function rateLimit(request: NextRequest, action: 'search_guest' | 'rsvp') {
-  const ip = clientIp(request)
+  const ip = clientIpForRateLimit(request)
   return checkRateLimit({
     key: `wedding-website:${action}:${ip}`,
     limit: action === 'rsvp' ? 10 : 60,

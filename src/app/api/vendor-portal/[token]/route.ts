@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { clientIpForRateLimit } from '@/lib/security/client-ip'
 
 // ---------------------------------------------------------------------------
 // /api/vendor-portal/[token] — Token-based booked-vendor self-service
@@ -22,12 +23,8 @@ const URL_FIELD_MAX = 1000            // website, instagram
 const SHORT_FIELD_MAX = 500           // contact_name, contact_email, contact_phone, arrival/departure
 const COUPLE_PREVIEW_MAX = 2          // people rows to fetch for couple-name display
 
-function clientIp(request: NextRequest): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
-}
-
 async function rateLimit(request: NextRequest, prefix: 'get' | 'put') {
-  const ip = clientIp(request)
+  const ip = clientIpForRateLimit(request)
   return checkRateLimit({
     key: `vendor-portal-booked:${prefix}:${ip}`,
     limit: prefix === 'put' ? 30 : 120,
