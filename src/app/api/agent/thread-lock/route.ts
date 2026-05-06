@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth, unauthorized } from '@/lib/api/auth-helpers'
+import {
+  getPlatformAuth,
+  assertCanAccessVenue,
+  unauthorized,
+  forbidden,
+} from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // Thread Lock API
@@ -68,13 +73,8 @@ export async function POST(request: NextRequest) {
     if (!interaction) {
       return NextResponse.json({ error: 'Interaction not found' }, { status: 404 })
     }
-    const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
-    if (!isAdmin && interaction.venue_id !== venueId) {
-      return NextResponse.json(
-        { error: 'Forbidden: interaction belongs to another venue' },
-        { status: 403 }
-      )
-    }
+    const decision = await assertCanAccessVenue(auth, interaction.venue_id as string)
+    if (!decision.ok) return forbidden(`interaction ${decision.reason}`)
 
     const displayName = [profile?.first_name, profile?.last_name]
       .filter(Boolean)

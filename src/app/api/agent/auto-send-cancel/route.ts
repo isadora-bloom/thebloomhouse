@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getPlatformAuth, unauthorized } from '@/lib/api/auth-helpers'
+import {
+  getPlatformAuth,
+  assertCanAccessVenue,
+  unauthorized,
+  forbidden,
+} from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
 // Auto-Send Cancel API
@@ -36,11 +41,8 @@ export async function POST(request: NextRequest) {
     const supabase = createServiceClient()
 
     // Ownership pre-check: verify the draft belongs to a venue the
-    // authenticated user can access. Admins bypass — they may operate
-    // across the org. Demo mode: confined to the Crestwood allowlist
-    // (already enforced by getPlatformAuth returning isDemo=true with
-    // a fixed venueId, so the eq check below holds).
-    const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
+    // authenticated user can access. assertCanAccessVenue handles
+    // demo / exact-match / super_admin / org_admin-with-org-scope.
     const { data: draftOwnership } = await supabase
       .from('drafts')
       .select('venue_id')
@@ -50,12 +52,8 @@ export async function POST(request: NextRequest) {
     if (!draftOwnership) {
       return NextResponse.json({ error: 'Draft not found' }, { status: 404 })
     }
-    if (!isAdmin && draftOwnership.venue_id !== auth.venueId) {
-      return NextResponse.json(
-        { error: 'Forbidden: draft belongs to another venue' },
-        { status: 403 }
-      )
-    }
+    const decision = await assertCanAccessVenue(auth, draftOwnership.venue_id as string)
+    if (!decision.ok) return forbidden(`draft ${decision.reason}`)
 
     // Conditional cancel: only transition if the draft is still in
     // auto_send_pending. Once the flush cron has claimed it

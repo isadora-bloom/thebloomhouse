@@ -3,8 +3,9 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { callAI } from '@/lib/ai/client'
 import {
   getPlatformAuth,
-  isDemoVenueAllowed,
+  assertCanAccessVenue,
   unauthorized,
+  forbidden,
 } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
@@ -51,26 +52,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Authorization: the authenticated user must have access to the
-    // feedback's venue. Demo allowlist applies only to demo cookies.
-    // Non-admins must match auth.venueId; admins (org_admin / super_admin)
-    // may access any venue (RLS policies on dependent reads add a
-    // belt-and-suspenders check).
+    // Authorization: org-aware via assertCanAccessVenue. org_admin
+    // bypass is now scoped to their org's venues, not "any venue."
     const venueId = feedback.venue_id as string
-    const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
-    if (auth.isDemo) {
-      if (!isDemoVenueAllowed(venueId)) {
-        return NextResponse.json(
-          { error: 'Forbidden: feedback belongs to a non-demo venue' },
-          { status: 403 }
-        )
-      }
-    } else if (!isAdmin && venueId !== auth.venueId) {
-      return NextResponse.json(
-        { error: 'Forbidden: feedback belongs to another venue' },
-        { status: 403 }
-      )
-    }
+    const decision = await assertCanAccessVenue(auth, venueId)
+    if (!decision.ok) return forbidden(`feedback ${decision.reason}`)
 
     // Fetch vendor ratings
     const { data: vendorRatings } = await supabase

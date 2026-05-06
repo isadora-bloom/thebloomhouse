@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { sendEmail } from '@/lib/services/email'
-import { getPlatformAuth, unauthorized } from '@/lib/api/auth-helpers'
+import {
+  getPlatformAuth,
+  assertCanAccessVenue,
+  unauthorized,
+  forbidden,
+} from '@/lib/api/auth-helpers'
 
 /**
  * POST /api/portal/invite-couple
@@ -58,13 +63,8 @@ export async function POST(request: NextRequest) {
     }
 
     const venueId = wedding.venue_id as string
-    const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
-    if (!isAdmin && venueId !== auth.venueId) {
-      return NextResponse.json(
-        { error: 'Forbidden: wedding belongs to another venue' },
-        { status: 403 }
-      )
-    }
+    const decision = await assertCanAccessVenue(auth, venueId)
+    if (!decision.ok) return forbidden(`wedding ${decision.reason}`)
     // If the caller supplied venueId, it MUST match the wedding's
     // venue_id (catches client-side bugs without breaking the contract).
     if (requestedVenueId && requestedVenueId !== venueId) {

@@ -13,8 +13,9 @@ import {
 import { importData, rowsToRecords } from '@/lib/services/data-import'
 import {
   getPlatformAuth,
-  isDemoVenueAllowed,
+  assertCanAccessVenue,
   unauthorized,
+  forbidden,
 } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
@@ -142,34 +143,14 @@ export async function POST(request: NextRequest) {
     const weddingId = formData.get('weddingId') as string | null
 
     // Resolve the venueId we will actually operate against. Client-supplied
-    // venueId is advisory and must be authorized. Admins (org_admin /
-    // super_admin) may operate against any venue in their org; non-admins
-    // are pinned to auth.venueId.
-    const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
-    let venueId: string
-    if (auth.isDemo) {
-      // Demo coordinator: only the Crestwood allowlist is permitted.
-      if (!requestedVenueId || !isDemoVenueAllowed(requestedVenueId)) {
-        return NextResponse.json(
-          { error: 'Forbidden: venue not in demo allowlist' },
-          { status: 403 }
-        )
-      }
-      venueId = requestedVenueId
-    } else if (requestedVenueId) {
-      if (!isAdmin && requestedVenueId !== auth.venueId) {
-        return NextResponse.json(
-          { error: 'Forbidden: cannot operate against another venue' },
-          { status: 403 }
-        )
-      }
-      // Admins: trust the requested venueId, but assume the org-scope
-      // check happens downstream in importData via venue_id RLS. If a
-      // future audit shows that's not enforced, harden here.
-      venueId = requestedVenueId
-    } else {
-      venueId = auth.venueId
-    }
+    // venueId is advisory and must be authorized via assertCanAccessVenue —
+    // which checks demo allowlist, exact match, super_admin bypass, AND
+    // org membership for org_admin (the round-2 audit caught a missing
+    // org-scope check that allowed cross-org operations).
+    const targetVenueId = requestedVenueId || auth.venueId
+    const decision = await assertCanAccessVenue(auth, targetVenueId)
+    if (!decision.ok) return forbidden(decision.reason)
+    const venueId = decision.venueId
 
     // -----------------------------------------------------------------------
     // Step 1: Extract text content from the input

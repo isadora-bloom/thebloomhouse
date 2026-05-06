@@ -141,6 +141,86 @@ export async function getCoupleAuth() {
 }
 
 // ---------------------------------------------------------------------------
+// assertCanAccessVenue — venue-scope guard for routes that operate
+// against a caller-supplied venueId (or one derived from a fetched
+// row). Closes the org_admin cross-venue bypass flagged by the round-1
+// + round-2 audits:
+//
+// > In event-feedback / quick-add / thread-lock / auto-send-cancel /
+// > invite-couple, super_admin and org_admin are allowed to operate
+// > against any venue regardless of org membership. The routes use
+// > createServiceClient() which bypasses RLS, so the comment's
+// > "RLS will catch it downstream" reassurance is wrong-shaped.
+//
+// Behaviour:
+//   - Demo cookie: venueId must be in DEMO_VENUE_ALLOWLIST (Crestwood).
+//   - super_admin: all venues allowed (platform team).
+//   - org_admin / venue_manager / coordinator: venueId must equal
+//     auth.venueId OR be in the user's org's set of venues.
+//   - couple role: not callable here — couples should use
+//     getCoupleAuth + their wedding's venue_id.
+//
+// Returns ok=true with the resolved canonical venueId, or ok=false
+// with a 403 reason. Callers translate to a NextResponse.
+// ---------------------------------------------------------------------------
+
+export type AccessDecision =
+  | { ok: true; venueId: string }
+  | { ok: false; reason: string }
+
+type PlatformAuth = NonNullable<Awaited<ReturnType<typeof getPlatformAuth>>>
+
+export async function assertCanAccessVenue(
+  auth: PlatformAuth,
+  venueId: string,
+): Promise<AccessDecision> {
+  if (!venueId || typeof venueId !== 'string') {
+    return { ok: false, reason: 'venueId required' }
+  }
+
+  if (auth.isDemo) {
+    if (!DEMO_VENUE_ALLOWLIST.has(venueId)) {
+      return { ok: false, reason: 'venue not in demo allowlist' }
+    }
+    return { ok: true, venueId }
+  }
+
+  if (venueId === auth.venueId) {
+    return { ok: true, venueId }
+  }
+
+  if (auth.role === 'super_admin') {
+    return { ok: true, venueId }
+  }
+
+  if (auth.role === 'org_admin' && auth.orgId) {
+    // Verify the target venue is within the admin's org. Service-role
+    // query — we want truth, not RLS-filtered. The pg_policies on
+    // venues authorize org-admin reads but bypassing keeps this robust
+    // against future policy churn.
+    const service = createServiceClient()
+    const { data: targetVenue } = await service
+      .from('venues')
+      .select('org_id')
+      .eq('id', venueId)
+      .maybeSingle()
+    if (!targetVenue) {
+      return { ok: false, reason: 'venue not found' }
+    }
+    if (targetVenue.org_id !== auth.orgId) {
+      return { ok: false, reason: 'venue belongs to another organisation' }
+    }
+    return { ok: true, venueId }
+  }
+
+  return { ok: false, reason: 'venue belongs to another venue' }
+}
+
+export function forbidden(reason: string) {
+  return NextResponse.json({ error: `Forbidden: ${reason}` }, { status: 403 })
+}
+
+// ---------------------------------------------------------------------------
 // Common error responses
 // ---------------------------------------------------------------------------
 

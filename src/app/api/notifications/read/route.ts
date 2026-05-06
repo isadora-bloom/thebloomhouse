@@ -1,7 +1,12 @@
 import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { NextRequest, NextResponse } from 'next/server'
-import { getPlatformAuth, unauthorized } from '@/lib/api/auth-helpers'
+import {
+  getPlatformAuth,
+  assertCanAccessVenue,
+  unauthorized,
+  forbidden,
+} from '@/lib/api/auth-helpers'
 
 /**
  * PATCH /api/notifications/read
@@ -40,13 +45,8 @@ export async function PATCH(request: NextRequest) {
     if (!notif) {
       return NextResponse.json({ error: 'Notification not found' }, { status: 404 })
     }
-    const isAdmin = auth.role === 'org_admin' || auth.role === 'super_admin'
-    if (!isAdmin && notif.venue_id !== auth.venueId) {
-      return NextResponse.json(
-        { error: 'Forbidden: notification belongs to another venue' },
-        { status: 403 }
-      )
-    }
+    const decision = await assertCanAccessVenue(auth, notif.venue_id as string)
+    if (!decision.ok) return forbidden(`notification ${decision.reason}`)
 
     const supabase = await createServerSupabaseClient()
 
