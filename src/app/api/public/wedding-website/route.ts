@@ -1,11 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { checkRateLimit } from '@/lib/rate-limit'
 
 // ---------------------------------------------------------------------------
-// Public wedding website API — no auth required
-// GET  ?slug=xxx           — full published website data
-// GET  ?slug=xxx&action=search_guest&name=xxx — guest name search for RSVP
-// POST ?slug=xxx&action=rsvp — public RSVP submission
+// Public wedding website API
+// GET  ?slug=xxx                                   — full published website (public)
+// GET  ?slug=xxx&t=token&action=search_guest&name=xxx — guest search (TOKEN-GATED)
+// POST ?slug=xxx&t=token&action=rsvp               — RSVP submission (TOKEN-GATED)
+//
+// Two tiers:
+//   - Public: slug-only website rendering. Couples share the URL openly.
+//   - Token-gated: guest search + RSVP submit. Requires share_token (mig
+//     218) carried in the couple's invitation link. Without the token,
+//     guest enumeration via 2-char prefix match is closed.
+//
+// Per 2026-05-06 audit Lens 8.
 // ---------------------------------------------------------------------------
 
 function json(data: unknown, status = 200) {
@@ -14,6 +23,33 @@ function json(data: unknown, status = 200) {
 
 function err(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status })
+}
+
+function clientIp(request: NextRequest): string {
+  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
+}
+
+async function rateLimit(request: NextRequest, action: 'search_guest' | 'rsvp') {
+  const ip = clientIp(request)
+  return checkRateLimit({
+    key: `wedding-website:${action}:${ip}`,
+    limit: action === 'rsvp' ? 10 : 60,
+    windowSec: 3600,
+  })
+}
+
+function rateLimited(rl: { resetAt: Date }) {
+  return NextResponse.json(
+    { error: 'Rate limit exceeded' },
+    {
+      status: 429,
+      headers: {
+        'Retry-After': String(
+          Math.ceil((rl.resetAt.getTime() - Date.now()) / 1000),
+        ),
+      },
+    },
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -32,6 +68,28 @@ async function getPublishedWebsite(supabase: ReturnType<typeof createServiceClie
   return data
 }
 
+/**
+ * Token-gated lookup. Returns the website row only if (slug, share_token)
+ * BOTH match. Used by guest search + RSVP submit. Wrong token = same 404
+ * response as missing slug; no information leak about which is wrong.
+ */
+async function getPublishedWebsiteWithToken(
+  supabase: ReturnType<typeof createServiceClient>,
+  slug: string,
+  token: string,
+) {
+  const { data, error } = await supabase
+    .from('wedding_website_settings')
+    .select('*')
+    .eq('slug', slug)
+    .eq('share_token', token)
+    .eq('is_published', true)
+    .maybeSingle()
+
+  if (error) throw error
+  return data
+}
+
 // ---------------------------------------------------------------------------
 // GET
 // ---------------------------------------------------------------------------
@@ -41,15 +99,25 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const slug = searchParams.get('slug')
     const action = searchParams.get('action')
+    const token = searchParams.get('t')
 
     if (!slug) return err('slug is required')
 
     const supabase = createServiceClient()
-    const website = await getPublishedWebsite(supabase, slug)
-    if (!website) return err('Wedding website not found or not published', 404)
 
-    // ---- Guest search ----
+    // ---- Guest search (TOKEN-GATED) ----
     if (action === 'search_guest') {
+      const rl = await rateLimit(request, 'search_guest')
+      if (!rl.ok) return rateLimited(rl)
+
+      if (!token) {
+        // No token = no enumeration. 404 not 401 so an attacker can't
+        // distinguish a missing-token from a wrong-token.
+        return err('Wedding website not found or not published', 404)
+      }
+      const website = await getPublishedWebsiteWithToken(supabase, slug, token)
+      if (!website) return err('Wedding website not found or not published', 404)
+
       const name = searchParams.get('name')
       if (!name || name.trim().length < 2) {
         return err('name param required (min 2 chars)')
@@ -103,7 +171,9 @@ export async function GET(request: NextRequest) {
       return json({ guests: matches })
     }
 
-    // ---- Full website data ----
+    // ---- Full website data (PUBLIC, slug-only) ----
+    const website = await getPublishedWebsite(supabase, slug)
+    if (!website) return err('Wedding website not found or not published', 404)
     const weddingId = website.wedding_id
     const venueId = website.venue_id
 
@@ -200,16 +270,26 @@ export async function GET(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
+  const rl = await rateLimit(request, 'rsvp')
+  if (!rl.ok) return rateLimited(rl)
+
   try {
     const { searchParams } = new URL(request.url)
     const slug = searchParams.get('slug')
     const action = searchParams.get('action')
+    const token = searchParams.get('t')
 
     if (!slug) return err('slug is required')
     if (action !== 'rsvp') return err('Invalid action. Use action=rsvp')
+    if (!token) {
+      // RSVP submit without a share-token is closed entirely. Pre-fix
+      // any caller could submit a fake RSVP for any guest_id by
+      // enumerating UUIDs (or by walking a leaked guest list).
+      return err('Wedding website not found or not published', 404)
+    }
 
     const supabase = createServiceClient()
-    const website = await getPublishedWebsite(supabase, slug)
+    const website = await getPublishedWebsiteWithToken(supabase, slug, token)
     if (!website) return err('Wedding website not found or not published', 404)
 
     const body = await request.json()

@@ -20,7 +20,7 @@ import {
   Loader2,
   Sparkles,
 } from 'lucide-react'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -246,7 +246,12 @@ function getSectionFromSections(sections: WebsiteSection[], type: string): Websi
 
 export default function WeddingWebsitePage() {
   const params = useParams()
+  const searchParams = useSearchParams()
   const slug = params.slug as string
+  // Share-token from the couple's invitation link. Required for guest
+  // search and RSVP submit; not required for public website rendering.
+  // Per audit Lens 8 / mig 218.
+  const shareToken = searchParams?.get('t') ?? ''
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -394,6 +399,7 @@ export default function WeddingWebsitePage() {
           timeline={timeline}
           accommodations={accommodations}
           slug={slug}
+          shareToken={shareToken}
           rsvpConfig={rsvpConfig}
         />
       ))}
@@ -447,6 +453,7 @@ function SectionRenderer({
   timeline,
   accommodations,
   slug,
+  shareToken,
   rsvpConfig,
 }: {
   section: WebsiteSection
@@ -458,6 +465,7 @@ function SectionRenderer({
   timeline: TimelineItem[]
   accommodations: Accommodation[]
   slug: string
+  shareToken: string
   rsvpConfig: RsvpConfigData | null
 }) {
   const content = (() => {
@@ -471,7 +479,7 @@ function SectionRenderer({
       case 'the_day':
         return <ScheduleSection data={section.data} timeline={timeline} theme={theme} accent={accent} />
       case 'rsvp':
-        return <RSVPSection data={section.data} slug={slug} mealOptions={mealOptions} theme={theme} accent={accent} accentRgb={accentRgb} rsvpConfig={rsvpConfig} />
+        return <RSVPSection data={section.data} slug={slug} shareToken={shareToken} mealOptions={mealOptions} theme={theme} accent={accent} accentRgb={accentRgb} rsvpConfig={rsvpConfig} />
       case 'registry':
         return <RegistrySection data={section.data} website={website} theme={theme} accent={accent} accentRgb={accentRgb} />
       case 'faq':
@@ -716,9 +724,10 @@ function ScheduleSection({ data, timeline, theme, accent }: {
 
 type RSVPStep = 'search' | 'confirm' | 'form' | 'success'
 
-function RSVPSection({ data, slug, mealOptions, theme, accent, rsvpConfig }: {
+function RSVPSection({ data, slug, shareToken, mealOptions, theme, accent, rsvpConfig }: {
   data: Record<string, unknown>
   slug: string
+  shareToken: string
   mealOptions: MealOption[]
   theme: typeof THEME_CONFIG.classic
   accent: string
@@ -803,8 +812,14 @@ function RSVPSection({ data, slug, mealOptions, theme, accent, rsvpConfig }: {
     setSearchResults([])
 
     try {
+      if (!shareToken) {
+        setSearchError(
+          'This RSVP link looks incomplete. Please use the link the couple sent you.'
+        )
+        return
+      }
       const res = await fetch(
-        `/api/public/wedding-website?slug=${encodeURIComponent(slug)}&action=search_guest&name=${encodeURIComponent(searchQuery.trim())}`
+        `/api/public/wedding-website?slug=${encodeURIComponent(slug)}&t=${encodeURIComponent(shareToken)}&action=search_guest&name=${encodeURIComponent(searchQuery.trim())}`
       )
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Search failed')
@@ -891,7 +906,7 @@ function RSVPSection({ data, slug, mealOptions, theme, accent, rsvpConfig }: {
       }
 
       const res = await fetch(
-        `/api/public/wedding-website?slug=${encodeURIComponent(slug)}&action=rsvp`,
+        `/api/public/wedding-website?slug=${encodeURIComponent(slug)}&t=${encodeURIComponent(shareToken)}&action=rsvp`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
