@@ -134,7 +134,26 @@ export async function middleware(request: NextRequest) {
   // Resolution: auth wins. Clear the demo cookies and fall through to the
   // authenticated flow below. The user sees their real venue cleanly.
   // -----------------------------------------------------------------------
-  const isDemo = request.cookies.get('bloom_demo')?.value === 'true'
+  // Two cookie shapes resolve to "this is a demo session":
+  //   - bloom_demo=true        : legacy value cookie set by the /demo/*
+  //                              rewrite path at the top of this middleware.
+  //   - bloom_demo_hint=1      : non-HttpOnly hint set by the new signed-token
+  //                              flow in /demo Server Action (see demo-token.ts).
+  //                              Pairs with the HttpOnly bloom_demo_token; the
+  //                              hint exists specifically so Edge middleware
+  //                              (which can't call node:crypto / verifyDemoToken)
+  //                              can recognise the session without seeing the
+  //                              signature. Anyone can set this in DevTools, but
+  //                              downstream auth-helpers verify the signed token
+  //                              on every server-side data read, so flipping
+  //                              the hint without the signed token still leaves
+  //                              the user with no real-data access.
+  // 2026-05-08 fix: pre-fix middleware only checked the legacy cookie, so
+  // /demo entry (which sets the new pair) hit the no-auth branch and bounced
+  // through /welcome → /login redirect loops.
+  const isDemo =
+    request.cookies.get('bloom_demo')?.value === 'true' ||
+    request.cookies.get('bloom_demo_hint')?.value === '1'
   if (isDemo && !user) {
     return response
   }
