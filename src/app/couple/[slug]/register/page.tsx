@@ -218,7 +218,8 @@ export default function CoupleRegisterPage() {
               className="mt-2 text-center text-sm text-gray-500"
               style={{ fontFamily: 'var(--couple-font-body, sans-serif)' }}
             >
-              Welcome! Let&apos;s set up your account.
+              Welcome. Let&apos;s set up your account. Both partners can use
+              the same event code to create separate logins.
             </p>
           </div>
 

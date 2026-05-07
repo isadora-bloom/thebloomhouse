@@ -4,13 +4,29 @@ import { createServiceClient } from '@/lib/supabase/service'
 /**
  * POST /api/couple/register
  *
- * Registers a new couple account:
- * 1. Validates event code against weddings.event_code
- * 2. Verifies venue slug matches the wedding's venue
- * 3. Creates Supabase auth user (admin.createUser with email_confirm)
- * 4. Creates user_profiles row with role='couple'
- * 5. Updates wedding.couple_registered_at
- * 6. Links auth user to existing people record by email
+ * Registers a couple account against a wedding's event_code.
+ *
+ * Tier-B #57 (Option B, 2026-05-07): supports up to TWO partner accounts
+ * per wedding sharing a single event_code. The first registration is
+ * the "primary" partner; the second registration creates a separate
+ * auth user + user_profiles row pointing at the same wedding_id, with
+ * its own login credentials. Each partner has their own auth identity
+ * but sees the same wedding data via the couple_read RLS policies in
+ * mig 226 (wedding_id is the only thing those policies care about, so
+ * two user_profiles rows with the same wedding_id naturally co-tenant).
+ *
+ * Flow:
+ * 1. Validate event code against weddings.event_code
+ * 2. Verify venue slug matches the wedding's venue
+ * 3. Reject if 2 couple accounts already exist for this wedding (cap)
+ * 4. Reject if THIS email is already registered for this wedding
+ *    (idempotency / prevent dup accounts for the same person)
+ * 5. Create Supabase auth user (admin.createUser with email_confirm)
+ * 6. Create user_profiles row with role='couple', wedding_id, venue_id
+ * 7. Stamp wedding.couple_registered_at on FIRST registration only
+ *    (preserves "first sign-up timestamp" semantics)
+ * 8. Link auth user to a people record by email; if no email match,
+ *    fill in the first partner row that has no email yet
  */
 export async function POST(request: NextRequest) {
   try {
@@ -49,7 +65,10 @@ export async function POST(request: NextRequest) {
     }
 
     // 2. Verify slug matches
-    const venueData = wedding.venues as { name?: string; slug?: string } | { name?: string; slug?: string }[] | null
+    const venueData = wedding.venues as
+      | { name?: string; slug?: string }
+      | { name?: string; slug?: string }[]
+      | null
     const venueSlug = Array.isArray(venueData) ? venueData[0]?.slug : venueData?.slug
 
     if (venueSlug !== slug) {
@@ -59,15 +78,59 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 3. Check if already registered
-    if (wedding.couple_registered_at) {
+    // 3. Cap at 2 couple accounts per wedding.
+    // Two partners is the supported case; we don't open it up further so
+    // a leaked event_code can't onboard arbitrary readers. If a couple
+    // ever needs more (say, a planner with their own login), the right
+    // answer is a coordinator-side action, not a third partner.
+    const { count: existingCount, error: countErr } = await supabase
+      .from('user_profiles')
+      .select('id', { count: 'exact', head: true })
+      .eq('wedding_id', wedding.id)
+      .eq('role', 'couple')
+
+    if (countErr) {
+      console.error('[COUPLE REGISTER] Count error:', countErr)
+      return NextResponse.json({ error: 'Failed to verify registration state' }, { status: 500 })
+    }
+
+    if ((existingCount ?? 0) >= 2) {
       return NextResponse.json(
-        { error: 'An account has already been registered for this wedding' },
+        {
+          error:
+            'Both partner accounts are already registered for this wedding. ' +
+            'If you need help, contact your venue.',
+        },
         { status: 400 }
       )
     }
 
-    // 4. Create auth user
+    // 4. Reject if THIS email already has a couple account for THIS wedding.
+    // We resolve the auth user by email; if a row already exists, point
+    // them to sign-in instead of creating a duplicate.
+    const { data: dupAuth } = await supabase
+      .from('user_profiles')
+      .select('id')
+      .eq('wedding_id', wedding.id)
+      .eq('role', 'couple')
+      .limit(1)
+    // Cross-reference auth.users since user_profiles.id IS the auth.uid().
+    // Walk the user_profiles rows we have and check each auth user's email.
+    if (dupAuth && dupAuth.length > 0) {
+      for (const row of dupAuth) {
+        const { data: authUser } = await supabase.auth.admin.getUserById(row.id as string)
+        if (authUser?.user?.email?.toLowerCase() === email.toLowerCase()) {
+          return NextResponse.json(
+            {
+              error: 'An account with this email already exists for this wedding. Sign in instead.',
+            },
+            { status: 400 }
+          )
+        }
+      }
+    }
+
+    // 5. Create auth user
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email,
       password,
@@ -80,7 +143,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: authError.message }, { status: 400 })
     }
 
-    // 5. Create user_profile.
+    // 6. Create user_profile.
     // Tier-A #2b (mig 226): wedding_id is what gates the couple_read /
     // couple_write RLS policies on every couple-portal-readable table.
     // Without it, the couple session resolves to "anon-but-authed" and
@@ -99,16 +162,23 @@ export async function POST(request: NextRequest) {
       // Don't block — auth user was created, profile can be retried
     }
 
-    // 6. Update wedding
-    await supabase
-      .from('weddings')
-      .update({ couple_registered_at: new Date().toISOString() })
-      .eq('id', wedding.id)
+    // 7. Stamp couple_registered_at on FIRST registration only.
+    // Preserves "when did the couple first start using the portal"
+    // semantics for analytics / coordinator UX.
+    if (!wedding.couple_registered_at) {
+      await supabase
+        .from('weddings')
+        .update({ couple_registered_at: new Date().toISOString() })
+        .eq('id', wedding.id)
+    }
 
-    // 7. Link the auth user to the people record.
-    // First try to match by existing email. If no match, update the first
-    // partner1 record to use the registering email so useCoupleContext can
-    // resolve the wedding from the auth user's email.
+    // 8. Link the auth user to a people record.
+    // Strategy:
+    //   a) If a person row already has this email, that's the link.
+    //   b) Else find the first partner row (partner1, then partner2)
+    //      that has no email and stamp this email there. This handles
+    //      both first and second registrations: first fills partner1,
+    //      second fills partner2.
     const { data: existingPerson } = await supabase
       .from('people')
       .select('id')
@@ -117,19 +187,21 @@ export async function POST(request: NextRequest) {
       .maybeSingle()
 
     if (!existingPerson) {
-      // Update partner1's email to the registering email
-      const { data: partner1 } = await supabase
+      const { data: openPartner } = await supabase
         .from('people')
-        .select('id')
+        .select('id, role, email')
         .eq('wedding_id', wedding.id)
-        .eq('role', 'partner1')
+        .in('role', ['partner1', 'partner2'])
+        .or('email.is.null,email.eq.')
+        .order('role', { ascending: true })
+        .limit(1)
         .maybeSingle()
 
-      if (partner1) {
+      if (openPartner) {
         await supabase
           .from('people')
           .update({ email })
-          .eq('id', partner1.id)
+          .eq('id', openPartner.id)
       }
     }
 
@@ -137,6 +209,10 @@ export async function POST(request: NextRequest) {
       success: true,
       weddingId: wedding.id,
       venueSlug,
+      // Surface to the client whether this was the first or second
+      // partner so the post-register screen can welcome them
+      // appropriately ("Welcome — Sarah's already registered" etc.)
+      partnerNumber: (existingCount ?? 0) === 0 ? 1 : 2,
     })
   } catch (err) {
     console.error('[COUPLE REGISTER ERROR]', err)
