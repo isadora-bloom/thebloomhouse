@@ -332,7 +332,12 @@ export default function ChecklistPage() {
       prev.map((i) => (i.id === item.id ? { ...i, ...update } : i))
     )
 
-    await supabase.from('checklist_items').update(update).eq('id', item.id)
+    if (!weddingId) return
+    await supabase
+      .from('checklist_items')
+      .update(update)
+      .eq('id', item.id)
+      .eq('wedding_id', weddingId)
   }
 
   // ---- Notes ----
@@ -351,9 +356,14 @@ export default function ChecklistPage() {
   }
 
   async function saveNote(id: string) {
+    if (!weddingId) return
     setSavingNote(id)
     const note = noteDrafts[id]?.trim() || null
-    await supabase.from('checklist_items').update({ description: note }).eq('id', id)
+    await supabase
+      .from('checklist_items')
+      .update({ description: note })
+      .eq('id', id)
+      .eq('wedding_id', weddingId)
     setItems((prev) =>
       prev.map((i) => (i.id === id ? { ...i, description: note } : i))
     )
@@ -393,8 +403,13 @@ export default function ChecklistPage() {
         : items.length + 1,
     }
 
+    if (!weddingId) return
     if (editingId) {
-      await supabase.from('checklist_items').update(payload).eq('id', editingId)
+      await supabase
+        .from('checklist_items')
+        .update(payload)
+        .eq('id', editingId)
+        .eq('wedding_id', weddingId)
     } else {
       await supabase.from('checklist_items').insert(payload)
     }
@@ -406,15 +421,22 @@ export default function ChecklistPage() {
 
   async function handleDelete(id: string) {
     if (!confirm('Remove this task?')) return
-    await supabase.from('checklist_items').delete().eq('id', id)
+    if (!weddingId) return
+    await supabase
+      .from('checklist_items')
+      .delete()
+      .eq('id', id)
+      .eq('wedding_id', weddingId)
     setItems((prev) => prev.filter((i) => i.id !== id))
   }
 
   async function handleSetDueDate(id: string, date: string) {
+    if (!weddingId) return
     await supabase
       .from('checklist_items')
       .update({ due_date: date || null })
       .eq('id', id)
+      .eq('wedding_id', weddingId)
     setItems((prev) =>
       prev.map((i) => (i.id === id ? { ...i, due_date: date || null } : i))
     )

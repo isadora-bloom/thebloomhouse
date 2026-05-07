@@ -23,6 +23,48 @@ import {
 import { CouplePhotoPrompt } from '@/components/couple/couple-photo-prompt'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 
+/**
+ * Round-7 audit fix: owner_photo_url allowlist.
+ *
+ * Accept only Supabase Storage public-object URLs of the form:
+ *   https://<project-ref>.supabase.co/storage/v1/object/public/<bucket>/<path>
+ *
+ * The project-ref subdomain is exposed via NEXT_PUBLIC_SUPABASE_URL so we
+ * pin the host to whatever the env declares. Any other host (a tracker,
+ * a personal domain, a Cloudinary URL) returns false and the dashboard
+ * falls back to the sage-heart icon.
+ *
+ * Trade-off: coordinators can't paste arbitrary photo URLs. Long-term
+ * the venue-info form needs an upload affordance that writes directly
+ * to Supabase Storage and stamps the resulting URL into owner_photo_url.
+ * Until that ships coordinators have to upload via Studio. Documented
+ * in TIER-B-DESIGN-QUESTIONS.md follow-ups.
+ */
+function isAllowedSupabaseStorageUrl(raw: unknown): boolean {
+  if (typeof raw !== 'string' || raw.length === 0) return false
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  if (!supabaseUrl) return false
+  let host: string
+  try {
+    const u = new URL(raw)
+    if (u.protocol !== 'https:') return false
+    host = u.host
+    // Pin: must be the same host as our Supabase project, AND the path
+    // must look like a public-object route. Storage signed URLs use
+    // /storage/v1/object/sign/ which we intentionally exclude — couples
+    // shouldn't see expiring assets here.
+    if (!u.pathname.startsWith('/storage/v1/object/public/')) return false
+  } catch {
+    return false
+  }
+  try {
+    const expected = new URL(supabaseUrl).host
+    return host === expected
+  } catch {
+    return false
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -86,6 +128,11 @@ interface DashboardData {
     description: string | null
     seasonOrTier: string | null
   } | null
+  // Round-7 audit fix: surface RLS / fetch failures so missing cards
+  // aren't silently rendered as "your coordinator hasn't filled this
+  // in." Empty string when no errors happened. Each side-fetch
+  // (owner / package / next payment) appends a short reason.
+  fetchErrors: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -435,23 +482,30 @@ export default function CoupleDashboard() {
         // Owner presence + package synthesis from the parallel fetch above.
         // Round-6 follow-up: log each fetch error so a misconfigured
         // RLS policy doesn't silently render the cards as missing.
+        // Round-7 follow-up: also collect into a fetchErrors array
+        // surfaced in the UI as a banner so couples know "something
+        // didn't load" instead of "the coordinator hasn't filled this."
+        const fetchErrors: string[] = []
         if (aiConfigRes.error) {
           console.warn(
             '[couple-dashboard] owner_name fetch failed:',
             aiConfigRes.error.message,
           )
+          fetchErrors.push("Couldn't load your venue's owner info.")
         }
         if (venueConfigRes.error) {
           console.warn(
             '[couple-dashboard] venue_config fetch failed:',
             venueConfigRes.error.message,
           )
+          fetchErrors.push("Couldn't load venue branding.")
         }
         if (packageRes.error) {
           console.warn(
             '[couple-dashboard] packages catalog fetch failed:',
             packageRes.error.message,
           )
+          fetchErrors.push("Couldn't load your booked package.")
         }
 
         const ownerName =
@@ -466,8 +520,17 @@ export default function CoupleDashboard() {
         // the heart icon.
         const rawPhotoUrl =
           ((venueConfigRes.data as { owner_photo_url?: string } | null)?.owner_photo_url)
-        const ownerPhotoUrl =
-          rawPhotoUrl && /^https:\/\/[^\s<>"]+$/.test(rawPhotoUrl) ? rawPhotoUrl : null
+        // Round-7 audit fix: previous regex `^https://[^\s<>"]+$` blocked
+        // XSS chars but allowed any third-party host. A coordinator (or
+        // someone briefly on a coordinator account) could paste a tracker
+        // URL and every couple's dashboard load would ping that host.
+        // Real defense: allowlist Supabase Storage public-object URLs
+        // only. Coordinators upload via the venue-info form (future
+        // upload UI) which writes the public-object URL back into
+        // owner_photo_url. Foreign hosts → fall through to heart icon.
+        const ownerPhotoUrl = isAllowedSupabaseStorageUrl(rawPhotoUrl)
+          ? (rawPhotoUrl as string)
+          : null
 
         let packageInfo: DashboardData['packageInfo'] = null
         const pkgRow = packageRes.data as
@@ -618,6 +681,7 @@ export default function CoupleDashboard() {
           ownerPhotoUrl,
           nextPayment,
           packageInfo,
+          fetchErrors,
         })
       } catch (err) {
         console.error('Failed to load couple dashboard:', err)
@@ -758,6 +822,24 @@ export default function CoupleDashboard() {
           </p>
         )}
       </div>
+
+      {/* Round-7 audit fix: surface fetch errors so a missing card isn't
+          silently rendered as "not filled in." Distinct from the alerts
+          strip because it's a system-level message, not a planning task. */}
+      {data.fetchErrors.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex items-start gap-2">
+          <svg className="w-4 h-4 mt-0.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+          </svg>
+          <div className="flex-1 min-w-0">
+            <p className="font-medium mb-0.5">Some venue info didn&apos;t load.</p>
+            <p className="text-xs leading-relaxed">
+              {data.fetchErrors.join(' ')} If this keeps happening, message
+              your coordinator.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Planning Alerts Strip */}
       {visibleAlerts.length > 0 && (

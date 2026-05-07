@@ -125,7 +125,13 @@ BEGIN
     WHERE c.table_schema = 'public'
       AND c.column_name = 'wedding_id'
       AND c.table_name NOT IN (
-        -- Coordinator-internal: do NOT expose to couples
+        -- Coordinator-internal: do NOT expose to couples.
+        -- 2026-05-07 (round-7 audit): added attribution_parity_log,
+        -- booked_data_recovery_log, event_feedback*, after they were
+        -- caught leaking via the original list. Long-term direction is
+        -- to invert this to an opt-in allowlist; for now the list is
+        -- maintained additively. Mig 228 dropped the leaked policies
+        -- on already-applied schemas.
         'gmail_connections',
         'gmail_tokens',
         'team_invitations',
@@ -139,6 +145,7 @@ BEGIN
         'activity_log',            -- audit log; coordinator
         'wedding_journey_narratives', -- internal narrative
         'attribution_events',      -- internal attribution
+        'attribution_parity_log',  -- internal attribution scoring (round-7)
         'candidate_identities',    -- internal identity resolution
         'wedding_touchpoints',     -- internal multi-touch
         'voice_training_responses', -- internal voice DNA
@@ -146,7 +153,10 @@ BEGIN
         'follow_up_sequences',     -- internal cron sequences
         'identity_reconciliation_log',
         'web_form_submissions',
-        'storefront_analytics'
+        'storefront_analytics',
+        'booked_data_recovery_log', -- internal recovery audit (round-7)
+        'event_feedback',          -- internal post-event feedback (round-7)
+        'event_feedback_vendors'   -- internal vendor scoring (round-7)
       )
   LOOP
     EXECUTE format('DROP POLICY IF EXISTS "couple_read" ON public.%I', t.table_name);
