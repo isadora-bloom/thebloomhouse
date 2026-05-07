@@ -107,6 +107,15 @@ export function classifyUrlShape(url: string): UrlShape {
  * Fetch a URL with timeout / size / redirect caps. Returns ok=false on
  * any failure mode (timeout, oversized body, non-2xx, non-HTML
  * content-type). Never throws.
+ *
+ * Note (2026-05-06): does NOT use the generic safeFetch helper. The
+ * dedicated implementation here adds three guards safeFetch doesn't:
+ * a streaming body-size cap (4 MB), a text/html content-type filter,
+ * and a structured ok/reason return shape suited to the brain-dump
+ * surface (we want to render "couldn't read your portfolio: timeout"
+ * to the coordinator rather than throw). It DOES still revalidate
+ * every redirect hop with assertSafeUrl, so the SSRF posture matches
+ * safeFetch. Keep the two in sync if assertSafeUrl semantics change.
  */
 async function fetchWithCaps(url: string): Promise<{
   ok: true
