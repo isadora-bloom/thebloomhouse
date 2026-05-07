@@ -86,7 +86,7 @@ function buildAlerts(data: DashboardData, SLUG: string): PlanningAlert[] {
     alerts.push({
       id: 'photo',
       icon: Camera,
-      title: "Add a couple photo — it'll appear on your website and throughout your portal.",
+      title: "Add a couple photo. It'll appear on your website and throughout your portal.",
       href: `/couple/${SLUG}/couple-photo`,
     })
   }
@@ -126,7 +126,7 @@ function buildAlerts(data: DashboardData, SLUG: string): PlanningAlert[] {
     alerts.push({
       id: 'guests',
       icon: Users,
-      title: 'Your guest list is empty — add guests to unlock seating, shuttle, and more.',
+      title: 'Your guest list is empty. Add guests to unlock seating, shuttle, and more.',
       href: `/couple/${SLUG}/guests`,
     })
   }
@@ -227,10 +227,24 @@ export default function CoupleDashboard() {
   // see all the same setup nags I dismissed at 14 months out."
   // localStorage persists across sessions so dismissed setup-card
   // nags stay dismissed.
+  //
+  // Round-4 follow-up: one-time read of the legacy sessionStorage
+  // key on mount so couples mid-session who already dismissed
+  // alerts in sessionStorage don't see them re-appear when this
+  // ships.
   useEffect(() => {
     if (typeof window === 'undefined') return
     try {
-      const raw = localStorage.getItem('bloom_dismissed_alerts')
+      let raw = localStorage.getItem('bloom_dismissed_alerts')
+      if (!raw) {
+        // Migrate legacy sessionStorage value if present.
+        const legacy = sessionStorage.getItem('bloom_dismissed_alerts')
+        if (legacy) {
+          localStorage.setItem('bloom_dismissed_alerts', legacy)
+          sessionStorage.removeItem('bloom_dismissed_alerts')
+          raw = legacy
+        }
+      }
       if (raw) {
         const parsed = JSON.parse(raw)
         if (Array.isArray(parsed)) setDismissedAlerts(parsed as AlertId[])
@@ -1035,7 +1049,7 @@ export default function CoupleDashboard() {
                 Ask {aiName} anything about your wedding
               </h3>
               <p className="text-white/80 text-sm">
-                Venue details, day-of logistics, vendor recommendations, or just brainstorming ideas — {aiName} is here to help.
+                Venue details, day-of logistics, vendor recommendations, or just brainstorming ideas. {aiName} is here to help.
               </p>
             </div>
             <ArrowRight className="w-5 h-5 text-white/80 group-hover:translate-x-1 transition-transform shrink-0" />

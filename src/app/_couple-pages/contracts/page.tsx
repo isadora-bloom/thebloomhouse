@@ -710,7 +710,7 @@ export default function ContractsPage() {
           </h1>
           <p className="text-gray-500 text-sm">
             {totalContracts === 0
-              ? 'Just your venue contract for now. Add vendor contracts here as you sign them — no rush.'
+              ? 'Just your venue contract for now. Add vendor contracts here as you sign them, no rush.'
               : 'Upload vendor contracts and let AI extract the important details.'}
           </p>
         </div>
@@ -743,7 +743,7 @@ export default function ContractsPage() {
             className="text-lg font-semibold mb-1"
             style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
           >
-            Nothing here yet — and that&apos;s fine
+            Nothing here yet, and that&apos;s fine
           </h2>
           <p className="text-sm text-gray-500 max-w-md mx-auto">
             Once you sign with a caterer, photographer, DJ, or florist, drop their

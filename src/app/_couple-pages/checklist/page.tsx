@@ -540,7 +540,7 @@ export default function ChecklistPage() {
           <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
           <span>
             <span className="font-semibold">{overdueItems}</span>{' '}
-            task{overdueItems > 1 ? 's' : ''} overdue — stay on top of your planning!
+            task{overdueItems > 1 ? 's' : ''} overdue. Stay on top of your planning.
           </span>
         </div>
       )}
