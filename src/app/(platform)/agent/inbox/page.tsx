@@ -50,6 +50,7 @@ import {
 // Tier-B #72: consolidated 5 local reimplementations to the canonical
 // htmlToText in lib/utils/html-text.ts.
 import { htmlToText as stripHtml } from '@/lib/utils/html-text'
+import { personFullName } from '@/lib/utils/couple-name'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1395,14 +1396,14 @@ export default function InboxPage() {
             ? `${partner1.first_name} & ${partner2.first_name} ${partner1.last_name}`
             : partner2
               ? `${partner1.first_name} ${partner1.last_name} & ${partner2.first_name} ${partner2.last_name}`
-              : [partner1.first_name, partner1.last_name].filter(Boolean).join(' ')
+              : personFullName(partner1)
           : null
         // Prefer the joined people row, then the couple on the wedding,
         // then the raw from_email/from_name captured by the pipeline on
         // inbound (or to_email on outbound). The raw fields are the
         // last-line-of-defence when person_id never resolved.
         const joinedPersonName = person
-          ? [person.first_name, person.last_name].filter(Boolean).join(' ')
+          ? personFullName(person)
           : null
         const rawFromName = typeof row.from_name === 'string' ? row.from_name.trim() : ''
         const personName =
@@ -1725,10 +1726,10 @@ export default function InboxPage() {
               ? `${partner1.first_name} & ${partner2.first_name} ${partner1.last_name}`
               : partner2
                 ? `${partner1.first_name} ${partner1.last_name} & ${partner2.first_name} ${partner2.last_name}`
-                : [partner1.first_name, partner1.last_name].filter(Boolean).join(' ')
+                : personFullName(partner1)
             : null
           const joinedPersonName = person
-            ? [person.first_name, person.last_name].filter(Boolean).join(' ')
+            ? personFullName(person)
             : null
           const rawFromName = typeof row.from_name === 'string' ? row.from_name.trim() : ''
           const personName =
