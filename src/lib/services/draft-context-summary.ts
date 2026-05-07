@@ -14,7 +14,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { getLatestIndicators, calculateDemandScore } from '@/lib/services/economics'
+import { getLatestIndicators, calculateDemandScore } from '@/lib/services/fred-demand'
 import { detectTrendDeviations } from '@/lib/services/trends'
 import { getSeasonalContext } from '@/lib/services/sage-intelligence'
 

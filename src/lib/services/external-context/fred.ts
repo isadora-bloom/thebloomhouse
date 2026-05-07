@@ -31,6 +31,15 @@ export const DEFAULT_FRED_SERIES: ReadonlyArray<{ id: string; label: string }> =
   { id: 'SP500',        label: 'S&P 500' },
   { id: 'UNRATE',       label: 'US unemployment' },
   { id: 'UMCSENT',      label: 'Consumer sentiment' },
+  // Tier-B #80 (2026-05-08): added so the demand-score readers
+  // (briefings, draft-context-summary, sage-intelligence, intel/dashboard)
+  // can migrate off the legacy economics.ts module which writes the
+  // deprecated `economic_indicators` table. The cron now writes both
+  // the existing 5 series above and these 4 into `fred_indicators`.
+  { id: 'PSAVERT',      label: 'Personal savings rate' },
+  { id: 'CONCCONF',     label: 'Consumer confidence' },
+  { id: 'HOUST',        label: 'Housing starts' },
+  { id: 'DSPIC96',      label: 'Real disposable income' },
 ]
 
 /**
