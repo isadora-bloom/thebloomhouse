@@ -80,10 +80,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: authError.message }, { status: 400 })
     }
 
-    // 5. Create user_profile
+    // 5. Create user_profile.
+    // Tier-A #2b (mig 226): wedding_id is what gates the couple_read /
+    // couple_write RLS policies on every couple-portal-readable table.
+    // Without it, the couple session resolves to "anon-but-authed" and
+    // sees no rows. Both venue_id and wedding_id are stamped here so
+    // the helper functions couple_user_wedding_id() / couple_user_venue_id()
+    // resolve correctly.
     const { error: profileErr } = await supabase.from('user_profiles').insert({
       id: authData.user.id,
       venue_id: wedding.venue_id,
+      wedding_id: wedding.id,
       role: 'couple',
     })
 

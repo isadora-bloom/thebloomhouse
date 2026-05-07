@@ -49,9 +49,34 @@ async function main() {
   const all = splitSqlStatements(sql)
   // PL/pgSQL EXECUTE rejects transaction-control statements
   // (SQLSTATE 0A000 "EXECUTE of transaction commands is not implemented").
-  // Strip BEGIN/COMMIT/etc. — each statement runs as its own implicit tx.
-  const TX_CONTROL_RE = /^\s*(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK|SAVEPOINT|RELEASE\s+SAVEPOINT|END)\b/i
-  const statements = all.filter((s) => !TX_CONTROL_RE.test(s))
+  // Strip BEGIN/COMMIT/etc; each statement runs as its own implicit tx.
+  // The regex must run AFTER stripping leading comments + whitespace, since
+  // splitSqlStatements often packages "comments + BEGIN" as one chunk.
+  const TX_CONTROL_RE = /^(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK|SAVEPOINT|RELEASE\s+SAVEPOINT|END)\b/i
+  function stripLeadingNoise(s: string): string {
+    let i = 0
+    while (i < s.length) {
+      const c = s[i]!
+      if (/\s/.test(c)) { i++; continue }
+      if (c === '-' && s[i + 1] === '-') {
+        while (i < s.length && s[i] !== '\n') i++
+        continue
+      }
+      if (c === '/' && s[i + 1] === '*') {
+        let depth = 1
+        i += 2
+        while (i < s.length && depth > 0) {
+          if (s[i] === '/' && s[i + 1] === '*') { depth++; i += 2; continue }
+          if (s[i] === '*' && s[i + 1] === '/') { depth--; i += 2; continue }
+          i++
+        }
+        continue
+      }
+      break
+    }
+    return s.slice(i)
+  }
+  const statements = all.filter((s) => !TX_CONTROL_RE.test(stripLeadingNoise(s)))
   const skipped = all.length - statements.length
   console.log(`Migration: ${path}`)
   console.log(`Parsed: ${statements.length} top-level statement(s)${skipped > 0 ? ` (${skipped} BEGIN/COMMIT skipped)` : ''}`)

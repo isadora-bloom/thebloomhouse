@@ -21,7 +21,29 @@
 --
 -- Idempotent: ALTER COLUMN SET DEFAULT, DROP POLICY IF EXISTS,
 -- CREATE POLICY.
+--
+-- 2026-05-07 fixup: this migration originally referenced
+-- user_profiles.wedding_id in the F3 SELECT policy, but the column was
+-- only added later in mig 226 (couple-role RLS pathway). Apply order
+-- inverted, so re-running 220 against a fresh schema would fail with
+-- "column up.wedding_id does not exist". Added the column-add inline
+-- here so 220 is self-contained. Mig 226 then layers helper functions
+-- + the broader couple_read/write policy set on top of this column.
+-- The IF NOT EXISTS guard makes both migrations idempotent in either
+-- order.
 -- ============================================
+
+-- ----------------------------------------------------------------------
+-- F0: prerequisite — user_profiles.wedding_id (originally mig 226)
+-- ----------------------------------------------------------------------
+
+ALTER TABLE public.user_profiles
+  ADD COLUMN IF NOT EXISTS wedding_id uuid REFERENCES public.weddings(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_user_profiles_wedding ON public.user_profiles(wedding_id);
+
+COMMENT ON COLUMN public.user_profiles.wedding_id IS
+  'For role=couple users: the wedding they registered for. NULL for coordinator / org_admin / super_admin / pending-invite rows. Drives the couple_read RLS predicates.';
 
 -- ----------------------------------------------------------------------
 -- F1: share_token DEFAULT

@@ -60,7 +60,16 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 - **v1.0** (2026-05-01) — Initial versioning baseline. UNIVERSAL_RULES
   + CLIENT_RULES + personality + task prompt + learning block.
 
-### sage-brain (`sage-brain.prompt.v1.0`)
+### sage-brain (`sage-brain.prompt.v1.2`)
+- **v1.2** (2026-05-07) — Tier-A #3 closure. Ported the Rixey-portal
+  Sage persona scaffold (SAGE_BASE_PERSONA in task-prompts-sage.ts).
+  Voice characteristics, "what you're NOT" boundaries, factual-accuracy
+  cite-your-source rule, and sign-off style now prepend every Sage task
+  prompt. Production Rixey Sage had been running this scaffold for
+  months with zero tone-related escalations; bringing the warmth +
+  reassurance + non-human framing into the bloom-house Sage default.
+  Venue-specific facts (property, rates, policies) still come from
+  per-venue config + KB; this scaffold is the universal floor.
 - **v1.0** (2026-05-01) — Initial versioning baseline. 4-layer assembly
   with KB context + intelligence-context block. Tier-1 content (couple
   PII, family context).

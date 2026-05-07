@@ -22,7 +22,7 @@ import {
 import { buildSageIntelligenceContext } from './sage-intelligence'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
-export const BRAIN_PROMPT_VERSION = 'sage-brain.prompt.v1.1'
+export const BRAIN_PROMPT_VERSION = 'sage-brain.prompt.v1.2'
 import { searchKnowledgeBase } from './knowledge-base'
 import { createServiceClient } from '@/lib/supabase/service'
 import { createNotification } from '@/lib/services/admin-notifications'
