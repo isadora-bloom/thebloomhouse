@@ -27,7 +27,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 // ---------------------------------------------------------------------------
 
 export async function GET(request: NextRequest) {
-  const plan = await requirePlan(request, 'solo')
+  const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()
@@ -130,7 +130,7 @@ export async function GET(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
-  const plan = await requirePlan(request, 'solo')
+  const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()
@@ -153,7 +153,7 @@ export async function POST(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export async function PATCH(request: NextRequest) {
-  const plan = await requirePlan(request, 'solo')
+  const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

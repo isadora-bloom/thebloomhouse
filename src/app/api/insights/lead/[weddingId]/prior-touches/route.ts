@@ -29,7 +29,7 @@ export async function GET(
   { params }: { params: Promise<{ weddingId: string }> },
 ) {
   // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
-  const plan = await requirePlan(request, 'solo')
+  const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const { weddingId } = await params

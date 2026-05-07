@@ -30,7 +30,7 @@ const NLQ_RATE_WINDOW_SEC = 15 * 60 // 15 minutes
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
-  const plan = await requirePlan(request, 'solo')
+  const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()
@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export async function PATCH(request: NextRequest) {
-  const plan = await requirePlan(request, 'solo')
+  const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

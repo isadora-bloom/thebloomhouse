@@ -52,7 +52,7 @@ export async function GET(_request: NextRequest) {
     const base = {
       venueId: venue.id as string,
       venueName: venue.name as string,
-      tier: (venue.plan_tier as string) || 'starter',
+      tier: (venue.plan_tier as string) || 'pre_opening',
       hasSubscription: false,
       hasCustomer: Boolean(venue.stripe_customer_id),
       status: null as string | null,

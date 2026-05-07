@@ -61,7 +61,7 @@ interface BenchmarkResponse {
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000
 
 export async function GET(req: NextRequest) {
-  const plan = await requirePlan(req, 'solo')
+  const plan = await requirePlan(req, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

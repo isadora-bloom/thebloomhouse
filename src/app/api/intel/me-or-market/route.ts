@@ -15,7 +15,7 @@ import { computeMeOrMarket } from '@/lib/services/me-or-market'
 // ---------------------------------------------------------------------------
 
 export async function GET(req: NextRequest) {
-  const plan = await requirePlan(req, 'solo')
+  const plan = await requirePlan(req, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

@@ -105,7 +105,7 @@ function healthBg(score: number): string {
 
 export default function BenchmarkPageWrapper() {
   return (
-    <UpgradeGate requiredTier="solo" featureName="Venue Benchmark">
+    <UpgradeGate requiredTier="pre_opening" featureName="Venue Benchmark">
       <BenchmarkInner />
     </UpgradeGate>
   )

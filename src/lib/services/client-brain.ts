@@ -496,7 +496,9 @@ export async function generateClientDraft(
         correlationId: correlationId ?? null,
         actor: 'system',
         event_type: 'kb_echo_detected',
-        outcome: 'fail',
+        // Soft signal, not a failure. 'ok' keeps it out of error
+        // dashboards that filter on outcome='fail' for real failures.
+        outcome: 'ok',
         data: {
           longest_match_words: echo.longestMatchWords,
           kb_entry_index: echo.kbEntryIndex,

@@ -492,7 +492,7 @@ function BillingPageInner() {
             Other plans
           </h3>
           <div className="space-y-3">
-            {PLANS.filter((p) => p.tier !== (sub?.tier ?? 'starter')).map((p) => (
+            {PLANS.filter((p) => p.tier !== (sub?.tier ?? 'pre_opening')).map((p) => (
               <div
                 key={p.tier}
                 className="flex items-center justify-between rounded-lg border border-sage-100 px-4 py-3"
@@ -504,7 +504,11 @@ function BillingPageInner() {
                 <div className="flex items-center gap-4">
                   <div className="text-right">
                     <div className="text-sm font-semibold text-sage-900">
-                      {p.monthly === 0 ? 'Free' : `$${p.monthly}/mo`}
+                      {p.tier === 'enterprise'
+                        ? 'Custom'
+                        : p.monthly === 0
+                        ? '—'
+                        : `$${p.monthly}/mo`}
                     </div>
                     {p.annual > 0 && (
                       <div className="text-xs text-sage-500">

@@ -159,7 +159,7 @@ export default async function BillingSuccessPage({ searchParams }: PageProps) {
     .select('plan_tier, name')
     .eq('id', venueId)
     .maybeSingle()
-  const currentTier = (venue?.plan_tier as PlanTier | undefined) ?? 'starter'
+  const currentTier = (venue?.plan_tier as PlanTier | undefined) ?? 'pre_opening'
   const syncPending = stripeTier !== null && currentTier !== stripeTier
 
   const subscription =

@@ -35,7 +35,12 @@ interface VenueRow {
   name: string
   slug: string
   status: 'active' | 'trial' | 'suspended' | 'churned'
-  plan_tier: 'starter' | 'intelligence' | 'enterprise'
+  // Pricing v2 (2026-05-06): 5-tier capacity-gated model.
+  // See src/lib/auth/plan-tiers.ts. Round-5 audit caught this row
+  // typed against the legacy starter|intelligence|enterprise union;
+  // the planBadge default-branch was rendering raw enum strings for
+  // every new tier (pre_opening / solo / growth / multi).
+  plan_tier: import('@/lib/auth/plan-tiers').PlanTier
   org_id: string | null
   created_at: string
   // Aggregated stats (computed client-side)
@@ -69,12 +74,16 @@ function statusBadge(status: VenueRow['status']) {
 
 function planBadge(tier: VenueRow['plan_tier']) {
   switch (tier) {
-    case 'starter':
-      return { bg: 'bg-sage-100', text: 'text-sage-700', label: 'Starter' }
-    case 'intelligence':
-      return { bg: 'bg-teal-100', text: 'text-teal-700', label: 'Intelligence' }
+    case 'pre_opening':
+      return { bg: 'bg-sage-100', text: 'text-sage-700', label: 'Pre-Opening' }
+    case 'solo':
+      return { bg: 'bg-teal-100', text: 'text-teal-700', label: 'Solo' }
+    case 'growth':
+      return { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Growth' }
+    case 'multi':
+      return { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Multi' }
     case 'enterprise':
-      return { bg: 'bg-gold-100 bg-amber-100', text: 'text-amber-700', label: 'Enterprise' }
+      return { bg: 'bg-amber-100', text: 'text-amber-700', label: 'Enterprise' }
     default:
       return { bg: 'bg-sage-100', text: 'text-sage-700', label: tier }
   }
@@ -152,7 +161,7 @@ export default function SuperAdminPage() {
       name: v.name,
       slug: v.slug,
       status: v.status || 'trial',
-      plan_tier: v.plan_tier || 'starter',
+      plan_tier: v.plan_tier || 'pre_opening',
       org_id: v.org_id,
       created_at: v.created_at,
       inquiries_this_month: venueStats[v.id]?.inquiries ?? 0,

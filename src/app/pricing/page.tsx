@@ -177,14 +177,23 @@ function PricingPageInner() {
                 <div className="mb-6">
                   <div className="flex items-baseline gap-1">
                     <span className="text-4xl font-bold text-sage-900">
-                      {isContact && plan.tier === 'enterprise'
+                      {plan.tier === 'enterprise'
                         ? 'Custom'
+                        : cycle === 'annual' && plan.annual === 0
+                        ? `$${plan.monthly.toLocaleString()}`
                         : `$${price.toLocaleString()}`}
                     </span>
-                    {!(isContact && plan.tier === 'enterprise') && (
-                      <span className="text-sage-500 text-sm">{priceLabel}</span>
+                    {plan.tier !== 'enterprise' && (
+                      <span className="text-sage-500 text-sm">
+                        {cycle === 'annual' && plan.annual === 0 ? '/mo' : priceLabel}
+                      </span>
                     )}
                   </div>
+                  {cycle === 'annual' && plan.annual === 0 && plan.tier !== 'enterprise' && (
+                    <p className="text-xs text-sage-500 mt-1">
+                      Monthly only — annual prepay not available on this tier.
+                    </p>
+                  )}
                   {!isContact && cycle === 'annual' && plan.annual > 0 && (
                     <p className="text-xs text-sage-500 mt-1">
                       ${(plan.annual / 12).toFixed(0)} per month, billed annually

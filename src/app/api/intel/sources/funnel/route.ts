@@ -33,7 +33,7 @@ import {
  * Gated behind the `intelligence` plan tier — same as the rest of /intel.
  */
 export async function GET(request: NextRequest) {
-  const plan = await requirePlan(request, 'solo')
+  const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

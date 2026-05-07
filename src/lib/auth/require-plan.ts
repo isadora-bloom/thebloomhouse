@@ -227,24 +227,42 @@ export async function requirePlan(
       // request so the expiry is enforced at day-boundary precision.
       return { ok: true, isDemo: false }
     }
-    // Grace period expired — treat as solo (the new pricing-v2 baseline) for
-    // access purposes. Fall through to the standard tier check below with
-    // effectiveTier = 'solo'.
-    const effectiveTier: PlanTier = 'solo'
-    if (tierMeetsMinimum(effectiveTier, minTier)) {
-      return { ok: true, isDemo: false }
-    }
+    // Grace period expired. Pricing v2 has no free tier, so the prior
+    // "treat as solo" fallback would always pass the new pre_opening
+    // minimum gate — round-5 audit caught this as a free-platform hole.
+    // Fail closed instead: the venue must update payment before
+    // accessing gated features. Returns 402 so the client can route
+    // to /settings/billing rather than show a generic 403.
     void recordCounter('plan_gate_block', {
       venueId: resolvedVenueId,
       dimension: { tier: minTier, route, reason: 'past_due_grace_expired', current_tier: currentTier },
     })
-    const pastDueDisplay = TIER_DISPLAY[minTier]
     return {
       ok: false,
-      status: 403,
-      message: `Upgrade to ${pastDueDisplay.name} to access this feature`,
+      status: 402,
+      message: 'Your subscription is past due. Update your payment method to restore access.',
       requiredTier: minTier,
-      currentTier: effectiveTier,
+      currentTier,
+    }
+  }
+
+  // Canceled subscriptions (Round-5 audit fix). The webhook stamps
+  // subscription_status='canceled' on customer.subscription.deleted but
+  // also sets plan_tier='solo' (the placeholder baseline). Without this
+  // explicit branch, a canceled venue keeps full platform access for
+  // free until they re-subscribe. Fail closed; the venue can still hit
+  // /settings/billing (which is gated separately) to re-subscribe.
+  if (venue?.subscription_status === 'canceled') {
+    void recordCounter('plan_gate_block', {
+      venueId: resolvedVenueId,
+      dimension: { tier: minTier, route, reason: 'subscription_canceled', current_tier: currentTier },
+    })
+    return {
+      ok: false,
+      status: 402,
+      message: 'Your subscription has ended. Subscribe to restore access.',
+      requiredTier: minTier,
+      currentTier,
     }
   }
 

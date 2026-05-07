@@ -14,7 +14,7 @@ import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
  * single venue's slice.
  */
 export async function GET(request: NextRequest) {
-  const plan = await requirePlan(request, 'solo')
+  const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

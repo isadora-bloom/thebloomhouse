@@ -66,14 +66,17 @@ export function InlineInsightBanner({ surface, category, className }: InlineInsi
   const [insight, setInsight] = useState<InsightRow | null>(null)
   const [dismissed, setDismissed] = useState(false)
   // Insights live behind a paid tier server-side (requirePlan in
-  // /api/intel/insights). Gate the banner by the same check client-side so
-  // pre-opening venues don't repeatedly hit a 403 — visible as scary-looking
-  // network errors on pages like the Agent Inbox where the banner is
-  // embedded by default. When plan_tier is still loading, hold off.
-  // Pricing v2 (2026-05-06): every paid tier ('solo' and up) gets all
-  // intelligence features. 'pre_opening' is the only tier blocked.
+  // /api/intel/insights). Gate the banner by the same check client-side
+  // so unauthed sessions don't hit a 403. When plan_tier is still
+  // loading, hold off.
+  //
+  // Pricing v2 (2026-05-06): every tier — including 'pre_opening' —
+  // gets every feature. Round-5 audit caught the prior 'solo' gate as
+  // a regression (sold the pre_opening venue Full Bloom Platform but
+  // 403'd them on intel). 'pre_opening' is now the minimum because
+  // it's the lowest paid PlanTier rank.
   const { meetsMinimum, loading: planLoading } = usePlanTier()
-  const hasIntel = meetsMinimum('solo')
+  const hasIntel = meetsMinimum('pre_opening')
 
   useEffect(() => {
     if (planLoading) return

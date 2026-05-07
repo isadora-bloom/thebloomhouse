@@ -45,7 +45,7 @@ import { createServiceClient } from '@/lib/supabase/service'
  * Gated behind the `intelligence` plan tier.
  */
 export async function GET(request: NextRequest) {
-  const plan = await requirePlan(request, 'solo')
+  const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

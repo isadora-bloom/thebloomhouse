@@ -106,7 +106,7 @@ function truncate(s: string | null | undefined, max = 100): string {
 
 export default function AnomaliesPage() {
   return (
-    <UpgradeGate requiredTier="solo" featureName="Anomaly alerts">
+    <UpgradeGate requiredTier="pre_opening" featureName="Anomaly alerts">
       <AnomaliesInner />
     </UpgradeGate>
   )

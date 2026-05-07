@@ -24,7 +24,7 @@ const DISMISS_TTL_MS = 90 * 86_400_000
 
 export async function GET(request: NextRequest) {
   // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
-  const plan = await requirePlan(request, 'solo')
+  const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()
@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
-  const plan = await requirePlan(request, 'solo')
+  const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()
@@ -110,7 +110,7 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
-  const plan = await requirePlan(request, 'solo')
+  const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

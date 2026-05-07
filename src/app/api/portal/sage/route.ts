@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
     // starter cannot expose Sage to their couples. Demo cookie path
     // bypasses inside requirePlan. requirePlan resolves the venueId
     // from user_profiles which works for the couple role too.
-    const plan = await requirePlan(request, 'solo')
+    const plan = await requirePlan(request, 'pre_opening')
     if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
     const body = await request.json()

@@ -33,7 +33,7 @@ import { gateForBrainCall, nextUtcMidnightIso } from '@/lib/services/cost-ceilin
 import { redactError } from '@/lib/observability/redact'
 
 export async function GET(req: NextRequest) {
-  const plan = await requirePlan(req, 'solo')
+  const plan = await requirePlan(req, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()
