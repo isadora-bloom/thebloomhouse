@@ -148,19 +148,35 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
   )
   const sections = buildCoupleSidebarSections(base)
 
-  // Compute Final Review badge: show when wedding is within 6 weeks (42 days)
-  const finalReviewBadge = (() => {
-    if (!weddingDate) return undefined
-    const daysUntil = Math.ceil(
-      (new Date(weddingDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
-    )
-    if (daysUntil <= 42 && daysUntil > 0) return `${daysUntil}d`
-    return undefined
+  // Days-until-wedding shared by Final Review badge + post-wedding
+  // section gating. Sarah-portal Tier-B #62: pre-fix the "After Your
+  // Wedding" section was visible for every couple, including those
+  // 14 months out. Now hide it until the wedding has passed.
+  const daysUntilWedding = (() => {
+    if (!weddingDate) return null
+    const ms = new Date(weddingDate).getTime() - Date.now()
+    if (Number.isNaN(ms)) return null
+    return Math.ceil(ms / (1000 * 60 * 60 * 24))
   })()
+
+  // Final Review badge: show when wedding is within 6 weeks (42 days)
+  const finalReviewBadge =
+    daysUntilWedding !== null && daysUntilWedding <= 42 && daysUntilWedding > 0
+      ? `${daysUntilWedding}d`
+      : undefined
+
+  // Filter out post-wedding sections until they're useful. The "After
+  // Your Wedding" section becomes visible once the wedding has passed
+  // (daysUntilWedding <= 0). Pre-wedding it's just one Day-of Memories
+  // link sitting in the sidebar with nothing to do.
+  const visibleSections =
+    daysUntilWedding !== null && daysUntilWedding > 0
+      ? sections.filter((s) => s.title !== 'After Your Wedding')
+      : sections
 
   // Inject badge into Final Review nav item
   if (finalReviewBadge) {
-    for (const section of sections) {
+    for (const section of visibleSections) {
       for (const item of section.items) {
         if (item.href.endsWith('/final-review')) {
           item.badge = finalReviewBadge
@@ -185,7 +201,7 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
   const nav = (
     <nav className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto py-4 px-3 space-y-4">
-        {sections.map((section) => {
+        {visibleSections.map((section) => {
           const isCollapsed = collapsedSections.has(section.title)
           const hasActiveItem = section.items.some((item) => isActive(item.href))
 

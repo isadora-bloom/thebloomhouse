@@ -36,7 +36,20 @@ export function CoupleTopBar({
   clientCode,
 }: CoupleTopBarProps) {
   const pathname = usePathname()
-  const { weddingId, aiName } = useCoupleContext()
+  const { weddingId, aiName, weddingDate } = useCoupleContext()
+  // Sarah-portal Tier-B #62: print buttons are only useful in the
+  // final 42 days (a couple 14 months out doesn't even have a
+  // timeline to print). Hide them until the couple is within the
+  // window. The whole-page print icon stays visible since the
+  // browser's "print this page" works for any page.
+  const daysUntilWedding = (() => {
+    if (!weddingDate) return null
+    const ms = new Date(weddingDate).getTime() - Date.now()
+    if (Number.isNaN(ms)) return null
+    return Math.ceil(ms / (1000 * 60 * 60 * 24))
+  })()
+  const showDayOfPackageButton =
+    daysUntilWedding !== null && daysUntilWedding <= 42 && daysUntilWedding > -7
   const sageHref = `${base}/chat`
   const dashHref = base
 
@@ -123,8 +136,11 @@ export function CoupleTopBar({
             <span className="hidden sm:inline">Dashboard</span>
           </Link>
 
-          {/* 3. Print Day-of Package */}
-          {weddingId && (
+          {/* 3. Print Day-of Package — gated to final 42 days +
+              first week post-wedding. Pre-fix this rendered for every
+              couple regardless of wedding date; Sarah's audit flagged
+              it as premature noise 14 months out. */}
+          {weddingId && showDayOfPackageButton && (
             <Link
               href={`/portal/weddings/${weddingId}/print`}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors whitespace-nowrap"

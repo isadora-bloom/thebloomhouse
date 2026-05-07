@@ -21,6 +21,13 @@ export interface CoupleContext {
    * defaults to an empty string when the venue lookup hasn't resolved yet.
    */
   venueName: string
+  /**
+   * Wedding date as ISO date string (YYYY-MM-DD) or null if not yet
+   * set. Surfaced so visibility-gated UI (e.g. day-of print buttons,
+   * 42-day final-review badge, post-wedding affordances) can avoid
+   * rendering for couples who are >42 days out, per Sarah's audit.
+   */
+  weddingDate: string | null
   loading: boolean
   isDemo: boolean
 }
@@ -51,6 +58,7 @@ export function useCoupleContext(): CoupleContext {
   const [weddingId, setWeddingId] = useState<string | null>(initialDemo ? DEMO_WEDDING_ID : null)
   const [aiName, setAiName] = useState<string>(DEFAULT_AI_NAME)
   const [venueName, setVenueName] = useState<string>('')
+  const [weddingDate, setWeddingDate] = useState<string | null>(null)
   const [loading, setLoading] = useState(!initialDemo)
   const [isDemo, setIsDemo] = useState(initialDemo)
 
@@ -103,6 +111,14 @@ export function useCoupleContext(): CoupleContext {
 
         if (person?.wedding_id) {
           setWeddingId(person.wedding_id as string)
+          // Fetch the wedding_date for visibility-gated UI. Best-
+          // effort — falls through to null on missing row.
+          const { data: w } = await supabase
+            .from('weddings')
+            .select('wedding_date')
+            .eq('id', person.wedding_id as string)
+            .maybeSingle()
+          if (w?.wedding_date) setWeddingDate(w.wedding_date as string)
         }
       }
 
@@ -123,5 +139,5 @@ export function useCoupleContext(): CoupleContext {
     }
   }, [isDemo, venueId, weddingId])
 
-  return { slug, venueId, weddingId, aiName, venueName, loading, isDemo }
+  return { slug, venueId, weddingId, aiName, venueName, weddingDate, loading, isDemo }
 }
