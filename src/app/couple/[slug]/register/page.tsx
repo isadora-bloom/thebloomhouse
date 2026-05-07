@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
 import { Heart, Loader2 } from 'lucide-react'
 
 interface VenueBranding {
@@ -121,8 +122,8 @@ export default function CoupleRegisterPage() {
         return
       }
 
-      // Clear any demo cookie
-      document.cookie = 'bloom_demo=; path=/; max-age=0'
+      // Clear any demo cookies (middleware also clears server-side).
+      clearDemoCookiesClientSide()
 
       // Redirect to the couple portal
       router.push(`/couple/${slug}`)

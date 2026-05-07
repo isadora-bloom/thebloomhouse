@@ -159,14 +159,24 @@ export async function middleware(request: NextRequest) {
   }
   if (isDemo && user) {
     const clear = { path: '/', maxAge: 0 } as const
+    // Clear ALL demo cookies, both shapes. Pre-2026-05-08 only the
+    // legacy three were cleared; bloom_demo_token (HMAC-signed) and
+    // bloom_demo_hint survived and getPlatformAuth was still seeing
+    // a valid signed token → demo wins → coordinator's real venue data
+    // gets crossed with the demo identity. Clearing all four resolves
+    // to "auth wins" cleanly.
     response.cookies.set('bloom_demo', '', clear)
     response.cookies.set('bloom_scope', '', clear)
     response.cookies.set('bloom_venue', '', clear)
+    response.cookies.set('bloom_demo_token', '', clear)
+    response.cookies.set('bloom_demo_hint', '', clear)
     // Also clear from the in-flight request so downstream server components
     // in this same request don't observe the stale demo cookie.
     request.cookies.delete('bloom_demo')
     request.cookies.delete('bloom_scope')
     request.cookies.delete('bloom_venue')
+    request.cookies.delete('bloom_demo_token')
+    request.cookies.delete('bloom_demo_hint')
   }
 
   // -----------------------------------------------------------------------

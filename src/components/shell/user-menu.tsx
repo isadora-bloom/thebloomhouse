@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
 import { Settings, LogOut } from 'lucide-react'
 
 interface UserData {
@@ -111,11 +112,7 @@ export function UserMenu({ compact = false }: UserMenuProps) {
   }, [])
 
   async function handleSignOut() {
-    // Clear demo cookies if present
-    document.cookie = 'bloom_demo=; path=/; max-age=0'
-    document.cookie = 'bloom_venue=; path=/; max-age=0'
-    document.cookie = 'bloom_scope=; path=/; max-age=0'
-
+    clearDemoCookiesClientSide()
     const supabase = createClient()
     await supabase.auth.signOut()
     router.push('/login')

@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
 import { User, Lock, Mail, ArrowRight, Heart } from 'lucide-react'
 import Link from 'next/link'
 
@@ -83,9 +84,9 @@ export default function SignupPage() {
         return
       }
 
-      // 3. Clear demo cookies on real sign-up
-      document.cookie = 'bloom_demo=; path=/; max-age=0'
-      document.cookie = 'bloom_scope=; path=/; max-age=0'
+      // 3. Clear demo cookies on real sign-up (middleware also clears
+      // server-side in the auth-wins branch; this is belt-and-braces).
+      clearDemoCookiesClientSide()
 
       // 4. Redirect coordinators to /setup (company setup wizard), couples to home
       if (data.needsSetup) {

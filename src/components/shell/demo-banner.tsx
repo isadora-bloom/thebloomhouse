@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation'
 import { Eye, ArrowRight, X } from 'lucide-react'
+import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
 
 /**
  * Fixed banner at the very top of the page during demo mode.
@@ -12,9 +13,7 @@ export function DemoBanner() {
   const router = useRouter()
 
   function exitDemo() {
-    document.cookie = 'bloom_demo=; path=/; max-age=0'
-    document.cookie = 'bloom_venue=; path=/; max-age=0'
-    document.cookie = 'bloom_scope=; path=/; max-age=0'
+    clearDemoCookiesClientSide()
     router.push('/')
   }
 

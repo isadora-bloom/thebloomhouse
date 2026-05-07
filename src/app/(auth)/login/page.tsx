@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -30,8 +31,9 @@ export default function LoginPage() {
       return
     }
 
-    // Clear demo cookies on real sign-in
-    document.cookie = 'bloom_demo=; path=/; max-age=0'
+    // Clear demo cookies on real sign-in (middleware also clears them
+    // server-side in the auth-wins branch; this is belt-and-braces).
+    clearDemoCookiesClientSide()
 
     router.push('/')
   }

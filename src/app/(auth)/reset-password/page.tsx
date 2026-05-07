@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
 
 export default function ResetPasswordPage() {
   const router = useRouter()
@@ -68,8 +69,9 @@ export default function ResetPasswordPage() {
       return
     }
 
-    // Clear demo cookie so a real session takes over
-    document.cookie = 'bloom_demo=; path=/; max-age=0'
+    // Clear demo cookies so a real session takes over (middleware also
+    // clears server-side; this is belt-and-braces).
+    clearDemoCookiesClientSide()
 
     router.push('/')
   }

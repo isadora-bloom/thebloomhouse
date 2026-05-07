@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { LogOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
 
 interface CoupleUserMenuProps {
   /** Display name shown in the dropdown header, e.g. "Chloe & Ryan" */
@@ -40,10 +41,7 @@ export function CoupleUserMenu({
   }, [])
 
   function handleSignOut() {
-    // Clear demo cookies
-    document.cookie = 'bloom_demo=; path=/; max-age=0'
-    document.cookie = 'bloom_venue=; path=/; max-age=0'
-    document.cookie = 'bloom_scope=; path=/; max-age=0'
+    clearDemoCookiesClientSide()
     setOpen(false)
     router.push('/demo')
   }

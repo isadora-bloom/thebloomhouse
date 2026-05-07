@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
 import {
   Loader2,
   CheckCircle2,
@@ -199,7 +200,8 @@ export default function JoinPage() {
           companyName: invitation.organisations?.name || 'Company',
         }
         document.cookie = `bloom_scope=${encodeURIComponent(JSON.stringify(scopeData))}; path=/; max-age=${60 * 60 * 24 * 365}`
-        document.cookie = `bloom_demo=; path=/; max-age=0`
+        // Clear any demo cookies on join (middleware also clears server-side).
+        clearDemoCookiesClientSide()
       }
 
       setAccepted(true)
