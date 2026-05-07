@@ -33,6 +33,15 @@ interface VenueLocation {
   day_of_contact_phone: string | null
 }
 
+interface OwnerPresence {
+  // Couple-facing presence fields (mig 222) live on venue_config, not venues.
+  // Owner NAME is read from venue_ai_config.owner_name elsewhere — this form
+  // edits the note + photo only since name editing already lives on the AI
+  // personality settings page.
+  owner_note_to_couples: string | null
+  owner_photo_url: string | null
+}
+
 const EMPTY: VenueLocation = {
   address_line1: '',
   city: '',
@@ -46,10 +55,16 @@ const EMPTY: VenueLocation = {
   day_of_contact_phone: '',
 }
 
+const EMPTY_OWNER: OwnerPresence = {
+  owner_note_to_couples: '',
+  owner_photo_url: '',
+}
+
 export default function VenueInfoSettingsPage() {
   const { venueId, level: scopeLevel } = useScope()
   const supabase = createClient()
   const [data, setData] = useState<VenueLocation>(EMPTY)
+  const [owner, setOwner] = useState<OwnerPresence>(EMPTY_OWNER)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -59,16 +74,25 @@ export default function VenueInfoSettingsPage() {
     if (!venueId) return
     let cancelled = false
     async function load() {
-      const { data: row, error: loadErr } = await supabase
-        .from('venues')
-        .select(
-          'address_line1, city, state, zip, latitude, longitude, parking_instructions, entry_instructions, day_of_contact_name, day_of_contact_phone',
-        )
-        .eq('id', venueId)
-        .maybeSingle()
+      const [venueRes, configRes] = await Promise.all([
+        supabase
+          .from('venues')
+          .select(
+            'address_line1, city, state, zip, latitude, longitude, parking_instructions, entry_instructions, day_of_contact_name, day_of_contact_phone',
+          )
+          .eq('id', venueId)
+          .maybeSingle(),
+        supabase
+          .from('venue_config')
+          .select('owner_note_to_couples, owner_photo_url')
+          .eq('venue_id', venueId)
+          .maybeSingle(),
+      ])
       if (cancelled) return
-      if (loadErr) setError(loadErr.message)
-      setData((row as VenueLocation | null) ?? EMPTY)
+      if (venueRes.error) setError(venueRes.error.message)
+      else if (configRes.error) setError(configRes.error.message)
+      setData((venueRes.data as VenueLocation | null) ?? EMPTY)
+      setOwner((configRes.data as OwnerPresence | null) ?? EMPTY_OWNER)
       setLoading(false)
     }
     load()
@@ -82,7 +106,7 @@ export default function VenueInfoSettingsPage() {
     setSaving(true)
     setSaved(false)
     setError(null)
-    const payload = {
+    const venuesPayload = {
       address_line1: data.address_line1 || null,
       city: data.city || null,
       state: data.state || null,
@@ -94,13 +118,25 @@ export default function VenueInfoSettingsPage() {
       day_of_contact_name: data.day_of_contact_name || null,
       day_of_contact_phone: data.day_of_contact_phone || null,
     }
-    const { error: saveErr } = await supabase
-      .from('venues')
-      .update(payload)
-      .eq('id', venueId)
+    const configPayload = {
+      owner_note_to_couples: owner.owner_note_to_couples || null,
+      owner_photo_url: owner.owner_photo_url || null,
+    }
+    // Two parallel updates — venue_config and venues are independent
+    // tables. Promise.all so the user sees one success/failure decision
+    // rather than a half-saved state if both round-trips were sequential
+    // and the second failed mid-flight.
+    const [venuesRes, configRes] = await Promise.all([
+      supabase.from('venues').update(venuesPayload).eq('id', venueId),
+      supabase.from('venue_config').update(configPayload).eq('venue_id', venueId),
+    ])
     setSaving(false)
-    if (saveErr) {
-      setError(saveErr.message)
+    if (venuesRes.error) {
+      setError(venuesRes.error.message)
+      return
+    }
+    if (configRes.error) {
+      setError(configRes.error.message)
       return
     }
     setSaved(true)
@@ -227,6 +263,38 @@ export default function VenueInfoSettingsPage() {
           value={data.entry_instructions ?? ''}
           onChange={(e) => set('entry_instructions', e.target.value)}
         />
+      </section>
+
+      <section className="mb-8 rounded-xl border border-sage-100 bg-white p-6">
+        <h2 className="font-medium text-sage-900 mb-2">A note from the owner</h2>
+        <p className="text-xs text-sage-500 mb-4 leading-relaxed">
+          Renders as a warm card on the couple dashboard. A short personal
+          welcome — what to expect, how often you check in, what they should
+          come to you with — goes a long way. The card uses the owner name
+          you set on Settings → Personality.
+        </p>
+        <textarea
+          className={inputCls}
+          rows={5}
+          placeholder="e.g. Hi! I'm Isadora, the owner. I'll be checking in every couple of weeks to see how planning is going. Anything you need that Sage can't help with — just message me directly. We can't wait to host you."
+          value={owner.owner_note_to_couples ?? ''}
+          onChange={(e) =>
+            setOwner({ ...owner, owner_note_to_couples: e.target.value })
+          }
+        />
+        <div className="mt-3">
+          <input
+            className={inputCls}
+            placeholder="Owner photo URL (optional, square-ish recommended)"
+            value={owner.owner_photo_url ?? ''}
+            onChange={(e) =>
+              setOwner({ ...owner, owner_photo_url: e.target.value })
+            }
+          />
+          <p className="text-xs text-sage-500 mt-1">
+            Public URL. The card renders text-only when this is blank.
+          </p>
+        </div>
       </section>
 
       <section className="mb-8 rounded-xl border border-sage-100 bg-white p-6">

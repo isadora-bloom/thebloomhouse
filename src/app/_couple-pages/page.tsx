@@ -62,6 +62,12 @@ interface DashboardData {
   guestListCount: number
   contractsCount: number
   bookedVendorsCount: number
+  // Tier-B #50/#51 — owner presence card. ownerNote + ownerPhotoUrl
+  // populated from venue_config (mig 222); ownerName from venue_ai_config.
+  // All optional — card renders only when ownerNote is non-empty.
+  ownerName: string | null
+  ownerNote: string | null
+  ownerPhotoUrl: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +219,7 @@ function timeAgo(dateStr: string): string {
 const ALERT_PRIORITY: AlertId[] = ['photo', 'budget', 'contracts', 'vendors', 'guests', 'checklist']
 
 export default function CoupleDashboard() {
-  const { slug, weddingId, aiName, loading: contextLoading } = useCoupleContext()
+  const { slug, weddingId, venueId, aiName, loading: contextLoading } = useCoupleContext()
   const SLUG = slug
   const WEDDING_ID = weddingId
   const [data, setData] = useState<DashboardData | null>(null)
@@ -281,6 +287,7 @@ export default function CoupleDashboard() {
   useEffect(() => {
     if (contextLoading || !WEDDING_ID) return
     const wid: string = WEDDING_ID
+    const vid: string | null = venueId
     async function loadDashboard() {
       const supabase = createClient()
 
@@ -362,6 +369,32 @@ export default function CoupleDashboard() {
             .select('id', { count: 'exact', head: true })
             .eq('wedding_id', wid),
         ])
+
+        // Owner presence (Tier-B #50/#51). Fetched separately because the
+        // venue-scoped reads happen alongside the main wedding-scoped fan-out.
+        // Fail-soft: any error returns null fields and the card simply
+        // doesn't render. No PII concerns — these are coordinator-curated
+        // venue copy, not couple data.
+        let ownerName: string | null = null
+        let ownerNote: string | null = null
+        let ownerPhotoUrl: string | null = null
+        if (vid) {
+          const [aiConfigRes, configRes] = await Promise.all([
+            supabase
+              .from('venue_ai_config')
+              .select('owner_name')
+              .eq('venue_id', vid)
+              .maybeSingle(),
+            supabase
+              .from('venue_config')
+              .select('owner_note_to_couples, owner_photo_url')
+              .eq('venue_id', vid)
+              .maybeSingle(),
+          ])
+          ownerName = (aiConfigRes.data?.owner_name as string | undefined) ?? null
+          ownerNote = (configRes.data?.owner_note_to_couples as string | undefined) ?? null
+          ownerPhotoUrl = (configRes.data?.owner_photo_url as string | undefined) ?? null
+        }
 
         const people = (wedding.people || []) as Array<{
           first_name: string
@@ -448,6 +481,9 @@ export default function CoupleDashboard() {
           guestListCount: guestList.length,
           contractsCount: contractsRes.count ?? 0,
           bookedVendorsCount: bookedVendorsRes.count ?? 0,
+          ownerName,
+          ownerNote,
+          ownerPhotoUrl,
         })
       } catch (err) {
         console.error('Failed to load couple dashboard:', err)
@@ -457,7 +493,7 @@ export default function CoupleDashboard() {
     }
 
     loadDashboard()
-  }, [WEDDING_ID, contextLoading])
+  }, [WEDDING_ID, contextLoading, venueId])
 
   if (loading || contextLoading) {
     return (
@@ -621,6 +657,42 @@ export default function CoupleDashboard() {
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Owner presence card (Tier-B #50/#51).
+          Renders only when the venue owner has populated a note via
+          /settings/venue-info. Photo is optional and falls through to
+          a text-only card. ownerName comes from venue_ai_config so
+          the heading reads with the venue's actual owner. */}
+      {data.ownerNote && (
+        <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 flex gap-4">
+          {data.ownerPhotoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={data.ownerPhotoUrl}
+              alt={data.ownerName ?? 'Venue owner'}
+              className="w-16 h-16 rounded-full object-cover shrink-0"
+            />
+          ) : (
+            <div
+              className="w-16 h-16 rounded-full flex items-center justify-center shrink-0"
+              style={{ backgroundColor: '#7D847115' }}
+            >
+              <Heart
+                className="w-6 h-6"
+                style={{ color: 'var(--couple-primary)' }}
+              />
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-gray-500 mb-1">
+              A note from {data.ownerName ?? 'the team'}
+            </p>
+            <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">
+              {data.ownerNote}
+            </p>
+          </div>
         </div>
       )}
 
