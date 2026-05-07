@@ -44,8 +44,13 @@ export function UserMenu({ compact = false }: UserMenuProps) {
 
   useEffect(() => {
     async function loadUser() {
-      // Demo mode: show a fake profile so the menu (with Sign Out) is always visible
-      const isDemo = document.cookie.split('; ').some((c) => c === 'bloom_demo=true')
+      // Demo mode: show a fake profile so the menu (with Sign Out) is always visible.
+      // Accept both legacy `bloom_demo=true` (middleware /demo/* rewrite path)
+      // and new `bloom_demo_hint=1` (set by /demo Server Action).
+      const cookies = document.cookie.split('; ')
+      const isDemo = cookies.some(
+        (c) => c === 'bloom_demo=true' || c === 'bloom_demo_hint=1',
+      )
       if (isDemo) {
         setUser({
           name: 'Demo User',

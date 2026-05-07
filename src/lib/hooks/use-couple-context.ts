@@ -41,10 +41,29 @@ const DEFAULT_AI_NAME = 'Sage'
  * Synchronously detect demo mode from the document cookie.
  * Used as the initial state so the very first render already has IDs
  * (queries don't fire with null wedding_id on first paint).
+ *
+ * Two cookie shapes both indicate "this is a demo session":
+ *   - bloom_demo=true        : legacy value cookie (set by the
+ *                              /demo/* rewrite path in middleware).
+ *   - bloom_demo_hint=1      : non-HttpOnly hint set by the /demo
+ *                              Server Action that mints the signed
+ *                              bloom_demo_token. Pre-fix this hook
+ *                              only checked the legacy cookie, so
+ *                              visitors entering via the new /demo
+ *                              flow had venueId/weddingId stay null
+ *                              and every couple-portal page hung
+ *                              on its loading spinner.
+ *
+ * The hint cookie is non-HttpOnly because client-side code (this hook,
+ * top-bar demo banner, etc.) needs to know "is this a demo" without
+ * reading the signed token. The hint alone never grants real-data
+ * access — server-side reads still go through anon RLS, which gates
+ * by is_demo=true at the venue level (mig 064).
  */
 function detectDemoSync(): boolean {
   if (typeof document === 'undefined') return false
-  return document.cookie.split('; ').some((c) => c === 'bloom_demo=true')
+  const cookies = document.cookie.split('; ')
+  return cookies.some((c) => c === 'bloom_demo=true' || c === 'bloom_demo_hint=1')
 }
 
 export function useCoupleContext(): CoupleContext {

@@ -34,7 +34,12 @@ export function getVenueIdFromCookie(cookieHeader?: string): string {
   const match = cookies.find((c) => c.startsWith('bloom_venue='))
   if (match) return match.split('=')[1]
 
-  const isDemo = cookies.some((c) => c === 'bloom_demo=true')
+  // Accept both the legacy `bloom_demo=true` cookie (set by middleware
+  // /demo/* rewrite path) AND the new `bloom_demo_hint=1` cookie set by
+  // the /demo Server Action. See lib/services/demo-token.ts for context.
+  const isDemo = cookies.some(
+    (c) => c === 'bloom_demo=true' || c === 'bloom_demo_hint=1',
+  )
   if (isDemo) return DEMO_VENUE_ID
 
   return ''

@@ -29,8 +29,12 @@ export function GearMenu({ scopeLevel = 'venue' }: { scopeLevel?: ScopeLevel } =
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    // Demo mode: treat as org_admin so the gear is visible.
-    if (document.cookie.split('; ').some((c) => c === 'bloom_demo=true')) {
+    // Demo mode: treat as org_admin so the gear is visible. Accept both
+    // the legacy `bloom_demo=true` cookie (set by middleware /demo/*
+    // rewrite path) and the new `bloom_demo_hint=1` cookie set by the
+    // /demo Server Action.
+    const cookies = document.cookie.split('; ')
+    if (cookies.some((c) => c === 'bloom_demo=true' || c === 'bloom_demo_hint=1')) {
       setRole('org_admin')
       return
     }
