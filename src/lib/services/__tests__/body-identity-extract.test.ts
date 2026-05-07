@@ -3,7 +3,7 @@ import {
   extractIdentityFromEmail,
   isRelayAddress,
   isSyntheticAddress,
-} from '../body-identity-extract'
+} from '../identity/body-extract'
 
 // ---------------------------------------------------------------------------
 // Smoke + invariant tests for the universal email-body identity extractor.

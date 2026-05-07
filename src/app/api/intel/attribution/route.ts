@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { recomputeFirstTouch } from '@/lib/services/candidate-resolver'
+import { recomputeFirstTouch } from '@/lib/services/identity/candidate-resolver'
 import { recalculateHeatScore } from '@/lib/services/heat-mapping'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'

@@ -30,7 +30,7 @@ import {
   timeAwareTourKind,
   type SchedulingEvent,
 } from '@/lib/services/scheduling-tool-parsers'
-import { resolveIdentity } from '@/lib/services/identity-resolution'
+import { resolveIdentity } from '@/lib/services/identity/resolution'
 import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
 import { applySignalInference } from '@/lib/services/signal-inference'
 import { createNotification } from '@/lib/services/admin-notifications'
@@ -44,7 +44,7 @@ import {
   extractIdentityFromEmail,
   isRelayAddress,
   isSyntheticAddress,
-} from '@/lib/services/body-identity-extract'
+} from '@/lib/services/identity/body-extract'
 import { createLogger, newCorrelationId } from '@/lib/observability/logger'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
@@ -532,7 +532,7 @@ export async function findOrCreateContact(
   // linked. Fire-and-forget: a matching failure must never break ingest.
   let survivorId = newPerson.id
   try {
-    const { enqueueIdentityMatches } = await import('@/lib/services/identity-enqueue')
+    const { enqueueIdentityMatches } = await import('@/lib/services/identity/enqueue')
     const result = await enqueueIdentityMatches({ supabase, venueId, newPersonId: newPerson.id })
     if (result.autoMergedIntoPersonId && result.autoMergedIntoPersonId !== newPerson.id) {
       survivorId = result.autoMergedIntoPersonId
@@ -1583,7 +1583,7 @@ export async function processIncomingEmail(
       // pipeline. Best-effort, errors logged.
       void (async () => {
         try {
-          const { resolveForWedding } = await import('@/lib/services/candidate-resolver')
+          const { resolveForWedding } = await import('@/lib/services/identity/candidate-resolver')
           if (weddingId) {
             await resolveForWedding({ supabase, weddingId })
           }
@@ -1603,7 +1603,7 @@ export async function processIncomingEmail(
       // resolver's tier-1 ±72h window. Fire-and-forget, never blocks.
       void (async () => {
         try {
-          const { runBacktrackForWedding } = await import('@/lib/services/identity-backtrack')
+          const { runBacktrackForWedding } = await import('@/lib/services/identity/backtrack')
           if (weddingId) {
             await runBacktrackForWedding(supabase, weddingId)
           }
@@ -2020,7 +2020,7 @@ export async function processIncomingEmail(
           // consolidate. Silently skip if personId already matches.
           if (personId && personId !== high.personId) {
             try {
-              const { mergePeople } = await import('@/lib/services/merge-people')
+              const { mergePeople } = await import('@/lib/services/identity/merge-people')
               await mergePeople({
                 supabase, venueId,
                 keepPersonId: high.personId,

@@ -23,8 +23,8 @@ import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
 import { detectPlatformSource } from '../src/lib/services/platform-detectors'
 import { importPlatformSignals } from '../src/lib/services/platform-signals-import'
-import { clusterSignals } from '../src/lib/services/candidate-clusterer'
-import { resolveVenueCandidates } from '../src/lib/services/candidate-resolver'
+import { clusterSignals } from '../src/lib/services/identity/candidate-clusterer'
+import { resolveVenueCandidates } from '../src/lib/services/identity/candidate-resolver'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')

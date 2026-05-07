@@ -11,7 +11,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveIdentity } from '@/lib/services/identity-resolution'
+import { resolveIdentity } from '@/lib/services/identity/resolution'
 
 export interface IdentityCandidate {
   name?: string

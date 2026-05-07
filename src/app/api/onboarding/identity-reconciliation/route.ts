@@ -23,7 +23,7 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import {
   reconcileVenue,
   applyClusterMerge,
-} from '@/lib/services/identity-reconciliation'
+} from '@/lib/services/identity/reconciliation'
 
 export async function GET(request: NextRequest) {
   const auth = await getPlatformAuth()

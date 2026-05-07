@@ -33,7 +33,7 @@ import {
   runBacktrackForVenue,
   applyBacktrackLink,
   rejectBacktrackCandidate,
-} from '@/lib/services/identity-backtrack'
+} from '@/lib/services/identity/backtrack'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 export async function GET(request: NextRequest) {

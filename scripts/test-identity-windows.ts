@@ -19,7 +19,7 @@ import {
   windowsForPlatform,
   type PerPlatformWindow,
   type PerPlatformWindowMap,
-} from '../src/lib/services/identity-windows'
+} from '../src/lib/services/identity/windows'
 
 let pass = 0
 let fail = 0

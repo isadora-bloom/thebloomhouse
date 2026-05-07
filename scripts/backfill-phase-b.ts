@@ -17,8 +17,8 @@
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
-import { reclusterVenue } from '../src/lib/services/candidate-clusterer'
-import { resolveVenueCandidates } from '../src/lib/services/candidate-resolver'
+import { reclusterVenue } from '../src/lib/services/identity/candidate-clusterer'
+import { resolveVenueCandidates } from '../src/lib/services/identity/candidate-resolver'
 import { recalculateHeatScore } from '../src/lib/services/heat-mapping'
 
 const env = Object.fromEntries(

@@ -25,7 +25,7 @@
 //   npx tsx scripts/merge-and-clean-rixey.ts --apply
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { mergePeople } from '../src/lib/services/merge-people'
+import { mergePeople } from '../src/lib/services/identity/merge-people'
 import { parseInviteeName, detectSchedulingEvent } from '../src/lib/services/scheduling-tool-parsers'
 import { recalculateHeatScore } from '../src/lib/services/heat-mapping'
 

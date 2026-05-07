@@ -16,8 +16,8 @@ import {
 import { importIdentityCandidates } from '@/lib/services/tangential-signals-import'
 import { detectPlatformSource } from '@/lib/services/platform-detectors'
 import { importPlatformSignals } from '@/lib/services/platform-signals-import'
-import { clusterSignals } from '@/lib/services/candidate-clusterer'
-import { resolveVenueCandidates } from '@/lib/services/candidate-resolver'
+import { clusterSignals } from '@/lib/services/identity/candidate-clusterer'
+import { resolveVenueCandidates } from '@/lib/services/identity/candidate-resolver'
 import { callAIVision, callAIJson } from '@/lib/ai/client'
 import { createNotification } from '@/lib/services/admin-notifications'
 import {

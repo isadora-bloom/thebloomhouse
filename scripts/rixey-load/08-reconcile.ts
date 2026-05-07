@@ -1,7 +1,7 @@
 // Phase 7: Identity reconciliation. After loading 4 sources, dedupe.
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { reconcileVenue } from '../../src/lib/services/identity-reconciliation'
+import { reconcileVenue } from '../../src/lib/services/identity/reconciliation'
 
 async function main() {
   const env = Object.fromEntries(

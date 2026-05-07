@@ -132,7 +132,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'enqueue_identity_matches') {
-      const { enqueueIdentityMatches } = await import('@/lib/services/identity-enqueue')
+      const { enqueueIdentityMatches } = await import('@/lib/services/identity/enqueue')
       const { createServiceClient } = await import('@/lib/supabase/service')
       const newPersonId = (payload.options as { newPersonId?: string } | undefined)?.newPersonId
       if (!newPersonId) {

@@ -41,12 +41,12 @@ export {
   DEFAULT_PER_PLATFORM_WINDOWS,
   type PerPlatformWindow,
   type PerPlatformWindowMap,
-} from './identity-windows-constants'
+} from './windows-constants'
 import {
   DEFAULT_PER_PLATFORM_WINDOWS,
   type PerPlatformWindow,
   type PerPlatformWindowMap,
-} from './identity-windows-constants'
+} from './windows-constants'
 
 /**
  * Lookup a candidate's window with the right fallback chain:

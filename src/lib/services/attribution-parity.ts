@@ -27,7 +27,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { computeFirstTouchForVenue } from '@/lib/services/identity-cluster-attribution'
+import { computeFirstTouchForVenue } from '@/lib/services/identity/cluster-attribution'
 import { formatSourceLabel } from '@/lib/utils/format-source-label'
 
 export interface VenueParityResult {

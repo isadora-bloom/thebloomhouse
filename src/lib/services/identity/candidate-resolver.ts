@@ -36,18 +36,18 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { normalizeSource } from './normalize-source'
+import { normalizeSource } from '../normalize-source'
 import {
   adjudicateAmbiguousMatch,
   fetchWeddingContext,
   type CandidateContextForAI,
 } from './candidate-ai-adjudicator'
-import { recalculateHeatScore } from './heat-mapping'
+import { recalculateHeatScore } from '../heat-mapping'
 import {
   loadPerPlatformWindows,
   windowsForPlatform,
   type PerPlatformWindowMap,
-} from './identity-windows'
+} from './windows'
 
 // Hard-coded fallbacks. Per-platform overrides flow through
 // loadPerPlatformWindows + windowsForPlatform (T2-D / ARCH-8.5.3).

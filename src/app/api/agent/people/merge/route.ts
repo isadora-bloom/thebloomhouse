@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { mergePeople, undoMerge } from '@/lib/services/merge-people'
+import { mergePeople, undoMerge } from '@/lib/services/identity/merge-people'
 
 /**
  * POST /api/agent/people/merge

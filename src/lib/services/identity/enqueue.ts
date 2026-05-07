@@ -18,8 +18,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveIdentity, personToCandidate } from '@/lib/services/identity-resolution'
-import { mergePeople } from '@/lib/services/merge-people'
+import { resolveIdentity, personToCandidate } from '@/lib/services/identity/resolution'
+import { mergePeople } from '@/lib/services/identity/merge-people'
 
 export interface EnqueueResult {
   autoMergedIntoPersonId: string | null

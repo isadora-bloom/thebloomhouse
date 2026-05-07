@@ -55,7 +55,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { recalculateHeatScore } from './heat-mapping'
+import { recalculateHeatScore } from '../heat-mapping'
 import { recordHistogram } from '@/lib/observability/metrics'
 
 const AUTO_CLUSTER_DAYS = 14

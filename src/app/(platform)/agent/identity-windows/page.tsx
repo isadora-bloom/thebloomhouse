@@ -26,7 +26,7 @@ import {
   DEFAULT_PER_PLATFORM_WINDOWS as DEFAULTS,
   type PerPlatformWindow,
   type PerPlatformWindowMap as WindowMap,
-} from '@/lib/services/identity-windows-constants'
+} from '@/lib/services/identity/windows-constants'
 
 // Display order — most-trafficked sources first, default last.
 const PLATFORM_ORDER = [

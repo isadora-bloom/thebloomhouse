@@ -21,7 +21,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { runBacktrackForVenue } from '../../src/lib/services/identity-backtrack'
+import { runBacktrackForVenue } from '../../src/lib/services/identity/backtrack'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')

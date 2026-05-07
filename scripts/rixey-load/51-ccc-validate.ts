@@ -12,7 +12,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { runBacktrackForVenue } from '../../src/lib/services/identity-backtrack'
+import { runBacktrackForVenue } from '../../src/lib/services/identity/backtrack'
 import { deriveLeadSourceForVenue } from '../../src/lib/services/lead-source-derivation'
 
 const env = Object.fromEntries(

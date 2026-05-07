@@ -15,7 +15,7 @@
  * Run with: npx tsx scripts/test-t1j-bandaids.ts
  */
 
-import { isRelayAddress, isSyntheticAddress } from '../src/lib/services/body-identity-extract'
+import { isRelayAddress, isSyntheticAddress } from '../src/lib/services/identity/body-extract'
 import { checkEscalation } from '../src/config/escalation-keywords'
 
 let pass = 0

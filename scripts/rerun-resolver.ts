@@ -5,7 +5,7 @@
 // Usage: npx tsx scripts/rerun-resolver.ts [--venue <uuid>]
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { resolveVenueCandidates } from '../src/lib/services/candidate-resolver'
+import { resolveVenueCandidates } from '../src/lib/services/identity/candidate-resolver'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')

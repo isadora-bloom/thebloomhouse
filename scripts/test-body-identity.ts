@@ -1,6 +1,6 @@
 // Regression tests for extractIdentityFromEmail. Run with:
 //   npx tsx scripts/test-body-identity.ts
-import { extractIdentityFromEmail } from '../src/lib/services/body-identity-extract'
+import { extractIdentityFromEmail } from '../src/lib/services/identity/body-extract'
 
 interface Case {
   name: string

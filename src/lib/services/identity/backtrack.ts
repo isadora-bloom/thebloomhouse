@@ -59,8 +59,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { recalculateHeatScore } from './heat-mapping'
-import { normalizeSource } from './normalize-source'
+import { recalculateHeatScore } from '../heat-mapping'
+import { normalizeSource } from '../normalize-source'
 
 // ---------------------------------------------------------------------------
 // Constants
