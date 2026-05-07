@@ -13,7 +13,7 @@
 // fragment ("</strong>") instead of the actual datetime. Fixed by
 // widening the block-tag pattern to tolerate attributes.
 
-import { detectSchedulingEvent } from '../src/lib/services/scheduling-tool-parsers'
+import { detectSchedulingEvent } from '../src/lib/services/ingestion/scheduling-tool-parsers'
 
 interface TestCase {
   name: string

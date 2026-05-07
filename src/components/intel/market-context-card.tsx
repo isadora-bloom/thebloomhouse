@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Globe, TrendingUp, Clock, BarChart3, MapPin, Users, DollarSign, CalendarDays, AlertTriangle, Compass } from 'lucide-react'
-import { getEventsInRange, getSeasonalAdvisory, type CalendarEvent } from '@/lib/services/calendar-ingest'
+import { getEventsInRange, getSeasonalAdvisory, type CalendarEvent } from '@/lib/services/ingestion/calendar'
 
 // ---------------------------------------------------------------------------
 // Types matching the API response

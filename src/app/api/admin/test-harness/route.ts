@@ -112,7 +112,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'import_identity_candidates') {
-      const { importIdentityCandidates } = await import('@/lib/services/tangential-signals-import')
+      const { importIdentityCandidates } = await import('@/lib/services/ingestion/tangential-signals')
       const { createServiceClient } = await import('@/lib/supabase/service')
       const opts = payload.options as unknown as {
         candidates: Parameters<typeof importIdentityCandidates>[0]['candidates']

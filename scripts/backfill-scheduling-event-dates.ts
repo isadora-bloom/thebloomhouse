@@ -23,7 +23,7 @@
 //   npx tsx scripts/backfill-scheduling-event-dates.ts --apply --venue <uuid>
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { parseCalendlyDatetime } from '../src/lib/services/scheduling-tool-parsers'
+import { parseCalendlyDatetime } from '../src/lib/services/ingestion/scheduling-tool-parsers'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')

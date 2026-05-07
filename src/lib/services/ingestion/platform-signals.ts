@@ -24,7 +24,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { PlatformDetector, UniversalSignalRow } from './platform-detectors/types'
+import type { PlatformDetector, UniversalSignalRow } from '../platform-detectors/types'
 
 export interface PlatformSignalsImportSummary {
   inserted: number

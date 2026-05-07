@@ -14,7 +14,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
 import { detectPlatformSource } from '../src/lib/services/platform-detectors'
-import { importPlatformSignals } from '../src/lib/services/platform-signals-import'
+import { importPlatformSignals } from '../src/lib/services/ingestion/platform-signals'
 import { parseVendorDate } from '../src/lib/services/parse-vendor-date'
 
 const env = Object.fromEntries(

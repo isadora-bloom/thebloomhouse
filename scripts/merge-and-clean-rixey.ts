@@ -26,7 +26,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
 import { mergePeople } from '../src/lib/services/identity/merge-people'
-import { parseInviteeName, detectSchedulingEvent } from '../src/lib/services/scheduling-tool-parsers'
+import { parseInviteeName, detectSchedulingEvent } from '../src/lib/services/ingestion/scheduling-tool-parsers'
 import { recalculateHeatScore } from '../src/lib/services/heat-mapping'
 
 const env = Object.fromEntries(

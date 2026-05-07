@@ -13,9 +13,9 @@ import {
   importTourLinks,
   type ImportSummary,
 } from '@/lib/services/brain-dump/imports'
-import { importIdentityCandidates } from '@/lib/services/tangential-signals-import'
+import { importIdentityCandidates } from '@/lib/services/ingestion/tangential-signals'
 import { detectPlatformSource } from '@/lib/services/platform-detectors'
-import { importPlatformSignals } from '@/lib/services/platform-signals-import'
+import { importPlatformSignals } from '@/lib/services/ingestion/platform-signals'
 import { clusterSignals } from '@/lib/services/identity/candidate-clusterer'
 import { resolveVenueCandidates } from '@/lib/services/identity/candidate-resolver'
 import { callAIVision, callAIJson } from '@/lib/ai/client'

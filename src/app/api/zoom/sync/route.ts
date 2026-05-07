@@ -13,7 +13,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { syncMeetings } from '@/lib/services/zoom'
+import { syncMeetings } from '@/lib/services/ingestion/zoom'
 
 export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()

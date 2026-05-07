@@ -22,7 +22,7 @@ import {
   eventKindToStatus,
   normalizeEventTypeForScoring,
   type SchedulingEventKind,
-} from '../src/lib/services/scheduling-tool-parsers'
+} from '../src/lib/services/ingestion/scheduling-tool-parsers'
 
 let pass = 0
 let fail = 0

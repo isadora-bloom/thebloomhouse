@@ -31,7 +31,7 @@ import {
   eventKindToStatus,
   timeAwareTourKind,
   type SchedulingEvent,
-} from '../src/lib/services/scheduling-tool-parsers'
+} from '../src/lib/services/ingestion/scheduling-tool-parsers'
 import { recordEngagementEventsBatch, recalculateHeatScore } from '../src/lib/services/heat-mapping'
 import { resolveIdentity } from '../src/lib/services/identity/resolution'
 

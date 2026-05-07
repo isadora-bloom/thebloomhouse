@@ -14,7 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHmac } from 'crypto'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { ZOOM_SCOPES } from '@/lib/services/zoom'
+import { ZOOM_SCOPES } from '@/lib/services/ingestion/zoom'
 
 const ZOOM_OAUTH_AUTHORIZE = 'https://zoom.us/oauth/authorize'
 

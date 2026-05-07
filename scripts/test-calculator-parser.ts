@@ -4,7 +4,7 @@
 // Locks in the strong-vs-weak detection split and the Ryan-Schubert
 // case (calculator email from a venue alias not registered in
 // gmail_connections — must still extract the prospect).
-import { detectFormRelay } from '../src/lib/services/form-relay-parsers'
+import { detectFormRelay } from '../src/lib/services/ingestion/form-relay-parsers'
 
 interface Case {
   name: string

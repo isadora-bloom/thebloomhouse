@@ -4,7 +4,7 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { detectCsvShape, parseCsvRows } from '@/lib/services/brain-dump/csv-shape'
 import { runCsvImport } from '@/app/api/brain-dump/route'
 import { importReviews } from '@/lib/services/brain-dump/imports'
-import { importStorefrontAnalytics } from '@/lib/services/storefront-analytics-import'
+import { importStorefrontAnalytics } from '@/lib/services/ingestion/storefront-analytics'
 
 /**
  * Resolve a pending brain-dump clarification.

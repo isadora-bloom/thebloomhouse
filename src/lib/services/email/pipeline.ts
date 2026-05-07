@@ -29,7 +29,7 @@ import {
   eventKindToStatus,
   timeAwareTourKind,
   type SchedulingEvent,
-} from '@/lib/services/scheduling-tool-parsers'
+} from '@/lib/services/ingestion/scheduling-tool-parsers'
 import { resolveIdentity } from '@/lib/services/identity/resolution'
 import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
 import { applySignalInference } from '@/lib/services/attribution/signal-inference'
@@ -39,7 +39,7 @@ import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain
 import { matchFilter, clearFilterCache } from '@/lib/services/email/inbox-filters'
 import { parseFuzzyDate, parseGuestCount, validateEstimatedGuests } from '@/lib/services/fuzzy-date'
 import { chooseEventTime, parseEventTime } from '@/lib/services/event-time'
-import { detectFormRelay, type FormRelayLead } from '@/lib/services/form-relay-parsers'
+import { detectFormRelay, type FormRelayLead } from '@/lib/services/ingestion/form-relay-parsers'
 import {
   extractIdentityFromEmail,
   isRelayAddress,

@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
-import type { OpenPhonePhoneNumber } from '@/lib/services/openphone'
+import type { OpenPhonePhoneNumber } from '@/lib/services/ingestion/openphone'
 
 interface PublicConnection {
   hasApiKey: boolean

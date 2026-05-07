@@ -28,7 +28,7 @@ import {
   eventKindToEngagementType,
   eventKindToStatus,
   timeAwareTourKind,
-} from '../src/lib/services/scheduling-tool-parsers'
+} from '../src/lib/services/ingestion/scheduling-tool-parsers'
 import {
   stripQuotedReply,
   BOOKING_PATTERNS,

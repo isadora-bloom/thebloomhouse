@@ -16,7 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { revokeZoomToken } from '@/lib/services/zoom'
+import { revokeZoomToken } from '@/lib/services/ingestion/zoom'
 
 export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()

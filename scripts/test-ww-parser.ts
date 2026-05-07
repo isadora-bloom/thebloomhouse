@@ -1,5 +1,5 @@
 // Regression tests for parseWeddingWire authsolic-token extraction.
-import { detectFormRelay } from '../src/lib/services/form-relay-parsers'
+import { detectFormRelay } from '../src/lib/services/ingestion/form-relay-parsers'
 
 const REAL_BODY_KELLIE = `
 

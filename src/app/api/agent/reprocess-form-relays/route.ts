@@ -4,7 +4,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import {
   detectFormRelay,
   type FormRelayLead,
-} from '@/lib/services/form-relay-parsers'
+} from '@/lib/services/ingestion/form-relay-parsers'
 import { venueOwnEmails, findOrCreateContact } from '@/lib/services/email/pipeline'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { normalizeSource } from '@/lib/services/normalize-source'

@@ -4,7 +4,7 @@ import {
   fetchUpcomingEvents,
   CalendlyNotConfiguredError,
   CalendlyReconnectError,
-} from '@/lib/services/calendly'
+} from '@/lib/services/ingestion/calendly'
 
 // ---------------------------------------------------------------------------
 // GET /api/calendly/events

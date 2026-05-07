@@ -11,7 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { syncMessages } from '@/lib/services/openphone'
+import { syncMessages } from '@/lib/services/ingestion/openphone'
 
 // Polling several phone numbers + three endpoints each can take a while —
 // give ourselves the full Vercel Pro budget so a multi-line workspace

@@ -12,7 +12,7 @@
 
 import { NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { discoverPhoneNumbers } from '@/lib/services/openphone'
+import { discoverPhoneNumbers } from '@/lib/services/ingestion/openphone'
 
 export async function POST() {
   const auth = await getPlatformAuth()
