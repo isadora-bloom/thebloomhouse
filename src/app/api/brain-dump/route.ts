@@ -6,13 +6,13 @@ import {
   detectCsvShape,
   parseCsvRows,
   type ShapeDetection,
-} from '@/lib/services/brain-dump-csv-shape'
+} from '@/lib/services/brain-dump/csv-shape'
 import {
   importLeads,
   importReviews,
   importTourLinks,
   type ImportSummary,
-} from '@/lib/services/brain-dump-imports'
+} from '@/lib/services/brain-dump/imports'
 import { importIdentityCandidates } from '@/lib/services/tangential-signals-import'
 import { detectPlatformSource } from '@/lib/services/platform-detectors'
 import { importPlatformSignals } from '@/lib/services/platform-signals-import'
@@ -23,8 +23,8 @@ import { createNotification } from '@/lib/services/admin-notifications'
 import {
   detectUrlOnlyInput,
   fetchAndExtractUrl,
-} from '@/lib/services/brain-dump-url'
-import { extractPdfText, PDF_SIZE_CAP_BYTES } from '@/lib/services/brain-dump-pdf'
+} from '@/lib/services/brain-dump/url'
+import { extractPdfText, PDF_SIZE_CAP_BYTES } from '@/lib/services/brain-dump/pdf'
 
 const FILE_CONTENT_CAP = 40_000 // chars embedded into the classifier prompt
 const LARGE_CSV_ROW_THRESHOLD = 50 // rows above this → preview + confirm
@@ -755,7 +755,7 @@ export async function runCsvImport(args: {
   dataRows: string[][]
 }): Promise<ImportSummary> {
   const { supabase, venueId, detection, headerRow, dataRows } = args
-  const { rowToRecord } = await import('@/lib/services/brain-dump-csv-shape')
+  const { rowToRecord } = await import('@/lib/services/brain-dump/csv-shape')
 
   switch (detection.shape) {
     case 'leads':

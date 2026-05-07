@@ -76,7 +76,7 @@ import type {
 // for /api/onboarding/extract-packages because the cycle resolves to an
 // uninitialized binding at module-eval time. Dynamic import defers the
 // resolution to call time, after both modules have finished evaluating.
-import { parseCsvRows } from '@/lib/services/brain-dump-csv-shape'
+import { parseCsvRows } from '@/lib/services/brain-dump/csv-shape'
 import { type Cents, asDollars, dollarsToCents } from '@/lib/types/monetary'
 import {
   splitConcatenatedCoupleName,

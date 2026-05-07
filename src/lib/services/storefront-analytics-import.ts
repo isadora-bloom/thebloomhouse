@@ -20,7 +20,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ImportSummary } from '@/lib/services/brain-dump-imports'
+import type { ImportSummary } from '@/lib/services/brain-dump/imports'
 
 export interface StorefrontAnalyticsRow {
   label: string            // "Oct", "Nov", "2025-10" — keep the source label verbatim

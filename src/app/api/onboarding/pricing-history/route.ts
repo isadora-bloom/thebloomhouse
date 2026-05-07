@@ -25,7 +25,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { parseCsvRows } from '@/lib/services/brain-dump-csv-shape'
+import { parseCsvRows } from '@/lib/services/brain-dump/csv-shape'
 
 const FIVE_YEARS_MS = 5 * 365 * 86_400_000
 const MAX_PRICE_CENTS = 1_000_000 * 100  // $1,000,000

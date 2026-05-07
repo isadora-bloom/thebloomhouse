@@ -13,7 +13,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
 import { findAdapter } from '../../src/lib/services/crm-import'
-import { parseCsvRows } from '../../src/lib/services/brain-dump-csv-shape'
+import { parseCsvRows } from '../../src/lib/services/brain-dump/csv-shape'
 
 async function main() {
   const env = Object.fromEntries(

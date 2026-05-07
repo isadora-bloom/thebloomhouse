@@ -102,7 +102,7 @@ import type {
   RoutedQuestion,
 } from './index'
 import { commitNormalisedRows } from './index'
-import { parseCsvRows } from '@/lib/services/brain-dump-csv-shape'
+import { parseCsvRows } from '@/lib/services/brain-dump/csv-shape'
 
 // ---------------------------------------------------------------------------
 // EVENT-TYPE CLASSIFIER

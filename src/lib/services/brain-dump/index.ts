@@ -42,7 +42,7 @@ import {
   patternSignature,
   evaluateGraduation,
   consumeGrantIfActive,
-} from '@/lib/services/brain-dump-graduation'
+} from '@/lib/services/brain-dump/graduation'
 
 export type BrainDumpIntent =
   | 'client_note'

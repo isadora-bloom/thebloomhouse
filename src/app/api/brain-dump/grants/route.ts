@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { revokePatternGrant, grantPattern } from '@/lib/services/brain-dump-graduation'
+import { revokePatternGrant, grantPattern } from '@/lib/services/brain-dump/graduation'
 
 export async function GET() {
   const auth = await getPlatformAuth()

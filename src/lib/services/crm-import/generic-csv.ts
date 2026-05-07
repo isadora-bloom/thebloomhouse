@@ -36,7 +36,7 @@ import type {
   CommitResult,
 } from './index'
 import { commitNormalisedRows } from './index'
-import { parseCsvRows } from '@/lib/services/brain-dump-csv-shape'
+import { parseCsvRows } from '@/lib/services/brain-dump/csv-shape'
 import { type Cents, asDollars, dollarsToCents } from '@/lib/types/monetary'
 
 const SUPPORTED_FIELDS = new Set([

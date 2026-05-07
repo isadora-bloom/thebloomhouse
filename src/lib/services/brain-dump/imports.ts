@@ -25,8 +25,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ShapeDetection } from '@/lib/services/brain-dump-csv-shape'
-import { rowToRecord } from '@/lib/services/brain-dump-csv-shape'
+import type { ShapeDetection } from '@/lib/services/brain-dump/csv-shape'
+import { rowToRecord } from '@/lib/services/brain-dump/csv-shape'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { htmlToText } from '@/lib/utils/html-text'
 

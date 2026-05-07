@@ -45,7 +45,7 @@
  * confirmation step.
  */
 
-import { parseCsvRows } from '@/lib/services/brain-dump-csv-shape'
+import { parseCsvRows } from '@/lib/services/brain-dump/csv-shape'
 import type { FormHint } from './web-form'
 
 export interface ProposedPackage {
