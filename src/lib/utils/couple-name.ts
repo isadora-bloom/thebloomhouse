@@ -84,6 +84,28 @@ export function buildCoupleFirstNames<T extends PersonNameLike>(people: T[]): st
 }
 
 /**
+ * Format a single person's display name from first + last + (optional)
+ * email fallback. Replaces the 20+ inline `[p.first_name, p.last_name]
+ * .filter(Boolean).join(' ')` sprinkles flagged by Lens 1. Trims each
+ * part so "  Sarah  " + "  Smith  " collapses to "Sarah Smith".
+ *
+ * fallback: when name is empty, returns the supplied fallback (commonly
+ * an email address) rather than an empty string. Pass undefined to
+ * return empty.
+ */
+export function personFullName<T extends PersonNameLike>(
+  person: T | null | undefined,
+  fallback?: string | null,
+): string {
+  if (!person) return fallback ?? ''
+  const first = (person.first_name ?? '').trim()
+  const last = (person.last_name ?? '').trim()
+  const joined = [first, last].filter((s) => s.length > 0).join(' ')
+  if (joined) return joined
+  return fallback ?? person.email ?? ''
+}
+
+/**
  * "Sarah Rohrschneider & John Olkowski" — full names joined with
  * ampersand, deduped by (first + last). Returns null when no name
  * signal.

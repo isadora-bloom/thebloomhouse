@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
+import { personFullName } from '@/lib/utils/couple-name'
 import {
   Network,
   Plus,
@@ -74,7 +75,7 @@ function typeBadge(type: string): { bg: string; text: string; label: string } {
 }
 
 function personName(p: Person): string {
-  return [p.first_name, p.last_name].filter(Boolean).join(' ') || p.email || 'Unknown'
+  return personFullName(p) || p.email || 'Unknown'
 }
 
 const inputClasses =
@@ -350,13 +351,9 @@ export default function RelationshipsPage() {
           type: row.relationship_type,
           notes: row.notes,
           created_at: row.created_at,
-          person_a_name: a
-            ? [a.first_name, a.last_name].filter(Boolean).join(' ') || undefined
-            : undefined,
+          person_a_name: a ? personFullName(a) || undefined : undefined,
           person_a_email: a?.email || undefined,
-          person_b_name: b
-            ? [b.first_name, b.last_name].filter(Boolean).join(' ') || undefined
-            : undefined,
+          person_b_name: b ? personFullName(b) || undefined : undefined,
           person_b_email: b?.email || undefined,
         }
       })

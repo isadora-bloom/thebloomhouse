@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
+import { personFullName } from '@/lib/utils/couple-name'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import { formatSourceLabel } from '@/lib/utils/format-source-label'
@@ -262,12 +263,8 @@ export default function ClientCodesPage() {
           wedding_id: row.wedding_id,
           code: row.code,
           created_at: row.created_at,
-          partner1_name: p1
-            ? [p1.first_name, p1.last_name].filter(Boolean).join(' ')
-            : undefined,
-          partner2_name: p2
-            ? [p2.first_name, p2.last_name].filter(Boolean).join(' ')
-            : undefined,
+          partner1_name: p1 ? personFullName(p1) : undefined,
+          partner2_name: p2 ? personFullName(p2) : undefined,
           wedding_date: wedding?.wedding_date,
           wedding_status: wedding?.status,
           heat_score: wedding?.heat_score,

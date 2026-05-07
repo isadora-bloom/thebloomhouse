@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
+import { personFullName } from '@/lib/utils/couple-name'
 import { VenueChip } from '@/components/intel/venue-chip'
 // Stream HHH Bug 10: InlineInsightBanner removed from /agent/leads.
 import { HeatBadge } from '@/components/intel/heat-badge'
@@ -526,12 +527,8 @@ export default function LeadsPage() {
           confidence_flag: (row.confidence_flag as string | null) ?? null,
           last_activity_at: lastActivityByWedding[row.id as string] ?? null,
           import_warnings: importWarnings,
-          partner1_name: p1
-            ? [p1.first_name, p1.last_name].filter(Boolean).join(' ')
-            : null,
-          partner2_name: p2
-            ? [p2.first_name, p2.last_name].filter(Boolean).join(' ')
-            : null,
+          partner1_name: p1 ? personFullName(p1) : null,
+          partner2_name: p2 ? personFullName(p2) : null,
           client_code: clientCode,
           venue_name: venueName,
         }
