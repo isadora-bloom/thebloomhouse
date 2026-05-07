@@ -15,6 +15,7 @@
  */
 
 import { callAI } from '@/lib/ai/client'
+import { detectKbEcho } from '@/lib/security/kb-echo-guard'
 import {
   buildPersonalityPrompt,
   buildSignoffBlock,
@@ -415,6 +416,9 @@ export async function generateInquiryDraft(
 
   // Step 2: Search knowledge base for answers to detected questions
   let kbContext = ''
+  // Hoisted out of the if-block so the post-generation echo guard (Tier-B
+  // #87) can compare draft text against the same KB chunks the prompt saw.
+  let kbResultsForGuard: ReadonlyArray<{ answer: string }> = []
   if (extractedData.questions.length > 0) {
     const searchQuery = extractedData.questions.join(' ')
     const kbResults = await searchKnowledgeBase(venueId, searchQuery)
@@ -424,6 +428,7 @@ export async function generateInquiryDraft(
         (entry) => `Q: ${entry.question}\nA: ${entry.answer}`
       )
       kbContext = `\n\n## KNOWLEDGE BASE (Use these to answer their questions accurately):\n\n${kbLines.join('\n\n')}`
+      kbResultsForGuard = kbResults.slice(0, 5)
     }
   }
 
@@ -716,6 +721,34 @@ export async function generateInquiryDraft(
     promptVersion: BRAIN_PROMPT_VERSION,
     correlationId,
   })
+
+  // KB-echo guard (Tier-B #87). Soft check: emits a structured warn event
+  // when the model echoes ≥ 8 contiguous tokens from a KB answer verbatim.
+  // KB authoring intent ("internal phrasing for AI context") leaks to
+  // couples otherwise. Doesn't block the draft — coordinator review still
+  // catches it before send. Guard returns matched=false on empty KB so this
+  // is safe to run unconditionally.
+  if (kbResultsForGuard.length > 0) {
+    const echo = detectKbEcho(result.text, kbResultsForGuard)
+    if (echo.matched) {
+      logEvent({
+        level: 'warn',
+        msg: 'inquiry-brain draft echoes KB verbatim',
+        venueId,
+        correlationId: correlationId ?? null,
+        actor: 'system',
+        event_type: 'kb_echo_detected',
+        outcome: 'fail',
+        data: {
+          longest_match_words: echo.longestMatchWords,
+          kb_entry_index: echo.kbEntryIndex,
+          sample_snippet: echo.sampleSnippet,
+          brain: 'inquiry',
+          task_type: taskType,
+        },
+      })
+    }
+  }
 
   // Calculate confidence based on data completeness
   let confidence = 75

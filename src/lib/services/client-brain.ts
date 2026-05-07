@@ -13,6 +13,7 @@
  */
 
 import { callAI } from '@/lib/ai/client'
+import { detectKbEcho } from '@/lib/security/kb-echo-guard'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import {
   buildPersonalityPrompt,
@@ -481,6 +482,31 @@ export async function generateClientDraft(
     promptVersion: BRAIN_PROMPT_VERSION,
     correlationId,
   })
+
+  // KB-echo guard (Tier-B #87). Soft check — see kb-echo-guard.ts for the
+  // detection rules. Same wiring as inquiry-brain. Returns matched=false on
+  // empty KB so this is safe to run unconditionally.
+  if (kbResults.length > 0) {
+    const echo = detectKbEcho(result.text, kbResults.slice(0, 5))
+    if (echo.matched) {
+      logEvent({
+        level: 'warn',
+        msg: 'client-brain draft echoes KB verbatim',
+        venueId,
+        correlationId: correlationId ?? null,
+        actor: 'system',
+        event_type: 'kb_echo_detected',
+        outcome: 'fail',
+        data: {
+          longest_match_words: echo.longestMatchWords,
+          kb_entry_index: echo.kbEntryIndex,
+          sample_snippet: echo.sampleSnippet,
+          brain: 'client',
+          task_type: taskType,
+        },
+      })
+    }
+  }
 
   // Confidence for client responses is generally high (we know who they are)
   let confidence = 80
