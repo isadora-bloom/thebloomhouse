@@ -31,7 +31,11 @@ interface NavSection {
   items: NavItem[]
 }
 
-export function buildCoupleSidebarSections(base: string): NavSection[] {
+export function buildCoupleSidebarSections(
+  base: string,
+  opts: { showDayOf?: boolean } = {},
+): NavSection[] {
+  const { showDayOf = false } = opts
   return [
     {
       title: 'Plan',
@@ -106,6 +110,17 @@ export function buildCoupleSidebarSections(base: string): NavSection[] {
         { label: 'Messages', href: `${base}/messages`, icon: MessagesSquare },
       ],
     },
+    // Tier-B #59A — surface the day-of view ONLY in the final week.
+    // Outside that window the page itself renders a placeholder so a
+    // direct URL still resolves; this gate keeps the sidebar focused.
+    ...(showDayOf
+      ? [{
+          title: 'This week',
+          items: [
+            { label: 'Day-of', href: `${base}/day-of`, icon: CalendarRange },
+          ],
+        }]
+      : []),
     {
       title: 'After Your Wedding',
       items: [
@@ -147,8 +162,6 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
     () => new Set(DEFAULT_COLLAPSED),
   )
-  const sections = buildCoupleSidebarSections(base)
-
   // Days-until-wedding shared by Final Review badge + post-wedding
   // section gating. Sarah-portal Tier-B #62: pre-fix the "After Your
   // Wedding" section was visible for every couple, including those
@@ -159,6 +172,13 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
     if (Number.isNaN(ms)) return null
     return Math.ceil(ms / (1000 * 60 * 60 * 24))
   })()
+
+  // Tier-B #59A — surface Day-of in the final week. Outside that window
+  // the URL still resolves but the page renders an "available 3 days
+  // before" placeholder so direct-link clicks aren't a dead end.
+  const showDayOf = daysUntilWedding !== null && daysUntilWedding >= -1 && daysUntilWedding <= 7
+
+  const sections = buildCoupleSidebarSections(base, { showDayOf })
 
   // Final Review badge: show when wedding is within 6 weeks (42 days)
   const finalReviewBadge =
