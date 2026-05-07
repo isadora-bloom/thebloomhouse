@@ -68,6 +68,15 @@ interface DashboardData {
   ownerName: string | null
   ownerNote: string | null
   ownerPhotoUrl: string | null
+  // Tier-B #53 — "what I owe next" with date. nextPayment is the
+  // budget_item with the earliest non-past payment_due_date AND a
+  // positive outstanding balance (committed - paid). null when nothing
+  // is currently due. Card renders only when present.
+  nextPayment: {
+    itemName: string
+    amountDue: number
+    dueDate: string
+  } | null
 }
 
 // ---------------------------------------------------------------------------
@@ -320,7 +329,7 @@ export default function CoupleDashboard() {
           supabase.from('guest_list').select('id, rsvp_status').eq('wedding_id', wid),
           supabase
             .from('budget_items')
-            .select('budgeted, committed, paid, budget_payments(amount)')
+            .select('item_name, budgeted, committed, paid, payment_due_date, budget_payments(amount)')
             .eq('wedding_id', wid),
           supabase
             .from('wedding_config')
@@ -409,9 +418,11 @@ export default function CoupleDashboard() {
 
         const guestList = guests.data || []
         const budgetItems = (budgetItemsRes.data || []) as Array<{
+          item_name: string | null
           budgeted: number | null
           committed: number | null
           paid: number | null
+          payment_due_date: string | null
           budget_payments: Array<{ amount: number | null }> | null
         }>
         const weddingConfig = weddingConfigRes.data as { total_budget: number | null } | null
@@ -425,6 +436,32 @@ export default function CoupleDashboard() {
           if (c.is_completed || !c.due_date) return false
           return new Date(c.due_date + 'T00:00:00') < today
         }).length
+
+        // Tier-B #53 — derive next-payment-due. Compute outstanding per
+        // item as committed - sum(payments). Filter to items with a
+        // payment_due_date >= today AND a positive outstanding amount.
+        // Sort by due date ASC and pick the first.
+        const todayStr = new Date().toISOString().slice(0, 10)
+        const upcomingPayments = budgetItems
+          .map((b) => {
+            const paymentsSum = (b.budget_payments || []).reduce(
+              (ps, p) => ps + (Number(p.amount) || 0),
+              0,
+            )
+            const effectivePaid = paymentsSum > 0 ? paymentsSum : Number(b.paid) || 0
+            const outstanding = (Number(b.committed) || 0) - effectivePaid
+            return {
+              itemName: b.item_name || 'Payment',
+              amountDue: outstanding,
+              dueDate: b.payment_due_date,
+            }
+          })
+          .filter(
+            (p): p is { itemName: string; amountDue: number; dueDate: string } =>
+              p.dueDate !== null && p.amountDue > 0 && p.dueDate >= todayStr,
+          )
+          .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+        const nextPayment = upcomingPayments[0] ?? null
 
         // Derive timeline summary
         const ceremonyItem = allTimelineItems.find((t) => t.category === 'ceremony' || t.title.toLowerCase().includes('ceremony'))
@@ -484,6 +521,7 @@ export default function CoupleDashboard() {
           ownerName,
           ownerNote,
           ownerPhotoUrl,
+          nextPayment,
         })
       } catch (err) {
         console.error('Failed to load couple dashboard:', err)
@@ -659,6 +697,55 @@ export default function CoupleDashboard() {
           })}
         </div>
       )}
+
+      {/* Next payment due (Tier-B #53). Renders only when a
+          budget_item has a future payment_due_date AND positive
+          outstanding balance. Days-until calculated client-side
+          so the urgency framing stays accurate without rerunning
+          the query. Past-due items are filtered out at compute
+          time — they belong on a separate "Overdue" card (future
+          work) rather than the forward-looking surface here. */}
+      {data.nextPayment && (() => {
+        const due = new Date(data.nextPayment.dueDate + 'T00:00:00')
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+        const days = Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+        const dateLabel = due.toLocaleDateString('en-US', {
+          month: 'long',
+          day: 'numeric',
+          year: due.getFullYear() === today.getFullYear() ? undefined : 'numeric',
+        })
+        const urgency =
+          days === 0 ? 'Due today' :
+          days === 1 ? 'Due tomorrow' :
+          days <= 7 ? `Due in ${days} days` :
+          `Due ${dateLabel}`
+        return (
+          <Link
+            href={`/couple/${SLUG}/budget`}
+            className="block bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:border-gray-300 transition-colors"
+          >
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-gray-500 mb-1">Next payment</p>
+                <p className="text-base font-medium text-gray-900 truncate">
+                  {data.nextPayment.itemName}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">{urgency}</p>
+              </div>
+              <div className="text-right shrink-0">
+                <p
+                  className="text-2xl font-bold tabular-nums"
+                  style={{ color: 'var(--couple-primary)' }}
+                >
+                  ${Math.round(data.nextPayment.amountDue).toLocaleString()}
+                </p>
+                <ArrowRight className="w-4 h-4 text-gray-400 ml-auto mt-1" />
+              </div>
+            </div>
+          </Link>
+        )
+      })()}
 
       {/* Owner presence card (Tier-B #50/#51).
           Renders only when the venue owner has populated a note via
