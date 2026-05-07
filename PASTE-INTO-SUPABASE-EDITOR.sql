@@ -975,10 +975,17 @@ CREATE POLICY "couple_read" ON public.portal_section_config
 DO $$
 DECLARE
   v_table text;
+  v_has_wedding boolean;
   v_tables text[] := ARRAY[
     -- The wedding_id-scoped tables couples are expected to write.
     -- Mirror the surface area mig 147 grants to demo anon, minus
     -- coordinator-internal tables.
+    --
+    -- 2026-05-07 fixup: not every table in this list actually has
+    -- wedding_id. guest_tag_assignments uses guest_id → guest_list.
+    -- The DO block now checks information_schema before writing the
+    -- policy and skips tables without wedding_id (handled below the
+    -- loop with explicit per-table policies).
     'checklist_items',
     'guest_list',
     'seating_tables',
@@ -1029,6 +1036,22 @@ BEGIN
       CONTINUE;
     END IF;
 
+    -- 2026-05-07 fix: column-existence check. Tables that join via a
+    -- different FK (guest_tag_assignments → guest_list, etc.) can't
+    -- use the simple wedding_id predicate; they get an explicit
+    -- policy block below the loop.
+    SELECT EXISTS(
+      SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = v_table
+         AND column_name = 'wedding_id'
+    ) INTO v_has_wedding;
+
+    IF NOT v_has_wedding THEN
+      RAISE NOTICE '[226] Skipping % (no wedding_id column; needs custom policy)', v_table;
+      CONTINUE;
+    END IF;
+
     EXECUTE format('DROP POLICY IF EXISTS "couple_insert" ON public.%I', v_table);
     EXECUTE format($p$CREATE POLICY "couple_insert" ON public.%I
       FOR INSERT TO authenticated
@@ -1070,6 +1093,55 @@ BEGIN
       )$p$, v_table);
   END LOOP;
 END $$;
+
+-- ----------------------------------------------------------------------------
+-- 5b. Tables without wedding_id — explicit policies via FK join.
+--
+-- guest_tag_assignments: many-to-many join between guest_list (which
+-- carries wedding_id) and guest_tags. Couples write to this table when
+-- they tag guests; gate on guest_id → guest_list.wedding_id.
+-- ----------------------------------------------------------------------------
+
+DROP POLICY IF EXISTS "couple_read" ON public.guest_tag_assignments;
+CREATE POLICY "couple_read" ON public.guest_tag_assignments
+  FOR SELECT TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.guest_list g
+       WHERE g.id = guest_tag_assignments.guest_id
+         AND g.wedding_id = public.couple_user_wedding_id()
+    )
+  );
+
+DROP POLICY IF EXISTS "couple_insert" ON public.guest_tag_assignments;
+CREATE POLICY "couple_insert" ON public.guest_tag_assignments
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.guest_list g
+       WHERE g.id = guest_tag_assignments.guest_id
+         AND g.wedding_id = public.couple_user_wedding_id()
+    )
+    AND EXISTS (
+      SELECT 1 FROM public.user_profiles
+       WHERE id = auth.uid() AND role = 'couple'
+    )
+  );
+
+DROP POLICY IF EXISTS "couple_delete" ON public.guest_tag_assignments;
+CREATE POLICY "couple_delete" ON public.guest_tag_assignments
+  FOR DELETE TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.guest_list g
+       WHERE g.id = guest_tag_assignments.guest_id
+         AND g.wedding_id = public.couple_user_wedding_id()
+    )
+    AND EXISTS (
+      SELECT 1 FROM public.user_profiles
+       WHERE id = auth.uid() AND role = 'couple'
+    )
+  );
 
 -- ----------------------------------------------------------------------------
 -- 6. people table — wedding-scoped, but couples need to read AND update
