@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getGmailClient, getConnections } from '@/lib/services/gmail'
+import { getGmailClient, getConnections } from '@/lib/services/email/gmail'
 import {
   extractEmailAddress,
   extractName,
   findOrCreateContact,
-} from '@/lib/services/email-pipeline'
+} from '@/lib/services/email/pipeline'
 
 // ---------------------------------------------------------------------------
 // POST /api/agent/backfill-senders

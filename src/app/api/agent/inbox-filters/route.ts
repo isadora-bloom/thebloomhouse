@@ -14,7 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { clearFilterCache } from '@/lib/services/inbox-filters'
+import { clearFilterCache } from '@/lib/services/email/inbox-filters'
 
 const VALID_PATTERN_TYPES = ['sender_exact', 'sender_domain', 'gmail_label'] as const
 const VALID_ACTIONS = ['ignore', 'no_draft'] as const

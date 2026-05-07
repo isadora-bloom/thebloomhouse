@@ -19,8 +19,8 @@ import { detectTrendDeviations } from './trends'
 import { getWeatherForDateRange } from './weather'
 import { getLatestIndicators, calculateDemandScore } from './fred-demand'
 import { getActiveAlerts } from './anomaly-detection'
-import { sendEmail as sendGmail } from './gmail'
-import { sendEmail as sendTransactionalEmail } from './email'
+import { sendEmail as sendGmail } from './email/gmail'
+import { sendEmail as sendTransactionalEmail } from './email/transport'
 
 /**
  * Prompt revision identifiers. Per Playbook OPS-21.5.1 / T1-E.

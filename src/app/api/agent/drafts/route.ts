@@ -5,7 +5,7 @@ import {
   rejectDraft,
   editAndApproveDraft,
   sendApprovedDraft,
-} from '@/lib/services/email-pipeline'
+} from '@/lib/services/email/pipeline'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------

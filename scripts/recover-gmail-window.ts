@@ -35,8 +35,8 @@ const days = daysIdx >= 0 ? parseInt(args[daysIdx + 1], 10) : 4
 async function main() {
   console.log(`\n=== Gmail recovery for venue ${venueId} (last ${days} days) ===\n`)
 
-  const { fetchNewEmails } = await import('../src/lib/services/gmail')
-  const { processIncomingEmail } = await import('../src/lib/services/email-pipeline')
+  const { fetchNewEmails } = await import('../src/lib/services/email/gmail')
+  const { processIncomingEmail } = await import('../src/lib/services/email/pipeline')
 
   const emails = await fetchNewEmails(venueId, 500, { sinceDays: days })
   console.log(`fetched ${emails.length} messages from Gmail`)

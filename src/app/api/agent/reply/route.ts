@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { sendEmail } from '@/lib/services/gmail'
+import { sendEmail } from '@/lib/services/email/gmail'
 import { createServiceClient } from '@/lib/supabase/service'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
 

@@ -13,9 +13,9 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { generateFollowUp, BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION } from './brain/inquiry'
+import { generateFollowUp, BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION } from '../brain/inquiry'
 import { checkAutoSendEligible } from './autonomous-sender'
-import { createNotification } from './admin-notifications'
+import { createNotification } from '../admin-notifications'
 
 // ---------------------------------------------------------------------------
 // Types

@@ -17,8 +17,8 @@
 //   npx tsx scripts/backfill-rixey-history.ts --apply --days 180   # custom window
 //   npx tsx scripts/backfill-rixey-history.ts --apply --venue <uuid>  # other venue
 import { readFileSync } from 'node:fs'
-import { fetchNewEmails } from '../src/lib/services/gmail'
-import { processIncomingEmail } from '../src/lib/services/email-pipeline'
+import { fetchNewEmails } from '../src/lib/services/email/gmail'
+import { processIncomingEmail } from '../src/lib/services/email/pipeline'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')

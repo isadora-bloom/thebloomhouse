@@ -1,6 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { NextRequest, NextResponse } from 'next/server'
-import { getOAuthUrl, handleOAuthCallback, getGmailClient, getConnections } from '@/lib/services/gmail'
+import { getOAuthUrl, handleOAuthCallback, getGmailClient, getConnections } from '@/lib/services/email/gmail'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createLogger, newCorrelationId } from '@/lib/observability/logger'
 import { redactError } from '@/lib/observability/redact'

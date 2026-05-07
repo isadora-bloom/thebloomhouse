@@ -23,7 +23,7 @@
 //   npx tsx scripts/reclassify-direction-from-gmail.ts --apply --venue <uuid>
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { getGmailClient } from '../src/lib/services/gmail'
+import { getGmailClient } from '../src/lib/services/email/gmail'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')

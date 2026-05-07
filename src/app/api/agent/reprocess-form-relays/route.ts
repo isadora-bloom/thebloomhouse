@@ -5,7 +5,7 @@ import {
   detectFormRelay,
   type FormRelayLead,
 } from '@/lib/services/form-relay-parsers'
-import { venueOwnEmails, findOrCreateContact } from '@/lib/services/email-pipeline'
+import { venueOwnEmails, findOrCreateContact } from '@/lib/services/email/pipeline'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { normalizeSource } from '@/lib/services/normalize-source'
 

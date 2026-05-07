@@ -6,7 +6,7 @@ import { TIER_RANK, type PlanTier } from '@/lib/auth/plan-tiers'
 import { getStripe, isStripeConfigured } from '@/lib/stripe'
 import { redact, redactError } from '@/lib/observability/redact'
 import { recordCounter } from '@/lib/observability/metrics'
-import { sendEmail } from '@/lib/services/email'
+import { sendEmail } from '@/lib/services/email/transport'
 import type Stripe from 'stripe'
 
 // ---------------------------------------------------------------------------

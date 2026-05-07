@@ -22,7 +22,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import {
   verifyGmailOAuthState,
   safeReturnTo,
-} from '@/lib/services/gmail-oauth-state'
+} from '@/lib/services/email/gmail-oauth-state'
 import { GMAIL_OAUTH_SCOPES } from '@/app/api/gmail/oauth/start/route'
 import { recordCounter } from '@/lib/observability/metrics'
 import { redactError } from '@/lib/observability/redact'

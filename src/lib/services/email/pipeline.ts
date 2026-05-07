@@ -21,7 +21,7 @@ import {
 } from '@/lib/services/brain/router'
 import { generateInquiryDraft, BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION } from '@/lib/services/brain/inquiry'
 import { generateClientDraft, BRAIN_PROMPT_VERSION as CLIENT_BRAIN_PROMPT_VERSION } from '@/lib/services/brain/client'
-import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/gmail'
+import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/email/gmail'
 import { detectBookingSignal } from '@/lib/services/booking-signal'
 import {
   detectSchedulingEvent,
@@ -36,7 +36,7 @@ import { applySignalInference } from '@/lib/services/signal-inference'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
-import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
+import { matchFilter, clearFilterCache } from '@/lib/services/email/inbox-filters'
 import { parseFuzzyDate, parseGuestCount, validateEstimatedGuests } from '@/lib/services/fuzzy-date'
 import { chooseEventTime, parseEventTime } from '@/lib/services/event-time'
 import { detectFormRelay, type FormRelayLead } from '@/lib/services/form-relay-parsers'
@@ -2704,7 +2704,7 @@ export async function processIncomingEmail(
       // with a 5-minute delay. The next cron email_poll cycle will flush expired
       // pending sends. Coordinators can cancel via the notification UI.
       try {
-        const { checkAutoSendEligible } = await import('@/lib/services/autonomous-sender')
+        const { checkAutoSendEligible } = await import('@/lib/services/email/autonomous-sender')
         const { containsInjectionAttempt } = await import('@/lib/security/prompt-sanitize')
 
         // Round-2 audit follow-up #36: detect prompt-injection on the

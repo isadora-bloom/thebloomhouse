@@ -140,7 +140,7 @@ async function checkIdempotency(): Promise<void> {
 
 async function checkInboundDetection(sb: SupabaseClient): Promise<void> {
   const { detectHumanRequested, HUMAN_REQUESTED_SUBJECT_PATTERN } =
-    await import('../../src/lib/services/email-pipeline')
+    await import('../../src/lib/services/email/pipeline')
 
   console.log(`  pattern = ${HUMAN_REQUESTED_SUBJECT_PATTERN.toString()}`)
 

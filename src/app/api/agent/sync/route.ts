@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { fetchNewEmails } from '@/lib/services/gmail'
-import { processIncomingEmail } from '@/lib/services/email-pipeline'
+import { fetchNewEmails } from '@/lib/services/email/gmail'
+import { processIncomingEmail } from '@/lib/services/email/pipeline'
 
 // Vercel serverless cap — 300s is the max for Pro, 10s is the default
 // hobby limit. This route fans out Gmail fetches × classifier calls, so

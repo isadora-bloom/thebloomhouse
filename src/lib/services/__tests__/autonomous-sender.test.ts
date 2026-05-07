@@ -150,7 +150,7 @@ vi.mock('@/lib/observability/metrics', () => ({
 // rule. Instead the makeMockClient() above intercepts the underlying
 // supabase queries those helpers make and returns mockState.threadCount
 // / mockState.todayCount. Same end behaviour, fewer moving parts.
-import { checkAutoSendEligible } from '@/lib/services/autonomous-sender'
+import { checkAutoSendEligible } from '@/lib/services/email/autonomous-sender'
 
 const VENUE = 'venue-test-1'
 

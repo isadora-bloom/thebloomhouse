@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
 
   try {
     if (action === 'process_incoming_email') {
-      const { processIncomingEmail } = await import('@/lib/services/email-pipeline')
+      const { processIncomingEmail } = await import('@/lib/services/email/pipeline')
       const email = payload.email as unknown as {
         messageId: string; threadId: string; from: string; to: string
         subject: string; body: string; date: string
@@ -147,7 +147,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'check_auto_send_eligible') {
-      const { checkAutoSendEligible } = await import('@/lib/services/autonomous-sender')
+      const { checkAutoSendEligible } = await import('@/lib/services/email/autonomous-sender')
       const opts = payload.options as unknown as {
         contextType: string
         confidenceScore: number

@@ -16,8 +16,8 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import { callAI } from '@/lib/ai/client'
 import { withAiCache } from '@/lib/ai/cache'
-import { sendEmail as sendGmail } from '@/lib/services/gmail'
-import { sendEmail as sendTransactionalEmail } from '@/lib/services/email'
+import { sendEmail as sendGmail } from '@/lib/services/email/gmail'
+import { sendEmail as sendTransactionalEmail } from '@/lib/services/email/transport'
 import {
   enabledCategories,
   type DigestPreferences,

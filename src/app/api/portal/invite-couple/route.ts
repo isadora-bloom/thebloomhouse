@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { sendEmail } from '@/lib/services/email'
+import { sendEmail } from '@/lib/services/email/transport'
 import {
   getPlatformAuth,
   assertCanAccessVenue,

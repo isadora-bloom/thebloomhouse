@@ -29,8 +29,8 @@
 //   npx tsx scripts/fetch-scheduling-tool-history.ts --apply --venue <uuid> --days 180
 import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
-import { fetchNewEmails } from '../src/lib/services/gmail'
-import { processIncomingEmail } from '../src/lib/services/email-pipeline'
+import { fetchNewEmails } from '../src/lib/services/email/gmail'
+import { processIncomingEmail } from '../src/lib/services/email/pipeline'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')

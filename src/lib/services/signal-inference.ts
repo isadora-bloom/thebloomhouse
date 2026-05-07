@@ -23,7 +23,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
-import { venueOwnEmails } from '@/lib/services/email-pipeline'
+import { venueOwnEmails } from '@/lib/services/email/pipeline'
 
 // ---------------------------------------------------------------------------
 // Pattern sets (source of truth)

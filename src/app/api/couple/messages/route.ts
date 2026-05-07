@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getCoupleAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
-import { runEscalationCheck } from '@/lib/services/escalation-detector'
+import { runEscalationCheck } from '@/lib/services/email/escalation-detector'
 
 // ---------------------------------------------------------------------------
 // /api/couple/messages

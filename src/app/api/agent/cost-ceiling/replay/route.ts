@@ -55,7 +55,7 @@ async function executeWorkType(workType: string, venueId: string): Promise<{ ok:
         return { ok: true }
       }
       case 'follow_up_sequences': {
-        const { generateFollowUps } = await import('@/lib/services/follow-up-sequences')
+        const { generateFollowUps } = await import('@/lib/services/email/follow-up-sequences')
         await generateFollowUps(venueId)
         return { ok: true }
       }

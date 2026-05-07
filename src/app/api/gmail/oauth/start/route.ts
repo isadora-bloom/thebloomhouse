@@ -23,7 +23,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OAuth2Client } from 'google-auth-library'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { signGmailOAuthState, safeReturnTo } from '@/lib/services/gmail-oauth-state'
+import { signGmailOAuthState, safeReturnTo } from '@/lib/services/email/gmail-oauth-state'
 import { recordCounter } from '@/lib/observability/metrics'
 import { redactError } from '@/lib/observability/redact'
 
