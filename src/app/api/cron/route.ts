@@ -37,7 +37,7 @@ import {
   enforceCeilingsAllVenues,
   clearStaleAutonomousPauses,
 } from '@/lib/services/cost-ceiling'
-import { runEssentialsSuggester } from '@/lib/services/essentials-suggester'
+import { runEssentialsSuggester } from '@/lib/services/onboarding/essentials-suggester'
 import {
   populateUSCalendarEvents,
   populateVirginiaCalendarEvents,

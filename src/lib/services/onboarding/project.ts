@@ -540,7 +540,7 @@ export async function activateLive(
     // Lazy-load to avoid circular import (this module is imported at
     // service-init time; onboarding-backfill imports nothing from
     // here so the cycle is one-way).
-    const { computeBackfillScore } = await import('./onboarding-backfill')
+    const { computeBackfillScore } = await import('./backfill')
     const { score, coverages, categoriesRequired } = await computeBackfillScore(supabase, row.venue_id as string)
     if (score < MIN_BACKFILL_SCORE_FOR_PAID) {
       const missing = coverages

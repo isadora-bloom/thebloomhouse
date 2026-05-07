@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { activateLive } from '@/lib/services/onboarding-project'
+import { activateLive } from '@/lib/services/onboarding/project'
 
 export async function POST(request: NextRequest) {
   const auth = await getPlatformAuth()

@@ -17,7 +17,7 @@ import {
   Info,
   Clock,
 } from 'lucide-react'
-import { PROJECT_PLAN, TOTAL_DAYS, type DayStep, detectDay1Completion } from '@/lib/services/onboarding-project'
+import { PROJECT_PLAN, TOTAL_DAYS, type DayStep, detectDay1Completion } from '@/lib/services/onboarding/project'
 import { BackfillChecklist } from '@/components/onboarding/backfill-checklist'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 

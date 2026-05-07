@@ -12,7 +12,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { evaluateDay3Readiness } from '@/lib/services/onboarding-project'
+import { evaluateDay3Readiness } from '@/lib/services/onboarding/project'
 
 export async function GET() {
   const auth = await getPlatformAuth()

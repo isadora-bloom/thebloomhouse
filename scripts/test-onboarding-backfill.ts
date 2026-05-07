@@ -10,8 +10,8 @@
  *   - Empty / degenerate inputs return safe defaults
  */
 
-import { __test__ } from '../src/lib/services/onboarding-backfill'
-import type { CategoryCoverage, BackfillCategory } from '../src/lib/services/onboarding-backfill'
+import { __test__ } from '../src/lib/services/onboarding/backfill'
+import type { CategoryCoverage, BackfillCategory } from '../src/lib/services/onboarding/backfill'
 
 const { computeStatus, scoreCoverage, CATEGORY_REQUIRED } = __test__
 

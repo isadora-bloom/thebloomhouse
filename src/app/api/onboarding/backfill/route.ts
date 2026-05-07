@@ -27,7 +27,7 @@ import {
   computeBackfillScore,
   skipBackfillCategory,
   type BackfillCategory,
-} from '@/lib/services/onboarding-backfill'
+} from '@/lib/services/onboarding/backfill'
 import { fetchTrendsForVenue } from '@/lib/services/intel/trends'
 import { fetchAllDefaultFredSeries } from '@/lib/services/external-context/fred-fetch'
 import { fetchHistoricalWeather } from '@/lib/services/intel/weather'
