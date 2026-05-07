@@ -483,22 +483,34 @@ export async function generateInquiryDraft(
   const { sanitizeUserContent, wrapUntrustedContent, containsInjectionAttempt } =
     await import('@/lib/security/prompt-sanitize')
 
-  const safeSubject = sanitizeUserContent(inquiry.subject).content
+  const subjectSanitized = sanitizeUserContent(inquiry.subject)
+  const bodySanitized = sanitizeUserContent(inquiry.body.slice(0, 3000))
   const wrappedBody = wrapUntrustedContent(
     inquiry.body.slice(0, 3000),
     'inquiry_body',
   ).wrapped
 
-  let contextBlock = `\n\n## INCOMING EMAIL:\n\nFrom: ${inquiry.from}\nSubject: ${safeSubject}\n\n${wrappedBody}`
+  let contextBlock = `\n\n## INCOMING EMAIL:\n\nFrom: ${inquiry.from}\nSubject: ${subjectSanitized.content}\n\n${wrappedBody}`
 
-  if (containsInjectionAttempt(inquiry.body) || containsInjectionAttempt(inquiry.subject)) {
-    // Surface to logs. Auto-send eligibility checks elsewhere may want
-    // to consult this signal (out of scope for this PR — flagged as
-    // follow-up: feed into auto_send_rules eligibility).
-    console.warn('[inquiry-brain] possible prompt-injection attempt in inbound email', {
+  // Telemetry — both injection signals and the lower-severity
+  // strip events. Round-3+4 audits flagged the strip flags as ghost
+  // data; consumed here so a single log line surfaces what the
+  // sanitizer actually did. Auto-send block (mig 219 + persistence)
+  // already gates on the injection signal; this is for ops trail.
+  const injectionDetected =
+    containsInjectionAttempt(inquiry.body) || containsInjectionAttempt(inquiry.subject)
+  const rolePrefixStripped =
+    subjectSanitized.rolePrefixStripped || bodySanitized.rolePrefixStripped
+  const systemTagStripped =
+    subjectSanitized.systemTagStripped || bodySanitized.systemTagStripped
+  if (injectionDetected || rolePrefixStripped || systemTagStripped) {
+    console.warn('[inquiry-brain] prompt-sanitize signals on inbound email', {
       from: inquiry.from,
       subjectLength: inquiry.subject.length,
       bodyLength: inquiry.body.length,
+      injectionDetected,
+      rolePrefixStripped,
+      systemTagStripped,
     })
   }
 

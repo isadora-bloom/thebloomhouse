@@ -577,29 +577,46 @@ export async function generateSageResponse(
   const { sanitizeUserContent, wrapUntrustedContent, containsInjectionAttempt } =
     await import('@/lib/security/prompt-sanitize')
 
+  // Track sanitizer telemetry across the whole transcript so a single
+  // log line per request surfaces what was stripped vs detected.
+  // Round-3 + round-4 audits flagged that rolePrefixStripped /
+  // systemTagStripped were computed but never consumed.
+  let anyRolePrefixStripped = false
+  let anySystemTagStripped = false
+
   const messages = conversationHistory
     .map((msg) => {
       if (msg.role === 'user') {
-        const safe = sanitizeUserContent(msg.content).content
-        return `Couple: ${safe}`
+        const sanitized = sanitizeUserContent(msg.content)
+        if (sanitized.rolePrefixStripped) anyRolePrefixStripped = true
+        if (sanitized.systemTagStripped) anySystemTagStripped = true
+        return `Couple: ${sanitized.content}`
       }
       return `${aiNameForTask}: ${msg.content}`
     })
     .join('\n\n')
 
   const wrappedCurrent = wrapUntrustedContent(message, 'couple_message').wrapped
+  // Run sanitize on the current message too so the telemetry covers it.
+  const currentSanitized = sanitizeUserContent(message)
+  if (currentSanitized.rolePrefixStripped) anyRolePrefixStripped = true
+  if (currentSanitized.systemTagStripped) anySystemTagStripped = true
 
   const userPrompt = messages
     ? `${messages}\n\nCouple just sent the following message:\n${wrappedCurrent}`
     : `Couple just sent the following message:\n${wrappedCurrent}`
 
-  // Log injection attempts for telemetry. Don't block — the wrapping
-  // contains the attack and a false positive shouldn't break a couple's
-  // chat. Future: surface to escalation queue.
-  if (containsInjectionAttempt(message)) {
-    console.warn('[sage-brain] possible prompt-injection attempt in couple message', {
+  // Log telemetry — strip events at WARN, injection attempts at WARN.
+  // Don't block; wrapping contains attacks. False positives don't
+  // affect chat output.
+  const injectionDetected = containsInjectionAttempt(message)
+  if (injectionDetected || anyRolePrefixStripped || anySystemTagStripped) {
+    console.warn('[sage-brain] prompt-sanitize signals on couple message', {
       venueId,
       length: message.length,
+      injectionDetected,
+      rolePrefixStripped: anyRolePrefixStripped,
+      systemTagStripped: anySystemTagStripped,
     })
   }
 
