@@ -16,6 +16,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { createNotification } from '@/lib/services/admin-notifications'
+import { recordHistogram } from '@/lib/observability/metrics'
 
 // Graduated cooling-warning milestones before auto-lost. Each stage fires
 // at most once per wedding — dedup is by admin_notifications (venue_id,
@@ -971,6 +972,13 @@ export async function applyDailyDecay(venueId: string): Promise<DecaySummary> {
   //
   // Counts are mutated inside the per-wedding closure under the
   // single-threaded JS event loop — no atomic-counter races.
+  //
+  // Round-5 follow-up: surface latency + concurrency to metered_events
+  // so we can detect Supabase pool back-pressure (queueing showing up
+  // as P99 latency growth without P50 movement). Histogram dimensions
+  // include venueId + concurrency size for ad-hoc filtering.
+  const parallelStartedAt = Date.now()
+  const concurrencySize = weddings.length
   const results = await Promise.allSettled(
     weddings.map(async (wedding) => {
       const weddingId = wedding.id as string
@@ -1050,6 +1058,18 @@ export async function applyDailyDecay(venueId: string): Promise<DecaySummary> {
       `[heat-mapping] ${failures.length} of ${weddings.length} wedding decays failed`,
     )
   }
+
+  // Round-5 follow-up: emit per-batch latency histogram. Watch for
+  // P99 climbing while P50 stays flat — signals PgBouncer queueing.
+  void recordHistogram('heat_decay.batch_latency_ms', Date.now() - parallelStartedAt, {
+    venueId,
+    dimension: {
+      concurrency: concurrencySize,
+      decayed: decayedCount,
+      auto_lost: autoLostCount,
+      failures: failures.length,
+    },
+  })
 
   console.log(
     `[heat-mapping] venue=${venueId} decayed=${decayedCount} ` +
@@ -1430,57 +1450,65 @@ export async function markAsLost(
   const now = new Date().toISOString()
   const previousStage = (wedding.status as string) || 'inquiry'
 
-  // Update wedding status
-  await supabase
-    .from('weddings')
-    .update({
-      status: 'lost',
-      heat_score: 0,
-      temperature_tier: 'frozen',
+  // Round-5 follow-up: parallelize the 4 writes. The UPDATE and 3
+  // INSERTs all depend on the SELECT above but not on each other —
+  // engagement_events / lost_deals / lead_score_history each capture
+  // an independent facet of the marked-lost transition. Running them
+  // concurrently turns a 5-round-trip call into 2 (1 read + 1 batched
+  // parallel writes). At venue scale (50+ auto-marks per cron tick
+  // via applyDailyDecay), that's 250 → 100 sequential operations.
+  await Promise.all([
+    supabase
+      .from('weddings')
+      .update({
+        status: 'lost',
+        heat_score: 0,
+        temperature_tier: 'frozen',
+        lost_at: now,
+        lost_reason: reason ?? null,
+        updated_at: now,
+      })
+      .eq('id', weddingId),
+
+    // Record engagement event. Direction: 'inbound' for the audit row —
+    // the wedding-state observation belongs alongside the inbound
+    // couple-side timeline. The -100 points here are nominal: the UPDATE
+    // sibling sets weddings.heat_score = 0 directly, so this row is
+    // mostly an audit trail and recalculateHeatScore re-runs only
+    // matter if heat is later recomputed against this dataset. Keeping
+    // direction='inbound' avoids a phantom outbound event in the
+    // timeline that the couple never actually triggered. INV-13.
+    supabase.from('engagement_events').insert({
+      venue_id: venueId,
+      wedding_id: weddingId,
+      event_type: 'marked_lost',
+      direction: 'inbound',
+      points: DEFAULT_POINTS.marked_lost,
+      metadata: { reason: reason ?? null, lost_to: lostTo ?? null },
+    }),
+
+    // Insert lost_deals record
+    // signal-class-justified: lost-deals are structurally always outcome
+    supabase.from('lost_deals').insert({
+      venue_id: venueId,
+      wedding_id: weddingId,
+      lost_at_stage: previousStage,
+      reason_category: lostTo ? 'competitor' : 'other',
+      reason_detail: reason ?? null,
+      competitor_name: lostTo ?? null,
       lost_at: now,
-      lost_reason: reason ?? null,
-      updated_at: now,
-    })
-    .eq('id', weddingId)
+      signal_class: 'outcome',
+    }),
 
-  // Record engagement event. Direction: 'inbound' for the audit row —
-  // the wedding-state observation belongs alongside the inbound
-  // couple-side timeline. The -100 points here are nominal: markAsLost
-  // sets weddings.heat_score = 0 directly above (line 1104), so this
-  // row is mostly an audit trail and recalculateHeatScore re-runs only
-  // matter if heat is later recomputed against this dataset. Keeping
-  // direction='inbound' avoids a phantom outbound event in the timeline
-  // that the couple never actually triggered. INV-13.
-  await supabase.from('engagement_events').insert({
-    venue_id: venueId,
-    wedding_id: weddingId,
-    event_type: 'marked_lost',
-    direction: 'inbound',
-    points: DEFAULT_POINTS.marked_lost,
-    metadata: { reason: reason ?? null, lost_to: lostTo ?? null },
-  })
-
-  // Insert lost_deals record
-  // signal-class-justified: lost-deals are structurally always outcome
-  await supabase.from('lost_deals').insert({
-    venue_id: venueId,
-    wedding_id: weddingId,
-    lost_at_stage: previousStage,
-    reason_category: lostTo ? 'competitor' : 'other',
-    reason_detail: reason ?? null,
-    competitor_name: lostTo ?? null,
-    lost_at: now,
-    signal_class: 'outcome',
-  })
-
-  // Insert score history snapshot
-  await supabase.from('lead_score_history').insert({
-    venue_id: venueId,
-    wedding_id: weddingId,
-    score: 0,
-    temperature_tier: 'frozen',
-    calculated_at: now,
-  })
+    // Insert score history snapshot
+    supabase.from('lead_score_history').insert({
+      venue_id: venueId,
+      wedding_id: weddingId,
+      score: 0,
+      temperature_tier: 'frozen',
+      calculated_at: now,
+    }),
+  ])
 
   console.log(`[heat-mapping] Wedding ${weddingId} marked as lost (reason: ${reason ?? 'none'})`)
 }

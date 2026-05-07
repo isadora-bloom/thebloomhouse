@@ -56,6 +56,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { recalculateHeatScore } from './heat-mapping'
+import { recordHistogram } from '@/lib/observability/metrics'
 
 const AUTO_CLUSTER_DAYS = 14
 const REVIEW_CLUSTER_DAYS = 30
@@ -493,6 +494,12 @@ async function flushCandidatesForGroup(
   // signals to dozens of pre-existing weddings; serial recalc was
   // a real cron-tail bottleneck. Promise.allSettled isolates per-
   // wedding failures so one bad row doesn't drop the rest.
+  //
+  // Round-5 follow-up: emit batch-latency histogram so we can detect
+  // Supabase pool back-pressure if a CSV touches a large number of
+  // weddings. Mirrors the heat_decay.batch_latency_ms metric.
+  const parallelStartedAt = Date.now()
+  const concurrencySize = weddingsToRefresh.size
   const refreshResults = await Promise.allSettled(
     Array.from(weddingsToRefresh.entries()).map(async ([weddingId, venueId]) => {
       try {
@@ -511,6 +518,14 @@ async function flushCandidatesForGroup(
     console.warn(
       `[clusterer] ${refreshFailures.length} of ${weddingsToRefresh.size} heat recalcs threw outside the try`,
     )
+  }
+  if (concurrencySize > 0) {
+    void recordHistogram('clusterer_heat_recalc.batch_latency_ms', Date.now() - parallelStartedAt, {
+      dimension: {
+        concurrency: concurrencySize,
+        failures: refreshFailures.length,
+      },
+    })
   }
 }
 

@@ -48,8 +48,15 @@ export interface NavItem {
   icon: ComponentType<{ className?: string }>
   /** Shown in compact ("daily") rail mode. */
   daily?: boolean
-  /** Plan tier gate. */
-  /** Pricing v2: gates accept any PlanTier minimum. 'solo' = lowest paid. */
+  /**
+   * Plan tier minimum for this nav item to be visible. Pricing v2
+   * (2026-05-06): every tier gets every feature, so currently NO nav
+   * item declares this. The field is kept for future tier-locked items
+   * (cross-portfolio dashboards on `multi`+, API-key management on
+   * `enterprise`) — sidebar already gates correctly via tierMeetsMinimum.
+   * Round-5 audit flagged this as dead infrastructure; intentionally
+   * preserved as forward-compatible.
+   */
   requiresPlan?: import('@/lib/auth/plan-tiers').PlanTier
   /** External label like "AI" / "Beta" rendered as a small pill. */
   badge?: string
@@ -61,8 +68,7 @@ export interface NavSection {
   items: NavItem[]
   /** Hidden at group/company scope (venue-only configuration). */
   venueOnly?: boolean
-  /** Plan tier gate for the whole section. */
-  /** Pricing v2: gates accept any PlanTier minimum. 'solo' = lowest paid. */
+  /** Plan tier minimum — see NavItem.requiresPlan for context. */
   requiresPlan?: import('@/lib/auth/plan-tiers').PlanTier
 }
 
