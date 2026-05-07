@@ -77,6 +77,15 @@ interface DashboardData {
     amountDue: number
     dueDate: string
   } | null
+  // Tier-B #54 — booked package summary. Resolved from weddings.package
+  // (text) → packages row (name + description). description from
+  // mig 223. Null when wedding has no package set OR no matching
+  // packages row exists.
+  packageInfo: {
+    name: string
+    description: string | null
+    seasonOrTier: string | null
+  } | null
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +388,40 @@ export default function CoupleDashboard() {
             .eq('wedding_id', wid),
         ])
 
+        // Booked-package resolution (Tier-B #54). The wedding row
+        // carries the package as a free-text label (mig 009); we look
+        // it up against the packages catalog by case-insensitive name
+        // match scoped to this venue. Fail-soft: when the wedding has
+        // no package label or the catalog has no match, packageInfo
+        // stays null and the dashboard card simply doesn't render.
+        let packageInfo: DashboardData['packageInfo'] = null
+        const weddingPackage = (wedding as { package?: string | null }).package
+        if (vid && weddingPackage) {
+          const { data: pkgRow } = await supabase
+            .from('packages')
+            .select('name, description, season, tier')
+            .eq('venue_id', vid)
+            .eq('kind', 'package')
+            .ilike('name', weddingPackage)
+            .maybeSingle()
+          if (pkgRow) {
+            const seasonOrTier = (pkgRow.season as string | null) ?? (pkgRow.tier as string | null) ?? null
+            packageInfo = {
+              name: pkgRow.name as string,
+              description: (pkgRow.description as string | null) ?? null,
+              seasonOrTier,
+            }
+          } else {
+            // Catalog miss but the wedding row has a label — surface the
+            // bare label so couples still see what they booked.
+            packageInfo = {
+              name: weddingPackage,
+              description: null,
+              seasonOrTier: null,
+            }
+          }
+        }
+
         // Owner presence (Tier-B #50/#51). Fetched separately because the
         // venue-scoped reads happen alongside the main wedding-scoped fan-out.
         // Fail-soft: any error returns null fields and the card simply
@@ -522,6 +565,7 @@ export default function CoupleDashboard() {
           ownerNote,
           ownerPhotoUrl,
           nextPayment,
+          packageInfo,
         })
       } catch (err) {
         console.error('Failed to load couple dashboard:', err)
@@ -746,6 +790,42 @@ export default function CoupleDashboard() {
           </Link>
         )
       })()}
+
+      {/* Booked package summary (Tier-B #54). Renders when the wedding
+          has a package set. When the catalog has a description, shows
+          it as multi-line prose; without a description, falls back to
+          a short "details live in your contract" hint so couples still
+          see what they booked. Links to /booking. */}
+      {data.packageInfo && (
+        <Link
+          href={`/couple/${SLUG}/booking`}
+          className="block bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:border-gray-300 transition-colors"
+        >
+          <div className="flex items-start justify-between gap-4 mb-2">
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-gray-500 mb-1">Your package</p>
+              <p className="text-base font-medium text-gray-900">
+                {data.packageInfo.name}
+                {data.packageInfo.seasonOrTier && (
+                  <span className="ml-2 text-xs text-gray-500 font-normal">
+                    ({data.packageInfo.seasonOrTier})
+                  </span>
+                )}
+              </p>
+            </div>
+            <ArrowRight className="w-4 h-4 text-gray-400 shrink-0 mt-1" />
+          </div>
+          {data.packageInfo.description ? (
+            <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">
+              {data.packageInfo.description}
+            </p>
+          ) : (
+            <p className="text-xs text-gray-500 italic">
+              The full details of what&apos;s included live in your contract.
+            </p>
+          )}
+        </Link>
+      )}
 
       {/* Owner presence card (Tier-B #50/#51).
           Renders only when the venue owner has populated a note via
