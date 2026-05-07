@@ -374,6 +374,7 @@ export const MODE_SAGE: ModeConfig = {
         { label: 'Voice Games', href: '/settings/voice', icon: Mic },
         { label: 'Teach Voice', href: '/agent/learning', icon: GraduationCap },
         { label: 'Always / Never Rules', href: '/agent/rules', icon: ScrollText },
+        { label: 'Brain Dump Log', href: '/settings/brain-dump-log', icon: ScrollText },
       ],
     },
     {
@@ -487,14 +488,6 @@ export const MODE_SAGE: ModeConfig = {
         { label: 'OpenPhone (SMS)', href: '/settings/openphone', icon: Phone },
       ],
     },
-    {
-      title: 'Onboarding',
-      subtitle: 'Re-run any step',
-      venueOnly: true,
-      items: [
-        { label: 'Onboarding', href: '/onboarding', icon: Building },
-      ],
-    },
   ],
 }
 
@@ -541,6 +534,14 @@ export const GEAR_GROUPS: GearGroup[] = [
       { label: 'Team', href: '/settings/team', icon: Users, requiresRole: 'group_admin' },
       { label: 'Billing', href: '/settings/billing', icon: CreditCard, requiresRole: 'org_admin' },
       { label: 'Venue groups', href: '/settings/groups', icon: Layers, requiresRole: 'org_admin' },
+      { label: 'Org Essentials defaults', href: '/settings/essentials-org', icon: SlidersHorizontal, requiresRole: 'org_admin' },
+    ],
+  },
+  {
+    title: 'Personal',
+    items: [
+      { label: 'Digest preferences', href: '/settings/digest-preferences', icon: Mail },
+      { label: 'Pulse snoozes', href: '/settings/pulse-snoozes', icon: Inbox },
     ],
   },
   {

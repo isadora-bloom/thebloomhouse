@@ -1813,13 +1813,22 @@ export default function SourceAttributionPage() {
             </button>
           ))}
         </div>
-        <Link
-          href="/settings/sources"
-          className="text-xs font-medium text-sage-600 hover:text-sage-900 underline-offset-2 hover:underline"
-          title="Find the real first-touch source for couples whose first source is a scheduling tool."
-        >
-          Re-attribute scheduling-tool bookings →
-        </Link>
+        <div className="flex items-center gap-4 flex-wrap">
+          <Link
+            href="/settings/sources"
+            className="text-xs font-medium text-sage-600 hover:text-sage-900 underline-offset-2 hover:underline"
+            title="Find the real first-touch source for couples whose first source is a scheduling tool."
+          >
+            Re-attribute scheduling-tool bookings →
+          </Link>
+          <Link
+            href="/intel/sources/parity"
+            className="text-xs font-medium text-sage-600 hover:text-sage-900 underline-offset-2 hover:underline"
+            title="Coordinator audit: where computed first-touch disagrees with the legacy lead source field."
+          >
+            Attribution parity log →
+          </Link>
+        </div>
       </div>
 
       {/* ---- Spend importer — Phase 3 Task 33 ---- */}

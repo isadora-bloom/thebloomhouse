@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import {
   signGmailOAuthState,
-} from '../../src/lib/services/gmail-oauth-state'
+} from '../../src/lib/services/email/gmail-oauth-state'
 
 /**
  * §23 Gmail OAuth (PROJECT-AUDIT-V2 GAP-13).

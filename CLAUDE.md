@@ -84,7 +84,7 @@ Structured logger at `lib/observability/logger.ts` (T1-G) emits JSON-line events
 ### Sage's Brain → Inquiry behaviour
 - `/agent/settings` — Auto-send + follow-ups
 - `/agent/forbidden-topics` — per-venue forbidden topic keywords (T1-J / B-21). Reads `venue_forbidden_topics` (migration 125). `checkEscalationForVenue` merges these with global ESCALATION_KEYWORDS.
-- `/agent/identity-windows` — per-platform decay windows for the candidate-resolver (T2-D / ARCH-8.5.3). Defaults at `lib/services/identity-windows-constants.ts`.
+- `/agent/identity-windows` — per-platform decay windows for the candidate-resolver (T2-D / ARCH-8.5.3). Defaults at `lib/services/identity/windows-constants.ts`.
 
 ### Sage's Brain → Internal context (T2-B Phase 2)
 - `/portal/marketing-channels-config` — venue-scoped channel registry (LIMB-16.2.4-A). Replaces the global CANONICAL_SOURCES const.
