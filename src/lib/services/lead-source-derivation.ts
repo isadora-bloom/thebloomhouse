@@ -420,17 +420,12 @@ async function tryPriority7WeddingsSourceFallback(
  * pattern-matching so the canonical channel name surfaces instead of
  * a tag fragment.
  */
-function stripHtml(s: string): string {
-  return s
-    .replace(/<[^>]*>/g, ' ')          // strip tags
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
+// Canonical html→text. Tier-B #72: consolidated 5 local reimplementations
+// to lib/utils/html-text.ts. The canonical helper preserves newlines from
+// block-level tags — the lead-source derivation chain depends on the
+// "next newline" semantic noted above, so this consolidation keeps that
+// guarantee.
+import { htmlToText as stripHtml } from '@/lib/utils/html-text'
 
 /**
  * Returns true if a derived lead-source value looks like an HTML

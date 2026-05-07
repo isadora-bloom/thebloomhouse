@@ -126,15 +126,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   })
 }
 
-/** Strip HTML to plain readable text (script/style first, then tags). */
-function stripHtml(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
+// Canonical html→text. Tier-B #72: consolidated 5 local reimplementations
+// to lib/utils/html-text.ts.
+import { htmlToText as stripHtml } from '@/lib/utils/html-text'
 
 /**
  * Fetch a URL through Jina's reader (`https://r.jina.ai/<url>`) which returns

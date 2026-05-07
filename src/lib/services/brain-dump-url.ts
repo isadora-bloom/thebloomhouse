@@ -206,27 +206,9 @@ async function fetchWithCaps(url: string): Promise<{
   }
 }
 
-/**
- * Strip script, style, and other markup from raw HTML. Returns the
- * cleaned body. Not a full HTML parser — meta-tag extraction is done
- * separately and treated as authoritative when present.
- */
-function stripHtml(html: string): string {
-  return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim()
-}
+// Canonical html→text. Tier-B #72: consolidated 5 local reimplementations
+// to lib/utils/html-text.ts.
+import { htmlToText as stripHtml } from '@/lib/utils/html-text'
 
 /** Read a meta-tag value from a raw HTML blob. */
 function readMeta(html: string, propertyOrName: string): string | null {

@@ -107,37 +107,12 @@ const EMAIL_RE = /[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g
  *   - Decode the handful of entities Calendly uses (&amp; &lt; etc.)
  *   - Collapse runs of blank lines
  */
-function stripHtml(body: string): string {
-  if (!body.includes('<')) return body // plain text already
-  let s = body
-  // Remove script + style blocks entirely (content unsafe)
-  s = s.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, '')
-  // Block-level tags → newlines so "Label" and "Value" stay on separate lines.
-  // Match optional attributes ([^>]*) so Calendly's inline-styled
-  // `<br style='...'>` and `</p style='...'>` (yes, real samples)
-  // become line breaks instead of being silently stripped to empty
-  // by the catch-all below — without this, two adjacent label/value
-  // pairs concatenate and the next regex captures whichever fragment
-  // it sees, including HTML tag remnants like "</strong>" (the
-  // 2026-04-30 Rixey corruption surface). 2026-04-30: widened from
-  // bare-tag-only to attribute-tolerant.
-  s = s.replace(/<\/?(p|div|tr|td|li|h[1-6]|table|br)\b[^>]*>/gi, '\n')
-  // Strip all remaining tags
-  s = s.replace(/<[^>]+>/g, '')
-  // Decode common entities
-  s = s
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#x27;/g, "'")
-  // Collapse 3+ blank lines → 2 so the "Label\n\nValue" pattern is
-  // preserved but we don't get 20 blank lines between sections
-  s = s.replace(/\n{3,}/g, '\n\n')
-  return s
-}
+// Canonical html→text. Tier-B #72: consolidated 5 local reimplementations
+// to lib/utils/html-text.ts. The canonical helper preserves the
+// attribute-tolerant block-tag → newline behaviour that the 2026-04-30
+// Rixey corruption fix relies on (the original regex tightening was
+// hoisted into htmlToText itself).
+import { htmlToText as stripHtml } from '@/lib/utils/html-text'
 
 /** Extract the first plausible non-sender email from a body. `excludeDomains`
  *  are sender/tool domains we know aren't the invitee. */

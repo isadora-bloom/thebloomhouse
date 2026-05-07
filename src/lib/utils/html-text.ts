@@ -78,9 +78,14 @@ export function htmlToText(input: string | null | undefined): string {
   // Block-level / unsafe content removal.
   s = s.replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
   s = s.replace(/<!--[\s\S]*?-->/g, ' ')
-  // Block-level tags → newlines.
-  s = s.replace(/<\s*br\s*\/?>/gi, '\n')
-  s = s.replace(/<\/\s*(p|div|li|tr|h[1-6])\s*>/gi, '\n')
+  // Block-level tags → newlines. ATTRIBUTE-TOLERANT: real-world emails
+  // (Calendly especially) emit `<br style='...'>` and `</p style='...'>`
+  // — without [^>]* tolerance, the catch-all below silently stripped
+  // them to empty strings, concatenating adjacent label/value pairs
+  // and corrupting downstream field extraction. This is the 2026-04-30
+  // Rixey scheduling-tool-parsers fix preserved at the canonical layer.
+  s = s.replace(/<\s*br\b[^>]*>/gi, '\n')
+  s = s.replace(/<\/\s*(p|div|li|tr|td|h[1-6]|table)\s*[^>]*>/gi, '\n')
   // Remove remaining tags.
   s = s.replace(/<[^>]+>/g, '')
   // Decode entities.

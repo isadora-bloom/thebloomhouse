@@ -39,43 +39,17 @@ import {
   Pencil,
 } from 'lucide-react'
 
-// ---------------------------------------------------------------------------
-// HTML → plain text for previews and collapsed body view
-//
-// Outbound drafts (Sage replies) are stored as HTML in interactions.full_body
+// HTML → plain text for previews and collapsed body view. Outbound
+// drafts (Sage replies) are stored as HTML in interactions.full_body
 // and the first 300 chars get sliced into body_preview — which renders
-// literally as `<div>Hi Sarah!<br>...` in the inbox list. We strip tags +
-// decode a handful of common entities here so the text surface stays clean.
-// Full HTML rendering is intentionally NOT used (XSS surface on inbound
+// literally as `<div>Hi Sarah!<br>...` in the inbox list. We strip
+// tags + decode entities so the text surface stays clean. Full HTML
+// rendering is intentionally NOT used (XSS surface on inbound
 // forwarded email is not worth it for a preview).
-// ---------------------------------------------------------------------------
-
-const HTML_ENTITY_MAP: Record<string, string> = {
-  '&amp;': '&',
-  '&lt;': '<',
-  '&gt;': '>',
-  '&quot;': '"',
-  '&#39;': "'",
-  '&apos;': "'",
-  '&nbsp;': ' ',
-}
-
-function stripHtml(input: string | null | undefined): string {
-  if (!input) return ''
-  return input
-    // Convert block/line breaks to newlines before stripping tags so
-    // "Hi there<br>How are you" doesn't collapse to "Hi thereHow are you".
-    .replace(/<\s*br\s*\/?>/gi, '\n')
-    .replace(/<\/\s*(p|div|li|tr|h[1-6])\s*>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(parseInt(n, 10)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
-    .replace(/&[a-z]+;/gi, (m) => HTML_ENTITY_MAP[m.toLowerCase()] ?? m)
-    // Collapse runs of whitespace but preserve single newlines.
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
+//
+// Tier-B #72: consolidated 5 local reimplementations to the canonical
+// htmlToText in lib/utils/html-text.ts.
+import { htmlToText as stripHtml } from '@/lib/utils/html-text'
 
 // ---------------------------------------------------------------------------
 // Types
