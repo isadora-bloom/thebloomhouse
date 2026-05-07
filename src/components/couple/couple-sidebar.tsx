@@ -8,7 +8,7 @@ import {
   CheckSquare, Clock, DollarSign, FileText,
   Users, ClipboardCheck, Armchair, Table2, UsersRound, ShieldAlert, HeartHandshake,
   BookOpen, UtensilsCrossed, Wine, Flower2, Camera, Sparkles, Lightbulb,
-  Store, Star, BedDouble, Hotel, Car, HardHat,
+  Store, Star, BedDouble, Hotel, Car, HardHat, MapPin,
   Heart, Package, ShoppingBag,
   Globe, Download, CalendarPlus, ClipboardList, FileSignature,
   MessagesSquare, ChevronDown, X, CalendarRange,
@@ -72,6 +72,7 @@ export function buildCoupleSidebarSections(base: string): NavSection[] {
     {
       title: 'Logistics',
       items: [
+        { label: 'Venue Info', href: `${base}/venue-info`, icon: MapPin },
         { label: 'Vendors', href: `${base}/vendors`, icon: Store },
         { label: 'Preferred Vendors', href: `${base}/preferred-vendors`, icon: Star },
         { label: 'Rooms', href: `${base}/rooms`, icon: BedDouble },
