@@ -615,7 +615,11 @@ export default function ClientProfilePage() {
       // as a placeholder, which compared draft.id to wedding.id and never
       // matched — every wedding's draft-feedback panel was silently empty.
       // Per 2026-05-06 audit Lens 1 (intel/clients/[id]:665).
-      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes, codeRes, notesRes, toursRes, activityRes, extractionsRes] = await Promise.all([
+      // Tier-B #85 — collapse the draft_feedback fetch into the parallel
+      // batch via a wedding-scoped inner-join through drafts. Pre-fix this
+      // ran sequentially after the first 11 queries resolved (a separate
+      // round-trip just to get feedback IDs).
+      const [weddingRes, peopleRes, intRes, eventsRes, scoreRes, draftsRes, codeRes, notesRes, toursRes, activityRes, extractionsRes, feedbackRes] = await Promise.all([
         supabase
           .from('weddings')
           .select('*')
@@ -685,6 +689,15 @@ export default function ClientProfilePage() {
           .eq('wedding_id', weddingId)
           .order('created_at', { ascending: false })
           .limit(100),
+        // Tier-B #85: inner-join drafts so we can scope by wedding_id
+        // without a sequential round-trip. drafts!inner enforces the FK
+        // and wraps the query in a single PostgREST request.
+        supabase
+          .from('draft_feedback')
+          .select('id, draft_id, action, rejection_reason, created_at, drafts!inner(wedding_id)')
+          .eq('drafts.wedding_id', weddingId)
+          .order('created_at', { ascending: false })
+          .limit(50),
       ])
 
       if (weddingRes.error) throw weddingRes.error
@@ -702,19 +715,11 @@ export default function ClientProfilePage() {
       setActivityLog((activityRes.data ?? []) as ActivityLogRow[])
       setExtractions((extractionsRes.data ?? []) as ExtractionRow[])
 
-      // Fetch draft feedback using actual draft IDs
-      if (fetchedDrafts.length > 0) {
-        const draftIds = fetchedDrafts.map((d) => d.id)
-        const { data: feedbackData } = await supabase
-          .from('draft_feedback')
-          .select('id, draft_id, action, rejection_reason, created_at')
-          .in('draft_id', draftIds)
-          .order('created_at', { ascending: false })
-          .limit(50)
-        setDraftFeedback((feedbackData ?? []) as DraftFeedbackRow[])
-      } else {
-        setDraftFeedback([])
-      }
+      // Strip the join-only `drafts` field before storing.
+      const feedbackRows = (feedbackRes.data ?? []) as Array<DraftFeedbackRow & { drafts?: unknown }>
+      setDraftFeedback(
+        feedbackRows.map(({ drafts: _drop, ...rest }) => rest as DraftFeedbackRow),
+      )
       setError(null)
     } catch (err) {
       console.error('Failed to fetch client profile:', err)

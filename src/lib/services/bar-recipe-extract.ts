@@ -21,6 +21,7 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 import { callAIJson, callAIVision, CLAUDE_MODEL } from '@/lib/ai/client'
+import { safeFetch } from '@/lib/security/safe-fetch'
 import {
   recordCall,
   shouldSkip,
@@ -136,14 +137,22 @@ import { htmlToText as stripHtml } from '@/lib/utils/html-text'
  * page directly + stripping HTML when Jina is unreachable or returns empty.
  */
 async function fetchReadableText(url: string): Promise<string> {
+  // Tier-B #88 — both fetches go through safeFetch so a couple/coordinator-
+  // supplied URL can't be steered at internal IPs (SSRF). Jina's first hop
+  // is hardcoded public (r.jina.ai) but the URL embedded in the path can
+  // chain redirects, so we still wrap it. The direct-fetch fallback hits
+  // the user URL straight on and absolutely needs SSRF protection.
   // Try Jina first
   try {
     const jinaUrl = `https://r.jina.ai/${url}`
-    const res = await fetch(jinaUrl, {
-      headers: { 'User-Agent': 'BloomHouse-Recipe-Extractor/1.0' },
-      // 12s — Jina can be slow on first hit
-      signal: AbortSignal.timeout(12_000),
-    })
+    const res = await safeFetch(
+      jinaUrl,
+      {
+        headers: { 'User-Agent': 'BloomHouse-Recipe-Extractor/1.0' },
+        signal: AbortSignal.timeout(12_000),
+      },
+      { hostAllowlist: ['r.jina.ai'] },
+    )
     if (res.ok) {
       const text = await res.text()
       if (text && text.trim().length > 100) return text.slice(0, 20_000)
@@ -152,8 +161,8 @@ async function fetchReadableText(url: string): Promise<string> {
     // fall through to direct fetch
   }
 
-  // Direct fetch fallback
-  const res = await fetch(url, {
+  // Direct fetch fallback. SSRF-guarded.
+  const res = await safeFetch(url, {
     headers: {
       'User-Agent':
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
