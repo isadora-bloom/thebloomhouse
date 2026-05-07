@@ -1,11 +1,12 @@
 /**
  * Unit tests for plan-tiers.ts — pure functions, no mocks needed.
  *
- * Covers:
- *   - tierMeetsMinimum: all 9 tier-pair combinations
- *   - tierHasFeature: cumulative access at each tier
- *   - minTierForFeature: returns the correct minimum tier
- *   - TIER_RANK: strict ordering
+ * Covers (Pricing v2 — 5-tier capacity-gated model):
+ *   - tierMeetsMinimum: full 5×5 tier-pair matrix
+ *   - tierHasFeature: every tier has every feature post-v2 (always true)
+ *   - minTierForFeature: returns 'solo' (lowest paid tier) for any feature
+ *   - TIER_RANK: strict ordering across the new 5 tiers
+ *   - capacityForTier: returns the per-tier capacity caps
  */
 
 import { describe, it, expect } from 'vitest'
@@ -13,18 +14,25 @@ import {
   tierMeetsMinimum,
   tierHasFeature,
   minTierForFeature,
+  capacityForTier,
+  CAPACITY_LIMITS,
   TIER_RANK,
+  TIER_DISPLAY,
   type PlanTier,
 } from '@/lib/auth/plan-tiers'
+
+const ALL_TIERS: PlanTier[] = ['pre_opening', 'solo', 'growth', 'multi', 'enterprise']
 
 // ---------------------------------------------------------------------------
 // TIER_RANK ordering
 // ---------------------------------------------------------------------------
 
 describe('TIER_RANK', () => {
-  it('has starter < intelligence < enterprise', () => {
-    expect(TIER_RANK.starter).toBeLessThan(TIER_RANK.intelligence)
-    expect(TIER_RANK.intelligence).toBeLessThan(TIER_RANK.enterprise)
+  it('orders pre_opening < solo < growth < multi < enterprise', () => {
+    expect(TIER_RANK.pre_opening).toBeLessThan(TIER_RANK.solo)
+    expect(TIER_RANK.solo).toBeLessThan(TIER_RANK.growth)
+    expect(TIER_RANK.growth).toBeLessThan(TIER_RANK.multi)
+    expect(TIER_RANK.multi).toBeLessThan(TIER_RANK.enterprise)
   })
 
   it('assigns non-negative integers to every tier', () => {
@@ -33,28 +41,32 @@ describe('TIER_RANK', () => {
       expect(Number.isInteger(rank)).toBe(true)
     }
   })
+
+  it('has TIER_DISPLAY entries for every tier', () => {
+    for (const tier of ALL_TIERS) {
+      expect(TIER_DISPLAY[tier]).toBeDefined()
+      expect(TIER_DISPLAY[tier].name.length).toBeGreaterThan(0)
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
-// tierMeetsMinimum — exhaustive 3×3 matrix
+// tierMeetsMinimum — exhaustive 5×5 matrix
 // ---------------------------------------------------------------------------
 
 describe('tierMeetsMinimum', () => {
-  // Rows = current tier, Cols = required tier
-  const matrix: Array<{ current: PlanTier; required: PlanTier; expected: boolean }> = [
-    // starter vs all
-    { current: 'starter', required: 'starter', expected: true },
-    { current: 'starter', required: 'intelligence', expected: false },
-    { current: 'starter', required: 'enterprise', expected: false },
-    // intelligence vs all
-    { current: 'intelligence', required: 'starter', expected: true },
-    { current: 'intelligence', required: 'intelligence', expected: true },
-    { current: 'intelligence', required: 'enterprise', expected: false },
-    // enterprise vs all
-    { current: 'enterprise', required: 'starter', expected: true },
-    { current: 'enterprise', required: 'intelligence', expected: true },
-    { current: 'enterprise', required: 'enterprise', expected: true },
-  ]
+  // Build the matrix programmatically: a tier meets a required tier iff
+  // its rank is >= the required rank.
+  const matrix: Array<{ current: PlanTier; required: PlanTier; expected: boolean }> = []
+  for (const current of ALL_TIERS) {
+    for (const required of ALL_TIERS) {
+      matrix.push({
+        current,
+        required,
+        expected: TIER_RANK[current] >= TIER_RANK[required],
+      })
+    }
+  }
 
   for (const { current, required, expected } of matrix) {
     it(`tierMeetsMinimum('${current}', '${required}') → ${expected}`, () => {
@@ -62,103 +74,91 @@ describe('tierMeetsMinimum', () => {
     })
   }
 
-  it('enterprise meets starter minimum', () => {
-    expect(tierMeetsMinimum('enterprise', 'starter')).toBe(true)
+  it('enterprise meets every minimum', () => {
+    for (const required of ALL_TIERS) {
+      expect(tierMeetsMinimum('enterprise', required)).toBe(true)
+    }
   })
 
-  it('enterprise meets intelligence minimum', () => {
-    expect(tierMeetsMinimum('enterprise', 'intelligence')).toBe(true)
+  it('pre_opening only meets pre_opening', () => {
+    expect(tierMeetsMinimum('pre_opening', 'pre_opening')).toBe(true)
+    expect(tierMeetsMinimum('pre_opening', 'solo')).toBe(false)
+    expect(tierMeetsMinimum('pre_opening', 'enterprise')).toBe(false)
   })
 
-  it('starter does not meet intelligence minimum', () => {
-    expect(tierMeetsMinimum('starter', 'intelligence')).toBe(false)
-  })
-
-  it('intelligence meets intelligence minimum (equal tier)', () => {
-    expect(tierMeetsMinimum('intelligence', 'intelligence')).toBe(true)
-  })
-
-  it('enterprise meets enterprise minimum (equal tier)', () => {
-    expect(tierMeetsMinimum('enterprise', 'enterprise')).toBe(true)
+  it('every tier meets itself (reflexive)', () => {
+    for (const tier of ALL_TIERS) {
+      expect(tierMeetsMinimum(tier, tier)).toBe(true)
+    }
   })
 })
 
 // ---------------------------------------------------------------------------
-// tierHasFeature — cumulative access
+// tierHasFeature — pricing v2: every tier has every feature
 // ---------------------------------------------------------------------------
 
-describe('tierHasFeature', () => {
-  // Starter-only features
-  it('starter has access to "agent" feature', () => {
-    expect(tierHasFeature('starter', 'agent')).toBe(true)
-  })
-
-  it('intelligence has access to "agent" (cumulative from starter)', () => {
-    expect(tierHasFeature('intelligence', 'agent')).toBe(true)
-  })
-
-  it('enterprise has access to "agent" (cumulative from starter)', () => {
-    expect(tierHasFeature('enterprise', 'agent')).toBe(true)
-  })
-
-  // Intelligence-tier features
-  it('intelligence has access to "sage" feature', () => {
-    expect(tierHasFeature('intelligence', 'sage')).toBe(true)
-  })
-
-  it('enterprise has access to "sage" (cumulative from intelligence)', () => {
-    expect(tierHasFeature('enterprise', 'sage')).toBe(true)
-  })
-
-  it('starter does NOT have access to "sage"', () => {
-    expect(tierHasFeature('starter', 'sage')).toBe(false)
-  })
-
-  // Enterprise-only features
-  it('enterprise has access to "multi_venue" feature', () => {
-    expect(tierHasFeature('enterprise', 'multi_venue')).toBe(true)
-  })
-
-  it('intelligence does NOT have access to "multi_venue"', () => {
-    expect(tierHasFeature('intelligence', 'multi_venue')).toBe(false)
-  })
-
-  it('starter does NOT have access to "multi_venue"', () => {
-    expect(tierHasFeature('starter', 'multi_venue')).toBe(false)
-  })
-
-  it('returns false for a completely unknown feature at any tier', () => {
-    expect(tierHasFeature('enterprise', 'feature_that_does_not_exist')).toBe(false)
-    expect(tierHasFeature('starter', 'feature_that_does_not_exist')).toBe(false)
+describe('tierHasFeature (pricing v2)', () => {
+  it('returns true for every tier × every feature (capacity is the only differentiator)', () => {
+    const sampleFeatures = ['agent', 'sage', 'multi_venue', 'totally_made_up_feature']
+    for (const tier of ALL_TIERS) {
+      for (const feature of sampleFeatures) {
+        expect(tierHasFeature(tier, feature)).toBe(true)
+      }
+    }
   })
 })
 
 // ---------------------------------------------------------------------------
-// minTierForFeature
+// minTierForFeature — pricing v2: lowest paid tier (solo) for any feature
 // ---------------------------------------------------------------------------
 
-describe('minTierForFeature', () => {
-  it('returns "starter" for a starter feature', () => {
-    expect(minTierForFeature('agent')).toBe('starter')
+describe('minTierForFeature (pricing v2)', () => {
+  it('returns "solo" for any feature (no feature gates exist post-v2)', () => {
+    expect(minTierForFeature('agent')).toBe('solo')
+    expect(minTierForFeature('sage')).toBe('solo')
+    expect(minTierForFeature('multi_venue')).toBe('solo')
+    expect(minTierForFeature('totally_unknown_feature')).toBe('solo')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// capacityForTier — capacity caps per tier
+// ---------------------------------------------------------------------------
+
+describe('capacityForTier', () => {
+  it('matches the documented capacity table', () => {
+    expect(capacityForTier('pre_opening')).toEqual({
+      inquiriesPerMonth: 100,
+      venues: 1,
+      activeCouplesInPortal: 30,
+    })
+    expect(capacityForTier('solo')).toEqual({
+      inquiriesPerMonth: 150,
+      venues: 1,
+      activeCouplesInPortal: 50,
+    })
+    expect(capacityForTier('growth')).toEqual({
+      inquiriesPerMonth: 400,
+      venues: 1,
+      activeCouplesInPortal: 150,
+    })
+    expect(capacityForTier('multi')).toEqual({
+      inquiriesPerMonth: 1200,
+      venues: 5,
+      activeCouplesInPortal: 400,
+    })
   })
 
-  it('returns "starter" for "portal" (starter feature)', () => {
-    expect(minTierForFeature('portal')).toBe('starter')
+  it('returns null caps for enterprise (unlimited)', () => {
+    const caps = capacityForTier('enterprise')
+    expect(caps.inquiriesPerMonth).toBeNull()
+    expect(caps.venues).toBeNull()
+    expect(caps.activeCouplesInPortal).toBeNull()
   })
 
-  it('returns "intelligence" for "sage"', () => {
-    expect(minTierForFeature('sage')).toBe('intelligence')
-  })
-
-  it('returns "intelligence" for "couple_portal"', () => {
-    expect(minTierForFeature('couple_portal')).toBe('intelligence')
-  })
-
-  it('returns "enterprise" for "multi_venue"', () => {
-    expect(minTierForFeature('multi_venue')).toBe('enterprise')
-  })
-
-  it('returns "enterprise" for a completely unknown feature (fail-closed)', () => {
-    expect(minTierForFeature('totally_unknown_feature')).toBe('enterprise')
+  it('returns the same record exposed via CAPACITY_LIMITS', () => {
+    for (const tier of ALL_TIERS) {
+      expect(capacityForTier(tier)).toEqual(CAPACITY_LIMITS[tier])
+    }
   })
 })

@@ -9,7 +9,7 @@
  *   3. Demo-token bypass returns { ok: true, isDemo: true } without any DB
  *      calls.
  *   4. Unauthenticated users (getUser returns null) → { ok: false, status: 401 }.
- *   5. A user on starter tier requesting an intelligence-gated route →
+ *   5. A user on solo tier requesting a growth-gated route →
  *      { ok: false, status: 403 }.
  *
  * ALL external calls are mocked. No network traffic, no Supabase, no Claude.
@@ -181,10 +181,10 @@ describe('30-second tier cache', () => {
 
     const fakeReq = new Request(FAKE_URL)
 
-    const r1 = await requirePlan(fakeReq, 'starter')
+    const r1 = await requirePlan(fakeReq, 'solo')
     expect(r1.ok).toBe(true)
 
-    const r2 = await requirePlan(fakeReq, 'starter')
+    const r2 = await requirePlan(fakeReq, 'solo')
     expect(r2.ok).toBe(true)
 
     // auth.getUser is called once per requirePlan (before cache check).
@@ -198,20 +198,20 @@ describe('30-second tier cache', () => {
 
   it('calls Supabase again after the 30-second TTL expires', async () => {
     const { requirePlan, venueChain } = await buildRequirePlan({
-      venueResult: { data: { plan_tier: 'intelligence', subscription_status: 'active', past_due_since: null, updated_at: null } },
+      venueResult: { data: { plan_tier: 'growth', subscription_status: 'active', past_due_since: null, updated_at: null } },
     })
 
     const fakeReq = new Request(FAKE_URL)
 
     // First call — populates cache.
-    await requirePlan(fakeReq, 'starter')
+    await requirePlan(fakeReq, 'solo')
     expect(venueChain.single).toHaveBeenCalledTimes(1)
 
     // Advance time past the 30-second TTL.
     vi.advanceTimersByTime(31_000)
 
     // Second call — cache is expired, Supabase must be called again.
-    await requirePlan(fakeReq, 'starter')
+    await requirePlan(fakeReq, 'solo')
     expect(venueChain.single).toHaveBeenCalledTimes(2)
   })
 
@@ -222,8 +222,8 @@ describe('30-second tier cache', () => {
 
     const fakeReq = new Request(FAKE_URL)
 
-    const r1 = await requirePlan(fakeReq, 'intelligence')
-    const r2 = await requirePlan(fakeReq, 'intelligence')
+    const r1 = await requirePlan(fakeReq, 'growth')
+    const r2 = await requirePlan(fakeReq, 'growth')
 
     // Both must pass because enterprise >= intelligence.
     expect(r1.ok).toBe(true)
@@ -261,7 +261,7 @@ describe('unauthenticated user', () => {
       getUserResult: { data: { user: null } },
     })
 
-    const result = await requirePlan(new Request(FAKE_URL), 'starter')
+    const result = await requirePlan(new Request(FAKE_URL), 'solo')
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.status).toBe(401)
@@ -275,27 +275,27 @@ describe('unauthenticated user', () => {
 describe('insufficient tier', () => {
   it('returns { ok: false, status: 403 } when user is on starter but route requires intelligence', async () => {
     const { requirePlan } = await buildRequirePlan({
-      venueResult: { data: { plan_tier: 'starter', subscription_status: 'active', past_due_since: null, updated_at: null } },
+      venueResult: { data: { plan_tier: 'solo', subscription_status: 'active', past_due_since: null, updated_at: null } },
     })
 
-    const result = await requirePlan(new Request(FAKE_URL), 'intelligence')
+    const result = await requirePlan(new Request(FAKE_URL), 'growth')
 
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.status).toBe(403)
       if ('requiredTier' in result) {
-        expect(result.requiredTier).toBe('intelligence')
-        expect(result.currentTier).toBe('starter')
+        expect(result.requiredTier).toBe('growth')
+        expect(result.currentTier).toBe('solo')
       }
     }
   })
 
   it('returns { ok: true } when user is on intelligence and route requires starter', async () => {
     const { requirePlan } = await buildRequirePlan({
-      venueResult: { data: { plan_tier: 'intelligence', subscription_status: 'active', past_due_since: null, updated_at: null } },
+      venueResult: { data: { plan_tier: 'growth', subscription_status: 'active', past_due_since: null, updated_at: null } },
     })
 
-    const result = await requirePlan(new Request(FAKE_URL), 'starter')
+    const result = await requirePlan(new Request(FAKE_URL), 'solo')
 
     expect(result.ok).toBe(true)
   })
@@ -311,7 +311,7 @@ describe('missing profile', () => {
       profileResult: { data: null },
     })
 
-    const result = await requirePlan(new Request(FAKE_URL), 'starter')
+    const result = await requirePlan(new Request(FAKE_URL), 'solo')
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.status).toBe(401)
@@ -373,11 +373,11 @@ describe('planErrorBody', () => {
       ok: false,
       status: 403,
       message: 'Upgrade required',
-      requiredTier: 'intelligence',
-      currentTier: 'starter',
+      requiredTier: 'growth',
+      currentTier: 'solo',
     })
     expect(body.error).toBe('plan_required')
-    expect(body.required_tier).toBe('intelligence')
-    expect(body.current_tier).toBe('starter')
+    expect(body.required_tier).toBe('growth')
+    expect(body.current_tier).toBe('solo')
   })
 })

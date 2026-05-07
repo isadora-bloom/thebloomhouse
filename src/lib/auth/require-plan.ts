@@ -196,7 +196,7 @@ export async function requirePlan(
     .eq('id', resolvedVenueId)
     .single()
 
-  const currentTier = (venue?.plan_tier as PlanTier | undefined) ?? 'starter'
+  const currentTier = (venue?.plan_tier as PlanTier | undefined) ?? 'solo'
 
   // ---------------------------------------------------------------------------
   // 7-day past-due grace period (Fix 5 / Wave B)
@@ -227,9 +227,10 @@ export async function requirePlan(
       // request so the expiry is enforced at day-boundary precision.
       return { ok: true, isDemo: false }
     }
-    // Grace period expired — treat as starter for access purposes.
-    // Fall through to the standard tier check below with effectiveTier = 'starter'.
-    const effectiveTier: PlanTier = 'starter'
+    // Grace period expired — treat as solo (the new pricing-v2 baseline) for
+    // access purposes. Fall through to the standard tier check below with
+    // effectiveTier = 'solo'.
+    const effectiveTier: PlanTier = 'solo'
     if (tierMeetsMinimum(effectiveTier, minTier)) {
       return { ok: true, isDemo: false }
     }

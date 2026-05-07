@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { planTierForPriceId } from '@/lib/billing/plans'
+import { TIER_RANK, type PlanTier } from '@/lib/auth/plan-tiers'
 import { getStripe, isStripeConfigured } from '@/lib/stripe'
 import { redact, redactError } from '@/lib/observability/redact'
 import { recordCounter } from '@/lib/observability/metrics'
@@ -456,13 +457,13 @@ export async function POST(request: NextRequest) {
         console.log(`[webhook/stripe] Updated venue ${venueId} to plan: ${planTier}`)
 
         // Notify on a tier change (upgrade or downgrade). Skip notifications
-        // for "noise" updates that don't change the visible plan.
+        // for "noise" updates that don't change the visible plan. The
+        // direction is determined by TIER_RANK so the comparison stays
+        // consistent across the 5-tier capacity model (pricing v2).
         if (previousTier && previousTier !== planTier) {
-          const direction =
-            (previousTier === 'starter' && planTier !== 'starter') ||
-            (previousTier === 'intelligence' && planTier === 'enterprise')
-              ? 'upgraded'
-              : 'changed'
+          const prevRank = TIER_RANK[previousTier as PlanTier] ?? -1
+          const nextRank = TIER_RANK[planTier] ?? -1
+          const direction = nextRank > prevRank ? 'upgraded' : 'changed'
           await writeAdminNotification(supabase, {
             venueId,
             type: `subscription_${direction}`,
@@ -522,15 +523,15 @@ export async function POST(request: NextRequest) {
           break
         }
 
-        // Downgrade to starter tier on cancellation. Also clear subscription_status
+        // Downgrade to solo tier on cancellation. Also clear subscription_status
         // and past_due_since (migration 211) so require-plan.ts sees a clean state.
-        // NOTE: 'starter' is the free/baseline tier in our schema. The
-        // venues.plan_tier CHECK constraint only allows
-        // ('starter', 'intelligence', 'enterprise') — there is no 'free' value.
+        // NOTE (pricing v2): 'solo' is the lowest paid tier and the new default
+        // for venues.plan_tier (migration 215). The CHECK constraint allows
+        // ('pre_opening', 'solo', 'growth', 'multi', 'enterprise').
         const { error } = await supabase
           .from('venues')
           .update({
-            plan_tier: 'starter',
+            plan_tier: 'solo',
             stripe_subscription_id: null,
             subscription_status: 'canceled',
             past_due_since: null,
@@ -543,14 +544,14 @@ export async function POST(request: NextRequest) {
           throw error
         }
 
-        console.log(`[webhook/stripe] Downgraded venue ${venueId} to starter tier`)
+        console.log(`[webhook/stripe] Downgraded venue ${venueId} to solo tier`)
 
         await writeAdminNotification(supabase, {
           venueId,
           type: 'subscription_canceled',
-          title: 'Subscription canceled — downgraded to Starter',
+          title: 'Subscription canceled — downgraded to Solo',
           body:
-            'Your paid subscription has ended and your venue is back on the Starter plan. ' +
+            'Your paid subscription has ended and your venue is back on the Solo plan. ' +
             'Re-subscribe anytime at /pricing. (subscription ' + subscription.id + ')',
           priority: 'high',
           dedupKey: subscription.id,
@@ -670,22 +671,24 @@ export async function POST(request: NextRequest) {
 // Helper: map Stripe subscription to plan tier
 // ---------------------------------------------------------------------------
 
-function mapSubscriptionToTier(subscription: Stripe.Subscription): 'starter' | 'intelligence' | 'enterprise' {
+function mapSubscriptionToTier(subscription: Stripe.Subscription): PlanTier {
   const status = subscription.status
 
   // If subscription is not active, default to the baseline tier.
-  // NOTE: 'starter' is the free/baseline tier in our schema. The
-  // venues.plan_tier CHECK constraint only allows
-  // ('starter', 'intelligence', 'enterprise') — there is no 'free' value.
+  // NOTE (pricing v2): 'solo' is the lowest paid tier and the new default
+  // for venues.plan_tier (migration 215). The CHECK constraint allows
+  // ('pre_opening', 'solo', 'growth', 'multi', 'enterprise').
   if (status !== 'active' && status !== 'trialing') {
-    return 'starter'
+    return 'solo'
   }
 
   // Explicit override via metadata wins (useful for manual/grandfathered tiers)
   const explicitTier = subscription.metadata?.plan_tier
   if (
-    explicitTier === 'starter' ||
-    explicitTier === 'intelligence' ||
+    explicitTier === 'pre_opening' ||
+    explicitTier === 'solo' ||
+    explicitTier === 'growth' ||
+    explicitTier === 'multi' ||
     explicitTier === 'enterprise'
   ) {
     return explicitTier
@@ -698,6 +701,6 @@ function mapSubscriptionToTier(subscription: Stripe.Subscription): 'starter' | '
     if (mapped) return mapped
   }
 
-  // Unknown price — default to starter rather than silently granting a paid tier
-  return 'starter'
+  // Unknown price — default to solo rather than silently granting a higher tier
+  return 'solo'
 }

@@ -31,8 +31,8 @@ export {
  * an immediate re-fetch of plan_tier without a full page reload.
  *
  * Phase 1 audit fixes:
- * - Default tier is now 'starter' (not 'enterprise') so gates don't flash
- *   open while loading — guards should fail closed.
+ * - Default tier is now 'solo' (the lowest paid tier post-pricing-v2) so
+ *   gates don't flash open while loading — guards should fail closed.
  * - Supabase realtime subscription on the venues row means a Stripe webhook
  *   upgrade propagates to the sidebar without a page reload.
  * - Window focus listener refetches when the coordinator returns from the
@@ -40,9 +40,9 @@ export {
  */
 export function usePlanTier() {
   const { venueId, isDemo } = useVenueScope()
-  // Default to 'starter' so feature gates fail closed during the initial
-  // fetch instead of momentarily showing paid-tier content.
-  const [tier, setTier] = useState<PlanTier>('starter')
+  // Default to 'solo' so feature gates fail closed during the initial
+  // fetch instead of momentarily showing higher-tier content.
+  const [tier, setTier] = useState<PlanTier>('solo')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {

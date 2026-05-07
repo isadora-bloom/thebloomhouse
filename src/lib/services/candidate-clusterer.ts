@@ -489,14 +489,28 @@ async function flushCandidatesForGroup(
       weddingsToRefresh.set(c.resolved_wedding_id, c.venue_id)
     }
   }
-  for (const [weddingId, venueId] of weddingsToRefresh) {
-    try {
-      await recalculateHeatScore(venueId, weddingId)
-    } catch (err) {
-      summary.errors.push(
-        `heat recalc for wedding ${weddingId}: ${err instanceof Error ? err.message : String(err)}`,
-      )
-    }
+  // Tier-B #84: parallelize heat recalcs. CSV imports can attach
+  // signals to dozens of pre-existing weddings; serial recalc was
+  // a real cron-tail bottleneck. Promise.allSettled isolates per-
+  // wedding failures so one bad row doesn't drop the rest.
+  const refreshResults = await Promise.allSettled(
+    Array.from(weddingsToRefresh.entries()).map(async ([weddingId, venueId]) => {
+      try {
+        await recalculateHeatScore(venueId, weddingId)
+      } catch (err) {
+        summary.errors.push(
+          `heat recalc for wedding ${weddingId}: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
+    }),
+  )
+  // Promise.allSettled never rejects, but log anything weird in case
+  // a non-await throw escapes the inner try.
+  const refreshFailures = refreshResults.filter((r) => r.status === 'rejected')
+  if (refreshFailures.length > 0) {
+    console.warn(
+      `[clusterer] ${refreshFailures.length} of ${weddingsToRefresh.size} heat recalcs threw outside the try`,
+    )
   }
 }
 

@@ -1,14 +1,18 @@
-import type { PlanTier } from '@/lib/hooks/use-plan-tier'
+import type { PlanTier } from '@/lib/auth/plan-tiers'
 
 // ---------------------------------------------------------------------------
-// Plan catalog
+// Plan catalog — Pricing v2 (capacity-gated 5-tier model)
 //
 // Single source of truth for pricing, features, and Stripe price IDs.
 // Consumed by the public /pricing page, the billing page, and the
 // checkout endpoint (to validate incoming price IDs).
 //
-// Prices are USD. Annual shows the yearly total (already discounted —
-// equivalent to ~10 months).
+// Every tier gets every feature. Capacity (inquiries/mo, venues, active
+// couples in portal) is the only differentiator.
+//
+// Annual prepay = monthly * 12 * 0.85 (15% off), offered for solo/growth/
+// multi only. Pre-Opening has no annual prepay; Enterprise is sales-led.
+// Prices are USD.
 // ---------------------------------------------------------------------------
 
 export interface Plan {
@@ -16,68 +20,98 @@ export interface Plan {
   name: string
   tagline: string
   monthly: number
+  /** 0 if no annual offering for this tier (pre_opening, enterprise). */
   annual: number
   monthlyPriceId?: string
   annualPriceId?: string
   features: string[]
+  capacity: { inquiries: string; venues: string; couples: string }
   /** Highlighted as the recommended tier on the pricing page. */
   featured?: boolean
+  /** True for sales-led tiers (pre_opening waitlist, multi onboarding, enterprise). */
+  contactSales?: boolean
 }
 
 export const PLANS: Plan[] = [
   {
-    tier: 'starter',
-    name: 'Starter',
-    tagline: 'Everything a single venue needs to respond, manage, and grow.',
-    monthly: 0,
+    tier: 'pre_opening',
+    name: 'Pre-Opening',
+    tagline: 'For venues not yet operational.',
+    monthly: 99,
     annual: 0,
+    monthlyPriceId: process.env.STRIPE_PRICE_PRE_OPENING_MONTHLY,
+    contactSales: true,
+    capacity: { inquiries: '100/mo', venues: '1', couples: '30 active' },
     features: [
-      'AI email agent with approval queue',
-      'Lead pipeline & heat map',
-      'Couple portal with Sage chat',
-      'Knowledge base & vendor directory',
-      'Voice training & brand rules',
-      'Email sequences & analytics',
-      'Up to 1 venue',
+      'Full Bloom platform — Agent + Intelligence + Portal',
+      'Pre-opening guidance and benchmarks',
+      'Auto-rolls to Solo when first wedding completes',
     ],
   },
   {
-    tier: 'intelligence',
-    name: 'Intelligence',
-    tagline: 'The full Bloom House intelligence loop — market, trends, reviews.',
-    monthly: 249,
-    annual: 2490,
-    monthlyPriceId: process.env.STRIPE_PRICE_INTELLIGENCE_MONTHLY,
-    annualPriceId: process.env.STRIPE_PRICE_INTELLIGENCE_ANNUAL,
-    featured: true,
+    tier: 'solo',
+    name: 'Solo',
+    tagline: 'For established single venues, owner-operated.',
+    monthly: 299,
+    annual: 3049,  // 299 * 12 * 0.85 = 3049.8 → 3049
+    monthlyPriceId: process.env.STRIPE_PRICE_SOLO_MONTHLY,
+    annualPriceId: process.env.STRIPE_PRICE_SOLO_ANNUAL,
+    capacity: { inquiries: '150/mo', venues: '1', couples: '50 active' },
     features: [
-      'Everything in Starter',
-      'Intelligence dashboard & market pulse',
-      'Ask Anything (natural language queries)',
-      'Daily briefings & trend watch',
-      'Review monitoring & sentiment',
-      'Tour conversion analytics',
-      'Lost-deal insights & campaigns',
-      'Capacity & forecast models',
-      'Health score tracking',
+      'Full Bloom platform — Agent + Intelligence + Portal',
+      'Voice training + Always/Never rules',
+      'Custom venue knowledge base',
+      'Email support',
+    ],
+  },
+  {
+    tier: 'growth',
+    name: 'Growth',
+    tagline: 'For venues with staff, ~50–100 weddings/year.',
+    monthly: 549,
+    annual: 5599,  // 549 * 12 * 0.85 = 5599.8 → 5599
+    monthlyPriceId: process.env.STRIPE_PRICE_GROWTH_MONTHLY,
+    annualPriceId: process.env.STRIPE_PRICE_GROWTH_ANNUAL,
+    featured: true,
+    capacity: { inquiries: '400/mo', venues: '1', couples: '150 active' },
+    features: [
+      'Everything in Solo',
+      'Higher capacity for established venues',
+      'Priority email support',
+    ],
+  },
+  {
+    tier: 'multi',
+    name: 'Multi',
+    tagline: 'For small portfolios (2–5 venues).',
+    monthly: 1099,
+    annual: 11209,  // 1099 * 12 * 0.85 = 11209.8 → 11209
+    monthlyPriceId: process.env.STRIPE_PRICE_MULTI_MONTHLY,
+    annualPriceId: process.env.STRIPE_PRICE_MULTI_ANNUAL,
+    contactSales: true,
+    capacity: { inquiries: '1,200/mo', venues: 'Up to 5', couples: '400 active' },
+    features: [
+      'Everything in Growth',
+      'Cross-venue intelligence',
+      'Unified attribution across portfolio',
+      'Dedicated onboarding',
     ],
   },
   {
     tier: 'enterprise',
     name: 'Enterprise',
-    tagline: 'For venue groups and multi-property operators.',
-    monthly: 599,
-    annual: 5990,
-    monthlyPriceId: process.env.STRIPE_PRICE_ENTERPRISE_MONTHLY,
-    annualPriceId: process.env.STRIPE_PRICE_ENTERPRISE_ANNUAL,
+    tagline: 'For venue groups, PE-backed portfolios, regional rollups.',
+    monthly: 0,
+    annual: 0,
+    contactSales: true,
+    capacity: { inquiries: 'Unlimited', venues: 'Unlimited', couples: 'Unlimited' },
     features: [
-      'Everything in Intelligence',
-      'Portfolio overview across venues',
-      'Company-wide performance dashboards',
-      'Team performance & regions',
-      'Cross-venue client deduplication',
-      'Unlimited venues & users',
-      'Priority support',
+      'Everything in Multi',
+      'Cross-portfolio dashboards',
+      'API access',
+      'Dedicated account management',
+      'Priority feature requests',
+      'Uptime + response SLA',
     ],
   },
 ]
