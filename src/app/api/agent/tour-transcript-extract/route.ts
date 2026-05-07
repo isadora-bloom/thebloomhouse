@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { extractTourTranscript } from '@/lib/services/tour-transcript-extract'
+import { extractTourTranscript } from '@/lib/services/tour/transcript-extract'
 
 // ---------------------------------------------------------------------------
 // POST { tourId }

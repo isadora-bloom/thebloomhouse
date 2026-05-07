@@ -153,7 +153,7 @@ async function main() {
   // Optional inline classifier dry-run
   if (process.argv.includes('--classify')) {
     console.log('\n--- Inline classifier dry-run on Rixey ---')
-    const { classifyTourOutcomes } = await import('../src/lib/services/tour-outcome-classifier')
+    const { classifyTourOutcomes } = await import('../src/lib/services/tour/outcome-classifier')
     const RIXEY = 'f3d10226-4c5c-47ad-b89b-98ad63842492'
     const r = await classifyTourOutcomes(sb, RIXEY)
     console.log(JSON.stringify(r, null, 2))

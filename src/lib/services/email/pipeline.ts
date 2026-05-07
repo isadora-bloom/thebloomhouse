@@ -2379,7 +2379,7 @@ export async function processIncomingEmail(
           const {
             findCancellableTour,
             extractCancellationReason,
-          } = await import('@/lib/services/tour-cancellation-reason')
+          } = await import('@/lib/services/tour/cancellation-reason')
           const tourRow = await findCancellableTour(supabase, {
             venueId,
             weddingId,

@@ -67,7 +67,7 @@ async function main() {
 
   // (4) Run the classifier.
   console.log(`\nRunning classifier for Rixey…`)
-  const { classifyTourOutcomes } = await import('../../src/lib/services/tour-outcome-classifier')
+  const { classifyTourOutcomes } = await import('../../src/lib/services/tour/outcome-classifier')
   const result = await classifyTourOutcomes(sb as Parameters<typeof classifyTourOutcomes>[0], RIXEY)
   console.log('\nClassifier result:')
   console.log(JSON.stringify(result, null, 2))

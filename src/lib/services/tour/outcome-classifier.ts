@@ -51,7 +51,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
-import { extractCancellationReason } from '@/lib/services/tour-cancellation-reason'
+import { extractCancellationReason } from '@/lib/services/tour/cancellation-reason'
 
 // ---------------------------------------------------------------------------
 // Tunables

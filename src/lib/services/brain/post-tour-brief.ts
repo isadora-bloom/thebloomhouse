@@ -29,7 +29,7 @@ import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
 import { requireAiName } from '@/lib/ai/personality-builder'
-import type { TranscriptExtraction } from '../tour-transcript-extract'
+import type { TranscriptExtraction } from '../tour/transcript-extract'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
 export const BRAIN_PROMPT_VERSION = 'post-tour-brief.prompt.v1.0'

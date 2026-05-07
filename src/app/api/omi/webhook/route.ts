@@ -23,7 +23,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { extractTourTranscript } from '@/lib/services/tour-transcript-extract'
+import { extractTourTranscript } from '@/lib/services/tour/transcript-extract'
 import { omiAdapter } from '@/lib/services/audio-capture/adapters/omi-adapter'
 import { persistAudioSegments } from '@/lib/services/audio-capture/orchestrator'
 
