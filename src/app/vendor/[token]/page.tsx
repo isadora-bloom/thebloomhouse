@@ -1,6 +1,22 @@
 'use client'
 
-// Public vendor self-service page: vendors update their own info via token link
+/**
+ * /vendor/[token] — DAY-OF VENDOR COORDINATION self-service.
+ *
+ * NOT to be confused with /vendor-portal/[token] (a different product).
+ * Tier-B audit #81 flagged the two pages as suspicious near-duplicates;
+ * they're not duplicates, but the names invite confusion. See
+ * /api/vendor-portal/[token]/route.ts for the matching API + schema.
+ *
+ * This page is for vendors HIRED for a specific wedding to confirm their
+ * arrival/departure window, contact info, and notes. Backed by the
+ * `booked_vendors` table; tokens issued per-booking (migration 032).
+ *
+ * /vendor-portal/[token] is a separate product targeting the venue's
+ * MARKETPLACE catalog (`vendor_recommendations`) — vendors update their
+ * marketing profile (bio, pricing, portfolio photos), not day-of logistics.
+ */
+//
 // No auth required — the token IS the auth
 
 import { useState, useEffect } from 'react'

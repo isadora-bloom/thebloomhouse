@@ -1,5 +1,22 @@
 'use client'
 
+/**
+ * /vendor-portal/[token] — MARKETPLACE LISTING self-service.
+ *
+ * NOT to be confused with /vendor/[token] (a different product). Tier-B
+ * audit #81 flagged the two pages as suspicious near-duplicates; they're
+ * not duplicates, but the names invite confusion.
+ *
+ * This page is for vendors in the venue's preferred/recommended catalog
+ * (`vendor_recommendations` table) to maintain their marketing profile
+ * — bio, pricing, portfolio photos, social links. Backed by
+ * /api/public/vendor-portal.
+ *
+ * /vendor/[token] is a separate product for vendors HIRED for a specific
+ * wedding (`booked_vendors`) to confirm day-of logistics — arrival /
+ * departure windows, contact info, day-of notes.
+ */
+
 import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
 import {
