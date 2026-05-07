@@ -960,83 +960,95 @@ export async function applyDailyDecay(venueId: string): Promise<DecaySummary> {
   let warningsFired = 0
   let autoLostCount = 0
 
-  for (const wedding of weddings) {
-    const weddingId = wedding.id as string
-    const oldScore = (wedding.heat_score as number) ?? 0
-    const oldTier = (wedding.temperature_tier as string) ?? 'cool'
+  // Tier-B #83: parallelize per-wedding work. Each wedding's decay /
+  // warnings / auto-lost processing is independent, so the previous
+  // serial `for…await` loop produced O(N) sequential round trips for
+  // a venue with N active inquiries. Now Promise.all over the whole
+  // list runs the writes concurrently. Concurrency is naturally
+  // capped by Supabase's pool (10-15 simultaneous connections via
+  // PgBouncer), and Promise.allSettled isolates per-wedding failures
+  // so one bad row doesn't poison the whole sweep.
+  //
+  // Counts are mutated inside the per-wedding closure under the
+  // single-threaded JS event loop — no atomic-counter races.
+  const results = await Promise.allSettled(
+    weddings.map(async (wedding) => {
+      const weddingId = wedding.id as string
+      const oldScore = (wedding.heat_score as number) ?? 0
+      const oldTier = (wedding.temperature_tier as string) ?? 'cool'
 
-    // Silence floor: last inbound, else inquiry_date.
-    const lastActivity = latestByWedding.get(weddingId) ?? (wedding.inquiry_date as string | null)
-    const silentDays = lastActivity
-      ? Math.floor((now.getTime() - new Date(lastActivity).getTime()) / (1000 * 60 * 60 * 24))
-      : 0
+      const lastActivity =
+        latestByWedding.get(weddingId) ?? (wedding.inquiry_date as string | null)
+      const silentDays = lastActivity
+        ? Math.floor((now.getTime() - new Date(lastActivity).getTime()) / (1000 * 60 * 60 * 24))
+        : 0
 
-    // --- Branch 1: heat decay ---
-    if (oldScore > 0) {
-      const newScore = Math.max(0, Math.round(oldScore * decayMultiplier))
-      if (newScore !== oldScore) {
-        const newTier = getTier(newScore)
-
-        await supabase
-          .from('weddings')
-          .update({
-            heat_score: newScore,
-            temperature_tier: newTier,
-            updated_at: nowIso,
-          })
-          .eq('id', weddingId)
-
-        if (newTier !== oldTier) {
-          await supabase.from('lead_score_history').insert({
-            venue_id: venueId,
-            wedding_id: weddingId,
-            score: newScore,
-            temperature_tier: newTier,
-            calculated_at: nowIso,
-          })
+      // Branch 1: heat decay
+      if (oldScore > 0) {
+        const newScore = Math.max(0, Math.round(oldScore * decayMultiplier))
+        if (newScore !== oldScore) {
+          const newTier = getTier(newScore)
+          await supabase
+            .from('weddings')
+            .update({
+              heat_score: newScore,
+              temperature_tier: newTier,
+              updated_at: nowIso,
+            })
+            .eq('id', weddingId)
+          if (newTier !== oldTier) {
+            await supabase.from('lead_score_history').insert({
+              venue_id: venueId,
+              wedding_id: weddingId,
+              score: newScore,
+              temperature_tier: newTier,
+              calculated_at: nowIso,
+            })
+          }
+          decayedCount++
         }
-
-        decayedCount++
       }
-    }
 
-    // --- Branch 2: graduated cooling warnings ---
-    // Fire the highest un-fired stage the wedding has crossed. Earlier
-    // stages that were skipped (e.g. a wedding created silent-from-day-0
-    // or cron was down during the 14d window) fire together with the
-    // current one so coordinators still see the full progression.
-    const fired = firedByWedding.get(weddingId) ?? new Set<string>()
-    for (const stage of COOLING_WARNING_DAYS) {
-      const type = `cooling_warning_${stage}d`
-      if (silentDays >= stage && !fired.has(type)) {
-        await createNotification({
-          venueId,
-          weddingId,
-          type,
-          title: `Couple cooling — ${stage} days silent`,
-          body: `No inbound response in ${silentDays} days. ${
-            stage === 14
-              ? 'Consider a gentle check-in.'
-              : stage === 21
-              ? 'This lead is slipping — a follow-up now may save it.'
-              : 'Last chance before auto-lost. Send a final outreach or mark lost intentionally.'
-          }`,
-        })
-        fired.add(type)
-        warningsFired++
+      // Branch 2: graduated cooling warnings
+      const fired = firedByWedding.get(weddingId) ?? new Set<string>()
+      for (const stage of COOLING_WARNING_DAYS) {
+        const type = `cooling_warning_${stage}d`
+        if (silentDays >= stage && !fired.has(type)) {
+          await createNotification({
+            venueId,
+            weddingId,
+            type,
+            title: `Couple cooling — ${stage} days silent`,
+            body: `No inbound response in ${silentDays} days. ${
+              stage === 14
+                ? 'Consider a gentle check-in.'
+                : stage === 21
+                ? 'This lead is slipping. A follow-up now may save it.'
+                : 'Last chance before auto-lost. Send a final outreach or mark lost intentionally.'
+            }`,
+          })
+          fired.add(type)
+          warningsFired++
+        }
       }
-    }
 
-    // --- Branch 3: auto-mark-lost ---
-    // Setting lost_auto_mark_days=0 disables this branch entirely.
-    if (lostAutoMarkDays > 0 && silentDays >= lostAutoMarkDays) {
-      try {
-        await markAsLost(weddingId, `auto: no response after ${silentDays} days`)
-        autoLostCount++
-      } catch (err) {
-        console.error(`[heat-mapping] auto-mark-lost failed for ${weddingId}:`, err)
+      // Branch 3: auto-mark-lost
+      if (lostAutoMarkDays > 0 && silentDays >= lostAutoMarkDays) {
+        try {
+          await markAsLost(weddingId, `auto: no response after ${silentDays} days`)
+          autoLostCount++
+        } catch (err) {
+          console.error(`[heat-mapping] auto-mark-lost failed for ${weddingId}:`, err)
+        }
       }
-    }
+    }),
+  )
+
+  const failures = results.filter((r) => r.status === 'rejected')
+  if (failures.length > 0) {
+    console.error(
+      `[heat-mapping] ${failures.length} of ${weddings.length} wedding decays failed`,
+    )
   }
 
   console.log(
