@@ -150,7 +150,7 @@ export async function POST(request: NextRequest) {
     const targetVenueId = requestedVenueId || auth.venueId
     const decision = await assertCanAccessVenue(auth, targetVenueId)
     if (!decision.ok) return forbidden(decision.reason)
-    const venueId = decision.venueId
+    const venueId = targetVenueId
 
     // -----------------------------------------------------------------------
     // Step 1: Extract text content from the input

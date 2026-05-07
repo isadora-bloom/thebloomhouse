@@ -164,8 +164,14 @@ export async function getCoupleAuth() {
 // with a 403 reason. Callers translate to a NextResponse.
 // ---------------------------------------------------------------------------
 
+// Round-3 follow-up #92: removed `venueId` from the ok branch. It was
+// always identical to the input parameter passed into assertCanAccessVenue
+// (every code path either returned the input, or returned ok:false). Real
+// ghost data — readers were spelunking `decision.venueId` even though the
+// caller already had the value in scope. Now { ok: true } only; consumers
+// keep using their original venueId variable.
 export type AccessDecision =
-  | { ok: true; venueId: string }
+  | { ok: true }
   | { ok: false; reason: string }
 
 type PlatformAuth = NonNullable<Awaited<ReturnType<typeof getPlatformAuth>>>
@@ -182,18 +188,18 @@ export async function assertCanAccessVenue(
     if (!DEMO_VENUE_ALLOWLIST.has(venueId)) {
       return { ok: false, reason: 'venue access denied' }
     }
-    return { ok: true, venueId }
+    return { ok: true }
   }
 
   // super_admin first so platform-team accesses are distinguishable
   // from "happens to match my home venue" if we ever add audit logging
   // on the bypass path. Per round-3 audit ordering note.
   if (auth.role === 'super_admin') {
-    return { ok: true, venueId }
+    return { ok: true }
   }
 
   if (venueId === auth.venueId) {
-    return { ok: true, venueId }
+    return { ok: true }
   }
 
   if (auth.role === 'org_admin') {
@@ -222,7 +228,7 @@ export async function assertCanAccessVenue(
     if (!targetVenue || targetVenue.org_id !== auth.orgId) {
       return { ok: false, reason: 'venue access denied' }
     }
-    return { ok: true, venueId }
+    return { ok: true }
   }
 
   return { ok: false, reason: 'venue access denied' }
