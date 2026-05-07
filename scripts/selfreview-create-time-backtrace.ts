@@ -19,7 +19,7 @@
 // without live Gmail tokens there's no way to get a high-confidence
 // match — the local interactions table doesn't have the upstream
 // relay emails for these couples, as Phase 1 self-review proved.
-import { backtraceOneWedding } from '../src/lib/services/source-backtrace'
+import { backtraceOneWedding } from '../src/lib/services/attribution/source-backtrace'
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { applyBacktrace } from '@/lib/services/source-backtrace'
+import { applyBacktrace } from '@/lib/services/attribution/source-backtrace'
 import { CANONICAL_SOURCES, type CanonicalSource } from '@/lib/services/normalize-source'
 import { createServiceClient } from '@/lib/supabase/service'
 

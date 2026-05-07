@@ -3,7 +3,7 @@
 // HTML fragments and falls through to lower-priority strategies.
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { deriveLeadSourceForWedding } from '../../src/lib/services/lead-source-derivation'
+import { deriveLeadSourceForWedding } from '../../src/lib/services/attribution/lead-source-derivation'
 
 async function main() {
   const env = Object.fromEntries(

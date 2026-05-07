@@ -17,7 +17,7 @@ import {
   NOT_INTERESTED_PATTERNS,
   TOUR_CANCEL_PATTERNS,
   TOUR_REQUEST_PATTERNS,
-} from '../src/lib/services/signal-inference'
+} from '../src/lib/services/attribution/signal-inference'
 
 let pass = 0
 let fail = 0

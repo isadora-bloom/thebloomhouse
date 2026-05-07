@@ -8,7 +8,7 @@
 // lead_source row has an attempted_at stamp.
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { deriveLeadSourceForVenue } from '../../src/lib/services/lead-source-derivation'
+import { deriveLeadSourceForVenue } from '../../src/lib/services/attribution/lead-source-derivation'
 
 async function main() {
   const env = Object.fromEntries(

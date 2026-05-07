@@ -21,7 +21,7 @@
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { deriveLeadSourceForVenue } from '../../src/lib/services/lead-source-derivation'
+import { deriveLeadSourceForVenue } from '../../src/lib/services/attribution/lead-source-derivation'
 
 const RIXEY_ID = 'f3d10226-4c5c-47ad-b89b-98ad63842492'
 

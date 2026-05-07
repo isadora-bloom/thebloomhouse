@@ -44,7 +44,7 @@ import {
   PROPOSAL_SENT_PATTERNS,
   BOOKING_PATTERNS,
   DATE_SPECIFICITY,
-} from '../src/lib/services/signal-inference'
+} from '../src/lib/services/attribution/signal-inference'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')

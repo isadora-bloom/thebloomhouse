@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
-import { findBacktraceCandidates, applyBacktrace } from '@/lib/services/source-backtrace'
+import { findBacktraceCandidates, applyBacktrace } from '@/lib/services/attribution/source-backtrace'
 
 /**
  * Source-backtrace endpoints.

@@ -23,7 +23,7 @@
 //   npx tsx scripts/backfill-touchpoints.ts --apply --all  # every real venue
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { engagementToTouchType, type TouchType } from '../src/lib/services/touchpoints'
+import { engagementToTouchType, type TouchType } from '../src/lib/services/attribution/touchpoints'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8').split('\n').filter((l) => l && !l.startsWith('#') && l.includes('=')).map((l) => {

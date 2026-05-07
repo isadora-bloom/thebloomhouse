@@ -9,7 +9,7 @@
 // cohort that previously fell through to no_signal.
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { deriveLeadSourceForVenue } from '../../src/lib/services/lead-source-derivation'
+import { deriveLeadSourceForVenue } from '../../src/lib/services/attribution/lead-source-derivation'
 
 async function main() {
   const env = Object.fromEntries(

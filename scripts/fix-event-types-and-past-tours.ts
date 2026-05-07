@@ -35,7 +35,7 @@ import {
   TOUR_CONFIRMATION_PATTERNS,
   TOUR_REQUEST_PATTERNS,
   PROPOSAL_SENT_PATTERNS,
-} from '../src/lib/services/signal-inference'
+} from '../src/lib/services/attribution/signal-inference'
 import { recalculateHeatScore } from '../src/lib/services/heat-mapping'
 
 const env = Object.fromEntries(

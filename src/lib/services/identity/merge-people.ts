@@ -117,7 +117,7 @@ export async function mergePeople(args: MergePeopleArgs): Promise<MergePeopleRes
       // needs to know this couple booked, regardless of which wedding
       // row carried the booking event historically.
       try {
-        const { recordStatusChangeTouchpoint } = await import('@/lib/services/touchpoints')
+        const { recordStatusChangeTouchpoint } = await import('@/lib/services/attribution/touchpoints')
         // Pull the kept wedding's source for attribution context.
         const { data: keptW } = await supabase.from('weddings').select('source').eq('id', keptWeddingId).maybeSingle()
         await recordStatusChangeTouchpoint(venueId, keptWeddingId, ms, {

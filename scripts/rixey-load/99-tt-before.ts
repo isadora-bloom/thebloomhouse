@@ -65,7 +65,7 @@ async function main() {
 
   // 3. backtrace queue size — call the API service directly
   try {
-    const { findBacktraceCandidates } = await import('../../src/lib/services/source-backtrace')
+    const { findBacktraceCandidates } = await import('../../src/lib/services/attribution/source-backtrace')
     const queue = await findBacktraceCandidates(RIXEY_ID, { useLiveGmail: false })
     const queueAll = await findBacktraceCandidates(RIXEY_ID, { useLiveGmail: false, includeNoMatch: true })
     console.log(`\nBacktrace queue (visible / weak+confident): ${queue.length}`)

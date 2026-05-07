@@ -55,7 +55,7 @@ function pass(msg: string) { console.log(`PASS: ${msg}`) }
 async function main() {
   console.log('=== T5-Rixey-UUU verification ===')
 
-  const { computeSourceFunnel } = await import('../../src/lib/services/attribution.js')
+  const { computeSourceFunnel } = await import('../../src/lib/services/attribution/index.js')
 
   // Source-of-truth: per JJJ, no Knot wedding should be in
   // (booked, completed) on Rixey.

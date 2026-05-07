@@ -8,7 +8,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { deriveLeadSourceForWedding } from '../../src/lib/services/lead-source-derivation'
+import { deriveLeadSourceForWedding } from '../../src/lib/services/attribution/lead-source-derivation'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')

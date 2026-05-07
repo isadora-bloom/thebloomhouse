@@ -8,7 +8,7 @@
 // re-run with live=true later if they want to scan unindexed messages.
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { findBacktraceCandidates, applyBacktrace } from '../../src/lib/services/source-backtrace'
+import { findBacktraceCandidates, applyBacktrace } from '../../src/lib/services/attribution/source-backtrace'
 
 async function main() {
   const env = Object.fromEntries(

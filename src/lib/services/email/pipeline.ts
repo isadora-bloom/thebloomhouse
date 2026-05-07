@@ -32,7 +32,7 @@ import {
 } from '@/lib/services/scheduling-tool-parsers'
 import { resolveIdentity } from '@/lib/services/identity/resolution'
 import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
-import { applySignalInference } from '@/lib/services/signal-inference'
+import { applySignalInference } from '@/lib/services/attribution/signal-inference'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
@@ -1542,7 +1542,7 @@ export async function processIncomingEmail(
       // schema choices stay in one place. occurred_at is the email's
       // real timestamp (not now()), so journey ordering matches reality.
       try {
-        const { recordTouchpoint } = await import('@/lib/services/touchpoints')
+        const { recordTouchpoint } = await import('@/lib/services/attribution/touchpoints')
         await recordTouchpoint({
           venueId,
           weddingId,
@@ -1564,7 +1564,7 @@ export async function processIncomingEmail(
       // Fire-and-forget — Gmail latency must not block the pipeline.
       void (async () => {
         try {
-          const { backtraceOneWedding, WEAK_FIRST_TOUCH_SOURCES } = await import('@/lib/services/source-backtrace')
+          const { backtraceOneWedding, WEAK_FIRST_TOUCH_SOURCES } = await import('@/lib/services/attribution/source-backtrace')
           if (weddingId && WEAK_FIRST_TOUCH_SOURCES.has(detectedSource)) {
             await backtraceOneWedding(venueId, weddingId)
           }
@@ -1807,7 +1807,7 @@ export async function processIncomingEmail(
         // engagementToTouchType returns null for heat-internal signals
         // (high_specificity / family_mentioned) — those don't appear in
         // the funnel.
-        const { recordTouchpointsForEngagementEvents } = await import('@/lib/services/touchpoints')
+        const { recordTouchpointsForEngagementEvents } = await import('@/lib/services/attribution/touchpoints')
         await recordTouchpointsForEngagementEvents(
           venueId,
           weddingId,
@@ -2165,7 +2165,7 @@ export async function processIncomingEmail(
         const newWeddingId = weddingId
         void (async () => {
           try {
-            const { backtraceOneWedding } = await import('@/lib/services/source-backtrace')
+            const { backtraceOneWedding } = await import('@/lib/services/attribution/source-backtrace')
             await backtraceOneWedding(venueId, newWeddingId)
           } catch (err) {
             console.warn('[pipeline] scheduling-tool create-time backtrace failed:', err)
@@ -2266,7 +2266,7 @@ export async function processIncomingEmail(
       // wedding's overall attribution. /intel/sources can decide how to
       // weight that.
       try {
-        const { recordTouchpointsForEngagementEvents } = await import('@/lib/services/touchpoints')
+        const { recordTouchpointsForEngagementEvents } = await import('@/lib/services/attribution/touchpoints')
         await recordTouchpointsForEngagementEvents(venueId, weddingId, [{
           eventType,
           source: schedulingEvent.source,
@@ -2306,7 +2306,7 @@ export async function processIncomingEmail(
           // a contract_signed engagement event. Without this, /intel/
           // sources can't count a booking against this wedding's source.
           try {
-            const { recordStatusChangeTouchpoint } = await import('@/lib/services/touchpoints')
+            const { recordStatusChangeTouchpoint } = await import('@/lib/services/attribution/touchpoints')
             await recordStatusChangeTouchpoint(venueId, weddingId, targetStatus, {
               source: schedulingEvent.source,
               occurredAt: schedulingOccurredAt,

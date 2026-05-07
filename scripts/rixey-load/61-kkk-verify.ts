@@ -63,7 +63,7 @@ async function main() {
 
   // Dynamic import so process.env hydration above lands before the
   // service module reads SUPABASE_URL / SERVICE_ROLE_KEY.
-  const { computeSourceFunnel } = await import('../../src/lib/services/attribution.js')
+  const { computeSourceFunnel } = await import('../../src/lib/services/attribution/index.js')
 
   // ---- Direct DB truth ----
   console.log('\n--- A) DB truth (non-merged booked weddings by source) ---')

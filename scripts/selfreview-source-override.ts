@@ -10,7 +10,7 @@
 //      not belong to the asserted venueId returns ok: false.
 //   5. Round-trip: restore the original source so this script is
 //      idempotent.
-import { applyBacktrace } from '../src/lib/services/source-backtrace'
+import { applyBacktrace } from '../src/lib/services/attribution/source-backtrace'
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
 

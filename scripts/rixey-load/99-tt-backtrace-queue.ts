@@ -1,4 +1,4 @@
-import { findBacktraceCandidates } from '../../src/lib/services/source-backtrace'
+import { findBacktraceCandidates } from '../../src/lib/services/attribution/source-backtrace'
 import { readFileSync } from 'node:fs'
 
 async function main() {

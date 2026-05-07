@@ -11,7 +11,7 @@
 //   4. Suggestions are canonicalized (no raw 'theknot.com' strings).
 //   5. applyBacktrace round-trip — one wedding, then read back +
 //      restore. Idempotent: re-applying with same source is a no-op.
-import { findBacktraceCandidates, applyBacktrace, WEAK_FIRST_TOUCH_SOURCES } from '../src/lib/services/source-backtrace'
+import { findBacktraceCandidates, applyBacktrace, WEAK_FIRST_TOUCH_SOURCES } from '../src/lib/services/attribution/source-backtrace'
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
 

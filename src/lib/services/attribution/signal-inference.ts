@@ -555,7 +555,7 @@ export async function applySignalInference(
     // skips heat-internal signals (specificity, sustained engagement)
     // automatically; only attribution-relevant funnel events land here.
     try {
-      const { recordTouchpointsForEngagementEvents } = await import('@/lib/services/touchpoints')
+      const { recordTouchpointsForEngagementEvents } = await import('@/lib/services/attribution/touchpoints')
       const inferredSource = (wedding as { source?: string | null }).source ?? null
       await recordTouchpointsForEngagementEvents(
         venueId,
@@ -577,7 +577,7 @@ export async function applySignalInference(
     // inferred from text patterns even when no scheduling event fires.
     // Source = wedding's first-touch source (the inquiry channel).
     try {
-      const { recordStatusChangeTouchpoint } = await import('@/lib/services/touchpoints')
+      const { recordStatusChangeTouchpoint } = await import('@/lib/services/attribution/touchpoints')
       const inferredSource = (wedding as { source?: string | null }).source ?? null
       await recordStatusChangeTouchpoint(venueId, weddingId, targetStatus, {
         source: inferredSource,

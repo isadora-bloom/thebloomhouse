@@ -6,7 +6,7 @@
 // applying the same 7-day notification dedup the handler does.
 import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
-import { findBacktraceCandidates } from '../src/lib/services/source-backtrace'
+import { findBacktraceCandidates } from '../src/lib/services/attribution/source-backtrace'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8').split('\n').filter((l) => l && !l.startsWith('#') && l.includes('=')).map((l) => {

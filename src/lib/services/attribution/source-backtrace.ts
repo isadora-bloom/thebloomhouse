@@ -59,9 +59,9 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { detectFormRelay, type FormRelayLead } from './form-relay-parsers'
-import { normalizeSource } from './normalize-source'
-import { getGmailClient, parseEmailBody } from './email/gmail'
+import { detectFormRelay, type FormRelayLead } from '../form-relay-parsers'
+import { normalizeSource } from '../normalize-source'
+import { getGmailClient, parseEmailBody } from '../email/gmail'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
 
 /**
