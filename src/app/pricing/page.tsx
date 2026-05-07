@@ -84,15 +84,15 @@ function PricingPageInner() {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto px-6 py-16">
+      <div className="max-w-7xl mx-auto px-6 py-16">
         {/* Heading */}
         <div className="text-center mb-12">
           <h1 className="font-heading text-4xl md:text-5xl font-bold text-sage-900 mb-4">
             Pricing that grows with your venue
           </h1>
           <p className="text-lg text-sage-600 max-w-2xl mx-auto">
-            Start free with the Starter plan. Unlock intelligence and portfolio features
-            as you grow.
+            Every plan includes the full Bloom platform. Capacity is the only
+            difference.
           </p>
         </div>
 
@@ -136,17 +136,17 @@ function PricingPageInner() {
               }`}
             >
               Annual
-              <span className="ml-2 text-xs text-gold-600 font-semibold">Save 17%</span>
+              <span className="ml-2 text-xs text-gold-600 font-semibold">Save 15%</span>
             </button>
           </div>
         </div>
 
-        {/* Plan cards */}
-        <div className="grid md:grid-cols-3 gap-6">
+        {/* Plan cards. 5 tiers — 2 rows on lg (3 + 2) so cards stay legible. */}
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
           {PLANS.map((plan) => {
             const price = cycle === 'monthly' ? plan.monthly : plan.annual
             const priceLabel = cycle === 'monthly' ? '/mo' : '/yr'
-            const isFree = plan.tier === 'starter'
+            const isContact = plan.contactSales === true || price === 0
             const isLoading = loadingTier === plan.tier
 
             return (
@@ -177,25 +177,34 @@ function PricingPageInner() {
                 <div className="mb-6">
                   <div className="flex items-baseline gap-1">
                     <span className="text-4xl font-bold text-sage-900">
-                      {isFree ? 'Free' : `$${price.toLocaleString()}`}
+                      {isContact && plan.tier === 'enterprise'
+                        ? 'Custom'
+                        : `$${price.toLocaleString()}`}
                     </span>
-                    {!isFree && (
+                    {!(isContact && plan.tier === 'enterprise') && (
                       <span className="text-sage-500 text-sm">{priceLabel}</span>
                     )}
                   </div>
-                  {!isFree && cycle === 'annual' && (
+                  {!isContact && cycle === 'annual' && plan.annual > 0 && (
                     <p className="text-xs text-sage-500 mt-1">
                       ${(plan.annual / 12).toFixed(0)} per month, billed annually
                     </p>
                   )}
                 </div>
 
-                {isFree ? (
+                {/* Capacity row */}
+                <div className="mb-6 -mt-3 text-xs text-sage-600 space-y-0.5">
+                  <div>{plan.capacity.inquiries} inquiries</div>
+                  <div>{plan.capacity.venues === '1' ? '1 venue' : plan.capacity.venues}</div>
+                  <div>{plan.capacity.couples} couples</div>
+                </div>
+
+                {isContact ? (
                   <Link
-                    href="/signup"
+                    href="/contact"
                     className="w-full text-center px-4 py-2.5 rounded-lg bg-sage-100 text-sage-800 text-sm font-medium hover:bg-sage-200 transition-colors mb-6"
                   >
-                    Start free
+                    Contact us
                   </Link>
                 ) : (
                   <button
@@ -215,7 +224,7 @@ function PricingPageInner() {
                       </>
                     ) : (
                       <>
-                        Upgrade to {plan.name}
+                        Choose {plan.name}
                         <ArrowRight className="w-4 h-4" />
                       </>
                     )}

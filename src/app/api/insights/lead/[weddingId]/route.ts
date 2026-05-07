@@ -34,7 +34,7 @@ export async function GET(
 ) {
   // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
   // Demo cookie path bypasses inside requirePlan (mirrors usePlanTier).
-  const plan = await requirePlan(request, 'intelligence')
+  const plan = await requirePlan(request, 'solo')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const { weddingId } = await params

@@ -22,7 +22,7 @@ import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 export async function POST(request: NextRequest) {
   // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
-  const plan = await requirePlan(request, 'intelligence')
+  const plan = await requirePlan(request, 'solo')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

@@ -28,7 +28,7 @@ interface Body {
 
 export async function POST(req: NextRequest) {
   // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
-  const plan = await requirePlan(req, 'intelligence')
+  const plan = await requirePlan(req, 'solo')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

@@ -28,6 +28,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { requireAiName } from '@/lib/ai/personality-builder'
 
+export const RE_ENGAGEMENT_DRAFTER_PROMPT_VERSION = 're-engagement-drafter.prompt.v1.0'
+
 export type ReEngagementChannel = 'email' | 'manual_paste'
 
 interface DraftInput {
@@ -149,6 +151,7 @@ export async function draftReEngagementMessage(
     temperature: 0.4,
     venueId: c.venue_id,
     taskType: 're_engagement_drafter',
+    promptVersion: RE_ENGAGEMENT_DRAFTER_PROMPT_VERSION,
   })
 
   const text = (response.text ?? '').trim()

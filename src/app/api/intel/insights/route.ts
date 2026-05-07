@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   const start = Date.now()
   const correlationId = newCorrelationId()
 
-  const plan = await requirePlan(req, 'intelligence')
+  const plan = await requirePlan(req, 'solo')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

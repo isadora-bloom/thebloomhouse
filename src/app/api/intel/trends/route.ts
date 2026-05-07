@@ -13,7 +13,7 @@ import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 // ---------------------------------------------------------------------------
 
 export async function GET(request: NextRequest) {
-  const plan = await requirePlan(request, 'intelligence')
+  const plan = await requirePlan(request, 'solo')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()
@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
-  const plan = await requirePlan(request, 'intelligence')
+  const plan = await requirePlan(request, 'solo')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

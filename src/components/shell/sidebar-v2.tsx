@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { usePlanTier } from '@/lib/hooks/use-plan-tier'
+import { tierMeetsMinimum, type PlanTier } from '@/lib/auth/plan-tiers'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
@@ -54,29 +55,22 @@ interface SidebarV2Props {
 
 type View = 'essential' | 'all'
 
-function isNavItemVisible(item: NavItem, planTier: 'starter' | 'intelligence' | 'enterprise'): boolean {
+// Pricing v2 (2026-05-06): plan gates use the rank-based PlanTier system.
+// `requiresPlan` declares the minimum tier that unlocks the item/section.
+// Every paid tier ('solo' and up) gets every feature, so most existing
+// gates collapse to a single "must be on a paid plan" check.
+function isNavItemVisible(item: NavItem, planTier: PlanTier): boolean {
   if (!item.requiresPlan) return true
-  if (item.requiresPlan === 'enterprise') return planTier === 'enterprise'
-  if (item.requiresPlan === 'intelligence') return planTier === 'intelligence' || planTier === 'enterprise'
-  return true
+  return tierMeetsMinimum(planTier, item.requiresPlan)
 }
 
 function isSectionVisible(
   section: NavSection,
   scopeLevel: 'venue' | 'group' | 'company',
-  planTier: 'starter' | 'intelligence' | 'enterprise'
+  planTier: PlanTier
 ): boolean {
   if (section.venueOnly && scopeLevel !== 'venue') return false
-  if (section.requiresPlan) {
-    if (section.requiresPlan === 'enterprise' && planTier !== 'enterprise') return false
-    if (
-      section.requiresPlan === 'intelligence' &&
-      planTier !== 'intelligence' &&
-      planTier !== 'enterprise'
-    ) {
-      return false
-    }
-  }
+  if (section.requiresPlan && !tierMeetsMinimum(planTier, section.requiresPlan)) return false
   return true
 }
 

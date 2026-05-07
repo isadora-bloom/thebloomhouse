@@ -24,6 +24,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
 
+export const JOURNEY_NARRATIVE_PROMPT_VERSION = 'journey-narrative.prompt.v1.0'
+
 const STALENESS_DELTA = 2
 const GEN_LOCK_TTL_MS = 60_000 // 60s — generation that takes longer than this is assumed crashed
 
@@ -256,6 +258,7 @@ export async function generateNarrativeText(
     temperature: 0.4,
     venueId: ctx.wedding.venue_id,
     taskType: 'journey_narrative',
+    promptVersion: JOURNEY_NARRATIVE_PROMPT_VERSION,
   })
 
   // PC.4 fix #9: AI sometimes wraps the paragraph in quotes despite

@@ -14,7 +14,7 @@ import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 // ---------------------------------------------------------------------------
 
 export async function GET(req: NextRequest) {
-  const plan = await requirePlan(req, 'intelligence')
+  const plan = await requirePlan(req, 'solo')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const auth = await getPlatformAuth()

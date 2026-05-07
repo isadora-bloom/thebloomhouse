@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
   // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
   // Pulse aggregates intelligence_insights + anomaly_alerts, both are
   // intelligence-tier features. Demo cookie path bypasses inside requirePlan.
-  const plan = await requirePlan(request, 'intelligence')
+  const plan = await requirePlan(request, 'solo')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
 
   const supabase = createServiceClient()

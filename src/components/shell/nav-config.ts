@@ -49,7 +49,8 @@ export interface NavItem {
   /** Shown in compact ("daily") rail mode. */
   daily?: boolean
   /** Plan tier gate. */
-  requiresPlan?: 'intelligence' | 'enterprise'
+  /** Pricing v2: gates accept any PlanTier minimum. 'solo' = lowest paid. */
+  requiresPlan?: import('@/lib/auth/plan-tiers').PlanTier
   /** External label like "AI" / "Beta" rendered as a small pill. */
   badge?: string
 }
@@ -61,7 +62,8 @@ export interface NavSection {
   /** Hidden at group/company scope (venue-only configuration). */
   venueOnly?: boolean
   /** Plan tier gate for the whole section. */
-  requiresPlan?: 'intelligence' | 'enterprise'
+  /** Pricing v2: gates accept any PlanTier minimum. 'solo' = lowest paid. */
+  requiresPlan?: import('@/lib/auth/plan-tiers').PlanTier
 }
 
 export interface ModeConfig {

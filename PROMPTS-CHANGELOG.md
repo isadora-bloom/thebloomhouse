@@ -37,6 +37,13 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 | marketing-spend | — | v1.0 | Initial versioning (T1-E / OPS-21.5.1) |
 | bar-recipe-extract | — | v1.0 | Initial versioning; image path rewired through callAIVision (T1-E / OPS-21.5.1) |
 
+## 2026-05-06
+
+| Module | Old | New | Reason |
+|--------|-----|-----|--------|
+| journey-narrative | — | v1.0 | Initial versioning; closed Tier-B #75 audit gap (call landed in api_costs with prompt_version=NULL) |
+| re-engagement-drafter | — | v1.0 | Initial versioning; closed Tier-B #75 audit gap (call landed in api_costs with prompt_version=NULL) |
+
 ## Per-brain history
 
 ### inquiry-brain (`inquiry-brain.prompt.v1.1`)
@@ -171,6 +178,19 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
   (via callAIJson) and upload extraction. Image uploads rewired through callAIVision
   so circuit breaker and cost logging apply. PDF path retains direct SDK call
   (document block) with manual api_costs insert + promptVersion. Sonnet tier.
+
+### journey-narrative (`journey-narrative.prompt.v1.0`)
+- **v1.0** (2026-05-06) — Initial versioning baseline. 2-3 sentence
+  retrospective narrative composed from candidate-identity touchpoints +
+  attribution events for a wedding. Sonnet tier; tier-1 content
+  (couple PII via context). Closes Tier-B #75 telemetry gap — was logging
+  api_costs.prompt_version=NULL.
+
+### re-engagement-drafter (`re-engagement-drafter.prompt.v1.0`)
+- **v1.0** (2026-05-06) — Initial versioning baseline. Tier-2 winback
+  drafter (email + SMS variants) for re-engagement playbook. Sonnet tier;
+  tier-1 content (couple first name / state / activity history). Closes
+  Tier-B #75 telemetry gap — was logging api_costs.prompt_version=NULL.
 
 ## Adding a new brain prompt
 
