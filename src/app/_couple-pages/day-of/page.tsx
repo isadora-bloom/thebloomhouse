@@ -14,11 +14,11 @@
  *
  * Visibility:
  *   - Always reachable via direct URL
- *   - Sidebar only surfaces this when wedding_date - today <= 3
+ *   - Sidebar only surfaces this when wedding_date - today is in [-1, 7]
  *     (gated in couple-sidebar.tsx via useCoupleContext.weddingDate)
- *   - When a couple lands here >7 days out, render an "available 3 days
- *     before your wedding" placeholder so the page isn't useless to
- *     someone who clicked too early.
+ *   - When a couple lands here outside that window, render an
+ *     "available the week of your wedding" placeholder so the page
+ *     isn't useless to someone who clicked too early.
  */
 
 import { useEffect, useState } from 'react'

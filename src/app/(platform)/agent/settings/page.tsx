@@ -42,6 +42,11 @@ interface AutoSendRule {
   confidence_threshold: number
   daily_limit: number
   require_new_contact: boolean
+  // Mig 227 (Tier-B #67A). Optional in the type because the columns may
+  // not be present on rows fetched before mig 227 lands in prod.
+  shadow_mode?: boolean | null
+  shadow_started_at?: string | null
+  graduated_at?: string | null
 }
 
 interface EmailSyncState {
@@ -471,21 +476,51 @@ export default function AgentSettingsPage() {
   }
 
   // ---- Save rules ----
+  // Tier-B #67A: when a rule is enabled for the first time (never
+  // graduated, not currently shadowing) we flip shadow_mode=true so the
+  // first N decisions land in the shadow review queue instead of firing.
+  // Coordinator promotes via /agent/auto-send-shadow once accuracy is
+  // proven. Re-saving an already-graduated rule does NOT reset shadow.
   async function saveRules() {
     setSaving(true)
     setSaveMessage(null)
 
     let hasError = false
     for (const rule of rules) {
-      const { error } = await supabase
+      const startShadow =
+        rule.enabled && !rule.shadow_mode && !rule.graduated_at
+
+      const update: Record<string, unknown> = {
+        enabled: rule.enabled,
+        confidence_threshold: rule.confidence_threshold,
+        daily_limit: rule.daily_limit,
+        require_new_contact: rule.require_new_contact,
+      }
+      if (startShadow) {
+        update.shadow_mode = true
+        update.shadow_started_at = new Date().toISOString()
+      }
+
+      let { error } = await supabase
         .from('auto_send_rules')
-        .update({
-          enabled: rule.enabled,
-          confidence_threshold: rule.confidence_threshold,
-          daily_limit: rule.daily_limit,
-          require_new_contact: rule.require_new_contact,
-        })
+        .update(update)
         .eq('id', rule.id)
+
+      // Mig 227 forward-compat: if shadow_mode column doesn't exist yet
+      // (PostgREST 42703), retry without the shadow fields. Loses the
+      // probationary period until 227 lands but doesn't block saves.
+      if (error && (error as { code?: string }).code === '42703' && startShadow) {
+        const retry = await supabase
+          .from('auto_send_rules')
+          .update({
+            enabled: rule.enabled,
+            confidence_threshold: rule.confidence_threshold,
+            daily_limit: rule.daily_limit,
+            require_new_contact: rule.require_new_contact,
+          })
+          .eq('id', rule.id)
+        error = retry.error
+      }
 
       if (error) {
         hasError = true
@@ -496,6 +531,9 @@ export default function AgentSettingsPage() {
     setSaveMessage(hasError ? 'Some rules failed to save.' : 'Auto-send rules saved.')
     setSaving(false)
     setTimeout(() => setSaveMessage(null), 3000)
+    // Refresh local state so the new shadow_mode shows on the dashboard
+    // and a re-save doesn't re-trigger startShadow.
+    await fetchData()
   }
 
   // ---- Save follow-up config ----

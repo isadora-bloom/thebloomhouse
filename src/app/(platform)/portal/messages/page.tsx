@@ -42,7 +42,7 @@ interface Message {
   wedding_id: string
   sender_role: 'coordinator' | 'couple' | 'sage'
   sender_name: string | null
-  body: string
+  content: string
   created_at: string
 }
 
@@ -351,24 +351,30 @@ export default function MessagesPage() {
   }, [messages])
 
   // ---- Send message ----
+  // Routes through /api/agent/messages/reply (Tier-B #58C) so the
+  // outbound reply mirrors into the agent inbox via interactions
+  // (type='portal_chat'). Direct supabase.from('messages').insert was
+  // both column-broken (the table is `content`, not `body`) and
+  // bypassed the inbox mirror.
   const handleSend = async () => {
     if (!newMessage.trim() || !selectedWeddingId) return
-    const selected = threads.find((t) => t.id === selectedWeddingId)
-    if (!selected) return
+    const trimmed = newMessage.trim()
     setSending(true)
 
-    const supabase = createClient()
-
     try {
-      const { error: insertErr } = await supabase.from('messages').insert({
-        venue_id: selected.venue_id,
-        wedding_id: selectedWeddingId,
-        sender_role: 'coordinator',
-        sender_name: 'Coordinator', // TODO: Use current user name
-        body: newMessage.trim(),
+      const res = await fetch('/api/agent/messages/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          weddingId: selectedWeddingId,
+          content: trimmed,
+        }),
       })
 
-      if (insertErr) throw insertErr
+      if (!res.ok) {
+        const errPayload = await res.json().catch(() => ({}))
+        throw new Error(errPayload.error || `Send failed (${res.status})`)
+      }
 
       setNewMessage('')
       await fetchMessages()
@@ -579,7 +585,7 @@ export default function MessagesPage() {
                               'rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap',
                               config.bubbleClass
                             )}>
-                              {msg.body}
+                              {msg.content}
                             </div>
                           </div>
                         )

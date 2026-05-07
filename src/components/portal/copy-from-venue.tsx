@@ -45,6 +45,11 @@ export function CopyFromVenueButton({
   // Resolve sister venues once. Looks at the calling user's
   // user_profiles.org_id and lists every other venue in the same org.
   // RLS gates the read so cross-org attempts return zero.
+  //
+  // Round 8: also gate the button by role. assertCanAccessVenue on the
+  // server only grants cross-venue access to super_admin / org_admin.
+  // venue_manager + coordinator click → 403 from the API. Hide the
+  // button for those roles so the click never happens.
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -54,10 +59,15 @@ export function CopyFromVenueButton({
       if (!userId) return
       const { data: profile } = await supabase
         .from('user_profiles')
-        .select('org_id, venue_id')
+        .select('org_id, venue_id, role')
         .eq('id', userId)
         .maybeSingle()
       if (!profile?.org_id || !profile?.venue_id) {
+        setSisters([])
+        return
+      }
+      const role = (profile as { role?: string | null }).role ?? null
+      if (role !== 'super_admin' && role !== 'org_admin') {
         setSisters([])
         return
       }
@@ -76,7 +86,7 @@ export function CopyFromVenueButton({
     }
   }, [])
 
-  // Solo-org: render nothing. There's no sister to copy from.
+  // Solo-org or non-org-admin role: render nothing.
   if (sisters !== null && sisters.length === 0) return null
 
   async function handleCopy(sourceVenueId: string) {

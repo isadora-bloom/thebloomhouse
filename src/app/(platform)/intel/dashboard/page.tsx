@@ -321,8 +321,8 @@ function AlertCard({
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Demand score calculation (mirrors economics.ts)
-// Source the baselines from economics.ts so a change to one surface
+// Demand score calculation (mirrors fred-demand.ts)
+// Source the baselines from fred-demand.ts so a change to one surface
 // can't silently drift the other. Local AVERAGES alias preserves the
 // existing call sites.
 // ---------------------------------------------------------------------------

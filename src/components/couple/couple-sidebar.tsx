@@ -166,16 +166,27 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
   // section gating. Sarah-portal Tier-B #62: pre-fix the "After Your
   // Wedding" section was visible for every couple, including those
   // 14 months out. Now hide it until the wedding has passed.
+  //
+  // Round 8: pin the calc to local-midnight on both sides. Date-only
+  // ISO strings ("2026-05-15") parse as UTC midnight; subtracting
+  // Date.now() and ceiling drifts by ±1 around midnight depending on
+  // the couple's timezone offset. Pinning to local-startOfDay makes
+  // "the day of" stable across the whole calendar day.
   const daysUntilWedding = (() => {
     if (!weddingDate) return null
-    const ms = new Date(weddingDate).getTime() - Date.now()
-    if (Number.isNaN(ms)) return null
-    return Math.ceil(ms / (1000 * 60 * 60 * 24))
+    const datePart = weddingDate.slice(0, 10) // YYYY-MM-DD
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart)
+    if (!m) return null
+    const wedding = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const ms = wedding.getTime() - today.getTime()
+    return Math.round(ms / (1000 * 60 * 60 * 24))
   })()
 
   // Tier-B #59A — surface Day-of in the final week. Outside that window
-  // the URL still resolves but the page renders an "available 3 days
-  // before" placeholder so direct-link clicks aren't a dead end.
+  // the URL still resolves but the page renders a placeholder so
+  // direct-link clicks aren't a dead end.
   const showDayOf = daysUntilWedding !== null && daysUntilWedding >= -1 && daysUntilWedding <= 7
 
   const sections = buildCoupleSidebarSections(base, { showDayOf })

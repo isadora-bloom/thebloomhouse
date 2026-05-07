@@ -190,52 +190,66 @@ async function getMatchingRule(
 ): Promise<AutoSendRule | null> {
   const supabase = createServiceClient()
 
-  const cols =
+  // Forward-compat with prod-migration lag: shadow_mode lands in mig 227.
+  // If the column isn't there yet, the SELECT returns Postgres error
+  // 42703 (undefined_column). Without this guard, every venue's auto-send
+  // silently falls through to "no rule" and stops firing. Round 8 #1.
+  const colsWithShadow =
     'id, enabled, confidence_threshold, daily_limit, thread_cap_24h, require_new_contact, source, shadow_mode'
+  const colsLegacy =
+    'id, enabled, confidence_threshold, daily_limit, thread_cap_24h, require_new_contact, source'
+
+  async function selectOne(
+    matchSource: string
+  ): Promise<{ row: Record<string, unknown> | null; hasShadowCol: boolean }> {
+    const primary = await supabase
+      .from('auto_send_rules')
+      .select(colsWithShadow)
+      .eq('venue_id', venueId)
+      .eq('context', context)
+      .eq('source', matchSource)
+      .limit(1)
+
+    if (primary.error && (primary.error as { code?: string }).code === '42703') {
+      // Mig 227 not applied yet. Fall back to legacy column set; the
+      // shadow-mode feature is dormant until the migration ships.
+      const legacy = await supabase
+        .from('auto_send_rules')
+        .select(colsLegacy)
+        .eq('venue_id', venueId)
+        .eq('context', context)
+        .eq('source', matchSource)
+        .limit(1)
+      const data = legacy.data as Array<Record<string, unknown>> | null
+      const row = data && data.length > 0 ? data[0] : null
+      return { row, hasShadowCol: false }
+    }
+
+    const data = primary.data as Array<Record<string, unknown>> | null
+    const row = data && data.length > 0 ? data[0] : null
+    return { row, hasShadowCol: true }
+  }
+
+  function toRule(row: Record<string, unknown>, hasShadowCol: boolean): AutoSendRule {
+    return {
+      id: row.id as string,
+      enabled: row.enabled as boolean,
+      confidenceThreshold: row.confidence_threshold as number,
+      dailyLimit: row.daily_limit as number,
+      threadCap24h: (row.thread_cap_24h as number) ?? 3,
+      requireNewContact: (row.require_new_contact as boolean) ?? true,
+      source: row.source as string,
+      shadowMode: hasShadowCol ? ((row.shadow_mode as boolean) ?? false) : false,
+    }
+  }
 
   // Try source-specific rule first
-  const { data: sourceRule } = await supabase
-    .from('auto_send_rules')
-    .select(cols)
-    .eq('venue_id', venueId)
-    .eq('context', context)
-    .eq('source', source)
-    .limit(1)
-
-  if (sourceRule && sourceRule.length > 0) {
-    return {
-      id: sourceRule[0].id as string,
-      enabled: sourceRule[0].enabled as boolean,
-      confidenceThreshold: sourceRule[0].confidence_threshold as number,
-      dailyLimit: sourceRule[0].daily_limit as number,
-      threadCap24h: (sourceRule[0].thread_cap_24h as number) ?? 3,
-      requireNewContact: (sourceRule[0].require_new_contact as boolean) ?? true,
-      source: sourceRule[0].source as string,
-      shadowMode: (sourceRule[0].shadow_mode as boolean) ?? false,
-    }
-  }
+  const sourceMatch = await selectOne(source)
+  if (sourceMatch.row) return toRule(sourceMatch.row, sourceMatch.hasShadowCol)
 
   // Fall back to 'all' rule for this context
-  const { data: allRule } = await supabase
-    .from('auto_send_rules')
-    .select(cols)
-    .eq('venue_id', venueId)
-    .eq('context', context)
-    .eq('source', 'all')
-    .limit(1)
-
-  if (allRule && allRule.length > 0) {
-    return {
-      id: allRule[0].id as string,
-      enabled: allRule[0].enabled as boolean,
-      confidenceThreshold: allRule[0].confidence_threshold as number,
-      dailyLimit: allRule[0].daily_limit as number,
-      threadCap24h: (allRule[0].thread_cap_24h as number) ?? 3,
-      requireNewContact: (allRule[0].require_new_contact as boolean) ?? true,
-      source: allRule[0].source as string,
-      shadowMode: (allRule[0].shadow_mode as boolean) ?? false,
-    }
-  }
+  const allMatch = await selectOne('all')
+  if (allMatch.row) return toRule(allMatch.row, allMatch.hasShadowCol)
 
   // No rule found — auto-send is not configured
   return null

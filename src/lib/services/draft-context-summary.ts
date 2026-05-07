@@ -103,7 +103,7 @@ export async function summarizeDraftContext(
     console.warn('[draft-context] Failed to fetch ai_name:', err)
   }
 
-  // --- Demand outlook (from economics service) ---
+  // --- Demand outlook (from FRED demand service) ---
   let demandSummary: string | null = null
   try {
     const indicators = await getLatestIndicators()

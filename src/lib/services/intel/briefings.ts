@@ -2,8 +2,9 @@
  * Bloom House: AI Briefing Generator
  *
  * Generates weekly and monthly intelligence briefings for wedding venues.
- * Aggregates data from weddings, trends, weather, economics, and anomaly
- * detection, then uses AI to produce structured, actionable summaries.
+ * Aggregates data from weddings, trends, weather, FRED demand, and
+ * anomaly detection, then uses AI to produce structured, actionable
+ * summaries.
  *
  * Briefing types:
  *   - weekly:  7-day window, tactical recommendations
