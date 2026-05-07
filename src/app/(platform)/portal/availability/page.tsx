@@ -25,7 +25,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import {
   ChevronLeft, ChevronRight, Calendar as CalendarIcon,
   Save, X, Trash2, Info,
@@ -186,12 +186,7 @@ function buildCalendarGrid(month: Date): Date[] {
 // Supabase client (browser)
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Page
@@ -227,7 +222,7 @@ export default function AvailabilityPage() {
   // -------------------------------------------------------------------------
   useEffect(() => {
     if (!venueId) return
-    const supabase = getSupabase()
+    const supabase = createClient()
     ;(async () => {
       const [{ data: venue }, { data: cfg }] = await Promise.all([
         supabase.from('venues').select('name').eq('id', venueId).maybeSingle(),
@@ -247,7 +242,7 @@ export default function AvailabilityPage() {
   const loadRange = useCallback(async () => {
     if (!venueId) return
     setLoading(true)
-    const supabase = getSupabase()
+    const supabase = createClient()
     const fromISO = toISO(rangeStart)
     const toISOstr = toISO(rangeEnd)
 
@@ -372,7 +367,7 @@ export default function AvailabilityPage() {
   async function saveEditor() {
     if (!editor.date || !venueId) return
     setEditor((e) => ({ ...e, saving: true, error: null }))
-    const supabase = getSupabase()
+    const supabase = createClient()
     const payload = {
       venue_id: venueId,
       date: editor.date,
@@ -395,7 +390,7 @@ export default function AvailabilityPage() {
   async function resetEditor() {
     if (!editor.date || !venueId) return
     setEditor((e) => ({ ...e, saving: true, error: null }))
-    const supabase = getSupabase()
+    const supabase = createClient()
     const { error } = await supabase
       .from('venue_availability')
       .delete()
@@ -415,7 +410,7 @@ export default function AvailabilityPage() {
   // -------------------------------------------------------------------------
   async function bulkSetStatus(next: AvailabilityStatus) {
     if (!venueId || selected.size === 0) return
-    const supabase = getSupabase()
+    const supabase = createClient()
     const payload = Array.from(selected).map((date) => ({
       venue_id: venueId,
       date,
@@ -437,7 +432,7 @@ export default function AvailabilityPage() {
 
   async function bulkReset() {
     if (!venueId || selected.size === 0) return
-    const supabase = getSupabase()
+    const supabase = createClient()
     const { error } = await supabase
       .from('venue_availability')
       .delete()

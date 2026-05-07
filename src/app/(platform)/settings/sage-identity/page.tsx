@@ -17,7 +17,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { useScope } from '@/lib/hooks/use-scope'
 import { Save, Sparkles, Check, Link as LinkIcon, Plus, Trash2, Star } from 'lucide-react'
 import {
@@ -31,10 +31,7 @@ import {
 } from '@/lib/services/sage-identity'
 import type { SageRole, SageOpenerShape } from '@/lib/supabase/types'
 
-const supabase = createBrowserClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+const supabase = createClient()
 
 interface TourLink {
   label: string

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { useScope } from '@/lib/hooks/use-scope'
 import {
   MapPin,
@@ -27,12 +27,6 @@ import { UpgradeGate } from '@/components/ui/upgrade-gate'
 // Supabase
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -103,7 +97,7 @@ function RegionalAnalyticsPageInner() {
 
   const fetchData = useCallback(async () => {
     if (scope.loading) return
-    const supabase = getSupabase()
+    const supabase = createClient()
     try {
       // Filter venues by org_id to prevent cross-org data leak
       let venueQ = supabase.from('venues').select('id, name, state')

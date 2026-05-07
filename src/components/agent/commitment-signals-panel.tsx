@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { Sparkles, Check, MessageCircle } from 'lucide-react'
 
 interface SignalCatalogItem {
@@ -54,13 +54,6 @@ interface Props {
   weddingId: string
 }
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  )
-}
-
 function fmtDate(d: string | null): string {
   if (!d) return ''
   return new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
@@ -73,7 +66,7 @@ export function CommitmentSignalsPanel({ weddingId }: Props) {
 
   useEffect(() => {
     let cancelled = false
-    const sb = getSupabase()
+    const sb = createClient()
     ;(async () => {
       setLoading(true)
       const eventTypes = COMMITMENT_SIGNALS.map((s) => s.eventType)

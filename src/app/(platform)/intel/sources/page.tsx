@@ -2,7 +2,7 @@
 
 import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import {
   BarChart3,
   DollarSign,
@@ -144,12 +144,7 @@ function formatSource(source: string | null | undefined): string {
 // Supabase client
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -323,10 +318,7 @@ function PhaseBIntelPanels({ scope, windowDays, multiTouchWindowDays, onMultiTou
       return
     }
     let cancelled = false
-    const sb = createBrowserClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    )
+    const sb = createClient()
     const windowStartIso = new Date(Date.now() - windowDays * 86_400_000).toISOString()
 
     ;(async () => {
@@ -417,10 +409,7 @@ function PhaseBIntelPanels({ scope, windowDays, multiTouchWindowDays, onMultiTou
       return
     }
     let cancelled = false
-    const sb = createBrowserClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    )
+    const sb = createClient()
     // 'all' → effectively no lower bound (epoch-ish iso) so the
     // attribution_events query covers full venue history.
     const mtWindowStartIso = multiTouchWindowDays === 'all'
@@ -1380,7 +1369,7 @@ export default function SourceAttributionPage() {
   // cost-per-X math on top without giving the API spend visibility.
   const fetchData = useCallback(async () => {
     if (scope.loading) return
-    const supabase = getSupabase()
+    const supabase = createClient()
 
     try {
       // ---- Resolve scope params for the funnel API ----

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import {
   Users,
   Search,
@@ -22,12 +22,7 @@ import { formatSourceLabel } from '@/lib/utils/format-source-label'
 // Supabase
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Types
@@ -143,7 +138,7 @@ function ClientsPageInner() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
-    const supabase = getSupabase()
+    const supabase = createClient()
     try {
       // Scoped to current venue. Previous version had no filter — relied
       // on RLS which permits cross-venue reads through demo_anon_select

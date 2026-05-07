@@ -27,7 +27,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import {
   LineChart,
   Line,
@@ -62,12 +62,7 @@ interface DailyAgreement {
   agreementPct: number
 }
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  )
-}
+
 
 export default function AttributionParityPage() {
   const scope = useScope()
@@ -84,7 +79,7 @@ export default function AttributionParityPage() {
     setLoading(true)
     setError(null)
     try {
-      const supabase = getSupabase()
+      const supabase = createClient()
       const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
       const { data, error: queryErr } = await supabase
         .from('attribution_parity_log')

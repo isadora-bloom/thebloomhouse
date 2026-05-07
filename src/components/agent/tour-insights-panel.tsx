@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { Telescope, Sparkles, RefreshCw, Loader2, AlertTriangle } from 'lucide-react'
 
 interface TourLite {
@@ -37,12 +37,7 @@ interface Props {
   weddingId: string
 }
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  )
-}
+
 
 function fmtTourDate(d: string | null): string {
   if (!d) return 'Tour'
@@ -63,7 +58,7 @@ export function TourInsightsPanel({ weddingId }: Props) {
 
   useEffect(() => {
     let cancelled = false
-    const sb = getSupabase()
+    const sb = createClient()
     ;(async () => {
       setLoading(true)
       const { data } = await sb

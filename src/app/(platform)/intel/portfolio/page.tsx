@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import {
   Building2,
@@ -21,12 +21,7 @@ import { computeHealthScore } from '@/lib/intel/health-score'
 // Supabase
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Types
@@ -325,7 +320,7 @@ export default function PortfolioOverviewPage() {
 
   const fetchData = useCallback(async () => {
     if (scope.loading) return
-    const supabase = getSupabase()
+    const supabase = createClient()
     try {
       const ninetyDaysAgo = new Date()
       ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90)

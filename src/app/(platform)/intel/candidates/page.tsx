@@ -16,19 +16,12 @@
  */
 
 import { useEffect, useState } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import {
   CheckCircle2, XCircle, AlertTriangle, Sparkles, Search,
   Activity, ArrowRight, RotateCcw,
 } from 'lucide-react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
-
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  )
-}
 
 interface CandidateRow {
   id: string
@@ -93,7 +86,7 @@ export default function CandidatesReviewPage() {
   useEffect(() => {
     if (!venueId) return
     let cancelled = false
-    const sb = getSupabase()
+    const sb = createClient()
     ;(async () => {
       setLoading(true)
       const [reviewRes, conflictRes, recentRes] = await Promise.all([
@@ -172,7 +165,7 @@ export default function CandidatesReviewPage() {
 
   async function dismissCandidate(id: string) {
     if (!confirm('Dismiss this candidate? Marks reviewed; signals stay attached.')) return
-    const sb = getSupabase()
+    const sb = createClient()
     await sb.from('candidate_identities').update({ review_status: 'reviewed' }).eq('id', id)
     setNeedsReview((prev) => prev.filter((c) => c.id !== id))
   }
@@ -181,7 +174,7 @@ export default function CandidatesReviewPage() {
     // Manual link from the review queue. Writes attribution_events for
     // every signal attached to the candidate, marks candidate resolved,
     // and recomputes first-touch on the wedding.
-    const sb = getSupabase()
+    const sb = createClient()
     const res = await fetch('/api/intel/candidates/link', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -343,7 +336,7 @@ function NeedsReviewCard({
     setPickerOpen(true)
     if (pickerCandidates.length > 0) return
     setPickerLoading(true)
-    const sb = getSupabase()
+    const sb = createClient()
     // Suggest weddings whose people share the candidate's first name.
     const { data: people } = await sb
       .from('people')

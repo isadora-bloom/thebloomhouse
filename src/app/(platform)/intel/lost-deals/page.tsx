@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import {
   XCircle,
   Plus,
@@ -31,12 +31,7 @@ import {
 // Supabase
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Types
@@ -121,7 +116,7 @@ export default function LostDealsPage() {
 
   const fetchData = useCallback(async () => {
     if (scope.loading) return
-    const supabase = getSupabase()
+    const supabase = createClient()
     try {
       // Resolve scope → list of venue IDs (null = all venues / company)
       let venueIds: string[] | null = null
@@ -267,7 +262,7 @@ export default function LostDealsPage() {
   // Save new lost deal
   const handleSave = async () => {
     setSaving(true)
-    const supabase = getSupabase()
+    const supabase = createClient()
     try {
       const { error: err } = await supabase.from('lost_deals').insert({
         stage: formStage,
@@ -295,7 +290,7 @@ export default function LostDealsPage() {
 
   // Toggle recovery attempt
   const handleRecoveryAttempt = async (id: string) => {
-    const supabase = getSupabase()
+    const supabase = createClient()
     await supabase.from('lost_deals').update({ recovery_attempted: true }).eq('id', id)
     setDeals((prev) => prev.map((d) => (d.id === id ? { ...d, recovery_attempted: true } : d)))
   }

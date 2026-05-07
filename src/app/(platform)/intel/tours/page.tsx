@@ -1,7 +1,7 @@
 'use client'
 
 import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { useScope } from '@/lib/hooks/use-scope'
 import {
   MapPin,
@@ -27,12 +27,7 @@ import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel
 // Supabase
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Types
@@ -241,7 +236,7 @@ export default function ToursPage() {
 
   const fetchData = useCallback(async () => {
     if (scope.loading) return
-    const supabase = getSupabase()
+    const supabase = createClient()
     try {
       // Resolve scope → list of venue IDs (null = all venues / company)
       let venueIds: string[] | null = null
@@ -421,7 +416,7 @@ export default function ToursPage() {
 
   const handleSave = async () => {
     setSaving(true)
-    const supabase = getSupabase()
+    const supabase = createClient()
     try {
       // Note: `couple_name` isn't a column on tours (couple identity lives
       // on people via wedding_id). `competing_venues` is text[], so a

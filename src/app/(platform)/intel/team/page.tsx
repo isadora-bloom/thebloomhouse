@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useScope, scopeVenueFilter } from '@/lib/hooks/use-scope'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import {
   Users,
   Clock,
@@ -67,12 +67,6 @@ type Period = 'this_month' | 'last_month' | 'last_3_months'
 // Supabase client
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -303,7 +297,7 @@ function TeamPerformancePageInner() {
   // ---- Fetch data ----
   const fetchData = useCallback(async () => {
     if (scope.loading) return
-    const supabase = getSupabase()
+    const supabase = createClient()
     const { start, end } = getPeriodDates(period)
 
     try {

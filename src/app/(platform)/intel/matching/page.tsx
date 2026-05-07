@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import {
   GitMerge,
   X as XIcon,
@@ -21,12 +21,6 @@ import { useVenueId } from '@/lib/hooks/use-venue-id'
 // Supabase
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -201,7 +195,7 @@ function MatchingPageInner() {
   const [showSnoozed, setShowSnoozed] = useState(false)
 
   const fetchData = useCallback(async () => {
-    const supabase = getSupabase()
+    const supabase = createClient()
     try {
       // Every query explicitly filters by VENUE_ID. Relying on RLS alone
       // caused a bleed: browser-client queries can read cross-venue rows

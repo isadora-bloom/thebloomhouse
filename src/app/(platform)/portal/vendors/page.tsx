@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import {
   Store,
   Plus,
@@ -77,12 +77,6 @@ const VENDOR_TYPES = [
 // Supabase client
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -423,7 +417,7 @@ export default function VendorsPage() {
 
   // ---- Fetch data ----
   const fetchData = useCallback(async () => {
-    const supabase = getSupabase()
+    const supabase = createClient()
 
     try {
       const { data, error: fetchErr } = await supabase
@@ -478,7 +472,7 @@ export default function VendorsPage() {
   }
 
   async function handleSave() {
-    const supabase = getSupabase()
+    const supabase = createClient()
     setSaving(true)
 
     const payload = {

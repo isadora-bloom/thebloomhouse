@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { CheckCircle2, AlertTriangle, RefreshCw, Mail } from 'lucide-react'
 
 interface ConnectionState {
@@ -28,13 +28,6 @@ interface ConnectionState {
 
 interface Props {
   venueId: string | null
-}
-
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  )
 }
 
 function fmtRelative(iso: string | null): string {
@@ -55,7 +48,7 @@ export function GmailConnectionStatus({ venueId }: Props) {
   useEffect(() => {
     if (!venueId) return
     let cancelled = false
-    const sb = getSupabase()
+    const sb = createClient()
     ;(async () => {
       const { data } = await sb
         .from('gmail_connections')

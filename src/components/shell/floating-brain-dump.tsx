@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { Brain, X, Loader2, Send, CheckCircle2, AlertCircle, Upload } from 'lucide-react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useAiName } from '@/lib/hooks/use-ai-name'
@@ -55,12 +55,7 @@ type SubmitState =
 
 const BUCKET = 'brain-dump'
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 /**
  * Pre-fill hint derived from the current pathname (ARCH-20.5.5).
@@ -185,7 +180,7 @@ export function FloatingBrainDump() {
           })
           return
         }
-        const supabase = getSupabase()
+        const supabase = createClient()
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
         const path = `${venueId}/${crypto.randomUUID()}-${safeName}`
         const { error: upErr } = await supabase.storage

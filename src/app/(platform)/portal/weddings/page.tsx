@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
@@ -113,12 +113,7 @@ type SortKey = 'date' | 'status' | 'value'
 // Supabase client
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -532,7 +527,7 @@ function NewBookingModal({
     setSaving(true)
 
     try {
-      const supabase = getSupabase()
+      const supabase = createClient()
 
       // 1. Generate event code (3 letter venue prefix + 3 digits)
       const prefix = (venueSlug || 'BLM').slice(0, 3).toUpperCase()
@@ -611,7 +606,7 @@ function NewBookingModal({
   }
 
   async function createPeopleAndInvite(
-    supabase: ReturnType<typeof getSupabase>,
+    supabase: ReturnType<typeof createClient>,
     wedding: any,
     code: string,
   ) {
@@ -961,7 +956,7 @@ export default function WeddingsPage() {
   // ---- Fetch data ----
   const fetchData = useCallback(async () => {
     if (scope.loading) return
-    const supabase = getSupabase()
+    const supabase = createClient()
 
     try {
       // Resolve scope → list of venue IDs (null = all venues / company)

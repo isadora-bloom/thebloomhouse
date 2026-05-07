@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { useAiName } from '@/lib/hooks/use-ai-name'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import {
@@ -50,12 +50,7 @@ interface Message {
 // Supabase client
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -216,7 +211,7 @@ export default function MessagesPage() {
   // ---- Fetch threads ----
   const fetchThreads = useCallback(async () => {
     if (scope.loading) return
-    const supabase = getSupabase()
+    const supabase = createClient()
 
     try {
       // Resolve scope → list of venue IDs (null = all venues / company)
@@ -323,7 +318,7 @@ export default function MessagesPage() {
     if (!selectedWeddingId) return
     setLoadingMessages(true)
 
-    const supabase = getSupabase()
+    const supabase = createClient()
 
     try {
       const { data, error: fetchErr } = await supabase
@@ -362,7 +357,7 @@ export default function MessagesPage() {
     if (!selected) return
     setSending(true)
 
-    const supabase = getSupabase()
+    const supabase = createClient()
 
     try {
       const { error: insertErr } = await supabase.from('messages').insert({

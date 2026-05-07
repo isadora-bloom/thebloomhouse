@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { useAiName } from '@/lib/hooks/use-ai-name'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import {
@@ -48,12 +48,7 @@ interface SageQueueItem {
 // Supabase client
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -283,7 +278,7 @@ export default function SageQueuePage() {
   // ---- Fetch data ----
   const fetchData = useCallback(async () => {
     if (scope.loading) return
-    const supabase = getSupabase()
+    const supabase = createClient()
 
     try {
       // Resolve scope → list of venue IDs (null = all venues / company)
@@ -363,7 +358,7 @@ export default function SageQueuePage() {
 
   // ---- Respond to question ----
   const handleRespond = async (id: string, answer: string, addToKB: boolean) => {
-    const supabase = getSupabase()
+    const supabase = createClient()
 
     const { error: updateErr } = await supabase
       .from('sage_uncertain_queue')

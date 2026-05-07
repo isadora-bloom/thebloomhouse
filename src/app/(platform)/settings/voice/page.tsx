@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import {
   MessageSquare, ThumbsUp, ThumbsDown, Zap, Trophy, ArrowLeft,
@@ -17,11 +17,8 @@ import {
 } from '@/config/voice-training-content'
 import { formatSourceLabel } from '@/lib/utils/format-source-label'
 
-// TODO: Wire venue selector — for now we load the first venue
-const supabase = createBrowserClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+// TODO: Wire venue selector. For now we load the first venue.
+const supabase = createClient()
 
 // ---------------------------------------------------------------------------
 // Types

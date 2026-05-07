@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import {
   Megaphone,
   Plus,
@@ -24,12 +24,7 @@ import {
 // Supabase
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Types
@@ -116,7 +111,7 @@ export default function CampaignsPage() {
   const CHANNELS = ['instagram', 'facebook', 'google_ads', 'the_knot', 'wedding_wire', 'tiktok', 'email', 'referral', 'other']
 
   const fetchData = useCallback(async () => {
-    const supabase = getSupabase()
+    const supabase = createClient()
     try {
       const { data, error: err } = await supabase
         .from('campaigns')
@@ -198,7 +193,7 @@ export default function CampaignsPage() {
 
   const handleSave = async () => {
     setSaving(true)
-    const supabase = getSupabase()
+    const supabase = createClient()
     const payload = {
       name: formName,
       channel: formChannel,

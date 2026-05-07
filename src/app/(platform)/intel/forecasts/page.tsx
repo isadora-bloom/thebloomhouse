@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import {
   TrendingUp,
   DollarSign,
@@ -23,12 +23,6 @@ import {
 // Supabase
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -111,7 +105,7 @@ export default function ForecastsPage() {
   const [error, setError] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
-    const supabase = getSupabase()
+    const supabase = createClient()
     try {
       const { data, error: err } = await supabase
         .from('weddings')

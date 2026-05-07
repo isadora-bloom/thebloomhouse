@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { useScope, scopeVenueFilter } from '@/lib/hooks/use-scope'
 import { computeHealthScore } from '@/lib/intel/health-score'
 import { UpgradeGate } from '@/components/ui/upgrade-gate'
@@ -35,12 +35,7 @@ import {
 // Supabase
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 // ---------------------------------------------------------------------------
 // Types
@@ -152,7 +147,7 @@ function CompanyDashboardInner() {
 
   const fetchData = useCallback(async () => {
     if (scope.loading) return
-    const supabase = getSupabase()
+    const supabase = createClient()
     try {
       let venueQ = supabase.from('venues').select('id, name, state')
       let weddingQ = supabase

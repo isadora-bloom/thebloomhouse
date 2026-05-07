@@ -27,7 +27,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { Activity, Eye, Bookmark, MessageSquare, MousePointerClick, Star, Phone, Sparkles, AlertTriangle, RotateCcw } from 'lucide-react'
 
 interface AttributionEvent {
@@ -72,13 +72,6 @@ interface Props {
   weddingId: string
   legacySource: string | null
   onChangeAttribution?: (eventId: string) => void
-}
-
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  )
 }
 
 function platformLabel(key: string): string {
@@ -130,7 +123,7 @@ export function CandidateSignalEvidence({ weddingId, legacySource, onChangeAttri
 
   useEffect(() => {
     let cancelled = false
-    const sb = getSupabase()
+    const sb = createClient()
     ;(async () => {
       const { data: cands } = await sb
         .from('candidate_identities')

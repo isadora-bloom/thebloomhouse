@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { useAiName } from '@/lib/hooks/use-ai-name'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import {
   BookOpen,
   Plus,
@@ -106,12 +106,7 @@ const SOURCE_COLORS: Record<KBSource, string> = {
 // Supabase client
 // ---------------------------------------------------------------------------
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
+
 
 function formatDate(iso: string | null | undefined) {
   if (!iso) return '—'
@@ -174,7 +169,7 @@ export default function KnowledgeBasePage() {
       return
     }
     setLoading(true)
-    const supabase = getSupabase()
+    const supabase = createClient()
     const { data, error: err } = await supabase
       .from('knowledge_base')
       .select('*')
@@ -288,7 +283,7 @@ export default function KnowledgeBasePage() {
       setError('No venue selected.')
       return
     }
-    const supabase = getSupabase()
+    const supabase = createClient()
     setSaving(true)
 
     const payload = {
@@ -333,7 +328,7 @@ export default function KnowledgeBasePage() {
   }
 
   async function toggleActive(entry: KBEntry) {
-    const supabase = getSupabase()
+    const supabase = createClient()
     // Optimistic
     setEntries((prev) =>
       prev.map((e) =>
@@ -356,7 +351,7 @@ export default function KnowledgeBasePage() {
   }
 
   async function handleDelete(id: string) {
-    const supabase = getSupabase()
+    const supabase = createClient()
     const { error: err } = await supabase
       .from('knowledge_base')
       .delete()
@@ -447,7 +442,7 @@ export default function KnowledgeBasePage() {
         return
       }
 
-      const supabase = getSupabase()
+      const supabase = createClient()
       const { error: insertErr } = await supabase
         .from('knowledge_base')
         .insert(rows)

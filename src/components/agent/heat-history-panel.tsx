@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@/lib/supabase/client'
 import { TrendingUp, TrendingDown, Flame, ChevronRight } from 'lucide-react'
 
 interface SnapshotRow {
@@ -34,12 +34,7 @@ interface Props {
   weddingId: string
 }
 
-function getSupabase() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  )
-}
+
 
 function fmtDateTime(d: string): string {
   return new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
@@ -57,7 +52,7 @@ export function HeatHistoryPanel({ weddingId }: Props) {
 
   useEffect(() => {
     let cancelled = false
-    const sb = getSupabase()
+    const sb = createClient()
     ;(async () => {
       setLoading(true)
       const [snapsRes, eventsRes] = await Promise.all([
