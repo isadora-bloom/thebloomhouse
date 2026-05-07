@@ -89,8 +89,12 @@ export default function VenueInfoSettingsPage() {
           .maybeSingle(),
       ])
       if (cancelled) return
-      if (venueRes.error) setError(venueRes.error.message)
-      else if (configRes.error) setError(configRes.error.message)
+      // Round-6 audit fix: was `if/else if` which silently dropped
+      // configRes.error when venuesRes.error fired. Surface both.
+      const errs: string[] = []
+      if (venueRes.error) errs.push(`venues: ${venueRes.error.message}`)
+      if (configRes.error) errs.push(`venue_config: ${configRes.error.message}`)
+      if (errs.length > 0) setError(errs.join(' | '))
       setData((venueRes.data as VenueLocation | null) ?? EMPTY)
       setOwner((configRes.data as OwnerPresence | null) ?? EMPTY_OWNER)
       setLoading(false)

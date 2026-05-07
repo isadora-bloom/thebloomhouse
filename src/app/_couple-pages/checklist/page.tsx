@@ -423,13 +423,23 @@ export default function ChecklistPage() {
   // Tier-B #56 — assign-to handler. Trims whitespace at the API boundary
   // (mig 224 comment) and stores empty string as null so renderer's
   // null-check (= "no chip") works without normalisation.
+  //
+  // Round-6 audit fixes:
+  //   - Cap to 80 chars to defend against runaway pastes (renderer
+  //     truncates at 24 visually, but storage is unbounded TEXT).
+  //   - Add wedding_id predicate to the UPDATE so a future RLS
+  //     pathway that lets couples read across weddings can't be
+  //     coerced into writing across weddings via a leaked
+  //     checklist_item.id.
   async function handleSetAssignedTo(id: string, raw: string) {
-    const trimmed = raw.trim()
+    if (!weddingId) return
+    const trimmed = raw.trim().slice(0, 80)
     const value = trimmed.length === 0 ? null : trimmed
     await supabase
       .from('checklist_items')
       .update({ assigned_to: value })
       .eq('id', id)
+      .eq('wedding_id', weddingId)
     setItems((prev) =>
       prev.map((i) => (i.id === id ? { ...i, assigned_to: value } : i))
     )

@@ -1,5 +1,5 @@
 -- ============================================================================
--- 224: CHECKLIST_ITEMS — assigned_to
+-- 224: CHECKLIST_ITEMS (assigned_to)
 --
 -- Tier-B audit #56. Couples planning together need to be able to say
 -- "Sarah handles flowers, James handles vendors, Mom is on rehearsal
@@ -15,7 +15,7 @@
 --   3. Couples can change their minds quickly. Cheaper to type a new
 --      name than to add/remove people rows.
 --
--- Renderer treats the value as opaque — first 24 chars rendered as a
+-- Renderer treats the value as opaque: first 24 chars rendered as a
 -- chip on the checklist item, no normalization. Empty string === null.
 -- Whitespace trimmed at the API boundary, not in SQL.
 -- ============================================================================

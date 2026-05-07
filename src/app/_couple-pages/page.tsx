@@ -322,7 +322,19 @@ export default function CoupleDashboard() {
           return
         }
 
-        // Fetch related data in parallel
+        // Fetch related data in parallel.
+        // Round-6 audit fix: owner-presence (venue_ai_config + venue_config)
+        // and packages catalog reads are folded INTO this fan-out instead of
+        // running sequentially after it. Saves ~2 round-trips of latency
+        // per dashboard load. Each result is null-tolerant (fail-soft) so
+        // a misconfigured RLS policy doesn't break the page; we log a
+        // console.warn for debuggability per round-6 follow-up.
+        const weddingPackageLabel = (wedding as { package?: string | null }).package ?? null
+        // Same `%`/`_` escape applied here that's used downstream when
+        // resolving the package catalog row (round-6 #1a fix).
+        const escapedPackageLabel =
+          weddingPackageLabel ? weddingPackageLabel.replace(/[\\%_]/g, '\\$&') : null
+
         const [
           guests,
           budgetItemsRes,
@@ -334,6 +346,9 @@ export default function CoupleDashboard() {
           interactionsRes,
           contractsRes,
           bookedVendorsRes,
+          aiConfigRes,
+          venueConfigRes,
+          packageRes,
         ] = await Promise.all([
           supabase.from('guest_list').select('id, rsvp_status').eq('wedding_id', wid),
           supabase
@@ -386,66 +401,97 @@ export default function CoupleDashboard() {
             .from('booked_vendors')
             .select('id', { count: 'exact', head: true })
             .eq('wedding_id', wid),
+          // Owner identity (venue_ai_config). Returns null shape when
+          // venue_id is unresolved or RLS denies — safe.
+          vid
+            ? supabase
+                .from('venue_ai_config')
+                .select('owner_name')
+                .eq('venue_id', vid)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+          // Owner presence (venue_config: note + photo).
+          vid
+            ? supabase
+                .from('venue_config')
+                .select('owner_note_to_couples, owner_photo_url')
+                .eq('venue_id', vid)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+          // Booked-package catalog row. Skipped when there's no
+          // wedding-side label; otherwise case-insensitive lookup
+          // with `%`/`_` escaped.
+          vid && escapedPackageLabel
+            ? supabase
+                .from('packages')
+                .select('name, description, season, tier')
+                .eq('venue_id', vid)
+                .eq('kind', 'package')
+                .ilike('name', escapedPackageLabel)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
         ])
 
-        // Booked-package resolution (Tier-B #54). The wedding row
-        // carries the package as a free-text label (mig 009); we look
-        // it up against the packages catalog by case-insensitive name
-        // match scoped to this venue. Fail-soft: when the wedding has
-        // no package label or the catalog has no match, packageInfo
-        // stays null and the dashboard card simply doesn't render.
-        let packageInfo: DashboardData['packageInfo'] = null
-        const weddingPackage = (wedding as { package?: string | null }).package
-        if (vid && weddingPackage) {
-          const { data: pkgRow } = await supabase
-            .from('packages')
-            .select('name, description, season, tier')
-            .eq('venue_id', vid)
-            .eq('kind', 'package')
-            .ilike('name', weddingPackage)
-            .maybeSingle()
-          if (pkgRow) {
-            const seasonOrTier = (pkgRow.season as string | null) ?? (pkgRow.tier as string | null) ?? null
-            packageInfo = {
-              name: pkgRow.name as string,
-              description: (pkgRow.description as string | null) ?? null,
-              seasonOrTier,
-            }
-          } else {
-            // Catalog miss but the wedding row has a label — surface the
-            // bare label so couples still see what they booked.
-            packageInfo = {
-              name: weddingPackage,
-              description: null,
-              seasonOrTier: null,
-            }
-          }
+        // Owner presence + package synthesis from the parallel fetch above.
+        // Round-6 follow-up: log each fetch error so a misconfigured
+        // RLS policy doesn't silently render the cards as missing.
+        if (aiConfigRes.error) {
+          console.warn(
+            '[couple-dashboard] owner_name fetch failed:',
+            aiConfigRes.error.message,
+          )
+        }
+        if (venueConfigRes.error) {
+          console.warn(
+            '[couple-dashboard] venue_config fetch failed:',
+            venueConfigRes.error.message,
+          )
+        }
+        if (packageRes.error) {
+          console.warn(
+            '[couple-dashboard] packages catalog fetch failed:',
+            packageRes.error.message,
+          )
         }
 
-        // Owner presence (Tier-B #50/#51). Fetched separately because the
-        // venue-scoped reads happen alongside the main wedding-scoped fan-out.
-        // Fail-soft: any error returns null fields and the card simply
-        // doesn't render. No PII concerns — these are coordinator-curated
-        // venue copy, not couple data.
-        let ownerName: string | null = null
-        let ownerNote: string | null = null
-        let ownerPhotoUrl: string | null = null
-        if (vid) {
-          const [aiConfigRes, configRes] = await Promise.all([
-            supabase
-              .from('venue_ai_config')
-              .select('owner_name')
-              .eq('venue_id', vid)
-              .maybeSingle(),
-            supabase
-              .from('venue_config')
-              .select('owner_note_to_couples, owner_photo_url')
-              .eq('venue_id', vid)
-              .maybeSingle(),
-          ])
-          ownerName = (aiConfigRes.data?.owner_name as string | undefined) ?? null
-          ownerNote = (configRes.data?.owner_note_to_couples as string | undefined) ?? null
-          ownerPhotoUrl = (configRes.data?.owner_photo_url as string | undefined) ?? null
+        const ownerName =
+          ((aiConfigRes.data as { owner_name?: string } | null)?.owner_name) ?? null
+        const ownerNote =
+          ((venueConfigRes.data as { owner_note_to_couples?: string } | null)?.owner_note_to_couples) ?? null
+        // Round-6 audit fix: validate owner_photo_url is HTTPS before
+        // rendering. Coordinator field is free-text; a bad value would
+        // leak every couple's dashboard load to a third-party host AND
+        // ship http:// content over the portal's https origin. Reject
+        // anything that isn't a well-formed https URL — falls back to
+        // the heart icon.
+        const rawPhotoUrl =
+          ((venueConfigRes.data as { owner_photo_url?: string } | null)?.owner_photo_url)
+        const ownerPhotoUrl =
+          rawPhotoUrl && /^https:\/\/[^\s<>"]+$/.test(rawPhotoUrl) ? rawPhotoUrl : null
+
+        let packageInfo: DashboardData['packageInfo'] = null
+        const pkgRow = packageRes.data as
+          | {
+              name: string
+              description: string | null
+              season: string | null
+              tier: string | null
+            }
+          | null
+        if (pkgRow) {
+          packageInfo = {
+            name: pkgRow.name,
+            description: pkgRow.description ?? null,
+            seasonOrTier: pkgRow.season ?? pkgRow.tier ?? null,
+          }
+        } else if (weddingPackageLabel) {
+          // Catalog miss but the wedding row has a label — surface the
+          // bare label so couples still see what they booked.
+          packageInfo = {
+            name: weddingPackageLabel,
+            description: null,
+            seasonOrTier: null,
+          }
         }
 
         const people = (wedding.people || []) as Array<{
@@ -484,7 +530,13 @@ export default function CoupleDashboard() {
         // item as committed - sum(payments). Filter to items with a
         // payment_due_date >= today AND a positive outstanding amount.
         // Sort by due date ASC and pick the first.
-        const todayStr = new Date().toISOString().slice(0, 10)
+        //
+        // Round-6 audit fix: was `new Date().toISOString().slice(0,10)`
+        // which produces UTC date. A couple opening the dashboard at
+        // 9pm Pacific would see the next-day filter (UTC-tomorrow)
+        // applied, hiding payments due today. Use locale-formatted
+        // YYYY-MM-DD via en-CA which produces ISO-shape in local TZ.
+        const todayStr = new Date().toLocaleDateString('en-CA')
         const upcomingPayments = budgetItems
           .map((b) => {
             const paymentsSum = (b.budget_payments || []).reduce(

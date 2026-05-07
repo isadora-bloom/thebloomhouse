@@ -330,6 +330,7 @@ export const MODE_SAGE: ModeConfig = {
     '/portal/marketing-channels-config',
     '/portal/absences-config',
     '/portal/property-state-config',
+    '/settings/venue-info',
     '/portal/kb',
     '/portal/section-settings',
     '/portal/venue-usps-config',
@@ -390,6 +391,7 @@ export const MODE_SAGE: ModeConfig = {
         { label: 'Marketing channels', href: '/portal/marketing-channels-config', icon: MegaphoneIcon },
         { label: 'Coordinator absences', href: '/portal/absences-config', icon: CalendarOff },
         { label: 'Property state', href: '/portal/property-state-config', icon: Hammer },
+        { label: 'Venue info & owner note', href: '/settings/venue-info', icon: MapPin },
       ],
     },
     {
