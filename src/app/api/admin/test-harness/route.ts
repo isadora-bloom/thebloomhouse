@@ -155,12 +155,12 @@ export async function POST(request: NextRequest) {
         threadId?: string
         direction?: 'inbound' | 'outbound'
         weddingId?: string
+        injectionSuspected?: boolean
       }
       // direction is required on AutoSendCheck (Repair K). The
       // test harness defaults to 'inbound' if the test caller didn't
-      // pass it — this is the explicit harness-side default, NOT a
-      // function-side fallback. Tests that exercise the outbound
-      // path set direction='outbound' explicitly.
+      // pass it. injectionSuspected is forwarded so tests can
+      // exercise the round-3 Check 0c block path.
       const result = await checkAutoSendEligible(venueId, {
         ...opts,
         direction: opts.direction ?? 'inbound',

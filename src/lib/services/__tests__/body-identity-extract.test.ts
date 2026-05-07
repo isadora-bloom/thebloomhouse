@@ -88,7 +88,15 @@ Or contact directly: real.couple@gmail.com
       body: 'We are open to 2026-09-14, 09/14/2026, Fall 2026, or even September 2026.',
     })
     expect(result.date_hints).toEqual(
-      expect.arrayContaining(['2026-09-14', '09/14/2026', 'Fall 2026']),
+      expect.arrayContaining([
+        '2026-09-14',
+        '09/14/2026',
+        'Fall 2026',
+        // Round-4 audit: pin the month+year case so a regex regression
+        // that drops the pattern fails this test rather than silently
+        // producing nulls in production.
+        'September 2026',
+      ]),
     )
   })
 

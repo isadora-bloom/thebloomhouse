@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { CheckSquare, Square, Calendar, AlertTriangle, Heart } from 'lucide-react'
 
@@ -44,6 +44,23 @@ const CATEGORY_LABEL: Record<string, string> = {
 }
 
 export default function PublicChecklistPage() {
+  // Wrap in Suspense — useSearchParams in Next 16 needs a Suspense
+  // boundary or it logs a deferred-render warning. Per round-4
+  // follow-up F7.
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+          <p className="text-gray-500 text-sm">Loading checklist…</p>
+        </div>
+      }
+    >
+      <PublicChecklistInner />
+    </Suspense>
+  )
+}
+
+function PublicChecklistInner() {
   const params = useParams()
   const searchParams = useSearchParams()
   const slug = params.slug as string
