@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import {
   detectTrendDeviations,
   fetchTrendsForVenue,
-} from '@/lib/services/trends'
+} from '@/lib/services/intel/trends'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { resolveScopeVenueIds } from '@/lib/api/resolve-platform-scope'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'

@@ -5,7 +5,7 @@
 //   3. attribution model differences exist on Rixey (proves the
 //      side-by-side comparison surfaces something useful)
 //   4. anomaly_alerts query for unacknowledged count works
-import { computeSourceQuality } from '../src/lib/services/source-quality'
+import { computeSourceQuality } from '../src/lib/services/intel/source-quality'
 import { computeSourceFunnel } from '../src/lib/services/attribution'
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'

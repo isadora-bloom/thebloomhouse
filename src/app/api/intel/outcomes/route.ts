@@ -3,7 +3,7 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import {
   getOutcomesForVenue,
   getOutcomeForInsight,
-} from '@/lib/services/insight-tracking'
+} from '@/lib/services/intel/insight-tracking'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 // ---------------------------------------------------------------------------

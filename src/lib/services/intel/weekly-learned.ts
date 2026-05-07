@@ -15,7 +15,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { computeSourceQuality } from '@/lib/services/source-quality'
+import { computeSourceQuality } from '@/lib/services/intel/source-quality'
 
 // ---------------------------------------------------------------------------
 // Types

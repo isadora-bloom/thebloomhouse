@@ -5,7 +5,7 @@
 //   - threshold lowered 20 → 12 nonzero days
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { computeCorrelationsForVenue } from '../../src/lib/services/correlation-engine'
+import { computeCorrelationsForVenue } from '../../src/lib/services/intel/correlation-engine'
 
 async function main() {
   const env = Object.fromEntries(

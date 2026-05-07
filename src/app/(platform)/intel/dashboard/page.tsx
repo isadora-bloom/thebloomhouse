@@ -327,7 +327,7 @@ function AlertCard({
 // existing call sites.
 // ---------------------------------------------------------------------------
 
-import { ECONOMIC_INDICATOR_AVERAGES as AVERAGES } from '@/lib/services/fred-demand'
+import { ECONOMIC_INDICATOR_AVERAGES as AVERAGES } from '@/lib/services/intel/fred-demand'
 
 function clampVal(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))

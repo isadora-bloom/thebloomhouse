@@ -5,7 +5,7 @@ import {
   parseSpendCsv,
   extractSpendFromText,
   type SpendRow,
-} from '@/lib/services/marketing-spend'
+} from '@/lib/services/intel/marketing-spend'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 /**

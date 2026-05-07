@@ -20,7 +20,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth, isDemoMode, isDemoVenueAllowed } from '@/lib/api/auth-helpers'
-import { getPriorTouches } from '@/lib/services/prior-touches'
+import { getPriorTouches } from '@/lib/services/intel/prior-touches'
 import { redactError } from '@/lib/observability/redact'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 

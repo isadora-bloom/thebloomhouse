@@ -31,7 +31,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 import { redactError } from '@/lib/observability/redact'
-import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
+import { recordKnowledgeGaps } from '@/lib/services/intel/knowledge-gaps'
 import { requireAiName } from '@/lib/ai/personality-builder'
 
 // ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ import {
   requireAiName,
   type PersonalityData,
 } from '@/lib/ai/personality-builder'
-import { buildSageIntelligenceContext } from '../sage-intelligence'
+import { buildSageIntelligenceContext } from '../intel/sage-intelligence'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
 export const BRAIN_PROMPT_VERSION = 'sage-brain.prompt.v1.2'

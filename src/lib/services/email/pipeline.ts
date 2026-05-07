@@ -31,10 +31,10 @@ import {
   type SchedulingEvent,
 } from '@/lib/services/ingestion/scheduling-tool-parsers'
 import { resolveIdentity } from '@/lib/services/identity/resolution'
-import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
+import { recordKnowledgeGaps } from '@/lib/services/intel/knowledge-gaps'
 import { applySignalInference } from '@/lib/services/attribution/signal-inference'
 import { createNotification } from '@/lib/services/admin-notifications'
-import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
+import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/intel/consultant-tracking'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
 import { matchFilter, clearFilterCache } from '@/lib/services/email/inbox-filters'
 import { parseFuzzyDate, parseGuestCount, validateEstimatedGuests } from '@/lib/services/fuzzy-date'

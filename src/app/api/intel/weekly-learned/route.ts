@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
-import { computeWeeklyLearned } from '@/lib/services/weekly-learned'
+import { computeWeeklyLearned } from '@/lib/services/intel/weekly-learned'
 
 /**
  * GET /api/intel/weekly-learned

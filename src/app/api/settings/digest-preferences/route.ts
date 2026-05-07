@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { getOrCreateDefault, updatePreferences, type DigestPreferences } from '@/lib/services/digest-preferences'
+import { getOrCreateDefault, updatePreferences, type DigestPreferences } from '@/lib/services/intel/digest-preferences'
 
 const MUTABLE_FIELDS: Array<keyof DigestPreferences> = [
   'cadence',

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { getPostTourBrowsingLeads } from '@/lib/services/post-tour-browsing'
+import { getPostTourBrowsingLeads } from '@/lib/services/intel/post-tour-browsing'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 /**

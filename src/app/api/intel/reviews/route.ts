@@ -6,7 +6,7 @@ import {
   getTopPhrases,
   approvePhraseForSage,
   approvePhraseForMarketing,
-} from '@/lib/services/review-language'
+} from '@/lib/services/intel/review-language'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { trackCoordinatorAction } from '@/lib/services/consultant-tracking'
+import { trackCoordinatorAction } from '@/lib/services/intel/consultant-tracking'
 
 /**
  * POST /api/tracking

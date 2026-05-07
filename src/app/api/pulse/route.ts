@@ -14,7 +14,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { aggregatePulseFull } from '@/lib/services/pulse-aggregator'
+import { aggregatePulseFull } from '@/lib/services/intel/pulse-aggregator'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { verifyDemoToken, DEMO_TOKEN_COOKIE, DEMO_VENUE_ID } from '@/lib/services/demo-token'
 

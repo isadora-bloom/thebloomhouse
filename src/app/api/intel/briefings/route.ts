@@ -4,7 +4,7 @@ import {
   getAllBriefings,
   generateWeeklyBriefing,
   generateMonthlyBriefing,
-} from '@/lib/services/briefings'
+} from '@/lib/services/intel/briefings'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 

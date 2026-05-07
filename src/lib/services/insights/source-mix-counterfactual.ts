@@ -55,7 +55,7 @@ import { redactError } from '@/lib/observability/redact'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
-import { computeSourceQuality, type SourceQualityRow } from '@/lib/services/source-quality'
+import { computeSourceQuality, type SourceQualityRow } from '@/lib/services/intel/source-quality'
 
 export const SOURCE_MIX_COUNTERFACTUAL_PROMPT_VERSION = 'source-mix-counterfactual.prompt.v1.0'
 

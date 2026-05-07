@@ -30,11 +30,11 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
-import { loadFredSeries } from './external-context/fred'
-import { loadCulturalMomentsSeries } from './external-context/cultural-moments'
-import { loadCalendarSeries } from './external-context/calendar'
-import { loadGovernmentSeries } from './external-context/government'
-import { bonferroniCriticalR } from './external-context/stats'
+import { loadFredSeries } from '../external-context/fred'
+import { loadCulturalMomentsSeries } from '../external-context/cultural-moments'
+import { loadCalendarSeries } from '../external-context/calendar'
+import { loadGovernmentSeries } from '../external-context/government'
+import { bonferroniCriticalR } from '../external-context/stats'
 import {
   formatSeriesLabel,
   classifySeries,

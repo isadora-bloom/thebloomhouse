@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { getPriorTouches } from '@/lib/services/prior-touches'
+import { getPriorTouches } from '@/lib/services/intel/prior-touches'
 
 /**
  * GET /api/agent/inbox/prior-touches/:personId

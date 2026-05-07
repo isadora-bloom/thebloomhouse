@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
-import { computeMeOrMarket } from '@/lib/services/me-or-market'
+import { computeMeOrMarket } from '@/lib/services/intel/me-or-market'
 
 // ---------------------------------------------------------------------------
 // GET /api/intel/me-or-market

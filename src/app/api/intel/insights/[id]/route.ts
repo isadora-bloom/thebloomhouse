@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { recordInsightAction } from '@/lib/services/insight-tracking'
+import { recordInsightAction } from '@/lib/services/intel/insight-tracking'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 // ---------------------------------------------------------------------------

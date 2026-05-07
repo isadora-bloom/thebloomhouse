@@ -567,7 +567,7 @@ export async function routeBrainDump(args: {
   // for coordinator confirmation (CSV-style preview flow — never
   // auto-commit spend numbers).
   if (parsed.intent === 'analytics') {
-    const { extractSpendFromText } = await import('@/lib/services/marketing-spend')
+    const { extractSpendFromText } = await import('@/lib/services/intel/marketing-spend')
     const extract = await extractSpendFromText({ venueId, text: rawText })
     if (extract.rows.length > 0) {
       await createNotification({

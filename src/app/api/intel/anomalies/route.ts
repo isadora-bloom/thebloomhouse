@@ -3,7 +3,7 @@ import {
   getActiveAlerts,
   runAnomalyDetection,
   acknowledgeAlert,
-} from '@/lib/services/anomaly-detection'
+} from '@/lib/services/intel/anomaly-detection'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createServiceClient } from '@/lib/supabase/service'

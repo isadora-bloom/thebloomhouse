@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Flame, Sparkles, ChevronDown, ChevronUp, Mail, AtSign, Globe, Calendar, Star, Link as LinkIcon, Snowflake } from 'lucide-react'
-import type { PriorTouchSummary, PriorTouch } from '@/lib/services/prior-touches'
+import type { PriorTouchSummary, PriorTouch } from '@/lib/services/intel/prior-touches'
 
 interface PriorTouchesChipProps {
   personId: string | null | undefined

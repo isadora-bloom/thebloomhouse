@@ -13,7 +13,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { shouldSendToday, type DigestPreferences } from '@/lib/services/digest-preferences'
+import { shouldSendToday, type DigestPreferences } from '@/lib/services/intel/digest-preferences'
 
 export interface DigestDispatchSummary {
   venuesConsidered: number

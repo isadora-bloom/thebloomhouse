@@ -2,7 +2,7 @@
  * Unit tests — pulse-aggregator pure helpers (ARCH-20.2.2).
  */
 
-import { __test__ } from '../src/lib/services/pulse-aggregator'
+import { __test__ } from '../src/lib/services/intel/pulse-aggregator'
 
 const { notificationPriority, anomalyPriority, PRIORITY_RANK, dedupeAndLimit } = __test__
 

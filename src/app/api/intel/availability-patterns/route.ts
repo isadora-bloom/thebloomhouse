@@ -6,7 +6,7 @@ import {
   computeAvailabilityPatterns,
   deriveTopAvailabilityInsight,
   type MonthlyFillRate,
-} from '@/lib/services/quality-signals'
+} from '@/lib/services/intel/quality-signals'
 
 /**
  * GET /api/intel/availability-patterns

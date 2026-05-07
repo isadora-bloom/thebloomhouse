@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Flame, MessageCircle, AlertTriangle, TrendingDown, Users, RefreshCw, Loader2 } from 'lucide-react'
 import { PriorTouchesBadge } from '@/components/intel/inline-primitives'
-import type { PriorTouchSummary } from '@/lib/services/prior-touches'
+import type { PriorTouchSummary } from '@/lib/services/intel/prior-touches'
 
 // ---------------------------------------------------------------------------
 // Lead insights panel — renders the 3 T3 generators (heat narration,

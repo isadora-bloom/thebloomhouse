@@ -5,7 +5,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import {
   computeSourceQuality,
   type SourceQualityRow,
-} from '@/lib/services/source-quality'
+} from '@/lib/services/intel/source-quality'
 
 /**
  * GET /api/intel/source-quality

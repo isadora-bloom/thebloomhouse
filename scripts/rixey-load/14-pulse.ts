@@ -1,7 +1,7 @@
 // Phase 10b: Pulse aggregator test.
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { aggregatePulseFull } from '../../src/lib/services/pulse-aggregator'
+import { aggregatePulseFull } from '../../src/lib/services/intel/pulse-aggregator'
 
 async function main() {
   const env = Object.fromEntries(

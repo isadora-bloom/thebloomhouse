@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { getMarketContext, benchmarkVenue } from '@/lib/services/market-context'
+import { getMarketContext, benchmarkVenue } from '@/lib/services/intel/market-context'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 // ---------------------------------------------------------------------------

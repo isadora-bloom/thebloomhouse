@@ -35,22 +35,22 @@ async function executeWorkType(workType: string, venueId: string): Promise<{ ok:
   try {
     switch (workType) {
       case 'weekly_digest': {
-        const { generateWeeklyDigest } = await import('@/lib/services/weekly-digest')
+        const { generateWeeklyDigest } = await import('@/lib/services/intel/weekly-digest')
         await generateWeeklyDigest(venueId)
         return { ok: true }
       }
       case 'weekly_briefing': {
-        const { generateWeeklyBriefing } = await import('@/lib/services/briefings')
+        const { generateWeeklyBriefing } = await import('@/lib/services/intel/briefings')
         await generateWeeklyBriefing(venueId)
         return { ok: true }
       }
       case 'monthly_briefing': {
-        const { generateMonthlyBriefing } = await import('@/lib/services/briefings')
+        const { generateMonthlyBriefing } = await import('@/lib/services/intel/briefings')
         await generateMonthlyBriefing(venueId)
         return { ok: true }
       }
       case 'anomaly_detection': {
-        const { runAnomalyDetection } = await import('@/lib/services/anomaly-detection')
+        const { runAnomalyDetection } = await import('@/lib/services/intel/anomaly-detection')
         await runAnomalyDetection(venueId)
         return { ok: true }
       }
@@ -60,19 +60,19 @@ async function executeWorkType(workType: string, venueId: string): Promise<{ ok:
         return { ok: true }
       }
       case 'intelligence_analysis': {
-        const { runIntelligenceAnalysis } = await import('@/lib/services/intelligence-engine')
+        const { runIntelligenceAnalysis } = await import('@/lib/services/intel/intelligence-engine')
         await runIntelligenceAnalysis(venueId)
         return { ok: true }
       }
       case 'daily_digest': {
-        const { sendDigestEmail } = await import('@/lib/services/daily-digest')
+        const { sendDigestEmail } = await import('@/lib/services/intel/daily-digest')
         await sendDigestEmail(venueId)
         return { ok: true }
       }
       case 'correlation_analysis': {
         // Correlation engine works across all venues; for a single-
         // venue replay we re-run the per-venue computation directly.
-        const { computeCorrelationsForVenue } = await import('@/lib/services/correlation-engine')
+        const { computeCorrelationsForVenue } = await import('@/lib/services/intel/correlation-engine')
         const supabase = createServiceClient()
         await computeCorrelationsForVenue({ supabase, venueId })
         return { ok: true }

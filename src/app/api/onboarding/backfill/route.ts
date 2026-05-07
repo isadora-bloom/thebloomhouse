@@ -28,9 +28,9 @@ import {
   skipBackfillCategory,
   type BackfillCategory,
 } from '@/lib/services/onboarding-backfill'
-import { fetchTrendsForVenue } from '@/lib/services/trends'
+import { fetchTrendsForVenue } from '@/lib/services/intel/trends'
 import { fetchAllDefaultFredSeries } from '@/lib/services/external-context/fred-fetch'
-import { fetchHistoricalWeather } from '@/lib/services/weather'
+import { fetchHistoricalWeather } from '@/lib/services/intel/weather'
 
 const VALID_CATEGORIES: ReadonlyArray<BackfillCategory> = [
   'email_history', 'marketing_spend', 'pricing_history',

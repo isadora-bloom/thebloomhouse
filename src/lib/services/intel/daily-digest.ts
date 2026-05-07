@@ -21,7 +21,7 @@ import { sendEmail as sendTransactionalEmail } from '@/lib/services/email/transp
 import {
   enabledCategories,
   type DigestPreferences,
-} from '@/lib/services/digest-preferences'
+} from '@/lib/services/intel/digest-preferences'
 
 /**
  * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
@@ -861,7 +861,7 @@ export async function sendAllDigests(): Promise<
 > {
   const supabase = createServiceClient()
 
-  const { eligibleVenuesToday, markPreferencesSent } = await import('@/lib/services/digest-dispatch')
+  const { eligibleVenuesToday, markPreferencesSent } = await import('@/lib/services/intel/digest-dispatch')
   const { venueIds: prefVenueIds, userPrefs } = await eligibleVenuesToday()
 
   // Legacy backfill — venues with briefing_email but no preferences row.

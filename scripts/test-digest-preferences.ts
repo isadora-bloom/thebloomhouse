@@ -2,7 +2,7 @@
  * Unit tests — digest preferences pure helpers (T4-H).
  */
 
-import { __test__ } from '../src/lib/services/digest-preferences'
+import { __test__ } from '../src/lib/services/intel/digest-preferences'
 
 const { shouldSendToday, enabledCategories, DEFAULT_PREFS } = __test__
 

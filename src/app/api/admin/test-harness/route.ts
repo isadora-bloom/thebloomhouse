@@ -100,7 +100,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'compute_weekly_learned') {
-      const { computeWeeklyLearned } = await import('@/lib/services/weekly-learned')
+      const { computeWeeklyLearned } = await import('@/lib/services/intel/weekly-learned')
       const result = await computeWeeklyLearned(venueId)
       return NextResponse.json({ ok: true, result })
     }

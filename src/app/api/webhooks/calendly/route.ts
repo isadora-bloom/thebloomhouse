@@ -1,7 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { NextRequest, NextResponse } from 'next/server'
 import { recordEngagementEvent } from '@/lib/services/heat-mapping'
-import { trackCoordinatorAction } from '@/lib/services/consultant-tracking'
+import { trackCoordinatorAction } from '@/lib/services/intel/consultant-tracking'
 import { createHmac, timingSafeEqual } from 'crypto'
 
 // ---------------------------------------------------------------------------
