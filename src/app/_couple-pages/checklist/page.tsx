@@ -23,6 +23,7 @@ import {
   EyeOff,
   Home,
   Users,
+  Users2,
   Scissors,
   Palette,
   Clock,
@@ -44,6 +45,10 @@ interface ChecklistItem {
   completed_at: string | null
   description: string | null
   sort_order: number
+  // Tier-B #56 — free-text owner label. nullable. Couples set via the
+  // inline "Assign" pill on each row. ~24 chars displayed; longer
+  // values are stored as-is and truncated only at render.
+  assigned_to: string | null
 }
 
 interface ChecklistFormData {
@@ -415,6 +420,21 @@ export default function ChecklistPage() {
     )
   }
 
+  // Tier-B #56 — assign-to handler. Trims whitespace at the API boundary
+  // (mig 224 comment) and stores empty string as null so renderer's
+  // null-check (= "no chip") works without normalisation.
+  async function handleSetAssignedTo(id: string, raw: string) {
+    const trimmed = raw.trim()
+    const value = trimmed.length === 0 ? null : trimmed
+    await supabase
+      .from('checklist_items')
+      .update({ assigned_to: value })
+      .eq('id', id)
+    setItems((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, assigned_to: value } : i))
+    )
+  }
+
   // ---- Unique categories in data (for filter dropdown) ----
   const activeCategories = useMemo(() => {
     const cats = new Set(items.map((i) => i.category))
@@ -722,6 +742,47 @@ export default function ChecklistPage() {
                                     onChange={(e) => handleSetDueDate(item.id, e.target.value)}
                                     title="Set due date"
                                   />
+                                )}
+
+                                {/* Tier-B #56 — assigned-to chip. When set, shows
+                                    a chip; click to edit or clear. When unset,
+                                    shows a low-opacity "Assign" affordance for
+                                    completed-and-uncompleted alike (couples
+                                    sometimes want to retroactively note who
+                                    handled what). Uses prompt() for MVP — full
+                                    inline editor is a future enhancement. */}
+                                {item.assigned_to ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const next = window.prompt(
+                                        'Assign to (or empty to clear)',
+                                        item.assigned_to ?? '',
+                                      )
+                                      if (next === null) return
+                                      void handleSetAssignedTo(item.id, next)
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-sage-50 text-sage-700 hover:bg-sage-100"
+                                    title="Click to edit"
+                                  >
+                                    <Users2 className="w-3 h-3" />
+                                    {item.assigned_to.slice(0, 24)}
+                                  </button>
+                                ) : (
+                                  !item.is_completed && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const next = window.prompt('Assign to')
+                                        if (next === null) return
+                                        void handleSetAssignedTo(item.id, next)
+                                      }}
+                                      className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-600"
+                                    >
+                                      <Users2 className="w-3 h-3" />
+                                      Assign
+                                    </button>
+                                  )
                                 )}
                               </div>
                             </div>
