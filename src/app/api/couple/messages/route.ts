@@ -77,6 +77,7 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
+    const trimmed = content.trim()
     const { data, error } = await supabase
       .from('messages')
       .insert({
@@ -84,17 +85,43 @@ export async function POST(request: NextRequest) {
         wedding_id: auth.weddingId,
         sender_id: auth.userId,
         sender_role: 'couple',
-        content: content.trim(),
+        content: trimmed,
       })
       .select()
       .single()
 
     if (error) throw error
 
+    // Tier-B #58C: mirror to interactions so the message shows up in the
+    // agent inbox alongside emails. Interaction type='portal_chat' (mig
+    // 230) makes the channel distinct so coordinators can filter. Body
+    // preview is the first 240 chars of the trimmed content (matches
+    // the email preview pattern). Direction='inbound' since this came
+    // FROM the couple. Fire-and-forget — a mirror failure must NOT block
+    // the message send (the messages row is the source of truth for the
+    // couple-side thread).
+    void supabase
+      .from('interactions')
+      .insert({
+        venue_id: auth.venueId,
+        wedding_id: auth.weddingId,
+        type: 'portal_chat',
+        direction: 'inbound',
+        subject: 'Message from couple',
+        body_preview: trimmed.length > 240 ? trimmed.slice(0, 240) + '…' : trimmed,
+        full_body: trimmed,
+        // No gmail_message_id / gmail_thread_id — portal_chat lives outside Gmail.
+      })
+      .then(({ error: mirrorErr }) => {
+        if (mirrorErr) {
+          console.warn('[couple/messages] inbox mirror failed (non-fatal):', mirrorErr.message)
+        }
+      })
+
     // Escalation scan — fire-and-forget, must never block the message send.
     // checkEscalation short-circuits on first hit so we don't double-fire.
     void runEscalationCheck({
-      text: content.trim(),
+      text: trimmed,
       venueId: auth.venueId,
       weddingId: auth.weddingId,
       sourceType: 'couple_message',
