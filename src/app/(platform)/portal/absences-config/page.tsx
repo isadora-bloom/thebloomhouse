@@ -5,6 +5,7 @@ import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import { useSupabaseList } from '@/lib/hooks/use-supabase-list'
 import { CalendarOff, Plus, Trash2, AlertTriangle, User, Save } from 'lucide-react'
+import { CopyFromVenueButton } from '@/components/portal/copy-from-venue'
 
 // ---------------------------------------------------------------------------
 // Coordinator absences admin (T2-B Phase 2 / LIMB-16.2.1)
@@ -176,9 +177,15 @@ export default function AbsencesConfigPage() {
   return (
     <div className="p-8 max-w-4xl space-y-6">
       <header className="space-y-2">
-        <div className="flex items-center gap-2">
-          <CalendarOff className="w-5 h-5 text-sage-700" />
-          <h1 className="font-heading text-2xl font-semibold text-sage-900">Coordinator absences</h1>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <CalendarOff className="w-5 h-5 text-sage-700" />
+            <h1 className="font-heading text-2xl font-semibold text-sage-900">Coordinator absences</h1>
+          </div>
+          <CopyFromVenueButton
+            table="coordinator_absences"
+            onCopied={() => window.location.reload()}
+          />
         </div>
         <p className="text-sm text-sage-600 max-w-2xl">
           Log windows when you or a coordinator are out of office. Anomaly

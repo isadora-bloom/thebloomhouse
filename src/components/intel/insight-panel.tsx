@@ -1,12 +1,16 @@
 'use client'
 
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import {
   TrendingUp,
   TrendingDown,
   AlertTriangle,
   Lightbulb,
   ArrowRight,
+  Sparkles,
 } from 'lucide-react'
+import { InsightAcknowledge } from './insight-acknowledge'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -19,12 +23,29 @@ export interface InsightItem {
   icon: InsightIcon
   text: string
   priority?: InsightPriority
+  /**
+   * Tier-B #64A/#65 — when set together with `key`, this insight becomes
+   * "ackable": a small dismiss button appears next to it, and the insight
+   * is filtered from render if the venue has an active acknowledgment in
+   * intel_acknowledgments. `kind` is the surface scope ("market_pulse"),
+   * `key` is the insight instance ("cpi_spike_2026-Q3").
+   */
+  kind?: string
+  key?: string
+  /** Default 7 days. Pass higher for monthly-cadence insights. */
+  suppressDays?: number
 }
 
 interface InsightPanelProps {
   title?: string
   insights: InsightItem[]
   className?: string
+  /**
+   * When provided, the panel fetches active acknowledgments for this kind
+   * once on mount and filters out matching keys before rendering. Pass
+   * the surface name (e.g. "market_pulse") to enable per-insight dismiss.
+   */
+  ackKind?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -49,8 +70,45 @@ const PRIORITY_BADGE: Record<InsightPriority, string> = {
 // Component
 // ---------------------------------------------------------------------------
 
-export function InsightPanel({ title, insights, className = '' }: InsightPanelProps) {
-  if (insights.length === 0) return null
+export function InsightPanel({ title, insights, className = '', ackKind }: InsightPanelProps) {
+  // Acknowledged keys for this surface. Empty until first fetch resolves.
+  // Local state so a fresh dismiss removes the row immediately without a
+  // network round-trip.
+  const [ackedKeys, setAckedKeys] = useState<Set<string>>(new Set())
+  const [acksLoaded, setAcksLoaded] = useState(false)
+
+  useEffect(() => {
+    if (!ackKind) {
+      setAcksLoaded(true)
+      return
+    }
+    let cancelled = false
+    async function load() {
+      try {
+        const res = await fetch(`/api/intel/acknowledge?kind=${encodeURIComponent(ackKind!)}`)
+        if (!res.ok) return
+        const body = await res.json()
+        const keys = new Set<string>(
+          (body?.acknowledgments ?? []).map((a: { insight_key: string }) => a.insight_key),
+        )
+        if (!cancelled) setAckedKeys(keys)
+      } catch {
+        // Fail-soft. If the fetch fails, all items show. Coordinator can
+        // re-dismiss; not load-bearing.
+      } finally {
+        if (!cancelled) setAcksLoaded(true)
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [ackKind])
+
+  // Filter to renderable insights. Items without a key always render.
+  const visible = insights.filter((i) => !i.key || !ackedKeys.has(i.key))
+  if (!acksLoaded && ackKind) return null
+  if (visible.length === 0) return null
 
   return (
     <div
@@ -70,12 +128,13 @@ export function InsightPanel({ title, insights, className = '' }: InsightPanelPr
 
         {/* Insight rows */}
         <div className="space-y-3">
-          {insights.map((item, idx) => {
+          {visible.map((item, idx) => {
             const iconDef = ICON_MAP[item.icon]
             const IconComp = iconDef.component
+            const ackable = Boolean(item.kind && item.key)
 
             return (
-              <div key={idx} className="flex items-start gap-3">
+              <div key={item.key ?? idx} className="flex items-start gap-3">
                 <IconComp className={`w-4 h-4 mt-0.5 shrink-0 ${iconDef.color}`} />
                 <p className="text-sm text-sage-700 leading-relaxed flex-1">{item.text}</p>
                 {item.priority && (
@@ -84,6 +143,36 @@ export function InsightPanel({ title, insights, className = '' }: InsightPanelPr
                   >
                     {item.priority}
                   </span>
+                )}
+                {ackable && (
+                  <>
+                    {/* Tier-B #64C: "Ask Sage" hand-off — opens NLQ page
+                        with the insight text pre-filled in the input.
+                        Coordinator can refine before sending. */}
+                    <Link
+                      href={{
+                        pathname: '/intel/nlq',
+                        query: { prompt: `Tell me more about this: ${item.text}` },
+                      }}
+                      title="Ask Sage about this"
+                      className="p-1.5 rounded-md text-sage-400 hover:text-sage-700 hover:bg-sage-50 shrink-0"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                    </Link>
+                    <InsightAcknowledge
+                      kind={item.kind!}
+                      insightKey={item.key!}
+                      suppressDays={item.suppressDays}
+                      variant="icon"
+                      onAcknowledged={() => {
+                        setAckedKeys((prev) => {
+                          const next = new Set(prev)
+                          next.add(item.key!)
+                          return next
+                        })
+                      }}
+                    />
+                  </>
                 )}
               </div>
             )

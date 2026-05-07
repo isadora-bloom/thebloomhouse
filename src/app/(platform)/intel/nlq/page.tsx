@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import {
   Sparkles,
@@ -185,6 +186,23 @@ export default function NaturalLanguageQueryPage() {
   const [error, setError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  // Tier-B #64C: when arriving via "Ask Sage about this" from an intel
+  // insight card, the insight text is passed as ?prompt=. Pre-fill the
+  // input so the coordinator can edit before sending. Doesn't auto-send
+  // — they may want to refine the question.
+  const searchParams = useSearchParams()
+  useEffect(() => {
+    const prompt = searchParams?.get('prompt')
+    if (prompt) {
+      setInput(prompt)
+      // Focus the textarea so the cursor lands ready to edit/send.
+      inputRef.current?.focus()
+    }
+    // Only run on mount with the initial prompt; subsequent param changes
+    // (history navigation) shouldn't re-fill.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // ---- Load history from natural_language_queries table ----
   const loadHistory = useCallback(async () => {

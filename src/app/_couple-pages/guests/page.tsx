@@ -194,7 +194,22 @@ const EMPTY_FORM: GuestFormData = {
 // ---------------------------------------------------------------------------
 
 export default function GuestListPage() {
-  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
+  const { venueId, weddingId, weddingDate, loading: contextLoading } = useCoupleContext()
+
+  // Tier-B #63 — premature-print gating. Hide the Print + Export buttons
+  // when the wedding is more than 60 days away. Couples planning months
+  // out shouldn't be encouraged to print a guest list that's still in
+  // flux. The buttons re-appear inside the 60-day window when printing
+  // becomes meaningfully useful.
+  const showPrintButtons = (() => {
+    if (!weddingDate) return true // unknown date → don't hide
+    const days = Math.ceil(
+      (new Date(weddingDate + 'T00:00:00').getTime() -
+        new Date(new Date().toLocaleDateString('en-CA') + 'T00:00:00').getTime()) /
+        (1000 * 60 * 60 * 24),
+    )
+    return days <= 60
+  })()
   // Core state
   const [guests, setGuests] = useState<Guest[]>([])
   const [loading, setLoading] = useState(true)
@@ -942,20 +957,24 @@ export default function GuestListPage() {
           >
             <Settings className="w-4 h-4" />
           </button>
-          <button
-            onClick={printGuestList}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50"
-          >
-            <Printer className="w-3.5 h-3.5" />
-            Print
-          </button>
-          <button
-            onClick={exportCsv}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50"
-          >
-            <Download className="w-3.5 h-3.5" />
-            Export
-          </button>
+          {showPrintButtons && (
+            <>
+              <button
+                onClick={printGuestList}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                Print
+              </button>
+              <button
+                onClick={exportCsv}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Export
+              </button>
+            </>
+          )}
           <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 cursor-pointer">
             <Upload className="w-3.5 h-3.5" />
             Import

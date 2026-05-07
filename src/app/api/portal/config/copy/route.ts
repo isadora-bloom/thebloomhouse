@@ -34,6 +34,7 @@ import { getPlatformAuth, assertCanAccessVenue, forbidden } from '@/lib/api/auth
 const ALLOWED_TABLES = new Set<string>([
   'marketing_channels',
   'coordinator_absences',
+  'venue_operational_state',
   // Add more as more config pages get the copy-from button. Each entry
   // here is a venue-scoped table where `venue_id` is the only tenancy
   // column; if a table needs more nuance (per-row FK like booked_vendors,

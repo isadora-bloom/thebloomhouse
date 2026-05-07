@@ -570,7 +570,20 @@ function ShoppingRow({
 // ---------------------------------------------------------------------------
 
 export default function BarPlannerPage() {
-  const { venueId, weddingId, loading: contextLoading } = useCoupleContext()
+  const { venueId, weddingId, weddingDate, loading: contextLoading } = useCoupleContext()
+
+  // Tier-B #63 — premature-print gating. Hide Print until the wedding
+  // is within 60 days. Bar shopping list is the kind of thing you take
+  // to Costco the week of, not the year of.
+  const showPrint = (() => {
+    if (!weddingDate) return true
+    const days = Math.ceil(
+      (new Date(weddingDate + 'T00:00:00').getTime() -
+        new Date(new Date().toLocaleDateString('en-CA') + 'T00:00:00').getTime()) /
+        (1000 * 60 * 60 * 24),
+    )
+    return days <= 60
+  })()
   const [tab, setTab] = useState<'calculator' | 'list' | 'recipes'>('calculator')
   const [loading, setLoading] = useState(true)
 
@@ -1486,7 +1499,7 @@ export default function BarPlannerPage() {
                   {showCalcSummary ? 'Hide' : 'View'} last calculation
                 </button>
               )}
-              {items.filter((i) => !i.purchased).length > 0 && (
+              {showPrint && items.filter((i) => !i.purchased).length > 0 && (
                 <button
                   onClick={() => printList(items)}
                   className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5"

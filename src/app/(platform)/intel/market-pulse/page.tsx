@@ -2166,6 +2166,12 @@ export default function MarketPulsePage() {
   }, [climateRows])
 
   // ---- Compute insights ----
+  // Tier-B #65: each insight gets a stable (kind, key) tuple so the
+  // InsightPanel can render a per-row dismiss button and filter out
+  // already-acknowledged items via the intel_acknowledgments table.
+  // Keys are stable across rerenders within the same logical insight
+  // instance (demand-score-bucket, current-month, etc.) so a dismiss
+  // sticks for the suppressDays window.
   const insights: InsightItem[] = useMemo(() => {
     const items: InsightItem[] = []
 
@@ -2175,18 +2181,23 @@ export default function MarketPulsePage() {
           icon: 'trend_up',
           text: `Economic demand score is ${demandScore.score}/100 — conditions are favorable for wedding spending. Lean into premium packages.`,
           priority: 'high',
+          kind: 'market_pulse',
+          key: 'demand_score:positive',
         })
       } else if (demandScore.outlook === 'caution') {
         items.push({
           icon: 'warning',
           text: `Economic demand score is ${demandScore.score}/100 — caution indicators suggest tightening budgets. Emphasize value and flexible pricing.`,
           priority: 'high',
+          kind: 'market_pulse',
+          key: 'demand_score:caution',
         })
       }
     }
 
     const pendingRecs = recommendations.filter((r) => r.status === 'pending')
     if (pendingRecs.length > 0) {
+      // Not ackable — this is a system queue count, not a recurring insight.
       items.push({
         icon: 'action',
         text: `${pendingRecs.length} recommendation${pendingRecs.length !== 1 ? 's' : ''} waiting for your review — apply or dismiss to keep your strategy current.`,
@@ -2200,9 +2211,14 @@ export default function MarketPulsePage() {
       monthlyWeather[0]
     )
     if (bestMonth && bestMonth.outdoorScore > 0) {
+      // Key by month so coordinator can dismiss "best month is May" once
+      // and re-see it when the calculation surfaces a different month.
       items.push({
         icon: 'tip',
         text: `${bestMonth.month} has the highest outdoor event score (${bestMonth.outdoorScore}/100). Feature outdoor ceremony photos from this season.`,
+        kind: 'market_pulse',
+        key: `best_outdoor_month:${bestMonth.month}`,
+        suppressDays: 30,
       })
     }
 
@@ -2251,9 +2267,9 @@ export default function MarketPulsePage() {
         </div>
       )}
 
-      {/* ---- AI Insights ---- */}
+      {/* ---- AI Insights (Tier-B #65 — ackable via intel_acknowledgments) ---- */}
       {!loading && insights.length > 0 && (
-        <InsightPanel insights={insights} title="Market Insights" />
+        <InsightPanel insights={insights} title="Market Insights" ackKind="market_pulse" />
       )}
 
       {/* ---- Me or Market diagnosis (Phase 6 Task 55) ---- */}
