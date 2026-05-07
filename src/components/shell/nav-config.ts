@@ -37,7 +37,7 @@ import {
   Link2, ShoppingBag, Box,
   // Org admin
   Users, CreditCard, Building2, Layers,
-  MapPin, ShieldCheck,
+  MapPin, ShieldCheck, Eye,
 } from 'lucide-react'
 
 export type NavMode = 'agent' | 'weddings' | 'intel' | 'sage'
@@ -327,6 +327,7 @@ export const MODE_SAGE: ModeConfig = {
     '/agent/forbidden-topics',
     '/agent/identity-windows',
     '/agent/settings',
+    '/agent/auto-send-shadow',
     '/portal/marketing-channels-config',
     '/portal/absences-config',
     '/portal/property-state-config',
@@ -409,6 +410,7 @@ export const MODE_SAGE: ModeConfig = {
       venueOnly: true,
       items: [
         { label: 'Auto-send & Follow-ups', href: '/agent/settings', icon: Settings, daily: true },
+        { label: 'Auto-send Shadow Review', href: '/agent/auto-send-shadow', icon: Eye, daily: true },
         { label: 'Inbox Filters', href: '/settings/inbox-filters', icon: MailX },
         { label: 'Forbidden Topics', href: '/agent/forbidden-topics', icon: ShieldAlert },
         { label: 'Identity Match Windows', href: '/agent/identity-windows', icon: ClockIcon },

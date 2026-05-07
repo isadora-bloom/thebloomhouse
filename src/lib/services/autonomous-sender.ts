@@ -24,6 +24,45 @@ import { isAutonomousPaused } from '@/lib/services/cost-ceiling'
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * Record a shadow decision (Tier-B #67A). Called from
+ * checkAutoSendEligible whenever the matching rule has shadow_mode=true.
+ * Captures the decision the rule WOULD have made so the coordinator can
+ * review accuracy before promoting.
+ *
+ * Fire-and-forget. A failed insert (constraint violation, network blip)
+ * must NOT block the calling email pipeline — coordinator review is the
+ * eventual consistency check, not the eligibility decision.
+ */
+async function recordShadowDecision(args: {
+  venueId: string
+  ruleId: string | null
+  draft: AutoSendCheck
+  wouldHaveSent: boolean
+  reason: string
+}): Promise<void> {
+  try {
+    const supabase = createServiceClient()
+    await supabase.from('auto_send_shadow_decisions').insert({
+      venue_id: args.venueId,
+      rule_id: args.ruleId,
+      wedding_id: args.draft.weddingId ?? null,
+      thread_id: args.draft.threadId ?? null,
+      context_type: args.draft.contextType,
+      source: args.draft.source ?? null,
+      confidence_score: args.draft.confidenceScore,
+      injection_suspected: args.draft.injectionSuspected ?? false,
+      would_have_sent: args.wouldHaveSent,
+      reason: args.reason,
+    })
+  } catch (err) {
+    console.warn(
+      '[auto-sender] shadow_decision insert failed (non-fatal):',
+      err instanceof Error ? err.message : err,
+    )
+  }
+}
+
 interface AutoSendCheck {
   contextType: string
   /**
@@ -123,12 +162,20 @@ function detectSource(email: string): string {
 // ---------------------------------------------------------------------------
 
 interface AutoSendRule {
+  id: string
   enabled: boolean
   confidenceThreshold: number
   dailyLimit: number
   threadCap24h: number
   requireNewContact: boolean
   source: string
+  /**
+   * Tier-B #67A. When true, the eligibility chain runs to completion
+   * but the decision is logged to auto_send_shadow_decisions instead
+   * of firing. Coordinator promotes via /agent/auto-send-shadow.
+   * Mig 227.
+   */
+  shadowMode: boolean
 }
 
 /**
@@ -143,10 +190,13 @@ async function getMatchingRule(
 ): Promise<AutoSendRule | null> {
   const supabase = createServiceClient()
 
+  const cols =
+    'id, enabled, confidence_threshold, daily_limit, thread_cap_24h, require_new_contact, source, shadow_mode'
+
   // Try source-specific rule first
   const { data: sourceRule } = await supabase
     .from('auto_send_rules')
-    .select('enabled, confidence_threshold, daily_limit, thread_cap_24h, require_new_contact, source')
+    .select(cols)
     .eq('venue_id', venueId)
     .eq('context', context)
     .eq('source', source)
@@ -154,19 +204,21 @@ async function getMatchingRule(
 
   if (sourceRule && sourceRule.length > 0) {
     return {
+      id: sourceRule[0].id as string,
       enabled: sourceRule[0].enabled as boolean,
       confidenceThreshold: sourceRule[0].confidence_threshold as number,
       dailyLimit: sourceRule[0].daily_limit as number,
       threadCap24h: (sourceRule[0].thread_cap_24h as number) ?? 3,
       requireNewContact: (sourceRule[0].require_new_contact as boolean) ?? true,
       source: sourceRule[0].source as string,
+      shadowMode: (sourceRule[0].shadow_mode as boolean) ?? false,
     }
   }
 
   // Fall back to 'all' rule for this context
   const { data: allRule } = await supabase
     .from('auto_send_rules')
-    .select('enabled, confidence_threshold, daily_limit, thread_cap_24h, require_new_contact, source')
+    .select(cols)
     .eq('venue_id', venueId)
     .eq('context', context)
     .eq('source', 'all')
@@ -174,12 +226,14 @@ async function getMatchingRule(
 
   if (allRule && allRule.length > 0) {
     return {
+      id: allRule[0].id as string,
       enabled: allRule[0].enabled as boolean,
       confidenceThreshold: allRule[0].confidence_threshold as number,
       dailyLimit: allRule[0].daily_limit as number,
       threadCap24h: (allRule[0].thread_cap_24h as number) ?? 3,
       requireNewContact: (allRule[0].require_new_contact as boolean) ?? true,
       source: allRule[0].source as string,
+      shadowMode: (allRule[0].shadow_mode as boolean) ?? false,
     }
   }
 
@@ -283,6 +337,46 @@ export async function checkAutoSendEligible(
     }
   }
 
+  // From here on we have an enabled rule. Tier-B #67A: when the rule is
+  // in shadow_mode, the gates below run normally but we capture the
+  // would-be-decision instead of short-circuiting return. At the end we
+  // log the decision to auto_send_shadow_decisions and force an
+  // ineligible result so the email pipeline doesn't actually fire.
+  //
+  // Pattern: a helper that returns the rule-specific gate decision as
+  // a plain object. Live mode returns it directly; shadow mode logs it,
+  // then returns shadow-blocked.
+  const decision = await runRuleGates(venueId, rule, draft, ruleSource)
+
+  if (rule.shadowMode) {
+    await recordShadowDecision({
+      venueId,
+      ruleId: rule.id,
+      draft,
+      wouldHaveSent: decision.eligible,
+      reason: decision.reason,
+    })
+    return {
+      eligible: false,
+      reason: `Shadow mode: rule would have ${decision.eligible ? 'sent' : 'blocked'}. ${decision.reason}`,
+    }
+  }
+
+  return decision
+}
+
+/**
+ * Run the rule-specific gates (checks 2-5) and return the would-be
+ * decision. Extracted from checkAutoSendEligible so the same code path
+ * serves both live and shadow modes — guarantees parity between what
+ * shadow logs say and what live sends do.
+ */
+async function runRuleGates(
+  venueId: string,
+  rule: AutoSendRule,
+  draft: AutoSendCheck,
+  ruleSource: string,
+): Promise<AutoSendResult> {
   // Check 2: Confidence threshold. Both sides integer 0-100 (post-121).
   if (draft.confidenceScore < rule.confidenceThreshold) {
     return {
@@ -291,9 +385,7 @@ export async function checkAutoSendEligible(
     }
   }
 
-  // Check 3: require_new_contact. When set, only auto-send to contacts
-  // not seen before. If the wedding has ANY prior interaction, fail —
-  // coordinator wanted to handle returning contacts manually.
+  // Check 3: require_new_contact.
   if (rule.requireNewContact && draft.weddingId) {
     const supabase = createServiceClient()
     const { count, error: priorErr } = await supabase
@@ -302,15 +394,11 @@ export async function checkAutoSendEligible(
       .eq('wedding_id', draft.weddingId)
     if (priorErr) {
       console.error('[auto-sender] require_new_contact lookup failed:', priorErr.message)
-      // Fail closed: if we can't verify, do not auto-send.
       return {
         eligible: false,
         reason: 'require_new_contact gate failed: unable to count prior interactions',
       }
     }
-    // The current interaction itself may already be in the count when this
-    // runs after interaction insert. Threshold of >1 (more than just this
-    // one) means a prior touch existed.
     if ((count ?? 0) > 1) {
       return {
         eligible: false,
@@ -319,11 +407,7 @@ export async function checkAutoSendEligible(
     }
   }
 
-  // Check 4: Per-thread rolling-24h cap. Belt-and-braces against
-  // auto-responder loops — venue-wide `daily_limit` can hide a runaway
-  // single thread. Skipped when threadId is absent (tests / synthetic
-  // paths). Ordered BEFORE the daily cap so the deny reason is specific
-  // when both would deny.
+  // Check 4: Per-thread rolling-24h cap.
   if (draft.threadId) {
     const threadCount = await getRecentThreadAutoSendCount(venueId, draft.threadId)
     if (threadCount >= rule.threadCap24h) {
@@ -343,10 +427,10 @@ export async function checkAutoSendEligible(
     }
   }
 
-  // All checks passed
   return {
     eligible: true,
-    reason: `Auto-send approved: source '${ruleSource}', confidence ${draft.confidenceScore}, ` +
+    reason:
+      `Auto-send approved: source '${ruleSource}', confidence ${draft.confidenceScore}, ` +
       `count ${todayCount + 1}/${rule.dailyLimit}`,
   }
 }
