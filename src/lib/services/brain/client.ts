@@ -32,7 +32,7 @@ import { searchKnowledgeBase } from '@/lib/services/knowledge-base'
 import { buildSageIntelligenceContext } from '@/lib/services/sage-intelligence'
 import { getApprovedPhrases } from '@/lib/services/review-language'
 import { getLearningContext, getVoicePreferences } from '@/lib/services/learning'
-import { VOICE_TRAINING_MIN_SAMPLES } from '@/lib/services/inquiry-brain'
+import { VOICE_TRAINING_MIN_SAMPLES } from '@/lib/services/brain/inquiry'
 import { logEvent } from '@/lib/observability/logger'
 
 // ---------------------------------------------------------------------------

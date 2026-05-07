@@ -35,7 +35,7 @@ import {
   extractVoiceDnaFromBackfill,
   hasPriorImport,
   DEFAULT_SAMPLE_LIMIT,
-} from '@/lib/services/voice-dna-extract'
+} from '@/lib/services/brain/voice-dna-extract'
 import { newCorrelationId } from '@/lib/observability/logger'
 
 export async function POST(request: NextRequest) {

@@ -42,7 +42,7 @@ import {
   populateUSCalendarEvents,
   populateVirginiaCalendarEvents,
 } from '@/lib/services/external-context/calendar-writer'
-import { refreshVoiceDnaForAllVenues } from '@/lib/services/voice-dna-extract'
+import { refreshVoiceDnaForAllVenues } from '@/lib/services/brain/voice-dna-extract'
 import { logEvent } from '@/lib/observability/logger'
 import { computeAttributionParityAllVenues } from '@/lib/services/attribution-parity'
 import { mergePeopleAliasesAllVenues } from '@/lib/services/identity/people-merge-aliases'

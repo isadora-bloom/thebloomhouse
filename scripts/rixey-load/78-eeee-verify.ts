@@ -76,7 +76,7 @@ async function probeMigration206(sb: SupabaseClient): Promise<boolean> {
 
 async function renderRixeyFooter(): Promise<{ rendered: string; ctx: unknown }> {
   const { fetchDisclosureContext, appendAIDisclosure, AI_DISCLOSURE_MARKER_V3 } =
-    await import('../../src/lib/services/ai-disclosure')
+    await import('../../src/lib/services/brain/ai-disclosure')
   const ctx = await fetchDisclosureContext(RIXEY_VENUE_ID)
   const sample = 'Thanks so much for your patience while we sort this out.'
   const rendered = appendAIDisclosure(sample, ctx)
@@ -119,7 +119,7 @@ async function checkIdempotency(): Promise<void> {
     AI_DISCLOSURE_MARKER_V1,
     AI_DISCLOSURE_MARKER_V2,
     AI_DISCLOSURE_MARKER_V3,
-  } = await import('../../src/lib/services/ai-disclosure')
+  } = await import('../../src/lib/services/brain/ai-disclosure')
 
   const cases = [
     { label: 'v1 already present', body: `Hi.\n\n--\nSage\n${AI_DISCLOSURE_MARKER_V1}` },
@@ -173,7 +173,7 @@ async function checkInboundDetection(sb: SupabaseClient): Promise<void> {
 
 async function checkChatDetection(): Promise<void> {
   const { detectChatHumanRequest, SAGE_HUMAN_REQUEST_PATTERN } =
-    await import('../../src/lib/services/sage-brain')
+    await import('../../src/lib/services/brain/sage')
 
   console.log(`  pattern = ${SAGE_HUMAN_REQUEST_PATTERN.toString()}`)
 

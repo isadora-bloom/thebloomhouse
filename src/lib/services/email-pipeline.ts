@@ -18,9 +18,9 @@ import {
   shouldAutoIgnore,
   isMachineGenerated,
   type ClassificationResult,
-} from '@/lib/services/router-brain'
-import { generateInquiryDraft, BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION } from '@/lib/services/inquiry-brain'
-import { generateClientDraft, BRAIN_PROMPT_VERSION as CLIENT_BRAIN_PROMPT_VERSION } from '@/lib/services/client-brain'
+} from '@/lib/services/brain/router'
+import { generateInquiryDraft, BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION } from '@/lib/services/brain/inquiry'
+import { generateClientDraft, BRAIN_PROMPT_VERSION as CLIENT_BRAIN_PROMPT_VERSION } from '@/lib/services/brain/client'
 import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/gmail'
 import { detectBookingSignal } from '@/lib/services/booking-signal'
 import {
@@ -35,7 +35,7 @@ import { recordKnowledgeGaps } from '@/lib/services/knowledge-gaps'
 import { applySignalInference } from '@/lib/services/signal-inference'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/consultant-tracking'
-import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
+import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
 import { matchFilter, clearFilterCache } from '@/lib/services/inbox-filters'
 import { parseFuzzyDate, parseGuestCount, validateEstimatedGuests } from '@/lib/services/fuzzy-date'
 import { chooseEventTime, parseEventTime } from '@/lib/services/event-time'

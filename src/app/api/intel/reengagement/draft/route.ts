@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { isReEngagementEnabled } from '@/lib/services/re-engagement'
-import { draftReEngagementMessage, type ReEngagementChannel } from '@/lib/services/re-engagement-drafter'
+import { draftReEngagementMessage, type ReEngagementChannel } from '@/lib/services/brain/re-engagement-drafter'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 /**

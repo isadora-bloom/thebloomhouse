@@ -1,7 +1,7 @@
 // Phase 10a: NLQ tests for the loaded Rixey data.
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
-import { answerNaturalLanguageQuery } from '../../src/lib/services/intel-brain'
+import { answerNaturalLanguageQuery } from '../../src/lib/services/brain/intel-brain'
 
 async function main() {
   const env = Object.fromEntries(

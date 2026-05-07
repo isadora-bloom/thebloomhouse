@@ -28,7 +28,7 @@ import {
   resolveSageIdentity,
   renderIntroPreview,
   renderOpenerExample,
-} from '@/lib/services/sage-identity'
+} from '@/lib/services/brain/sage-identity'
 import type { SageRole, SageOpenerShape } from '@/lib/supabase/types'
 
 const supabase = createClient()

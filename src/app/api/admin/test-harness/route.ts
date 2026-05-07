@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'generate_inquiry_draft') {
-      const { generateInquiryDraft } = await import('@/lib/services/inquiry-brain')
+      const { generateInquiryDraft } = await import('@/lib/services/brain/inquiry')
       const result = await generateInquiryDraft(
         payload.options as unknown as Parameters<typeof generateInquiryDraft>[0]
       )

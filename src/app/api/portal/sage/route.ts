@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { generateSageResponse, detectChatHumanRequest, routeChatToHuman } from '@/lib/services/sage-brain'
+import { generateSageResponse, detectChatHumanRequest, routeChatToHuman } from '@/lib/services/brain/sage'
 import { extractPlanningDecisions, savePlanningNotes, extractAndSaveAINotes } from '@/lib/services/planning-extraction'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { runEscalationCheck } from '@/lib/services/escalation-detector'

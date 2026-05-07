@@ -15,7 +15,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getLatestIndicators, calculateDemandScore } from '@/lib/services/fred-demand'
 import { detectTrendDeviations } from '@/lib/services/trends'
 import { getPriorTouches, narrateTouches } from '@/lib/services/prior-touches'
-import { fetchCachedNarrative } from '@/lib/services/journey-narrative'
+import { fetchCachedNarrative } from '@/lib/services/brain/journey-narrative'
 import { getLearningContext } from '@/lib/services/learning'
 
 // ---------------------------------------------------------------------------

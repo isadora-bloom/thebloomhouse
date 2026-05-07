@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { classifyEmail } from '@/lib/services/router-brain'
+import { classifyEmail } from '@/lib/services/brain/router'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { normalizeSource } from '@/lib/services/normalize-source'
 

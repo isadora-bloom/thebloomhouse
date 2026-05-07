@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/gmail'
-import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
+import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 /**

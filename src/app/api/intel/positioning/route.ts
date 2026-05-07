@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth, unauthorized, serverError } from '@/lib/api/auth-helpers'
-import { generatePositioningSuggestions } from '@/lib/services/intel-brain'
+import { generatePositioningSuggestions } from '@/lib/services/brain/intel-brain'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 // ---------------------------------------------------------------------------

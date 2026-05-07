@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/gmail'
 import { createServiceClient } from '@/lib/supabase/service'
-import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/ai-disclosure'
+import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
 
 // ---------------------------------------------------------------------------
 // POST — Reply to an existing email thread

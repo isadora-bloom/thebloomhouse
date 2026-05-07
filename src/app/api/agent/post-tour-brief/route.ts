@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { fetchCachedTourBrief, generatePostTourBrief } from '@/lib/services/post-tour-brief'
+import { fetchCachedTourBrief, generatePostTourBrief } from '@/lib/services/brain/post-tour-brief'
 
 // ---------------------------------------------------------------------------
 // POST { tourId }

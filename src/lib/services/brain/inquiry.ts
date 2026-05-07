@@ -22,7 +22,7 @@ import {
   requireAiName,
   type PersonalityData,
 } from '@/lib/ai/personality-builder'
-import { resolveSageIdentity, renderOpenerConstraints } from '@/lib/services/sage-identity'
+import { resolveSageIdentity, renderOpenerConstraints } from '@/lib/services/brain/sage-identity'
 
 /**
  * Prompt revision identifier — bump when the system prompt or task

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
-import { generateOrFetch } from '@/lib/services/journey-narrative'
+import { generateOrFetch } from '@/lib/services/brain/journey-narrative'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 
 /**

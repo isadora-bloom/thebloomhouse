@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import {
   answerNaturalLanguageQuery,
   markQueryHelpful,
-} from '@/lib/services/intel-brain'
+} from '@/lib/services/brain/intel-brain'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
