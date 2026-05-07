@@ -11,7 +11,7 @@ import {
   Store, Star, BedDouble, Hotel, Car, HardHat, MapPin,
   Heart, Package, ShoppingBag,
   Globe, Download, CalendarPlus, ClipboardList, FileSignature,
-  MessagesSquare, ChevronDown, X, CalendarRange,
+  MessagesSquare, ChevronDown, X, CalendarRange, ShieldCheck,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -125,6 +125,12 @@ export function buildCoupleSidebarSections(
       title: 'After Your Wedding',
       items: [
         { label: 'Day-of Memories', href: `${base}/day-of-memories`, icon: Camera },
+      ],
+    },
+    {
+      title: 'Account',
+      items: [
+        { label: 'Privacy & data', href: `${base}/privacy`, icon: ShieldCheck },
       ],
     },
   ]

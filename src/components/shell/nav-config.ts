@@ -542,6 +542,7 @@ export const GEAR_GROUPS: GearGroup[] = [
     items: [
       { label: 'Digest preferences', href: '/settings/digest-preferences', icon: Mail },
       { label: 'Pulse snoozes', href: '/settings/pulse-snoozes', icon: Inbox },
+      { label: 'Privacy & data', href: '/settings/privacy', icon: ShieldCheck },
     ],
   },
   {
@@ -562,6 +563,7 @@ export const GEAR_GROUPS: GearGroup[] = [
     items: [
       { label: 'Super Admin', href: '/super-admin', icon: ShieldCheck, requiresRole: 'super_admin' },
       { label: 'Pipeline Health', href: '/super-admin/pipeline-health', icon: Activity, requiresRole: 'super_admin' },
+      { label: 'Consumer requests', href: '/super-admin/consumer-requests', icon: ShieldAlert, requiresRole: 'super_admin' },
     ],
   },
 ]
