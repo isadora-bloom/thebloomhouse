@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import { useSupabaseList } from '@/lib/hooks/use-supabase-list'
+import { CopyFromVenueButton } from '@/components/portal/copy-from-venue'
 import {
   Megaphone,
   Plus,
@@ -202,9 +203,20 @@ export default function MarketingChannelsConfigPage() {
   return (
     <div className="p-8 max-w-4xl space-y-6">
       <header className="space-y-2">
-        <div className="flex items-center gap-2">
-          <Megaphone className="w-5 h-5 text-sage-700" />
-          <h1 className="font-heading text-2xl font-semibold text-sage-900">Marketing channels</h1>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Megaphone className="w-5 h-5 text-sage-700" />
+            <h1 className="font-heading text-2xl font-semibold text-sage-900">Marketing channels</h1>
+          </div>
+          <CopyFromVenueButton
+            table="marketing_channels"
+            onCopied={() => {
+              // Refetch is the parent component's responsibility. The
+              // simplest path: reload, since the page already re-runs
+              // its initial fetch on mount.
+              window.location.reload()
+            }}
+          />
         </div>
         <p className="text-sm text-sage-600 max-w-2xl">
           The canonical list of channels this venue actively markets through.
