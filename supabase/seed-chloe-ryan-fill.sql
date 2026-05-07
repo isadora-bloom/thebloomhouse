@@ -25,11 +25,11 @@ SELECT * FROM (VALUES
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Mia Martinez',     'maid_of_honor', 'bride', 'Sister',         1),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Jess Thompson',    'bridesmaid',    'bride', 'College roommate',2),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Sara Patel',       'bridesmaid',    'bride', 'Cousin',         3),
-  ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Olivia Brooks',    'bridesmaid',    'bride', "Ryan's sister", 4),
+  ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Olivia Brooks',    'bridesmaid',    'bride', 'Ryan''s sister', 4),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Nathan Brooks',    'best_man',      'groom', 'Brother',        1),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Marcus Lin',       'groomsman',     'groom', 'College friend', 2),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Daniel Reyes',     'groomsman',     'groom', 'Childhood friend', 3),
-  ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Tom Brooks',       'groomsman',     'groom', "Chloe's brother", 4),
+  ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Tom Brooks',       'groomsman',     'groom', 'Chloe''s brother', 4),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Lily Martinez',    'flower_girl',   'bride', 'Niece',          5),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Henry Brooks',     'ring_bearer',   'groom', 'Nephew',         5)
 ) AS v(venue_id, wedding_id, name, role, side, relationship, sort_order)
@@ -45,14 +45,14 @@ INSERT INTO decor_inventory (venue_id, wedding_id, item_name, category, quantity
 SELECT * FROM (VALUES
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Wooden ceremony arch',           'ceremony',  1,  'borrow',  'Hawthorne Manor', 'From the borrow catalog. Florist will install swag.', 'Leaving for venue to break down'),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Bud vases (assorted)',           'tables',    24, 'borrow',  'Hawthorne Manor', 'Mix of clear and amber from the borrow catalog.',     'Returning to catalog after'),
-  ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Card box (vintage suitcase)',    'entrance',  1,  'personal', NULL,             "Chloe's grandmother's. Sentimental.",                'Mom is taking home Sunday'),
+  ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Card box (vintage suitcase)',    'entrance',  1,  'personal', NULL,             'Chloe''s grandmother''s. Sentimental.',                'Mom is taking home Sunday'),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Calligraphed escort mirror',     'entrance',  1,  'diy',     NULL,              'Olivia is doing the calligraphy in white paint.',    'Saving for our home'),
-  ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Honey jar favors',               'tables',    140,'diy',     NULL,              "Custom labels printed at home — 'Meant to Bee'.",    'Guests take home'),
+  ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Honey jar favors',               'tables',    140,'diy',     NULL,              'Custom labels printed at home (Meant to Bee).',    'Guests take home'),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Sparklers (36-inch wedding)',    'other',     200,'personal', NULL,             'For grand exit. DJ will announce.',                  'Whatever is left, leave with venue'),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Welcome sign',                   'entrance',  1,  'diy',     NULL,              'Chalkboard easel from Target.',                      'Saving'),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Hurricane vases',                'tables',    14, 'borrow',  'Hawthorne Manor', 'For taper candles on long tables.',                  'Returning to catalog'),
   ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Cheesecloth runners (sage)',     'tables',    14, 'borrow',  'Hawthorne Manor', 'Already pre-pressed. Florist will style with greenery.', 'Returning'),
-  ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Cake cutter & server',           'reception', 1,  'personal', NULL,             "Wedding gift from Chloe's parents.",                 'Taking home')
+  ('22222222-2222-2222-2222-222222222201'::uuid, '44444444-4444-4444-4444-444444000109'::uuid, 'Cake cutter & server',           'reception', 1,  'personal', NULL,             'Wedding gift from Chloe''s parents.',                 'Taking home')
 ) AS v(venue_id, wedding_id, item_name, category, quantity, source, vendor_name, notes, leaving_instructions)
 WHERE NOT EXISTS (
   SELECT 1 FROM decor_inventory
