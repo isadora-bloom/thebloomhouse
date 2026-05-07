@@ -121,7 +121,7 @@ export function NotificationBell({ venueId }: { venueId: string }) {
         ref={buttonRef}
         onClick={() => setOpen((v) => !v)}
         aria-label={hasUnread ? `${count} unread urgent notifications` : 'Notifications'}
-        className="relative flex items-center justify-center w-8 h-8 rounded-full text-sage-500 hover:bg-sage-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-sage-400"
+        className="relative flex items-center justify-center w-11 h-11 lg:w-8 lg:h-8 rounded-full text-sage-500 hover:bg-sage-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-sage-400"
       >
         {hasUnread ? (
           <BellRing className="w-5 h-5 text-sage-600" />

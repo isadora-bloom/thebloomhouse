@@ -173,7 +173,7 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
         <Link href="/" className="font-heading text-lg font-bold text-sage-900">
           Bloom
         </Link>
-        <p className="text-[11px] text-sage-500 mt-0.5">{brandedLabel(mode.description, aiName)}</p>
+        <p className="text-[11px] text-sage-600 mt-0.5">{brandedLabel(mode.description, aiName)}</p>
       </div>
 
       {/* Essential / All toggle. Sits below the brand block; persists
@@ -186,11 +186,11 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
               'flex-1 px-2 py-1 rounded-md font-medium transition-colors',
               view === 'essential'
                 ? 'bg-surface text-sage-900 shadow-sm'
-                : 'text-sage-500 hover:text-sage-700'
+                : 'text-sage-600 hover:text-sage-800'
             )}
           >
             Essential
-            <span className="ml-1 text-[10px] text-sage-400">{essentialCount}</span>
+            <span className="ml-1 text-[10px] text-sage-600">{essentialCount}</span>
           </button>
           <button
             onClick={() => flipView('all')}
@@ -198,11 +198,11 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
               'flex-1 px-2 py-1 rounded-md font-medium transition-colors',
               view === 'all'
                 ? 'bg-surface text-sage-900 shadow-sm'
-                : 'text-sage-500 hover:text-sage-700'
+                : 'text-sage-600 hover:text-sage-800'
             )}
           >
             All
-            <span className="ml-1 text-[10px] text-sage-400">{allCount}</span>
+            <span className="ml-1 text-[10px] text-sage-600">{allCount}</span>
           </button>
         </div>
       </div>
@@ -223,7 +223,7 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
             <div key={s.title}>
               <button
                 onClick={() => toggle(s.title)}
-                className="w-full flex items-center justify-between px-2 text-[10px] uppercase tracking-wider text-sage-500 font-semibold mb-2 hover:text-sage-700"
+                className="w-full flex items-center justify-between px-2 text-[10px] uppercase tracking-wider text-sage-600 font-semibold mb-2 hover:text-sage-800"
               >
                 <span>{brandedLabel(s.title, aiName)}</span>
                 <ChevronDown
@@ -234,7 +234,7 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
                 />
               </button>
               {s.subtitle && !isCollapsed && view === 'all' && (
-                <p className="text-[11px] text-sage-400 px-2 mb-1">{brandedLabel(s.subtitle, aiName)}</p>
+                <p className="text-[11px] text-sage-600 px-2 mb-1">{brandedLabel(s.subtitle, aiName)}</p>
               )}
               {!isCollapsed && (
                 <ul className="space-y-0.5">
@@ -288,7 +288,7 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
         {/* Hint when Essential is empty for this mode (no items have
             daily:true). Falls back to a soft prompt to flip to All. */}
         {view === 'essential' && renderable.length === 0 && (
-          <div className="px-2 py-3 text-xs text-sage-500 text-center">
+          <div className="px-2 py-3 text-xs text-sage-600 text-center">
             <p className="mb-2">No essentials configured for this view.</p>
             <button
               onClick={() => flipView('all')}

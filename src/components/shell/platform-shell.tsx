@@ -56,13 +56,17 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
       {isDemo && <DemoBanner />}
       <SidebarV2 scopeLevel={scopeLevel} />
       <main className={`lg:pl-64 ${isDemo ? 'pt-24 lg:pt-10' : 'pt-14 lg:pt-0'}`}>
+        {/* Tier-B #62 — top bar small-screen behavior. Tighter horizontal
+            padding on mobile (px-3) so the right cluster doesn't overflow
+            on iPhone SE width (375px). Right cluster gets `shrink-0` so
+            mode-strip absorbs any squeeze first. */}
         <div
-          className={`sticky z-30 bg-warm-white/90 backdrop-blur-sm border-b border-border px-6 lg:px-8 py-2 flex items-center justify-between gap-4 ${
+          className={`sticky z-30 bg-warm-white/90 backdrop-blur-sm border-b border-border px-3 lg:px-8 py-2 flex items-center justify-between gap-2 ${
             isDemo ? 'top-24 lg:top-10' : 'top-14 lg:top-0'
           }`}
         >
           <ModeStrip />
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 lg:gap-2 shrink-0">
             <ScopeIndicator />
             <NotificationBell venueId={venueId} />
             <GearMenu scopeLevel={scopeLevel} />

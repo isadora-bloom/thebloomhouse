@@ -226,7 +226,7 @@ export function ScopeIndicator() {
             >
               <Globe className="w-4 h-4 shrink-0" />
               <span className="flex-1 text-left font-medium">{orgName}</span>
-              <span className="text-xs text-sage-400">
+              <span className="text-xs text-sage-600">
                 {venues.length} {venues.length === 1 ? 'venue' : 'venues'}
               </span>
               {level === 'company' && <Check className="w-3.5 h-3.5" />}
@@ -236,7 +236,7 @@ export function ScopeIndicator() {
           {/* Groups */}
           {groups.length > 0 && (
             <div className="p-2 border-b border-border max-h-48 overflow-y-auto">
-              <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-sage-400">
+              <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-sage-600">
                 Groups
               </p>
               {groups.map((g) => (
@@ -262,11 +262,11 @@ export function ScopeIndicator() {
 
           {/* Venues */}
           <div className="p-2 max-h-64 overflow-y-auto">
-            <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-sage-400">
+            <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-sage-600">
               Venues
             </p>
             {venues.length === 0 ? (
-              <div className="px-3 py-2 text-sm text-sage-400">Loading…</div>
+              <div className="px-3 py-2 text-sm text-sage-600">Loading…</div>
             ) : (
               venues.map((v) => (
                 <button

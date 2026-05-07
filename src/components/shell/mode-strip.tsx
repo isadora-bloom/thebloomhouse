@@ -33,7 +33,9 @@ export function ModeStrip() {
             key={m.mode}
             href={m.defaultHref}
             className={cn(
-              'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
+              // Tier-B #60 — mobile tap targets meet Apple HIG 44px min.
+              // Desktop keeps the tighter density via md: overrides.
+              'inline-flex items-center justify-center gap-1.5 px-3 min-h-11 min-w-11 md:min-h-0 md:min-w-0 md:py-1.5 rounded-md text-sm font-medium transition-colors',
               isActive
                 ? 'bg-sage-100 text-sage-900'
                 : 'text-sage-600 hover:bg-sage-50 hover:text-sage-900'

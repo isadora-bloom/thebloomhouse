@@ -100,7 +100,8 @@ export function GearMenu({ scopeLevel = 'venue' }: { scopeLevel?: ScopeLevel } =
       <button
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          'p-2 rounded-md text-sage-600 hover:bg-sage-50 hover:text-sage-900 transition-colors',
+          // Tier-B #60 — 44px mobile tap target, tighter on desktop.
+          'flex items-center justify-center w-11 h-11 lg:w-auto lg:h-auto lg:p-2 rounded-md text-sage-600 hover:bg-sage-50 hover:text-sage-900 transition-colors',
           open && 'bg-sage-100 text-sage-900'
         )}
         aria-label="Admin menu"
