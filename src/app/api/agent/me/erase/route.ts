@@ -67,7 +67,7 @@ export async function POST() {
       status: 'pending',
       resolution_notes:
         requesterRole === 'super_admin'
-          ? 'Super-admin self-erasure — escalate to platform compliance.'
+          ? 'Super-admin self-erasure: escalate to platform compliance.'
           : null,
     })
     .select('id, expires_at')

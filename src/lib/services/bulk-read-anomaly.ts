@@ -22,17 +22,21 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { createNotification } from '@/lib/services/admin-notifications'
 
-/** Tier-1 read activity_types this detector cares about. View = single
- *  row (low signal); export + bulk_read = multi-row (high signal). */
-const TIER_1_READ_PREFIXES = ['export_', 'bulk_read_']
+/** Tier-1 read activity_types this detector cares about. `view_` is
+ *  single-row but tier-1 PII; `bulk_read_` and `export_` are multi-row
+ *  high-signal. We trigger on EITHER row-volume OR event-frequency so a
+ *  drip-style exfil (one wedding view at a time) still surfaces. */
+const TIER_1_READ_PREFIXES = ['export_', 'bulk_read_', 'view_']
 
 /** Burst window — short, tighter threshold. */
 const BURST_WINDOW_MIN = 5
 const BURST_ROW_THRESHOLD = 500
+const BURST_EVENT_THRESHOLD = 50
 
 /** Daily window — longer, generous threshold. */
 const DAILY_WINDOW_HOURS = 24
 const DAILY_ROW_THRESHOLD = 5_000
+const DAILY_EVENT_THRESHOLD = 200
 
 interface UserBucket {
   user_id: string
@@ -105,11 +109,15 @@ export async function detectBulkReadAnomalies(): Promise<BulkReadAnomalyResult> 
     buckets.set(r.user_id, bucket)
   }
 
-  // Filter to over-threshold buckets.
+  // Filter to over-threshold buckets. Trigger on rows OR events so
+  // one-wedding-at-a-time drip exfil still surfaces (each view logs
+  // rowCount=1 so the row-volume check alone would never fire).
   const flagged: UserBucket[] = []
   for (const b of buckets.values()) {
-    const burstHit = b.burst_rows > BURST_ROW_THRESHOLD
-    const dailyHit = b.daily_rows > DAILY_ROW_THRESHOLD
+    const burstHit =
+      b.burst_rows > BURST_ROW_THRESHOLD || b.burst_events > BURST_EVENT_THRESHOLD
+    const dailyHit =
+      b.daily_rows > DAILY_ROW_THRESHOLD || b.daily_events > DAILY_EVENT_THRESHOLD
     if (burstHit || dailyHit) flagged.push(b)
   }
 
@@ -117,31 +125,36 @@ export async function detectBulkReadAnomalies(): Promise<BulkReadAnomalyResult> 
     return { users_flagged: 0, notifications_created: 0, errors }
   }
 
-  // Write one notification per flagged user. createNotification dedups
-  // on (venue_id, type, user_id) within a 5-minute window, but we want
-  // 24h dedup for this signal so the queue isn't spammed. Pre-check
-  // recent notifications first.
-  const dailyDedupCutoff = dailyCutoff
+  // Write one notification per flagged user. The notification is
+  // venue-broadcast (no userId) so org_admin / super_admin actually see
+  // it in their bell — targeting userId=offender would deliver the
+  // alert to the very user we're flagging.
+  //
+  // Dedup: the per-user createNotification dedup keys on (venue, type,
+  // user_id) which doesn't apply to broadcast rows. Pre-check by body
+  // prefix instead — the offender id is the first token of the body.
   const { data: recent } = await supabase
     .from('admin_notifications')
-    .select('user_id')
+    .select('body')
     .eq('type', 'bulk_read_anomaly')
-    .gte('created_at', dailyDedupCutoff)
+    .gte('created_at', dailyCutoff)
   const alreadyNotified = new Set<string>()
-  for (const n of (recent ?? []) as Array<{ user_id: string | null }>) {
-    if (n.user_id) alreadyNotified.add(n.user_id)
+  for (const n of (recent ?? []) as Array<{ body: string | null }>) {
+    const m = n.body?.match(/^User ([0-9a-f-]+) /i)
+    if (m) alreadyNotified.add(m[1])
   }
 
   let notificationsCreated = 0
   for (const b of flagged) {
     if (alreadyNotified.has(b.user_id)) continue
-    const reason =
-      b.burst_rows > BURST_ROW_THRESHOLD
-        ? `${b.burst_rows} rows in ${BURST_WINDOW_MIN} min`
-        : `${b.daily_rows} rows in ${DAILY_WINDOW_HOURS}h`
+    const reasons: string[] = []
+    if (b.burst_rows > BURST_ROW_THRESHOLD) reasons.push(`${b.burst_rows} rows in ${BURST_WINDOW_MIN} min`)
+    if (b.burst_events > BURST_EVENT_THRESHOLD) reasons.push(`${b.burst_events} reads in ${BURST_WINDOW_MIN} min`)
+    if (b.daily_rows > DAILY_ROW_THRESHOLD) reasons.push(`${b.daily_rows} rows in ${DAILY_WINDOW_HOURS}h`)
+    if (b.daily_events > DAILY_EVENT_THRESHOLD) reasons.push(`${b.daily_events} reads in ${DAILY_WINDOW_HOURS}h`)
     const resourceList = Array.from(b.resources).join(', ')
     const body = [
-      `User ${b.user_id} crossed bulk-read threshold (${reason}).`,
+      `User ${b.user_id} crossed bulk-read threshold (${reasons.join('; ') || 'unknown'}).`,
       `Resources touched: ${resourceList || 'unknown'}.`,
       `Daily total: ${b.daily_rows} rows over ${b.daily_events} events.`,
       `Review activity_log filtered to user_id=${b.user_id} for the affected window.`,
@@ -149,7 +162,6 @@ export async function detectBulkReadAnomalies(): Promise<BulkReadAnomalyResult> 
     try {
       await createNotification({
         venueId: b.venue_id,
-        userId: b.user_id,
         type: 'bulk_read_anomaly',
         title: 'Unusual bulk-read volume',
         body,

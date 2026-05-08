@@ -120,7 +120,7 @@ export async function GET(
         weddingId,
         userId: platformAuth.userId,
         resource: 'lead_insights',
-        mode: 'view',
+        mode: 'bulk_read',
         rowCount: 1,
         details: { force, correlationId },
       })

@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
       weddingId,
       userId: auth.userId,
       resource: 'journey_narrative',
-      mode: 'view',
+      mode: 'bulk_read',
       rowCount: 1,
     })
   }

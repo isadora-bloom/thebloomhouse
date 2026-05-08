@@ -179,11 +179,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     throw new Error(`Unsupported request_type: ${request.request_type}`)
   } catch (err) {
+    // Re-open for another attempt. Clear processed_by + processed_at
+    // so the next admin attempt overwrites cleanly and resolution_notes
+    // appends rather than replaces (preserves the failure trail).
+    const failureLine = `Processing failed at ${new Date().toISOString()}: ${err instanceof Error ? err.message : String(err)}`
+    const priorNotes = (request.resolution_notes as string | null) ?? ''
     await supabase
       .from('consumer_requests')
       .update({
-        status: 'pending', // re-open for another attempt
-        resolution_notes: `Processing failed: ${err instanceof Error ? err.message : String(err)}`,
+        status: 'pending',
+        processed_by: null,
+        processed_at: null,
+        resolution_notes: priorNotes ? `${priorNotes}\n${failureLine}` : failureLine,
       })
       .eq('id', id)
     return serverError(err)

@@ -198,10 +198,10 @@ export async function eraseCouple(args: EraseCoupleArgs): Promise<EraseResult> {
       .eq('wedding_id', args.weddingId),
   )
 
-  // candidate_identities: match by wedding_id where attached. Some rows
-  // are pre-zero (no wedding_id yet) and unreachable from this scope —
-  // out of scope for couple-side erasure since they may belong to any
-  // future couple. Document the limitation explicitly.
+  // candidate_identities: column is `resolved_wedding_id` (mig 105),
+  // not `wedding_id`. Pre-zero rows that never matched a wedding stay
+  // un-anonymised (out of scope for couple-side erasure since they
+  // may belong to any future couple).
   await step('candidate_identities', 'anonymize', async () =>
     await supabase
       .from('candidate_identities')
@@ -214,15 +214,26 @@ export async function eraseCouple(args: EraseCoupleArgs): Promise<EraseResult> {
         },
         { count: 'exact' },
       )
-      .eq('wedding_id', args.weddingId),
+      .eq('resolved_wedding_id', args.weddingId),
   )
 
-  await step('tangential_signals', 'anonymize', async () =>
-    await supabase
-      .from('tangential_signals')
-      .update({ extracted_identity: null }, { count: 'exact' })
-      .eq('wedding_id', args.weddingId),
-  )
+  // tangential_signals has no wedding link (mig 085). Reach it through
+  // matched_person_id by collecting people for this wedding first.
+  const { data: peopleForWedding } = await supabase
+    .from('people')
+    .select('id')
+    .eq('wedding_id', args.weddingId)
+  const personIds = (peopleForWedding ?? []).map((r) => (r as { id: string }).id)
+  if (personIds.length > 0) {
+    await step('tangential_signals', 'anonymize', async () =>
+      await supabase
+        .from('tangential_signals')
+        .update({ extracted_identity: {} }, { count: 'exact' })
+        .in('matched_person_id', personIds),
+    )
+  } else {
+    steps.push({ table: 'tangential_signals', mode: 'anonymize', affected: 0 })
+  }
 
   // --- Step 6. People rows + the auth user ---
   // people: couples are surfaced via wedding_id. Anonymize first_name /

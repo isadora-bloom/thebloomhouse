@@ -563,7 +563,10 @@ export const GEAR_GROUPS: GearGroup[] = [
     items: [
       { label: 'Super Admin', href: '/super-admin', icon: ShieldCheck, requiresRole: 'super_admin' },
       { label: 'Pipeline Health', href: '/super-admin/pipeline-health', icon: Activity, requiresRole: 'super_admin' },
-      { label: 'Consumer requests', href: '/super-admin/consumer-requests', icon: ShieldAlert, requiresRole: 'super_admin' },
+      // Lowered to org_admin to match API authority (process route admits
+       // org_admin within their org). Super-admin sees all venues; org_admin
+       // sees their venues' requests.
+       { label: 'Consumer requests', href: '/super-admin/consumer-requests', icon: ShieldAlert, requiresRole: 'org_admin' },
     ],
   },
 ]

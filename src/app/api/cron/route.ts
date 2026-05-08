@@ -213,6 +213,12 @@ const VALID_JOBS = [
   // restricts to missing-bv weddings so successful recoveries are
   // not re-attempted on subsequent days.
   'booked_data_recovery',
+  // Tier-C #118 follow-up (2026-05-08). Nightly flip of pending /
+  // processing consumer_requests rows whose expires_at < now() to
+  // status='expired'. Mig 231 documented this as cron-driven but
+  // shipped without an actual cron — caught by Round 9 audit. Merged
+  // into prune_maintenance to stay under the 40-cron Vercel cap.
+  'consumer_requests_expire',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -549,6 +555,12 @@ async function runJob(job: JobName): Promise<unknown> {
       // backlog automatically the first time it runs.
       return classifyTourOutcomesAllVenues(createServiceClient())
 
+    case 'consumer_requests_expire':
+      // Tier-C #118 follow-up. Flip pending / processing rows whose
+      // expires_at < now() to expired. Append-only ledger requires
+      // each transition to leave a resolution_notes audit trail.
+      return runConsumerRequestsExpire()
+
     case 'booked_data_recovery':
       // T5-Rixey-MMM (2026-05-03). Booked-data recovery — universal
       // back-fill for missing booking_value across booked / completed
@@ -637,15 +649,17 @@ async function runPruneMaintenance(): Promise<{
   brain_dump_stale: { rows_abandoned: number }
   audit: { activity_log_deleted: number; errors: string[] }
   bulk_read_anomaly: { users_flagged: number; notifications_created: number; errors: string[] }
+  consumer_requests_expired: { rows_expired: number; errors: string[] }
 }> {
   const { runAuditRetentionPrune } = await import('@/lib/services/audit-retention')
   const { detectBulkReadAnomalies } = await import('@/lib/services/bulk-read-anomaly')
-  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead] = await Promise.allSettled([
+  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired] = await Promise.allSettled([
     runTelemetryRetentionPrune(),
     runPruneRateLimits(),
     runPruneBrainDumpStale(),
     runAuditRetentionPrune(),
     detectBulkReadAnomalies(),
+    runConsumerRequestsExpire(),
   ])
 
   const telemetryResult =
@@ -694,13 +708,66 @@ async function runPruneMaintenance(): Promise<{
           return { users_flagged: 0, notifications_created: 0, errors: [String(bulkRead.reason)] }
         })()
 
+  const expiredResult =
+    expired.status === 'fulfilled'
+      ? expired.value
+      : (() => {
+          console.error('[prune_maintenance] consumer_requests expire failed:', expired.reason)
+          return { rows_expired: 0, errors: [String(expired.reason)] }
+        })()
+
   return {
     telemetry: telemetryResult,
     rate_limits: rateLimitsResult,
     brain_dump_stale: brainDumpStaleResult,
     audit: auditResult,
     bulk_read_anomaly: bulkReadResult,
+    consumer_requests_expired: expiredResult,
   }
+}
+
+/**
+ * Tier-C #118 follow-up (2026-05-08). Nightly sweep of consumer_requests
+ * rows past their expires_at. Mig 231 sets expires_at = created_at + 45d
+ * by default, and the page renders an "overdue" badge — but the row
+ * never moves to status='expired' without this sweeper. Append-only
+ * ledger: leaves a resolution_notes line so the audit trail is intact.
+ */
+async function runConsumerRequestsExpire(): Promise<{
+  rows_expired: number
+  errors: string[]
+}> {
+  const supabase = createServiceClient()
+  const errors: string[] = []
+  const nowIso = new Date().toISOString()
+
+  const { data: stale, error } = await supabase
+    .from('consumer_requests')
+    .select('id, resolution_notes')
+    .in('status', ['pending', 'processing'])
+    .lt('expires_at', nowIso)
+    .limit(500)
+  if (error) {
+    errors.push(`select: ${error.message}`)
+    return { rows_expired: 0, errors }
+  }
+
+  let updated = 0
+  for (const r of (stale ?? []) as Array<{ id: string; resolution_notes: string | null }>) {
+    const note = `Auto-expired at ${nowIso} (45-day SLA elapsed without resolution)`
+    const merged = r.resolution_notes ? `${r.resolution_notes}\n${note}` : note
+    const { error: upErr } = await supabase
+      .from('consumer_requests')
+      .update({ status: 'expired', resolution_notes: merged })
+      .eq('id', r.id)
+    if (upErr) {
+      errors.push(`update ${r.id}: ${upErr.message}`)
+      continue
+    }
+    updated += 1
+  }
+  console.log(`[consumer_requests_expire] rows_expired=${updated}` + (errors.length ? ` errors=${errors.length}` : ''))
+  return { rows_expired: updated, errors }
 }
 
 /**

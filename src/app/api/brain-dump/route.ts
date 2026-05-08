@@ -240,7 +240,7 @@ export async function POST(request: NextRequest) {
   })
   if (!rl.ok) {
     return NextResponse.json(
-      { error: 'Too many requests — slow down for a moment' },
+      { error: 'Too many requests, slow down for a moment' },
       {
         status: 429,
         headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) },

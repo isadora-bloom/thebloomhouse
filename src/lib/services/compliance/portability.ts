@@ -118,7 +118,7 @@ export async function exportCouple(args: ExportCoupleArgs): Promise<PortabilityE
       notes:
         'This export contains data Bloom House holds about you and your wedding. ' +
         'Operator-derived analytics (identity resolution candidates, attribution events, ' +
-        'tangential signals) are excluded — request scope=access for those.',
+        'tangential signals) are excluded. Request scope=access for those.',
     },
     user_profile: profile.data ?? null,
     people: people.data ?? [],

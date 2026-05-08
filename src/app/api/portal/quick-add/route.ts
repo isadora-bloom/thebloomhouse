@@ -145,7 +145,7 @@ export async function POST(request: NextRequest) {
     })
     if (!rl.ok) {
       return NextResponse.json(
-        { error: 'Too many uploads — wait a moment before trying again' },
+        { error: 'Too many uploads, wait a moment before trying again' },
         {
           status: 429,
           headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) },
