@@ -5,7 +5,6 @@ import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { cn } from '@/lib/utils'
 import { MessagesSquare, Send, Loader2, MessageCircle } from 'lucide-react'
 
-// TODO: Get from auth session
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------

@@ -660,16 +660,19 @@ async function runPruneMaintenance(): Promise<{
   audit: { activity_log_deleted: number; errors: string[] }
   bulk_read_anomaly: { users_flagged: number; notifications_created: number; errors: string[] }
   consumer_requests_expired: { rows_expired: number; errors: string[] }
+  dunning: { reminder_1_fired: number; reminder_2_fired: number; sage_paused_fired: number; read_only_fired: number; errors: string[] }
 }> {
   const { runAuditRetentionPrune } = await import('@/lib/services/audit-retention')
   const { detectBulkReadAnomalies } = await import('@/lib/services/bulk-read-anomaly')
-  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired] = await Promise.allSettled([
+  const { runDunningEscalate } = await import('@/lib/services/billing/dunning')
+  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning] = await Promise.allSettled([
     runTelemetryRetentionPrune(),
     runPruneRateLimits(),
     runPruneBrainDumpStale(),
     runAuditRetentionPrune(),
     detectBulkReadAnomalies(),
     runConsumerRequestsExpire(),
+    runDunningEscalate(),
   ])
 
   const telemetryResult =
@@ -726,6 +729,20 @@ async function runPruneMaintenance(): Promise<{
           return { rows_expired: 0, errors: [String(expired.reason)] }
         })()
 
+  const dunningResult =
+    dunning.status === 'fulfilled'
+      ? {
+          reminder_1_fired: dunning.value.reminder_1_fired,
+          reminder_2_fired: dunning.value.reminder_2_fired,
+          sage_paused_fired: dunning.value.sage_paused_fired,
+          read_only_fired: dunning.value.read_only_fired,
+          errors: dunning.value.errors,
+        }
+      : (() => {
+          console.error('[prune_maintenance] dunning escalate failed:', dunning.reason)
+          return { reminder_1_fired: 0, reminder_2_fired: 0, sage_paused_fired: 0, read_only_fired: 0, errors: [String(dunning.reason)] }
+        })()
+
   return {
     telemetry: telemetryResult,
     rate_limits: rateLimitsResult,
@@ -733,6 +750,7 @@ async function runPruneMaintenance(): Promise<{
     audit: auditResult,
     bulk_read_anomaly: bulkReadResult,
     consumer_requests_expired: expiredResult,
+    dunning: dunningResult,
   }
 }
 

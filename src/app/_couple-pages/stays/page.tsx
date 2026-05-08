@@ -15,7 +15,6 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// TODO: Get from auth session — venueId used for fetching venue-level data
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------

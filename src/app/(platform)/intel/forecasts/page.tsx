@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useScope, scopeVenueFilter } from '@/lib/hooks/use-scope'
 import {
   TrendingUp,
   DollarSign,
@@ -100,16 +101,28 @@ function ForecastCardSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function ForecastsPage() {
+  const scope = useScope()
+  const scopedVenueIds = scopeVenueFilter(scope)
+
   const [weddings, setWeddings] = useState<WeddingRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
+    if (scope.loading) return
     const supabase = createClient()
     try {
-      const { data, error: err } = await supabase
+      // 2026-05-08: scope-aware filter. Pre-fix the page issued an
+      // unfiltered SELECT against weddings; org_admin viewing single-
+      // venue scope still saw every venue's pipeline. Now respects the
+      // scope cookie via scopeVenueFilter(scope).
+      let query = supabase
         .from('weddings')
         .select('id, status, booking_value, wedding_date, created_at')
+      if (scopedVenueIds && scopedVenueIds.length > 0) {
+        query = query.in('venue_id', scopedVenueIds)
+      }
+      const { data, error: err } = await query
       if (err) throw err
       setWeddings((data ?? []) as WeddingRow[])
       setError(null)
@@ -119,7 +132,7 @@ export default function ForecastsPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope.loading, scopedVenueIds])
 
   useEffect(() => {
     fetchData()

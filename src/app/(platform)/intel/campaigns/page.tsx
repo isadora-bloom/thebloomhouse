@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useVenueId } from '@/lib/hooks/use-venue-id'
 import {
   Megaphone,
   Plus,
@@ -110,12 +111,19 @@ export default function CampaignsPage() {
 
   const CHANNELS = ['instagram', 'facebook', 'google_ads', 'the_knot', 'wedding_wire', 'tiktok', 'email', 'referral', 'other']
 
+  const venueId = useVenueId()
+
   const fetchData = useCallback(async () => {
+    if (!venueId) return
     const supabase = createClient()
     try {
+      // 2026-05-08: filter campaigns to current venue. Pre-fix an
+      // unfiltered SELECT meant org_admin saw every venue's campaigns
+      // merged. Now respects venue scope from the cookie.
       const { data, error: err } = await supabase
         .from('campaigns')
         .select('*')
+        .eq('venue_id', venueId)
         .order('created_at', { ascending: false })
       if (err) throw err
       setCampaigns((data ?? []) as Campaign[])
@@ -126,7 +134,7 @@ export default function CampaignsPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [venueId])
 
   useEffect(() => {
     fetchData()
@@ -195,6 +203,7 @@ export default function CampaignsPage() {
     setSaving(true)
     const supabase = createClient()
     const payload = {
+      venue_id: venueId,
       name: formName,
       channel: formChannel,
       spend: Number(formSpend) || 0,

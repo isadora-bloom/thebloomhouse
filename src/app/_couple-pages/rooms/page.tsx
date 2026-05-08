@@ -39,7 +39,6 @@ import {
   type VenueRoomsConfig,
 } from '@/lib/services/couple-portal-config'
 
-// TODO: Get from auth session
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------

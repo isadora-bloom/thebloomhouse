@@ -6,7 +6,6 @@ import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
 import { Send, Sparkles, AlertCircle, Loader2, RotateCcw, FileText, Brain, Paperclip, X, File as FileIcon } from 'lucide-react'
 
-// TODO: Get from auth session
 // TODO: Derive venue_id from wedding or session
 // ---------------------------------------------------------------------------
 // Types

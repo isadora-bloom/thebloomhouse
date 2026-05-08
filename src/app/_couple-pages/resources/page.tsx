@@ -32,7 +32,6 @@ import {
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 
-// TODO: Get from auth session
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------

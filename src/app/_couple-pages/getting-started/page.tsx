@@ -17,7 +17,6 @@ import {
 import { cn } from '@/lib/utils'
 import { substituteAiName } from '@/lib/white-label'
 
-// TODO: Get from auth session
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------

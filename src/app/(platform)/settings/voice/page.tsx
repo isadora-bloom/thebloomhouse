@@ -17,7 +17,8 @@ import {
 } from '@/config/voice-training-content'
 import { formatSourceLabel } from '@/lib/utils/format-source-label'
 
-// TODO: Wire venue selector. For now we load the first venue.
+// 2026-05-08: comment was stale — venue selector is wired via
+// useVenueId() at line 105, which reads from the platform scope cookie.
 const supabase = createClient()
 
 // ---------------------------------------------------------------------------

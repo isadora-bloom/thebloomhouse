@@ -17,7 +17,6 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// TODO: Get from auth session
 // ---------------------------------------------------------------------------
 // Section definitions
 // ---------------------------------------------------------------------------

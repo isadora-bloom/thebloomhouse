@@ -16,7 +16,6 @@ import {
   Upload,
 } from 'lucide-react'
 
-// TODO: Get from auth session
 const MAX_IMAGES = 50
 
 // ---------------------------------------------------------------------------

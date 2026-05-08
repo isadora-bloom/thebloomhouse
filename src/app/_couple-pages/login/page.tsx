@@ -10,13 +10,17 @@ import { Heart } from 'lucide-react'
  * Paths look like /couple/[slug]/login
  */
 function getSlugFromPath(): string {
-  if (typeof window === 'undefined') return 'hawthorne-manor'
+  // 2026-05-08: stripped the 'hawthorne-manor' fallback. SSR can't see
+  // window; in client mode if path parsing fails we return empty and
+  // the loader treats it as no-venue (renders the generic "Wedding
+  // Portal" branding instead of silently routing to the demo venue).
+  if (typeof window === 'undefined') return ''
   const parts = window.location.pathname.split('/')
   const coupleIdx = parts.indexOf('couple')
   if (coupleIdx >= 0 && parts[coupleIdx + 1]) {
     return parts[coupleIdx + 1]
   }
-  return 'hawthorne-manor'
+  return ''
 }
 
 interface VenueBranding {

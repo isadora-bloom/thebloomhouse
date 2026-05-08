@@ -33,7 +33,6 @@ import {
   type VenueBarConfig,
 } from '@/lib/services/couple-portal-config'
 
-// TODO: Get from auth session
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------

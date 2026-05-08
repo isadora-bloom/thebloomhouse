@@ -88,6 +88,14 @@ export default function SignupPage() {
       // server-side in the auth-wins branch; this is belt-and-braces).
       clearDemoCookiesClientSide()
 
+      // 3.5. PostHog signup_complete event (D8). Captured client-side
+      // since the user lands here only on success. Fires before redirect
+      // so the page-leave doesn't drop the event.
+      try {
+        const { default: posthog } = await import('posthog-js')
+        posthog.capture('signup_complete', { needs_setup: !!data.needsSetup })
+      } catch { /* posthog not configured; ignore */ }
+
       // 4. Redirect coordinators to /setup (company setup wizard), couples to home
       if (data.needsSetup) {
         router.push('/setup')
