@@ -24,6 +24,10 @@ interface NavItem {
   icon: React.ComponentType<{ className?: string }>
   /** Optional badge text shown next to the label */
   badge?: string
+  /** Optional title-attr tooltip shown on hover. Used by Final Review
+   *  countdown (A1) to convey urgency without the inline "42d" badge
+   *  the audit found confusing. */
+  tooltip?: string
 }
 
 interface NavSection {
@@ -211,10 +215,13 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
 
   const sections = buildCoupleSidebarSections(base, { showDayOf, showAfterWedding })
 
-  // Final Review badge: show when wedding is within 6 weeks (42 days)
-  const finalReviewBadge =
+  // 2026-05-08: Final Review countdown moved from inline badge to
+  // hover-tooltip per A1. Inline `42d` text was confusing (auditor:
+  // "what does 42d mean?"). Tooltip surfaces "Final Review - X days
+  // to go" on hover only.
+  const finalReviewTooltip =
     daysUntilWedding !== null && daysUntilWedding <= 42 && daysUntilWedding > 0
-      ? `${daysUntilWedding}d`
+      ? `${daysUntilWedding} day${daysUntilWedding === 1 ? '' : 's'} to your wedding`
       : undefined
 
   // Round 12 #a (2026-05-08): the redundant visibleSections post-filter
@@ -223,12 +230,13 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
   // enforces the same condition; the post-filter was dead code.
   const visibleSections = sections
 
-  // Inject badge into Final Review nav item
-  if (finalReviewBadge) {
+  // Inject tooltip into Final Review nav item (A1: tooltip-on-hover
+  // replaces the inline badge text).
+  if (finalReviewTooltip) {
     for (const section of visibleSections) {
       for (const item of section.items) {
         if (item.href.endsWith('/final-review')) {
-          item.badge = finalReviewBadge
+          item.tooltip = finalReviewTooltip
         }
       }
     }
@@ -287,6 +295,7 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
                         <Link
                           href={item.href}
                           onClick={onMobileClose}
+                          title={item.tooltip}
                           className={cn(
                             'flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm transition-colors',
                             active
