@@ -37,7 +37,7 @@ import {
   Link2, ShoppingBag, Box,
   // Org admin
   Users, CreditCard, Building2, Layers,
-  MapPin, ShieldCheck, Eye,
+  MapPin, ShieldCheck, Eye, Database,
 } from 'lucide-react'
 
 export type NavMode = 'agent' | 'weddings' | 'intel' | 'sage'
@@ -394,6 +394,10 @@ export const MODE_SAGE: ModeConfig = {
         { label: 'Coordinator absences', href: '/portal/absences-config', icon: CalendarOff },
         { label: 'Property state', href: '/portal/property-state-config', icon: Hammer },
         { label: 'Venue info & owner note', href: '/settings/venue-info', icon: MapPin },
+        // Tier-C C-INGEST-2: data-sources picker. Stored in
+        // venue_config.feature_flags.data_sources; consumed by future
+        // detection-bias logic in /api/brain-dump.
+        { label: 'Data sources', href: '/settings/data-sources', icon: Database },
       ],
     },
     {
@@ -549,6 +553,9 @@ export const GEAR_GROUPS: GearGroup[] = [
     title: 'Portfolio analytics',
     items: [
       { label: 'Portfolio Overview', href: '/intel/portfolio', icon: Layers, requiresRole: 'group_admin' },
+      // Tier-C #134: hierarchy view (Region → District → Venue) — uses
+      // the org's venue_groups tree from mig 234, not geographic state.
+      { label: 'Structure', href: '/intel/portfolio/structure', icon: Layers, requiresRole: 'org_admin' },
       { label: 'Benchmark', href: '/intel/benchmark', icon: BarChart3, requiresRole: 'group_admin' },
       { label: 'Company View', href: '/intel/company', icon: Building2, requiresRole: 'org_admin' },
       { label: 'Team Performance', href: '/intel/team', icon: Users, requiresRole: 'group_admin' },

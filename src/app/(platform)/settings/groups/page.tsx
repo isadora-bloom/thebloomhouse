@@ -21,10 +21,15 @@ interface VenueRow {
   name: string
 }
 
+type GroupKind = 'region' | 'district' | 'cluster' | 'custom'
+const GROUP_KINDS: GroupKind[] = ['region', 'district', 'cluster', 'custom']
+
 interface GroupRow {
   id: string
   name: string
   description: string | null
+  group_kind: GroupKind
+  parent_group_id: string | null
   memberIds: string[]
 }
 
@@ -41,6 +46,8 @@ export default function VenueGroupsPage() {
   // Create form state
   const [newName, setNewName] = useState('')
   const [newDesc, setNewDesc] = useState('')
+  const [newKind, setNewKind] = useState<GroupKind>('custom')
+  const [newParentId, setNewParentId] = useState<string | null>(null)
   const [newMembers, setNewMembers] = useState<Set<string>>(new Set())
   const [showNew, setShowNew] = useState(false)
 
@@ -81,7 +88,7 @@ export default function VenueGroupsPage() {
 
     const { data: groupRows } = await supabase
       .from('venue_groups')
-      .select('id, name, description, venue_group_members(venue_id)')
+      .select('id, name, description, group_kind, parent_group_id, venue_group_members(venue_id)')
       .eq('org_id', profile.org_id as string)
       .order('name')
 
@@ -89,11 +96,15 @@ export default function VenueGroupsPage() {
       id: string
       name: string
       description: string | null
+      group_kind: string | null
+      parent_group_id: string | null
       venue_group_members?: { venue_id: string }[] | null
     }) => ({
       id: g.id,
       name: g.name,
       description: g.description,
+      group_kind: (g.group_kind ?? 'custom') as GroupKind,
+      parent_group_id: g.parent_group_id,
       memberIds: (g.venue_group_members ?? []).map((m) => m.venue_id),
     }))
     setGroups(shaped)
@@ -121,6 +132,8 @@ export default function VenueGroupsPage() {
         org_id: orgId,
         name: newName.trim(),
         description: newDesc.trim() || null,
+        group_kind: newKind,
+        parent_group_id: newParentId,
       })
       .select('id')
       .single()
@@ -146,6 +159,8 @@ export default function VenueGroupsPage() {
 
     setNewName('')
     setNewDesc('')
+    setNewKind('custom')
+    setNewParentId(null)
     setNewMembers(new Set())
     setShowNew(false)
     setSaving(false)
@@ -257,6 +272,35 @@ export default function VenueGroupsPage() {
                 className="w-full border border-border rounded-lg px-3 py-2.5 text-sm bg-warm-white"
               />
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs uppercase tracking-wider text-sage-500 mb-1">Level</label>
+                <select
+                  value={newKind}
+                  onChange={(e) => setNewKind(e.target.value as GroupKind)}
+                  className="w-full border border-border rounded-lg px-3 py-2.5 text-sm bg-warm-white"
+                >
+                  {GROUP_KINDS.map((k) => (
+                    <option key={k} value={k}>{k}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-sage-400 mt-1">region &gt; district &gt; cluster &gt; custom</p>
+              </div>
+              <div>
+                <label className="block text-xs uppercase tracking-wider text-sage-500 mb-1">Parent group (optional)</label>
+                <select
+                  value={newParentId ?? ''}
+                  onChange={(e) => setNewParentId(e.target.value || null)}
+                  className="w-full border border-border rounded-lg px-3 py-2.5 text-sm bg-warm-white"
+                >
+                  <option value="">None (top-level)</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>{g.name} ({g.group_kind})</option>
+                  ))}
+                </select>
+                <p className="text-xs text-sage-400 mt-1">Leave blank for top of hierarchy</p>
+              </div>
+            </div>
             <div>
               <label className="block text-xs uppercase tracking-wider text-sage-500 mb-2">Venues in this group</label>
               {venues.length === 0 ? (
@@ -315,18 +359,24 @@ export default function VenueGroupsPage() {
         </div>
       )}
 
-      {groups.map((g) => (
+      {groups.map((g) => {
+        const parent = g.parent_group_id ? groups.find((p) => p.id === g.parent_group_id) : null
+        return (
         <div key={g.id} className="p-5 bg-surface border border-border rounded-xl space-y-3">
           <div className="flex items-start justify-between">
             <div>
               <h3 className="text-base font-semibold text-sage-800 flex items-center gap-2">
                 <Layers className="w-4 h-4 text-teal-600" /> {g.name}
+                <span className="text-xs uppercase tracking-wider text-sage-500 bg-sage-50 px-2 py-0.5 rounded">
+                  {g.group_kind}
+                </span>
               </h3>
               {g.description && (
                 <p className="text-sm text-sage-500 mt-1">{g.description}</p>
               )}
               <p className="text-xs text-sage-400 mt-1">
                 {g.memberIds.length} venue{g.memberIds.length === 1 ? '' : 's'}
+                {parent ? ` · under ${parent.name}` : ''}
               </p>
             </div>
             <button
@@ -357,7 +407,8 @@ export default function VenueGroupsPage() {
             })}
           </div>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
