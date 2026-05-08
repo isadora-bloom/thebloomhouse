@@ -17,6 +17,9 @@ import {
   AlertCircle,
   Mic,
   GraduationCap,
+  Mail,
+  Loader2,
+  Check as CheckIcon,
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
 
@@ -237,6 +240,11 @@ export default function VoiceDnaPage() {
   const [error, setError] = useState<string | null>(null)
   const [activeTheme, setActiveTheme] = useState<string | null>(null)
 
+  // B6 (2026-05-08): Gmail history backfill state.
+  const [backfilling, setBackfilling] = useState(false)
+  const [backfillResult, setBackfillResult] = useState<{ scanned: number; phrases_inserted: number; phrases_deduped: number; errors: string[] } | null>(null)
+  const [backfillError, setBackfillError] = useState<string | null>(null)
+
   const isVenueScope = scope.level === 'venue'
 
   const fetchData = useCallback(async () => {
@@ -456,9 +464,80 @@ export default function VoiceDnaPage() {
           </div>
         ) : (
           <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-3 py-1 text-xs font-medium text-emerald-800">
-            Voice DNA mature — every milestone cleared.
+            Voice DNA mature - every milestone cleared.
           </div>
         )}
+
+        {/* B6 (2026-05-08): Gmail history backfill. Pulls last 12 months
+            of sent email through the phrase extractor, upserts into
+            review_language with source_type='gmail_backfill'. Manual
+            trigger (B6.3 = b); safe to re-click thanks to phrase dedup. */}
+        <div className="bg-surface border border-sage-200 rounded-xl p-4 max-w-xl mt-4">
+          <div className="flex items-start gap-3">
+            <Mail className="w-5 h-5 text-sage-500 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-sage-900 mb-1">
+                Import from Gmail history
+              </p>
+              <p className="text-xs text-sage-600 mb-3">
+                Pull the last 12 months of your sent email through the voice extractor. Skips auto-replies and calendar invites. Safe to re-run; phrases dedup.
+              </p>
+              <button
+                type="button"
+                onClick={async () => {
+                  setBackfilling(true)
+                  setBackfillError(null)
+                  try {
+                    const res = await fetch('/api/intel/voice-dna/backfill', { method: 'POST' })
+                    const json = await res.json()
+                    if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`)
+                    setBackfillResult({
+                      scanned: json.scanned ?? 0,
+                      phrases_inserted: json.phrases_inserted ?? 0,
+                      phrases_deduped: json.phrases_deduped ?? 0,
+                      errors: json.errors ?? [],
+                    })
+                    fetchData()
+                  } catch (e) {
+                    setBackfillError(e instanceof Error ? e.message : String(e))
+                  } finally {
+                    setBackfilling(false)
+                  }
+                }}
+                disabled={backfilling}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-sage-600 text-white rounded-lg hover:bg-sage-700 disabled:opacity-50"
+              >
+                {backfilling ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Importing... can take a few minutes
+                  </>
+                ) : backfillResult ? (
+                  <>
+                    <CheckIcon className="w-4 h-4" />
+                    Import again
+                  </>
+                ) : (
+                  <>
+                    <Mail className="w-4 h-4" />
+                    Import history
+                  </>
+                )}
+              </button>
+              {backfillResult && (
+                <p className="text-xs text-sage-600 mt-2">
+                  Scanned <span className="font-semibold">{backfillResult.scanned}</span> emails. Added <span className="font-semibold">{backfillResult.phrases_inserted}</span> new phrases, refreshed <span className="font-semibold">{backfillResult.phrases_deduped}</span> existing.
+                  {backfillResult.errors.length > 0 && (
+                    <span className="text-amber-700"> {backfillResult.errors.length} errors logged.</span>
+                  )}
+                </p>
+              )}
+              {backfillError && (
+                <p className="text-xs text-rose-700 mt-2">{backfillError}</p>
+              )}
+            </div>
+          </div>
+        </div>
       </section>
 
       {/* =============================================================== */}
