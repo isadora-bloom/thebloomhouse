@@ -379,12 +379,75 @@ export default function VoiceDnaPage() {
             {aiName} hasn&apos;t collected enough of your voice yet
           </h2>
           <p className="text-sm text-sage-600 max-w-md mx-auto mb-6">
-            Play voice training games to teach {aiName} what sounds like you, and approve review phrases to build a library of quotable language.
+            The fastest way: import the last 12 months of your sent email and {aiName} will mine your voice phrases automatically. Or play training games and approve review phrases to teach manually.
           </p>
+
+          {/* B6 (2026-05-08): empty-state Gmail import. Highest-leverage
+              action when there's no voice yet; pre-fix the import button
+              only rendered on the main happy path so the venue most in
+              need of it never saw it. */}
+          <div className="flex items-center justify-center mb-4">
+            <button
+              type="button"
+              onClick={async () => {
+                setBackfilling(true)
+                setBackfillError(null)
+                try {
+                  const res = await fetch('/api/intel/voice-dna/backfill', { method: 'POST' })
+                  const json = await res.json()
+                  if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`)
+                  setBackfillResult({
+                    scanned: json.scanned ?? 0,
+                    phrases_inserted: json.phrases_inserted ?? 0,
+                    phrases_deduped: json.phrases_deduped ?? 0,
+                    errors: json.errors ?? [],
+                  })
+                  fetchData()
+                } catch (e) {
+                  setBackfillError(e instanceof Error ? e.message : String(e))
+                } finally {
+                  setBackfilling(false)
+                }
+              }}
+              disabled={backfilling}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-sage-600 hover:bg-sage-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+            >
+              {backfilling ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Importing... can take a few minutes
+                </>
+              ) : backfillResult ? (
+                <>
+                  <CheckIcon className="w-4 h-4" />
+                  Import again
+                </>
+              ) : (
+                <>
+                  <Mail className="w-4 h-4" />
+                  Import from Gmail history
+                </>
+              )}
+            </button>
+          </div>
+
+          {backfillResult && (
+            <p className="text-xs text-sage-600 mb-4">
+              Scanned <span className="font-semibold">{backfillResult.scanned}</span> emails. Added <span className="font-semibold">{backfillResult.phrases_inserted}</span> new phrases, refreshed <span className="font-semibold">{backfillResult.phrases_deduped}</span> existing.
+              {backfillResult.errors.length > 0 && (
+                <span className="text-amber-700"> {backfillResult.errors.length} errors logged.</span>
+              )}
+            </p>
+          )}
+          {backfillError && (
+            <p className="text-xs text-rose-700 mb-4">{backfillError}</p>
+          )}
+
+          <p className="text-xs text-sage-500 mb-3">Or teach manually:</p>
           <div className="flex items-center justify-center gap-3 flex-wrap">
             <Link
               href="/settings/voice"
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2.5 border border-sage-300 text-sage-700 hover:bg-sage-50 text-sm font-medium rounded-lg transition-colors"
             >
               <Mic className="w-4 h-4" />
               Play voice training games
