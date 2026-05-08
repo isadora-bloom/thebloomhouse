@@ -710,15 +710,27 @@ export default function ReviewAnalysisPage() {
               : 'Source reviews from Google, The Knot, and WeddingWire. Draft responses and track sentiment.'}
           </p>
         </div>
-        {pageView === 'phrases' && (
-          <button
-            onClick={() => setShowModal(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors shrink-0"
+        <div className="flex items-center gap-2 shrink-0">
+          {/* 2026-05-08: bulk-paste path so coordinators don't need to
+              upload one review screenshot at a time when migrating from
+              Knot / WeddingWire / Google. */}
+          <a
+            href="/intel/reviews/paste"
+            className="flex items-center gap-2 px-4 py-2.5 border border-sage-300 text-sage-700 hover:bg-sage-50 text-sm font-medium rounded-lg transition-colors"
           >
             <Plus className="w-4 h-4" />
-            Extract from Review
-          </button>
-        )}
+            Bulk paste
+          </a>
+          {pageView === 'phrases' && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-sage-500 hover:bg-sage-600 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Extract one
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ---- Page view switcher ---- */}

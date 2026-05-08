@@ -258,8 +258,8 @@ export async function POST(request: NextRequest) {
 
   const rawText = (payload.rawText ?? '').trim()
   if (!rawText) return NextResponse.json({ error: 'rawText is required' }, { status: 400 })
-  if (rawText.length > 10_000) {
-    return NextResponse.json({ error: 'rawText exceeds 10 KB cap' }, { status: 400 })
+  if (rawText.length > 100_000) {
+    return NextResponse.json({ error: 'rawText exceeds 100 KB cap' }, { status: 400 })
   }
 
   const inputType = (payload.inputType && ['text', 'voice', 'image', 'pdf', 'csv', 'mixed'].includes(payload.inputType))
