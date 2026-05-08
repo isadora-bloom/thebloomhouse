@@ -14,6 +14,8 @@ import {
   Megaphone,
   Save,
   MapPin,
+  Wand2,
+  Loader2,
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { useAiName } from '@/lib/hooks/use-ai-name'
@@ -410,14 +412,20 @@ function SourceReviewCard({
   review,
   showVenue,
   onSaveResponse,
+  aiName,
 }: {
   review: SourceReview
   showVenue: boolean
   onSaveResponse: (id: string, text: string) => Promise<void>
+  aiName: string
 }) {
   const [responseText, setResponseText] = useState(review.response_text ?? '')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [extracting, setExtracting] = useState(false)
+  const [extractMsg, setExtractMsg] = useState<string | null>(null)
+  const [drafting, setDrafting] = useState(false)
+  const [draftErr, setDraftErr] = useState<string | null>(null)
 
   const handleSave = async () => {
     setSaving(true)
@@ -425,6 +433,47 @@ function SourceReviewCard({
     setSaving(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
+  }
+
+  const handleExtractPhrases = async () => {
+    setExtracting(true)
+    setExtractMsg(null)
+    try {
+      const res = await fetch(`/api/intel/reviews/${review.id}/extract-phrases`, {
+        method: 'POST',
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Extraction failed')
+      const n = data.phrases_extracted ?? 0
+      setExtractMsg(n === 0 ? 'No new phrases' : `${n} phrase${n === 1 ? '' : 's'} added`)
+      setTimeout(() => setExtractMsg(null), 3500)
+    } catch (err) {
+      setExtractMsg('Extraction failed')
+      setTimeout(() => setExtractMsg(null), 3500)
+    } finally {
+      setExtracting(false)
+    }
+  }
+
+  const handleAIDraft = async () => {
+    setDrafting(true)
+    setDraftErr(null)
+    try {
+      const res = await fetch(`/api/intel/reviews/${review.id}/draft-response`, {
+        method: 'POST',
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Draft failed')
+      if (data.draft) {
+        setResponseText(data.draft)
+        setSaved(false)
+      }
+    } catch (err) {
+      setDraftErr('Draft failed')
+      setTimeout(() => setDraftErr(null), 3500)
+    } finally {
+      setDrafting(false)
+    }
   }
 
   return (
@@ -468,18 +517,56 @@ function SourceReviewCard({
         </div>
       )}
 
+      {/* Per-review actions */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <button
+          onClick={handleExtractPhrases}
+          disabled={extracting}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium border border-sage-200 hover:bg-sage-50 disabled:opacity-50 text-sage-700 rounded-lg transition-colors"
+          title="Mine phrases from this review for the voice library"
+        >
+          {extracting ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <Sparkles className="w-3.5 h-3.5" />
+          )}
+          {extracting ? 'Extracting...' : 'Extract phrases'}
+        </button>
+        {extractMsg && (
+          <span className="text-xs text-emerald-600 font-medium">{extractMsg}</span>
+        )}
+      </div>
+
       {/* Response textarea */}
       <div className="border-t border-border pt-3 mt-3">
-        <label className="block text-xs font-medium text-sage-600 mb-1.5">
-          Response {review.response_date ? `(sent ${new Date(review.response_date).toLocaleDateString()})` : '(draft)'}
-        </label>
+        <div className="flex items-center justify-between mb-1.5">
+          <label className="block text-xs font-medium text-sage-600">
+            Response {review.response_date ? `(sent ${new Date(review.response_date).toLocaleDateString()})` : '(draft)'}
+          </label>
+          <button
+            onClick={handleAIDraft}
+            disabled={drafting}
+            className="flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium text-teal-700 hover:text-teal-900 hover:bg-teal-50 disabled:opacity-50 rounded transition-colors"
+            title={`Have ${aiName} draft a response you can edit`}
+          >
+            {drafting ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Wand2 className="w-3.5 h-3.5" />
+            )}
+            {drafting ? 'Drafting...' : `${aiName} draft`}
+          </button>
+        </div>
         <textarea
           value={responseText}
           onChange={(e) => { setResponseText(e.target.value); setSaved(false) }}
-          placeholder="Draft a response to this review..."
-          rows={3}
+          placeholder={`Draft a response, or click ${aiName} draft above to start with an AI-written reply you can edit.`}
+          rows={4}
           className="w-full px-3 py-2 border border-sage-200 rounded-lg text-sm text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 resize-none bg-warm-white"
         />
+        {draftErr && (
+          <p className="text-xs text-red-600 mt-1">{draftErr}</p>
+        )}
         <div className="flex items-center gap-2 mt-2">
           <button
             onClick={handleSave}
@@ -519,6 +606,8 @@ export default function ReviewAnalysisPage() {
   const [reviewsLoading, setReviewsLoading] = useState(false)
   const [reviewsError, setReviewsError] = useState<string | null>(null)
   const [reviewSearch, setReviewSearch] = useState('')
+  const [bulkExtracting, setBulkExtracting] = useState(false)
+  const [bulkExtractMsg, setBulkExtractMsg] = useState<string | null>(null)
 
   // ---- Fetch phrases ----
   const fetchPhrases = useCallback(async () => {
@@ -647,6 +736,32 @@ export default function ReviewAnalysisPage() {
       fetchSourceReviews()
     }
   }, [pageView, fetchSourceReviews])
+
+  // ---- Bulk extract phrases across every review in scope ----
+  const handleBulkExtract = useCallback(async () => {
+    if (sourceReviews.length === 0) return
+    setBulkExtracting(true)
+    setBulkExtractMsg(null)
+    try {
+      const res = await fetch('/api/intel/reviews/extract-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Bulk extract failed')
+      const n = data.phrases_extracted ?? 0
+      const r = data.reviews_processed ?? 0
+      setBulkExtractMsg(`${n} phrase${n === 1 ? '' : 's'} mined from ${r} review${r === 1 ? '' : 's'}`)
+      // Refresh phrases tab so the user sees the new haul
+      await fetchPhrases()
+    } catch (err) {
+      setBulkExtractMsg('Bulk extract failed')
+    } finally {
+      setBulkExtracting(false)
+      setTimeout(() => setBulkExtractMsg(null), 5000)
+    }
+  }, [sourceReviews.length, fetchPhrases])
 
   // ---- Save review response ----
   const handleSaveResponse = useCallback(async (reviewId: string, responseText: string) => {
@@ -890,16 +1005,40 @@ export default function ReviewAnalysisPage() {
             </div>
           )}
 
-          {/* Search */}
-          <div className="relative w-full sm:w-72">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-sage-400" />
-            <input
-              type="text"
-              placeholder="Search reviews..."
-              value={reviewSearch}
-              onChange={(e) => setReviewSearch(e.target.value)}
-              className="pl-9 pr-4 py-2 text-sm border border-sage-200 rounded-lg text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 w-full bg-warm-white"
-            />
+          {/* Search + bulk action */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="relative w-full sm:w-72">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-sage-400" />
+              <input
+                type="text"
+                placeholder="Search reviews..."
+                value={reviewSearch}
+                onChange={(e) => setReviewSearch(e.target.value)}
+                className="pl-9 pr-4 py-2 text-sm border border-sage-200 rounded-lg text-sage-900 placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 w-full bg-warm-white"
+              />
+            </div>
+            {sourceReviews.length > 0 && (
+              <>
+                <button
+                  onClick={handleBulkExtract}
+                  disabled={bulkExtracting}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-sage-300 hover:bg-sage-50 disabled:opacity-50 text-sage-800 rounded-lg transition-colors"
+                  title="Mine voice-phrase library from every review in scope"
+                >
+                  {bulkExtracting ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-3.5 h-3.5" />
+                  )}
+                  {bulkExtracting
+                    ? 'Mining phrases...'
+                    : `Extract phrases from all (${sourceReviews.length})`}
+                </button>
+                {bulkExtractMsg && (
+                  <span className="text-xs text-emerald-700 font-medium">{bulkExtractMsg}</span>
+                )}
+              </>
+            )}
           </div>
 
           {/* Reviews list */}
@@ -933,6 +1072,7 @@ export default function ReviewAnalysisPage() {
                   review={review}
                   showVenue={scope.level !== 'venue'}
                   onSaveResponse={handleSaveResponse}
+                  aiName={aiName}
                 />
               ))}
             </div>

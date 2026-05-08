@@ -44,6 +44,13 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 | journey-narrative | — | v1.0 | Initial versioning; closed Tier-B #75 audit gap (call landed in api_costs with prompt_version=NULL) |
 | re-engagement-drafter | — | v1.0 | Initial versioning; closed Tier-B #75 audit gap (call landed in api_costs with prompt_version=NULL) |
 
+## 2026-05-08
+
+| Module | Old | New | Reason |
+|--------|-----|-----|--------|
+| brain-dump | v1.0 | v1.1 | Added `help_question` intent + disambiguation rule for help vs knowledge_base import (Isadora feedback round). |
+| brain-dump-help | — | v1.0 | New help-mode answer prompt; curated surface map of ~50 Bloom routes; constrained-output JSON. |
+
 ## Per-brain history
 
 ### inquiry-brain (`inquiry-brain.prompt.v1.1`)
@@ -147,10 +154,22 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
   for metric anomalies with Internal Context bundle (absences, operational state,
   pricing changes, marketing channels). Haiku tier.
 
-### brain-dump (`brain-dump.prompt.v1.0`)
+### brain-dump (`brain-dump.prompt.v1.1`)
+- **v1.1** (2026-05-08) — Added `help_question` intent (8th class) for "where
+  do I X" / "how do I X" coordinator questions. Help-mode does NOT propose-
+  and-confirm; it returns a curated answer + click-through links via the new
+  brain-dump-help prompt. Disambiguation rule added: a single platform
+  question is help_question, a list of Q/A pairs is knowledge_base_import.
 - **v1.0** (2026-05-05) — Initial versioning baseline. 7-intent classifier
   (client_note / availability / analytics / staff_observation / operational_note /
   knowledge_base_import / ambiguous). Haiku tier, tier-1 content.
+
+### brain-dump-help (`brain-dump-help.prompt.v1.0`)
+- **v1.0** (2026-05-08) — Help-mode Q&A answer prompt. Constrained-output
+  JSON `{body, links}`. Surface map of ~50 Bloom routes embedded in the
+  system prompt; the model is instructed never to invent paths and to
+  admit uncertainty when no entry matches. Haiku tier, tier-3 content
+  (no PII).
 
 ### briefings (`briefings.prompt.v1.0` / `briefings.monthly.v1.0`)
 - **v1.0** (2026-05-05) — Initial versioning baseline. Weekly briefing uses

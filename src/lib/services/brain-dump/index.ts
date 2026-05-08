@@ -36,7 +36,7 @@ import { gateForBrainCall } from '@/lib/services/cost-ceiling'
  * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
  * See PROMPTS-CHANGELOG.md for version history.
  */
-export const BRAIN_DUMP_PROMPT_VERSION = 'brain-dump.prompt.v1.0'
+export const BRAIN_DUMP_PROMPT_VERSION = 'brain-dump.prompt.v1.1'
 import { createNotification } from '@/lib/services/admin-notifications'
 import {
   patternSignature,
@@ -51,6 +51,7 @@ export type BrainDumpIntent =
   | 'staff_observation'
   | 'operational_note'
   | 'knowledge_base_import'
+  | 'help_question'
   | 'ambiguous'
 
 export interface BrainDumpParseResult {
@@ -122,7 +123,7 @@ export async function classifyBrainDump(args: {
 
 Output JSON matching this exact shape:
 {
-  "intent": "client_note" | "availability" | "analytics" | "staff_observation" | "operational_note" | "knowledge_base_import" | "ambiguous",
+  "intent": "client_note" | "availability" | "analytics" | "staff_observation" | "operational_note" | "knowledge_base_import" | "help_question" | "ambiguous",
   "confidence": 0-100,
   "clientMatch": { "weddingId": string | null, "coupleLabel": string | null, "ambiguousCandidates": [{"weddingId": "...", "label": "..."}] } | null,
   "note": string | null,
@@ -133,6 +134,7 @@ Output JSON matching this exact shape:
 }
 
 Intent rules:
+- help_question: the coordinator is asking the platform a "where do I X" / "how do I X" / "I can't find Y" / "is there a way to Z" question. They want navigation help, not to file an observation. Question marks plus question-shaped phrasing are strong signals. When you classify as help_question, set confidence to at least 80 and leave the other fields null.
 - client_note: observation about a specific couple. Look up in the COUPLES list below. If exactly one match, use it; if multiple possibles, intent MUST be "ambiguous" and list candidates.
 - availability: a date changed (cancelled, held, blocked, released). Always classify this — the system handles the confirm-first flow.
 - analytics: the observation looks like ad-platform data (impressions, clicks, spend, inquiries by source).
@@ -140,6 +142,8 @@ Intent rules:
 - operational_note: about the venue itself (AC, grounds, equipment) — not a couple, not a staff member.
 - knowledge_base_import: the input contains FAQ-style Question/Answer pairs intended to seed the venue's Sage knowledge base. Typical signals: an attached CSV with Question and Answer columns, a list of "Q: ... A: ..." pairs, or a policies document. Extract each Q/A pair into knowledgeBase.rows. category should be a short lowercase bucket like "pricing", "capacity", "vendors", "decor", "logistics" derived from the question. Only use this intent when the pairs are clearly additive reference content, not a specific couple's message.
 - ambiguous: confidence < 75 OR multiple entities match OR you can't tell what to do. Populate clarificationQuestion with a SINGLE specific question.
+
+Help vs knowledge_base disambiguation: a single question from the coordinator about the platform itself is help_question; a list of Q/A pairs the coordinator wants Sage to learn for couples is knowledge_base_import. "Where do I upload reviews?" is help. "Q: What time does the venue close? A: 11pm." is knowledge_base_import.
 
 COUPLES at this venue (JSON): ${JSON.stringify(coupleIndex.slice(0, 200))}
 
@@ -221,6 +225,59 @@ const GRADUABLE_INTENTS: ReadonlySet<BrainDumpIntent> = new Set([
 ])
 
 /**
+ * Resolve a deep-link destination for a routed/parked brain-dump entry.
+ *
+ * 2026-05-08 (Isadora feedback): every actionable intent should give the
+ * coordinator a "go to X" affordance after the bubble's success state.
+ * Pre-fix the bubble said "Filed." with no link, so the coordinator
+ * had to guess where the data landed. Per-intent map below mirrors the
+ * resolve route's writers.
+ */
+export function nextHrefFor(args: {
+  intent: BrainDumpIntent | string
+  weddingId?: string | null
+}): { nextHref: string; nextLabel: string } | null {
+  const { intent, weddingId } = args
+  if (intent.endsWith('_preview')) {
+    // CSV / vision previews: most land in /intel/sources (sources & ROI),
+    // reviews land in /intel/reviews. Refine when shape is known.
+    if (intent === 'reviews_preview') return { nextHref: '/intel/reviews', nextLabel: 'Open reviews' }
+    if (intent === 'knowledge_base_qa_preview' || intent === 'knowledge_base_tc_preview') {
+      return { nextHref: '/portal/kb', nextLabel: 'Open knowledge base' }
+    }
+    if (intent === 'tour_links_preview') return { nextHref: '/intel/tours', nextLabel: 'Open tours' }
+    if (intent === 'leads_preview') return { nextHref: '/agent/leads', nextLabel: 'Open leads' }
+    if (intent === 'storefront_analytics_preview') return { nextHref: '/intel/sources', nextLabel: 'Open sources' }
+    return { nextHref: '/intel/sources', nextLabel: 'Open sources' }
+  }
+  switch (intent) {
+    case 'client_note':
+      return weddingId
+        ? { nextHref: `/intel/clients/${weddingId}`, nextLabel: 'View couple' }
+        : { nextHref: '/intel/clients', nextLabel: 'View couples' }
+    case 'knowledge_base_import':
+      return { nextHref: '/portal/kb', nextLabel: 'Open knowledge base' }
+    case 'operational_note':
+      return { nextHref: '/agent/knowledge-gaps', nextLabel: 'Open knowledge gaps' }
+    case 'availability':
+      return { nextHref: '/portal/availability', nextLabel: 'Open availability' }
+    case 'analytics':
+      return { nextHref: '/intel/sources', nextLabel: 'Open sources' }
+    case 'staff_observation':
+      return { nextHref: '/intel/team', nextLabel: 'Team performance' }
+    case 'reviews_from_screenshot':
+      return { nextHref: '/intel/reviews', nextLabel: 'Open reviews' }
+    case 'identity_signals':
+    case 'scraper_json_imported':
+      return { nextHref: '/intel/candidates', nextLabel: 'Review candidates' }
+    case 'imported':
+      return { nextHref: '/intel/sources', nextLabel: 'Open sources' }
+    default:
+      return null
+  }
+}
+
+/**
  * Route a parsed brain dump to the right destination(s).
  *
  * Returns the `routed_to` array to store on brain_dump_entries.
@@ -238,6 +295,12 @@ export async function routeBrainDump(args: {
   routedTo: Array<{ table: string; id: string | null; action: string }>
   needsClarification: boolean
   clarificationQuestion: string | null
+  /** Deep-link destination per intent. Bubble renders "[label] →"
+   *  below the success card. */
+  nextHref?: string | null
+  nextLabel?: string | null
+  /** Help-mode answer payload (intent='help_question'). */
+  helpAnswer?: { body: string; links: Array<{ label: string; href: string }> } | null
   /** When >= REPEAT_THRESHOLD prior confirmations of this signature
    *  exist + no active grant, surface a graduation offer for the
    *  coordinator to accept on the next propose-and-confirm. */
@@ -269,6 +332,42 @@ export async function routeBrainDump(args: {
   let activeGrant: Awaited<ReturnType<typeof consumeGrantIfActive>> = null
   if (GRADUABLE_INTENTS.has(parsed.intent)) {
     activeGrant = await consumeGrantIfActive(supabase, venueId, signature)
+  }
+
+  // Help question: answer inline, no propose-and-confirm. The bubble
+  // renders helpAnswer.body + clickable links instead of a Confirm
+  // card. Stamp confirmed immediately so we don't pollute the
+  // clarification queue with platform-help questions.
+  if (parsed.intent === 'help_question') {
+    try {
+      const { answerHelpQuestion } = await import('@/lib/services/brain-dump/help')
+      const helpAnswer = await answerHelpQuestion({
+        venueId,
+        question: rawText,
+      })
+      await supabase
+        .from('brain_dump_entries')
+        .update({
+          parse_status: 'confirmed',
+          parsed_at: new Date().toISOString(),
+          resolved_at: new Date().toISOString(),
+          parse_result: {
+            ...(parsed as unknown as Record<string, unknown>),
+            help_answer: helpAnswer,
+          },
+          routed_to: [{ table: 'help_answer', id: null, action: 'inline_help' }],
+        })
+        .eq('id', entryId)
+      return {
+        routedTo: [{ table: 'help_answer', id: null, action: 'inline_help' }],
+        needsClarification: false,
+        clarificationQuestion: null,
+        helpAnswer,
+      }
+    } catch (err) {
+      console.warn('[brain-dump] help-mode failed; falling back to ambiguous:', err)
+      // Fall through to the ambiguous handler below.
+    }
   }
 
   // Low-confidence or explicitly ambiguous → clarification prompt.

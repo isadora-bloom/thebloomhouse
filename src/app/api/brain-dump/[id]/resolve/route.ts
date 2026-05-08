@@ -5,6 +5,7 @@ import { detectCsvShape, parseCsvRows } from '@/lib/services/brain-dump/csv-shap
 import { runCsvImport } from '@/app/api/brain-dump/route'
 import { importReviews } from '@/lib/services/brain-dump/imports'
 import { importStorefrontAnalytics } from '@/lib/services/ingestion/storefront-analytics'
+import { nextHrefFor } from '@/lib/services/brain-dump'
 
 /**
  * Resolve a pending brain-dump clarification.
@@ -85,7 +86,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       parse_result: { ...pr, summary, confirmed_at: new Date().toISOString() },
       resolved_at: new Date().toISOString(),
     }).eq('id', id)
-    return NextResponse.json({ id, status: 'confirmed', importSummary: summary })
+    const next = nextHrefFor({ intent: `${pr.shape}_preview` })
+    return NextResponse.json({
+      id,
+      status: 'confirmed',
+      importSummary: summary,
+      nextHref: next?.nextHref ?? null,
+      nextLabel: next?.nextLabel ?? null,
+    })
   }
 
   // Case B: Vision output parked for confirm — reviews, storefront
@@ -114,7 +122,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         parse_result: { ...pr, summary, confirmed_at: new Date().toISOString() },
         resolved_at: new Date().toISOString(),
       }).eq('id', id)
-      return NextResponse.json({ id, status: 'confirmed', importSummary: summary })
+      const next = nextHrefFor({ intent: 'reviews_from_screenshot' })
+      return NextResponse.json({
+        id,
+        status: 'confirmed',
+        importSummary: summary,
+        nextHref: next?.nextHref ?? null,
+        nextLabel: next?.nextLabel ?? null,
+      })
     }
     if (v.intent === 'storefront_analytics' && v.analytics?.rows?.length) {
       const summary = await importStorefrontAnalytics({
@@ -134,7 +149,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         routed_to: [{ table: 'engagement_events', action: `storefront_analytics:${summary.inserted}`, id: null }],
         resolved_at: new Date().toISOString(),
       }).eq('id', id)
-      return NextResponse.json({ id, status: 'confirmed', importSummary: summary })
+      const next = nextHrefFor({ intent: 'storefront_analytics_preview' })
+      return NextResponse.json({
+        id,
+        status: 'confirmed',
+        importSummary: summary,
+        nextHref: next?.nextHref ?? null,
+        nextLabel: next?.nextLabel ?? null,
+      })
     }
   }
 
@@ -184,7 +206,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       parse_result: { ...pr, confirmed_at: new Date().toISOString() },
       routed_to: [{ table: 'weddings', id: proposedNote.weddingId, action: 'append_sage_context_note' }],
     }).eq('id', id)
-    return NextResponse.json({ id, status: 'confirmed', appendedTo: proposedNote.weddingId })
+    const next = nextHrefFor({ intent: 'client_note', weddingId: proposedNote.weddingId })
+    return NextResponse.json({
+      id,
+      status: 'confirmed',
+      appendedTo: proposedNote.weddingId,
+      nextHref: next?.nextHref ?? null,
+      nextLabel: next?.nextLabel ?? null,
+    })
   }
 
   // Case E: proposed knowledge_base rows. Per INV-20.5.4-A, even
@@ -226,7 +255,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       parse_result: { ...pr, confirmed_at: new Date().toISOString(), inserted, deduped: existingSet.size },
       routed_to: [{ table: 'knowledge_base', id: null, action: `insert:${inserted},deduped:${existingSet.size}` }],
     }).eq('id', id)
-    return NextResponse.json({ id, status: 'confirmed', inserted, deduped: existingSet.size })
+    const next = nextHrefFor({ intent: 'knowledge_base_import' })
+    return NextResponse.json({
+      id,
+      status: 'confirmed',
+      inserted,
+      deduped: existingSet.size,
+      nextHref: next?.nextHref ?? null,
+      nextLabel: next?.nextLabel ?? null,
+    })
   }
 
   // Case F: proposed operational note → knowledge_gaps row.
@@ -252,7 +289,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       parse_result: { ...pr, confirmed_at: new Date().toISOString() },
       routed_to: [{ table: 'knowledge_gaps', id: insertedRow.id, action: 'insert' }],
     }).eq('id', id)
-    return NextResponse.json({ id, status: 'confirmed', knowledge_gap_id: insertedRow.id })
+    const next = nextHrefFor({ intent: 'operational_note' })
+    return NextResponse.json({
+      id,
+      status: 'confirmed',
+      knowledge_gap_id: insertedRow.id,
+      nextHref: next?.nextHref ?? null,
+      nextLabel: next?.nextLabel ?? null,
+    })
   }
 
   // Case G: plain clarification — just stamp the status and the answer.

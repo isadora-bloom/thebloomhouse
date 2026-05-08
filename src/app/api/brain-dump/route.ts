@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createHash } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
-import { classifyBrainDump, routeBrainDump } from '@/lib/services/brain-dump'
+import { classifyBrainDump, routeBrainDump, nextHrefFor } from '@/lib/services/brain-dump'
 import {
   detectCsvShape,
   parseCsvRows,
@@ -537,15 +537,20 @@ export async function POST(request: NextRequest) {
         resolved_at: new Date().toISOString(),
       }).eq('id', entry.id)
 
-      return NextResponse.json({
-        entryId: entry.id,
-        intent: 'scraper_json_imported',
-        confidence: 100,
-        needsClarification: false,
-        importSummary: summary,
-        rowsParsed: rowsRaw.length,
-        errors,
-      })
+      {
+        const next = nextHrefFor({ intent: 'scraper_json_imported' })
+        return NextResponse.json({
+          entryId: entry.id,
+          intent: 'scraper_json_imported',
+          confidence: 100,
+          needsClarification: false,
+          importSummary: summary,
+          rowsParsed: rowsRaw.length,
+          errors,
+          nextHref: next?.nextHref ?? null,
+          nextLabel: next?.nextLabel ?? null,
+        })
+      }
     }
   }
 
@@ -568,20 +573,24 @@ export async function POST(request: NextRequest) {
       // label the confirmation prompt ('large' vs 'small').
       if (detection.confidence >= 70 && detection.shape !== 'unknown') {
         const sizeLabel = dataRows.length > LARGE_CSV_ROW_THRESHOLD ? '' : '(small) '
-        const q = `This looks like ${sizeLabel}${humanShape(detection.shape)} data with ${dataRows.length} rows. Confirm the import from the Notifications page.`
+        const q = `This looks like ${sizeLabel}${humanShape(detection.shape)} data with ${dataRows.length} rows. Confirm to import.`
         await supabase.from('brain_dump_entries').update({
           parse_status: 'needs_clarification',
           clarification_question: q,
           parse_result: { shape: detection.shape, columns: detection.columns, rowCount: dataRows.length, storagePath: attachment.path },
           parsed_at: new Date().toISOString(),
         }).eq('id', entry.id)
+        const previewIntent = `${detection.shape}_preview`
+        const next = nextHrefFor({ intent: previewIntent })
         return NextResponse.json({
           entryId: entry.id,
-          intent: `${detection.shape}_preview`,
+          intent: previewIntent,
           confidence: detection.confidence,
           needsClarification: true,
           clarificationQuestion: q,
           previewRows: dataRows.length,
+          nextHref: next?.nextHref ?? null,
+          nextLabel: next?.nextLabel ?? null,
         })
       }
 
@@ -643,13 +652,18 @@ export async function POST(request: NextRequest) {
             parsed_at: new Date().toISOString(),
             resolved_at: new Date().toISOString(),
           }).eq('id', entry.id)
-          return NextResponse.json({
-            entryId: entry.id,
-            intent: 'reviews_from_screenshot',
-            confidence: 85,
-            needsClarification: false,
-            importSummary: summary,
-          })
+          {
+            const next = nextHrefFor({ intent: 'reviews_from_screenshot' })
+            return NextResponse.json({
+              entryId: entry.id,
+              intent: 'reviews_from_screenshot',
+              confidence: 85,
+              needsClarification: false,
+              importSummary: summary,
+              nextHref: next?.nextHref ?? null,
+              nextLabel: next?.nextLabel ?? null,
+            })
+          }
         }
 
         if (v.intent === 'storefront_analytics' && v.analytics?.rows?.length) {
@@ -692,14 +706,19 @@ export async function POST(request: NextRequest) {
             routed_to: routedTo,
             parsed_at: new Date().toISOString(),
           }).eq('id', entry.id)
-          return NextResponse.json({
-            entryId: entry.id,
-            intent: 'storefront_analytics_preview',
-            confidence: 75,
-            needsClarification: true,
-            clarificationQuestion: q,
-            identitySummary,
-          })
+          {
+            const next = nextHrefFor({ intent: 'storefront_analytics_preview' })
+            return NextResponse.json({
+              entryId: entry.id,
+              intent: 'storefront_analytics_preview',
+              confidence: 75,
+              needsClarification: true,
+              clarificationQuestion: q,
+              identitySummary,
+              nextHref: next?.nextHref ?? null,
+              nextLabel: next?.nextLabel ?? null,
+            })
+          }
         }
 
         if (v.intent === 'identity_signals' && v.identities && v.identities.length > 0) {
@@ -717,13 +736,18 @@ export async function POST(request: NextRequest) {
             parsed_at: new Date().toISOString(),
             resolved_at: new Date().toISOString(),
           }).eq('id', entry.id)
-          return NextResponse.json({
-            entryId: entry.id,
-            intent: 'identity_signals',
-            confidence: 80,
-            needsClarification: false,
-            identitySummary: summary,
-          })
+          {
+            const next = nextHrefFor({ intent: 'identity_signals' })
+            return NextResponse.json({
+              entryId: entry.id,
+              intent: 'identity_signals',
+              confidence: 80,
+              needsClarification: false,
+              identitySummary: summary,
+              nextHref: next?.nextHref ?? null,
+              nextLabel: next?.nextLabel ?? null,
+            })
+          }
         }
 
         // Other image types: store vision summary, park for triage.
@@ -864,6 +888,10 @@ export async function POST(request: NextRequest) {
       parsed,
       rawText,
     })
+    const next = nextHrefFor({
+      intent: parsed.intent,
+      weddingId: parsed.clientMatch?.weddingId ?? null,
+    })
     return NextResponse.json({
       entryId: entry.id,
       intent: parsed.intent,
@@ -871,6 +899,9 @@ export async function POST(request: NextRequest) {
       needsClarification: route.needsClarification,
       clarificationQuestion: route.clarificationQuestion,
       routedTo: route.routedTo,
+      nextHref: next?.nextHref ?? null,
+      nextLabel: next?.nextLabel ?? null,
+      helpAnswer: route.helpAnswer ?? null,
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -1120,6 +1151,10 @@ async function runClassifierFallback(args: {
       parsed,
       rawText,
     })
+    const next = nextHrefFor({
+      intent: parsed.intent,
+      weddingId: parsed.clientMatch?.weddingId ?? null,
+    })
     return NextResponse.json({
       entryId: entry.id,
       intent: parsed.intent,
@@ -1127,6 +1162,9 @@ async function runClassifierFallback(args: {
       needsClarification: route.needsClarification,
       clarificationQuestion: route.clarificationQuestion,
       routedTo: route.routedTo,
+      nextHref: next?.nextHref ?? null,
+      nextLabel: next?.nextLabel ?? null,
+      helpAnswer: route.helpAnswer ?? null,
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

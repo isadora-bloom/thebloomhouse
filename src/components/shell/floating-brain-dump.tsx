@@ -14,11 +14,28 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Brain, X, Loader2, Send, CheckCircle2, AlertCircle, Upload } from 'lucide-react'
+import { Brain, X, Loader2, Send, CheckCircle2, AlertCircle, Upload, ArrowRight, HelpCircle } from 'lucide-react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useAiName } from '@/lib/hooks/use-ai-name'
+
+/**
+ * Confirm-button label per intent. The bubble's pendingConfirm card uses
+ * this so a coordinator sees "Add to knowledge base" instead of a
+ * generic "Confirm". 2026-05-08 (Isadora feedback).
+ */
+function confirmLabelFor(intent: string): string {
+  if (intent.endsWith('_preview')) return 'Confirm import'
+  if (intent === 'client_note') return 'Save to couple'
+  if (intent === 'knowledge_base_import') return 'Add to knowledge base'
+  if (intent === 'operational_note') return 'File as operational note'
+  if (intent === 'availability') return 'Apply availability change'
+  if (intent === 'analytics') return 'Import spend rows'
+  if (intent === 'staff_observation') return 'Save observation'
+  return 'Confirm'
+}
 
 interface ImportSummaryShape {
   inserted: number
@@ -127,10 +144,12 @@ export function FloatingBrainDump() {
     setState({ kind: 'idle' })
   }, [])
 
-  // Inline confirm for parked CSV previews. Avoids forcing the
-  // coordinator to navigate to /agent/notifications for every large
-  // CSV upload — the same pipeline that runs small CSVs inline runs
-  // here when called.
+  // Inline confirm for any propose-and-confirm intent (CSV preview,
+  // client_note, knowledge_base_import, operational_note, availability,
+  // analytics, vision storefront analytics, etc.). Pre-fix this only
+  // handled CSV previews and pushed the coordinator to /agent/notifications
+  // for everything else. 2026-05-08 (Isadora feedback) extended this to
+  // every needs_clarification + entryId response.
   async function confirmImport(entryId: string) {
     setState({ kind: 'confirming', entryId })
     try {
@@ -143,18 +162,56 @@ export function FloatingBrainDump() {
         const err = await res.json().catch(() => ({}))
         throw new Error(err.error || `HTTP ${res.status}`)
       }
-      const data = (await res.json()) as { id: string; status: string; importSummary?: ImportSummaryShape }
+      const data = (await res.json()) as {
+        id: string
+        status: string
+        importSummary?: ImportSummaryShape
+        nextHref?: string | null
+        nextLabel?: string | null
+      }
       setState({
         kind: 'done',
         intent: 'imported',
         clarification: null,
         importSummary: data.importSummary ?? null,
         pendingConfirm: null,
+        nextHref: data.nextHref ?? null,
+        nextLabel: data.nextLabel ?? null,
       })
     } catch (err) {
       setState({
         kind: 'error',
         message: err instanceof Error ? err.message : 'Confirm failed',
+      })
+    }
+  }
+
+  // Dismiss a parked propose-and-confirm entry. Mirror of confirmImport
+  // but action='dismiss' — the resolve route stamps parse_status=dismissed
+  // without writing anything. 2026-05-08.
+  async function dismissEntry(entryId: string) {
+    setState({ kind: 'confirming', entryId })
+    try {
+      const res = await fetch(`/api/brain-dump/${entryId}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'dismiss' }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || `HTTP ${res.status}`)
+      }
+      setState({
+        kind: 'done',
+        intent: 'dismissed',
+        clarification: null,
+        importSummary: null,
+        pendingConfirm: null,
+      })
+    } catch (err) {
+      setState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Dismiss failed',
       })
     }
   }
@@ -232,24 +289,47 @@ export function FloatingBrainDump() {
         importSummary?: ImportSummaryShape | null
         needsClarification?: boolean
         previewRows?: number
+        nextHref?: string | null
+        nextLabel?: string | null
+        helpAnswer?: { body: string; links: Array<{ label: string; href: string }> } | null
       }
-      // Detect a large-CSV preview parked for confirmation. The route's
-      // CSV fast-path produces intents like 'platform_activity_preview',
-      // 'leads_preview', etc. when row count > LARGE_CSV_ROW_THRESHOLD.
-      const isCsvPreview =
+      // 2026-05-08 (Isadora feedback): inline-confirm every propose-and-
+      // confirm intent, not just CSV previews. Any time the route returns
+      // needsClarification + an entryId, surface Confirm/Dismiss in the
+      // bubble. The resolve route already handles every parked shape
+      // (Cases A-F).
+      const canInlineConfirm =
         data.needsClarification === true &&
-        typeof data.intent === 'string' &&
-        data.intent.endsWith('_preview') &&
         typeof data.entryId === 'string' &&
-        typeof data.previewRows === 'number'
+        typeof data.intent === 'string' &&
+        // Help-mode never goes through propose-and-confirm — it's a Q&A
+        // surface. Skip pendingConfirm so the answer card renders instead.
+        data.intent !== 'help_question' &&
+        // URL Google Doc and pdf_extract_failed surface a clarification
+        // we can't resolve from the bubble — let those still render the
+        // amber card with a message. (No proposed payload server-side.)
+        data.intent !== 'url_google_doc_deferred' &&
+        data.intent !== 'pdf_extract_failed' &&
+        data.intent !== 'pdf_oversized' &&
+        data.intent !== 'json_parse_failed' &&
+        data.intent !== 'json_contract_violation' &&
+        data.intent !== 'duplicate_upload'
       setState({
         kind: 'done',
         intent: data.intent ?? 'unknown',
         clarification: data.clarificationQuestion ?? null,
         importSummary: data.importSummary ?? null,
-        pendingConfirm: isCsvPreview
-          ? { entryId: data.entryId!, previewRows: data.previewRows!, intent: data.intent }
+        pendingConfirm: canInlineConfirm
+          ? {
+              entryId: data.entryId!,
+              intent: data.intent,
+              previewRows: data.previewRows,
+              confirmLabel: confirmLabelFor(data.intent),
+            }
           : null,
+        nextHref: data.nextHref ?? null,
+        nextLabel: data.nextLabel ?? null,
+        helpAnswer: data.helpAnswer ?? null,
       })
     } catch (err) {
       setState({
@@ -305,32 +385,70 @@ export function FloatingBrainDump() {
 
             {state.kind === 'done' ? (
               <div className="space-y-3 py-2">
-                {state.pendingConfirm ? (
-                  // Inline confirm path: large CSV detected, parked
-                  // for confirmation. Coordinator confirms here
-                  // instead of navigating to Notifications.
+                {state.helpAnswer ? (
+                  // Help-mode answer: bubble-rendered Q&A with click-
+                  // through link tiles. Different success card from
+                  // the propose-and-confirm path. 2026-05-08 (Isadora
+                  // feedback).
+                  <div className="flex items-start gap-2 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">
+                    <HelpCircle className="w-4 h-4 text-sky-600 mt-0.5 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-sky-900">Here's where that lives</p>
+                      <p className="text-xs text-sky-800 mt-1 whitespace-pre-line">
+                        {state.helpAnswer.body}
+                      </p>
+                      {state.helpAnswer.links.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {state.helpAnswer.links.map((l, i) => (
+                            <Link
+                              key={i}
+                              href={l.href}
+                              onClick={close}
+                              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 bg-white border border-sky-300 rounded-md text-sky-700 hover:bg-sky-100 hover:border-sky-400"
+                            >
+                              {l.label}
+                              <ArrowRight className="w-3 h-3" />
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : state.pendingConfirm ? (
+                  // Inline confirm card: any propose-and-confirm intent
+                  // (CSV preview, client_note, knowledge_base_import,
+                  // operational_note, availability, analytics, vision
+                  // storefront analytics, etc.). Pre-fix only CSV
+                  // previews surfaced here. 2026-05-08 (Isadora
+                  // feedback) extended to every parked entry.
                   <div className="flex items-start gap-2 bg-sage-50 border border-sage-200 rounded-lg px-3 py-2">
                     <CheckCircle2 className="w-4 h-4 text-sage-600 mt-0.5 shrink-0" />
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-sage-900">
-                        Detected {state.pendingConfirm.intent.replace(/_preview$/, '').replace(/_/g, ' ')} ·{' '}
-                        {state.pendingConfirm.previewRows.toLocaleString()} rows
+                        {state.pendingConfirm.intent.endsWith('_preview') &&
+                        typeof state.pendingConfirm.previewRows === 'number'
+                          ? `Detected ${state.pendingConfirm.intent.replace(/_preview$/, '').replace(/_/g, ' ')}, ${state.pendingConfirm.previewRows.toLocaleString()} rows`
+                          : state.clarification
+                            ? state.clarification
+                            : `Sage parsed this as ${state.pendingConfirm.intent.replace(/_/g, ' ')}`}
                       </p>
-                      <p className="text-xs text-sage-700 mt-1">
-                        Confirm to import. {aiName} will cluster signals + match candidates against existing leads.
-                      </p>
+                      {state.pendingConfirm.intent.endsWith('_preview') && (
+                        <p className="text-xs text-sage-700 mt-1">
+                          Confirm to import. {aiName} will cluster signals and match candidates against existing leads.
+                        </p>
+                      )}
                       <div className="flex gap-2 mt-2">
                         <button
                           onClick={() => confirmImport(state.pendingConfirm!.entryId)}
                           className="text-xs px-3 py-1.5 bg-sage-600 text-white rounded-lg hover:bg-sage-700"
                         >
-                          Confirm import
+                          {state.pendingConfirm.confirmLabel ?? 'Confirm'}
                         </button>
                         <button
-                          onClick={reset}
-                          className="text-xs px-3 py-1.5 border border-sage-200 rounded-lg text-sage-700 hover:bg-sage-100"
+                          onClick={() => dismissEntry(state.pendingConfirm!.entryId)}
+                          className="text-xs px-3 py-1.5 border border-sage-200 rounded-lg text-sage-400 hover:bg-sage-100 hover:text-sage-600"
                         >
-                          Cancel
+                          Dismiss
                         </button>
                       </div>
                     </div>
@@ -338,12 +456,17 @@ export function FloatingBrainDump() {
                 ) : state.clarification ? (
                   <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                     <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-                    <div>
+                    <div className="min-w-0">
                       <p className="text-sm font-medium text-amber-900">Needs clarification</p>
                       <p className="text-xs text-amber-800 mt-1">{state.clarification}</p>
-                      <p className="text-xs text-amber-700 mt-2">
-                        Check the Notifications page to resolve.
-                      </p>
+                      <Link
+                        href="/agent/notifications"
+                        onClick={close}
+                        className="inline-flex items-center gap-1 text-xs text-amber-800 hover:text-amber-900 mt-2 underline-offset-2 hover:underline"
+                      >
+                        Open Notifications
+                        <ArrowRight className="w-3 h-3" />
+                      </Link>
                     </div>
                   </div>
                 ) : (
@@ -408,6 +531,22 @@ export function FloatingBrainDump() {
                       )}
                     </div>
                   </div>
+                )}
+                {/* Deep-link affordance: when the route returned a
+                    nextHref for the routed/parked entry, show a small
+                    "[label] →" link so the coordinator can open the
+                    surface that owns this data. 2026-05-08 (Isadora
+                    feedback). Hidden when the help-answer card already
+                    rendered link tiles. */}
+                {state.nextHref && state.nextLabel && !state.helpAnswer && !state.pendingConfirm && (
+                  <Link
+                    href={state.nextHref}
+                    onClick={close}
+                    className="inline-flex items-center gap-1 text-xs text-sage-700 hover:text-sage-900 underline-offset-2 hover:underline"
+                  >
+                    {state.nextLabel}
+                    <ArrowRight className="w-3 h-3" />
+                  </Link>
                 )}
                 <div className="flex gap-2">
                   <button
