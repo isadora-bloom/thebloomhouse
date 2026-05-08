@@ -23,7 +23,6 @@ import {
   EyeOff,
   Home,
   Users,
-  Users2,
   Scissors,
   Palette,
   Clock,
@@ -31,6 +30,7 @@ import {
   MoreHorizontal,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AssignedToPicker } from '@/components/couple/assigned-to-picker'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -776,46 +776,14 @@ export default function ChecklistPage() {
                                   />
                                 )}
 
-                                {/* Tier-B #56 — assigned-to chip. When set, shows
-                                    a chip; click to edit or clear. When unset,
-                                    shows a low-opacity "Assign" affordance for
-                                    completed-and-uncompleted alike (couples
-                                    sometimes want to retroactively note who
-                                    handled what). Uses prompt() for MVP — full
-                                    inline editor is a future enhancement. */}
-                                {item.assigned_to ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const next = window.prompt(
-                                        'Assign to (or empty to clear)',
-                                        item.assigned_to ?? '',
-                                      )
-                                      if (next === null) return
-                                      void handleSetAssignedTo(item.id, next)
-                                    }}
-                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-sage-50 text-sage-700 hover:bg-sage-100"
-                                    title="Click to edit"
-                                  >
-                                    <Users2 className="w-3 h-3" />
-                                    {item.assigned_to.slice(0, 24)}
-                                  </button>
-                                ) : (
-                                  !item.is_completed && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const next = window.prompt('Assign to')
-                                        if (next === null) return
-                                        void handleSetAssignedTo(item.id, next)
-                                      }}
-                                      className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-600"
-                                    >
-                                      <Users2 className="w-3 h-3" />
-                                      Assign
-                                    </button>
-                                  )
-                                )}
+                                {/* Tier-D #191 (2026-05-08): replaced window.prompt
+                                    with the AssignedToPicker — quick-pick of 7
+                                    common roles + custom text + unassign. */}
+                                <AssignedToPicker
+                                  value={item.assigned_to}
+                                  isCompleted={item.is_completed}
+                                  onChange={(next) => void handleSetAssignedTo(item.id, next ?? '')}
+                                />
                               </div>
                             </div>
 

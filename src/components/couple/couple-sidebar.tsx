@@ -33,13 +33,18 @@ interface NavSection {
 
 export function buildCoupleSidebarSections(
   base: string,
-  opts: { showDayOf?: boolean } = {},
+  opts: { showDayOf?: boolean; showAfterWedding?: boolean } = {},
 ): NavSection[] {
-  const { showDayOf = false } = opts
+  const { showDayOf = false, showAfterWedding = false } = opts
   return [
     {
       title: 'Plan',
       items: [
+        // Tier-D #197: bookmark-able "what's next" landing. Surfaces the
+        // 3-5 most-actionable items (overdue, soon-due, payment due,
+        // recent venue message). Top of the sidebar so it's the natural
+        // tab-back-to surface.
+        { label: "What's next", href: `${base}/whats-next`, icon: Lightbulb },
         { label: 'Availability', href: `${base}/availability`, icon: CalendarRange },
         { label: 'Checklist', href: `${base}/checklist`, icon: CheckSquare },
         { label: 'Timeline', href: `${base}/timeline`, icon: Clock },
@@ -121,12 +126,18 @@ export function buildCoupleSidebarSections(
           ],
         }]
       : []),
-    {
-      title: 'After Your Wedding',
-      items: [
-        { label: 'Day-of Memories', href: `${base}/day-of-memories`, icon: Camera },
-      ],
-    },
+    // Tier-D #190 (2026-05-08): "After Your Wedding" section gated to
+    // post-wedding window only. Pre-wedding the page would render empty
+    // and confuse couples; the launch-plan note for 0a0b6f1 claimed
+    // this was already gated but the section was unconditional. Fixed.
+    ...(showAfterWedding
+      ? [{
+          title: 'After Your Wedding',
+          items: [
+            { label: 'Day-of Memories', href: `${base}/day-of-memories`, icon: Camera },
+          ],
+        }]
+      : []),
     {
       title: 'Account',
       items: [
@@ -194,8 +205,11 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
   // the URL still resolves but the page renders a placeholder so
   // direct-link clicks aren't a dead end.
   const showDayOf = daysUntilWedding !== null && daysUntilWedding >= -1 && daysUntilWedding <= 7
+  // Tier-D #190 — "After Your Wedding" section visible from wedding day
+  // onward. -1 catches the day-of edge case (couple uploading evening of).
+  const showAfterWedding = daysUntilWedding !== null && daysUntilWedding <= 0
 
-  const sections = buildCoupleSidebarSections(base, { showDayOf })
+  const sections = buildCoupleSidebarSections(base, { showDayOf, showAfterWedding })
 
   // Final Review badge: show when wedding is within 6 weeks (42 days)
   const finalReviewBadge =

@@ -125,34 +125,45 @@ export default function CoupleLoginPage() {
       <div className="w-full max-w-md">
         {/* Venue branding card */}
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 sm:p-10">
-          {/* Logo / Venue initial */}
+          {/* Logo / Venue initial. Tier-D #187 (2026-05-08): show a
+              skeleton in the logo + name slots until branding loads to
+              avoid the flicker from "Y" + "Your Venue" → real values. */}
           <div className="flex flex-col items-center mb-8">
-            {branding?.logoUrl ? (
-              <img
-                src={branding.logoUrl}
-                alt={venueName}
-                className="h-16 w-auto mb-4"
-              />
+            {branding === null ? (
+              <>
+                <div className="w-16 h-16 rounded-full bg-sage-100 animate-pulse mb-4" />
+                <div className="h-8 w-48 rounded bg-sage-100 animate-pulse" />
+              </>
             ) : (
-              <div
-                className="w-16 h-16 rounded-full flex items-center justify-center text-white text-2xl font-bold mb-4"
-                style={{ backgroundColor: 'var(--couple-primary, #7D8471)' }}
-              >
-                {venueName.charAt(0)}
-              </div>
+              <>
+                {branding.logoUrl ? (
+                  <img
+                    src={branding.logoUrl}
+                    alt={venueName}
+                    className="h-16 w-auto mb-4"
+                  />
+                ) : (
+                  <div
+                    className="w-16 h-16 rounded-full flex items-center justify-center text-white text-2xl font-bold mb-4"
+                    style={{ backgroundColor: 'var(--couple-primary, #7D8471)' }}
+                  >
+                    {venueName.charAt(0)}
+                  </div>
+                )}
+
+                <h1
+                  className="text-2xl sm:text-3xl font-bold text-center"
+                  style={{
+                    fontFamily: 'var(--couple-font-heading, serif)',
+                    color: 'var(--couple-primary, #7D8471)',
+                  }}
+                >
+                  {venueName}
+                </h1>
+              </>
             )}
 
-            <h1
-              className="text-2xl sm:text-3xl font-bold text-center"
-              style={{
-                fontFamily: 'var(--couple-font-heading, serif)',
-                color: 'var(--couple-primary, #7D8471)',
-              }}
-            >
-              {venueName}
-            </h1>
-
-            {branding?.portalTagline && (
+            {branding && branding.portalTagline && (
               <p
                 className="mt-2 text-center text-sm"
                 style={{
@@ -164,7 +175,7 @@ export default function CoupleLoginPage() {
               </p>
             )}
 
-            {!branding?.portalTagline && (
+            {branding && !branding.portalTagline && (
               <p
                 className="mt-2 text-center text-sm text-gray-500"
                 style={{ fontFamily: 'var(--couple-font-body, sans-serif)' }}
