@@ -219,6 +219,11 @@ const VALID_JOBS = [
   // shipped without an actual cron — caught by Round 9 audit. Merged
   // into prune_maintenance to stay under the 40-cron Vercel cap.
   'consumer_requests_expire',
+  // D3 (2026-05-08). Daily dunning escalation for past_due venues.
+  // Day 8 reminder email; Day 14 second email + banner; Day 21 sage
+  // paused; Day 30 read-only. Forward-only state machine on
+  // venues.dunning_stage; idempotent re-runs.
+  'dunning_escalate',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -554,6 +559,11 @@ async function runJob(job: JobName): Promise<unknown> {
       // already classified. Backfills the existing pending-tour
       // backlog automatically the first time it runs.
       return classifyTourOutcomesAllVenues(createServiceClient())
+
+    case 'dunning_escalate': {
+      const { runDunningEscalate } = await import('@/lib/services/billing/dunning')
+      return runDunningEscalate()
+    }
 
     case 'consumer_requests_expire':
       // Tier-C #118 follow-up. Flip pending / processing rows whose
