@@ -871,9 +871,14 @@ async function commitWebForm(args: {
     },
     source_context: r.source_detail ?? 'web_form_import',
     signal_date: r.inquiry_date ?? new Date().toISOString(),
-    match_status: 'confirmed_match',
+    // C-INGEST-5 Finding 2 fix (2026-05-08): was writing confirmed_match
+    // with matched_person_id=null + confidence=1.0, which inflated the
+    // confirmed-match rate on /intel/sources/parity and blocked FK
+    // joins from finding the person. Writes unmatched instead;
+    // phase_b_sweep promotes when the inquiry's person row arrives.
+    match_status: 'unmatched',
     matched_person_id: null,
-    confidence_score: 1.0,
+    confidence_score: null,
     // T5-Rixey-BBB: form-submission tangentials are touchpoint
     // class — the lead's interaction tool, not the discovery channel.
     // signal-class-justified: form_submission is a touchpoint signal_type

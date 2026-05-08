@@ -25,6 +25,10 @@ import { PinterestDetector } from './pinterest'
 import { GoogleBusinessDetector } from './google-business'
 import { FacebookDetector } from './facebook'
 import { HoneyBookDetector } from './honeybook'
+import { TripleseatDetector } from './tripleseat'
+import { AislePlannerDetector } from './aisle-planner'
+import { DubsadoDetector } from './dubsado'
+import { ZolaDetector } from './zola'
 
 const DETECTORS: PlatformDetector[] = [
   TheKnotDetector,
@@ -34,6 +38,10 @@ const DETECTORS: PlatformDetector[] = [
   GoogleBusinessDetector,
   FacebookDetector,
   HoneyBookDetector,
+  TripleseatDetector,
+  AislePlannerDetector,
+  DubsadoDetector,
+  ZolaDetector,
 ]
 
 /** Confidence threshold below which we call it "unknown" and ask. */
