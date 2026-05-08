@@ -48,6 +48,7 @@ import {
 import { createLogger, newCorrelationId } from '@/lib/observability/logger'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
+import { updateThreadLifecycleFolder } from '@/lib/services/inbox/lifecycle'
 
 // ---------------------------------------------------------------------------
 // Stream WWW (migration 205): UTM extraction from extracted_identity
@@ -931,6 +932,17 @@ export async function processIncomingEmail(
     }
     if (email.connectionId) outboundPayload.gmail_connection_id = email.connectionId
     await supabase.from('interactions').insert(outboundPayload)
+    // Recompute the thread's lifecycle folder so a venue-side outbound
+    // captured via self-loop promotes the thread out of 'new_inquiry'
+    // (any outbound makes the thread no longer a virgin first-touch).
+    // Best-effort — the inbox folder must never block ingestion.
+    try {
+      await updateThreadLifecycleFolder({
+        supabase,
+        venueId,
+        threadId: email.threadId ?? null,
+      })
+    } catch { /* swallow — non-fatal for ingest */ }
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
 
@@ -1190,6 +1202,31 @@ export async function processIncomingEmail(
   }
 
   const interactionId = interaction.id as string
+
+  // Inbox lifecycle folder (migration 242). Decided per-thread, written
+  // to every interaction on the thread so the inbox tab counts move
+  // atomically when the boundary flips (e.g. couple's first reply
+  // promotes the thread from 'new_inquiry' to 'potential_client').
+  // Best-effort: failure here mustn't block draft generation. Wrapped
+  // in try/catch so a folder mis-classification can't fail the pipeline.
+  try {
+    await updateThreadLifecycleFolder({
+      supabase,
+      venueId,
+      threadId: email.threadId ?? null,
+      interactionId,
+    })
+  } catch (folderErr) {
+    log.warn('pipeline.lifecycle_folder_failed', {
+      event_type: 'lifecycle_folder_update',
+      outcome: 'fail',
+      data: {
+        interactionId,
+        threadId: email.threadId,
+        error: folderErr instanceof Error ? folderErr.message : String(folderErr),
+      },
+    })
+  }
 
   // Resolve the email address of the Gmail connection that received this
   // email. Used to populate receivedAtAddress in the brain prompts so
@@ -3426,6 +3463,18 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
     timestamp: new Date().toISOString(),
     signal_class: 'unclassified',
   })
+
+  // Refresh the thread's lifecycle folder — the freshly-sent reply
+  // pushes a new_inquiry thread to potential_client (outbound>=1 +
+  // inbound>=2 once the couple writes back, or right now if a tour
+  // event already exists). Best-effort.
+  try {
+    await updateThreadLifecycleFolder({
+      supabase,
+      venueId: draft.venue_id as string,
+      threadId: threadId ?? null,
+    })
+  } catch { /* swallow — non-fatal */ }
 
   console.log(`[pipeline] Sent approved draft ${draftId} to ${draft.to_email}`)
 }

@@ -3,6 +3,7 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/email/gmail'
 import { createServiceClient } from '@/lib/supabase/service'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
+import { updateThreadLifecycleFolder } from '@/lib/services/inbox/lifecycle'
 
 // ---------------------------------------------------------------------------
 // POST — Compose and send a new email
@@ -52,17 +53,35 @@ export async function POST(request: NextRequest) {
     //   plain-text composed in the coordinator UI + appended disclosure;
     //   no inbound HTML to strip.
     const supabase = createServiceClient()
-    await supabase.from('interactions').insert({
-      venue_id: auth.venueId,
-      type: 'email',
-      direction: 'outbound',
-      subject: subject || '(No subject)',
-      body_preview: bodyWithDisclosure.slice(0, 200),
-      full_body: bodyWithDisclosure,
-      gmail_message_id: sentMessageId,
-      timestamp: new Date().toISOString(),
-      signal_class: 'unclassified',
-    })
+    const { data: insertedRow } = await supabase
+      .from('interactions')
+      .insert({
+        venue_id: auth.venueId,
+        type: 'email',
+        direction: 'outbound',
+        subject: subject || '(No subject)',
+        body_preview: bodyWithDisclosure.slice(0, 200),
+        full_body: bodyWithDisclosure,
+        gmail_message_id: sentMessageId,
+        timestamp: new Date().toISOString(),
+        signal_class: 'unclassified',
+      })
+      .select('id, gmail_thread_id')
+      .single()
+
+    // Inbox lifecycle folder (mig 242). A coordinator-composed cold
+    // outbound starts a thread that is, by definition, not a 'new
+    // inquiry' (it has venue-side outbound). Best-effort.
+    if (insertedRow?.id) {
+      try {
+        await updateThreadLifecycleFolder({
+          supabase,
+          venueId: auth.venueId,
+          threadId: (insertedRow.gmail_thread_id as string | null) ?? null,
+          interactionId: insertedRow.id as string,
+        })
+      } catch { /* non-fatal */ }
+    }
 
     return NextResponse.json({ success: true, messageId: sentMessageId })
   } catch (err) {

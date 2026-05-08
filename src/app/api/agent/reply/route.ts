@@ -3,6 +3,7 @@ import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/email/gmail'
 import { createServiceClient } from '@/lib/supabase/service'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
+import { updateThreadLifecycleFolder } from '@/lib/services/inbox/lifecycle'
 
 // ---------------------------------------------------------------------------
 // POST — Reply to an existing email thread
@@ -90,6 +91,18 @@ export async function POST(request: NextRequest) {
       timestamp: new Date().toISOString(),
       signal_class: 'unclassified',
     })
+
+    // Inbox lifecycle folder (mig 242). A coordinator reply on a thread
+    // promotes it out of 'new_inquiry' since outbound count just went
+    // up. Best-effort — folder mis-classification must not fail the
+    // user-visible send.
+    try {
+      await updateThreadLifecycleFolder({
+        supabase,
+        venueId: auth.venueId,
+        threadId: (interaction.gmail_thread_id as string | null) ?? null,
+      })
+    } catch { /* non-fatal */ }
 
     return NextResponse.json({ success: true, messageId: sentMessageId })
   } catch (err) {

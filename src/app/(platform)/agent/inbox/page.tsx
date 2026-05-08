@@ -39,6 +39,9 @@ import {
   Pencil,
 } from 'lucide-react'
 
+import type { LifecycleFolder } from '@/lib/services/inbox/lifecycle'
+import { LIFECYCLE_LABELS } from '@/lib/services/inbox/lifecycle'
+
 // HTML → plain text for previews and collapsed body view. Outbound
 // drafts (Sage replies) are stored as HTML in interactions.full_body
 // and the first 300 chars get sliced into body_preview — which renders
@@ -80,6 +83,12 @@ interface Interaction {
   person_email?: string
   wedding_status?: string
   classification?: 'inquiry' | 'client' | 'vendor'
+  // Lifecycle folder (mig 242). Stamped server-side by the email
+  // pipeline + outbound API routes. Six values map to the six inbox
+  // tabs: new_inquiry / potential_client / client / vendor / advertiser
+  // / other. May be null on rows that pre-date the migration backfill —
+  // those show under 'Other' until the next thread-write recomputes them.
+  lifecycle_folder?: LifecycleFolder | null
   is_read?: boolean
   client_code?: string | null
   code_extension?: string | null
