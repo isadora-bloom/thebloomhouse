@@ -47,11 +47,28 @@ function redirectBack(
 /**
  * Compute which of the required scopes Google actually granted.
  * Returns the missing-scope list (empty when full coverage).
+ *
+ * Google canonicalizes the short OpenID Connect scopes when it
+ * returns the granted set: a request for `email` comes back as
+ * `https://www.googleapis.com/auth/userinfo.email`, and `profile`
+ * as `https://www.googleapis.com/auth/userinfo.profile`. Comparing
+ * literal strings without that mapping flags every successful
+ * grant as "missing email, profile" — a false positive that
+ * blocks the integration. We map both sides into a canonical form
+ * before checking.
  */
+const SCOPE_ALIASES: Record<string, string[]> = {
+  email: ['https://www.googleapis.com/auth/userinfo.email', 'email'],
+  profile: ['https://www.googleapis.com/auth/userinfo.profile', 'profile'],
+}
+
 function detectMissingScopes(grantedScope: string | null | undefined): string[] {
   if (!grantedScope) return [...GMAIL_OAUTH_SCOPES]
   const granted = new Set(grantedScope.split(/\s+/).filter(Boolean))
-  return GMAIL_OAUTH_SCOPES.filter((s) => !granted.has(s))
+  return GMAIL_OAUTH_SCOPES.filter((requested) => {
+    const accepted = SCOPE_ALIASES[requested] ?? [requested]
+    return !accepted.some((a) => granted.has(a))
+  })
 }
 
 export async function GET(request: NextRequest) {
