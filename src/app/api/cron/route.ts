@@ -239,7 +239,7 @@ async function runJob(job: JobName): Promise<unknown> {
       return fetchAllVenueTrends()
 
     case 'weather_forecast':
-      return fetchWeatherForAllVenues()
+      return runWeatherForecastWithTourStamp()
 
     case 'fred_daily_refresh':
     case 'economic_indicators':
@@ -724,6 +724,26 @@ async function runPruneMaintenance(): Promise<{
     bulk_read_anomaly: bulkReadResult,
     consumer_requests_expired: expiredResult,
   }
+}
+
+/**
+ * Tier-D #164 (2026-05-08). Wraps the weather_forecast cron handler
+ * with a per-tour weather-snapshot stamp pass. Same cron entry, two
+ * sub-jobs: (a) refresh forecasts for every venue (existing), then
+ * (b) stamp upcoming + recently-completed tours from the freshly-
+ * refreshed weather_data table. Zero added API cost — pure DB join.
+ */
+async function runWeatherForecastWithTourStamp() {
+  const forecastResult = await fetchWeatherForAllVenues()
+  let tourStamp: { tours_stamped: number; errors: string[] } = { tours_stamped: 0, errors: [] }
+  try {
+    const { stampTourWeather } = await import('@/lib/services/intel/tour-weather')
+    tourStamp = await stampTourWeather(createServiceClient())
+  } catch (err) {
+    console.error('[weather_forecast] tour stamp failed:', err)
+    tourStamp.errors.push(err instanceof Error ? err.message : String(err))
+  }
+  return { forecast: forecastResult, tour_stamp: tourStamp }
 }
 
 /**
