@@ -12,6 +12,7 @@ through Notion.
 | `dpa-reference.md` | #122 | Sub-processor list with DPA links + categories of personal data shared |
 | `vendor-security-review.md` | #127 | Bloom House security posture summary, intended for prospective customers asking "how secure are you?" |
 | `vulnerability-management.md` | #131 | Scanning + pen-test cadence, dependency monitoring, and our patch SLA |
+| `sla.md` | #137 | Uptime + support response commitments for multi / enterprise customers. Default contract; per-customer MSA can override. |
 
 These are reference docs, not playbooks. For active-incident
 playbooks see `INCIDENT.md` at the repo root. For day-to-day ops see
