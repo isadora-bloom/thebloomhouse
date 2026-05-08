@@ -37,7 +37,7 @@ import {
   Link2, ShoppingBag, Box,
   // Org admin
   Users, CreditCard, Building2, Layers,
-  MapPin, ShieldCheck, Eye, Database,
+  MapPin, ShieldCheck, Eye, Database, Gauge,
 } from 'lucide-react'
 
 export type NavMode = 'agent' | 'weddings' | 'intel' | 'sage'
@@ -262,6 +262,11 @@ export const MODE_INTEL: ModeConfig = {
       items: [
         { label: 'Sources & ROI', href: '/intel/sources', icon: TrendingUp },
         { label: 'ROI dashboard', href: '/intel/roi', icon: BarChart3 },
+        // Tier-D #173: pricing_history changelog. Was a write-only table
+        // until this surface — coordinator now sees the trajectory of
+        // their pricing decisions + can add why-it-changed notes that
+        // weight the elasticity insight.
+        { label: 'Pricing history', href: '/intel/pricing-history', icon: BarChart3 },
         { label: 'Lost Deals', href: '/intel/lost-deals', icon: XCircle },
         // Campaigns removed from nav 2026-05-03 (Stream ZZZ). Manual
         // campaign CRUD is superseded by /intel/sources attribution.
@@ -570,6 +575,10 @@ export const GEAR_GROUPS: GearGroup[] = [
     items: [
       { label: 'Super Admin', href: '/super-admin', icon: ShieldCheck, requiresRole: 'super_admin' },
       { label: 'Pipeline Health', href: '/super-admin/pipeline-health', icon: Activity, requiresRole: 'super_admin' },
+      // Tier-D bucket 2: cron_runs + metered_events were write-only until
+      // this page. Distinct from pipeline-health which focuses on per-stage
+      // throughput; this is the raw cron/counter telemetry.
+      { label: 'Observability', href: '/super-admin/observability', icon: Gauge, requiresRole: 'super_admin' },
       // Lowered to org_admin to match API authority (process route admits
        // org_admin within their org). Super-admin sees all venues; org_admin
        // sees their venues' requests.
