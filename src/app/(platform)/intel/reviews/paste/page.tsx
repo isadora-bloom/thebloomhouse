@@ -32,7 +32,7 @@ export default function ReviewsPastePage() {
   const [extractError, setExtractError] = useState<string | null>(null)
   const [reviews, setReviews] = useState<ExtractedReview[]>([])
   const [importing, setImporting] = useState(false)
-  const [imported, setImported] = useState<{ inserted: number; skipped: number; errors: string[] } | null>(null)
+  const [imported, setImported] = useState<{ inserted: number; skipped: number; errors: string[]; phrases_extracted?: number } | null>(null)
 
   async function extract() {
     if (text.trim().length < 50) {
@@ -80,7 +80,7 @@ export default function ReviewsPastePage() {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`)
-      setImported(json.summary)
+      setImported({ ...json.summary, phrases_extracted: json.phrases_extracted })
       setReviews([])
       setText('')
     } catch (e) {
@@ -108,11 +108,17 @@ export default function ReviewsPastePage() {
       </div>
 
       {imported && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-sm text-emerald-800">
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-sm text-emerald-800 space-y-1">
           <p className="font-medium">Imported {imported.inserted} review{imported.inserted === 1 ? '' : 's'}.</p>
-          {imported.skipped > 0 && <p className="mt-1">Skipped {imported.skipped} duplicate{imported.skipped === 1 ? '' : 's'}.</p>}
+          {typeof imported.phrases_extracted === 'number' && imported.phrases_extracted > 0 && (
+            <p>
+              Mined <span className="font-semibold">{imported.phrases_extracted}</span> phrase{imported.phrases_extracted === 1 ? '' : 's'} into your Voice DNA.{' '}
+              <a href="/intel/reviews" className="underline">Review approvals →</a>
+            </p>
+          )}
+          {imported.skipped > 0 && <p>Skipped {imported.skipped} duplicate{imported.skipped === 1 ? '' : 's'}.</p>}
           {imported.errors.length > 0 && (
-            <p className="mt-1 text-amber-700">{imported.errors.length} error{imported.errors.length === 1 ? '' : 's'} logged.</p>
+            <p className="text-amber-700">{imported.errors.length} error{imported.errors.length === 1 ? '' : 's'} logged.</p>
           )}
         </div>
       )}
@@ -180,7 +186,7 @@ export default function ReviewsPastePage() {
                 {importing ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Saving...
+                    Saving + mining phrases (can take a few minutes)...
                   </>
                 ) : (
                   <>
