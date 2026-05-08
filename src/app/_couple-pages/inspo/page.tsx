@@ -84,24 +84,30 @@ export default function InspoGalleryPage() {
 
   // ---- Fetch ----
   const fetchImages = useCallback(async () => {
-    if (!venueId) return
+    // 2026-05-08 privacy fix: filter by wedding_id so each couple only
+    // sees their own uploads. Defense-in-depth alongside the mig 238
+    // RLS tightening. Pre-fix the read filtered by venue_id only,
+    // which leaked every couple's inspiration to every other couple.
+    if (!venueId || !weddingId) return
     const { data, error } = await supabase
       .from('inspo_gallery')
       .select('*')
       .eq('venue_id', venueId)
+      .eq('wedding_id', weddingId)
       .order('created_at', { ascending: false })
 
     if (!error && data) {
       setImages(data as InspoImage[])
     }
     setLoading(false)
-  }, [supabase, venueId])
+  }, [supabase, venueId, weddingId])
 
   // BUG-04A: wait for venueId before firing fetch.
+  // 2026-05-08: also wait for weddingId so the wedding-scoped query has the value.
   useEffect(() => {
-    if (!venueId) return
+    if (!venueId || !weddingId) return
     fetchImages()
-  }, [venueId, fetchImages])
+  }, [venueId, weddingId, fetchImages])
 
   // ---- Filter ----
   const filteredImages = images.filter((img) => {

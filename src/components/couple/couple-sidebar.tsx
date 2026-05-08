@@ -75,7 +75,7 @@ export function buildCoupleSidebarSections(
         { label: 'Decor', href: `${base}/decor`, icon: Flower2 },
         { label: 'Photos', href: `${base}/photos`, icon: Camera },
         { label: 'Beauty', href: `${base}/beauty`, icon: Sparkles },
-        { label: 'Inspo', href: `${base}/inspo`, icon: Lightbulb },
+        { label: 'Inspiration', href: `${base}/inspo`, icon: Lightbulb },
       ],
     },
     {
@@ -94,8 +94,8 @@ export function buildCoupleSidebarSections(
       title: 'Wedding Details',
       items: [
         { label: 'Wedding Details', href: `${base}/wedding-details`, icon: Heart },
-        { label: 'Venue Inventory', href: `${base}/venue-inventory`, icon: Package },
-        { label: 'Saved Items', href: `${base}/picks`, icon: ShoppingBag },
+        { label: 'Venue Inclusions', href: `${base}/venue-inventory`, icon: Package },
+        { label: 'Recommended Buys', href: `${base}/picks`, icon: ShoppingBag },
       ],
     },
     {
