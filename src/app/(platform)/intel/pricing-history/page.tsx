@@ -82,18 +82,27 @@ export default function PricingHistoryPage() {
   }, [venueId])
 
   async function saveNote(id: string) {
-    const supabase = createClient()
-    const { error } = await supabase
-      .from('pricing_history')
-      .update({ notes: draftNote || null })
-      .eq('id', id)
-    if (error) {
-      setErr(error.message)
-      return
+    // Round 11 P0 fix (2026-05-08): pricing_history is RLS-locked
+    // append-only for authenticated (mig 142). Browser-client UPDATE
+    // gets denied silently. Route through the service-role PATCH
+    // endpoint which validates only `notes` is being changed.
+    try {
+      const res = await fetch(`/api/intel/pricing-history/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: draftNote || null }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`)
+      setRows((prev) => prev.map((r) => (r.id === id ? { ...r, notes: draftNote || null } : r)))
+      setEditingId(null)
+      setDraftNote('')
+    } catch (e) {
+      // Inline error display so the edit context survives. setErr would
+      // unmount the row + replace the page with the full-screen error.
+      console.error('[pricing-history] saveNote failed:', e)
+      alert(e instanceof Error ? e.message : 'Save failed')
     }
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, notes: draftNote || null } : r)))
-    setEditingId(null)
-    setDraftNote('')
   }
 
   if (loading) {
