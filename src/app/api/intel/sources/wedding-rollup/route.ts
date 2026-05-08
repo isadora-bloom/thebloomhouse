@@ -108,6 +108,20 @@ export async function GET(request: NextRequest) {
       .in('venue_id', venueIds)
     if (error) throw error
 
+    // Tier-C #129 — bulk weddings read; record on audit trail. The
+    // venue_id list captures the scope (single venue / org sweep).
+    if (!auth.isDemo) {
+      const { logRead } = await import('@/lib/services/activity-logger')
+      void logRead({
+        venueId: auth.venueId,
+        userId: auth.userId,
+        resource: 'weddings_rollup',
+        mode: 'bulk_read',
+        rowCount: (weddings ?? []).length,
+        details: { venueIds, scope: orgIdParam ? 'org' : venueIdParam ? 'venue' : 'self' },
+      })
+    }
+
     // ---- Aggregate to one row per (source_key, venue_id) ----
     // Server keeps the snake_case source_key — the coordinator-facing
     // label transformation happens client-side (formatSourceLabel).

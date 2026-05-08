@@ -107,6 +107,26 @@ export async function GET(
     )
   }
 
+  // Tier-C #129 — record this tier-1 read on the audit trail. Lead
+  // insights touch interactions/people/wedding bodies; a coordinator
+  // exfiltrating couple-level intel would show as a burst of these
+  // entries. Fire-and-forget; failure logs but doesn't block.
+  if (!demo) {
+    const { logRead } = await import('@/lib/services/activity-logger')
+    const platformAuth = await getPlatformAuth()
+    if (platformAuth) {
+      void logRead({
+        venueId,
+        weddingId,
+        userId: platformAuth.userId,
+        resource: 'lead_insights',
+        mode: 'view',
+        rowCount: 1,
+        details: { force, correlationId },
+      })
+    }
+  }
+
   // Run the 4 generators in parallel. Each one is independently
   // cache-fast-path — if the cache is fresh it returns without
   // calling Claude. Decay self-gates and returns null when the lead

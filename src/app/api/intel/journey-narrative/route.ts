@@ -39,6 +39,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
+  // Tier-C #129 — journey narrative pulls full wedding history
+  // (interactions + touchpoints + drafts). Tier-1 read.
+  if (!auth.isDemo) {
+    const { logRead } = await import('@/lib/services/activity-logger')
+    void logRead({
+      venueId: auth.venueId,
+      weddingId,
+      userId: auth.userId,
+      resource: 'journey_narrative',
+      mode: 'view',
+      rowCount: 1,
+    })
+  }
+
   try {
     const narrative = await generateOrFetch(supabase, weddingId)
     if (!narrative) {

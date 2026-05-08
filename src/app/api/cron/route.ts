@@ -635,11 +635,17 @@ async function runPruneMaintenance(): Promise<{
   telemetry: Awaited<ReturnType<typeof runTelemetryRetentionPrune>>
   rate_limits: { rows_deleted: number }
   brain_dump_stale: { rows_abandoned: number }
+  audit: { activity_log_deleted: number; errors: string[] }
+  bulk_read_anomaly: { users_flagged: number; notifications_created: number; errors: string[] }
 }> {
-  const [telemetry, rate_limits, brain_dump_stale] = await Promise.allSettled([
+  const { runAuditRetentionPrune } = await import('@/lib/services/audit-retention')
+  const { detectBulkReadAnomalies } = await import('@/lib/services/bulk-read-anomaly')
+  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead] = await Promise.allSettled([
     runTelemetryRetentionPrune(),
     runPruneRateLimits(),
     runPruneBrainDumpStale(),
+    runAuditRetentionPrune(),
+    detectBulkReadAnomalies(),
   ])
 
   const telemetryResult =
@@ -672,7 +678,29 @@ async function runPruneMaintenance(): Promise<{
           return { rows_abandoned: 0 }
         })()
 
-  return { telemetry: telemetryResult, rate_limits: rateLimitsResult, brain_dump_stale: brainDumpStaleResult }
+  const auditResult =
+    audit.status === 'fulfilled'
+      ? audit.value
+      : (() => {
+          console.error('[prune_maintenance] audit prune failed:', audit.reason)
+          return { activity_log_deleted: 0, errors: [String(audit.reason)] }
+        })()
+
+  const bulkReadResult =
+    bulkRead.status === 'fulfilled'
+      ? bulkRead.value
+      : (() => {
+          console.error('[prune_maintenance] bulk-read anomaly detect failed:', bulkRead.reason)
+          return { users_flagged: 0, notifications_created: 0, errors: [String(bulkRead.reason)] }
+        })()
+
+  return {
+    telemetry: telemetryResult,
+    rate_limits: rateLimitsResult,
+    brain_dump_stale: brainDumpStaleResult,
+    audit: auditResult,
+    bulk_read_anomaly: bulkReadResult,
+  }
 }
 
 /**
