@@ -36,38 +36,49 @@ export default function CoupleLoginPage() {
   // Load venue branding from the CSS custom properties set by the couple layout
   useEffect(() => {
     async function loadBranding() {
-      const supabase = createClient()
+      // Round 12 fix #3 (2026-05-08): wrap in try/catch with a default
+      // fallback so a network error or RLS denial doesn't leave the
+      // skeleton spinning forever. Form area renders regardless; this
+      // protects the brand area from looking frozen.
+      try {
+        const supabase = createClient()
+        const params = new URLSearchParams(window.location.search)
+        const slug = params.get('venue') || 'hawthorne-manor'
 
-      // Try to determine venue slug from URL or cookie
-      const params = new URLSearchParams(window.location.search)
-      const slug = params.get('venue') || 'hawthorne-manor'
+        const { data: venue } = await supabase
+          .from('venues')
+          .select('id, name, slug')
+          .eq('slug', slug)
+          .single()
 
-      const { data: venue } = await supabase
-        .from('venues')
-        .select('id, name, slug')
-        .eq('slug', slug)
-        .single()
+        if (!venue) {
+          setBranding({
+            venueName: 'Wedding Portal',
+            logoUrl: null,
+            portalTagline: null,
+          })
+          return
+        }
 
-      if (!venue) {
+        const { data: config } = await supabase
+          .from('venue_config')
+          .select('business_name, logo_url, portal_tagline')
+          .eq('venue_id', venue.id)
+          .single()
+
+        setBranding({
+          venueName: config?.business_name || venue.name,
+          logoUrl: config?.logo_url || null,
+          portalTagline: config?.portal_tagline || null,
+        })
+      } catch (err) {
+        console.warn('[login] branding load failed:', err)
         setBranding({
           venueName: 'Wedding Portal',
           logoUrl: null,
           portalTagline: null,
         })
-        return
       }
-
-      const { data: config } = await supabase
-        .from('venue_config')
-        .select('business_name, logo_url, portal_tagline')
-        .eq('venue_id', venue.id)
-        .single()
-
-      setBranding({
-        venueName: config?.business_name || venue.name,
-        logoUrl: config?.logo_url || null,
-        portalTagline: config?.portal_tagline || null,
-      })
     }
 
     loadBranding()

@@ -15,6 +15,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { Users2, Check, X } from 'lucide-react'
 
+// Round 12 fix #1 (2026-05-08): the click-outside handler used to call
+// commit() - but commit() was recreated each render and the effect's
+// deps were [open, value], so the registered handler kept a stale
+// commit() closure that read the stale draft. User typing in the
+// custom input + clicking outside committed an empty string. Fix is
+// to keep a ref to the latest commit so the listener always invokes
+// the current closure.
+
 const QUICK_PICKS = [
   'Me',
   'Partner',
@@ -36,13 +44,35 @@ export function AssignedToPicker({ value, isCompleted, onChange }: AssignedToPic
   const [draft, setDraft] = useState(value ?? '')
   const ref = useRef<HTMLDivElement>(null)
 
-  useEffect(() => { setDraft(value ?? '') }, [value])
+  // Sync draft to value when the picker is closed. Mid-edit (open=true)
+  // we leave the draft alone so an external update from another tab
+  // doesn't stomp the user's typing. Worst case: commit overwrites the
+  // newer value, which is acceptable for last-write-wins assignment.
+  useEffect(() => {
+    if (!open) setDraft(value ?? '')
+  }, [open, value])
+
+  function commit() {
+    const trimmed = draft.trim().slice(0, 80)
+    if (trimmed === (value ?? '')) {
+      setOpen(false)
+      return
+    }
+    onChange(trimmed || null)
+    setOpen(false)
+  }
+
+  // Hold a ref to the latest commit so the click-outside handler always
+  // reads current state, not the closure from when the listener was
+  // registered.
+  const commitRef = useRef(commit)
+  commitRef.current = commit
 
   useEffect(() => {
     if (!open) return
     function handler(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) {
-        commit()
+        commitRef.current()
       }
     }
     function key(e: KeyboardEvent) {
@@ -57,18 +87,7 @@ export function AssignedToPicker({ value, isCompleted, onChange }: AssignedToPic
       window.removeEventListener('mousedown', handler)
       window.removeEventListener('keydown', key)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, value])
-
-  function commit() {
-    const trimmed = draft.trim().slice(0, 80)
-    if (trimmed === (value ?? '')) {
-      setOpen(false)
-      return
-    }
-    onChange(trimmed || null)
-    setOpen(false)
-  }
 
   function pick(label: string) {
     setDraft(label)

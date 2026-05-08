@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
-// Nav structure — grouped sections per couple portal spec
+// Nav structure - grouped sections per couple portal spec
 // ---------------------------------------------------------------------------
 
 interface NavItem {
@@ -115,7 +115,7 @@ export function buildCoupleSidebarSections(
         { label: 'Messages', href: `${base}/messages`, icon: MessagesSquare },
       ],
     },
-    // Tier-B #59A — surface the day-of view ONLY in the final week.
+    // Tier-B #59A - surface the day-of view ONLY in the final week.
     // Outside that window the page itself renders a placeholder so a
     // direct URL still resolves; this gate keeps the sidebar focused.
     ...(showDayOf
@@ -170,7 +170,7 @@ interface CoupleSidebarProps {
   mobileOpen: boolean
   /** Callback to close the mobile drawer (used on link click / overlay click). */
   onMobileClose: () => void
-  /** Wedding date string (ISO) — used to show a badge on Final Review when within 6 weeks. */
+  /** Wedding date string (ISO) - used to show a badge on Final Review when within 6 weeks. */
   weddingDate?: string | null
 }
 
@@ -201,11 +201,11 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
     return Math.round(ms / (1000 * 60 * 60 * 24))
   })()
 
-  // Tier-B #59A — surface Day-of in the final week. Outside that window
+  // Tier-B #59A - surface Day-of in the final week. Outside that window
   // the URL still resolves but the page renders a placeholder so
   // direct-link clicks aren't a dead end.
   const showDayOf = daysUntilWedding !== null && daysUntilWedding >= -1 && daysUntilWedding <= 7
-  // Tier-D #190 — "After Your Wedding" section visible from wedding day
+  // Tier-D #190 - "After Your Wedding" section visible from wedding day
   // onward. -1 catches the day-of edge case (couple uploading evening of).
   const showAfterWedding = daysUntilWedding !== null && daysUntilWedding <= 0
 
@@ -217,14 +217,11 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
       ? `${daysUntilWedding}d`
       : undefined
 
-  // Filter out post-wedding sections until they're useful. The "After
-  // Your Wedding" section becomes visible once the wedding has passed
-  // (daysUntilWedding <= 0). Pre-wedding it's just one Day-of Memories
-  // link sitting in the sidebar with nothing to do.
-  const visibleSections =
-    daysUntilWedding !== null && daysUntilWedding > 0
-      ? sections.filter((s) => s.title !== 'After Your Wedding')
-      : sections
+  // Round 12 #a (2026-05-08): the redundant visibleSections post-filter
+  // that previously stripped 'After Your Wedding' is gone. The
+  // showAfterWedding gate inside buildCoupleSidebarSections already
+  // enforces the same condition; the post-filter was dead code.
+  const visibleSections = sections
 
   // Inject badge into Final Review nav item
   if (finalReviewBadge) {
@@ -346,7 +343,7 @@ export function CoupleSidebar({ base, mobileOpen, onMobileClose, weddingDate }: 
         </div>
       )}
 
-      {/* Desktop sidebar — fixed left, below top bar */}
+      {/* Desktop sidebar - fixed left, below top bar */}
       <aside
         className="hidden lg:block fixed left-0 top-16 bottom-0 w-64 bg-white border-r z-20 no-print"
         style={{ borderColor: 'rgba(125, 132, 113, 0.15)' }}

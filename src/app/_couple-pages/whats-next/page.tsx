@@ -1,7 +1,7 @@
 'use client'
 
 /**
- * Tier-D #197 — bookmark-able "what's next" landing.
+ * Tier-D #197 - bookmark-able "what's next" landing.
  *
  * Sarah-portal feedback: couples want a single screen they can tab-back-to
  * that says "do this next." The dashboard tries to do everything (stats +
@@ -52,11 +52,18 @@ const URGENCY_STYLE = {
 }
 
 function daysUntil(iso: string | null): number | null {
+  // Round 12 #d (2026-05-08): pin both sides to local-midnight to avoid
+  // off-by-one drift around the couple's TZ midnight. ISO date-only
+  // strings parse as UTC midnight; without local pinning, "due tomorrow"
+  // could read as "due today" for couples east of UTC.
   if (!iso) return null
-  const target = new Date(iso).getTime()
+  const datePart = iso.slice(0, 10)
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart)
+  if (!m) return null
+  const target = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
   const today = new Date()
   today.setHours(0, 0, 0, 0)
-  return Math.round((target - today.getTime()) / (24 * 60 * 60 * 1000))
+  return Math.round((target.getTime() - today.getTime()) / (24 * 60 * 60 * 1000))
 }
 
 function fmtUntil(d: number): string {
@@ -74,7 +81,17 @@ export default function WhatsNextPage() {
   const [cards, setCards] = useState<NextCard[]>([])
 
   useEffect(() => {
-    if (!ctx?.weddingId) return
+    // Round 12 fix #2 (2026-05-08): if the context has resolved but
+    // there's no weddingId (coordinator viewing the URL, couple whose
+    // people row hasn't been seeded), the page used to spin forever.
+    // Now we resolve loading=false on the empty path so the empty
+    // state can render.
+    if (ctx.loading) return
+    if (!ctx.weddingId) {
+      setLoading(false)
+      setCards([])
+      return
+    }
     let cancelled = false
     ;(async () => {
       try {
@@ -207,7 +224,7 @@ export default function WhatsNextPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [ctx?.weddingId, ctx?.slug, ctx?.weddingDate])
+  }, [ctx.weddingId, ctx.slug, ctx.weddingDate, ctx.loading])
 
   if (loading) {
     return (
