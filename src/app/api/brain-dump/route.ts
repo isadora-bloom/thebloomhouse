@@ -962,7 +962,20 @@ export async function runCsvImport(args: {
       // ranked match; if no detector hits, we still pick the highest
       // (over 50) to give the import a chance — the coordinator can
       // override the platform on a future re-run.
-      const detection2 = detectPlatformSource(headerRow, dataRows.slice(0, 30))
+      // C-INGEST-2 tiebreak: pull the venue's declared data sources from
+      // venue_config.feature_flags.data_sources so a generic Sheets export
+      // that scores tied between (e.g.) HoneyBook + AislePlanner picks the
+      // one the venue actually uses.
+      const { data: vcRow } = await supabase
+        .from('venue_config')
+        .select('feature_flags')
+        .eq('venue_id', venueId)
+        .maybeSingle()
+      const ff = ((vcRow?.feature_flags ?? {}) as Record<string, unknown>)
+      const preferredKeys = Array.isArray(ff.data_sources)
+        ? new Set((ff.data_sources as unknown[]).filter((v): v is string => typeof v === 'string'))
+        : undefined
+      const detection2 = detectPlatformSource(headerRow, dataRows.slice(0, 30), preferredKeys)
       const best = detection2.best ?? detection2.all[0]
       if (!best || best.confidence < 50) {
         return {

@@ -63,7 +63,15 @@ export interface DetectionResult {
 
 export function detectPlatformSource(
   headers: readonly string[],
-  sampleRows: readonly string[][]
+  sampleRows: readonly string[][],
+  /**
+   * C-INGEST-2 tiebreak. Optional list of detector keys the venue has
+   * declared they collect from (`venue_config.feature_flags.data_sources`).
+   * When two detectors score within 5 points, the one in this set wins.
+   * If neither or both are in the set, the top-scoring detector wins as
+   * before. No effect when scores are decisively different.
+   */
+  preferredKeys?: ReadonlySet<string>
 ): DetectionResult {
   const matches: PlatformMatch[] = []
   for (const det of DETECTORS) {
@@ -75,6 +83,16 @@ export function detectPlatformSource(
     }
   }
   matches.sort((a, b) => b.confidence - a.confidence)
+
+  // Tiebreak pass: if the runner-up is within 5 of the leader and the
+  // runner-up is in preferredKeys but the leader isn't, swap them.
+  if (preferredKeys && preferredKeys.size > 0 && matches.length >= 2) {
+    const [a, b] = matches
+    if (a.confidence - b.confidence <= 5 && !preferredKeys.has(a.detector.key) && preferredKeys.has(b.detector.key)) {
+      matches[0] = b
+      matches[1] = a
+    }
+  }
 
   const best = matches[0] && matches[0].confidence >= MIN_CONFIDENT ? matches[0] : null
   const alternatives = matches.slice(best ? 1 : 0, best ? 3 : 2)

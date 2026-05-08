@@ -198,7 +198,7 @@ export default function WeatherToursPage() {
       )}
 
       <div className="text-xs text-sage-400 pt-4 border-t border-border">
-        Statistical significance (Fisher's exact / chi-sq) at this venue's tour count is generally too low to act on; treat the rates as directional. Cross-venue rollups give better N — see /intel/portfolio for portfolio-level views.
+        Statistical significance (Fisher's exact / chi-sq) at this venue's tour count is generally too low to act on; treat the rates as directional. Cross-venue rollups give better N. See /intel/portfolio for portfolio-level views.
       </div>
     </div>
   )

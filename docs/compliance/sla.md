@@ -10,7 +10,7 @@ This is the written commitment Bloom House makes to enterprise +
 multi-venue customers regarding uptime, support response, and
 incident handling. Customers below the **multi** plan tier follow
 the same operational practices in spirit but do not have a
-contractual SLA — they get best-effort support.
+contractual SLA. They get best-effort support.
 
 The numbers in this draft are **starting commitments**, calibrated
 to what a small operations team can credibly deliver. They tighten
@@ -36,7 +36,7 @@ What counts as downtime:
 
 What does NOT count as downtime:
 - Slow responses inside the 95th-percentile latency budget
-- Third-party outages (Anthropic, OpenAI, Stripe, Resend, Google) —
+- Third-party outages (Anthropic, OpenAI, Stripe, Resend, Google).
   Bloom serves cached responses + degraded paths, but if the
   underlying provider is down, downstream features are too. We
   surface a status banner to coordinators instead.
@@ -46,7 +46,7 @@ How we measure: Vercel uptime monitoring + an internal canary
 heartbeat that pings login + couple-portal + the Sage API every 60
 seconds. Monthly uptime calculation aggregates the heartbeat data.
 
-Status page: TBD — `status.thebloomhouse.ai` (placeholder for
+Status page: TBD at `status.thebloomhouse.ai` (placeholder for
 post-Wedgewood-deal commitment when the operational complexity
 warrants a public status page).
 
@@ -153,7 +153,7 @@ Honest disclosure of out-of-scope items:
   brain-dump that import bad data and lock up workflows.
 - **Sub-processor outages where we serve degraded paths
   successfully:** Anthropic down, Sage replies fall back to
-  templated responses — that's a feature, not downtime.
+  templated responses, that's a feature, not downtime.
 - **Beta features:** anything labeled "beta" in the UI is excluded
   from SLA. Beta features are released for feedback, not for
   production reliance.
@@ -191,5 +191,5 @@ unresolved support issue:
 
 - **Primary contact:** isadora@rixeymanor.com
 - **Future SLA escalation:** sla@thebloomhouse.ai (once configured)
-- **Emergency only:** TBD — will be provisioned when the team
+- **Emergency only:** TBD. Will be provisioned when the team
   establishes 24/7 on-call rotation.
