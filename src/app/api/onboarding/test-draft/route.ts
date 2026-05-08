@@ -18,6 +18,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // Tier-C #128 — per-user rate limit. test-draft fires callAI on every
+  // tweak of the personality sliders; tighter than steady-state APIs
+  // because the UI invokes it interactively.
+  const { checkRateLimit, secondsUntil } = await import('@/lib/rate-limit')
+  const rl = await checkRateLimit({
+    key: `onboarding-test-draft:${auth.userId}`,
+    limit: 20,
+    windowSec: 60,
+  })
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'Too many test drafts — wait a few seconds before trying again' },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) },
+      },
+    )
+  }
+
   try {
     const body = await request.json()
     const { venueName, personality, faqs, mockInquiry } = body

@@ -40,6 +40,27 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { action } = body
 
+    // Tier-C #128 — per-user rate limit on AI-spend actions. analyze
+    // and ask both call callAI (vision + chat). Plain creates skip the
+    // limit since they don't fire AI.
+    if (action === 'analyze' || action === 'ask') {
+      const { checkRateLimit, secondsUntil } = await import('@/lib/rate-limit')
+      const rl = await checkRateLimit({
+        key: `couple-contracts:${auth.userId}`,
+        limit: 20,
+        windowSec: 60,
+      })
+      if (!rl.ok) {
+        return NextResponse.json(
+          { error: 'Too many requests — please wait a moment' },
+          {
+            status: 429,
+            headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) },
+          },
+        )
+      }
+    }
+
     // ---- Action: analyze — run AI extraction on a contract ----
     if (action === 'analyze') {
       return handleAnalyze(body, auth)

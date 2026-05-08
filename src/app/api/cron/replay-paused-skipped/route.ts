@@ -165,10 +165,10 @@ async function buildRecap(): Promise<RecapResult> {
 }
 
 export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get('authorization')
-  const expected = `Bearer ${process.env.CRON_SECRET}`
-  if (!process.env.CRON_SECRET || authHeader !== expected) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { verifyCronAuth } = await import('@/lib/cron-auth')
+  const authResult = verifyCronAuth(request, { alwaysDestructive: true })
+  if (!authResult.ok) {
+    return NextResponse.json({ error: authResult.error }, { status: authResult.status })
   }
 
   try {

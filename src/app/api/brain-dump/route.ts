@@ -228,6 +228,26 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // Tier-C #128 — per-user rate limit on AI-spend endpoints. Cost-
+  // ceiling already covers venue-level cap, but a malicious or runaway
+  // client could still rack up calls inside the cap. 30/min is generous
+  // for a human at the keyboard and tight enough to catch a runaway.
+  const { checkRateLimit, secondsUntil } = await import('@/lib/rate-limit')
+  const rl = await checkRateLimit({
+    key: `brain-dump:${auth.userId}`,
+    limit: 30,
+    windowSec: 60,
+  })
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'Too many requests — slow down for a moment' },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) },
+      },
+    )
+  }
+
   let payload: { rawText?: string; inputType?: string }
   try {
     payload = await request.json()

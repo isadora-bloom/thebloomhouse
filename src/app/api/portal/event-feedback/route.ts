@@ -25,6 +25,23 @@ export async function POST(request: NextRequest) {
     const auth = await getPlatformAuth()
     if (!auth) return unauthorized()
 
+    // Tier-C #128 — per-user rate limit. callAI fires per request.
+    const { checkRateLimit, secondsUntil } = await import('@/lib/rate-limit')
+    const rl = await checkRateLimit({
+      key: `event-feedback:${auth.userId}`,
+      limit: 30,
+      windowSec: 60,
+    })
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'Too many requests — try again in a moment' },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) },
+        },
+      )
+    }
+
     const body = await request.json()
     const { eventFeedbackId } = body
 

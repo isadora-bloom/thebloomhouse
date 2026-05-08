@@ -1927,14 +1927,6 @@ async function runCorrelationAndWeatherCancellation(): Promise<{
 // ---------------------------------------------------------------------------
 
 export async function GET(request: NextRequest) {
-  // Verify cron secret
-  const authHeader = request.headers.get('authorization')
-  const expected = `Bearer ${process.env.CRON_SECRET}`
-
-  if (!process.env.CRON_SECRET || authHeader !== expected) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
   const { searchParams } = new URL(request.url)
   const job = searchParams.get('job') as JobName | null
 
@@ -1943,6 +1935,15 @@ export async function GET(request: NextRequest) {
       { error: `Invalid job. Must be one of: ${VALID_JOBS.join(', ')}` },
       { status: 400 }
     )
+  }
+
+  // Tier-C #126 two-tier cron auth. The destructive secondary kicks in
+  // for the merge / prune / outbound jobs when CRON_SECRET_DESTRUCTIVE
+  // is configured; otherwise behaves identically to single-secret.
+  const { verifyCronAuth } = await import('@/lib/cron-auth')
+  const authResult = verifyCronAuth(request, { jobName: job })
+  if (!authResult.ok) {
+    return NextResponse.json({ error: authResult.error }, { status: authResult.status })
   }
 
   // OPS-21.2.3: every cron tick gets a cron_runs row via trackCronRun.

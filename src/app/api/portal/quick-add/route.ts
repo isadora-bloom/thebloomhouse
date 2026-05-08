@@ -134,6 +134,25 @@ export async function POST(request: NextRequest) {
     const auth = await getPlatformAuth()
     if (!auth) return unauthorized()
 
+    // Tier-C #128 — per-user rate limit on AI-spend endpoint. quick-add
+    // calls callAIVision per upload; cost-ceiling caps venue-level spend
+    // but a runaway client inside the cap is still expensive.
+    const { checkRateLimit, secondsUntil } = await import('@/lib/rate-limit')
+    const rl = await checkRateLimit({
+      key: `quick-add:${auth.userId}`,
+      limit: 20,
+      windowSec: 60,
+    })
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'Too many uploads — wait a moment before trying again' },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(secondsUntil(rl.resetAt)) },
+        },
+      )
+    }
+
     const formData = await request.formData()
     const file = formData.get('file') as File | null
     const pastedData = formData.get('pastedData') as string | null
