@@ -24,6 +24,7 @@ import { InstagramDetector } from './instagram'
 import { PinterestDetector } from './pinterest'
 import { GoogleBusinessDetector } from './google-business'
 import { FacebookDetector } from './facebook'
+import { HoneyBookDetector } from './honeybook'
 
 const DETECTORS: PlatformDetector[] = [
   TheKnotDetector,
@@ -32,6 +33,7 @@ const DETECTORS: PlatformDetector[] = [
   PinterestDetector,
   GoogleBusinessDetector,
   FacebookDetector,
+  HoneyBookDetector,
 ]
 
 /** Confidence threshold below which we call it "unknown" and ask. */

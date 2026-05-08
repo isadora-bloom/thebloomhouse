@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createHash } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { classifyBrainDump, routeBrainDump } from '@/lib/services/brain-dump'
@@ -266,6 +267,57 @@ export async function POST(request: NextRequest) {
     : 'text'
 
   const supabase = createServiceClient()
+  const attachment = extractAttachmentMeta(rawText)
+
+  // C-INGEST-3 (2026-05-08). Idempotency on re-upload. Hash the canonical
+  // input — for attachments that's the file bytes (the [Attached file: ...]
+  // preamble carries a per-upload UUID path that breaks naive text-hash
+  // equality), for text-only that's rawText itself. If the same
+  // (venue_id, content_hash) was processed in the last 24h, return the
+  // existing entry instead of burning another LLM round-trip.
+  let contentHash: string | null = null
+  try {
+    if (attachment) {
+      const { data: blob } = await supabase.storage.from('brain-dump').download(attachment.path)
+      if (blob) {
+        const buf = Buffer.from(await blob.arrayBuffer())
+        contentHash = createHash('sha256').update(buf).digest('hex')
+      }
+    }
+    if (!contentHash) {
+      contentHash = createHash('sha256').update(rawText).digest('hex')
+    }
+  } catch (err) {
+    console.warn('[brain-dump] hash compute failed; skipping dedup probe:', err)
+    contentHash = null
+  }
+
+  if (contentHash) {
+    const dedupCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    const { data: dup } = await supabase
+      .from('brain_dump_entries')
+      .select('id, parse_status, clarification_question, created_at')
+      .eq('venue_id', auth.venueId)
+      .eq('content_hash', contentHash)
+      .gte('created_at', dedupCutoff)
+      .neq('parse_status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (dup) {
+      const ageHours = Math.floor((Date.now() - new Date(dup.created_at as string).getTime()) / 36e5)
+      return NextResponse.json({
+        entryId: dup.id,
+        intent: 'duplicate_upload',
+        confidence: 100,
+        needsClarification: dup.parse_status === 'needs_clarification',
+        clarificationQuestion: dup.clarification_question,
+        deduped: true,
+        message: `Already processed ${ageHours === 0 ? 'minutes' : `${ageHours} hour${ageHours === 1 ? '' : 's'}`} ago. Open the prior entry instead of re-running.`,
+        priorStatus: dup.parse_status,
+      })
+    }
+  }
 
   // 1. Persist the raw entry so we have an id even if a later step fails.
   const { data: entry, error: insertErr } = await supabase
@@ -276,14 +328,13 @@ export async function POST(request: NextRequest) {
       raw_input: rawText,
       input_type: inputType,
       parse_status: 'pending',
+      content_hash: contentHash,
     })
     .select('id')
     .single()
   if (insertErr || !entry) {
     return NextResponse.json({ error: insertErr?.message ?? 'Failed to record entry' }, { status: 500 })
   }
-
-  const attachment = extractAttachmentMeta(rawText)
 
   // 1.5 URL fast path (T5-ι.3). When the coordinator pastes nothing
   // but a URL (or a URL + trivial preamble), fetch the page, extract
@@ -388,6 +439,113 @@ export async function POST(request: NextRequest) {
       // Fetch failed — fall through to standard text classifier so the
       // bare URL still records something (the classifier may decide
       // it's an operational note, ambiguous, etc.).
+    }
+  }
+
+  // 2a. JSON fast path — bring-your-own-scraper contract (C-INGEST-4).
+  // Documented at docs/ingest/scraper-contract.md. Any 3rd-party tool
+  // (Phyllo, Hexomatic, custom IG scraper, etc.) that emits JSON in the
+  // contract shape lands directly in tangential_signals via the existing
+  // identity-import path. Vision-extracted signals already auto-import
+  // without propose-and-confirm; structured-JSON signals follow that
+  // pattern.
+  if (attachment && (attachment.type === 'application/json' || attachment.name.toLowerCase().endsWith('.json'))) {
+    const fileText = await readAttachedFileText(supabase, attachment.path)
+    if (fileText) {
+      let parsed: { source?: string; venue_id?: string; captured_at?: string; rows?: unknown[] } | null = null
+      try {
+        parsed = JSON.parse(fileText)
+      } catch (err) {
+        await supabase.from('brain_dump_entries').update({
+          parse_status: 'needs_clarification',
+          clarification_question: 'Could not parse the attached JSON. Re-export from your tool and try again.',
+          parse_result: { json_parse_error: err instanceof Error ? err.message : String(err) },
+          parsed_at: new Date().toISOString(),
+        }).eq('id', entry.id)
+        return NextResponse.json({
+          entryId: entry.id,
+          intent: 'json_parse_failed',
+          confidence: 0,
+          needsClarification: true,
+          clarificationQuestion: 'Could not parse the attached JSON.',
+        })
+      }
+
+      // Envelope validation. Empty rows is a no-op success, not an error.
+      const rowsRaw = Array.isArray(parsed?.rows) ? parsed!.rows : null
+      if (!rowsRaw) {
+        await supabase.from('brain_dump_entries').update({
+          parse_status: 'needs_clarification',
+          clarification_question: 'JSON did not match the scraper contract (no rows[] array). See docs/ingest/scraper-contract.md.',
+          parse_result: { contract_violation: 'missing rows[] array', sample: parsed },
+          parsed_at: new Date().toISOString(),
+        }).eq('id', entry.id)
+        return NextResponse.json({
+          entryId: entry.id,
+          intent: 'json_contract_violation',
+          confidence: 0,
+          needsClarification: true,
+          clarificationQuestion: 'JSON missing rows[] array.',
+        })
+      }
+
+      // Cross-venue safety: if envelope specifies venue_id, it must
+      // match auth scope. Without this check, a leaked JSON could
+      // re-target signals to a venue the user can read but not write.
+      if (parsed?.venue_id && parsed.venue_id !== auth.venueId) {
+        return NextResponse.json({ error: 'venue_id in JSON does not match auth scope' }, { status: 403 })
+      }
+
+      const candidates: Array<Parameters<typeof importIdentityCandidates>[0]['candidates'][number]> = []
+      const errors: string[] = []
+      for (let i = 0; i < rowsRaw.length; i++) {
+        const r = rowsRaw[i] as Record<string, unknown>
+        const ident = (r.extracted_identity ?? {}) as Record<string, unknown>
+        const hasIdentField = Boolean(
+          ident.first_name || ident.last_name || ident.username || ident.handle ||
+          ident.email_fragment || ident.phone_fragment,
+        )
+        if (!hasIdentField) {
+          errors.push(`row ${i}: extracted_identity has no identifying field`)
+          continue
+        }
+        candidates.push({
+          first_name: typeof ident.first_name === 'string' ? ident.first_name : undefined,
+          last_name: typeof ident.last_name === 'string' ? ident.last_name : undefined,
+          username: typeof ident.username === 'string' ? ident.username : undefined,
+          handle: typeof ident.handle === 'string' ? ident.handle : undefined,
+          platform: typeof parsed?.source === 'string' ? parsed.source : undefined,
+          context: typeof r.source_context === 'string' ? r.source_context : undefined,
+          signal_type: typeof r.signal_type === 'string' ? r.signal_type : 'other',
+        })
+      }
+
+      const summary = await importIdentityCandidates({
+        supabase,
+        venueId: auth.venueId,
+        candidates,
+        sourceEntryId: entry.id,
+        sourceContext: typeof parsed?.source === 'string' ? `Imported via scraper-contract from ${parsed.source}` : 'scraper_json',
+        signalDate: typeof parsed?.captured_at === 'string' ? parsed.captured_at : null,
+      })
+
+      await supabase.from('brain_dump_entries').update({
+        parse_status: 'confirmed',
+        parse_result: { scraper_json: { source: parsed?.source, captured_at: parsed?.captured_at, rowCount: rowsRaw.length }, summary, errors },
+        routed_to: [{ table: 'tangential_signals', action: `scraper_import:${summary.written}`, id: null }],
+        parsed_at: new Date().toISOString(),
+        resolved_at: new Date().toISOString(),
+      }).eq('id', entry.id)
+
+      return NextResponse.json({
+        entryId: entry.id,
+        intent: 'scraper_json_imported',
+        confidence: 100,
+        needsClarification: false,
+        importSummary: summary,
+        rowsParsed: rowsRaw.length,
+        errors,
+      })
     }
   }
 
