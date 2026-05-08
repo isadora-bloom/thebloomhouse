@@ -44,11 +44,20 @@ type SubmitState =
       intent: string
       clarification: string | null
       importSummary?: ImportSummaryShape | null
-      // When the route returns needsClarification with a CSV-preview
-      // intent, we surface an inline Confirm button so the coordinator
-      // doesn't have to navigate to /agent/notifications. Set when
-      // intent ends in '_preview' and entryId is present.
-      pendingConfirm?: { entryId: string; previewRows: number; intent: string } | null
+      // 2026-05-08 (Isadora feedback): inline confirm for ANY
+      // actionable propose-and-confirm intent, not just CSV preview.
+      pendingConfirm?: {
+        entryId: string
+        intent: string
+        previewRows?: number
+        confirmLabel?: string
+      } | null
+      // Deep-link destination for "go where this lives now" affordance.
+      nextHref?: string | null
+      nextLabel?: string | null
+      // Q&A help-mode answer (intent='help_question'). Bubble renders
+      // the answer + clickable link tiles.
+      helpAnswer?: { body: string; links: Array<{ label: string; href: string }> } | null
     }
   | { kind: 'confirming'; entryId: string }
   | { kind: 'error'; message: string }
