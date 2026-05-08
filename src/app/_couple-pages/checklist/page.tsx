@@ -198,6 +198,11 @@ export default function ChecklistPage() {
   const [form, setForm] = useState<ChecklistFormData>(EMPTY_FORM)
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [hideCompleted, setHideCompleted] = useState(false)
+  // A7 + A8 (2026-05-08): Essentials / All toggle. Essentials hides
+  // items due more than 60 days out so couples 6+ months from their
+  // wedding don't see "buy thank-you cards" alongside their next
+  // critical tasks. Default 'essentials'; one-click escape to 'all'.
+  const [view, setView] = useState<'essentials' | 'all'>('essentials')
   const [searchQuery, setSearchQuery] = useState('')
   const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set())
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({})
@@ -287,9 +292,19 @@ export default function ChecklistPage() {
 
   // ---- Filtering ----
   const filteredItems = useMemo(() => {
+    const sixtyDaysOut = new Date()
+    sixtyDaysOut.setDate(sixtyDaysOut.getDate() + 60)
     return items.filter((item) => {
       if (hideCompleted && item.is_completed) return false
       if (categoryFilter !== 'all' && item.category !== categoryFilter) return false
+      // Essentials gate: hide items due more than 60 days out. Items
+      // with no due_date are ALWAYS shown (treated as flexible).
+      // Overdue + no-date + due-soon all surface; far-future items
+      // hide until the toggle flips to 'all'.
+      if (view === 'essentials' && !item.is_completed && item.due_date) {
+        const due = new Date(item.due_date)
+        if (due > sixtyDaysOut) return false
+      }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase()
         if (
@@ -302,7 +317,7 @@ export default function ChecklistPage() {
       }
       return true
     })
-  }, [items, hideCompleted, categoryFilter, searchQuery])
+  }, [items, hideCompleted, categoryFilter, searchQuery, view])
 
   // ---- Group by category ----
   const groupedItems = useMemo(() => {
@@ -599,6 +614,35 @@ export default function ChecklistPage() {
 
       {/* Filter Bar */}
       <div className="flex flex-wrap items-center gap-3">
+        {/* A7+A8: Essentials / All toggle. Default 'essentials' hides
+            items due >60 days out. Click 'All' to see the full timeline. */}
+        <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+          <button
+            type="button"
+            onClick={() => setView('essentials')}
+            className={cn(
+              'px-3 py-2 transition-colors',
+              view === 'essentials'
+                ? 'bg-sage-600 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50',
+            )}
+          >
+            Essentials
+          </button>
+          <button
+            type="button"
+            onClick={() => setView('all')}
+            className={cn(
+              'px-3 py-2 transition-colors border-l border-gray-200',
+              view === 'all'
+                ? 'bg-sage-600 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50',
+            )}
+          >
+            All
+          </button>
+        </div>
+
         {/* Category Dropdown */}
         <div className="relative">
           <select

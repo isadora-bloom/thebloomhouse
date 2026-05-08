@@ -243,7 +243,8 @@ function ProgressRing({ completed, total }: { completed: number; total: number }
 // ---------------------------------------------------------------------------
 
 export default function GettingStartedPage() {
-  const { venueId, weddingId, aiName, loading: contextLoading } = useCoupleContext()
+  const ctx = useCoupleContext()
+  const { venueId, weddingId, aiName, loading: contextLoading } = ctx
   const [progress, setProgress] = useState<OnboardingProgress | null>(null)
   const [wedding, setWedding] = useState<WeddingInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -414,8 +415,17 @@ export default function GettingStartedPage() {
     return 'Welcome to your wedding portal'
   }, [wedding])
 
-  // ---- Build couple slug for links (simplified) ----
-  const coupleSlug = 'demo' // TODO: get from router params
+  // ---- Build couple slug for links ----
+  // 2026-05-08: pulled from useCoupleContext now (was hard-coded 'demo'
+  // which broke every real venue's getting-started links).
+  const coupleSlug = ctx.slug
+
+  // ---- A9 (2026-05-08): Welcome Back layout for fully-onboarded couples ----
+  // When all 5 getting-started steps are complete, returners shouldn't
+  // see the same 5 action cards (each with a checkmark) staring back
+  // at them. Render a "Welcome back" view with quick links instead.
+  // Computed below the loading guard so allComplete depends on real
+  // progress, not the loading-state fallback.
 
   // ---- Loading ----
   if (contextLoading || !weddingId || !venueId || loading) {
@@ -429,6 +439,68 @@ export default function GettingStartedPage() {
           {[1, 2, 3, 4, 5].map((i) => (
             <div key={i} className="h-40 bg-gray-100 rounded-xl animate-pulse" />
           ))}
+        </div>
+      </div>
+    )
+  }
+
+  // A9: Welcome Back branch. Skip the action cards entirely when the
+  // couple finished onboarding. Quick-link strip + redirect-style CTA
+  // to the actively-useful surfaces.
+  if (allComplete) {
+    return (
+      <div className="space-y-6 max-w-2xl mx-auto">
+        <div className="text-center space-y-2">
+          <h1
+            className="text-3xl font-bold"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary, #7D8471)' }}
+          >
+            Welcome back{wedding?.partner1_name ? `, ${wedding.partner1_name}` : ''}
+          </h1>
+          <p className="text-gray-500 text-sm">
+            You finished the welcome steps. Here is where you spend most of your time now.
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <a
+            href={`/couple/${coupleSlug}/whats-next`}
+            className="bg-white rounded-xl border border-sage-200 p-5 hover:shadow-md transition-shadow"
+          >
+            <Sparkles className="w-6 h-6 text-sage-600 mb-2" />
+            <h3 className="font-medium text-sage-900">What is next</h3>
+            <p className="text-xs text-gray-500 mt-1">The few things that matter today</p>
+          </a>
+          <a
+            href={`/couple/${coupleSlug}/checklist`}
+            className="bg-white rounded-xl border border-sage-200 p-5 hover:shadow-md transition-shadow"
+          >
+            <CheckSquare className="w-6 h-6 text-sage-600 mb-2" />
+            <h3 className="font-medium text-sage-900">Checklist</h3>
+            <p className="text-xs text-gray-500 mt-1">Essentials view shows what is due now</p>
+          </a>
+          <a
+            href={`/couple/${coupleSlug}/messages`}
+            className="bg-white rounded-xl border border-sage-200 p-5 hover:shadow-md transition-shadow"
+          >
+            <MessageCircle className="w-6 h-6 text-sage-600 mb-2" />
+            <h3 className="font-medium text-sage-900">Messages</h3>
+            <p className="text-xs text-gray-500 mt-1">Talk to your venue</p>
+          </a>
+          <a
+            href={`/couple/${coupleSlug}/`}
+            className="bg-white rounded-xl border border-sage-200 p-5 hover:shadow-md transition-shadow"
+          >
+            <ArrowRight className="w-6 h-6 text-sage-600 mb-2" />
+            <h3 className="font-medium text-sage-900">Dashboard</h3>
+            <p className="text-xs text-gray-500 mt-1">Full overview of your wedding</p>
+          </a>
+        </div>
+
+        <div className="text-center pt-4">
+          <p className="text-xs text-gray-400">
+            Want to revisit the welcome steps? They are still here below the dashboard cards.
+          </p>
         </div>
       </div>
     )
