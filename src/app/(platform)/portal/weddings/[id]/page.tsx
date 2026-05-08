@@ -46,6 +46,7 @@ import { checkEscalation } from '@/config/escalation-keywords'
 import { DayOfMemoriesTab } from './_components/day-of-memories-tab'
 import { VendorChecklistSection } from './_components/vendor-checklist-section'
 import { InternalNotesFeed } from './_components/internal-notes-feed'
+import { WeddingAddressesSection } from '@/components/portal/wedding-addresses-section'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -517,6 +518,10 @@ function OverviewTab({
           </div>
         </div>
       </div>
+
+      {/* B2 (2026-05-08): couple + family addresses captured at
+          /couple/[slug]/addresses. Read-only here for the coordinator. */}
+      <WeddingAddressesSection weddingId={wedding.id} />
     </div>
   )
 }

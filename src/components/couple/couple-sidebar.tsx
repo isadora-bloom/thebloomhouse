@@ -98,6 +98,9 @@ export function buildCoupleSidebarSections(
       title: 'Wedding Details',
       items: [
         { label: 'Wedding Details', href: `${base}/wedding-details`, icon: Heart },
+        // B2 starting cut (2026-05-08): couple + family addresses for
+        // thank-you cards, hotel block math, and identity-graph signals.
+        { label: 'Addresses', href: `${base}/addresses`, icon: MapPin },
         { label: 'Venue Inclusions', href: `${base}/venue-inventory`, icon: Package },
         { label: 'Recommended Buys', href: `${base}/picks`, icon: ShoppingBag },
       ],
