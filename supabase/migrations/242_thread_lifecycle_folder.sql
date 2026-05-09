@@ -203,9 +203,14 @@ SET lifecycle_folder = CASE
       AND tc.inbound_count  >= 2
   ) THEN 'potential_client'
 
-  -- 5) new_inquiry — wedding still 'inquiry', thread has exactly 1
-  --    inbound and 0 outbound (or no thread id yet — the very first
-  --    email landing without a Gmail-thread association).
+  -- 5) new_inquiry — wedding still 'inquiry' AND the couple has not
+  --    replied back yet. inbound_count <= 1 means the only inbound
+  --    on the thread is the original inquiry / Knot relay. We do
+  --    NOT require outbound_count = 0 here: per Isadora's rule,
+  --    "never heard from before, never responded" means the COUPLE
+  --    has not responded. Whether Sage has fired a nurture sequence
+  --    is irrelevant. Without this relaxation, every Knot inquiry
+  --    where Sage replied silently rolled into 'other'.
   WHEN EXISTS (
     SELECT 1 FROM public.weddings w
     WHERE w.id = itx.wedding_id
@@ -216,7 +221,6 @@ SET lifecycle_folder = CASE
       SELECT 1 FROM thread_counts tc
       WHERE tc.venue_id = itx.venue_id
         AND tc.gmail_thread_id = itx.gmail_thread_id
-        AND tc.outbound_count = 0
         AND tc.inbound_count <= 1
     )
   ) THEN 'new_inquiry'

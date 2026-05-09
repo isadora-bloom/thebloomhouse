@@ -258,13 +258,16 @@ export function decideLifecycleFolder(
   if (hasTourEvent) return 'potential_client'
   if (outboundCount >= 1 && inboundCount >= 2) return 'potential_client'
 
-  // 5) New inquiry — first inbound, never been replied to.
-  //    The shape of a virgin lead. Allow the no-thread-id case
-  //    (a brand-new email that hasn't been associated with a
-  //    Gmail thread yet) to qualify.
+  // 5) New inquiry — wedding is still in inquiry stage and the
+  //    couple has not replied back yet. Inbound count <= 1 means
+  //    the only inbound on the thread is the original inquiry /
+  //    relay. Whether Sage has already sent a nurture reply is
+  //    deliberately ignored: Isadora's rule is "never heard from
+  //    before, never responded" meaning the COUPLE has not
+  //    responded, not the venue. Without this relaxation, every
+  //    Knot inquiry where Sage replied auto-fell into Other.
   if (
     weddingStatus === 'inquiry' &&
-    outboundCount === 0 &&
     inboundCount <= 1
   ) {
     return 'new_inquiry'
