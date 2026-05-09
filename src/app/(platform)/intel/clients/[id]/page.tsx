@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
-import { dedupePeopleByName } from '@/lib/utils/couple-name'
+import { dedupePeopleByName, pickCanonicalPeople } from '@/lib/utils/couple-name'
 import { htmlToText } from '@/lib/utils/html-text'
 import {
   ArrowLeft,
@@ -106,6 +106,13 @@ interface InteractionRow {
   direction: string
   subject: string | null
   body_preview: string | null
+  // 2026-05-09: Communication-history rows are click-to-expand.
+  // body_preview is the truncated cell shown collapsed; full_body is
+  // the canonical full text loaded into the same row when expanded.
+  // Some legacy rows have full_body=null (older imports) — in that
+  // case the renderer keeps showing body_preview untouched.
+  full_body: string | null
+  gmail_thread_id: string | null
   timestamp: string
 }
 
@@ -733,29 +740,41 @@ export default function ClientProfilePage() {
     fetchData()
   }, [fetchData])
 
-  // Derived data
+  // Derived data — partners filtered to the partner roles, then
+  // canonicalised so a wedding with both a Knot-relay nickname row
+  // ("Jen B") and a calculator-submission legal-name row ("Jennifer
+  // Biaksangi") collapses to the legal name in the header. The
+  // Contacts list below still iterates the raw partners array so a
+  // coordinator can see every row that exists for this couple. The
+  // canonical list is what drives the headline + email/phone
+  // shortcuts.
   const partners = useMemo(
     () => people.filter((p) => p.role === 'partner1' || p.role === 'partner2'),
     [people]
   )
 
-  const coupleName = useMemo(() => {
-    if (partners.length === 0) return 'Unknown Client'
-    // T5-Rixey-EEE Bug 1 (defense-in-depth): dedupe by name so the
-    // headline doesn't render "Sarah & Sarah & Sarah" when one human
-    // exists under multiple email aliases (Knot proxy + real Gmail).
-    // Root fix lives in people-merge-aliases.ts.
-    return dedupePeopleByName(partners).map((p) => p.first_name).join(' & ')
-  }, [partners])
-
-  const primaryEmail = useMemo(
-    () => partners.find((p) => p.email)?.email ?? null,
+  const canonicalPartners = useMemo(
+    () => pickCanonicalPeople(partners),
     [partners]
   )
 
+  const coupleName = useMemo(() => {
+    if (canonicalPartners.length === 0) return 'Unknown Client'
+    // dedupePeopleByName routes through pickCanonicalPeople, so the
+    // headline gets the longest / least-abbreviated first name per
+    // logical-person bucket. Belt-and-suspenders against the
+    // alias-merge cron not having run for this wedding yet.
+    return dedupePeopleByName(canonicalPartners).map((p) => p.first_name).join(' & ')
+  }, [canonicalPartners])
+
+  const primaryEmail = useMemo(
+    () => canonicalPartners.find((p) => p.email)?.email ?? null,
+    [canonicalPartners]
+  )
+
   const primaryPhone = useMemo(
-    () => partners.find((p) => p.phone)?.phone ?? null,
-    [partners]
+    () => canonicalPartners.find((p) => p.phone)?.phone ?? null,
+    [canonicalPartners]
   )
 
   // T5-Rixey-GGG Bug 25: derive a real time-series for the heat

@@ -87,11 +87,87 @@ type SubmitState =
       // Q&A help-mode answer (intent='help_question'). Bubble renders
       // the answer + clickable link tiles.
       helpAnswer?: { body: string; links: Array<{ label: string; href: string }> } | null
+      // PDF confirm post-result fields (Case J in resolve route).
+      // 'csv_import' = headers detected and runCsvImport ran;
+      // 'text_classifier' = extracted text fed to classifyBrainDump.
+      pdfRoute?: 'csv_import' | 'text_classifier' | null
+      classifierIntent?: string | null
+      classifierConfidence?: number | null
+      // Coordinator-facing summary headline: composed from the
+      // shape of the import (eg "Imported 287 leads" / "Created
+      // knowledge base entries" / "Filed as ambiguous"). Falls
+      // back to "Filed." when nothing more specific applies.
+      summaryHeadline?: string | null
     }
   | { kind: 'confirming'; entryId: string }
   | { kind: 'error'; message: string }
 
 const BUCKET = 'brain-dump'
+
+/**
+ * Compose a coordinator-friendly headline for the success card based
+ * on the confirm response shape. Pre-fix the bubble said "Filed."
+ * for every confirm regardless of whether 1 or 287 rows landed in
+ * the database. Coordinator had no signal that a 43-page PDF
+ * actually became 287 weddings + 18 matched + 7 ambiguous.
+ *
+ * Headlines key off the import shape, the PDF route, the classifier
+ * intent, and how many rows were touched. Falls back to "Filed."
+ * when nothing more specific applies (like a plain client_note
+ * confirm).
+ */
+function summarizeConfirmResult(args: {
+  intent: string
+  importSummary?: ImportSummaryShape | null
+  pdfRoute?: 'csv_import' | 'text_classifier' | null
+  classifierIntent?: string | null
+}): string {
+  const { intent, importSummary, pdfRoute, classifierIntent } = args
+  const inserted = importSummary?.inserted ?? 0
+  const updated = importSummary?.updated ?? 0
+  const total = inserted + updated
+
+  // PDF that ran through the CSV-shape path: usually a spreadsheet
+  // or triage sheet. Show the row count.
+  if (pdfRoute === 'csv_import') {
+    if (total === 0) {
+      return 'PDF imported. No rows matched the detected shape.'
+    }
+    if (intent.includes('lead') || intent.includes('couple') || intent.includes('client')) {
+      return `Imported ${total.toLocaleString()} couple${total === 1 ? '' : 's'} from the spreadsheet.`
+    }
+    if (intent.includes('review')) {
+      return `Imported ${total.toLocaleString()} review${total === 1 ? '' : 's'}.`
+    }
+    return `Imported ${total.toLocaleString()} row${total === 1 ? '' : 's'} from the spreadsheet.`
+  }
+
+  // PDF that fed the regular text classifier — the bubble's classifier
+  // intent tells the coordinator how it was filed.
+  if (pdfRoute === 'text_classifier' && classifierIntent) {
+    return `PDF text classified as ${classifierIntent.replace(/_/g, ' ')}.`
+  }
+
+  // CSV import (top-level kind, not via PDF).
+  if (intent.endsWith('_preview') && total > 0) {
+    const noun = intent.replace(/_preview$/, '').replace(/_/g, ' ')
+    return `Imported ${total.toLocaleString()} ${noun} row${total === 1 ? '' : 's'}.`
+  }
+
+  // Knowledge-base or operational confirm.
+  if (intent === 'knowledge_base_import') {
+    return inserted > 0 ? `Added ${inserted} Q/A entr${inserted === 1 ? 'y' : 'ies'} to the knowledge base.` : 'Knowledge base entries filed.'
+  }
+  if (intent === 'operational_note') return 'Operational note filed.'
+  if (intent === 'staff_observation') return 'Staff observation filed.'
+  if (intent === 'analytics') return total > 0 ? `Imported ${total} marketing-spend row${total === 1 ? '' : 's'}.` : 'Analytics filed.'
+  if (intent === 'availability') return 'Availability change applied.'
+  if (intent === 'client_note') return 'Note added to the couple.'
+  if (intent === 'imported') return total > 0 ? `Imported ${total} row${total === 1 ? '' : 's'}.` : 'Filed.'
+  if (intent === 'dismissed') return 'Dismissed.'
+
+  return 'Filed.'
+}
 
 
 
@@ -202,7 +278,16 @@ export function FloatingBrainDump() {
         importSummary?: ImportSummaryShape
         nextHref?: string | null
         nextLabel?: string | null
+        pdfRoute?: 'csv_import' | 'text_classifier'
+        classifierIntent?: string
+        classifierConfidence?: number
       }
+      const headline = summarizeConfirmResult({
+        intent: 'imported',
+        importSummary: data.importSummary,
+        pdfRoute: data.pdfRoute,
+        classifierIntent: data.classifierIntent,
+      })
       setState({
         kind: 'done',
         intent: 'imported',
@@ -211,6 +296,10 @@ export function FloatingBrainDump() {
         pendingConfirm: null,
         nextHref: data.nextHref ?? null,
         nextLabel: data.nextLabel ?? null,
+        pdfRoute: data.pdfRoute ?? null,
+        classifierIntent: data.classifierIntent ?? null,
+        classifierConfidence: data.classifierConfidence ?? null,
+        summaryHeadline: headline,
       })
     } catch (err) {
       setState({
@@ -544,14 +633,21 @@ export function FloatingBrainDump() {
                   <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-emerald-900">Filed.</p>
+                      <p className="text-sm font-medium text-emerald-900">
+                        {state.summaryHeadline ?? 'Filed.'}
+                      </p>
                       <p className="text-xs text-emerald-800 mt-1">
-                        Classified as <strong>{state.intent.replace(/_/g, ' ')}</strong>.
+                        Classified as <strong>{state.intent.replace(/_/g, ' ')}</strong>
+                        {state.pdfRoute === 'csv_import' && ' via spreadsheet shape detection'}
+                        {state.pdfRoute === 'text_classifier' && state.classifierConfidence != null && ` (${state.classifierConfidence}% confidence)`}
+                        .
                       </p>
                       {state.importSummary && (
                         <div className="mt-2 text-xs text-emerald-800 space-y-0.5">
                           <p>
-                            {state.importSummary.inserted} new · {state.importSummary.skipped} skipped
+                            {state.importSummary.inserted} new
+                            {state.importSummary.updated > 0 && ` · ${state.importSummary.updated} updated`}
+                            {' · '}{state.importSummary.skipped} skipped
                             {state.importSummary.errors.length > 0 &&
                               ` · ${state.importSummary.errors.length} error${state.importSummary.errors.length === 1 ? '' : 's'}`}
                           </p>

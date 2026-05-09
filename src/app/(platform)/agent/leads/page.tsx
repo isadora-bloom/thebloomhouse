@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
-import { personFullName } from '@/lib/utils/couple-name'
+import { personFullName, pickCanonicalPeople } from '@/lib/utils/couple-name'
 import { VenueChip } from '@/components/intel/venue-chip'
 // Stream HHH Bug 10: InlineInsightBanner removed from /agent/leads.
 import { HeatBadge } from '@/components/intel/heat-badge'
@@ -498,8 +498,19 @@ export default function LeadsPage() {
 
       const mapped: Lead[] = (data ?? []).map((row: any) => {
         const people = row.people ?? []
-        const p1 = people.find((p: any) => p.role === 'partner1')
-        const p2 = people.find((p: any) => p.role === 'partner2')
+        // 2026-05-09: collapse Knot-relay nickname rows into the
+        // calculator-submission legal-name row before picking a
+        // partner1/partner2 representative. Without this, a venue
+        // with both rows would render "Jen B" instead of "Jennifer
+        // Biaksangi" in the inbox.
+        const canonicalP1 = pickCanonicalPeople(
+          people.filter((p: any) => p.role === 'partner1'),
+        )
+        const canonicalP2 = pickCanonicalPeople(
+          people.filter((p: any) => p.role === 'partner2'),
+        )
+        const p1 = canonicalP1[0]
+        const p2 = canonicalP2[0]
         const codes = row.client_codes ?? []
         const clientCode = Array.isArray(codes) && codes.length > 0 ? codes[0]?.code ?? null : null
         const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined

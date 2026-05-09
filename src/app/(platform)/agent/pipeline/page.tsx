@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
-import { personFullName } from '@/lib/utils/couple-name'
+import { personFullName, pickCanonicalPeople } from '@/lib/utils/couple-name'
 import { VenueChip } from '@/components/intel/venue-chip'
 // Stream HHH Bug 10: InlineInsightBanner removed from /agent/pipeline.
 import { HeatBadge } from '@/components/intel/heat-badge'
@@ -452,12 +452,15 @@ export default function PipelinePage() {
       const weddings: PipelineWedding[] = (weddingsData ?? []).map(
         (row: any) => {
           const people = row.people ?? []
-          const p1 = people.find(
-            (p: any) => p.role === 'partner1'
-          )
-          const p2 = people.find(
-            (p: any) => p.role === 'partner2'
-          )
+          // 2026-05-09: collapse Knot-relay nickname rows into the
+          // calculator-submission legal-name row before picking a
+          // partner1/partner2 representative for the pipeline card.
+          const p1 = pickCanonicalPeople(
+            people.filter((p: any) => p.role === 'partner1'),
+          )[0]
+          const p2 = pickCanonicalPeople(
+            people.filter((p: any) => p.role === 'partner2'),
+          )[0]
           const codes = row.client_codes ?? []
           const clientCode = Array.isArray(codes) && codes.length > 0 ? codes[0]?.code ?? null : null
           const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined

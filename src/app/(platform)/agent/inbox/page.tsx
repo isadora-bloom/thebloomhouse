@@ -53,7 +53,7 @@ import { LIFECYCLE_LABELS } from '@/lib/services/inbox/lifecycle'
 // Tier-B #72: consolidated 5 local reimplementations to the canonical
 // htmlToText in lib/utils/html-text.ts.
 import { htmlToText as stripHtml } from '@/lib/utils/html-text'
-import { personFullName } from '@/lib/utils/couple-name'
+import { personFullName, pickCanonicalPeople } from '@/lib/utils/couple-name'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1427,8 +1427,17 @@ export default function InboxPage() {
         // to a specific person_id yet (common for demo/inquiry data).
         const weddingPeople: Array<{ first_name?: string; last_name?: string; email?: string; role?: string }> =
           Array.isArray(wedding?.people) ? wedding.people : []
-        const partner1 = weddingPeople.find((p) => p.role === 'partner1') ?? weddingPeople[0]
-        const partner2 = weddingPeople.find((p) => p.role === 'partner2')
+        // 2026-05-09: collapse Knot-relay nickname rows into the
+        // calculator-submission legal-name row before picking a
+        // partner1/partner2 representative.
+        const canonicalP1Rows = pickCanonicalPeople(
+          weddingPeople.filter((p) => p.role === 'partner1'),
+        )
+        const canonicalP2Rows = pickCanonicalPeople(
+          weddingPeople.filter((p) => p.role === 'partner2'),
+        )
+        const partner1 = canonicalP1Rows[0] ?? weddingPeople[0]
+        const partner2 = canonicalP2Rows[0]
         const coupleDisplay = partner1
           ? partner2 && partner2.last_name === partner1.last_name
             ? `${partner1.first_name} & ${partner2.first_name} ${partner1.last_name}`
@@ -1758,8 +1767,16 @@ export default function InboxPage() {
           const wedding = row.weddings
           const weddingPeople: Array<{ first_name?: string; last_name?: string; email?: string; role?: string }> =
             Array.isArray(wedding?.people) ? wedding.people : []
-          const partner1 = weddingPeople.find((p) => p.role === 'partner1') ?? weddingPeople[0]
-          const partner2 = weddingPeople.find((p) => p.role === 'partner2')
+          // 2026-05-09: same canonical-name collapse as the inbox-list
+          // rendering above. Keeps the thread-detail header in sync.
+          const canonicalP1Rows = pickCanonicalPeople(
+            weddingPeople.filter((p) => p.role === 'partner1'),
+          )
+          const canonicalP2Rows = pickCanonicalPeople(
+            weddingPeople.filter((p) => p.role === 'partner2'),
+          )
+          const partner1 = canonicalP1Rows[0] ?? weddingPeople[0]
+          const partner2 = canonicalP2Rows[0]
           const coupleDisplay = partner1
             ? partner2 && partner2.last_name === partner1.last_name
               ? `${partner1.first_name} & ${partner2.first_name} ${partner1.last_name}`
