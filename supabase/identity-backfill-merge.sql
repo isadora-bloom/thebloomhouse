@@ -115,6 +115,7 @@ BEGIN
         -- of throwing 42703 and aborting the whole transaction.
         DECLARE
           v_t text;
+          v_row_id uuid;
           v_candidate_tables text[] := ARRAY[
             'interactions','drafts','engagement_events','tours','lost_deals',
             'admin_notifications','notifications','knowledge_gaps',
@@ -135,8 +136,34 @@ BEGIN
                 AND table_name = v_t
                 AND column_name = 'wedding_id'
             ) THEN
-              EXECUTE format('UPDATE public.%I SET wedding_id = $1 WHERE wedding_id = $2', v_t)
-                USING v_canonical_wedding, v_loser_wedding;
+              -- Try the bulk UPDATE first (fast path). If it hits a
+              -- unique-constraint violation (e.g.
+              -- uq_engagement_events_fire_once on
+              -- (venue_id, wedding_id, event_type)) fall back to
+              -- per-row UPDATE with the same exception handling: when
+              -- a single row collides with an existing canonical row,
+              -- delete the loser row instead of moving it. The
+              -- canonical's row already represents the merged
+              -- semantic event.
+              BEGIN
+                EXECUTE format('UPDATE public.%I SET wedding_id = $1 WHERE wedding_id = $2', v_t)
+                  USING v_canonical_wedding, v_loser_wedding;
+              EXCEPTION
+                WHEN unique_violation THEN
+                  FOR v_row_id IN
+                    EXECUTE format('SELECT id FROM public.%I WHERE wedding_id = $1', v_t)
+                    USING v_loser_wedding
+                  LOOP
+                    BEGIN
+                      EXECUTE format('UPDATE public.%I SET wedding_id = $1 WHERE id = $2', v_t)
+                        USING v_canonical_wedding, v_row_id;
+                    EXCEPTION
+                      WHEN unique_violation THEN
+                        EXECUTE format('DELETE FROM public.%I WHERE id = $1', v_t)
+                          USING v_row_id;
+                    END;
+                  END LOOP;
+              END;
             END IF;
           END LOOP;
         END;
@@ -226,9 +253,10 @@ BEGIN
     IF v_canonical_wedding = v_loser_wedding THEN CONTINUE; END IF;
 
     -- Reassign FK-referencing rows. Same introspection-guarded loop as
-    -- Pass A so missing wedding_id columns are silently skipped.
+    -- Pass A, with the same unique-violation fallback to row-by-row.
     DECLARE
       v_t text;
+      v_row_id uuid;
       v_candidate_tables text[] := ARRAY[
         'interactions','drafts','engagement_events','tours','lost_deals',
         'admin_notifications','notifications','knowledge_gaps',
@@ -249,8 +277,25 @@ BEGIN
             AND table_name = v_t
             AND column_name = 'wedding_id'
         ) THEN
-          EXECUTE format('UPDATE public.%I SET wedding_id = $1 WHERE wedding_id = $2', v_t)
-            USING v_canonical_wedding, v_loser_wedding;
+          BEGIN
+            EXECUTE format('UPDATE public.%I SET wedding_id = $1 WHERE wedding_id = $2', v_t)
+              USING v_canonical_wedding, v_loser_wedding;
+          EXCEPTION
+            WHEN unique_violation THEN
+              FOR v_row_id IN
+                EXECUTE format('SELECT id FROM public.%I WHERE wedding_id = $1', v_t)
+                USING v_loser_wedding
+              LOOP
+                BEGIN
+                  EXECUTE format('UPDATE public.%I SET wedding_id = $1 WHERE id = $2', v_t)
+                    USING v_canonical_wedding, v_row_id;
+                EXCEPTION
+                  WHEN unique_violation THEN
+                    EXECUTE format('DELETE FROM public.%I WHERE id = $1', v_t)
+                      USING v_row_id;
+                END;
+              END LOOP;
+          END;
         END IF;
       END LOOP;
     END;
