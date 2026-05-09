@@ -9,8 +9,12 @@
 // lets an admin sweep the existing 'other' rows through Haiku to relabel
 // the high-confidence ones.
 //
-// Auth: super_admin only. Pattern matches the consumer-requests admin
-// endpoints -- getPlatformAuth + role check. Demo mode is rejected.
+// Auth: any authenticated venue user. The query is hard-scoped to the
+// caller's auth.venueId so a venue owner can only reclass their own
+// inbox -- no cross-venue blast radius. Demo mode is rejected.
+// (Initial spec gated this to super_admin but Isadora is the venue
+// owner not a platform super_admin and got 403'd; the per-venue scope
+// is the real safety boundary, not the role.)
 //
 // Behaviour:
 //   - Selects interactions where lifecycle_folder='other' AND from_email
@@ -68,7 +72,7 @@ export async function POST(req: NextRequest) {
   const auth = await getPlatformAuth()
   if (!auth) return unauthorized()
   if (auth.isDemo) return forbidden('demo cannot reclass live rows')
-  if (auth.role !== 'super_admin') return forbidden('super_admin only')
+  if (!auth.venueId) return forbidden('no venue scope on session')
 
   const body = (await req.json().catch(() => null)) as
     | { batchSize?: number; maxRows?: number }
