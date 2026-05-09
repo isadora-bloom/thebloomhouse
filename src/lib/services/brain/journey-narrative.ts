@@ -23,8 +23,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 
-export const JOURNEY_NARRATIVE_PROMPT_VERSION = 'journey-narrative.prompt.v1.0'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
+export const JOURNEY_NARRATIVE_PROMPT_VERSION = 'journey-narrative.prompt.v2.0'
 
 const STALENESS_DELTA = 2
 const GEN_LOCK_TTL_MS = 60_000 // 60s — generation that takes longer than this is assumed crashed
@@ -207,7 +210,7 @@ function buildUserPrompt(ctx: NonNullable<Awaited<ReturnType<typeof fetchContext
   return lines.join('\n')
 }
 
-const SYSTEM_PROMPT = `You write one-to-two sentence narrative summaries of wedding-couple discovery journeys for venue coordinators.
+const TASK_INSTRUCTIONS = `Write one-to-two sentence narrative summaries of wedding-couple discovery journeys for venue coordinators.
 
 Input describes a couple, their inquiry/tour dates, the platform signals our system has captured (Knot views, Instagram follows, Pinterest saves, etc.), and the attribution decisions our matcher made.
 
@@ -216,7 +219,7 @@ Your output is a SINGLE PARAGRAPH (one or two sentences) that:
 - Describes the chronological discovery sequence using actual dates
 - When describing how they reached out, USE the INQUIRY_CHANNEL value
   if present (it's the computed channel from the inquiry touchpoint,
-  e.g. 'calendly'). DO NOT use LEGACY_SOURCE for this — it can be
+  e.g. 'calendly'). DO NOT use LEGACY_SOURCE for this, it can be
   stale and disagree with the computed channel.
 - Mentions the platforms involved and the engagement type (viewed, saved, messaged, followed, etc.)
 - Only call something "first-touch" if the input ATTRIBUTION DECISIONS
@@ -224,7 +227,7 @@ Your output is a SINGLE PARAGRAPH (one or two sentences) that:
   do NOT claim first-touch credit; describe the signals as engagement
   rather than attribution.
 - Pay attention to chronology: signals BEFORE the inquiry are
-  attribution, signals AFTER are post-inquiry browsing — describe
+  attribution, signals AFTER are post-inquiry browsing, describe
   them differently. Post-inquiry browsing on a vendor platform is a
   comparison-shopping signal, not first-touch credit.
 - If a recent email subject mentions "saw you on X" or similar, weave it in as confirming evidence
@@ -234,11 +237,11 @@ Your output is a SINGLE PARAGRAPH (one or two sentences) that:
 
 Examples of good output:
 
-"Sarah Reynolds first viewed your Knot listing on March 12, came back twice over the next two days, and saved it on March 13. She also followed your Instagram on March 14. The inquiry email arrived March 20 — first-touch credit goes to The Knot, six days before she reached out."
+"Sarah Reynolds first viewed your Knot listing on March 12, came back twice over the next two days, and saved it on March 13. She also followed your Instagram on March 14. The inquiry email arrived March 20, first-touch credit goes to The Knot, six days before she reached out."
 
-"Mark and Jenna have been quiet since their March 18 inquiry but were active on Pinterest before — they saved your venue twice in early March. Pinterest is the first-touch source even though the inquiry came through your website form."
+"Mark and Jenna have been quiet since their March 18 inquiry but were active on Pinterest before, they saved your venue twice in early March. Pinterest is the first-touch source even though the inquiry came through your website form."
 
-"Ryan Schubert and Madison Bryant booked a tour through Calendly on March 29 and toured the venue on April 13. Madison came back to The Knot the next day to save and view your listing again — post-tour comparison browsing rather than first-touch attribution."
+"Ryan Schubert and Madison Bryant booked a tour through Calendly on March 29 and toured the venue on April 13. Madison came back to The Knot the next day to save and view your listing again, post-tour comparison browsing rather than first-touch attribution."
 
 Return ONLY the narrative text. No JSON, no quotes around it, no explanation.`
 
@@ -251,14 +254,21 @@ export async function generateNarrativeText(
   if (ctx.candidates.length === 0) return null
 
   const userPrompt = buildUserPrompt(ctx)
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId: ctx.wedding.venue_id,
+    surface: 'journey_narrative',
+    taskInstructions: TASK_INSTRUCTIONS,
+    contentTier: 1,
+  })
   const result = await callAI({
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt,
     userPrompt,
     maxTokens: 300,
     temperature: 0.4,
     venueId: ctx.wedding.venue_id,
     taskType: 'journey_narrative',
-    promptVersion: JOURNEY_NARRATIVE_PROMPT_VERSION,
+    promptVersion,
+    contentTier,
   })
 
   // PC.4 fix #9: AI sometimes wraps the paragraph in quotes despite

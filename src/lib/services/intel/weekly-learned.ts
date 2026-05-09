@@ -32,8 +32,11 @@ import { computeSourceQuality } from '@/lib/services/intel/source-quality'
 import { callAIJson } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 
-export const WEEKLY_LEARNED_PROMPT_VERSION = 'weekly-learned.v1'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
+export const WEEKLY_LEARNED_PROMPT_VERSION = 'weekly-learned.v2'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -571,7 +574,7 @@ interface WeeklyNarrativeJson {
  */
 async function composeWeeklyNarrative(
   venueId: string,
-  aiName: string,
+  _aiName: string,
   counts: WeeklyStructuredCounts,
   bullets: WeeklyLearnedBullet[],
 ): Promise<string | null> {
@@ -581,10 +584,7 @@ async function composeWeeklyNarrative(
     .map((b) => `  - [${b.kind}] ${b.text}`)
     .join('\n') || '  (no non-empty bullets)'
 
-  const systemPrompt = `You are ${aiName}, the wedding-venue coordinator's
-intelligence assistant. The coordinator opens a "what happened this week"
-panel on their dashboard. Compose a 3-5 sentence observation that reads
-like you actually noticed patterns, not like a count of database rows.
+  const taskInstructions = `The coordinator opens a "what happened this week" panel on their dashboard. Compose a 3-5 sentence observation that reads like you actually noticed patterns, not like a count of database rows.
 
 Output JSON:
   {
@@ -592,18 +592,11 @@ Output JSON:
   }
 
 CRITICAL RULES:
-- The ONLY numbers you may use are the integers and dollar amount in the
-  STRUCTURED COUNTS block. Never invent ratios, percentages, or counts
-  that are not directly listed.
 - Skip any field whose value is null. Null means "no data this week",
   not zero. Do NOT say "0 inquiries this week" when the field is null.
 - Never anthropomorphise database operations. Phrases like "I learned 5
   voice preferences" are banned. Prefer "voice training added 5 new
   preferences" or "the team approved 5 voice updates".
-- Do not promise predictions ("you'll book more next week"). Frame
-  observations and patterns only.
-- Do not use em dashes. Use commas, periods, or "and / but / so" instead.
-- No emojis. No exclamation marks.
 - Do NOT name specific couples, vendors, or third parties. Aggregate only.
 - 3-5 sentences total. Tighter is better than longer.`
 
@@ -640,6 +633,24 @@ ${bulletLines}
 Compose the JSON narrative. 3-5 sentences. Numbers strictly from the
 STRUCTURED COUNTS block.`
 
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_weekly_learned',
+    taskInstructions,
+    numbersGuard: {
+      voice_preferences: counts.voicePreferences,
+      voice_training_responses: counts.voiceTrainingResponses,
+      inquiries_this_week: counts.inquiriesThisWeek,
+      bookings_this_week: counts.bookingsThisWeek,
+      bookings_last_week: counts.bookingsLastWeek,
+      booking_delta: bookingDelta,
+      top_source_avg_revenue_dollars: counts.topSourceAvgRevenueDollars,
+      multi_touch_inquiries: counts.multiTouchInquiries,
+      multi_touch_inquiries_total: counts.multiTouchInquiriesTotal,
+      strongest_correlation_lag_days: counts.strongestCorrelationLagDays,
+    },
+  })
+
   const result = await callAIJson<WeeklyNarrativeJson>({
     systemPrompt,
     userPrompt,
@@ -648,7 +659,8 @@ STRUCTURED COUNTS block.`
     venueId,
     taskType: 'weekly_learned',
     tier: 'sonnet',
-    promptVersion: WEEKLY_LEARNED_PROMPT_VERSION,
+    promptVersion,
+    contentTier,
   })
 
   const narrative = (result?.narrative ?? '').trim()

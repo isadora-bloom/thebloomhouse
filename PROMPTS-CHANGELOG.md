@@ -21,6 +21,82 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 - **MINOR** — wording / instruction refinement that holds the
   contract. Bumps still get a changelog row.
 
+## 2026-05-09 (late evening — coordinator-facing prompt unification)
+
+Canonical coordinator-facing prompt assembler (`src/lib/ai/coordinator-prompt.ts`)
+landed. One entry point (`buildCoordinatorPrompt`) replaces the three
+different identity patterns catalogued in `LLM-CALL-INVENTORY.md`
+personality-drift finding #3 (10 named-Sage / 10 nameless / 1
+named-venue across 24 narrators). Every coordinator-facing narrator
+now layers UNIVERSAL_RULES + COORDINATOR_RULES (new constant in
+`src/config/prompts/coordinator-rules.ts`) + buildPersonalityPrompt +
+numbersGuardBlock (optional) + per-task instructions. The new
+`loadCoordinatorPersonalityData` (`src/lib/ai/personality-loader.ts`)
+mirrors the strict couple-side loader but degrades gracefully to a
+synthetic "your assistant" personality when `venue_ai_config` is
+missing, so cron-driven narrators never throw on a half-onboarded
+venue. Surface enum has 24 entries; default content tier per surface
+keys off the inventory's tier-policy column (tier 1 for per-couple
+paragraphs: heat, cohort, decay, risk, journey, post-tour brief; tier
+2 for venue-aggregate dashboards).
+
+Migrated call sites (23): heat-narration, correlation-narration,
+cohort-match, decay-re-engagement, risk-flags (sentiment scan +
+narration, both calls), pricing-elasticity, source-mix-counterfactual,
+strength-area-cohort, coordinator-override-pattern, weather-cancellation,
+anomaly-detection (metric explainer + availability explainer),
+intelligence-engine-narration, briefings (weekly + monthly), daily-digest,
+weekly-digest, weekly-learned, attendee-intelligence, journey-narrative,
+intel-brain (NLQ), cultural-moments-llm-propose, post-tour-brief
+(brief only — couple-facing follow-up draft stays on its dedicated
+prompt). The `reengagement_drafter` surface enum entry is reserved for a
+future coordinator-side narrator; the existing candidate-facing drafter
+stays on its inline prompt per Agent N's couple-side scope.
+
+COORDINATOR_RULES contents:
+1. Address the coordinator as a teammate, not a customer.
+2. You are still ${aiName} — the same character couples chat with.
+3. NUMBERS DISCIPLINE — only the values in the NUMBERS YOU MAY USE
+   block; never invent numbers, ratios, projections.
+4. ABSOLUTE-CERTAINTY PHRASES BANNED — no "always", "every",
+   "definitely", "100%", "guaranteed", "will book / will lose";
+   prefer probability framing.
+5. Output is data-aware narrative, not bullet counts.
+6. No em dashes. No exclamation marks. No couple/vendor names unless
+   the task block invites them.
+
+| Module | Old | New | Reason |
+|--------|-----|-----|--------|
+| heat-narration | v1.2 | v2.0 | Migrated to `buildCoordinatorPrompt({surface:'narration_heat'})`. ai_name now flows through the unified personality block; `loadAiName` removed. Numbers-guard explicit (heat_score, raw_heat_score, cohort booked/total/pct, multiplier, total_events, top-event point values). |
+| correlation-narration | v1 | v2.0 | Migrated. Allowed numbers passed via `numbersGuard`; identity layer unified. |
+| cohort-match | v1.0 | v2.0 | Migrated. Numbers-guard exposes n_total / booked / lost / conversion_pct / median value / median days / confidence-mix counts. |
+| decay-re-engagement | v1.0 | v2.0 | Migrated. Numbers-guard: current_score, peak_score, decline_magnitude, days_since_last_inbound. |
+| risk-flags | v1.1 | v2.0 | Both calls (Haiku sentiment scan + Sonnet narration) migrated onto `narration_risk`. |
+| pricing-elasticity | v1.0 | v2.0 | Migrated. Numbers-guard: price_change_pct, pre/post conversion_pct + resolved counts, elasticity, marketing_delta_pct. |
+| source-mix-counterfactual | v1.0 | v2.0 | Migrated. Numbers-guard: cac_ratio, reallocation_amount, projected gains/losses, donor/recipient CAC + bookings. |
+| strength-area-cohort | v1.0 | v2.0 | Migrated. Numbers-guard: per-band conversion_pct + n, gap_pp, total_resolved. |
+| coordinator-override-pattern | v1.0 | v2.0 | Migrated. Numbers-guard: recent + prior approve/edit/reject %, drift_pp, per-DoW anomaly stats. |
+| weather-cancellation-narration | v1 | v2 | Migrated. Numbers-guard: bucket cancel %, baseline %, totals, multiplier_vs_baseline, lookback_days. |
+| anomaly-detection | v1.0 | v2.0 | Metric anomaly explainer migrated to `narration_anomaly_metric` with current/baseline/change_pct as numbers-guard. |
+| availability-anomaly-explanation | v1 | v2 | Migrated to `narration_anomaly_availability`. Numbers-guard: fill_rate_pct, saturday/non-saturday split, slot counts, days_out. |
+| intelligence-engine-narration | v1 | v2 | Migrated. Numbers-guard sources from the detector's allowedNumbers list (already used by the post-call numbers-guard validator). |
+| briefings (weekly) | v1.1 | v2.0 | Migrated to `briefing_weekly` surface. Numbers-guard exposes weekly metrics, prior-week metrics, deltas, demand_score, phase-B health counts. `withAiCache` key now keys off the assembler's promptVersion. |
+| briefings (monthly) | v1.1 | v2.0 | Migrated to `briefing_monthly`. Numbers-guard: current/prior monthly metrics + month-over-month changes + demand_score. |
+| daily-digest | v1.0 | v2.0 | Migrated. Numbers-guard exposes pending_drafts / unanswered / stale / yesterday-stats / upcoming counts / approval rate / AI cost. The previous "concise morning briefing assistant" framing folds into TASK_INSTRUCTIONS — identity now flows from the assembler. |
+| weekly-digest | v1.0 | v2.0 | Migrated. Numbers-guard: this/last week inquiries + bookings, lost, revenue, avg response time. Pre-fix this surface was untagged (api_costs.prompt_version IS NULL); v2.0 closes that audit gap too. |
+| weekly-learned | v1 | v2 | Migrated. Numbers-guard: voice prefs, training responses, this/last week bookings + delta, top source revenue, multi-touch counts, strongest correlation lag. |
+| attendee-intel | v1 | v2 | Migrated. Numbers-guard: bucket / overall rate %, lift, tours_with_bucket, total_tours. |
+| journey-narrative | v1.0 | v2.0 | Migrated. tier-1 (per-couple). Identity layer unified — pre-fix this was a nameless 1-2 sentence narrative writer; now the venue's `${aiName}` is the same voice telling the couple's story. |
+| intel-brain (NLQ) | v1.2 | v2.0 | Migrated. NLQ system prompt's "you are the intelligence analyst for ${venueName}" framing replaced with the standard COORDINATOR_RULES + personality block; the data-domain catalogue (weddings / source attribution / FRED / cultural moments / correlation narrations / etc.) stays in TASK_INSTRUCTIONS. The intel-brain `BRAIN_PROMPT_VERSION` is shared with the positioning-suggestions call which is NOT migrated (positioning is not in the coordinator-narrator inventory's surface enum); positioning continues to log `intel-brain.prompt.v2.0` on api_costs but renders the existing positioning-strategist system prompt. |
+| cultural-moments-llm-propose | v1 | v2 | Migrated. The previous explicit `You are an analyst for Bloom House` self-identification (the only narrator that named Bloom directly) flows through the standardised personality block. Continues to ship `contentTier: 3` (no PII; geography + categories only) explicitly so the assembler default doesn't downgrade the data sensitivity tag. |
+| post-tour-brief | v1.0 | v2.0 | BRIEF migrated to `post_tour_brief`. The follow-up DRAFT stays on its dedicated couple-side `buildDraftSystemPrompt` per the coordinator-side scope of this unification. |
+
+Net result of this batch: the `${aiName}` voice now appears
+consistently across all migrated narrators. The "nameless analyst" /
+"`${venueName}`-as-analyst" patterns are eliminated. Coordinators
+reading their `/intel` dashboard hear one author across adjacent
+tiles, briefings, digests, and lead-detail panels.
+
 ## 2026-05-09 (evening — couple-facing prompt unification)
 
 Canonical couple-facing prompt assembler (`src/lib/ai/couple-prompt.ts`)

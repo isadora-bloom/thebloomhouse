@@ -16,6 +16,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 import { withAiCache } from '@/lib/ai/cache'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { detectTrendDeviations } from './trends'
 import { getWeatherForDateRange } from './weather'
 import { getLatestIndicators, calculateDemandScore } from './fred-demand'
@@ -35,8 +36,10 @@ import { sendEmail as sendTransactionalEmail } from '../email/transport'
  * and the system prompts instruct the LLM to weave them into the
  * narrative when present.
  */
-export const BRIEFING_PROMPT_VERSION = 'briefings.prompt.v1.1'
-const MONTHLY_BRIEFING_PROMPT_VERSION = 'briefings.monthly.v1.1'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
+export const BRIEFING_PROMPT_VERSION = 'briefings.prompt.v2.0'
+const MONTHLY_BRIEFING_PROMPT_VERSION = 'briefings.monthly.v2.0'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -491,7 +494,7 @@ async function getWeddingMetrics(
 // System prompts
 // ---------------------------------------------------------------------------
 
-const WEEKLY_SYSTEM_PROMPT = `You are the intelligence analyst for a wedding venue. Generate a concise, actionable weekly briefing. Recommendations should be concrete actions the venue can take THIS WEEK. Tone: professional but warm, like a trusted advisor.
+const WEEKLY_TASK_INSTRUCTIONS = `Generate a concise, actionable weekly briefing. Recommendations should be concrete actions the venue can take THIS WEEK. Tone: professional but warm, like a trusted advisor.
 
 Return a JSON object with these exact fields:
 - summary: string (2-3 sentence executive summary of the week)
@@ -508,22 +511,12 @@ The user prompt also includes a PLATFORM SIGNAL HEALTH section with new candidat
 The user prompt may also include a MACRO CONTEXT section with confirmed cultural moments, FRED indicator deltas (CPI, mortgage rate, S&P, unemployment, sentiment), upcoming calendar events scoped to the venue's region, and correlation narrations (engine-discovered cross-channel pairs in plain English). When that section is present:
   - Weave the most relevant macro signal into the summary (e.g. "Mortgage rates climbed 30bps this month and our engine flagged a 60-day lag to inquiry softening.").
   - When a correlation narration is recent and venue-relevant (its pair_class isn't macro_x_macro), prefer quoting its title + r over re-describing the underlying numbers yourself.
-  - When an upcoming calendar event sits in the next 14 days, mention it as a context cue for the recommendations (e.g. "Memorial Day weekend lands inside this window — expect tour-request volatility.").
+  - When an upcoming calendar event sits in the next 14 days, mention it as a context cue for the recommendations (e.g. "Memorial Day weekend lands inside this window, expect tour-request volatility.").
   - Do NOT invent macro relationships; if the section is absent or empty, omit macro language from the briefing entirely.
-
-NUMBERS DISCIPLINE (anti-pattern guard, ANTI-19.9-A / playbook 19.9 #1):
-- Every number you reference must come from the user prompt VERBATIM.
-- Do NOT compute new percentages, averages, ratios, or comparisons.
-  Pre-computed deltas (inquiries_change_pct etc.) are provided — quote
-  those directly when discussing change.
-- Do NOT extrapolate ("at this pace we'll hit X"). The user prompt
-  carries the source numbers; if a projection isn't there, omit it.
-- If the data lacks a number you'd like to reference, write the
-  observation without the number rather than inventing one.
 
 Be direct and specific. Quote provided numbers. Do not hedge or use vague language.`
 
-const MONTHLY_SYSTEM_PROMPT = `You are the intelligence analyst for a wedding venue. Generate a strategic monthly briefing. Focus on big-picture trends, month-over-month momentum, and longer-term strategic recommendations. Tone: professional but warm, like a trusted advisor delivering a board-level summary.
+const MONTHLY_TASK_INSTRUCTIONS = `Generate a strategic monthly briefing. Focus on big-picture trends, month-over-month momentum, and longer-term strategic recommendations. Tone: professional but warm, like a trusted advisor delivering a board-level summary.
 
 Return a JSON object with these exact fields:
 - summary: string (2-3 sentence executive summary of the month)
@@ -534,11 +527,9 @@ Return a JSON object with these exact fields:
 - strategic_recommendations: string[] (2-3 bigger-picture strategic recommendations for the coming month)
 
 The user prompt may include a MACRO CONTEXT block with cultural moments, FRED indicator deltas, upcoming calendar events, and engine-discovered correlation narrations. When that block is present:
-  - Surface the most relevant macro signal in the strategic_recommendations (e.g. "Mortgage rate climbed 60bps over the month and the engine flagged an inverse correlation with tour completions at 60-day lag — consider revisiting payment-plan messaging.").
+  - Surface the most relevant macro signal in the strategic_recommendations (e.g. "Mortgage rate climbed 60bps over the month and the engine flagged an inverse correlation with tour completions at 60-day lag, consider revisiting payment-plan messaging.").
   - Prefer quoting a correlation narration's title verbatim rather than re-describing the underlying numbers yourself.
   - Do NOT invent macro relationships; if the block is absent or empty, write the briefing without macro language.
-
-NUMBERS DISCIPLINE (ANTI-19.9-A): every number you reference must come from the user prompt. Do NOT compute percentages, averages, ratios, or projections — only quote numbers + deltas pre-computed in the data block. If a number you'd like is missing, write the observation without it rather than inventing.
 
 Be decisive in your recommendations.`
 
@@ -674,8 +665,33 @@ Generate the weekly briefing.`
   // withAiCache de-dupes concurrent cron fires + coordinator "Refresh"
   // clicks within the 5-min default TTL. Cache key is venue + date
   // window start + prompt version (so prompt bumps invalidate the cache).
+  const weeklyBuilt = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'briefing_weekly',
+    taskInstructions: WEEKLY_TASK_INSTRUCTIONS,
+    numbersGuard: {
+      new_inquiries: metrics.new_inquiries,
+      tours_scheduled: metrics.tours_scheduled,
+      bookings: metrics.bookings,
+      lost_deals: metrics.lost_deals,
+      revenue_booked: metrics.revenue_booked,
+      prior_new_inquiries: priorMetrics.new_inquiries,
+      prior_tours_scheduled: priorMetrics.tours_scheduled,
+      prior_bookings: priorMetrics.bookings,
+      prior_revenue_booked: priorMetrics.revenue_booked,
+      inquiries_change_pct: deltas.inquiries_change_pct,
+      tours_change_pct: deltas.tours_change_pct,
+      bookings_change_pct: deltas.bookings_change_pct,
+      revenue_change_pct: deltas.revenue_change_pct,
+      demand_score: demandScore.score,
+      new_candidates: phaseB.newCandidates,
+      auto_linked: phaseB.autoLinked,
+      high_funnel_non_converting: phaseB.highFunnelNonConverting,
+      open_conflicts: phaseB.openConflicts,
+    },
+  })
   const aiResult = await withAiCache(
-    `briefing:${venueId}:${fromDate}:${BRIEFING_PROMPT_VERSION}`,
+    `briefing:${venueId}:${fromDate}:${weeklyBuilt.promptVersion}`,
     () => callAIJson<{
       summary: string
       trend_highlights: string[]
@@ -683,13 +699,14 @@ Generate the weekly briefing.`
       anomaly_summary: string[]
       recommendations: string[]
     }>({
-      systemPrompt: WEEKLY_SYSTEM_PROMPT,
+      systemPrompt: weeklyBuilt.systemPrompt,
       userPrompt: weeklyUserPrompt,
       maxTokens: 1500,
       temperature: 0.4,
       venueId,
       taskType: 'weekly_briefing',
-      promptVersion: BRIEFING_PROMPT_VERSION,
+      promptVersion: weeklyBuilt.promptVersion,
+      contentTier: weeklyBuilt.contentTier,
     }),
   )
 
@@ -867,8 +884,27 @@ Generate the monthly briefing with strategic recommendations.`
 
   // Call AI to generate the monthly briefing.
   // withAiCache absorbs double-fires within the 5-min default TTL.
+  const monthlyBuilt = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'briefing_monthly',
+    taskInstructions: MONTHLY_TASK_INSTRUCTIONS,
+    numbersGuard: {
+      new_inquiries: currentMetrics.new_inquiries,
+      tours_scheduled: currentMetrics.tours_scheduled,
+      bookings: currentMetrics.bookings,
+      lost_deals: currentMetrics.lost_deals,
+      revenue_booked: currentMetrics.revenue_booked,
+      prior_new_inquiries: priorMetrics.new_inquiries,
+      prior_bookings: priorMetrics.bookings,
+      prior_revenue_booked: priorMetrics.revenue_booked,
+      inquiries_change_pct: mom.inquiries_change,
+      bookings_change_pct: mom.bookings_change,
+      revenue_change_pct: mom.revenue_change,
+      demand_score: demandScore.score,
+    },
+  })
   const aiResult = await withAiCache(
-    `briefing:monthly:${venueId}:${currentFrom}:${MONTHLY_BRIEFING_PROMPT_VERSION}`,
+    `briefing:monthly:${venueId}:${currentFrom}:${monthlyBuilt.promptVersion}`,
     () => callAIJson<{
       summary: string
       trend_highlights: string[]
@@ -877,13 +913,14 @@ Generate the monthly briefing with strategic recommendations.`
       recommendations: string[]
       strategic_recommendations: string[]
     }>({
-      systemPrompt: MONTHLY_SYSTEM_PROMPT,
+      systemPrompt: monthlyBuilt.systemPrompt,
       userPrompt: monthlyUserPrompt,
       maxTokens: 2000,
       temperature: 0.4,
       venueId,
       taskType: 'monthly_briefing',
-      promptVersion: MONTHLY_BRIEFING_PROMPT_VERSION,
+      promptVersion: monthlyBuilt.promptVersion,
+      contentTier: monthlyBuilt.contentTier,
     }),
   )
 

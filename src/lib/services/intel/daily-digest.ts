@@ -16,6 +16,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import { callAI } from '@/lib/ai/client'
 import { withAiCache } from '@/lib/ai/cache'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { sendEmail as sendGmail } from '@/lib/services/email/gmail'
 import { sendEmail as sendTransactionalEmail } from '@/lib/services/email/transport'
 import {
@@ -27,8 +28,11 @@ import {
  * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
  * Bump when the system prompt changes so withAiCache invalidates on prompt updates.
  * See PROMPTS-CHANGELOG.md for version history.
+ *
+ * 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+ * when migrated to the canonical coordinator-prompt assembler.
  */
-export const DAILY_DIGEST_PROMPT_VERSION = 'daily-digest.prompt.v1.0'
+export const DAILY_DIGEST_PROMPT_VERSION = 'daily-digest.prompt.v2.0'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -420,9 +424,8 @@ export async function generateDigest(
   // legacy + per-user path both firing). Cache key is venue + date +
   // prompt version; 5-min default TTL from withAiCache covers the window.
   // Only the LLM call is cached; all DB queries above run fresh every time.
-  const digestSystemPrompt =
-    'You are a concise morning briefing assistant for a wedding venue coordinator. ' +
-    'Write a 2-3 sentence summary of their day. Be warm, direct, and actionable. ' +
+  const digestTaskInstructions =
+    'Write a 2-3 sentence summary of the coordinator\'s day. Be warm, direct, and actionable. ' +
     'If there are items needing attention, lead with those. No markdown.'
   const digestUserPrompt = `Venue: ${venueName}
 Coordinator: ${coordinatorName}
@@ -438,16 +441,35 @@ ${sections.briefing_highlight ? `Weekly briefing insight: ${sections.briefing_hi
 
 Write the morning summary.`
 
+  const digestBuilt = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'daily_digest',
+    taskInstructions: digestTaskInstructions,
+    numbersGuard: {
+      pending_drafts: sections.action_needed.pending_drafts,
+      unanswered_inquiries: sections.action_needed.unanswered_inquiries,
+      stale_leads: sections.action_needed.stale_leads,
+      yesterday_new_inquiries: sections.yesterday.new_inquiries,
+      yesterday_emails_sent: sections.yesterday.emails_sent,
+      yesterday_auto_sent: sections.yesterday.auto_sent,
+      upcoming_tours: tours.length,
+      upcoming_weddings: weddings.length,
+      approval_rate_pct: approvalRate,
+      ai_cost: sections.performance.ai_cost,
+      new_engagement_events: engagementResult.count ?? 0,
+    },
+  })
   const summaryResult = await withAiCache(
-    `digest:${venueId}:${todayStr}:${DAILY_DIGEST_PROMPT_VERSION}`,
+    `digest:${venueId}:${todayStr}:${digestBuilt.promptVersion}`,
     () => callAI({
-      systemPrompt: digestSystemPrompt,
+      systemPrompt: digestBuilt.systemPrompt,
       userPrompt: digestUserPrompt,
       maxTokens: 200,
       temperature: 0.4,
       venueId,
       taskType: 'daily_digest',
-      promptVersion: DAILY_DIGEST_PROMPT_VERSION,
+      promptVersion: digestBuilt.promptVersion,
+      contentTier: digestBuilt.contentTier,
     }),
   )
 

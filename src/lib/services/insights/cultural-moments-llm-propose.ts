@@ -41,13 +41,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import {
   proposeFromAutoDetection,
   type CulturalMomentCategory,
 } from '@/lib/services/external-context/cultural-moments'
 
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
 export const CULTURAL_MOMENTS_LLM_PROPOSE_VERSION =
-  'cultural-moments-llm-propose.v1'
+  'cultural-moments-llm-propose.v2'
 
 const DAY_MS = 86_400_000
 
@@ -77,7 +80,7 @@ interface LlmProposalResponse {
   proposals: LlmProposal[]
 }
 
-const SYSTEM_PROMPT = `You are an analyst for Bloom House, a wedding-venue intelligence platform. Your job is to surface NAMED cultural moments that plausibly affect wedding-search behaviour, so a venue coordinator can confirm or dismiss them.
+const TASK_INSTRUCTIONS = `Surface NAMED cultural moments that plausibly affect wedding-search behaviour, so the venue coordinator can confirm or dismiss them.
 
 CONTEXT:
 - Wedding venues book 12-24 months ahead. A celebrity engagement that goes viral now lifts search volume for "engagement ring", "outdoor wedding venue", "rustic barn wedding" in the same week, then translates into venue inquiries 1-6 months later.
@@ -273,17 +276,22 @@ Allowed categories: ${CATEGORY_LIST.join(', ')}.
 
 Propose 0-3 cultural moments active or imminent in the last 30 days for a wedding venue in ${venueState.toUpperCase()}. Apply all five criteria from the system prompt strictly. ${recentBlock}`
 
+  const { systemPrompt, promptVersion } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'cultural_moments_propose',
+    taskInstructions: TASK_INSTRUCTIONS,
+  })
   let response: LlmProposalResponse
   try {
     response = await callAIJson<LlmProposalResponse>({
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt,
       userPrompt,
       maxTokens: 800,
       temperature: 0.4,
       tier: 'sonnet',
       venueId,
       taskType: 'cultural_moments_propose',
-      promptVersion: CULTURAL_MOMENTS_LLM_PROPOSE_VERSION,
+      promptVersion,
       contentTier: 3, // No PII; the prompt only references geography + categories.
     })
   } catch (err) {

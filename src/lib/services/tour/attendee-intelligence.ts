@@ -33,8 +33,11 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 
-export const ATTENDEE_INTEL_PROMPT_VERSION = 'attendee-intel.v1'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
+export const ATTENDEE_INTEL_PROMPT_VERSION = 'attendee-intel.v2'
 
 export const MIN_TOURS_FOR_ATTENDEE_SIGNAL = 10
 
@@ -233,10 +236,7 @@ async function narrateAttendeeOutlier(
     ? Math.round((input.bucketRatePct / input.overallRatePct) * 10) / 10
     : null
 
-  const systemPrompt = `You are an intelligence assistant for a wedding-venue
-coordinator. The platform has detected an attendee-mix outlier from the
-venue's tour history: a particular attendee bucket books at a meaningfully
-higher rate than the overall venue average.
+  const taskInstructions = `The platform has detected an attendee-mix outlier from the venue's tour history: a particular attendee bucket books at a meaningfully higher rate than the overall venue average.
 
 Output JSON:
   {
@@ -245,16 +245,11 @@ Output JSON:
   }
 
 CRITICAL RULES:
-- The ONLY numbers you may reference are the percentages, tour counts, and
-  the lift ratio listed in the input block. Do NOT invent ratios,
-  conversion gaps, or sample sizes.
 - Lead with the action framing. Coordinators read this on a tour-prep
   surface; the value is "what should I do differently", not "what does
   the chart say".
 - Never name specific couples, vendors, or third parties.
 - Keep it to 1-2 sentences. No bullets, no markdown.
-- Do not use em dashes. Use commas, periods, or "and / but / so" instead.
-- No emojis. No exclamation marks.
 - Do not promise a future booking. Frame the action as something to
   prioritise this week, not a guaranteed outcome.`
 
@@ -270,6 +265,19 @@ Tours where this bucket was present: ${input.toursWithBucket} of ${input.totalTo
 Compose the JSON insight. 1-2 sentences. Numbers strictly from the
 listed values.`
 
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_attendee_intel',
+    taskInstructions,
+    numbersGuard: {
+      bucket_rate_pct: input.bucketRatePct,
+      overall_rate_pct: input.overallRatePct,
+      lift: lift,
+      tours_with_bucket: input.toursWithBucket,
+      total_tours: input.totalTours,
+    },
+  })
+
   const result = await callAIJson<AttendeeNarrationJson>({
     systemPrompt,
     userPrompt,
@@ -278,7 +286,8 @@ listed values.`
     venueId,
     taskType: 'attendee_intelligence_top',
     tier: 'sonnet',
-    promptVersion: ATTENDEE_INTEL_PROMPT_VERSION,
+    promptVersion,
+    contentTier,
   })
 
   const insight = (result?.insight ?? '').trim()

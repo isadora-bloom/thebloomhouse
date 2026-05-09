@@ -28,6 +28,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { requireAiName } from '@/lib/ai/personality-builder'
 
+// Re-engagement drafter composes a message TO the candidate, not a
+// coordinator-side analytic narration. The system prompt instructs the
+// model to write FROM the venue AI to the candidate, so it stays on
+// the couple-facing prompt path (Agent N's domain) per the
+// coordinator-narrator unification scope. The surface enum entry in
+// `coordinator-prompt.ts` is reserved for a future coordinator-side
+// re-engagement narrator (e.g. "why this candidate looks worth nudging")
+// rather than this candidate-facing drafter.
 export const RE_ENGAGEMENT_DRAFTER_PROMPT_VERSION = 're-engagement-drafter.prompt.v1.0'
 
 export type ReEngagementChannel = 'email' | 'manual_paste'

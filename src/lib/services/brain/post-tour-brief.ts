@@ -29,10 +29,15 @@ import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
 import { requireAiName } from '@/lib/ai/personality-builder'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import type { TranscriptExtraction } from '../tour/transcript-extract'
 
-/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
-export const BRAIN_PROMPT_VERSION = 'post-tour-brief.prompt.v1.0'
+/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1.
+ *  2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+ *  when the BRIEF (coordinator-facing) was migrated to the canonical
+ *  coordinator-prompt assembler. The follow-up DRAFT (couple-facing)
+ *  stays on its dedicated couple-side prompt builder. */
+export const BRAIN_PROMPT_VERSION = 'post-tour-brief.prompt.v2.0'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -144,8 +149,8 @@ function assessBriefConfidence(
 // Prompt builders
 // ---------------------------------------------------------------------------
 
-function buildBriefSystemPrompt(aiName: string, venueName: string): string {
-  return `You are ${aiName}, the AI assistant for ${venueName}. You have just reviewed a tour transcript and you are writing a coordinator-facing brief in clean markdown.
+function buildBriefTaskInstructions(aiName: string): string {
+  return `You have just reviewed a tour transcript and you are writing a coordinator-facing brief in clean markdown.
 
 Open with a sentence that begins with "${aiName} has reviewed the tour transcript and suggests...". Never use any other assistant name.
 
@@ -323,8 +328,14 @@ export async function generatePostTourBrief(
 
   let briefMarkdown = ''
   try {
+    const briefBuilt = await buildCoordinatorPrompt({
+      venueId,
+      surface: 'post_tour_brief',
+      taskInstructions: buildBriefTaskInstructions(aiName),
+      contentTier: 1,
+    })
     const briefResult = await callAI({
-      systemPrompt: buildBriefSystemPrompt(aiName, venueName),
+      systemPrompt: briefBuilt.systemPrompt,
       userPrompt: briefUserPrompt,
       maxTokens: 900,
       temperature: 0.4,
@@ -334,8 +345,8 @@ export async function generatePostTourBrief(
       // is tier-1 PII per Playbook 21.3.1. OpenAI fallback gets
       // store:false; api_costs.content_tier records the tag for the
       // ZDR audit. OPS-21.3.5.
-      contentTier: 1,
-      promptVersion: BRAIN_PROMPT_VERSION,
+      contentTier: briefBuilt.contentTier,
+      promptVersion: briefBuilt.promptVersion,
     })
     briefMarkdown = briefResult.text.trim()
   } catch (err) {

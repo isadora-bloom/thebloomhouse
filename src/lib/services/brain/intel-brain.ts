@@ -13,6 +13,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI, callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
 // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09): bumped 1.1 → 1.2.
@@ -22,7 +23,9 @@ import { callAI, callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 // surface engine-confirmed cross-channel relationships instead of being
 // hedged. Cultural moments / FRED / calendar / operational state were
 // already plumbed through (T5-θ.2); the narration block closes the loop.
-export const BRAIN_PROMPT_VERSION = 'intel-brain.prompt.v1.2'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
+export const BRAIN_PROMPT_VERSION = 'intel-brain.prompt.v2.0'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -310,8 +313,8 @@ interface WebsiteTrafficRow {
 // System prompt builder
 // ---------------------------------------------------------------------------
 
-function buildNLQSystemPrompt(venueName: string): string {
-  return `You are the intelligence analyst for ${venueName}. You have access to the venue's recent data and your job is to answer questions about venue performance, bookings, marketing, trends, and operations.
+function buildNLQTaskInstructions(venueName: string): string {
+  return `You have access to the venue (${venueName})'s recent data and your job is to answer questions about venue performance, bookings, marketing, trends, and operations.
 
 Answer questions conversationally but precisely. Always cite specific numbers when available. If you don't have enough data to answer confidently, say so. Never make up statistics.
 
@@ -1663,14 +1666,20 @@ export async function answerNaturalLanguageQuery(
   const dataContext = formatDataContext(venueData)
 
   // Call AI with venue data as context
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'nlq_intel',
+    taskInstructions: buildNLQTaskInstructions(venueData.venueName),
+  })
   const aiResult = await callAI({
-    systemPrompt: buildNLQSystemPrompt(venueData.venueName),
+    systemPrompt,
     userPrompt: `Here is the current data for ${venueData.venueName}:\n\n${dataContext}\n\n---\n\nQuestion: ${query}`,
     maxTokens: 1500,
     temperature: 0.3,
     venueId,
     taskType: 'natural_language_query',
-    promptVersion: BRAIN_PROMPT_VERSION,
+    promptVersion,
+    contentTier,
   })
 
   // Log the query and response

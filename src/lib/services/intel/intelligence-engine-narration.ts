@@ -178,10 +178,7 @@ function framingFor(family: IntelInsightFamily): string {
   }
 }
 
-const SYSTEM_PROMPT = `You are narrating a venue-intelligence insight for
-a wedding-venue coordinator. The insight has already been computed
-deterministically; your job is to translate the structured facts into
-2-3 sentences of plain English in coordinator voice.
+const TASK_INSTRUCTIONS = `Narrate a venue-intelligence insight. The insight has already been computed deterministically; your job is to translate the structured facts into 2-3 sentences of plain English in coordinator voice.
 
 Output JSON with three keys:
   - title: short headline, max ${TITLE_MAX_CHARS} chars. Reference the
@@ -196,17 +193,10 @@ Output JSON with three keys:
     Set to null only if the framing genuinely calls for no action.
 
 CRITICAL RULES:
-- Never invent numbers. The ONLY numbers you may reference are those
-  in the LISTED NUMBERS block. Numbers outside the list will be
-  rejected post-generation.
 - Never claim causation. Use "tracks with", "tends to", "is
   associated with", "preceded", not "caused".
 - Never quote a couple's email or message text. Reference the shape
-  of behaviour, not the content.
-- Never make absolute promises ("guaranteed", "definitely will book",
-  "100% sure"). The platform reads probabilities, not oracles.
-- Use a venue's voice but stay neutral and factual.
-- No em dashes — use commas, semicolons, or short sentences instead.`
+  of behaviour, not the content.`
 
 /**
  * Run the narrator. On success returns the LLM-composed narration +
@@ -253,17 +243,27 @@ export async function narrateIntelligenceInsight(
     .filter((line) => line !== null && line !== undefined)
     .join('\n')
 
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_intelligence_engine',
+    taskInstructions: TASK_INSTRUCTIONS,
+    numbersGuard: Object.fromEntries(
+      facts.numbers.map((n, i) => [`allowed_${i}`, n]),
+    ),
+  })
+
   let parsed: Partial<InsightNarration> | null = null
   try {
     parsed = await callAIJson<Partial<InsightNarration>>({
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt,
       userPrompt,
       maxTokens: MAX_OUTPUT_TOKENS,
       temperature: 0.4,
       venueId,
       taskType: 'intelligence_engine_narration',
       tier: 'sonnet',
-      promptVersion: BRAIN_INTEL_ENGINE_PROMPT_VERSION,
+      promptVersion,
+      contentTier,
     })
   } catch (err) {
     console.warn(

@@ -17,12 +17,15 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 
 /** Prompt revision identifier. See PROMPTS-CHANGELOG.md / OPS-21.5.1.
  *  v1.0 (LLM-CALL-INVENTORY backfill): initial versioning for the
  *  weekly-digest executive-summary call. Was previously logging
- *  api_costs.prompt_version=NULL. */
-export const WEEKLY_DIGEST_PROMPT_VERSION = 'weekly-digest.prompt.v1.0'
+ *  api_costs.prompt_version=NULL.
+ *  v2.0 (2026-05-09 LLM-CALL-INVENTORY personality drift #3): bumped
+ *  when migrated to the canonical coordinator-prompt assembler. */
+export const WEEKLY_DIGEST_PROMPT_VERSION = 'weekly-digest.prompt.v2.0'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -634,7 +637,7 @@ async function buildQuickWins(
 // AI Summary Generation
 // ---------------------------------------------------------------------------
 
-const DIGEST_SUMMARY_PROMPT = `You are the intelligence analyst for a wedding venue. Based on the structured weekly digest data provided, write a concise 1-2 sentence executive summary that captures the most important takeaway for the venue coordinator. Be specific with numbers. Tone: professional but warm, like a trusted advisor.
+const DIGEST_SUMMARY_TASK = `Based on the structured weekly digest data provided, write a concise 1-2 sentence executive summary that captures the most important takeaway for the venue coordinator. Be specific with numbers. Tone: professional but warm, like a trusted advisor.
 
 Return a JSON object with:
 - summary: string (1-2 sentence executive summary)`
@@ -653,8 +656,22 @@ async function generateDigestSummary(
       )
       .join('\n\n')
 
+    const built = await buildCoordinatorPrompt({
+      venueId,
+      surface: 'weekly_digest',
+      taskInstructions: DIGEST_SUMMARY_TASK,
+      numbersGuard: {
+        inquiries_this_week: metrics.inquiries_this_week,
+        inquiries_last_week: metrics.inquiries_last_week,
+        bookings_this_week: metrics.bookings_this_week,
+        bookings_last_week: metrics.bookings_last_week,
+        lost_this_week: metrics.lost_this_week,
+        revenue_this_week: metrics.revenue_this_week,
+        avg_response_time_minutes: metrics.avg_response_time_minutes,
+      },
+    })
     const result = await callAIJson<{ summary: string }>({
-      systemPrompt: DIGEST_SUMMARY_PROMPT,
+      systemPrompt: built.systemPrompt,
       userPrompt: `Venue: ${venueName}
 
 METRICS:
@@ -672,7 +689,8 @@ Generate the executive summary.`,
       temperature: 0.3,
       venueId,
       taskType: 'weekly_digest_summary',
-      promptVersion: WEEKLY_DIGEST_PROMPT_VERSION,
+      promptVersion: built.promptVersion,
+      contentTier: built.contentTier,
     })
 
     return result.summary
