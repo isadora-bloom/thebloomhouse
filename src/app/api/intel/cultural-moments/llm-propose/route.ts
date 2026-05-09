@@ -16,12 +16,17 @@
  * after onboarding a venue, before a strategy review, or whenever
  * the queue feels stale.
  *
- * Auth: getPlatformAuth — coordinator must be signed in. No demo-mode
- * bypass since this writes shared cultural_moments rows. Default
- * scope is the caller's venue. ?scope=all requires super_admin /
- * org_admin and sweeps every venue (parity with the sibling auto-
- * propose endpoint's scope rules — see T3 review P0 #3 for the
- * cross-tenant write guardrail rationale).
+ * Two auth paths (mirrors 366ba4a — identity admin endpoints):
+ *   - getPlatformAuth — coordinator session, the browser console
+ *     "Run LLM proposer now" button uses this. Default scope=venue;
+ *     ?scope=all requires org_admin / super_admin.
+ *   - CRON_SECRET (Authorization: Bearer $CRON_SECRET) — for ops/
+ *     agent-side runs that don't hold a user session. Body MUST
+ *     carry { venueId, scope: 'venue' }. ?scope=all is REJECTED on
+ *     the CRON_SECRET path so a leaked secret can't fan out across
+ *     every tenant.
+ *
+ * No demo-mode bypass since this writes shared cultural_moments rows.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -42,7 +47,75 @@ interface SampleSummary {
   scope: 'venue' | 'all'
 }
 
+interface CronBody {
+  venueId?: string
+  scope?: 'venue' | 'all'
+}
+
 export async function POST(request: NextRequest) {
+  // CRON_SECRET path. Skips getPlatformAuth + plan-tier gating —
+  // ops-side runs are trusted. Still enforces scope=venue + a
+  // body-supplied venueId so a leaked secret can't fan out cross-
+  // tenant.
+  const cronAuth =
+    request.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  if (cronAuth) {
+    let body: CronBody = {}
+    try {
+      body = (await request.clone().json()) as CronBody
+    } catch {
+      /* tolerate empty body */
+    }
+    if (!body.venueId) {
+      return NextResponse.json(
+        { error: 'CRON_SECRET path requires venueId in body' },
+        { status: 400 },
+      )
+    }
+    // Hard-gate: scope=all is rejected on the CRON_SECRET path. A
+    // leaked secret would otherwise fan out a Sonnet call per venue
+    // across every tenant; the user-auth path keeps scope=all behind
+    // the org_admin / super_admin role check.
+    if (body.scope && body.scope !== 'venue') {
+      return NextResponse.json(
+        { error: 'CRON_SECRET path is restricted to scope=venue' },
+        { status: 400 },
+      )
+    }
+
+    const supabase = createServiceClient()
+    const { data: venueRow } = await supabase
+      .from('venues')
+      .select('id, state')
+      .eq('id', body.venueId)
+      .maybeSingle()
+    if (!venueRow) {
+      return NextResponse.json({ error: 'venue_not_found' }, { status: 404 })
+    }
+    const venueState = venueRow.state
+      ? (venueRow.state as string).trim().toLowerCase()
+      : null
+
+    const result = await autoProposeCulturalMomentsLlm({
+      supabase,
+      venueId: body.venueId,
+      venueState,
+    })
+    const proposedTitles = result.details
+      .filter((d) => d.outcome === 'proposed')
+      .map((d) => d.title)
+
+    const out: SampleSummary = {
+      venuesProposed: result.proposed > 0 ? 1 : 0,
+      momentsProposed: result.proposed,
+      momentsDeduped: result.deduped,
+      errors: result.errors,
+      sampleTitles: proposedTitles.slice(0, 10),
+      scope: 'venue',
+    }
+    return NextResponse.json(out)
+  }
+
   // GAP-12: API-layer plan_tier enforcement BEFORE any DB reads.
   const plan = await requirePlan(request, 'pre_opening')
   if (!plan.ok) return NextResponse.json(planErrorBody(plan), { status: plan.status })
