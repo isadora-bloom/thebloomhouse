@@ -143,6 +143,37 @@ export async function checkFollowUpsDue(
 
     if (!contactEmail) continue
 
+    // Lifecycle gate (migration 246). The wedding's status is already
+    // filtered to inquiry / tour_scheduled above, but the per-message
+    // signal is the authoritative draft-suppression source: if the
+    // couple's most recent inbound was a decline / going-with-other /
+    // silent-close, even one that hasn't yet flipped the wedding row to
+    // lost, we must NOT generate a follow-up. The Naina Davidar
+    // regression came from exactly this gap on the inbound path; the
+    // follow-up cron is the same risk on the time-driven path.
+    const { data: latestSignaled } = await supabase
+      .from('interactions')
+      .select('lifecycle_signal')
+      .eq('wedding_id', weddingId)
+      .eq('direction', 'inbound')
+      .not('lifecycle_signal', 'is', null)
+      .order('timestamp', { ascending: false })
+      .limit(1)
+    const latestSignal =
+      (latestSignaled && latestSignaled.length > 0
+        ? (latestSignaled[0].lifecycle_signal as string | null)
+        : null) ?? null
+    if (
+      latestSignal === 'lead_declined' ||
+      latestSignal === 'going_with_other' ||
+      latestSignal === 'silent_close'
+    ) {
+      console.log(
+        `[follow-ups] Skipping wedding ${weddingId} -- most recent inbound carries lifecycle signal '${latestSignal}'`
+      )
+      continue
+    }
+
     // Get the last outbound interaction
     const { data: lastOutbound } = await supabase
       .from('interactions')

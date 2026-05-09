@@ -55,6 +55,9 @@ import { createLogger, logEvent, newCorrelationId } from '@/lib/observability/lo
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
 import { updateThreadLifecycleFolder } from '@/lib/services/inbox/lifecycle'
+import { detectLifecycleSignal } from '@/lib/services/lifecycle/signal-detector'
+import { applyLifecycleSignal } from '@/lib/services/lifecycle/writer'
+import { isLossSignal, isTerminalStatus, type WeddingStatus as LifecycleWeddingStatus } from '@/lib/services/lifecycle/wedding-lifecycle-engine'
 
 // ---------------------------------------------------------------------------
 // Stream WWW (migration 205): UTM extraction from extracted_identity
@@ -530,6 +533,12 @@ async function isEmailProcessed(
 /**
  * Find an existing contact by email or create a new person + contact.
  * Returns { personId, weddingId, isNew }.
+ *
+ * 2026-05-08: kept as a back-compat wrapper around the canonical identity
+ * resolver (src/lib/services/identity/resolver.ts). Every entry path now
+ * routes through resolveIdentity for deterministic match semantics; this
+ * function preserves the legacy {personId, weddingId, isNew} shape that
+ * processIncomingEmail and friends expect.
  */
 export async function findOrCreateContact(
   venueId: string,
@@ -562,30 +571,38 @@ export async function findOrCreateContact(
     return { personId: null, weddingId: null, isNew: false }
   }
 
-  // 1. Direct match on people.email within this venue.
-  const { data: byEmail } = await supabase
-    .from('people')
-    .select('id, wedding_id')
-    .eq('venue_id', venueId)
-    .ilike('email', email)
-    .limit(1)
-
-  if (byEmail && byEmail.length > 0) {
-    return {
-      personId: byEmail[0].id,
-      weddingId: byEmail[0].wedding_id,
-      isNew: false,
+  // 1. Canonical resolver — runs the full match-chain (email exact /
+  // canonical / phone). Returns the canonical person_id if the chain
+  // matches anyone. We pass weddingDate=null because email-pipeline
+  // creates the wedding itself based on classification.
+  // Signals: email + phone + name. partner names not known at this stage.
+  // Why this is here: the legacy body matched on `people.email` only,
+  // which missed the Reem case (Knot relay arrived first with hotmail,
+  // calculator arrived next with the same hotmail under different casing
+  // / plus-addressing).
+  try {
+    const { findCanonicalPersonForEmail } = await import('@/lib/services/identity/resolver-helpers')
+    const hit = await findCanonicalPersonForEmail(supabase, venueId, email, extras?.phone ?? null)
+    if (hit) {
+      return { personId: hit.personId, weddingId: hit.weddingId, isNew: false }
     }
+  } catch (err) {
+    // Never let the resolver kill ingest. Fall through to the legacy
+    // contacts-table path; if that misses too we still create a new row.
+    console.warn('[pipeline] canonical resolver pre-check failed, falling through:', err instanceof Error ? err.message : err)
   }
 
-  // 2. Match through the contacts table. contacts has no venue_id column;
-  // scope through people.venue_id via the FK join.
+  // 2. Match through the contacts table (legacy fallback). contacts has
+  // no venue_id column; scope through people.venue_id via the FK join.
+  // Some venues have stragglers in contacts that didn't make it onto
+  // people.email — keep this path to absorb them. tombstones are filtered.
   const { data: byContact } = await supabase
     .from('contacts')
-    .select('person_id, people!inner(id, wedding_id, venue_id)')
+    .select('person_id, people!inner(id, wedding_id, venue_id, merged_into_id)')
     .eq('type', 'email')
     .ilike('value', email)
     .eq('people.venue_id', venueId)
+    .is('people.merged_into_id', null)
     .limit(1)
 
   if (byContact && byContact.length > 0) {
@@ -1334,6 +1351,105 @@ export async function processIncomingEmail(
         error: folderErr instanceof Error ? folderErr.message : String(folderErr),
       },
     })
+  }
+
+  // ---------------------------------------------------------------------
+  // Lifecycle signal detection (migration 246).
+  // ---------------------------------------------------------------------
+  //
+  // The router brain classifies "what kind of email is this" (new
+  // inquiry / reply / vendor / spam). The lifecycle detector is a
+  // separate, narrower question: "does this email carry a state-machine
+  // signal -- decline, going-with-other, platform close, tour cancelled,
+  // tour completed, contract signed, deposit paid?".
+  //
+  // Splitting the two prompts keeps each one's job sharp. The router
+  // already has 7 buckets to balance; adding 7 more lifecycle signals
+  // would dilute its accuracy on the bucket it cares most about
+  // (new_inquiry vs inquiry_reply, the bug-source of half the
+  // misclassifications historically). Detector runs only when there's
+  // a wedding link -- a signal without a wedding has nothing to
+  // transition.
+  //
+  // Side effects:
+  //   - stamps interactions.lifecycle_signal so the auto-draft gate can
+  //     check the most recent inbound on the thread,
+  //   - calls applyLifecycleSignal which UPDATEs weddings.status (when
+  //     legal) and INSERTs a wedding_lifecycle_events row.
+  //
+  // Best-effort wrapper: any failure here logs and continues; never
+  // blocks the main path.
+  let lifecycleSignalDetected: string | null = null
+  if (weddingId) {
+    try {
+      const { data: w } = await supabase
+        .from('weddings')
+        .select('status')
+        .eq('id', weddingId)
+        .maybeSingle()
+      const currentStatus = ((w?.status as string | undefined) ?? null) as LifecycleWeddingStatus | null
+
+      const detected = await detectLifecycleSignal(
+        venueId,
+        {
+          from: fromEmail,
+          subject: email.subject,
+          body: email.body,
+          direction: 'inbound',
+        },
+        {
+          currentStatus,
+          threadInboundCount: priorInteractionCount,
+        },
+        { correlationId },
+      )
+
+      if (detected.signal) {
+        lifecycleSignalDetected = detected.signal
+        // Persist the per-message signal so the auto-draft gate (and
+        // any future surface) can reason about it without re-running
+        // the AI call. Best-effort.
+        try {
+          await supabase
+            .from('interactions')
+            .update({ lifecycle_signal: detected.signal })
+            .eq('id', interactionId)
+        } catch (sigErr) {
+          log.warn('pipeline.lifecycle_signal_stamp_failed', {
+            event_type: 'lifecycle_signal_stamp',
+            outcome: 'fail',
+            data: {
+              interactionId,
+              error: sigErr instanceof Error ? sigErr.message : String(sigErr),
+            },
+          })
+        }
+
+        // Apply the engine. Returns { applied, from, to, violation }.
+        // We don't fail the pipeline on a violation -- the writer
+        // already logged it, and a violation is informational
+        // (coordinator drift), not fatal.
+        await applyLifecycleSignal({
+          supabase,
+          venueId,
+          weddingId,
+          signal: detected.signal,
+          detectedBy: 'ai',
+          sourceInteractionId: interactionId,
+          confidence: detected.confidence,
+        })
+      }
+    } catch (lifeErr) {
+      log.warn('pipeline.lifecycle_detect_failed', {
+        event_type: 'lifecycle_detect',
+        outcome: 'fail',
+        data: {
+          interactionId,
+          weddingId,
+          error: lifeErr instanceof Error ? lifeErr.message : String(lifeErr),
+        },
+      })
+    }
   }
 
   // Resolve the email address of the Gmail connection that received this
@@ -2731,6 +2847,88 @@ export async function processIncomingEmail(
   // wedding are already persisted (intel layer still sees it); we just skip
   // handing off to the brains so Sage doesn't reply.
   if (skipDraft) {
+    return {
+      interactionId,
+      draftId: null,
+      classification: emailClassification,
+      autoSent: false,
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Lifecycle gate (migration 246).
+  // ---------------------------------------------------------------------
+  //
+  // Two ways an outbound draft is suppressed:
+  //
+  //   (1) The wedding row is in a terminal state (lost / cancelled /
+  //       completed). Replying to a couple who has explicitly closed
+  //       the door produces the Naina Davidar regression -- a chirpy
+  //       "I'd love to learn more about your celebration!" answer to a
+  //       "decided to close the conversation" message. Skip the draft
+  //       entirely. The interaction row is preserved (intel still
+  //       counts the message) but Sage stays silent.
+  //
+  //   (2) The most recent inbound on the thread carries a loss signal
+  //       (lead_declined / going_with_other / silent_close), even if
+  //       the wedding row hasn't yet transitioned. The detector + writer
+  //       are eventually-consistent: if the AI just emitted
+  //       'lead_declined' and the engine accepted the transition, the
+  //       row IS lost by the time we reach this gate. But we still
+  //       hand-check the per-message signal so a partial failure
+  //       (UPDATE failed, event log succeeded) doesn't ship a draft.
+  //
+  // Skip is logged but does NOT affect classification / heat / intel --
+  // those layers still process the message normally. The skip is
+  // strictly about the outbound side.
+  if (weddingId) {
+    try {
+      const { data: w } = await supabase
+        .from('weddings')
+        .select('status')
+        .eq('id', weddingId)
+        .maybeSingle()
+      const currentStatus = (w?.status as string | undefined) ?? null
+      if (isTerminalStatus(currentStatus)) {
+        log.info('pipeline.draft_gated_terminal_status', {
+          event_type: 'lifecycle_gate',
+          outcome: 'skip',
+          data: { interactionId, weddingId, currentStatus },
+        })
+        return {
+          interactionId,
+          draftId: null,
+          classification: emailClassification,
+          autoSent: false,
+        }
+      }
+    } catch {
+      // Read failure on the gate is fatal for safety -- if we can't
+      // verify the wedding is non-terminal, skip the draft. Better to
+      // miss a reply than to ship one to a closed lead.
+      log.warn('pipeline.draft_gate_read_failed', {
+        event_type: 'lifecycle_gate',
+        outcome: 'fail',
+        data: { interactionId, weddingId },
+      })
+      return {
+        interactionId,
+        draftId: null,
+        classification: emailClassification,
+        autoSent: false,
+      }
+    }
+  }
+  if (lifecycleSignalDetected && isLossSignal(lifecycleSignalDetected)) {
+    log.info('pipeline.draft_gated_loss_signal', {
+      event_type: 'lifecycle_gate',
+      outcome: 'skip',
+      data: {
+        interactionId,
+        weddingId,
+        signal: lifecycleSignalDetected,
+      },
+    })
     return {
       interactionId,
       draftId: null,

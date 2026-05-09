@@ -46,6 +46,7 @@ import { checkEscalation } from '@/config/escalation-keywords'
 import { DayOfMemoriesTab } from './_components/day-of-memories-tab'
 import { VendorChecklistSection } from './_components/vendor-checklist-section'
 import { InternalNotesFeed } from './_components/internal-notes-feed'
+import { LifecycleHistory } from './_components/lifecycle-history'
 import { WeddingAddressesSection } from '@/components/portal/wedding-addresses-section'
 
 // ---------------------------------------------------------------------------
@@ -204,7 +205,7 @@ interface EventFeedbackVendorRow {
 // Tab definitions
 // ---------------------------------------------------------------------------
 
-type TabKey = 'overview' | 'completeness' | 'planning-notes' | 'vendors' | 'guests' | 'timeline' | 'budget' | 'ceremony-chairs' | 'table-map' | 'communications' | 'internal-notes' | 'feedback' | 'day-of-memories'
+type TabKey = 'overview' | 'completeness' | 'planning-notes' | 'vendors' | 'guests' | 'timeline' | 'budget' | 'ceremony-chairs' | 'table-map' | 'communications' | 'internal-notes' | 'feedback' | 'day-of-memories' | 'lifecycle'
 
 const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: 'overview', label: 'Overview', icon: Activity },
@@ -220,6 +221,7 @@ const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?
   { key: 'internal-notes', label: 'Internal Notes', icon: Lock },
   { key: 'day-of-memories', label: 'Day-of Memories', icon: Camera },
   { key: 'feedback', label: 'Feedback', icon: ClipboardCheck },
+  { key: 'lifecycle', label: 'Lifecycle', icon: Activity },
 ]
 
 // ---------------------------------------------------------------------------
@@ -2304,6 +2306,9 @@ export default function WeddingProfilePage() {
             existingVendorRatings={feedbackVendorRatings}
             onSubmit={fetchData}
           />
+        )}
+        {activeTab === 'lifecycle' && wedding && (
+          <LifecycleHistory weddingId={weddingId} venueId={wedding.venue_id} />
         )}
       </div>
     </div>
