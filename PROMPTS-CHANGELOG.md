@@ -51,6 +51,7 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 | brain-dump | v1.0 | v1.1 | Added `help_question` intent + disambiguation rule for help vs knowledge_base import (Isadora feedback round). |
 | brain-dump-help | — | v1.0 | New help-mode answer prompt; curated surface map of ~50 Bloom routes; constrained-output JSON. |
 | asset-matcher | — | v1.0 | New Haiku prompt for Sage email auto-attach. Picks 0-3 brand-assets photos that would clearly add value to an outbound reply; defaults to empty. Pairs with migration 244 opt-in toggle. |
+| inbox-folder-ai | — | v1.0 | New Haiku prompt for inbox folder triage. Reads from/subject/body and picks one of the six lifecycle folders (new_inquiry / potential_client / client / vendor / advertiser / other) when the structured rule chain in lifecycle.ts cannot. Used as a fallback when rules return 'other' with no strong CRM signal, and powers the coordinator-triggered /api/admin/reclass-folders-ai sweep that relabels historical 'other' rows. Body sliced to 2000 chars; maxTokens=200; defensive fallback to 'other' on any malformed output so a bad response never blocks the pipeline. |
 
 ## Per-brain history
 

@@ -200,6 +200,15 @@ export interface LifecycleDecisionInput {
    * but present so a future LLM-backed classifier can plug in.
    */
   senderClassification?: string | null
+  /**
+   * Optional folder hint from the AI classifier (folder-ai-classifier.ts).
+   * Only consulted when the rule chain would otherwise return 'other'
+   * AND there is no strong structured signal: no wedding link,
+   * no people.role, no advertiser-domain match. The fallback ordering
+   * keeps deterministic CRM signal authoritative; AI is a tie-breaker
+   * for the long tail. Pass null/undefined to skip the AI branch.
+   */
+  aiClassification?: LifecycleFolder | null
 }
 
 /**
@@ -219,6 +228,7 @@ export function decideLifecycleFolder(
     senderDomain,
     senderRole,
     senderClassification,
+    aiClassification,
   } = input
 
   // 1) Advertiser — sender domain in allow-list AND no wedding link.
@@ -273,7 +283,27 @@ export function decideLifecycleFolder(
     return 'new_inquiry'
   }
 
-  // 6) Other — anything left.
+  // 6) AI fallback — the rule chain is about to return 'other'. If
+  //    we have an aiClassification AND no strong structured signal
+  //    (no wedding link, no people.role, not on the advertiser list),
+  //    trust the AI label. The "no strong signal" gate prevents the
+  //    AI from second-guessing a deterministic CRM hit. We also drop
+  //    AI labels that are themselves 'other' (no value-add) and
+  //    disallow the AI from picking 'client' here, since 'client'
+  //    requires a real weddings.booked_at link the AI cannot see.
+  if (aiClassification && aiClassification !== 'other' && aiClassification !== 'client') {
+    const hasStrongSignal =
+      weddingStatus !== null ||
+      senderRole !== null ||
+      senderClassification === 'vendor' ||
+      senderClassification === 'advertiser' ||
+      isAdvertiserDomain(senderDomain)
+    if (!hasStrongSignal) {
+      return aiClassification
+    }
+  }
+
+  // 7) Other — anything left.
   return 'other'
 }
 
@@ -302,19 +332,39 @@ export interface UpdateThreadFolderArgs {
   threadId: string | null
   /** interactions.id of the row that triggered this update. */
   interactionId?: string | null
+  /**
+   * Optional: when true, after the rule chain runs, if the would-be
+   * folder is 'other' AND the most recent inbound on the thread has a
+   * non-trivial body (>= 30 chars), classifyFolderAI is invoked and
+   * the result is fed back through decideLifecycleFolder via
+   * aiClassification. Default false. The live email pipeline keeps the
+   * default off; the one-shot reclass endpoint flips it on.
+   */
+  useAi?: boolean
+  /**
+   * Optional correlation id passed through to the AI classifier so the
+   * Haiku call lands in api_costs with the same correlation_id as the
+   * triggering inbound. Ignored when useAi is false.
+   */
+  correlationId?: string
 }
 
 export async function updateThreadLifecycleFolder(
   args: UpdateThreadFolderArgs,
 ): Promise<{ folder: LifecycleFolder | null; updated: number }> {
-  const { supabase, venueId, threadId, interactionId } = args
+  const { supabase, venueId, threadId, interactionId, useAi, correlationId } = args
 
   // Step 1: Fetch every interaction on the thread for this venue.
   // venue_id is enforced so a forensic-replay run on a different
   // venue can't mutate rows it shouldn't.
+  // We always pull subject + body + from_name + timestamp so the AI
+  // fallback path has the inputs it needs without a second round trip.
+  // The extra columns are small (subject/body_preview are short, full_body
+  // is a TEXT but rarely huge for emails) and the rule-only callers
+  // simply ignore them.
   let q = supabase
     .from('interactions')
-    .select('id, direction, wedding_id, person_id, from_email, gmail_thread_id')
+    .select('id, direction, wedding_id, person_id, from_email, from_name, subject, full_body, body_preview, timestamp, gmail_thread_id')
     .eq('venue_id', venueId)
     .eq('type', 'email')
 
@@ -410,7 +460,7 @@ export async function updateThreadLifecycleFolder(
     ? senderEmail.split('@').pop()!.toLowerCase()
     : null
 
-  const folder = decideLifecycleFolder({
+  const ruleFolder = decideLifecycleFolder({
     weddingStatus,
     bookedAt,
     inboundCount,
@@ -419,6 +469,60 @@ export async function updateThreadLifecycleFolder(
     senderDomain,
     senderRole,
   })
+
+  // Step 6b: AI fallback — only when caller opted in AND the rule chain
+  // would otherwise drop the thread into 'other'. We pick the most-recent
+  // inbound row (richest body, freshest sender) and hand it to the AI
+  // classifier. The result feeds back through decideLifecycleFolder via
+  // aiClassification — keeping the deterministic rule chain authoritative.
+  let folder = ruleFolder
+  if (useAi && ruleFolder === 'other') {
+    type InboundRow = {
+      direction: string
+      from_email?: string | null
+      from_name?: string | null
+      subject?: string | null
+      full_body?: string | null
+      body_preview?: string | null
+      timestamp?: string | null
+    }
+    const inboundRows = (rows as unknown as InboundRow[]).filter(
+      (r) => r.direction === 'inbound',
+    )
+    inboundRows.sort((a, b) => {
+      const ta = a.timestamp ? Date.parse(a.timestamp) : 0
+      const tb = b.timestamp ? Date.parse(b.timestamp) : 0
+      return tb - ta
+    })
+    const latest = inboundRows[0]
+    const body = (latest?.full_body ?? latest?.body_preview ?? '').toString()
+    if (latest && latest.from_email && body.length >= 30) {
+      // Lazy import to keep the lifecycle module's import graph stable
+      // for the unit tests that don't need the AI client surface.
+      const { classifyFolderAI } = await import('./folder-ai-classifier')
+      const ai = await classifyFolderAI(
+        venueId,
+        {
+          from: latest.from_email,
+          fromName: latest.from_name ?? null,
+          subject: latest.subject ?? null,
+          body,
+          direction: 'inbound',
+        },
+        { correlationId },
+      )
+      folder = decideLifecycleFolder({
+        weddingStatus,
+        bookedAt,
+        inboundCount,
+        outboundCount,
+        hasTourEvent,
+        senderDomain,
+        senderRole,
+        aiClassification: ai.folder,
+      })
+    }
+  }
 
   // Step 7: Stamp every interaction on the thread. Using gmail_thread_id
   // when available means coordinator-side outbound rows from a sibling

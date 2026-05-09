@@ -1256,6 +1256,11 @@ export default function InboxPage() {
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState<string | null>(null)
+  // AI folder reclass state. Drives the "Auto-classify Other" button +
+  // its progress banner. Status string surfaces in the same banner row as
+  // syncStatus (one-at-a-time UX since both are venue-wide operations).
+  const [reclassing, setReclassing] = useState(false)
+  const [reclassStatus, setReclassStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Default to the New Inquiries folder per spec — virgin first-touch
   // leads are the highest-priority bucket on every page load. The
@@ -1935,6 +1940,61 @@ export default function InboxPage() {
     }
   }
 
+  // ---- AI reclass of "Other" emails ----
+  //
+  // POSTs to /api/admin/reclass-folders-ai which sweeps the venue's
+  // 'other' bucket through Haiku and re-stamps lifecycle_folder when
+  // the AI returns a non-other folder with confidence >= 70. Caps at
+  // 500 rows per click to keep the round-trip under ~2 minutes; the
+  // coordinator can click again to process the next batch.
+  const handleReclass = async () => {
+    setReclassing(true)
+    setReclassStatus('Sage is reading 500 emails... this takes ~2 minutes.')
+    try {
+      const res = await fetch('/api/admin/reclass-folders-ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batchSize: 20, maxRows: 500 }),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new Error(`Reclass failed (${res.status}) ${text}`.trim())
+      }
+      const data = (await res.json()) as {
+        ok: boolean
+        scanned: number
+        updated: number
+        by_folder: Record<string, number>
+        ai_errors?: number
+        low_confidence?: number
+        duration_ms: number
+      }
+      const moved = Object.entries(data.by_folder ?? {})
+        .filter(([folder, count]) => folder !== 'other' && count > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([folder, count]) => {
+          const label =
+            LIFECYCLE_LABELS[folder as LifecycleFolder] ?? folder
+          return `${count} to ${label}`
+        })
+      const summary =
+        data.updated === 0
+          ? `Sage scanned ${data.scanned} email${data.scanned === 1 ? '' : 's'}, no high-confidence matches.`
+          : `Moved ${moved.join(', ')}.`
+      setReclassStatus(summary)
+      await fetchInteractions()
+      setTimeout(() => setReclassStatus(null), 10000)
+    } catch (err) {
+      console.error('Reclass failed:', err)
+      const msg =
+        err instanceof Error ? err.message : 'Auto-classify failed.'
+      setReclassStatus(msg)
+      setTimeout(() => setReclassStatus(null), 8000)
+    } finally {
+      setReclassing(false)
+    }
+  }
+
   // ---- Filtering ----
   //
   // Tab filtering stays client-side (it's a fast pass over a 200-row max).
@@ -2089,11 +2149,25 @@ export default function InboxPage() {
             <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
             {syncing ? 'Syncing...' : 'Sync'}
           </button>
+          <button
+            onClick={handleReclass}
+            disabled={reclassing}
+            title="Have Sage read each Other-folder email and bucket it correctly"
+            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Sparkles className={`w-4 h-4 ${reclassing ? 'animate-pulse' : ''}`} />
+            {reclassing ? 'Classifying...' : 'Auto-classify Other'}
+          </button>
         </div>
       </div>
       {syncStatus && (
         <div className="bg-sage-50 border border-sage-200 rounded-lg px-4 py-2 text-sm text-sage-700">
           {syncStatus}
+        </div>
+      )}
+      {reclassStatus && (
+        <div className="bg-sage-50 border border-sage-200 rounded-lg px-4 py-2 text-sm text-sage-700">
+          {reclassStatus}
         </div>
       )}
 
