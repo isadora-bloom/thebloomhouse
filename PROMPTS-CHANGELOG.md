@@ -21,6 +21,51 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 - **MINOR** — wording / instruction refinement that holds the
   contract. Bumps still get a changelog row.
 
+## 2026-05-09 (Wave 1A — emotionally-blind couple-facing brains read auto-context)
+
+The IDENTITY-TRUTH-AUDIT (Tenant 1, table rows 1-2 + 9 + journey
+breakdown §4) flagged four couple-facing brains as emotionally blind:
+the FIRST inquiry reply (`generateInquiryDraft`), review-response,
+post-tour-brief, and re-engagement-drafter. All four now consume the
+canonical `loadAutoContextForWedding` loader and inject the formatted
+COUPLE'S NOTES block into the system prompt assembly. Universal-rules
+gained a SOFT-CONTEXT NOTES POLICY section that governs the
+verbatim-quote rule for every brain that emits the canonical block,
+so a future brain forgetting an inline guard cannot leak grief or
+health markers into a draft.
+
+Architectural decisions:
+- **Single-source loader.** `src/lib/services/identity/auto-context-loader.ts`
+  is the only reader of `wedding_auto_context` for brain context.
+  Drift between five different limits and three different sort orders
+  (5 / 10 / 14 with mixed tie-breakers) collapses to one shape.
+- **brainBlock=null on empty.** Every brain skips the section
+  entirely when no eligible notes exist. No "(no notes yet)"
+  framing — that pollutes the prompt with a defining absence.
+- **Best-effort load.** Each brain wraps the loader call in
+  try/catch. A loader failure must NEVER block draft generation.
+- **Forward-compatible with mig 255.** The loader queries
+  `sensitive` + `expires_at` columns and falls back to a legacy
+  shape when the query errors with "column does not exist", so
+  the four brains ship safely on either side of the mig 255 cut.
+- **Pattern fix, not couple-specific.** No venue-specific
+  overrides; no couple-specific gating. The universal rule applies
+  uniformly.
+
+| Module | Old | New | Reason |
+|--------|-----|-----|--------|
+| inquiry-brain (`generateInquiryDraft` + `generateFollowUp`) | v1.2 | v1.3 | First-touch reply now loads auto-context (was the largest tenant-1 hole per audit §7 #1). Follow-up path migrated to canonical loader at the same time so both paths share one formatter. Inline "do NOT quote verbatim" hint removed; universal rule covers it. Pipeline passes `weddingId` through. |
+| review-response | v1 | v2 | Optional `weddingId` parameter; API route resolves it from reviewer-name match (single-match only). When present, fold COUPLE'S NOTES into systemPrompt between task and learning blocks. Public-facing reply now reflects what venue learned during planning without echoing sensitive content. |
+| post-tour-brief | v2.0 | v2.1 | Both the coordinator brief AND the couple-facing follow-up draft load the focal wedding's auto-context. Coordinator walks in informed; couple's follow-up reflects pre-tour soft-context (anxieties, vendor preferences, family logistics). Universal rule governs verbatim handling on the couple-facing draft. |
+| re-engagement-drafter | v1.0 | v1.1 | When candidate has resolved to a wedding (`resolved_wedding_id`), load auto-context and append a one-liner to systemPrompt: "weight your reply toward patience and slack". Privacy posture frozen 2026-04-30 stays intact (no signal counts, no surveillance feel); soft-context only widens patience window. |
+| client-brain | v1.1 | v1.2 | Inline `wedding_auto_context` reader migrated to canonical loader. Output shape now matches every other brain. |
+| couple-portal Sage chat | v2 | v2.1 | Inline soft-context reader emits canonical formatBrainBlock so universal rule governs the verbatim hint. Type-level `WeddingContext.autoContext` shape unchanged; only the prompt-emission line changed. |
+
+The four brains all converge on `loadAutoContextForWedding(supabase,
+weddingId)` returning `{ notes, brainBlock }`. The brainBlock format is
+the source of truth that the universal SOFT-CONTEXT NOTES POLICY
+references by literal header line.
+
 ## 2026-05-09 (Wave 1B — per-couple narrators read auto-context)
 
 Per-couple narrators now consume the wedding's `wedding_auto_context`
@@ -74,6 +119,76 @@ Architectural decisions:
 | journey-narrative | v2.0 | v2.1 | Same factual chronology + first-touch contract; tone is shaped by the soft layer when present. Adds explicit `TASK_INSTRUCTIONS` rule: notes shape tone, never facts. |
 | pricing-elasticity | v2.0 | (no bump) | Venue-level by construction; no focal couple. Documented inline alongside the version constant. |
 | anomaly-detection (metric) | v2.0 | (no bump) | Venue-level by construction. Per-wedding anomaly surfaces don't exist yet; when they land they will load focal-couple notes for their own narration. |
+
+## 2026-05-09 (Wave 1C — venue-aggregate rollups consume auto-context)
+
+Venue-aggregate surfaces (briefings, digests, intelligence engine,
+source-quality scorecard) now consume `wedding_auto_context` themes
+via the new `aggregateAutoContextThemes` aggregator in
+`src/lib/services/identity/auto-context-loader.ts`. The IDENTITY-TRUTH-
+AUDIT (Tenant 1, table row 10 + §5) flagged that "the venue's
+business-decision layer treats every couple as a flat row." Wave 1A
+fixed the per-couple brain side, Wave 1B fixed per-couple narrators,
+Wave 1C closes the venue-strategy side: counts and trends by
+category, rolled up across all couples, fed into the narrative prompt.
+
+Architectural decisions:
+- **Aggregate ≠ disclose.** The aggregator returns counts +
+  weddingCount + trendDelta + up-to-3 exemplars. Sensitive notes
+  (sensitive=true OR category in {health, grief, financial_stress,
+  family_conflict, mental_health}) are redacted to "(sensitive note
+  redacted from rollup)". UI surfaces NEVER name a couple alongside
+  a sensitive theme. The doctrine comment lives at the loader's
+  Wave-1C section header.
+- **One aggregator, four consumers.** briefings (weekly + monthly),
+  weekly-digest, daily-digest, and intelligence-engine all call
+  `loadVenueAutoContextRollup` for their respective windows (7 / 30 /
+  7 / 1 / 30 days). Rolling out a sensitivity rule change requires a
+  one-line edit in the aggregator, not a sweep across consumers.
+- **Source-quality theme correlation.** The Phase C scorecard now
+  carries `topEmotionalThemes[]` per source so coordinators can see
+  "couples from The Knot mention budget concerns at 2x the rate of
+  direct inquiries". Cross-venue aggregation drops the per-source
+  themes (per-venue weddingShares aren't meaningfully averageable);
+  the per-venue drilldown carries the correlation.
+- **15th detector: emotional_theme.** `detectEmotionalThemes` reads
+  the 30d rollup, surfaces categories with notable uptake (≥4 notes
+  AND trend ≥50%) as `intelligence_insights` rows of new type
+  `emotional_theme` / category `emotional` (migration 256). Sensitive-
+  tagged themes never fire as `priority: high` and the narrator
+  framing forbids couple-naming.
+- **Soft-fail everywhere.** Every aggregator call wraps in try/catch
+  and returns empty rollups + null block. A theme-load failure must
+  never block a digest or briefing from generating.
+- **Pre-mig-255 graceful degrade.** The aggregator queries
+  `sensitive` and falls back to a legacy projection when the column
+  doesn't exist, so the venue rollups ship safely on either side of
+  the mig 255 cut.
+
+| Module | Old | New | Reason |
+|--------|-----|-----|--------|
+| briefings (weekly) | v2.0 | v2.1 | EMOTIONAL THEMES THIS WEEK block fed by `aggregateAutoContextThemes(venueId, 7)`. Task instructions extended with the sensitive-handling rule. Persisted `emotional_themes` on BriefingContent for the briefings page render. |
+| briefings (monthly) | v2.0 | v2.1 | Same shape, 30-day window, EMOTIONAL THEMES THIS MONTH header. Strategic recommendations may reference theme trends. |
+| weekly-digest | v2.0 | v2.1 | WEEKLY EMOTIONAL PULSE block injected into the executive-summary prompt. Theme rollup persisted on `WeeklyDigest.emotional_themes` and on the `ai_briefings.content.emotional_themes` slot. |
+| daily-digest | v2.0 | v2.1 | YESTERDAY EMOTIONAL PULSE block (1d window, tighter exemplar list). Sensitive themes surface as counts only. |
+| intelligence-engine-narration | v2 | v2.1 | New `emotional_theme_pulse` family. Framing forbids couple-naming on sensitive categories. |
+
+Companion migration: `256_emotional_themes_insight_type.sql` widens the
+`intelligence_insights.insight_type` CHECK to accept `emotional_theme`
+and the `category` CHECK to accept `emotional`. Adds
+`venue_config.notify_on_sensitive_auto_context` (default false) — the
+opt-in flag for the future real-time notification when a sensitive
+note lands. The notification body never echoes the note body, only
+signals that a sensitive note arrived for a specific couple.
+
+UI surfaces wired in the same wave:
+- /agent/inbox row chip (per-row `AutoContextChipRender`, batched via
+  `useBatchAutoContextChips`). Sensitive notes redact to category +
+  Lock glyph; non-sensitive notes show body on hover.
+- /agent/leads row chip (same component, same hook).
+- /intel/briefings "Couples we learned about this week" section
+  (`EmotionalThemesSection`). Sensitive themes show counts +
+  exemplars-redacted, never named to a couple.
 
 ## 2026-05-09 (late evening — coordinator-facing prompt unification)
 

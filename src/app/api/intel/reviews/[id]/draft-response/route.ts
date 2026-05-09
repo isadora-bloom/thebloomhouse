@@ -47,16 +47,48 @@ export async function POST(
     return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   }
 
+  // Wave 1A (2026-05-09): try to resolve the underlying wedding from
+  // the reviewer's name so the brain can load wedding_auto_context and
+  // reflect what the venue learned during planning. Best-effort —
+  // ambiguous matches (multiple weddings sharing a first name) are
+  // skipped so we don't fold the WRONG couple's grief into a public
+  // reply. The brain still drafts a competent reply when no wedding
+  // resolves.
+  let resolvedWeddingId: string | null = null
+  const reviewerNameRaw =
+    typeof review.reviewer_name === 'string' ? review.reviewer_name.trim() : ''
+  if (reviewerNameRaw.length > 0) {
+    const tokens = reviewerNameRaw.split(/\s+/).filter((t) => t.length > 0)
+    const firstName = tokens[0] ?? ''
+    const lastName = tokens.length > 1 ? tokens[tokens.length - 1] : ''
+    if (firstName.length > 0 && lastName.length > 0) {
+      const { data: peopleMatches } = await supabase
+        .from('people')
+        .select('wedding_id')
+        .eq('venue_id', review.venue_id as string)
+        .ilike('first_name', firstName)
+        .ilike('last_name', lastName)
+        .limit(2)
+      if (peopleMatches && peopleMatches.length === 1) {
+        resolvedWeddingId = (peopleMatches[0].wedding_id as string | null) ?? null
+      }
+    }
+  }
+
   try {
-    const result = await generateReviewResponse(review.venue_id, {
-      id: review.id as string,
-      reviewer_name: (review.reviewer_name as string | null) ?? null,
-      rating: (review.rating as number | null) ?? null,
-      title: (review.title as string | null) ?? null,
-      body: review.body as string,
-      source: (review.source as string | null) ?? null,
-      response_text: (review.response_text as string | null) ?? null,
-    })
+    const result = await generateReviewResponse(
+      review.venue_id,
+      {
+        id: review.id as string,
+        reviewer_name: (review.reviewer_name as string | null) ?? null,
+        rating: (review.rating as number | null) ?? null,
+        title: (review.title as string | null) ?? null,
+        body: review.body as string,
+        source: (review.source as string | null) ?? null,
+        response_text: (review.response_text as string | null) ?? null,
+      },
+      { weddingId: resolvedWeddingId },
+    )
 
     if (!result.draft) {
       return NextResponse.json({ error: 'empty draft' }, { status: 502 })

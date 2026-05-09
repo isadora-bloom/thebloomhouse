@@ -20,8 +20,17 @@ import { buildPersonalityPrompt } from '@/lib/ai/personality-builder'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
 import { callAI } from '@/lib/ai/client'
 import { createServiceClient } from '@/lib/supabase/service'
+import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
 
-export const REVIEW_RESPONSE_PROMPT_VERSION = 'review-response.prompt.v1'
+/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1.
+ *  v2 (2026-05-09, Wave 1A): when the caller resolves the underlying
+ *  wedding, the brain now loads `wedding_auto_context` and folds the
+ *  COUPLE'S NOTES block into the system prompt so the public review
+ *  reply can soften / weight tone for couples whose planning carried
+ *  emotional load. Universal-rules SOFT-CONTEXT NOTES POLICY governs
+ *  the verbatim-quote rule (sensitive notes are voice-shaping only,
+ *  never echoed in a public-facing reply). */
+export const REVIEW_RESPONSE_PROMPT_VERSION = 'review-response.prompt.v2'
 
 export interface ReviewForResponse {
   id: string
@@ -112,6 +121,17 @@ Write the response now.`
 export async function generateReviewResponse(
   venueId: string,
   review: ReviewForResponse,
+  options: {
+    /**
+     * The wedding row this review belongs to, when the caller can
+     * resolve it (typically via reviewer name match). Lets the brain
+     * load `wedding_auto_context` and fold soft-context into the system
+     * prompt so the public reply reflects what the venue learned during
+     * planning. Optional — when null, the brain still drafts a competent
+     * reply from review_language alone. Wave 1A (2026-05-09).
+     */
+    weddingId?: string | null
+  } = {},
 ): Promise<ReviewResponseResult> {
   const personalityData = await loadPersonalityDataCached(venueId)
   const personalityPrompt = buildPersonalityPrompt(personalityData)
@@ -133,6 +153,25 @@ export async function generateReviewResponse(
   const approvedReviewPhrases = (phraseRows ?? [])
     .map((r) => r.phrase as string)
     .filter(Boolean)
+
+  // Wave 1A (2026-05-09): when the caller resolved a wedding, fold
+  // soft-context into the system prompt. Reviews land months after
+  // planning so by definition the venue has accumulated context —
+  // grief, vendor preferences, family logistics, what stressed the
+  // couple, what landed. The reply must reflect that without echoing
+  // sensitive content (universal-rules SOFT-CONTEXT NOTES POLICY).
+  let coupleNotesBlock: string | null = null
+  if (options.weddingId) {
+    try {
+      const { brainBlock } = await loadAutoContextForWedding(
+        supabase,
+        options.weddingId,
+      )
+      coupleNotesBlock = brainBlock
+    } catch {
+      // Soft-context failure must never block a public-reply draft.
+    }
+  }
 
   // Optional learning block — banned/approved phrases from voice
   // preferences. Mirrors generateClientDraft so the same voice
@@ -162,7 +201,13 @@ export async function generateReviewResponse(
     businessName,
   })
 
-  const systemPrompt = `${UNIVERSAL_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${learningBlock}`
+  // The COUPLE'S NOTES block sits between the task prompt and the
+  // learning block so the model reads (1) what the task is, (2) what
+  // it knows about THIS couple, (3) the venue's voice corrections.
+  // Empty block is null — skip the section entirely so we don't pollute
+  // the prompt with an empty header.
+  const coupleNotesSection = coupleNotesBlock ? `\n\n${coupleNotesBlock}` : ''
+  const systemPrompt = `${UNIVERSAL_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${coupleNotesSection}${learningBlock}`
 
   const result = await callAI({
     systemPrompt,

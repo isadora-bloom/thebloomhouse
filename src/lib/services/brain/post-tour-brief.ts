@@ -30,14 +30,23 @@ import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
 import { requireAiName } from '@/lib/ai/personality-builder'
 import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
+import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
 import type { TranscriptExtraction } from '../tour/transcript-extract'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1.
  *  2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
  *  when the BRIEF (coordinator-facing) was migrated to the canonical
  *  coordinator-prompt assembler. The follow-up DRAFT (couple-facing)
- *  stays on its dedicated couple-side prompt builder. */
-export const BRAIN_PROMPT_VERSION = 'post-tour-brief.prompt.v2.0'
+ *  stays on its dedicated couple-side prompt builder.
+ *
+ *  v2.1 (2026-05-09, Wave 1A): both the coordinator brief AND the
+ *  couple-facing follow-up draft now load `wedding_auto_context` so
+ *  pre-tour soft-context (anxieties, vendor preferences, family
+ *  logistics) reaches the post-tour artefacts. The coordinator walks
+ *  in informed; the couple's follow-up reflects context Sage already
+ *  observed. Universal-rules SOFT-CONTEXT NOTES POLICY governs the
+ *  verbatim-quote rule. */
+export const BRAIN_PROMPT_VERSION = 'post-tour-brief.prompt.v2.1'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -187,7 +196,9 @@ Rules:
 - No subject line, no greeting like "Dear [Name]". Start with a warm but natural opening.
 - No em dashes. Use commas, colons, or full stops.
 - Sign off as ${aiName} on behalf of ${venueName}.
-- If the transcript offered nothing concrete to reference, return the exact token NO_DRAFT with nothing else.`
+- If the transcript offered nothing concrete to reference, return the exact token NO_DRAFT with nothing else.
+
+Soft-context notes policy: if the user prompt includes a "COUPLE'S NOTES (DO NOT QUOTE VERBATIM)" block, use those notes for tone, empathy, and what NOT to say. Never quote them verbatim. Never echo a sensitive note (health, grief, family conflict, financial stress) directly back to the couple. Notes tagged "[SENSITIVE]" are voice-shaping only. Notes tagged "[PINNED]" carry coordinator emphasis.`
 }
 
 // ---------------------------------------------------------------------------
@@ -324,7 +335,24 @@ export async function generatePostTourBrief(
     ? `\nWedding context:\n- Couple: ${weddingSummary.coupleName ?? 'unknown'}${weddingSummary.partnerName ? ` & ${weddingSummary.partnerName}` : ''}\n- Wedding date: ${weddingSummary.weddingDate ?? 'not set'}\n- Guest count estimate: ${weddingSummary.guestCount ?? 'not set'}\n`
     : '\nWedding context: no linked wedding record yet.\n'
 
-  const briefUserPrompt = `Tour scheduled at: ${tour.scheduled_at}\nTour type: ${tour.tour_type}\n${weddingBlock}\nExtracted intelligence (JSON):\n${extractionJson}\n\nWrite the brief now.`
+  // Wave 1A (2026-05-09): pre-tour soft-context. By the time a tour
+  // happens, profile-enrichment has typically extracted the couple's
+  // anxieties, vendor preferences, family logistics from prior emails.
+  // The coordinator brief should integrate that so the coordinator
+  // walks in informed; the follow-up draft should reflect it so the
+  // couple feels heard. brainBlock=null when nothing eligible yet.
+  let coupleNotesBlock: string | null = null
+  if (weddingId) {
+    try {
+      const { brainBlock } = await loadAutoContextForWedding(supabase, weddingId)
+      coupleNotesBlock = brainBlock
+    } catch {
+      // Soft-context failure must never block the brief generation.
+    }
+  }
+  const coupleNotesSection = coupleNotesBlock ? `\n${coupleNotesBlock}\n` : ''
+
+  const briefUserPrompt = `Tour scheduled at: ${tour.scheduled_at}\nTour type: ${tour.tour_type}\n${weddingBlock}${coupleNotesSection}\nExtracted intelligence (JSON):\n${extractionJson}\n\nWrite the brief now.`
 
   let briefMarkdown = ''
   try {
@@ -365,8 +393,13 @@ export async function generatePostTourBrief(
     return null
   }
 
-  // 4. Compose the follow-up draft
-  const draftUserPrompt = `Tour context for the follow-up email:\n${weddingBlock}\nExtracted intelligence (JSON):\n${extractionJson}\n\nCompose the email body now. Remember: 80 to 160 words, reference a specific interest, end with a next-step question.`
+  // 4. Compose the follow-up draft. Same coupleNotesSection as the
+  // brief — the universal-rules SOFT-CONTEXT NOTES POLICY governs
+  // verbatim quoting from the system-prompt side. The couple-facing
+  // draft is more sensitive than the coordinator brief: a sentence
+  // that mentions the bride's mum's illness directly would land
+  // wrong. The rule keeps it tone-shaping only.
+  const draftUserPrompt = `Tour context for the follow-up email:\n${weddingBlock}${coupleNotesSection}\nExtracted intelligence (JSON):\n${extractionJson}\n\nCompose the email body now. Remember: 80 to 160 words, reference a specific interest, end with a next-step question.`
 
   let draftBody: string | null = null
   try {

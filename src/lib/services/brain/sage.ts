@@ -36,6 +36,7 @@ import { searchKnowledgeBase } from '../knowledge-base'
 import { createServiceClient } from '@/lib/supabase/service'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { getSageTaskPrompt } from '@/config/prompts/task-prompts-sage'
+import { formatBrainBlock, type AutoContextNote } from '@/lib/services/identity/auto-context-loader'
 
 // ---------------------------------------------------------------------------
 // Stream EEEE: human-escalation detection + chat sign-off
@@ -601,19 +602,25 @@ export async function generateSageResponse(
       )
     }
 
-    // Soft context (coordinator + AI knowledge of this couple, do NOT
-    // quote verbatim). Pulled from wedding_auto_context — life mentions,
-    // mood, vendor preferences, family dynamics, dietary asks. Sage
-    // uses these for tone/empathy. Pinned items always come first; the
-    // loader already sorted them. Migration 253 / 2026-05-09.
+    // Soft context (coordinator + AI knowledge of this couple). Pulled
+    // from wedding_auto_context. Wave 1A (2026-05-09): emit via the
+    // canonical formatBrainBlock so every brain shares one block label
+    // and the universal SOFT-CONTEXT NOTES POLICY governs the
+    // verbatim-quote rule. The pinned-first sort already happened in
+    // getWeddingContext; we just adapt the shape here.
     if (weddingContext.autoContext.length > 0) {
-      const lines = weddingContext.autoContext.map((c) => {
-        const tag = c.pinned ? '[pinned] ' : ''
-        return `- ${tag}(${c.category}) ${c.body}`
-      })
-      parts.push(
-        `Soft context (coordinator + AI knowledge of this couple, do NOT quote verbatim):\n${lines.join('\n')}`,
-      )
+      const adapted: AutoContextNote[] = weddingContext.autoContext.map((c) => ({
+        id: '',
+        body: c.body,
+        category: c.category,
+        source: c.source,
+        sensitive: false,
+        pinned: c.pinned,
+        expires_at: null,
+        confidence: null,
+        captured_at: '',
+      }))
+      parts.push(formatBrainBlock(adapted))
     }
 
     weddingBlock = `\n--- WEDDING CONTEXT ---\n${parts.join('\n')}\n--- END WEDDING CONTEXT ---\n`

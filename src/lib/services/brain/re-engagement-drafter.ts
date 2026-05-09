@@ -27,6 +27,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { requireAiName } from '@/lib/ai/personality-builder'
+import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
 
 // Re-engagement drafter composes a message TO the candidate, not a
 // coordinator-side analytic narration. The system prompt instructs the
@@ -36,7 +37,16 @@ import { requireAiName } from '@/lib/ai/personality-builder'
 // `coordinator-prompt.ts` is reserved for a future coordinator-side
 // re-engagement narrator (e.g. "why this candidate looks worth nudging")
 // rather than this candidate-facing drafter.
-export const RE_ENGAGEMENT_DRAFTER_PROMPT_VERSION = 're-engagement-drafter.prompt.v1.0'
+/** v1.1 (2026-05-09, Wave 1A): when the candidate has resolved to a
+ *  wedding (`resolved_wedding_id`) and that wedding carries soft
+ *  context, the drafter folds the COUPLE'S NOTES block into the
+ *  system prompt. The privacy posture stays intact: the system rules
+ *  still ban specific signal counts ("you saved us 3 times"), but
+ *  emotional truths the system already knows about (a stressful job
+ *  mention, a sick parent) shape tone — patience, slack, no urgency.
+ *  Universal-rules SOFT-CONTEXT NOTES POLICY governs the verbatim
+ *  rule (sensitive notes are voice-shaping only, never echoed). */
+export const RE_ENGAGEMENT_DRAFTER_PROMPT_VERSION = 're-engagement-drafter.prompt.v1.1'
 
 export type ReEngagementChannel = 'email' | 'manual_paste'
 
@@ -136,14 +146,49 @@ export async function draftReEngagementMessage(
 ): Promise<{ draft_text: string; model: string; platform: string } | null> {
   const { data: cand } = await sb
     .from('candidate_identities')
-    .select('id, venue_id, source_platform, first_name, last_initial, state')
+    .select('id, venue_id, source_platform, first_name, last_initial, state, resolved_wedding_id')
     .eq('id', args.candidate_id)
     .maybeSingle()
   if (!cand) return null
-  const c = cand as { id: string; venue_id: string; source_platform: string; first_name: string | null; last_initial: string | null; state: string | null }
+  const c = cand as {
+    id: string
+    venue_id: string
+    source_platform: string
+    first_name: string | null
+    last_initial: string | null
+    state: string | null
+    resolved_wedding_id: string | null
+  }
 
   const venue = await fetchVenueContext(sb, c.venue_id)
   if (!venue) return null
+
+  // Wave 1A (2026-05-09): when this candidate has resolved to a
+  // wedding, fold soft-context into the system prompt. Re-engagement
+  // is high-stakes — the candidate has gone silent. A note like
+  // "stressful job interview last week" or "juggling a sick parent"
+  // reframes the silence as life-context, not disinterest, and
+  // shapes the drafter's tone toward patience instead of urgency.
+  // Privacy posture (frozen 2026-04-30) stays intact: signal-count
+  // bans are still in SYSTEM_PROMPT below; soft-context only widens
+  // the patience window and tone, never widens the disclosure
+  // surface. brainBlock=null when nothing eligible — skip cleanly.
+  let coupleNotesBlock: string | null = null
+  if (c.resolved_wedding_id) {
+    try {
+      const { brainBlock } = await loadAutoContextForWedding(
+        sb,
+        c.resolved_wedding_id,
+      )
+      coupleNotesBlock = brainBlock
+    } catch {
+      // Soft-context failure must never block the re-engagement draft.
+    }
+  }
+
+  const systemPrompt = coupleNotesBlock
+    ? `${SYSTEM_PROMPT}\n\n${coupleNotesBlock}\n\nSoft-context handling for the COUPLE'S NOTES above: use them ONLY to shape tone toward patience and slack. Never quote them verbatim. Never reference sensitive notes (health, grief, family conflict, financial stress) by content. Never imply you tracked the candidate or know the specific event. The signal-count and surveillance-feel rules above remain absolute.`
+    : SYSTEM_PROMPT
 
   const userPrompt = buildUserPrompt(args.channel, venue, {
     source_platform: c.source_platform,
@@ -153,7 +198,7 @@ export async function draftReEngagementMessage(
   })
 
   const response = await callAI({
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt,
     userPrompt,
     maxTokens: args.channel === 'email' ? 400 : 200,
     temperature: 0.4,

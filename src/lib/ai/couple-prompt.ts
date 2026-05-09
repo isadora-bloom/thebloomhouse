@@ -55,7 +55,12 @@ import {
 // (the v2 jump captures the move from inline assembly to the unified
 // assembler + the new COUPLE_RULES floor).
 export const COUPLE_PROMPT_VERSIONS = {
-  chat: 'couple-chat.prompt.v2',
+  // chat v2.1 (2026-05-09, Wave 1A): the soft-context block emitted
+  // inside the wedding-context section now uses the canonical
+  // COUPLE'S NOTES block label so the universal SOFT-CONTEXT NOTES
+  // POLICY governs the verbatim-quote rule. Inline "do NOT quote
+  // verbatim" hint removed.
+  chat: 'couple-chat.prompt.v2.1',
   contract_question: 'couple-contract.prompt.v1',
   event_feedback: 'couple-event-feedback.prompt.v1',
   file_extraction: 'couple-file-extraction.prompt.v1',

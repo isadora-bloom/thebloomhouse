@@ -32,8 +32,17 @@ import { resolveSageIdentity, renderOpenerConstraints } from '@/lib/services/bra
  * v1.1 (T5-schema-gap, migration 165): added explicit "Headcount status"
  * line to the EXTRACTED DATA context block so Sage knows whether to ask
  * for headcount or skip it. Pairs with weddings.estimated_guests.
+ *
+ * v1.3 (2026-05-09, Wave 1A): the first-touch reply path
+ * (`generateInquiryDraft`) now loads `wedding_auto_context` via the
+ * canonical `loadAutoContextForWedding` loader and injects the
+ * COUPLE'S NOTES block into the system prompt — same pattern that
+ * already lived on `generateFollowUp`. The follow-up path is migrated
+ * to the loader at the same time so both call sites share one
+ * formatter. Universal-rules SOFT-CONTEXT NOTES POLICY now governs
+ * verbatim-quote handling for both paths.
  */
-export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.2'
+export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.3'
 import { selectPhrase } from '@/lib/ai/phrase-selector'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
@@ -42,6 +51,7 @@ import { searchKnowledgeBase } from '@/lib/services/knowledge-base'
 import { buildSageIntelligenceContext } from '@/lib/services/intel/sage-intelligence'
 import { getApprovedPhrases } from '@/lib/services/intel/review-language'
 import { getLearningContext, getVoicePreferences } from '@/lib/services/learning'
+import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
 import { logEvent } from '@/lib/observability/logger'
 
 /**
@@ -88,6 +98,16 @@ export interface InquiryDraftOptions {
    * (e.g. "you reached out to partner@venue.com") for multi-Gmail venues.
    */
   receivedAtAddress?: string
+  /**
+   * The wedding row this inquiry is attached to. When the pipeline has
+   * already minted a wedding (always true for new_inquiry; nearly always
+   * true for inquiry_reply), pass it through so the brain can load
+   * `wedding_auto_context` and reflect any soft-context the system has
+   * already learned about this couple. Optional because the test harness
+   * and admin entry points may invoke the brain without a wedding row.
+   * 2026-05-09 — Wave 1A.
+   */
+  weddingId?: string | null
   /** Correlation id from the upstream pipeline (T1-G). Logged onto
    *  api_costs and downstream draft rows. */
   correlationId?: string
@@ -406,6 +426,7 @@ export async function generateInquiryDraft(
     taskType = 'new_inquiry',
     source,
     receivedAtAddress,
+    weddingId,
     correlationId,
   } = options
 
@@ -639,6 +660,34 @@ export async function generateInquiryDraft(
     }
   } catch {
     // Review phrases are enrichment, not critical
+  }
+
+  // Step 6d: Couple's auto-context notes (Wave 1A, 2026-05-09).
+  //
+  // The first reply Sage ever sends to a couple is conversion-critical.
+  // If the venue already knows about a sick parent, a vendor preference,
+  // or a financial constraint — through prior emails, brain-dumps, or
+  // a tour transcript — the reply must reflect it. Cold openings to
+  // emotionally-loaded inquiries was the gap flagged in
+  // IDENTITY-TRUTH-AUDIT.md §1 + §7 #1.
+  //
+  // The loader returns `brainBlock=null` when no eligible notes exist
+  // (a brand-new inquiry from an unknown email — the wedding row was
+  // minted moments ago, profile-enrichment hasn't run yet). When null,
+  // we skip the section entirely; an empty header would pollute the
+  // prompt with "we have no notes" framing the model would interpret
+  // as a defining absence. Universal-rules SOFT-CONTEXT NOTES POLICY
+  // governs the verbatim-quote rule from the system-prompt side.
+  if (weddingId) {
+    try {
+      const supabase = createServiceClient()
+      const { brainBlock } = await loadAutoContextForWedding(supabase, weddingId)
+      if (brainBlock) {
+        contextBlock += `\n\n${brainBlock}`
+      }
+    } catch {
+      // Soft-context loader failure must NEVER block draft generation.
+    }
   }
 
   // Step 7: Add learning context from past feedback (approved drafts, rejections, edits)
@@ -886,33 +935,18 @@ export async function generateFollowUp(
     }
   }
 
-  // Continuous-enrichment auto-context (migration 253). Soft-context the
-  // AI extracted across emails / brain-dumps / tour transcripts. Top 5
-  // active, pinned first. Sage uses for tone, never quotes verbatim.
-  // 2026-05-09 user mandate.
+  // Wave 1A (2026-05-09): replaced the inline auto-context query with
+  // the canonical loader so first-touch and follow-up paths share one
+  // formatter and the universal SOFT-CONTEXT NOTES POLICY governs the
+  // verbatim-quote rule. The brainBlock is null when the loader has
+  // nothing eligible — skip the section entirely (no empty header).
   try {
-    const { data: autoCtxRows } = await supabase
-      .from('wedding_auto_context')
-      .select('body, category, pinned')
-      .eq('wedding_id', weddingId)
-      .eq('is_active', true)
-      .order('pinned', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(5)
-    const autoCtx = ((autoCtxRows ?? []) as Array<{
-      body: string
-      category: string | null
-      pinned: boolean
-    }>)
-    if (autoCtx.length > 0) {
-      contextBlock += `\n\nSoft context (AI + coordinator knowledge of this couple, do NOT quote verbatim):`
-      for (const c of autoCtx) {
-        const tag = c.pinned ? '[pinned] ' : ''
-        contextBlock += `\n- ${tag}(${c.category ?? 'misc'}) ${c.body}`
-      }
+    const { brainBlock } = await loadAutoContextForWedding(supabase, weddingId)
+    if (brainBlock) {
+      contextBlock += `\n\n${brainBlock}`
     }
   } catch {
-    // Best-effort.
+    // Soft-context loader failure must NEVER block draft generation.
   }
 
   if (lastInteraction) {

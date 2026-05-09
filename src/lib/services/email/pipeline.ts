@@ -3005,6 +3005,12 @@ export async function processIncomingEmail(
         // Tell Sage which inbox received the inquiry so it can reference
         // the correct address for multi-Gmail venues.
         receivedAtAddress,
+        // Wave 1A (2026-05-09): pass the wedding so inquiry-brain can
+        // load wedding_auto_context and reflect any soft-context the
+        // venue has already learned about this couple in their first
+        // reply. Optional in the InquiryDraftOptions contract — the
+        // test harness and admin entry points may invoke without one.
+        weddingId,
         correlationId,
       })
 

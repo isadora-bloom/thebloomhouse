@@ -23,8 +23,14 @@ import {
 } from '@/lib/ai/personality-builder'
 import { selectPhrase } from '@/lib/ai/phrase-selector'
 
-/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
-export const BRAIN_PROMPT_VERSION = 'client-brain.prompt.v1.1'
+/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1.
+ *  v1.2 (2026-05-09, Wave 1A): inline `wedding_auto_context` reader
+ *  migrated to the canonical `loadAutoContextForWedding` loader so all
+ *  brains share one formatter. The "do NOT quote verbatim" inline
+ *  instruction was removed — universal-rules SOFT-CONTEXT NOTES POLICY
+ *  now carries the rule for every brain that emits the COUPLE'S NOTES
+ *  block. */
+export const BRAIN_PROMPT_VERSION = 'client-brain.prompt.v1.2'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
 import { CLIENT_RULES, getClientTaskPrompt } from '@/config/prompts/task-prompts-client'
@@ -33,6 +39,7 @@ import { buildSageIntelligenceContext } from '@/lib/services/intel/sage-intellig
 import { getApprovedPhrases } from '@/lib/services/intel/review-language'
 import { getLearningContext, getVoicePreferences } from '@/lib/services/learning'
 import { VOICE_TRAINING_MIN_SAMPLES } from '@/lib/services/brain/inquiry'
+import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
 import { logEvent } from '@/lib/observability/logger'
 
 // ---------------------------------------------------------------------------
@@ -268,30 +275,15 @@ async function loadWeddingContext(weddingId: string): Promise<string> {
   // Continuous-enrichment auto-context (migration 253). Soft-context the
   // AI extracted from emails / brain-dumps / tour transcripts: life
   // mentions, mood, vendor prefs, dietary, cultural significance.
-  // Pinned-first, last 10 active. Tagged for the brain so it informs
-  // tone/empathy without echoing back. 2026-05-09 user mandate.
+  // Wave 1A (2026-05-09): migrated to the canonical loader so the
+  // COUPLE'S NOTES block matches every other brain and the universal
+  // SOFT-CONTEXT NOTES POLICY governs the verbatim-quote rule. The
+  // inline "do NOT quote verbatim" hint is gone — universal rule now
+  // carries it.
   try {
-    const { data: autoCtxRows } = await supabase
-      .from('wedding_auto_context')
-      .select('body, category, pinned')
-      .eq('wedding_id', weddingId)
-      .eq('is_active', true)
-      .order('pinned', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(10)
-    const autoCtx = ((autoCtxRows ?? []) as Array<{
-      body: string
-      category: string | null
-      pinned: boolean
-    }>)
-    if (autoCtx.length > 0) {
-      const lines = autoCtx.map((c) => {
-        const tag = c.pinned ? '[pinned] ' : ''
-        return `- ${tag}(${c.category ?? 'misc'}) ${c.body}`
-      })
-      parts.push(
-        `Soft context (AI + coordinator knowledge of this couple, do NOT quote verbatim):\n${lines.join('\n')}`,
-      )
+    const { brainBlock } = await loadAutoContextForWedding(supabase, weddingId)
+    if (brainBlock) {
+      parts.push(brainBlock)
     }
   } catch {
     // Best-effort. The auto-context is enrichment, not gate-quality
