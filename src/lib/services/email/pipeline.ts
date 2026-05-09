@@ -2003,6 +2003,25 @@ export async function processIncomingEmail(
     },
   })
 
+  // 2026-05-09 user mandate: "no names should be just one name if they
+  // have inquired or sent an email". The Knot relay hands us "Jen B" on
+  // first inquiry; the calculator email (and email signatures, contract
+  // signers, etc.) carry the full "Jennifer Biaksangi" later. Without
+  // a promotion service the people row stays at "Jen B" forever.
+  // Fire-and-forget — runtime must not block the pipeline. Best-effort,
+  // errors logged. The service itself skips tombstoned people rows and
+  // refuses to upgrade across last-name conflicts (different humans).
+  if (weddingId) {
+    void (async () => {
+      try {
+        const { upgradePeopleNameFromTouchpoints } = await import('@/lib/services/identity/name-upgrade')
+        await upgradePeopleNameFromTouchpoints(weddingId)
+      } catch (err) {
+        console.warn('[pipeline] name-upgrade failed:', err instanceof Error ? err.message : err)
+      }
+    })()
+  }
+
   // F6: classifier-derived heat signals. The router-brain already reads
   // the body, so we use its structured output instead of re-regexing for
   // tour requests, commitment phrases, or family mentions. Each fires as
