@@ -379,6 +379,9 @@ BEGIN
   END IF;
 END $$;
 
+-- Couple users are linked to people via email (auth.users.email = people.email),
+-- not via a people.user_id column. This mirrors the pattern in migrations 030
+-- and 031.
 CREATE POLICY "couple_read_brand_assets" ON public.brand_assets
   FOR SELECT
   TO authenticated
@@ -387,7 +390,7 @@ CREATE POLICY "couple_read_brand_assets" ON public.brand_assets
     AND venue_id IN (
       SELECT w.venue_id FROM public.weddings w
       JOIN public.people p ON p.wedding_id = w.id
-      WHERE p.user_id = auth.uid()
+      WHERE p.email = (SELECT email FROM auth.users WHERE id = auth.uid())
     )
   );
 
