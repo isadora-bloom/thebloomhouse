@@ -92,6 +92,7 @@ import {
   pickDisplayName,
   buildEvidenceFromSignal,
   classifyNameShape,
+  pruneJunkEvidence,
   type NameSignal,
   type NameEvidence,
   type NameSource,
@@ -168,6 +169,7 @@ interface PersonShape {
   email: string | null
   first_name: string | null
   last_name: string | null
+  name_evidence?: NameEvidence[] | null
 }
 
 const NAME_RE = /\b([A-Z][a-z'À-ſ-]{1,29})\s+([A-Z](?:[a-z'À-ſ-]{1,29}|\.))/g
@@ -379,6 +381,32 @@ function signalsFromTangential(row: TangentialSignalRow): NameSignal[] {
 }
 
 // ---------------------------------------------------------------------------
+// Wave 2.5 — venue-own-name lookup (mirror of name-capture's loader,
+// public-shape Set so pruneJunkEvidence can match case-insensitively)
+// ---------------------------------------------------------------------------
+
+async function loadVenueOwnNamesForRebuild(
+  supabase: ReturnType<typeof createServiceClient>,
+  venueId: string,
+): Promise<Set<string>> {
+  const out = new Set<string>()
+  try {
+    const [venueResp, configResp] = await Promise.all([
+      supabase.from('venues').select('name').eq('id', venueId).maybeSingle(),
+      supabase.from('venue_config').select('business_name').eq('venue_id', venueId).maybeSingle(),
+    ])
+    const venueName = (venueResp.data?.name as string | null | undefined) ?? null
+    const businessName = (configResp.data?.business_name as string | null | undefined) ?? null
+    if (venueName) out.add(venueName.replace(/\s+/g, ' ').trim().toLowerCase())
+    if (businessName) out.add(businessName.replace(/\s+/g, ' ').trim().toLowerCase())
+  } catch {
+    // Tolerate missing rows / RLS edge cases — pruning still runs without
+    // venue-name match, just won't flag venue-own-name entries.
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
 // Per-wedding processing
 // ---------------------------------------------------------------------------
 
@@ -393,6 +421,7 @@ async function processOneWedding(
   venueId: string,
   weddingId: string,
   dryRun: boolean,
+  venueOwnNames: ReadonlySet<string>,
 ): Promise<WeddingProcessResult> {
   const result: WeddingProcessResult = {
     weddingId,
@@ -417,7 +446,7 @@ async function processOneWedding(
       .maybeSingle(),
     supabase
       .from('people')
-      .select('id, email, first_name, last_name, merged_into_id')
+      .select('id, email, first_name, last_name, name_evidence, merged_into_id')
       .eq('wedding_id', weddingId)
       .is('merged_into_id', null),
     supabase
@@ -467,6 +496,26 @@ async function processOneWedding(
   for (const person of people) {
     const personEmail = (person.email ?? '').trim().toLowerCase() || null
 
+    // Wave 2.5: prune existing junk evidence (greeting / HTML / venue-
+    // name) from this person's name_evidence array. Pre-existing rows
+    // captured before Wave 2.5 may still carry the old shape; pruning
+    // stamps them 'rejected' so the picker ignores them on rerun.
+    const existingEvidence = Array.isArray(person.name_evidence)
+      ? (person.name_evidence as NameEvidence[])
+      : []
+    const { cleaned: prunedEvidence, pruned } = pruneJunkEvidence(existingEvidence, venueOwnNames)
+    const evidencePruned = pruned.greeting + pruned.html + pruned.venue_own_name
+    if (evidencePruned > 0 && !dryRun) {
+      try {
+        await supabase
+          .from('people')
+          .update({ name_evidence: prunedEvidence })
+          .eq('id', person.id)
+      } catch (err) {
+        console.warn('[rebuild-names] prune failed', { personId: person.id, err: err instanceof Error ? err.message : err })
+      }
+    }
+
     // For dry-run we synthesise a shadow evidence array by mapping
     // every signal through `buildEvidenceFromSignal`. The real run
     // calls `captureNameEvidence` which does the same thing plus the
@@ -482,7 +531,43 @@ async function processOneWedding(
       sigsForPerson.push(s)
     }
 
-    if (sigsForPerson.length === 0) continue
+    if (sigsForPerson.length === 0) {
+      // No new signals — but if we pruned junk evidence above, we still
+      // need to re-run the picker on the cleaned array and dual-write
+      // the result so junk-shaped first_name / last_name get cleared.
+      if (evidencePruned > 0 && !dryRun) {
+        const pickAfterPrune = pickDisplayName(prunedEvidence)
+        const movedFirst = (person.first_name ?? null) !== (pickAfterPrune.first ?? null)
+        const movedLast = (person.last_name ?? null) !== (pickAfterPrune.last ?? null)
+        if (movedFirst || movedLast) {
+          try {
+            await supabase
+              .from('people')
+              .update({
+                first_name: pickAfterPrune.first,
+                last_name: pickAfterPrune.last,
+                name_confidence: pickAfterPrune.confidence,
+              })
+              .eq('id', person.id)
+            result.upgradesApplied += 1
+            if (result.diffs.length < DIFF_SAMPLE_CAP) {
+              result.diffs.push({
+                personId: person.id,
+                weddingId,
+                currentDisplay: { first: person.first_name, last: person.last_name },
+                proposedDisplay: { first: pickAfterPrune.first, last: pickAfterPrune.last, confidence: pickAfterPrune.confidence },
+                evidenceCount: prunedEvidence.length,
+                sourceBreakdown: { junk_pruned: evidencePruned },
+                handleCount: 0,
+              })
+            }
+          } catch (err) {
+            console.warn('[rebuild-names] post-prune dual-write failed', { personId: person.id, err: err instanceof Error ? err.message : err })
+          }
+        }
+      }
+      continue
+    }
 
     if (dryRun) {
       // Build shadow evidence + run the picker locally (no DB writes).
@@ -601,6 +686,11 @@ export async function POST(req: NextRequest) {
 
   const supabase = createServiceClient()
 
+  // Wave 2.5: load venue's own names ONCE so pruneJunkEvidence can run
+  // synchronously inside the per-wedding loop without issuing N extra
+  // SELECTs.
+  const venueOwnNames = await loadVenueOwnNamesForRebuild(supabase, venueId)
+
   // Wedding cohort — non-tombstoned, ordered for stable paging.
   const { data: weddingRows, error: weddingErr, count } = await supabase
     .from('weddings')
@@ -630,7 +720,7 @@ export async function POST(req: NextRequest) {
   for (const w of weddings) {
     let processed: WeddingProcessResult
     try {
-      processed = await processOneWedding(supabase, venueId, w.id, dryRun)
+      processed = await processOneWedding(supabase, venueId, w.id, dryRun, venueOwnNames)
     } catch (err) {
       console.warn('[rebuild-names] wedding sweep failed', {
         weddingId: w.id,

@@ -56,6 +56,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { logEvent } from '@/lib/observability/logger'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -140,6 +141,7 @@ export type NameShape =
   | 'first_only'       // "Adam"
   | 'username'         // "Erinhorrigan", "rosaliehoyle", "thelabrozzis"
   | 'proxy'            // "User 89436314x..."
+  | 'rejected'         // greeting / HTML / venue-own-name — never enters picker
   | 'unknown'
 
 export interface CaptureResult {
@@ -157,6 +159,158 @@ export interface PickResult {
   last: string | null
   confidence: number
   handleHint: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Wave 2.5 — rejection list + shape hardening
+// ---------------------------------------------------------------------------
+//
+// Live data (May 2026) showed three classes of junk slipping into the
+// picker as 50-confidence "real_name" evidence:
+//
+//   1. Greetings — `Hi Megan`, `Hi Isadora`, `Hello Shafaq`. The body
+//      extractor was emitting "Hi" + the addressee as a {first, last}
+//      tuple. The shape detector saw two title-cased tokens and called
+//      it real_name.
+//   2. Venue's own name — `Rixey Manor` showing up as `first_name=Rixey`
+//      / `last_name=Manor` for several couples because the venue's
+//      outbound signature got captured as evidence about the COUPLE.
+//   3. Raw HTML — `</strong>` ending up as a first_name because the
+//      extracted_identity JSON preserved unescaped tags.
+//
+// All three need to be rejected at the chokepoint BEFORE the value is
+// stored, not after. The `rejected` shape is dropped from name evidence
+// entirely so the picker has no chance of selecting it.
+
+export const REJECTED_NAME_TOKENS: ReadonlySet<string> = new Set([
+  // greetings — the most common live-data offender
+  'hi', 'hello', 'hey', 'dear', 'greetings', 'hiya', 'howdy',
+  // pleasantries that look like names if mis-parsed
+  'thanks', 'thank', 'regards', 'best', 'cheers', 'sincerely',
+  // role descriptors that should never be a first_name
+  'team', 'staff', 'admin', 'support', 'info',
+])
+
+/**
+ * Reject when first_name is a known greeting / pleasantry / role
+ * descriptor, regardless of last_name. "Hi Megan" parses as
+ * {first:'Hi', last:'Megan'} via splitFull and trips this guard.
+ */
+export function isRejectedGreeting(first: string | null): boolean {
+  if (!first) return false
+  return REJECTED_NAME_TOKENS.has(first.toLowerCase().trim())
+}
+
+/**
+ * HTML tag detection — anything still carrying `<tag>` or `&entity;`
+ * after our normalisation must be junk. Preferred path is to call
+ * `stripHtmlForNameValue` first; this is the safety-net check that
+ * forbids residual markup from ever entering evidence.
+ */
+export function containsHtmlTag(value: string): boolean {
+  if (!value) return false
+  return /<[^>]+>/.test(value) || /&[a-z]+;/i.test(value) || /<\/[a-z]/i.test(value)
+}
+
+/**
+ * Strip HTML tags + decode common entities + collapse whitespace.
+ * Returns null when the value is empty or under 2 chars after
+ * stripping (junk fragment with no usable name content). Run this
+ * helper at every signal-source extractor BEFORE feeding values into
+ * the chokepoint so `</strong>`-style tokens never even reach
+ * classifyNameShape.
+ */
+export function stripHtmlForNameValue(value: string | null | undefined): string | null {
+  if (!value) return null
+  let v = value
+  // Decode the most common HTML entities. Full entity decoding is out
+  // of scope; these are the ones we've seen in the wild on
+  // extracted_identity values.
+  v = v.replace(/&nbsp;/gi, ' ')
+       .replace(/&amp;/gi, '&')
+       .replace(/&lt;/gi, '<')
+       .replace(/&gt;/gi, '>')
+       .replace(/&quot;/gi, '"')
+       .replace(/&#39;/gi, "'")
+       .replace(/&apos;/gi, "'")
+  // Strip tags (paired or self-closing).
+  v = v.replace(/<[^>]+>/g, ' ')
+  // Collapse whitespace.
+  v = v.replace(/\s+/g, ' ').trim()
+  if (!v) return null
+  if (v.length < 2) return null
+  return v
+}
+
+/**
+ * Venue-own-name detector. The venue's outbound signature ("Rixey Manor",
+ * "The Glass House") sometimes lands in extracted_identity as a name
+ * claim; that's evidence about the venue's email, NOT about the COUPLE.
+ *
+ * We compare against `venues.name` and `venue_config.business_name`
+ * (case + whitespace insensitive). Returns true when the candidate
+ * matches either of those, OR when both first+last together reconstruct
+ * the venue name.
+ */
+export async function isVenueOwnName(
+  supabase: SupabaseClient,
+  venueId: string | null,
+  candidate: { first: string | null; last: string | null; full?: string | null },
+): Promise<boolean> {
+  if (!venueId) return false
+  const names = await loadVenueOwnNames(supabase, venueId)
+  if (names.size === 0) return false
+  const candidates: string[] = []
+  if (candidate.full) candidates.push(candidate.full)
+  if (candidate.first && candidate.last) candidates.push(`${candidate.first} ${candidate.last}`)
+  if (candidate.first) candidates.push(candidate.first)
+  if (candidate.last) candidates.push(candidate.last)
+  for (const c of candidates) {
+    const norm = normaliseVenueNameToken(c)
+    if (!norm) continue
+    if (names.has(norm)) return true
+  }
+  return false
+}
+
+/** Lower-case + collapse whitespace to make a comparable venue-name key. */
+function normaliseVenueNameToken(value: string | null | undefined): string {
+  if (!value) return ''
+  return value.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+/**
+ * Per-call cache for venue-name lookups so we don't issue an extra
+ * SELECT for every signal in a hot loop. Keyed by venueId. Populated
+ * lazily; cleared by chokepoint when the supabase client doesn't match
+ * (cheap protection against stale state in cron loops).
+ */
+const VENUE_NAME_CACHE = new Map<string, { names: Set<string>; cachedAt: number }>()
+const VENUE_NAME_CACHE_TTL_MS = 5 * 60 * 1000  // 5 minutes is plenty; venue rename is rare.
+
+async function loadVenueOwnNames(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<Set<string>> {
+  const cached = VENUE_NAME_CACHE.get(venueId)
+  if (cached && Date.now() - cached.cachedAt < VENUE_NAME_CACHE_TTL_MS) return cached.names
+  const names = new Set<string>()
+  try {
+    const [venueResp, configResp] = await Promise.all([
+      supabase.from('venues').select('name').eq('id', venueId).maybeSingle(),
+      supabase.from('venue_config').select('business_name').eq('venue_id', venueId).maybeSingle(),
+    ])
+    const venueName = (venueResp.data?.name as string | null | undefined) ?? null
+    const businessName = (configResp.data?.business_name as string | null | undefined) ?? null
+    const norm1 = normaliseVenueNameToken(venueName)
+    const norm2 = normaliseVenueNameToken(businessName)
+    if (norm1) names.add(norm1)
+    if (norm2) names.add(norm2)
+  } catch {
+    // Swallow — venue-name detection is a guard, not a hard requirement.
+  }
+  VENUE_NAME_CACHE.set(venueId, { names, cachedAt: Date.now() })
+  return names
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +358,7 @@ function computeConfidenceForShape(shape: NameShape): number {
     case 'first_only':    return 20
     case 'username':      return 5
     case 'proxy':         return 0
+    case 'rejected':      return 0
     case 'unknown':       return 10
   }
 }
@@ -423,14 +578,25 @@ function titleCase(s: string): string {
 /**
  * Classify a single name string into a NameShape. Used by dynamic-
  * confidence sources (Gmail / Knot / WeddingWire) to score shape.
+ *
+ * Wave 2.5: HTML-tagged values and greeting-token leads are stamped
+ * 'rejected' here. Venue-own-name rejection requires a DB lookup so it
+ * happens in `captureNameEvidence` (async) — not in this pure helper.
  */
 export function classifyNameShape(value: string): NameShape {
   if (!value || !value.trim()) return 'unknown'
   const v = value.trim()
+  // Wave 2.5: HTML tags / entities anywhere in the value mean we
+  // failed to strip markup upstream. Reject so picker never sees it.
+  if (containsHtmlTag(v)) return 'rejected'
   if (isProxyShaped(v)) return 'proxy'
   if (isUsernameShaped(v)) return 'username'
   // Real-name analysis — split into tokens.
   const tokens = v.split(/\s+/).filter(Boolean)
+  // Wave 2.5: if the first token is a greeting / pleasantry, the whole
+  // value is a greeting+addressee mis-parse ("Hi Megan", "Dear Isadora",
+  // "Thanks Shafaq"). Reject before token-count classification.
+  if (tokens.length > 0 && isRejectedGreeting(tokens[0])) return 'rejected'
   if (tokens.length === 1) {
     // Single real-name-shaped token = first_only.
     return 'first_only'
@@ -471,13 +637,21 @@ function splitFull(full: string): { first: string | null; last: string | null } 
  */
 export function buildEvidenceFromSignal(signal: NameSignal): NameEvidence | null {
   const capturedAt = signal.capturedAt ?? new Date().toISOString()
-  // Shape inputs into a candidate (first, last) + raw.
-  let first: string | null = signal.first?.trim() || null
-  let last: string | null = signal.last?.trim() || null
+  // Wave 2.5: strip HTML markup from raw inputs BEFORE shape detection.
+  // Live data showed `</strong>` landing as a first_name because the
+  // extracted_identity JSON preserved unescaped tags. We strip
+  // defensively at the chokepoint so any signal source that didn't
+  // pre-clean is still safe.
+  const cleanFull = stripHtmlForNameValue(signal.full ?? null)
+  const cleanFirst = stripHtmlForNameValue(signal.first ?? null)
+  const cleanLast = stripHtmlForNameValue(signal.last ?? null)
+
+  let first: string | null = cleanFirst?.trim() || null
+  let last: string | null = cleanLast?.trim() || null
   let raw: string | null = null
-  if ((!first && !last) && signal.full) {
-    raw = signal.full
-    const split = splitFull(signal.full)
+  if ((!first && !last) && cleanFull) {
+    raw = cleanFull
+    const split = splitFull(cleanFull)
     first = split.first
     last = split.last
   }
@@ -501,6 +675,20 @@ export function buildEvidenceFromSignal(signal: NameSignal): NameEvidence | null
 
   // Reject (proxy) shapes hard — they MUST never become a name.
   if (shape === 'proxy') {
+    return {
+      source: signal.source,
+      value: { first: null, last: null },
+      raw: raw ?? combined,
+      confidence: 0,
+      capturedAt,
+      interactionId: signal.interactionId ?? null,
+      shape,
+    }
+  }
+  // Wave 2.5: rejected (greeting / HTML / venue-name) shapes — same
+  // treatment as proxy. Stored at confidence 0 for audit so we can see
+  // what got filtered, never picked, never displayed.
+  if (shape === 'rejected') {
     return {
       source: signal.source,
       value: { first: null, last: null },
@@ -568,7 +756,8 @@ export function pickDisplayName(evidence: NameEvidence[]): PickResult {
     let best: { value: string; confidence: number; capturedAt: string } | null = null
     for (const ev of evidence) {
       if (!ev || !ev.value) continue
-      if (ev.shape === 'username' || ev.shape === 'proxy') continue
+      // Wave 2.5: rejected shapes are NEVER pickable.
+      if (ev.shape === 'username' || ev.shape === 'proxy' || ev.shape === 'rejected') continue
       const v = ev.value[field]
       if (!v) continue
       if (best === null || ev.confidence > best.confidence ||
@@ -585,7 +774,9 @@ export function pickDisplayName(evidence: NameEvidence[]): PickResult {
   const confidence = Math.max(f.confidence, l.confidence)
 
   // Handle hint: most-recent username/proxy raw, when name confidence
-  // is below the verified threshold.
+  // is below the verified threshold. Rejected shapes do NOT contribute
+  // to the handle hint — a greeting / HTML fragment / venue name is
+  // not a useful handle either.
   let handleHint: string | null = null
   if (confidence < UNVERIFIED_THRESHOLD) {
     let bestHandle: { raw: string; capturedAt: string } | null = null
@@ -598,6 +789,23 @@ export function pickDisplayName(evidence: NameEvidence[]): PickResult {
       }
     }
     handleHint = bestHandle?.raw ?? null
+  }
+
+  // Wave 2.5: junk-clear path. When the only evidence available is
+  // rejected / username / proxy shaped (no real-name candidates above
+  // the unverified threshold), return null tuple so the caller can
+  // explicitly NULL out legacy first_name / last_name. The legacy
+  // pre-Wave-2 columns carrying `Mconn`, `Erinhorrigan`, `User <hex>`
+  // get cleared through this path during the rebuild-names backfill.
+  const noRealEvidence = f.value === null && l.value === null
+  if (noRealEvidence) {
+    return { first: null, last: null, confidence: 0, handleHint }
+  }
+  if (confidence < UNVERIFIED_THRESHOLD) {
+    // Below threshold — picker can't return a verified value. Caller
+    // surfaces handleHint instead. NULL out the columns so junk doesn't
+    // linger as the displayed name.
+    return { first: null, last: null, confidence: 0, handleHint }
   }
 
   return { first: f.value, last: l.value, confidence, handleHint }
@@ -675,13 +883,14 @@ export async function captureNameEvidence(
 
   if (!personId || !signal || !signal.source) return result
 
-  // 1. Read current row.
+  // 1. Read current row. Wave 2.5: pull venue_id too so we can run the
+  // async venue-own-name check on the candidate evidence.
   // Some installs may not yet have run mig 255 — name_evidence /
   // display_handle / platform_handles / name_confidence will come back
   // undefined. We treat undefined as empty/null and never crash.
   const { data: row, error: readErr } = await supabase
     .from('people')
-    .select('id, name_evidence, display_handle, platform_handles, first_name, last_name, email, name_confidence')
+    .select('id, venue_id, name_evidence, display_handle, platform_handles, first_name, last_name, email, name_confidence')
     .eq('id', personId)
     .maybeSingle()
 
@@ -693,6 +902,7 @@ export async function captureNameEvidence(
   }
 
   const fields: PeopleRowFields = row as PeopleRowFields
+  const venueId = (row as { venue_id?: string | null }).venue_id ?? null
   const existingEvidence: NameEvidence[] = Array.isArray(fields.name_evidence)
     ? (fields.name_evidence as NameEvidence[])
     : []
@@ -719,7 +929,69 @@ export async function captureNameEvidence(
   }
 
   // 3. Build + append evidence.
-  const evidence = buildEvidenceFromSignal(signal)
+  let evidence = buildEvidenceFromSignal(signal)
+
+  // Wave 2.5: async venue-own-name check. If the candidate's combined
+  // value matches the venue's name or business_name, stamp 'rejected'
+  // shape so it never enters the picker. Audit-log the rejection.
+  if (evidence && evidence.shape !== 'rejected' && evidence.shape !== 'proxy' && venueId) {
+    const isVenue = await isVenueOwnName(supabase, venueId, {
+      first: evidence.value.first,
+      last: evidence.value.last,
+      full: evidence.raw,
+    })
+    if (isVenue) {
+      logEvent({
+        level: 'warn',
+        msg: 'name-capture.rejected',
+        event_type: 'identity.name_capture',
+        outcome: 'skip',
+        venueId,
+        data: {
+          person_id: personId,
+          source: signal.source,
+          reason: 'venue_own_name',
+          raw: evidence.raw ?? `${evidence.value.first ?? ''} ${evidence.value.last ?? ''}`.trim(),
+        },
+      })
+      evidence = {
+        ...evidence,
+        shape: 'rejected',
+        value: { first: null, last: null },
+        confidence: 0,
+      }
+    }
+  }
+
+  // Audit-log other rejections (greeting / HTML) caught synchronously
+  // by classifyNameShape inside buildEvidenceFromSignal. Useful for
+  // tuning the reject list later without another DB scan.
+  if (evidence && evidence.shape === 'rejected') {
+    const lowerRaw = (evidence.raw ?? '').toLowerCase()
+    let reason: string = 'rejected'
+    if (containsHtmlTag(evidence.raw ?? '')) {
+      reason = 'html_markup'
+    } else if (lowerRaw && [...REJECTED_NAME_TOKENS].some((t) => lowerRaw.startsWith(t))) {
+      reason = 'greeting'
+    }
+    if (reason !== 'rejected' && reason !== 'venue_own_name') {
+      // Don't double-log venue_own_name (already emitted above).
+      logEvent({
+        level: 'warn',
+        msg: 'name-capture.rejected',
+        event_type: 'identity.name_capture',
+        outcome: 'skip',
+        venueId,
+        data: {
+          person_id: personId,
+          source: signal.source,
+          reason,
+          raw: evidence.raw ?? null,
+        },
+      })
+    }
+  }
+
   if (evidence) {
     if (!deduplicateEvidence(existingEvidence, evidence)) {
       evidenceArr = [...existingEvidence, evidence]
@@ -727,7 +999,9 @@ export async function captureNameEvidence(
       result.evidenceAdded = 1
     }
 
-    // 4. Display-handle stamp for username/proxy shape.
+    // 4. Display-handle stamp for username/proxy shape. Rejected shapes
+    // (greeting / HTML / venue-name) do NOT populate display_handle —
+    // they're not useful as a fallback display either.
     if ((evidence.shape === 'username' || evidence.shape === 'proxy') && evidence.raw) {
       // Don't overwrite an existing display_handle — append-only behaviour.
       // Different handles on different platforms go to platform_handles
@@ -739,15 +1013,23 @@ export async function captureNameEvidence(
   }
 
   // 5 + 6. Run the picker against the updated evidence and dual-write
-  // legacy columns. Only update when the picker produces a non-null
-  // value for a field that's currently null OR the picker confidence
-  // exceeds the current name_confidence on the row (preserves coordinator
-  // typed values at 100 against any later signal).
+  // legacy columns.
+  //
+  // Wave 2.5 — junk-clear path:
+  //   When the picker returns null first AND null last (no real-name
+  //   evidence above the unverified threshold), explicitly NULL out the
+  //   legacy columns so pre-existing junk values like `Mconn`,
+  //   `Erinhorrigan`, or `Hi`/`Megan` get cleared. Coordinator-typed
+  //   overrides (confidence === 100) are preserved by the picker because
+  //   they live as their own evidence row and survive the bestFor scan.
   const pick = pickDisplayName(evidenceArr)
   result.pickerRanThough = true
   result.newDisplay = { first: pick.first, last: pick.last, confidence: pick.confidence }
 
   const curConfidence = typeof fields.name_confidence === 'number' ? fields.name_confidence : 0
+  const pickerHasValue = pick.first !== null || pick.last !== null
+  const pickerCleared = !pickerHasValue && (fields.first_name !== null || fields.last_name !== null)
+
   const shouldDualWrite =
     // Always write when the existing column is null and the picker has a value.
     (!fields.first_name && pick.first) ||
@@ -755,12 +1037,24 @@ export async function captureNameEvidence(
     // Otherwise only write when the picker's confidence is GREATER than
     // the recorded name_confidence. Equal confidence does not trigger a
     // rewrite (avoids ping-pong on equal-quality signals).
-    (pick.confidence > curConfidence && (pick.first !== null || pick.last !== null))
+    (pick.confidence > curConfidence && pickerHasValue) ||
+    // Wave 2.5 junk-clear: picker returned null tuple but the legacy
+    // columns are populated. The existing column is junk by definition
+    // (no usable evidence supports it). Force NULL.
+    pickerCleared
 
   if (shouldDualWrite) {
-    if (pick.first !== null && pick.first !== fields.first_name) updates.first_name = pick.first
-    if (pick.last !== null && pick.last !== fields.last_name) updates.last_name = pick.last
-    if (pick.confidence !== curConfidence) updates.name_confidence = pick.confidence
+    if (pickerCleared) {
+      // Explicitly null the legacy columns. Don't touch name_confidence
+      // up unless the prior column was actually populated.
+      if (fields.first_name !== null) updates.first_name = null
+      if (fields.last_name !== null) updates.last_name = null
+      updates.name_confidence = 0
+    } else {
+      if (pick.first !== null && pick.first !== fields.first_name) updates.first_name = pick.first
+      if (pick.last !== null && pick.last !== fields.last_name) updates.last_name = pick.last
+      if (pick.confidence !== curConfidence) updates.name_confidence = pick.confidence
+    }
   }
 
   if (Object.keys(updates).length === 0) {
@@ -795,6 +1089,97 @@ export async function captureNameEvidence(
 
   result.recorded = true
   return result
+}
+
+/**
+ * Wave 2.5 — prune junk evidence rows from a name_evidence array.
+ *
+ * Walks the existing array and drops (or stamps confidence=0) any row
+ * that matches the rejection rules introduced in Wave 2.5:
+ *   - `value.first` is a known greeting token (REJECTED_NAME_TOKENS)
+ *   - `raw` or `value` contains residual HTML markup
+ *   - the (first, last, raw) reconstructs the venue's own name
+ *
+ * Use this from the rebuild-names backfill so historical evidence
+ * captured before Wave 2.5 also gets cleaned. Returns the cleaned array
+ * plus a per-reason count for audit logging.
+ *
+ * Idempotent: rows already stamped 'rejected' / 'proxy' / 'username' are
+ * left untouched.
+ */
+export function pruneJunkEvidence(
+  evidence: NameEvidence[],
+  venueOwnNames: ReadonlySet<string>,
+): { cleaned: NameEvidence[]; pruned: { greeting: number; html: number; venue_own_name: number } } {
+  const pruned = { greeting: 0, html: 0, venue_own_name: 0 }
+  if (!Array.isArray(evidence) || evidence.length === 0) {
+    return { cleaned: [], pruned }
+  }
+  const cleaned: NameEvidence[] = []
+  for (const ev of evidence) {
+    if (!ev || !ev.value) {
+      cleaned.push(ev)
+      continue
+    }
+    // Already-rejected / handle / proxy rows pass through unchanged.
+    if (ev.shape === 'rejected' || ev.shape === 'username' || ev.shape === 'proxy') {
+      cleaned.push(ev)
+      continue
+    }
+    const first = ev.value.first ?? null
+    const last = ev.value.last ?? null
+    const raw = ev.raw ?? null
+    const combined = raw ?? [first, last].filter(Boolean).join(' ').trim()
+
+    let reason: 'greeting' | 'html' | 'venue_own_name' | null = null
+    if (containsHtmlTag(first ?? '') || containsHtmlTag(last ?? '') || containsHtmlTag(combined)) {
+      reason = 'html'
+    } else if (isRejectedGreeting(first)) {
+      reason = 'greeting'
+    } else if (venueOwnNames.size > 0) {
+      // Venue-name match check: any of {first, last, full, "first last"}
+      // matches a known venue name (case + whitespace insensitive).
+      const probes: string[] = []
+      if (combined) probes.push(combined)
+      if (first) probes.push(first)
+      if (last) probes.push(last)
+      if (first && last) probes.push(`${first} ${last}`)
+      for (const p of probes) {
+        const norm = p.replace(/\s+/g, ' ').trim().toLowerCase()
+        if (norm && venueOwnNames.has(norm)) {
+          reason = 'venue_own_name'
+          break
+        }
+      }
+    }
+
+    if (reason) {
+      pruned[reason] += 1
+      cleaned.push({
+        ...ev,
+        shape: 'rejected',
+        value: { first: null, last: null },
+        confidence: 0,
+      })
+    } else {
+      cleaned.push(ev)
+    }
+  }
+  return { cleaned, pruned }
+}
+
+/**
+ * Wave 2.5 — async wrapper that loads venue's own names and runs
+ * `pruneJunkEvidence`. Convenience for callers that have a supabase
+ * client + venueId but not the name set.
+ */
+export async function pruneJunkEvidenceForVenue(
+  supabase: SupabaseClient,
+  venueId: string | null,
+  evidence: NameEvidence[],
+): Promise<{ cleaned: NameEvidence[]; pruned: { greeting: number; html: number; venue_own_name: number } }> {
+  const venueNames = venueId ? await loadVenueOwnNames(supabase, venueId) : new Set<string>()
+  return pruneJunkEvidence(evidence, venueNames)
 }
 
 // ---------------------------------------------------------------------------

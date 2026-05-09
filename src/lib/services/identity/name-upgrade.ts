@@ -85,6 +85,11 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
+import {
+  stripHtmlForNameValue,
+  isRejectedGreeting,
+  containsHtmlTag,
+} from './name-capture'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -244,9 +249,14 @@ function candidatesFromInteraction(row: InteractionRow): NameCandidate[] {
   const fromEmail = (row.from_email ?? '').trim().toLowerCase() || null
 
   // Direct first / last fields when the parser populated them.
-  const directFirst = typeof ei.first_name === 'string' ? ei.first_name : null
-  const directLast = typeof ei.last_name === 'string' ? ei.last_name : null
-  if (directFirst || directLast) {
+  // Wave 2.5: strip HTML markup BEFORE accepting the value, and reject
+  // greeting tokens so "Hi"/"Hello" never lands as a first_name.
+  const rawDirectFirst = typeof ei.first_name === 'string' ? ei.first_name : null
+  const rawDirectLast = typeof ei.last_name === 'string' ? ei.last_name : null
+  const directFirst = stripHtmlForNameValue(rawDirectFirst)
+  const directLast = stripHtmlForNameValue(rawDirectLast)
+  const directRejected = isRejectedGreeting(directFirst)
+  if ((directFirst || directLast) && !directRejected) {
     out.push({
       first: directFirst,
       last: directLast,
@@ -256,12 +266,17 @@ function candidatesFromInteraction(row: InteractionRow): NameCandidate[] {
     })
   }
 
-  // names[] from body-extract — capitalized "First Last" pairs.
+  // names[] from body-extract — capitalized "First Last" pairs. Wave 2.5:
+  // strip HTML and reject greetings before splitting.
   const names = Array.isArray(ei.names) ? (ei.names as unknown[]) : []
   for (const n of names) {
     if (typeof n !== 'string') continue
-    const [first, last] = splitFullName(n)
+    if (containsHtmlTag(n)) continue
+    const cleaned = stripHtmlForNameValue(n)
+    if (!cleaned) continue
+    const [first, last] = splitFullName(cleaned)
     if (!first && !last) continue
+    if (isRejectedGreeting(first)) continue
     out.push({
       first,
       last,
@@ -305,10 +320,14 @@ function candidatesFromWeddingText(wedding: WeddingRow): NameCandidate[] {
   const NAME_RE = /\b([A-Z][a-z'À-ſ-]{1,29})\s+([A-Z](?:[a-z'À-ſ-]{1,29}|\.))/g
 
   const harvestFrom = (text: string, source: string) => {
+    // Wave 2.5: strip HTML from the source text BEFORE running the
+    // regex. Sage-context-notes occasionally store rendered HTML.
+    const cleanedText = stripHtmlForNameValue(text) ?? ''
+    if (!cleanedText) return
     NAME_RE.lastIndex = 0
     const seen = new Set<string>()
     let m: RegExpExecArray | null
-    while ((m = NAME_RE.exec(text)) !== null && seen.size < 8) {
+    while ((m = NAME_RE.exec(cleanedText)) !== null && seen.size < 8) {
       const candidate = `${m[1]} ${m[2]}`
       // Filter obvious non-names — same blacklist as body-extract.ts.
       if (/^(Reply|View|Click|Forward|Read|Send|Open|Visit|Contact|Email|Phone|Subject|Date|From|To|Re|Fwd)\s/.test(candidate)) continue
@@ -317,6 +336,10 @@ function candidatesFromWeddingText(wedding: WeddingRow): NameCandidate[] {
       seen.add(candidate)
       const [first, last] = splitFullName(candidate)
       if (!first) continue
+      // Wave 2.5: reject greetings. The NAME_RE could land on a
+      // capitalised greeting like "Hi Megan" if the harvested text
+      // begins with one.
+      if (isRejectedGreeting(first)) continue
       out.push({
         first,
         last,
