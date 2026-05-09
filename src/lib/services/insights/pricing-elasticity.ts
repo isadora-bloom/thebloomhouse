@@ -69,6 +69,16 @@ import type { ClassicalEvidence, InsightNarration } from './types'
 
 // 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
 // when migrated to the canonical coordinator-prompt assembler.
+//
+// 2026-05-09 Wave 1B: NO version bump for pricing-elasticity.
+// Rationale: this narrator is venue-level by construction — it analyses
+// a single base_price change against the venue's pre/post conversion
+// windows. There is no FOCAL couple whose auto-context could shape the
+// narration; loading every cohort wedding's notes would be a privacy
+// violation (Tenant 1 / Constitution §4). The narrator stays on v2.0
+// until / unless a future per-wedding pricing-elasticity surface lands
+// (e.g. per-segment elasticity), at which point that callsite would
+// load the focal-couple notes for its own narration.
 export const PRICING_ELASTICITY_PROMPT_VERSION = 'pricing-elasticity.prompt.v2.0'
 
 const DAY_MS = 86_400_000

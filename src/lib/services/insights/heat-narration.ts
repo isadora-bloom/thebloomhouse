@@ -30,6 +30,7 @@ import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
 import { getCohortBookingRate, applyCohortDamping } from '@/lib/services/heat-mapping'
 import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
+import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -50,7 +51,17 @@ import type { ClassicalEvidence, InsightNarration } from './types'
 // prompt now flows UNIVERSAL_RULES + COORDINATOR_RULES + venue
 // personality + numbers-guard + task — same identity layers every
 // other coordinator narrator now uses.
-export const HEAT_NARRATION_PROMPT_VERSION = 'heat-narration.prompt.v2.0'
+//
+// 2026-05-09 Wave 1B: bumped to v2.1 — couple's auto-context notes
+// now flow into the system prompt BEFORE numbers-guard so the LLM
+// shapes its tone from the couple's emotional truths first, then
+// constrains its numbers afterwards. Same numerical output shape; the
+// prose differs in fidelity to the couple's known life context. A
+// heat drop in a couple with "mum's chemo" three weeks ago narrates
+// differently than a heat drop with no soft context. Cache invalidation
+// is intentional — pre-Wave-1B narrations would describe cold leads
+// as cold without knowing why the lead actually went quiet.
+export const HEAT_NARRATION_PROMPT_VERSION = 'heat-narration.prompt.v2.1'
 
 interface HeatEventForNarration {
   event_type: string
@@ -421,10 +432,29 @@ CRITICAL RULES:
 - Never claim to know what the couple is "thinking" or "feeling", narrate
   observed signals, not interpretations.`
 
+  // Wave 1B (2026-05-09). Load the couple's auto-context (life_context,
+  // family, grief, financial-stress, vendor preferences) as tone fuel.
+  // limit=8 — narrators have a tighter context budget than the brain
+  // reply path (default 12) because their output is a 1-2 sentence
+  // narration; flooding the prompt with notes hurts more than it helps.
+  // Best-effort: the loader never throws (swallows DB / RLS errors and
+  // returns null brainBlock); this try/catch is defense-in-depth so a
+  // future loader change can't break narration. A heat narration without
+  // soft-context still produces a valid narration; the prose just won't
+  // reflect the couple's known emotional truths.
+  let coupleNotesBlock: string | null = null
+  try {
+    const auto = await loadAutoContextForWedding(supabase, weddingId, { limit: 8 })
+    coupleNotesBlock = auto.brainBlock
+  } catch (err) {
+    console.warn('[heat-narration] auto-context load failed:', redactError(err))
+  }
+
   const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
     venueId,
     surface: 'narration_heat',
     taskInstructions,
+    coupleNotesBlock,
     numbersGuard: {
       heat_score: payload.heat_score,
       raw_heat_score: payload.raw_heat_score,

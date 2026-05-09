@@ -73,6 +73,27 @@ export interface CoordinatorPromptContext {
    */
   numbersGuard?: Record<string, number | string | null | undefined>
   /**
+   * Wave 1B (2026-05-09). Pre-formatted COUPLE'S NOTES block produced
+   * by `loadAutoContextForWedding` (or any future loader that respects
+   * the same shape). When provided, the assembler inserts it BEFORE
+   * the numbers-guard block so the LLM sets tone from the soft context
+   * first, then satisfies the numeric allowlist. Reversing the order
+   * (numbers first, notes last) makes the prose feel mechanically
+   * slotted because the model has already committed to the numeric
+   * frame before reading the qualitative tone fuel.
+   *
+   * The loader returns `null` when the wedding has no eligible notes;
+   * pass that null through and the assembler will skip the block
+   * entirely (no empty header pollution).
+   *
+   * Pass-through is qualitative tone fuel only — content here is NEVER
+   * a number the narrator may reference. The numbers-guard block still
+   * governs what numeric tokens appear in the output. The
+   * couple-notes-aware narrators include a one-line numbers-guard
+   * clarifier so the LLM cannot conflate the two blocks.
+   */
+  coupleNotesBlock?: string | null
+  /**
    * Sensitivity tier of the inputs (Playbook 21.3.1):
    *   1 = couple PII paragraphs (heat narration, decay narration,
    *       risk flags, journey narrative, post-tour brief).
@@ -105,21 +126,32 @@ const PROMPT_VERSIONS: Record<CoordinatorSurface, string> = {
   daily_digest: 'daily-digest.prompt.v2.0',
   weekly_digest: 'weekly-digest.prompt.v2.0',
   narration_correlation: 'correlation-narration.prompt.v2.0',
-  narration_heat: 'heat-narration.prompt.v2.0',
-  narration_cohort: 'cohort-match.prompt.v2.0',
-  narration_decay: 'decay-re-engagement.prompt.v2.0',
-  narration_risk: 'risk-flags.prompt.v2.0',
+  // Wave 1B (2026-05-09): per-couple narrators bumped to v2.1 when the
+  // COUPLE'S NOTES block became part of the system prompt. Output
+  // shape is unchanged — what shifts is tone fidelity to the couple's
+  // emotional context. Cache invalidation is intentional so stale
+  // pre-1B narrations don't linger after the wire-up lands.
+  narration_heat: 'heat-narration.prompt.v2.1',
+  narration_cohort: 'cohort-match.prompt.v2.1',
+  narration_decay: 'decay-re-engagement.prompt.v2.1',
+  narration_risk: 'risk-flags.prompt.v2.1',
+  // Pricing elasticity stays venue-level for now; v2.0 retained because
+  // there is no per-wedding entry point to load notes from. Documented
+  // in the source file alongside the "no per-wedding focal point" note.
   narration_pricing: 'pricing-elasticity.prompt.v2.0',
   narration_source_mix: 'source-mix-counterfactual.prompt.v2.0',
   narration_strength: 'strength-area-cohort.prompt.v2.0',
   narration_override: 'coordinator-override-pattern.prompt.v2.0',
   narration_intelligence_engine: 'intelligence-engine-narration.v2.0',
   narration_weather: 'weather-cancellation-narration.prompt.v2.0',
+  // Wave 1B: anomaly metric explainer stays venue-level (no weddingId
+  // available at the call site); v2.0 retained.
   narration_anomaly_metric: 'anomaly-detection.prompt.v2.0',
   narration_anomaly_availability: 'availability-anomaly-explanation.prompt.v2.0',
   narration_weekly_learned: 'weekly-learned.v2.0',
   narration_attendee_intel: 'attendee-intel.v2.0',
-  journey_narrative: 'journey-narrative.prompt.v2.0',
+  // Wave 1B: journey narrative is per-wedding by construction; bumped.
+  journey_narrative: 'journey-narrative.prompt.v2.1',
   cultural_moments_propose: 'cultural-moments-llm-propose.v2.0',
   nlq_intel: 'intel-brain.prompt.v2.0',
   post_tour_brief: 'post-tour-brief.prompt.v2.0',
@@ -162,6 +194,7 @@ const DEFAULT_CONTENT_TIER: Record<CoordinatorSurface, 1 | 2> = {
 
 function renderNumbersGuardBlock(
   numbers: CoordinatorPromptContext['numbersGuard'],
+  hasCoupleNotes: boolean,
 ): string {
   if (!numbers) return ''
   const entries = Object.entries(numbers).filter(
@@ -169,7 +202,35 @@ function renderNumbersGuardBlock(
   )
   if (entries.length === 0) return ''
   const lines = entries.map(([k, v]) => `  - ${k}: ${String(v)}`)
-  return `\n\n## NUMBERS YOU MAY USE\n\nThese are the only numbers you may reference. Anything not listed here is unknown to you; do not invent values, do not compute new ratios from them beyond what is already provided.\n\n${lines.join('\n')}`
+  // Wave 1B (2026-05-09): when the prompt also carries a COUPLE'S
+  // NOTES block, append a one-liner clarifying that the qualitative
+  // notes are NOT data points. Without this clarifier a numbers-guard
+  // discipline rule plus a COUPLE'S NOTES block can confuse the LLM
+  // into treating note tokens as referenceable numbers (e.g. "March
+  // 12" in a note bleeds into the output as if it were on the
+  // allowlist).
+  const coupleNotesClarifier = hasCoupleNotes
+    ? `\n\nThe COUPLE'S NOTES block above contains qualitative tone signals only; do not reference them as data points or quote them in the output.`
+    : ''
+  return `\n\n## NUMBERS YOU MAY USE\n\nThese are the only numbers you may reference. Anything not listed here is unknown to you; do not invent values, do not compute new ratios from them beyond what is already provided.\n\n${lines.join('\n')}${coupleNotesClarifier}`
+}
+
+/**
+ * Wave 1B (2026-05-09). Wrap the loader-produced couple-notes block in
+ * the assembler-level header so the prompt structure stays consistent
+ * across narrators. The loader already emits the inner header / footer
+ * markers; the assembler-side `## COUPLE'S NOTES` heading aligns it
+ * visually with the other prompt sections (UNIVERSAL_RULES,
+ * COORDINATOR_RULES, NUMBERS YOU MAY USE).
+ *
+ * When the loader returns `null` (no notes for this wedding), the
+ * assembler emits no block at all — empty headers in system prompts
+ * waste tokens and can mislead the LLM into thinking notes were
+ * suppressed.
+ */
+function renderCoupleNotesBlock(block: string | null | undefined): string {
+  if (!block || block.trim().length === 0) return ''
+  return `\n\n## COUPLE'S NOTES\n\nBackground tone signals captured from the couple's emails, brain-dumps, and tour transcripts. Use these to shape your tone, NOT to populate facts in your output. Sensitive notes (grief, health, financial stress, family conflict) must NEVER be quoted verbatim or referenced explicitly; they steer voice only.\n\n${block.trim()}`
 }
 
 /**
@@ -203,13 +264,24 @@ export async function buildCoordinatorPrompt(
 ): Promise<BuiltCoordinatorPrompt> {
   const personalityData = await loadCoordinatorPersonalityData(ctx.venueId)
   const personalityPrompt = buildPersonalityPrompt(personalityData)
-  const numbersGuardBlock = renderNumbersGuardBlock(ctx.numbersGuard)
+  // Wave 1B (2026-05-09). Couple-notes block is rendered BEFORE the
+  // numbers-guard block so the LLM sets tone first from the soft
+  // context, then satisfies numeric constraints. Reversing the order
+  // makes the prose feel mechanically slotted because the model has
+  // already committed to the numeric frame before reading the
+  // qualitative tone fuel. Per-couple narrators (heat, risk, decay,
+  // cohort, journey, anomaly when wedding-scoped) pass `coupleNotesBlock`;
+  // venue-aggregate narrators (briefings, digests) pass null.
+  const coupleNotesBlock = renderCoupleNotesBlock(ctx.coupleNotesBlock)
+  const hasCoupleNotes = coupleNotesBlock.length > 0
+  const numbersGuardBlock = renderNumbersGuardBlock(ctx.numbersGuard, hasCoupleNotes)
   const taskBlock = `\n\n## YOUR TASK\n\n${ctx.taskInstructions.trim()}`
 
   const systemPrompt = [
     UNIVERSAL_RULES,
     COORDINATOR_RULES,
     personalityPrompt,
+    coupleNotesBlock,
     numbersGuardBlock,
     taskBlock,
   ]

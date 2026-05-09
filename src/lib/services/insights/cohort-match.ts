@@ -33,13 +33,24 @@ import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
 import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
+import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 
 // 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
 // when migrated to the canonical coordinator-prompt assembler.
-export const COHORT_MATCH_PROMPT_VERSION = 'cohort-match.prompt.v2.0'
+//
+// 2026-05-09 Wave 1B: bumped to v2.1. The FOCAL couple's auto-context
+// notes flow into the diagnostic prompt so the cohort recommendation
+// is shaped by the focal couple's emotional truths, not just by what
+// past lookalikes did. Pattern + numerical taxonomy unchanged; the
+// prose recommends "for couples in this cohort with financial-stress
+// markers, the typical path is X" rather than ignoring the focal
+// couple's context entirely. Cohort members' notes are NOT loaded —
+// only the focal couple's, by design (cross-couple soft-context leakage
+// would violate Tenant 1's privacy posture).
+export const COHORT_MATCH_PROMPT_VERSION = 'cohort-match.prompt.v2.1'
 
 const DAY_MS = 86_400_000
 const COHORT_K = 10
@@ -506,7 +517,13 @@ CRITICAL RULES:
 - Refer to the cohort by SHAPE only, never invent a name or quote.
 - Do not claim causation from a small cohort. With < 10 members say
   "the venue's small look-alike sample suggests..." not "this segment
-  always books."`
+  always books."
+- If a COUPLE'S NOTES block is present, those notes belong to the
+  FOCAL couple (the lead being matched), NOT the cohort members. Use
+  them to shape the recommendation's emotional posture (e.g. "for
+  couples in this cohort carrying financial-stress markers, the
+  differentiator that converts is X"). Never echo the focal couple's
+  notes verbatim. Cohort members' inner state is unknown to you.`
 
   // T5-γ.1: include a confidence-mix disclosure line when any cohort
   // member is backfilled-low or has unknown provenance. Forces the
@@ -535,10 +552,25 @@ ${sampleCohort}
 
 Diagnose the pattern + recommend an action.${classical.n_low_confidence > 0 ? ' If a meaningful share of the cohort is backfilled-low, acknowledge that the comparison group is partly inferred from Gmail backfill (one short clause is enough, the UI also surfaces the count separately).' : ''}`
 
+  // Wave 1B (2026-05-09). Load the FOCAL couple's auto-context as
+  // tone fuel for the recommendation. Cohort members' notes are NOT
+  // loaded — Tenant 1 / Constitution §4 forbids cross-couple soft-
+  // context leakage, even in aggregate. limit=8 — narrators have a
+  // tighter context budget than the brain reply path. Best-effort:
+  // the loader never throws; this try/catch is defense-in-depth.
+  let coupleNotesBlock: string | null = null
+  try {
+    const auto = await loadAutoContextForWedding(supabase, weddingId, { limit: 8 })
+    coupleNotesBlock = auto.brainBlock
+  } catch (err) {
+    console.warn('[cohort-match] auto-context load failed:', redactError(err))
+  }
+
   const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
     venueId,
     surface: 'narration_cohort',
     taskInstructions,
+    coupleNotesBlock,
     numbersGuard: {
       n_total: classical.n_total,
       n_booked: classical.n_booked,

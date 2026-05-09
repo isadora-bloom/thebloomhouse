@@ -41,13 +41,21 @@ import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
 import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
+import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 
 // 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
 // when migrated to the canonical coordinator-prompt assembler.
-export const DECAY_RE_ENGAGEMENT_PROMPT_VERSION = 'decay-re-engagement.prompt.v2.0'
+//
+// 2026-05-09 Wave 1B: bumped to v2.1. Couple's auto-context notes now
+// flow into the diagnostic prompt BEFORE the numbers-guard block. A
+// decay diagnosis for a couple with "mum's health worsening" lands as
+// "they're running on bandwidth fumes; soft check-in" rather than
+// "researching alternatives". Same JSON contract; the cause taxonomy
+// is unchanged. Cache invalidation is intentional.
+export const DECAY_RE_ENGAGEMENT_PROMPT_VERSION = 'decay-re-engagement.prompt.v2.1'
 
 const DAY_MS = 86_400_000
 
@@ -324,7 +332,13 @@ CRITICAL RULES:
   about pricing"); never invent a quote.
 - 'missing_info' is the default when unresolved_questions is non-empty
   AND the cause isn't otherwise obvious.
-- 'unknown' when evidence is genuinely insufficient, be honest.`
+- 'unknown' when evidence is genuinely insufficient, be honest.
+- If a COUPLE'S NOTES block is present, it is tone fuel for the
+  recommendation, not extra evidence. A decay in a couple with
+  recent grief / family illness / financial-stress markers should
+  pivot the recommendation toward a soft, low-pressure check-in
+  rather than a comparison-shopping rebuttal — without naming or
+  echoing the soft context in the output.`
 
   const userPrompt = `LEAD DECAY DIAGNOSTIC
 
@@ -342,10 +356,25 @@ ${classical.last_inbound_excerpt ?? '(empty)'}
 
 Diagnose the cause + recommend a specific re-engagement action.`
 
+  // Wave 1B (2026-05-09). Load couple-notes as tone fuel for the
+  // decay diagnosis. limit=8 — narrators take a tighter context budget
+  // than the brain reply path. Best-effort: the loader never throws;
+  // this try/catch is defense-in-depth so a decay narration without
+  // soft-context still produces a diagnosis (just without the
+  // life-context-aware framing).
+  let coupleNotesBlock: string | null = null
+  try {
+    const auto = await loadAutoContextForWedding(supabase, weddingId, { limit: 8 })
+    coupleNotesBlock = auto.brainBlock
+  } catch (err) {
+    console.warn('[decay-re-engagement] auto-context load failed:', redactError(err))
+  }
+
   const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
     venueId,
     surface: 'narration_decay',
     taskInstructions,
+    coupleNotesBlock,
     numbersGuard: {
       current_score: classical.current_score,
       peak_score: classical.peak_score,

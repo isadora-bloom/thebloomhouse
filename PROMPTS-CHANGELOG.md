@@ -21,6 +21,60 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 - **MINOR** — wording / instruction refinement that holds the
   contract. Bumps still get a changelog row.
 
+## 2026-05-09 (Wave 1B — per-couple narrators read auto-context)
+
+Per-couple narrators now consume the wedding's `wedding_auto_context`
+notes as tone fuel. The IDENTITY-TRUTH-AUDIT (Tenant 1, table row 10)
+flagged that briefings, digests, and intel narrators "treat every
+couple as a flat row" — Sage knew the bride was grieving, the
+business-decision layer didn't. Wave 1B closes that gap on the
+per-couple side: heat narration, risk flags, decay re-engagement,
+cohort match, and journey narrative now load
+`loadAutoContextForWedding(supabase, weddingId, { limit: 8 })` and
+inject the formatted COUPLE'S NOTES block into the system prompt
+BEFORE the numbers-guard block. Wave 1C handles venue-aggregate
+rollups (briefings, digests, intelligence-engine); pricing-elasticity
+and venue-level anomaly explainer stay on v2.0 — neither has a focal
+couple to read notes from.
+
+Architectural decisions:
+- **Block placement: BEFORE numbers-guard.** The LLM should set tone
+  from the soft layer first, then satisfy numeric constraints.
+  Reversing the order makes the prose feel mechanically slotted
+  because the model commits to the numeric frame before reading the
+  qualitative tone fuel.
+- **Limit = 8 per narrator.** The brain reply path runs at the
+  loader's default 12; narrators take 8 because their output is a
+  1-2 sentence narration. More notes flood the prompt; fewer would
+  miss pinned context.
+- **Empty-block elision.** When the loader returns
+  `brainBlock=null` (fresh wedding, zero active notes) the
+  assembler emits no header at all — empty headers waste tokens
+  and can mislead the LLM into thinking notes were suppressed.
+- **Best-effort load.** Each narrator wraps the loader call in
+  try/catch and logs a warn on failure. Auto-context is enrichment;
+  a load failure must never block narration generation. Output
+  shape stays identical when the block is absent.
+- **Numbers-guard interaction.** When a COUPLE'S NOTES block is
+  present, the assembler appends a one-liner to the NUMBERS YOU MAY
+  USE block: "The COUPLE'S NOTES block above contains qualitative
+  tone signals only; do not reference them as data points or quote
+  them in the output." This prevents the LLM from treating note
+  tokens (e.g. "March 12") as referenceable allowlist values.
+- **Cohort-match privacy.** Only the FOCAL couple's notes are
+  loaded, never the cohort members'. Cross-couple soft-context
+  leakage would violate Tenant 1 / Constitution §4.
+
+| Module | Old | New | Reason |
+|--------|-----|-----|--------|
+| heat-narration | v2.0 | v2.1 | Couple-notes block threaded via `coupleNotesBlock` param to `buildCoordinatorPrompt`. A heat drop in a couple with grief / family-illness markers narrates as "stalled by emotional bandwidth, not by us" instead of "cold". Cache invalidation intentional — pre-1B narrations missed the soft layer entirely. |
+| cohort-match | v2.0 | v2.1 | Focal couple's notes shape the recommendation's tone ("for couples in this cohort with financial-stress markers, the differentiator is X"). Cohort members' notes deliberately NOT loaded — privacy posture. |
+| decay-re-engagement | v2.0 | v2.1 | Cause diagnosis still picks from the fixed taxonomy (missing_info / waiting_on_partner / etc.) but the recommendation prose softens for couples with grief / family-illness / financial-stress markers. taskInstructions extended with the "tone fuel, not extra evidence" rule. |
+| risk-flags | v2.0 | v2.1 | Both LLM calls (Haiku sentiment scan + Sonnet narration) read the same couple-notes block — the block is loaded once in `generateRiskFlags` and threaded into both calls. A short reply from a grieving couple stops being a comparison-shopping signal; a contract-delay flag in a financial-stress context narrates softer. |
+| journey-narrative | v2.0 | v2.1 | Same factual chronology + first-touch contract; tone is shaped by the soft layer when present. Adds explicit `TASK_INSTRUCTIONS` rule: notes shape tone, never facts. |
+| pricing-elasticity | v2.0 | (no bump) | Venue-level by construction; no focal couple. Documented inline alongside the version constant. |
+| anomaly-detection (metric) | v2.0 | (no bump) | Venue-level by construction. Per-wedding anomaly surfaces don't exist yet; when they land they will load focal-couple notes for their own narration. |
+
 ## 2026-05-09 (late evening — coordinator-facing prompt unification)
 
 Canonical coordinator-facing prompt assembler (`src/lib/ai/coordinator-prompt.ts`)

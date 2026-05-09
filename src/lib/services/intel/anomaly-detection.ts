@@ -28,6 +28,22 @@ import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
  *
  * 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
  * when migrated to the canonical coordinator-prompt assembler.
+ *
+ * 2026-05-09 Wave 1B: NO version bump for the metric anomaly
+ * explainer. Rationale: `runAnomalyDetection` operates on a venue-wide
+ * metric (inquiry_volume, response_time, tour_conversion, etc.) over
+ * a 7-day window. There is no single FOCAL wedding whose auto-context
+ * could shape the explanation; aggregating every wedding's soft notes
+ * into a venue-level anomaly prompt would be a privacy violation
+ * (Tenant 1 / Constitution §4) AND would dilute tone signal into
+ * noise. The narrator stays on v2.0 until a per-wedding anomaly
+ * surface lands (e.g. "this lead's heat dropped 30% — why?", which
+ * would then load the focal couple's notes for its own narration).
+ *
+ * The 14 detectors in `intelligence-engine.ts` are venue-aggregate by
+ * the same logic — they're Wave 1C territory (briefings + digests +
+ * intelligence-engine), not Wave 1B. Wave 1B is per-couple narrators
+ * only.
  */
 export const ANOMALY_DETECTION_PROMPT_VERSION = 'anomaly-detection.prompt.v2.0'
 

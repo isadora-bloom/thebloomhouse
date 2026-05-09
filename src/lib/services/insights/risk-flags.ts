@@ -27,6 +27,7 @@ import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
 import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
+import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -36,7 +37,16 @@ import type { ClassicalEvidence, InsightNarration } from './types'
 // the Haiku sentiment scan AND the Sonnet narration use the shared
 // assembler so the addressee, voice, and numbers-guard discipline
 // match every other coordinator narrator.
-export const RISK_FLAGS_PROMPT_VERSION = 'risk-flags.prompt.v2.0'
+//
+// 2026-05-09 Wave 1B: bumped to v2.1. Couple's auto-context notes now
+// flow into both the sentiment scan AND the narration prompts. Risk
+// flag explanations now narrate "Heat dropping in a couple with
+// financial-stress markers a fortnight ago" differently than a heat
+// drop with no soft context. Sentiment scan also benefits — the model
+// now reads "negative tone" through the lens of the couple's known
+// life context (e.g. brevity from a grieving couple is not a comparison-
+// shopping signal). Cache invalidation is intentional.
+export const RISK_FLAGS_PROMPT_VERSION = 'risk-flags.prompt.v2.1'
 
 /**
  * Strip likely PII (emails / phone numbers) from a free-text friction
@@ -309,6 +319,15 @@ async function sentimentScan(
   supabase: SupabaseClient,
   venueId: string,
   weddingId: string,
+  /** Wave 1B (2026-05-09). Pre-loaded couple-notes block from
+   *  loadAutoContextForWedding. Threaded in so the sentiment scan can
+   *  read tone through the lens of the couple's known life context: a
+   *  short, terse reply from a grieving bride is NOT the same risk
+   *  signal as a short, terse reply from a comparison-shopping lead.
+   *  The caller (generateRiskFlags) loads auto-context once and passes
+   *  the same block into both this scan and the downstream narration so
+   *  we don't double-fetch. */
+  coupleNotesBlock: string | null,
 ): Promise<SentimentResult | null> {
   const { data: recentInbound } = await supabase
     .from('interactions')
@@ -331,6 +350,13 @@ async function sentimentScan(
   - signals of comparison-shopping that lean unfavourable to this venue
   - unanswered questions accumulating
 
+If the system prompt carries a COUPLE'S NOTES block, weigh the message
+tone THROUGH that context. A terse reply from a couple whose notes
+mention recent grief or family illness is not a comparison-shopping
+signal; it's bandwidth. A short reply from a couple whose notes mention
+financial stress is hesitation, not disinterest. Use the notes to tune
+the threshold; never quote them in the evidence string.
+
 Output JSON: { negative: boolean, evidence: "1 short sentence describing the signal" }
 The evidence should reference the SHAPE of the signal, not invent quotes. If sentiment is
 neutral or positive, output { negative: false, evidence: "" }.
@@ -342,6 +368,7 @@ Don't hedge, when uncertain, output negative: false.`
     venueId,
     surface: 'narration_risk',
     taskInstructions,
+    coupleNotesBlock,
     contentTier: 1,
   })
 
@@ -398,13 +425,29 @@ export async function generateRiskFlags(
   // overlay or narration polish.
   const gate = await gateForBrainCall(venueId)
 
+  // Wave 1B (2026-05-09). Load couple-notes once and thread the same
+  // block into both the sentiment scan AND the narration prompt below.
+  // limit=8 matches the narrator-side budget (vs the 12-default brain
+  // reply path). Best-effort: the loader never throws (returns
+  // brainBlock=null on any error); this try/catch is defense-in-depth.
+  let coupleNotesBlock: string | null = null
+  try {
+    const auto = await loadAutoContextForWedding(supabase, weddingId, { limit: 8 })
+    coupleNotesBlock = auto.brainBlock
+  } catch (err) {
+    console.warn('[risk-flags] auto-context load failed:', redactError(err))
+  }
+
   // Sentiment overlay (LLM). Adds a flag if negative. Skipped when
   // ceiling-paused so we don't spend Haiku on a paused venue.
   // 2026-05-09: Agent O's coordinator-prompt assembler refactor
   // dropped the aiName arg from sentimentScan (the assembler loads
   // personality internally now). Reconciled the call here.
+  // 2026-05-09 Wave 1B: couple-notes block threaded through so the
+  // sentiment classifier reads the inbound tone with awareness of the
+  // couple's known emotional context.
   const sentiment = gate.ok
-    ? await sentimentScan(supabase, venueId, weddingId)
+    ? await sentimentScan(supabase, venueId, weddingId, coupleNotesBlock)
     : null
   if (sentiment?.negative) {
     classical.flags.push({
@@ -458,6 +501,10 @@ export async function generateRiskFlags(
   // assembler) so the venue's ai_name + COORDINATOR_RULES + numbers
   // guard fire consistently. The risk-flag specific rules layer on
   // as taskInstructions; numeric facts pass through numbersGuard.
+  // Wave 1B (2026-05-09): couple-notes block threaded so the risk
+  // narration's prose reflects the couple's emotional context — a
+  // contract delay flag in a financial-stress context narrates
+  // softer than the same flag with no soft context.
   const taskInstructions = `Summarise a couple's risk flags for the venue coordinator. Output JSON:
   - title: short headline (~60 chars)
   - body: 1 sentence summarising the top 2-3 flags
@@ -465,12 +512,17 @@ export async function generateRiskFlags(
 
 Risk-flag specific rules:
 - Do not quote the couple's messages directly; reference flag shapes.
-- Prioritise the highest-severity flags in the body.`
+- Prioritise the highest-severity flags in the body.
+- If a COUPLE'S NOTES block is present, let it shape your tone — a
+  silent-after-tour flag for a couple with financial-stress context
+  reads as "they may be running the numbers" not "they're cooling".
+  Never echo the notes themselves.`
 
   const built = await buildCoordinatorPrompt({
     venueId,
     surface: 'narration_risk',
     taskInstructions,
+    coupleNotesBlock,
     numbersGuard: {
       risk_score: classical.risk_score,
       flag_count: classical.flags.length,

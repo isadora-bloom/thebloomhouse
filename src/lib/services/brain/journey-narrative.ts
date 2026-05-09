@@ -24,10 +24,20 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { dedupePeopleByName } from '@/lib/utils/couple-name'
 import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
+import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
+import { redactError } from '@/lib/observability/redact'
 
 // 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
 // when migrated to the canonical coordinator-prompt assembler.
-export const JOURNEY_NARRATIVE_PROMPT_VERSION = 'journey-narrative.prompt.v2.0'
+//
+// 2026-05-09 Wave 1B: bumped to v2.1. Couple's auto-context notes now
+// flow into the journey narrative system prompt so the cross-source
+// prose can describe the discovery sequence with awareness of the
+// couple's emotional context. Same factual contract (chronology +
+// platforms + first-touch attribution remain intact); the narrative
+// voice is shaped by the soft layer when present. Cache invalidation
+// is intentional via the wedding_journey_narratives staleness gate.
+export const JOURNEY_NARRATIVE_PROMPT_VERSION = 'journey-narrative.prompt.v2.1'
 
 const STALENESS_DELTA = 2
 const GEN_LOCK_TTL_MS = 60_000 // 60s — generation that takes longer than this is assumed crashed
@@ -234,6 +244,13 @@ Your output is a SINGLE PARAGRAPH (one or two sentences) that:
 - Never invent dates or platforms not in the input
 - Use natural prose, no bullet points, no headers, no markdown
 - 50-100 words max
+- If a COUPLE'S NOTES block is in the system prompt, those notes
+  shape the TONE of the narrative (warmth, gravity, brevity), NOT
+  its facts. Never quote the notes; never reference grief, health,
+  or financial-stress markers explicitly. The narrative reads as
+  "Bloom knows this couple" only because the prose feels
+  appropriately tuned, never because soft-context appears in the
+  output.
 
 Examples of good output:
 
@@ -254,10 +271,24 @@ export async function generateNarrativeText(
   if (ctx.candidates.length === 0) return null
 
   const userPrompt = buildUserPrompt(ctx)
+  // Wave 1B (2026-05-09). Load couple-notes as tone fuel for the
+  // journey narrative. limit=8 — narrators have a tighter context
+  // budget than the brain reply path. Best-effort: the loader never
+  // throws (returns brainBlock=null on any error); this try/catch is
+  // defense-in-depth so a journey narrative without soft-context still
+  // produces valid prose (just without the life-context-aware framing).
+  let coupleNotesBlock: string | null = null
+  try {
+    const auto = await loadAutoContextForWedding(supabase, weddingId, { limit: 8 })
+    coupleNotesBlock = auto.brainBlock
+  } catch (err) {
+    console.warn('[journey-narrative] auto-context load failed:', redactError(err))
+  }
   const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
     venueId: ctx.wedding.venue_id,
     surface: 'journey_narrative',
     taskInstructions: TASK_INSTRUCTIONS,
+    coupleNotesBlock,
     contentTier: 1,
   })
   const result = await callAI({
