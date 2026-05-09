@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useScope } from '@/lib/hooks/use-scope'
@@ -1945,11 +1946,25 @@ export default function InboxPage() {
   // The underlying endpoints stay on disk for manual curl use, but the
   // correct answer for new venues is a clean sync with the current
   // pipeline — not a chain of patch buttons.
-  const handleSync = async () => {
+  // Shared sync runner — used by the regular Sync button (delta or first-
+  // sync 90d) and the explicit "Backfill 90 days" button. Loops until the
+  // server returns done=true (or 50 chunks, whichever comes first) so a
+  // multi-week backfill never trips a single-request 504. Status string
+  // updates incrementally so the coordinator sees progress while it runs.
+  const runSync = async (mode: 'auto' | 'backfill90') => {
     setSyncing(true)
     const firstSync = interactions.length === 0
-    const daysParam = firstSync ? 'days=90&' : ''
-    setSyncStatus(firstSync ? 'First sync — pulling last 90 days…' : 'Syncing…')
+    // Backfill mode always passes days=90; 'auto' only passes it on first
+    // sync (delta sync via Gmail history_id otherwise).
+    const daysParam =
+      mode === 'backfill90' ? 'days=90&' : firstSync ? 'days=90&' : ''
+    setSyncStatus(
+      mode === 'backfill90'
+        ? 'Backfilling 90 days — running every email through the classifier…'
+        : firstSync
+          ? 'First sync — pulling last 90 days…'
+          : 'Syncing…'
+    )
     try {
       let totalFetched = 0
       let totalProcessed = 0
@@ -1990,6 +2005,27 @@ export default function InboxPage() {
     }
   }
 
+  const handleSync = async () => {
+    await runSync('auto')
+  }
+
+  // Explicit 90-day backfill. Same endpoint as Sync, but always passes
+  // days=90 so coordinator can re-run it on demand (e.g. after a Gmail
+  // disconnect, or after adding a new venue connection mid-month). Behind
+  // a confirm because the classifier load is non-trivial — every inbound
+  // email in the last 90 days runs through Haiku, which can take 5-10
+  // minutes for an active venue.
+  const handleBackfill90 = async () => {
+    if (
+      !window.confirm(
+        'This pulls every email from the last 90 days through the classifier. Takes 5-10 minutes for active venues. Continue?'
+      )
+    ) {
+      return
+    }
+    await runSync('backfill90')
+  }
+
   // ---- AI reclass of "Other" emails ----
   //
   // POSTs to /api/admin/reclass-folders-ai which sweeps the venue's
@@ -2017,6 +2053,7 @@ export default function InboxPage() {
         by_folder: Record<string, number>
         ai_errors?: number
         low_confidence?: number
+        vendor_domains_promoted?: number
         duration_ms: number
       }
       const moved = Object.entries(data.by_folder ?? {})
@@ -2027,10 +2064,14 @@ export default function InboxPage() {
             LIFECYCLE_LABELS[folder as LifecycleFolder] ?? folder
           return `${count} to ${label}`
         })
+      const promotedSuffix =
+        (data.vendor_domains_promoted ?? 0) > 0
+          ? ` ${data.vendor_domains_promoted} new vendor domain${data.vendor_domains_promoted === 1 ? '' : 's'} added to allow-list.`
+          : ''
       const summary =
         data.updated === 0
-          ? `Sage scanned ${data.scanned} email${data.scanned === 1 ? '' : 's'}, no high-confidence matches.`
-          : `Moved ${moved.join(', ')}.`
+          ? `Sage scanned ${data.scanned} email${data.scanned === 1 ? '' : 's'}, no high-confidence matches.${promotedSuffix}`
+          : `Moved ${moved.join(', ')}.${promotedSuffix}`
       setReclassStatus(summary)
       await fetchInteractions()
       setTimeout(() => setReclassStatus(null), 10000)
@@ -2223,6 +2264,15 @@ export default function InboxPage() {
             {syncing ? 'Syncing...' : 'Sync'}
           </button>
           <button
+            onClick={handleBackfill90}
+            disabled={syncing}
+            title="Re-run the last 90 days through the classifier. Useful after reconnecting Gmail or adding a new connection."
+            className="flex items-center gap-2 px-4 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Clock className={`w-4 h-4 ${syncing ? 'animate-pulse' : ''}`} />
+            Backfill 90 days
+          </button>
+          <button
             onClick={handleReclass}
             disabled={reclassing}
             title="Have Sage read each Other-folder email and bucket it correctly"
@@ -2231,6 +2281,13 @@ export default function InboxPage() {
             <Sparkles className={`w-4 h-4 ${reclassing ? 'animate-pulse' : ''}`} />
             {reclassing ? 'Classifying...' : 'Auto-classify Other'}
           </button>
+          <Link
+            href="/settings/vendor-domains"
+            title="Review the per-venue vendor-domain allow-list (auto-grown by Auto-classify Other)"
+            className="flex items-center px-2.5 py-2.5 text-sage-700 border border-sage-300 text-sm font-medium rounded-lg hover:bg-sage-50 transition-colors"
+          >
+            <Tag className="w-4 h-4" />
+          </Link>
           <button
             onClick={() => {
               const next = !showOutbound

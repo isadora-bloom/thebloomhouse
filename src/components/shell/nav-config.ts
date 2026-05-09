@@ -144,6 +144,10 @@ export const MODE_AGENT: ModeConfig = {
       items: [
         { label: 'Notifications', href: '/agent/notifications', icon: Newspaper },
         { label: 'Error Monitor', href: '/agent/errors', icon: Activity },
+        // Classifier health: verifies Haiku is reading + classifying every
+        // inbound. Read-only telemetry from interactions /
+        // intelligence_extractions / api_costs.
+        { label: 'Classifier Health', href: '/agent/classification-health', icon: ShieldAlert },
       ],
     },
   ],
