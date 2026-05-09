@@ -533,6 +533,11 @@ Return a JSON object with these exact fields:
 - recommendations: string[] (2-4 actionable tactical recommendations)
 - strategic_recommendations: string[] (2-3 bigger-picture strategic recommendations for the coming month)
 
+The user prompt may include a MACRO CONTEXT block with cultural moments, FRED indicator deltas, upcoming calendar events, and engine-discovered correlation narrations. When that block is present:
+  - Surface the most relevant macro signal in the strategic_recommendations (e.g. "Mortgage rate climbed 60bps over the month and the engine flagged an inverse correlation with tour completions at 60-day lag — consider revisiting payment-plan messaging.").
+  - Prefer quoting a correlation narration's title verbatim rather than re-describing the underlying numbers yourself.
+  - Do NOT invent macro relationships; if the block is absent or empty, write the briefing without macro language.
+
 NUMBERS DISCIPLINE (ANTI-19.9-A): every number you reference must come from the user prompt. Do NOT compute percentages, averages, ratios, or projections — only quote numbers + deltas pre-computed in the data block. If a number you'd like is missing, write the observation without it rather than inventing.
 
 Be decisive in your recommendations.`
@@ -569,7 +574,7 @@ export async function generateWeeklyBriefing(
   // The 14-7 day prior window is the canonical comparison.
   const priorFrom = daysAgo(14)
   const priorTo = daysAgo(7)
-  const [metrics, priorMetrics, deviations, weather, indicators, alerts, phaseB] = await Promise.all([
+  const [metrics, priorMetrics, deviations, weather, indicators, alerts, phaseB, macroContext] = await Promise.all([
     getWeddingMetrics(venueId, fromDate, toDate),
     getWeddingMetrics(venueId, priorFrom, priorTo),
     detectTrendDeviations(venueId),
@@ -577,6 +582,8 @@ export async function generateWeeklyBriefing(
     getLatestIndicators(),
     getActiveAlerts(venueId),
     getPhaseBWeeklyState(venueId),
+    // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09).
+    getBriefingMacroContext(venueId),
   ])
 
   // Classical compute: deltas + change percentages. The LLM never
@@ -660,7 +667,7 @@ PLATFORM SIGNAL HEALTH (last 7 days):
 - Auto-linked to leads: ${phaseB.autoLinked} (Tier 1 deterministic + Tier 2 AI)
 - High-funnel non-converting: ${phaseB.highFunnelNonConverting} candidates engaged deeply but didn't inquire
 - Conflicts to review: ${phaseB.openConflicts}
-
+${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / correlation narrations):\n${macroContext.block}\n` : ''}
 Generate the weekly briefing.`
 
   // Call AI to generate the briefing narrative.
@@ -775,6 +782,7 @@ export async function generateMonthlyBriefing(
     weather,
     indicators,
     alerts,
+    macroContext,
   ] = await Promise.all([
     getWeddingMetrics(venueId, currentFrom, currentTo),
     getWeddingMetrics(venueId, priorFrom, priorTo),
@@ -782,6 +790,8 @@ export async function generateMonthlyBriefing(
     getWeatherForDateRange(venueId, today(), daysFromNow(14)),
     getLatestIndicators(),
     getActiveAlerts(venueId),
+    // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09).
+    getBriefingMacroContext(venueId),
   ])
 
   const demandScore = calculateDemandScore(indicators)
@@ -852,7 +862,7 @@ ${weatherSummary}
 
 ANOMALY ALERTS:
 ${alertSummary}
-
+${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / correlation narrations):\n${macroContext.block}\n` : ''}
 Generate the monthly briefing with strategic recommendations.`
 
   // Call AI to generate the monthly briefing.

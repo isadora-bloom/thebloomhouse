@@ -15,6 +15,7 @@ import {
   isProposedClientNote,
   isProposedKbRows,
   isProposedOperationalNote,
+  isPdfPreview,
   readParseResultKind,
 } from '@/lib/services/brain-dump/parse-result-schema'
 
@@ -464,6 +465,125 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       importSummary: summary,
       nextHref: next?.nextHref ?? null,
       nextLabel: next?.nextLabel ?? null,
+    })
+  }
+
+  // Case J: PDF preview confirm. Bug surfaced 2026-05-09 (Isadora's
+  // 43-page LINDY EMAIL TRIAGE SHEET): the route parked the extracted
+  // text and the bubble said "Confirm to file via the standard
+  // classifier" — but no Case existed to actually run the classifier
+  // on confirm, so confirms fell through to Case G and the entry's
+  // `routed_to` stayed []. The full PDF text sat in
+  // parse_result.pdf.extractedText doing nothing.
+  //
+  // The fix: detect CSV-shape from the extracted text first (tabular
+  // PDFs are usually exported spreadsheets — Lindy triage, vendor
+  // pricing tables, payment schedules). When CSV-detection succeeds,
+  // route through the same runCsvImport path small CSVs use.
+  // Otherwise fall through to the regular text classifier so free-
+  // text PDFs (brochures, contracts) still route correctly.
+  const isPdfPreviewLegacy =
+    !prKind &&
+    pr.pdf &&
+    typeof pr.pdf === 'object' &&
+    typeof (pr.pdf as { extractedText?: unknown }).extractedText === 'string'
+  if (isPdfPreview(pr) || isPdfPreviewLegacy) {
+    // The discriminated `kind: 'pdf_preview'` shape has the fields at
+    // the top level; the legacy shape nests them under pr.pdf. Read
+    // both forms safely.
+    const prAny = pr as Record<string, unknown>
+    const pdfShape = (prAny.pdf as Record<string, unknown> | undefined) ?? prAny
+    const extractedText = String((pdfShape as { extractedText?: unknown }).extractedText ?? '')
+
+    // Try CSV-shape detection first. We split on the first newline,
+    // tokenize the candidate header on whitespace + tabs + pipes
+    // (PDFs lose the comma delimiter when re-extracted as text), and
+    // only proceed when the header tokens actually match a known
+    // CSV-import shape. A header that doesn't match degrades to the
+    // text classifier path.
+    const firstLineEnd = extractedText.indexOf('\n')
+    const candidateHeader =
+      firstLineEnd > 0 ? extractedText.slice(0, firstLineEnd) : extractedText.slice(0, 400)
+    const headerTokens = candidateHeader
+      .split(/\t|\||\s{2,}/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const detection = detectCsvShape(headerTokens)
+
+    if (detection.shape !== 'unknown' && detection.confidence >= 0.5 && headerTokens.length >= 3) {
+      // Re-tokenize each subsequent line on the same delimiter.
+      const lines = extractedText.split('\n').slice(1)
+      const dataRows = lines
+        .map((line) => line.split(/\t|\||\s{2,}/).map((c) => c.trim()).filter(Boolean))
+        .filter((row) => row.length >= Math.max(2, Math.floor(headerTokens.length / 2)))
+
+      const summary = await runCsvImport({
+        supabase,
+        venueId: auth.venueId,
+        detection,
+        headerRow: headerTokens,
+        dataRows,
+      })
+
+      await supabase.from('brain_dump_entries').update({
+        parse_status: 'confirmed',
+        clarification_answer: body.answer?.trim() ?? null,
+        parse_result: {
+          ...pr,
+          confirmed_at: new Date().toISOString(),
+          summary,
+          pdf_route: 'csv_import',
+        },
+        routed_to: [{ table: 'pdf_csv_import', id: null, action: `${detection.shape}:${summary.inserted ?? 0}`}],
+        resolved_at: new Date().toISOString(),
+      }).eq('id', id)
+
+      const next = nextHrefFor({ intent: `${detection.shape}_preview` })
+      return NextResponse.json({
+        id,
+        status: 'confirmed',
+        importSummary: summary,
+        pdfRoute: 'csv_import',
+        nextHref: next?.nextHref ?? null,
+        nextLabel: next?.nextLabel ?? null,
+      })
+    }
+
+    // Free-text PDF path: feed the extracted text into the regular
+    // text classifier. Re-uses classifyBrainDump + routeBrainDump so
+    // the same propose-and-confirm + graduation rules apply.
+    const { classifyBrainDump, routeBrainDump } = await import('@/lib/services/brain-dump')
+    const parsed = await classifyBrainDump({ venueId: auth.venueId, rawText: extractedText })
+    const route = await routeBrainDump({
+      venueId: auth.venueId,
+      entryId: id,
+      submittedBy: null,
+      parsed,
+      rawText: extractedText,
+    })
+
+    await supabase.from('brain_dump_entries').update({
+      parse_status: route.needsClarification ? 'needs_clarification' : 'confirmed',
+      clarification_answer: body.answer?.trim() ?? null,
+      parse_result: {
+        ...pr,
+        confirmed_at: new Date().toISOString(),
+        text_classifier: { intent: parsed.intent, confidence: parsed.confidence },
+        pdf_route: 'text_classifier',
+      },
+      resolved_at: route.needsClarification ? null : new Date().toISOString(),
+    }).eq('id', id)
+
+    return NextResponse.json({
+      id,
+      status: route.needsClarification ? 'needs_clarification' : 'confirmed',
+      pdfRoute: 'text_classifier',
+      classifierIntent: parsed.intent,
+      classifierConfidence: parsed.confidence,
+      needsClarification: route.needsClarification,
+      clarificationQuestion: route.clarificationQuestion,
+      nextHref: route.nextHref ?? null,
+      nextLabel: route.nextLabel ?? null,
     })
   }
 
