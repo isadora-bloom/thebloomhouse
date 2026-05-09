@@ -331,29 +331,34 @@ export async function proposeFromAutoDetection(
 
 /**
  * TRENDS-DIAGNOSIS Fix 1 (2026-05-09). Daily auto-archive of expired
- * proposed cultural moments.
+ * cultural moments — any non-archived, non-dismissed row whose window
+ * has already closed.
  *
- * Pre-fix: rows with `end_at < now()` and `status='proposed'` stayed in
- * the awaiting-decision queue forever. The user reported "6 awaiting-
- * decision rows ALL from 2025" — moments whose windows had already
- * closed but were still surfacing for confirmation. They cannot affect
- * future bookings; they're history.
+ * Pre-fix v1 (cbf5f76): swept ONLY `status='proposed'` rows. The 6
+ * fictional Crestwood-era demo-seed moments are stamped
+ * `status='confirmed'` (Hawthorne already "confirmed" them in seed.sql
+ * so the correlation engine has data to lag against) and end_at in
+ * 2025, so they slipped past the 'proposed'-only WHERE clause and
+ * stayed in the queue forever for venues that hadn't recorded a
+ * venue_cultural_moment_state row.
  *
- * Post-fix: this helper, called as a sub-step of the existing
- * cultural_moments_auto_propose cron tick (no new Vercel cron entry
- * — we're at the 40-cron Pro plan limit), flips `status='archived'`
- * and stamps `archive_reason='expired'` plus an `archived_at` /
- * `archived_by` audit trail in evidence so coordinators can trace why
- * the row left the queue.
+ * Post-fix v2: sweep every status NOT IN ('archived', 'dismissed').
+ * Confirmed-but-expired rows DO archive — the global cultural_moments
+ * row leaves the read query (`/intel/cultural-moments` filters
+ * status='archived'), but the per-venue venue_cultural_moment_state
+ * rows remain so any historical correlation that referenced this
+ * moment is still attributable. The correlation engine's read path
+ * (loadCulturalMomentsSeries) already clamps each moment to the
+ * analysis window — an archived row whose window is fully in the
+ * past contributes zero points, exactly the same as before archival.
  *
- * Confirmed and dismissed moments are NEVER touched. A confirmed past
- * moment is a permanent attribution-engine input; dismissing-then-
- * archiving is two clicks the coordinator already chose. We only
- * sweep the proposed bucket.
+ * Dismissed moments are never touched: dismissing is the coordinator's
+ * explicit "this isn't real" signal, and we don't want a follow-up
+ * archive sweep to mutate that row's status.
  *
  * Idempotent: re-running the function on a row that's already
  * status='archived' is a no-op because the WHERE clause filters
- * status='proposed'.
+ * status NOT IN ('archived','dismissed').
  */
 export async function archiveExpiredCulturalMoments(
   supabase: SupabaseClient,
@@ -363,16 +368,20 @@ export async function archiveExpiredCulturalMoments(
   // the audit trail per-moment in case we ever add per-row reasoning
   // (different reasons for different rows in the same batch).
   const nowIso = new Date().toISOString()
+  // PostgREST `.not(col, 'in', '(a,b)')` translates to NOT IN (a,b).
+  // Quote the identifiers so values containing characters PostgREST
+  // would otherwise tokenise stay intact.
   const { data: expired } = await supabase
     .from('cultural_moments')
-    .select('id, evidence, end_at')
-    .eq('status', 'proposed')
+    .select('id, status, evidence, end_at')
+    .not('status', 'in', '("archived","dismissed")')
     .not('end_at', 'is', null)
     .lt('end_at', nowIso)
     .limit(500)
 
   const rows = (expired ?? []) as Array<{
     id: string
+    status: CulturalMomentStatus
     evidence: Record<string, unknown> | null
     end_at: string | null
   }>
@@ -383,6 +392,10 @@ export async function archiveExpiredCulturalMoments(
     const updatedEvidence = {
       ...(row.evidence ?? {}),
       archive_reason: 'expired',
+      // Preserve the prior status in the evidence trail so a historical
+      // audit can tell whether the row was confirmed-then-archived or
+      // proposed-then-archived without the row's current `status` column.
+      archived_from_status: row.status,
       archived_at: nowIso,
       archived_by: 'cron:cultural_moments_archive_expired',
     }
@@ -395,7 +408,10 @@ export async function archiveExpiredCulturalMoments(
         updated_at: nowIso,
       })
       .eq('id', row.id)
-      .eq('status', 'proposed') // re-assert to avoid races
+      // Re-assert the prior status to avoid a race where a coordinator
+      // dismisses a row between the SELECT and the UPDATE — we don't
+      // want the cron to clobber a fresh dismiss.
+      .eq('status', row.status)
     if (!error) archivedIds.push(row.id)
   }
 

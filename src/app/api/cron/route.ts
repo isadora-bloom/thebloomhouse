@@ -1399,9 +1399,10 @@ async function runCulturalMomentsAutoPropose(): Promise<{
     }>,
   }
 
-  // TRENDS-DIAGNOSIS Fix 1 (2026-05-09): archive expired proposed
-  // moments before re-running the proposer. Order matters: archiving
-  // first means a freshly-proposed moment whose window already closed
+  // TRENDS-DIAGNOSIS Fix 1 v2 (2026-05-09): archive expired moments
+  // (any status NOT IN ('archived','dismissed') with end_at < now())
+  // before re-running the proposer. Order matters: archiving first
+  // means a freshly-proposed moment whose window already closed
   // (extremely unlikely but possible) gets caught on the NEXT run, not
   // the same run — keeps the per-tick semantics simple. Service-role
   // global table — no per-venue loop required.
