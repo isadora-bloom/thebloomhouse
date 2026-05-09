@@ -63,11 +63,19 @@ type SubmitState =
       importSummary?: ImportSummaryShape | null
       // 2026-05-08 (Isadora feedback): inline confirm for ANY
       // actionable propose-and-confirm intent, not just CSV preview.
+      // 2026-05-08 #2: also surface dismiss-only inline cards for
+      // failure intents (pdf_extract_failed, oversized, etc.) so the
+      // coordinator can clear the entry without leaving the bubble.
       pendingConfirm?: {
         entryId: string
         intent: string
         previewRows?: number
         confirmLabel?: string
+        // When true, hide the Confirm button and only render Dismiss.
+        // For failure shapes (PDF parse failure, oversized payload)
+        // there is nothing to confirm but the entry still parks in
+        // brain_dump_entries.parse_status='needs_clarification'.
+        dismissOnly?: boolean
       } | null
       // Deep-link destination for "go where this lives now" affordance.
       nextHref?: string | null
@@ -298,6 +306,20 @@ export function FloatingBrainDump() {
       // needsClarification + an entryId, surface Confirm/Dismiss in the
       // bubble. The resolve route already handles every parked shape
       // (Cases A-F).
+      // Failure intents have nothing to confirm but still need to be
+      // dismissable from the bubble — Isadora explicitly asked for
+      // pdf_extract_failed to be resolvable inline, not via the
+      // notifications page.
+      const failureIntents = new Set([
+        'pdf_extract_failed',
+        'pdf_oversized',
+        'url_google_doc_deferred',
+        'json_parse_failed',
+        'json_contract_violation',
+        'duplicate_upload',
+      ])
+      const isFailureIntent =
+        typeof data.intent === 'string' && failureIntents.has(data.intent)
       const canInlineConfirm =
         data.needsClarification === true &&
         typeof data.entryId === 'string' &&
@@ -305,15 +327,13 @@ export function FloatingBrainDump() {
         // Help-mode never goes through propose-and-confirm — it's a Q&A
         // surface. Skip pendingConfirm so the answer card renders instead.
         data.intent !== 'help_question' &&
-        // URL Google Doc and pdf_extract_failed surface a clarification
-        // we can't resolve from the bubble — let those still render the
-        // amber card with a message. (No proposed payload server-side.)
-        data.intent !== 'url_google_doc_deferred' &&
-        data.intent !== 'pdf_extract_failed' &&
-        data.intent !== 'pdf_oversized' &&
-        data.intent !== 'json_parse_failed' &&
-        data.intent !== 'json_contract_violation' &&
-        data.intent !== 'duplicate_upload'
+        !isFailureIntent
+      // Failure intents get an inline Dismiss-only card so the entry
+      // does not vanish into /agent/notifications without a path back.
+      const canDismissInline =
+        data.needsClarification === true &&
+        typeof data.entryId === 'string' &&
+        isFailureIntent
       setState({
         kind: 'done',
         intent: data.intent ?? 'unknown',
@@ -326,7 +346,13 @@ export function FloatingBrainDump() {
               previewRows: data.previewRows,
               confirmLabel: confirmLabelFor(data.intent),
             }
-          : null,
+          : canDismissInline
+            ? {
+                entryId: data.entryId!,
+                intent: data.intent,
+                dismissOnly: true,
+              }
+            : null,
         nextHref: data.nextHref ?? null,
         nextLabel: data.nextLabel ?? null,
         helpAnswer: data.helpAnswer ?? null,
@@ -420,11 +446,18 @@ export function FloatingBrainDump() {
                   // operational_note, availability, analytics, vision
                   // storefront analytics, etc.). Pre-fix only CSV
                   // previews surfaced here. 2026-05-08 (Isadora
-                  // feedback) extended to every parked entry.
-                  <div className="flex items-start gap-2 bg-sage-50 border border-sage-200 rounded-lg px-3 py-2">
-                    <CheckCircle2 className="w-4 h-4 text-sage-600 mt-0.5 shrink-0" />
+                  // feedback) extended to every parked entry, plus
+                  // dismiss-only failure intents (PDF parse failure,
+                  // oversized payloads) so coordinators never have to
+                  // navigate to /agent/notifications to clear an entry.
+                  <div className={`flex items-start gap-2 ${state.pendingConfirm.dismissOnly ? 'bg-amber-50 border-amber-200' : 'bg-sage-50 border-sage-200'} border rounded-lg px-3 py-2`}>
+                    {state.pendingConfirm.dismissOnly ? (
+                      <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4 text-sage-600 mt-0.5 shrink-0" />
+                    )}
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-sage-900">
+                      <p className={`text-sm font-medium ${state.pendingConfirm.dismissOnly ? 'text-amber-900' : 'text-sage-900'}`}>
                         {state.pendingConfirm.intent.endsWith('_preview') &&
                         typeof state.pendingConfirm.previewRows === 'number'
                           ? `Detected ${state.pendingConfirm.intent.replace(/_preview$/, '').replace(/_/g, ' ')}, ${state.pendingConfirm.previewRows.toLocaleString()} rows`
@@ -438,15 +471,17 @@ export function FloatingBrainDump() {
                         </p>
                       )}
                       <div className="flex gap-2 mt-2">
-                        <button
-                          onClick={() => confirmImport(state.pendingConfirm!.entryId)}
-                          className="text-xs px-3 py-1.5 bg-sage-600 text-white rounded-lg hover:bg-sage-700"
-                        >
-                          {state.pendingConfirm.confirmLabel ?? 'Confirm'}
-                        </button>
+                        {!state.pendingConfirm.dismissOnly && (
+                          <button
+                            onClick={() => confirmImport(state.pendingConfirm!.entryId)}
+                            className="text-xs px-3 py-1.5 bg-sage-600 text-white rounded-lg hover:bg-sage-700"
+                          >
+                            {state.pendingConfirm.confirmLabel ?? 'Confirm'}
+                          </button>
+                        )}
                         <button
                           onClick={() => dismissEntry(state.pendingConfirm!.entryId)}
-                          className="text-xs px-3 py-1.5 border border-sage-200 rounded-lg text-sage-400 hover:bg-sage-100 hover:text-sage-600"
+                          className={`text-xs px-3 py-1.5 border rounded-lg ${state.pendingConfirm.dismissOnly ? 'border-amber-300 text-amber-800 hover:bg-amber-100' : 'border-sage-200 text-sage-400 hover:bg-sage-100 hover:text-sage-600'}`}
                         >
                           Dismiss
                         </button>

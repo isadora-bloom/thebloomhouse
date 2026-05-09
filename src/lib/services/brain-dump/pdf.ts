@@ -30,6 +30,81 @@
  * asking the coordinator to paste text instead).
  */
 
+// Belt-and-suspenders polyfill installed BEFORE unpdf loads.
+// unpdf's own stubBrowserGlobals runs lazily inside resolvePDFJSImport,
+// but we have observed cases where the very first PDF still threw
+// "DOMMatrix is not defined" — likely a serverless cold-start race
+// where module-scope references to DOMMatrix in pdfjs evaluate before
+// the lazy stub installs. Installing the polyfill at THIS module's
+// top-level guarantees the global exists by the time anything
+// downstream evaluates. Idempotent: skips when already defined.
+function installPdfGlobals(): void {
+  const g = globalThis as unknown as Record<string, unknown>
+  if (typeof g.DOMMatrix === 'undefined') {
+    class StubDOMMatrix {
+      a = 1; b = 0; c = 0; d = 1; e = 0; f = 0
+      constructor(init?: number[] | string) {
+        if (Array.isArray(init) && init.length === 6) {
+          ;[this.a, this.b, this.c, this.d, this.e, this.f] = init
+        }
+      }
+      multiply() { return this }
+      multiplySelf() { return this }
+      preMultiplySelf() { return this }
+      translate() { return this }
+      translateSelf(x = 0, y = 0) {
+        this.e = this.a * x + this.c * y + this.e
+        this.f = this.b * x + this.d * y + this.f
+        return this
+      }
+      scale() { return this }
+      scaleSelf(x = 1, y = x) {
+        this.a *= x; this.b *= x; this.c *= y; this.d *= y
+        return this
+      }
+      rotate() { return this }
+      rotateSelf() { return this }
+      invertSelf() { return this }
+      transformPoint(p: { x?: number; y?: number; z?: number; w?: number }) {
+        return { x: p.x ?? 0, y: p.y ?? 0, z: p.z ?? 0, w: p.w ?? 1 }
+      }
+    }
+    g.DOMMatrix = StubDOMMatrix
+  }
+  if (typeof g.Path2D === 'undefined') {
+    class StubPath2D {
+      constructor(_init?: unknown) {}
+      addPath() {}
+      moveTo() {}
+      lineTo() {}
+      bezierCurveTo() {}
+      quadraticCurveTo() {}
+      arc() {}
+      arcTo() {}
+      ellipse() {}
+      rect() {}
+      closePath() {}
+    }
+    g.Path2D = StubPath2D
+  }
+  if (typeof g.ImageData === 'undefined') {
+    class StubImageData {
+      data: Uint8ClampedArray
+      width: number
+      height: number
+      colorSpace = 'srgb' as const
+      constructor(width: number, height: number) {
+        this.width = width
+        this.height = height
+        this.data = new Uint8ClampedArray(width * height * 4)
+      }
+    }
+    g.ImageData = StubImageData
+  }
+}
+
+installPdfGlobals()
+
 export const PDF_SIZE_CAP_BYTES = 10 * 1024 * 1024 // 10MB
 export const PDF_TEXT_CAP_CHARS = 50_000
 
