@@ -1111,8 +1111,118 @@ async function fetchMessageIdsByList(
 // ---------------------------------------------------------------------------
 
 /**
+ * Inline-attached file for sendEmail. base64-encoded body so callers can
+ * pre-fetch / pre-encode (Storage download or URL fetch in the asset
+ * matcher) without coupling Gmail to those code paths.
+ */
+export interface EmailAttachment {
+  filename: string
+  mimeType: string
+  contentBase64: string
+}
+
+/**
+ * Total inline-attachment payload cap (raw bytes pre-encode). Gmail's send
+ * limit is ~25 MB MIME-encoded which is ~17 MB raw, but most consumer
+ * mailbox quotas choke earlier. 10 MB is a polite ceiling for a wedding-
+ * venue email reply that should be a photo or two, not a portfolio.
+ */
+const ATTACHMENT_TOTAL_CAP_BYTES = 10 * 1024 * 1024
+
+/**
+ * Drop the largest attachments until the total raw byte size fits inside
+ * ATTACHMENT_TOTAL_CAP_BYTES. Mutates a copy, returns the trimmed array.
+ */
+function enforceAttachmentSizeCap(attachments: EmailAttachment[]): EmailAttachment[] {
+  if (attachments.length === 0) return attachments
+
+  // Compute raw byte size from base64 length. Each 4 base64 chars decode
+  // to 3 bytes; padding subtracts 1 or 2.
+  function rawSize(a: EmailAttachment): number {
+    const s = a.contentBase64
+    const len = s.length
+    if (len === 0) return 0
+    const padding = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0
+    return Math.floor((len * 3) / 4) - padding
+  }
+
+  const withSize = attachments.map((a) => ({ a, size: rawSize(a) }))
+  let total = withSize.reduce((sum, x) => sum + x.size, 0)
+  if (total <= ATTACHMENT_TOTAL_CAP_BYTES) return attachments
+
+  // Drop the largest until we fit. Sort copy by size desc so the splice
+  // takes from the head.
+  const sorted = [...withSize].sort((x, y) => y.size - x.size)
+  while (total > ATTACHMENT_TOTAL_CAP_BYTES && sorted.length > 0) {
+    const dropped = sorted.shift()!
+    total -= dropped.size
+    console.warn(
+      `[gmail] attachment "${dropped.a.filename}" dropped to fit ${ATTACHMENT_TOTAL_CAP_BYTES} byte cap`,
+    )
+  }
+  return sorted.map((x) => x.a)
+}
+
+/**
+ * Build a multipart/mixed MIME message with an HTML-or-text body part
+ * plus one application/octet-stream-ish part per attachment. Returns the
+ * full RFC 2822 envelope as a string ready to be base64url-encoded for
+ * Gmail's `raw` send field.
+ *
+ * Body is sent as text/plain to match the previous single-part behavior.
+ * Boundary is a random hex string — colons / dots / non-ascii avoided so
+ * Gmail's strict parser doesn't reject it.
+ */
+function buildMultipartMime(
+  headers: string[],
+  body: string,
+  attachments: EmailAttachment[],
+): string {
+  const boundary = 'bh_' + Math.random().toString(16).slice(2) + Date.now().toString(16)
+
+  const headerCopy = [...headers]
+  // Replace single-part Content-Type if a caller already added it.
+  for (let i = headerCopy.length - 1; i >= 0; i--) {
+    if (headerCopy[i].toLowerCase().startsWith('content-type:')) {
+      headerCopy.splice(i, 1)
+    }
+  }
+  headerCopy.push(`Content-Type: multipart/mixed; boundary="${boundary}"`)
+
+  const lines: string[] = []
+  lines.push(...headerCopy)
+  lines.push('') // blank line ends headers
+
+  // Body part
+  lines.push(`--${boundary}`)
+  lines.push('Content-Type: text/plain; charset="UTF-8"')
+  lines.push('Content-Transfer-Encoding: 7bit')
+  lines.push('')
+  lines.push(body)
+
+  // Attachment parts
+  for (const att of attachments) {
+    // Wrap base64 to 76-char lines per RFC 2045. Some MTAs and mailbox
+    // providers reject very-long base64 lines.
+    const wrapped = att.contentBase64.replace(/.{76}/g, '$&\r\n')
+    lines.push(`--${boundary}`)
+    lines.push(`Content-Type: ${att.mimeType}; name="${att.filename}"`)
+    lines.push('Content-Transfer-Encoding: base64')
+    lines.push(`Content-Disposition: attachment; filename="${att.filename}"`)
+    lines.push('')
+    lines.push(wrapped)
+  }
+
+  lines.push(`--${boundary}--`)
+  return lines.join('\r\n')
+}
+
+/**
  * Send an email (or reply if threadId is provided).
  * Constructs a proper MIME message with RFC 2822 headers.
+ *
+ * If `attachments` is set and non-empty, builds a multipart/mixed MIME
+ * envelope and enforces a 10 MB total raw-byte cap (largest dropped first).
  *
  * Returns the sent message ID, or null on failure.
  */
@@ -1122,7 +1232,8 @@ export async function sendEmail(
   subject: string,
   body: string,
   threadId?: string,
-  connectionId?: string
+  connectionId?: string,
+  attachments?: EmailAttachment[],
 ): Promise<string | null> {
   const gmail = await getGmailClient(venueId, connectionId)
   if (!gmail) return null
@@ -1132,8 +1243,9 @@ export async function sendEmail(
     const profileResponse = await gmail.users.getProfile({ userId: 'me' })
     const fromEmail = profileResponse.data.emailAddress ?? ''
 
-    // Build RFC 2822 MIME message
-    const messageParts = [
+    // Build RFC 2822 MIME headers (single-part default; replaced when
+    // attachments are present).
+    const messageHeaders = [
       `From: ${fromEmail}`,
       `To: ${to}`,
       `Subject: ${subject}`,
@@ -1160,8 +1272,8 @@ export async function sendEmail(
           }>
           const lastMessageId = getHeader(lastHeaders, 'Message-ID')
           if (lastMessageId) {
-            messageParts.push(`In-Reply-To: ${lastMessageId}`)
-            messageParts.push(`References: ${lastMessageId}`)
+            messageHeaders.push(`In-Reply-To: ${lastMessageId}`)
+            messageHeaders.push(`References: ${lastMessageId}`)
           }
         }
       } catch (threadErr) {
@@ -1169,10 +1281,18 @@ export async function sendEmail(
       }
     }
 
-    // Blank line separates headers from body
-    messageParts.push('', body)
+    let rawMessage: string
+    const safeAttachments = attachments && attachments.length > 0
+      ? enforceAttachmentSizeCap(attachments)
+      : []
 
-    const rawMessage = messageParts.join('\r\n')
+    if (safeAttachments.length > 0) {
+      rawMessage = buildMultipartMime(messageHeaders, body, safeAttachments)
+    } else {
+      // Single-part. Blank line separates headers from body.
+      rawMessage = [...messageHeaders, '', body].join('\r\n')
+    }
+
     const encodedMessage = Buffer.from(rawMessage).toString('base64url')
 
     const sendParams: { userId: string; requestBody: { raw: string; threadId?: string } } = {
@@ -1187,7 +1307,7 @@ export async function sendEmail(
     const sendResponse = await gmail.users.messages.send(sendParams)
 
     console.log(
-      `[gmail] Sent email to ${to} for venue ${venueId} (message ID: ${sendResponse.data.id})`
+      `[gmail] Sent email to ${to} for venue ${venueId} (message ID: ${sendResponse.data.id}, attachments: ${safeAttachments.length})`,
     )
 
     return sendResponse.data.id ?? null

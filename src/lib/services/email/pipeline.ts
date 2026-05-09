@@ -21,7 +21,13 @@ import {
 } from '@/lib/services/brain/router'
 import { generateInquiryDraft, BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION } from '@/lib/services/brain/inquiry'
 import { generateClientDraft, BRAIN_PROMPT_VERSION as CLIENT_BRAIN_PROMPT_VERSION } from '@/lib/services/brain/client'
-import { fetchNewEmails, sendEmail, type ParsedEmail } from '@/lib/services/email/gmail'
+import { fetchNewEmails, sendEmail, type EmailAttachment, type ParsedEmail } from '@/lib/services/email/gmail'
+import {
+  matchAssetsForEmail,
+  loadAssetBytes,
+  filenameForAsset,
+  type MatchedAsset,
+} from '@/lib/services/intel/asset-matcher'
 import { detectBookingSignal } from '@/lib/services/booking-signal'
 import {
   detectSchedulingEvent,
@@ -45,7 +51,7 @@ import {
   isRelayAddress,
   isSyntheticAddress,
 } from '@/lib/services/identity/body-extract'
-import { createLogger, newCorrelationId } from '@/lib/observability/logger'
+import { createLogger, logEvent, newCorrelationId } from '@/lib/observability/logger'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
 import { updateThreadLifecycleFolder } from '@/lib/services/inbox/lifecycle'
@@ -94,6 +100,108 @@ function extractUtmFromExtractedIdentity(
     }
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// Sage email auto-attach: match + materialize attachments at the send boundary
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the EmailAttachment[] payload for a draft about to send. Runs the
+ * asset matcher (gated by venue_config.auto_attach_photos), pulls bytes
+ * for the matches, and returns base64 attachments. Always returns [] on
+ * any failure — must NEVER block email send.
+ *
+ * Telemetry: emits one structured log event per call so coordinator
+ * dashboards can track "how often Sage attached" and "average bytes".
+ */
+async function buildAutoAttachments(args: {
+  venueId: string
+  correlationId?: string | null
+  inboundSubject: string | null
+  inboundBody: string
+  replyDraft: string
+  maxAttachments?: number
+}): Promise<EmailAttachment[]> {
+  const { venueId, correlationId, inboundSubject, inboundBody, replyDraft } = args
+  if (!venueId || !replyDraft) return []
+
+  let matched: MatchedAsset[] = []
+  try {
+    matched = await matchAssetsForEmail(
+      venueId,
+      {
+        subject: inboundSubject ?? '',
+        body: inboundBody ?? '',
+        replyDraft,
+      },
+      {
+        maxAttachments: args.maxAttachments ?? 2,
+        correlationId: correlationId ?? undefined,
+      },
+    )
+  } catch {
+    // matchAssetsForEmail is itself try/catch'd, but belt-and-suspenders
+    // here so a future refactor can't accidentally make this throw.
+    matched = []
+  }
+
+  if (matched.length === 0) {
+    logEvent({
+      level: 'info',
+      msg: 'sage auto-attach matcher ran',
+      venueId,
+      correlationId: correlationId ?? undefined,
+      actor: 'system',
+      event_type: 'asset_match',
+      outcome: 'ok',
+      data: {
+        eligible: 'unknown', // matcher gates internally; not exposed
+        matched_count: 0,
+        attached_count: 0,
+        total_bytes: 0,
+      },
+    })
+    return []
+  }
+
+  const built: EmailAttachment[] = []
+  let totalBytes = 0
+  for (const a of matched) {
+    try {
+      const bytes = await loadAssetBytes(a)
+      if (!bytes) continue
+      built.push({
+        filename: filenameForAsset(a),
+        mimeType: a.mimeType ?? 'image/jpeg',
+        contentBase64: bytes.toString('base64'),
+      })
+      totalBytes += bytes.length
+    } catch (err) {
+      console.warn(
+        '[pipeline] auto-attach: loadAssetBytes failed for asset',
+        a.id,
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+
+  logEvent({
+    level: 'info',
+    msg: 'sage auto-attach matcher ran',
+    venueId,
+    correlationId: correlationId ?? undefined,
+    actor: 'system',
+    event_type: 'asset_match',
+    outcome: 'ok',
+    data: {
+      matched_count: matched.length,
+      attached_count: built.length,
+      total_bytes: totalBytes,
+    },
+  })
+
+  return built
 }
 
 // ---------------------------------------------------------------------------
@@ -3072,6 +3180,49 @@ export async function flushPendingAutoSends(venueId: string): Promise<number> {
       let sendError: unknown = null
       try {
         const disclosureCtx = await fetchDisclosureContext(venueId)
+
+        // Sage email auto-attach (migration 244). Wrapped so a matcher
+        // failure cannot block the autonomous send. The function gates
+        // on venue_config.auto_attach_photos itself.
+        let attachments: EmailAttachment[] = []
+        try {
+          // Pull the inbound body off the draft's interaction so the
+          // matcher can reason about what the couple actually asked.
+          const { data: draftRow } = await supabase
+            .from('drafts')
+            .select('interaction_id, correlation_id')
+            .eq('id', draft.id)
+            .maybeSingle()
+          let inboundBody = ''
+          let inboundSubject: string | null = details.subject ?? null
+          if (draftRow?.interaction_id) {
+            const { data: interaction } = await supabase
+              .from('interactions')
+              .select('full_body, body_preview, subject')
+              .eq('id', draftRow.interaction_id)
+              .maybeSingle()
+            inboundBody = (interaction?.full_body as string)
+              ?? (interaction?.body_preview as string)
+              ?? ''
+            inboundSubject = (interaction?.subject as string) ?? inboundSubject
+          }
+
+          attachments = await buildAutoAttachments({
+            venueId,
+            correlationId: (draftRow?.correlation_id as string | null) ?? null,
+            inboundSubject,
+            inboundBody,
+            replyDraft: draft.draft_body,
+            maxAttachments: 2,
+          })
+        } catch (matchErr) {
+          console.warn(
+            '[pipeline] auto-attach build failed (continuing without attachments):',
+            matchErr instanceof Error ? matchErr.message : matchErr,
+          )
+          attachments = []
+        }
+
         sentMessageId = await sendEmail(
           venueId,
           details.toEmail,
@@ -3080,7 +3231,8 @@ export async function flushPendingAutoSends(venueId: string): Promise<number> {
           details.threadId,
           // Use the inbound connection so the reply comes from the
           // same Gmail account that received the original inquiry.
-          details.connectionId ?? undefined
+          details.connectionId ?? undefined,
+          attachments.length > 0 ? attachments : undefined,
         )
       } catch (err) {
         sendError = err
@@ -3422,13 +3574,51 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
   // coordinator's own inbox. No transactional fallback here by design.
   // AI disclosure is enforced at the send boundary regardless of approval path.
   const disclosureCtx = await fetchDisclosureContext(draft.venue_id as string)
+
+  // Sage email auto-attach (migration 244). Wrapped so a matcher failure
+  // cannot block coordinator-approved sends. The matcher gates on
+  // venue_config.auto_attach_photos itself.
+  let attachments: EmailAttachment[] = []
+  try {
+    let inboundBody = ''
+    let inboundSubject: string | null = (draft.subject as string) ?? null
+    let approvedCorrelationId: string | null = null
+    if (draft.interaction_id) {
+      const { data: interaction } = await supabase
+        .from('interactions')
+        .select('full_body, body_preview, subject, correlation_id')
+        .eq('id', draft.interaction_id)
+        .maybeSingle()
+      inboundBody = (interaction?.full_body as string)
+        ?? (interaction?.body_preview as string)
+        ?? ''
+      inboundSubject = (interaction?.subject as string) ?? inboundSubject
+      approvedCorrelationId = (interaction?.correlation_id as string) ?? null
+    }
+    attachments = await buildAutoAttachments({
+      venueId: draft.venue_id as string,
+      correlationId: approvedCorrelationId,
+      inboundSubject,
+      inboundBody,
+      replyDraft: draft.draft_body as string,
+      maxAttachments: 2,
+    })
+  } catch (matchErr) {
+    console.warn(
+      '[pipeline] auto-attach build failed for approved draft (continuing without):',
+      matchErr instanceof Error ? matchErr.message : matchErr,
+    )
+    attachments = []
+  }
+
   const sentMessageId = await sendEmail(
     draft.venue_id as string,
     draft.to_email as string,
     draft.subject as string,
     appendAIDisclosure(draft.draft_body as string, disclosureCtx),
     threadId,
-    inboundConnectionId
+    inboundConnectionId,
+    attachments.length > 0 ? attachments : undefined,
   )
 
   if (!sentMessageId) {

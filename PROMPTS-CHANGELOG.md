@@ -50,6 +50,7 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 |--------|-----|-----|--------|
 | brain-dump | v1.0 | v1.1 | Added `help_question` intent + disambiguation rule for help vs knowledge_base import (Isadora feedback round). |
 | brain-dump-help | — | v1.0 | New help-mode answer prompt; curated surface map of ~50 Bloom routes; constrained-output JSON. |
+| asset-matcher | — | v1.0 | New Haiku prompt for Sage email auto-attach. Picks 0-3 brand-assets photos that would clearly add value to an outbound reply; defaults to empty. Pairs with migration 244 opt-in toggle. |
 
 ## Per-brain history
 

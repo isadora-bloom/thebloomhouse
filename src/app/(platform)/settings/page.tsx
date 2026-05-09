@@ -393,6 +393,10 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
         font_pair: config.font_pair,
         portal_tagline: config.portal_tagline,
         logo_url: config.logo_url,
+        // Migration 244: Sage email auto-attach toggle. Default false in
+        // schema; only persisted when present so older rows don't get
+        // accidentally flipped.
+        auto_attach_photos: config.auto_attach_photos ?? false,
         updated_at: new Date().toISOString(),
       })
       .eq('id', config.id)
@@ -1214,6 +1218,34 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
       {/* Integrations — Calendly                                             */}
       {/* ------------------------------------------------------------------ */}
       <CalendlyIntegrationSection venueId={scope.venueId} />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Automation — Sage send-time helpers                                 */}
+      {/* ------------------------------------------------------------------ */}
+      {/* Migration 244 lands the auto_attach_photos toggle. Off by default. */}
+      <section className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <Plug className="w-4 h-4 text-sage-500" />
+          <h3 className="text-sm font-semibold text-sage-800 uppercase tracking-wider">Automation</h3>
+        </div>
+
+        <label className="flex items-start gap-3 cursor-pointer group">
+          <input
+            type="checkbox"
+            checked={config.auto_attach_photos ?? false}
+            onChange={(e) => update('auto_attach_photos', e.target.checked)}
+            className="mt-1 h-4 w-4 rounded border-sage-300 text-sage-500 focus:ring-sage-500"
+          />
+          <div className="flex-1">
+            <div className="text-sm font-medium text-sage-900">
+              Sage may auto-attach photos to email replies
+            </div>
+            <p className="text-xs text-sage-600 mt-1 leading-relaxed">
+              When on, Sage picks 0 to 2 photos from your brand-assets library that match the email content. Mark photos as Sage-eligible on the brand-assets section to include them.
+            </p>
+          </div>
+        </label>
+      </section>
 
       {/* ------------------------------------------------------------------ */}
       {/* Integrations — OpenPhone (Quo)                                      */}
