@@ -617,18 +617,34 @@ export async function findOrCreateContact(
     }
   }
 
-  // 3. Create a new person. Split the display name into first/last so the
-  // inbox join (first_name, last_name, email) has something to render.
-  // people.role must be one of the CHECK values; 'partner1' is the default
-  // for an inquiry sender.
-  const [firstName, ...rest] = (name ?? '').trim().split(/\s+/).filter(Boolean)
-  const lastName = rest.join(' ') || null
+  // 3. Create a new person. Wave 2A: route every name signal through the
+  // identity name-capture chokepoint instead of splitting `name` directly
+  // here. We still need an initial first_name on the INSERT (the inbox
+  // join must render something synchronously), so the fallback chain is:
+  //   - email local part as a placeholder when the from_name is empty
+  //     OR username/proxy-shaped (Knot relays send "User <hex>" / smushed
+  //     handles — those should never become first_name).
+  //   - Otherwise, the leading whitespace token of `name`.
+  // The chokepoint then runs immediately after the INSERT to record the
+  // shape-classified evidence + dual-write the picked first / last /
+  // confidence columns + capture display_handle for username shapes.
+  // people.role must be one of the CHECK values; 'partner1' is the
+  // default for an inquiry sender.
+  const { isUsernameShaped, isProxyShaped, captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+  const trimmedName = (name ?? '').trim()
+  const placeholderFirst = (() => {
+    if (!trimmedName) return email.split('@')[0]
+    if (isProxyShaped(trimmedName) || isUsernameShaped(trimmedName)) {
+      return email.split('@')[0]
+    }
+    return trimmedName.split(/\s+/)[0] ?? email.split('@')[0]
+  })()
 
   const personInsert: Record<string, unknown> = {
     venue_id: venueId,
     role: 'partner1',
-    first_name: firstName || email.split('@')[0],
-    last_name: lastName,
+    first_name: placeholderFirst,
+    last_name: null,
     email,
   }
   if (extras?.phone) personInsert.phone = extras.phone
@@ -641,6 +657,23 @@ export async function findOrCreateContact(
   if (personError || !newPerson) {
     console.error('[pipeline] Failed to create person:', personError?.message)
     return { personId: null, weddingId: null, isNew: true }
+  }
+
+  // Now that the row exists, route the from-name signal through the
+  // chokepoint. Source = gmail_from_name → dynamic confidence based on
+  // shape. If trimmedName is empty (rare — Knot sometimes sends bare
+  // emails with no display name), skip the capture; the placeholder
+  // first_name from email-local-part is the only signal we have.
+  if (trimmedName) {
+    try {
+      await captureNameEvidence(supabase, newPerson.id as string, {
+        full: trimmedName,
+        email,
+        source: 'gmail_from_name',
+      })
+    } catch (err) {
+      console.warn('[pipeline] name-capture (findOrCreateContact) failed:', err instanceof Error ? err.message : err)
+    }
   }
 
   // 4. Mirror the email onto contacts so subsequent lookups that go through
@@ -1707,16 +1740,78 @@ export async function processIncomingEmail(
       // Second partner: if classifier extracted a name, seed partner2 so
       // the detail/kanban has a couple label. Best-effort — skip silently
       // if a partner2 already exists (race on concurrent emails).
+      //
+      // Wave 2A: route through the name-capture chokepoint, AND run the
+      // phantom-partner detector first. "Brett & Brett" / "Hannah Lord &
+      // Hannah Lord" land here when the classifier reads a sign-off that
+      // happens to be the sender's own first name. Phantom rows clutter
+      // the couple label and confuse Sage's prompts. When detected, we
+      // stamp weddings.partner_count=1 so prompts know to address one
+      // person AND skip the partner2 insert entirely.
       if (extracted.partnerName) {
-        const [p2First, ...p2Rest] = extracted.partnerName.trim().split(/\s+/)
+        const { detectPhantomPartner, captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+        const trimmedP2 = extracted.partnerName.trim()
+        const [p2First, ...p2Rest] = trimmedP2.split(/\s+/)
         const p2Last = p2Rest.join(' ') || null
-        await supabase.from('people').insert({
-          venue_id: venueId,
-          wedding_id: weddingId,
-          role: 'partner2',
-          first_name: p2First || null,
-          last_name: p2Last,
-        })
+
+        // Read partner1 to phantom-check (personId is the inquiry sender,
+        // already inserted as partner1). We pull first/last/email and
+        // compare against the LLM-extracted partnerName.
+        let p1First: string | null = null
+        let p1Last: string | null = null
+        let p1Email: string | null = null
+        if (personId) {
+          const { data: p1 } = await supabase
+            .from('people')
+            .select('first_name, last_name, email')
+            .eq('id', personId)
+            .maybeSingle()
+          p1First = (p1?.first_name as string | null) ?? null
+          p1Last = (p1?.last_name as string | null) ?? null
+          p1Email = (p1?.email as string | null) ?? null
+        }
+        const isPhantom = detectPhantomPartner(
+          { first: p1First, last: p1Last, email: p1Email },
+          { first: p2First || null, last: p2Last, email: null },
+        )
+
+        if (isPhantom) {
+          // Stamp partner_count=1 and DO NOT insert partner2.
+          try {
+            await supabase
+              .from('weddings')
+              .update({ partner_count: 1 })
+              .eq('id', weddingId)
+          } catch (err) {
+            console.warn('[pipeline] partner_count phantom stamp failed:', err)
+          }
+        } else if (p2First) {
+          // Real partner2. Insert with placeholder name then route the
+          // signal through the chokepoint so name_evidence + display_handle
+          // pick up correctly.
+          const { data: p2 } = await supabase
+            .from('people')
+            .insert({
+              venue_id: venueId,
+              wedding_id: weddingId,
+              role: 'partner2',
+              first_name: p2First,
+              last_name: p2Last,
+            })
+            .select('id')
+            .single()
+          if (p2?.id) {
+            try {
+              await captureNameEvidence(supabase, p2.id as string, {
+                full: trimmedP2,
+                source: 'partner_mention_in_body',
+                interactionId,
+              })
+            } catch (err) {
+              console.warn('[pipeline] name-capture (partner2 from body) failed:', err instanceof Error ? err.message : err)
+            }
+          }
+        }
       }
 
       // Update interaction with wedding_id
@@ -1890,6 +1985,17 @@ export async function processIncomingEmail(
       // fromName (raw From header). When neither produces anything,
       // signal_count + email + source_platform alone are enough for the
       // resolver to pin the candidate later.
+      //
+      // Wave 2A: pre-classify the shape via the chokepoint helpers so a
+      // username/proxy "fromName" (Knot relays carry "User <hex>" or
+      // smushed "erinhorrigan") never lands on candidate_identities.
+      // first_name. The candidate row has no `name_evidence` column
+      // (Phase 1 mig 255 only added evidence to `people`), so we drop
+      // junk silently here — the resolver will pull a real signal off
+      // a future interaction. NOT shaped to call captureNameEvidence
+      // (no person row yet); instead we use the classifier helpers
+      // directly to get a shape verdict and reject the bad shapes.
+      const { classifyNameShape } = await import('@/lib/services/identity/name-capture')
       const rawName =
         (typeof extracted.senderName === 'string' && extracted.senderName.trim().length > 0
           ? extracted.senderName.trim()
@@ -1897,9 +2003,16 @@ export async function processIncomingEmail(
         ?? (typeof fromName === 'string' && fromName.trim().length > 0
           ? fromName.trim()
           : null)
-      const nameParts = rawName ? rawName.split(/\s+/) : []
-      const subZeroFirstName = nameParts[0] ?? null
-      const subZeroLastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null
+      let subZeroFirstName: string | null = null
+      let subZeroLastName: string | null = null
+      if (rawName) {
+        const shape = classifyNameShape(rawName)
+        if (shape !== 'username' && shape !== 'proxy') {
+          const nameParts = rawName.split(/\s+/)
+          subZeroFirstName = nameParts[0] ?? null
+          subZeroLastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null
+        }
+      }
 
       const sourcePlatform = detectedSource
       await supabase.from('candidate_identities').insert({
@@ -2394,23 +2507,51 @@ export async function processIncomingEmail(
         // people is invisible on the leads UI and breaks downstream
         // matching, so synthesise one from the invitee email + name
         // here so every Calendly-created wedding has a real lead row.
+        //
+        // Wave 2A: route through the chokepoint. The placeholder
+        // first_name on the INSERT uses email-local-part if the synth
+        // name fails the username/proxy shape check (rare but possible
+        // when Calendly invitee = a Knot relay alias). The chokepoint
+        // call after the INSERT records the gmail_from_name signal +
+        // dual-writes the picked first_name / last_name / confidence.
         if (!personId && schedulingEvent.inviteeEmail) {
-          const [synthFirst, ...synthRest] = (schedulingEvent.inviteeName ?? schedulingEvent.inviteeEmail.split('@')[0]).trim().split(/\s+/)
-          const synthLast = synthRest.join(' ') || null
+          const { isProxyShaped, isUsernameShaped, captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+          const inviteeEmail = schedulingEvent.inviteeEmail
+          const inviteeName = (schedulingEvent.inviteeName ?? '').trim()
+          const placeholderFirst = (() => {
+            if (!inviteeName) return inviteeEmail.split('@')[0]
+            if (isProxyShaped(inviteeName) || isUsernameShaped(inviteeName)) {
+              return inviteeEmail.split('@')[0]
+            }
+            return inviteeName.split(/\s+/)[0] ?? inviteeEmail.split('@')[0]
+          })()
           const { data: synth } = await supabase
             .from('people')
             .insert({
               venue_id: venueId,
               wedding_id: weddingId,
               role: 'partner1',
-              first_name: synthFirst || null,
-              last_name: synthLast,
-              email: schedulingEvent.inviteeEmail,
+              first_name: placeholderFirst,
+              last_name: null,
+              email: inviteeEmail,
               phone: schedulingEvent.extras?.phone ?? null,
             })
             .select('id')
             .single()
-          if (synth) personId = synth.id as string
+          if (synth) {
+            personId = synth.id as string
+            if (inviteeName) {
+              try {
+                await captureNameEvidence(supabase, personId, {
+                  full: inviteeName,
+                  email: inviteeEmail,
+                  source: 'gmail_from_name',
+                })
+              } catch (err) {
+                console.warn('[pipeline] name-capture (scheduling synth) failed:', err instanceof Error ? err.message : err)
+              }
+            }
+          }
         } else if (personId) {
           await supabase.from('people').update({ wedding_id: weddingId, role: 'partner1' }).eq('id', personId)
         }
@@ -2434,18 +2575,76 @@ export async function processIncomingEmail(
 
         // Seed partner2 from the Calendly extras if present — most
         // Calendly booking forms capture the second partner's name.
+        //
+        // Wave 2A: phantom-partner detector before insert. A Calendly
+        // form where the partner-name answer is blank but the body
+        // fallback dumps the inviteeName again would land "Brett &
+        // Brett". When detected, stamp partner_count=1 on the wedding
+        // and skip the partner2 insert. Real partner2 rows route the
+        // signal through the chokepoint.
         if (schedulingEvent.extras?.partnerName) {
-          const [p2First, ...rest] = schedulingEvent.extras.partnerName.trim().split(/\s+/)
+          const { detectPhantomPartner, captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+          const trimmedP2 = schedulingEvent.extras.partnerName.trim()
+          const [p2First, ...rest] = trimmedP2.split(/\s+/)
+          const p2Last = rest.join(' ') || null
+          const p2Email = schedulingEvent.extras.partnerEmail ?? null
           if (p2First) {
-            await supabase.from('people').insert({
-              venue_id: venueId,
-              wedding_id: weddingId,
-              role: 'partner2',
-              first_name: p2First,
-              last_name: rest.join(' ') || null,
-              email: schedulingEvent.extras.partnerEmail ?? null,
-              phone: schedulingEvent.extras.phone ?? null,
-            })
+            // Phantom check against partner1.
+            let p1First: string | null = null
+            let p1Last: string | null = null
+            let p1Email: string | null = null
+            if (personId) {
+              const { data: p1 } = await supabase
+                .from('people')
+                .select('first_name, last_name, email')
+                .eq('id', personId)
+                .maybeSingle()
+              p1First = (p1?.first_name as string | null) ?? null
+              p1Last = (p1?.last_name as string | null) ?? null
+              p1Email = (p1?.email as string | null) ?? null
+            }
+            const isPhantom = detectPhantomPartner(
+              { first: p1First, last: p1Last, email: p1Email },
+              { first: p2First, last: p2Last, email: p2Email },
+            )
+            if (isPhantom) {
+              try {
+                await supabase
+                  .from('weddings')
+                  .update({ partner_count: 1 })
+                  .eq('id', weddingId)
+              } catch (err) {
+                console.warn('[pipeline] partner_count phantom stamp (scheduling) failed:', err)
+              }
+            } else {
+              const { data: p2 } = await supabase
+                .from('people')
+                .insert({
+                  venue_id: venueId,
+                  wedding_id: weddingId,
+                  role: 'partner2',
+                  first_name: p2First,
+                  last_name: p2Last,
+                  email: p2Email,
+                  phone: schedulingEvent.extras.phone ?? null,
+                })
+                .select('id')
+                .single()
+              if (p2?.id) {
+                try {
+                  // form_relay confidence — Calendly forms are coordinator-
+                  // approved structured data, slightly stronger than a
+                  // body-mention but weaker than calculator/contract.
+                  await captureNameEvidence(supabase, p2.id as string, {
+                    full: trimmedP2,
+                    email: p2Email,
+                    source: 'form_relay',
+                  })
+                } catch (err) {
+                  console.warn('[pipeline] name-capture (scheduling partner2) failed:', err instanceof Error ? err.message : err)
+                }
+              }
+            }
           }
         }
         // Seed the initial_inquiry event so baseline heat exists on
@@ -2485,37 +2684,25 @@ export async function processIncomingEmail(
   }
 
   // Calendly-provided name hygiene: when the scheduling parser extracted
-  // a clean full name from the "Invitee:" label, prefer it over whatever
-  // findOrCreateContact stored. Email-local-part salvage produces names
-  // like "Taylorm Smith" (taylorm.smith0017@...) or "Juliabrosenberger"
-  // (juliabrosenberger@...) which look sloppy on the leads list. The
-  // Calendly Invitee label is authoritative and reliably clean.
+  // a clean full name from the "Invitee:" label, route it through the
+  // name-capture chokepoint. Wave 2A: REMOVED the legacy "looksLikeSalvage"
+  // ternary at lines 2509-2515 — that heuristic had a logical bug
+  // (the ternary returned !curLast regardless of the casing branch) AND
+  // forced the pipeline to make decisions about overwrite ordering that
+  // the picker now owns. The chokepoint records this as a Calendly
+  // gmail_from_name signal; the picker promotes it over weaker email-
+  // local-part-derived first names automatically based on shape +
+  // confidence.
   if (schedulingEvent?.inviteeName && personId) {
-    const parts = schedulingEvent.inviteeName.trim().split(/\s+/)
-    if (parts.length >= 1 && parts[0].length > 0) {
-      const first = parts[0]
-      const last = parts.slice(1).join(' ') || null
-      // Only overwrite when the stored name looks like email-local
-      // salvage: lowercase bunched-together, no space, or a single
-      // capitalized smush. Never overwrite a name that already has
-      // two tokens (indicating it's been curated).
-      const { data: cur } = await supabase
-        .from('people')
-        .select('first_name, last_name')
-        .eq('id', personId)
-        .maybeSingle()
-      const curFirst = (cur?.first_name as string | null) ?? ''
-      const curLast = (cur?.last_name as string | null) ?? ''
-      const looksLikeSalvage =
-        !curLast || // no last name at all
-        /^[A-Za-z]+$/.test(curFirst + curLast) === false
-          ? !curLast
-          : curFirst.length > 6 // "Juliabrosenberger" etc. — real first names are rarely 7+ lower+cap smush
-      const shouldReplace = !curLast || looksLikeSalvage ||
-        (curFirst + curLast).toLowerCase() === (first + (last ?? '')).toLowerCase().replace(/\s+/g, '')
-      if (shouldReplace) {
-        await supabase.from('people').update({ first_name: first, last_name: last }).eq('id', personId)
-      }
+    try {
+      const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+      await captureNameEvidence(supabase, personId, {
+        full: schedulingEvent.inviteeName.trim(),
+        email: schedulingEvent.inviteeEmail ?? null,
+        source: 'gmail_from_name',
+      })
+    } catch (err) {
+      console.warn('[pipeline] name-capture (Calendly invitee hygiene) failed:', err instanceof Error ? err.message : err)
     }
   }
 
