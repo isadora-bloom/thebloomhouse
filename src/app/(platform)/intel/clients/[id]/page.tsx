@@ -60,6 +60,8 @@ import { TourInsightsPanel } from '@/components/agent/tour-insights-panel'
 import { CommitmentSignalsPanel } from '@/components/agent/commitment-signals-panel'
 import { HeatHistoryPanel } from '@/components/agent/heat-history-panel'
 import { AutoContextPanel } from '@/components/intel/auto-context-panel'
+import { NameEvidencePanel } from '@/components/intel/NameEvidencePanel'
+import { RelationshipsPanel } from '@/components/intel/RelationshipsPanel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -78,6 +80,10 @@ interface WeddingDetail {
   // Distinct from guest_count_estimate (legacy / mixed-purpose) and from
   // the couple-portal RSVP count (which lives in the guest_list table).
   estimated_guests: number | null
+  // Wave 2D (mig 255): 1 = phantom-partner detector flagged this as a
+  // single decision-maker. Drives the "Single decision-maker" badge on
+  // the contacts panel + Sage prompt salutation. NULL = unknown.
+  partner_count: number | null
   booking_value: number | null
   assigned_consultant_id: string | null
   inquiry_date: string | null
@@ -1065,7 +1071,23 @@ export default function ClientProfilePage() {
 
           {/* Contact Details */}
           <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
-            <h2 className="font-heading text-base font-semibold text-sage-900 mb-4">Contacts</h2>
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <h2 className="font-heading text-base font-semibold text-sage-900">Contacts</h2>
+              {/* Wave 2D phantom-partner badge: when the chokepoint or
+                  Phase-3 backfill set partner_count=1, surface the
+                  "Single decision-maker" pill so the coordinator
+                  doesn't read the missing partner2 row as a data gap.
+                  Renders only on a positive 1; partner_count=2 / NULL
+                  hide. */}
+              {wedding.partner_count === 1 && (
+                <span
+                  title="Phantom-partner detector flagged this couple as a single decision-maker. Sage prompts will use a singular salutation."
+                  className="text-[10px] uppercase tracking-wide font-medium text-sage-700 bg-sage-50 border border-sage-200 px-1.5 py-0.5 rounded"
+                >
+                  Single decision-maker
+                </span>
+              )}
+            </div>
             <div className="space-y-3">
               {partners.map((p) => (
                 <div key={p.id} className="flex items-center justify-between py-2 border-b border-sage-100 last:border-0">
@@ -1094,6 +1116,13 @@ export default function ClientProfilePage() {
               )}
             </div>
           </div>
+
+          {/* Wave 2D: Name evidence audit + manual override + handle
+              collection. Renders near contacts so coordinator can
+              cross-check the picked display against the underlying
+              evidence chain. Phase 1 ships with mostly-empty evidence
+              arrays; the panel handles that gracefully. */}
+          <NameEvidencePanel weddingId={weddingId} />
 
           {/* Lead Journey — server-aggregated, multi-source timeline.
               Pulls /api/agent/leads/[id]/journey which merges
@@ -1452,6 +1481,12 @@ export default function ClientProfilePage() {
               soft-context view; planningNotes are sage-conversation
               extractions only. 2026-05-09. */}
           <AutoContextPanel weddingId={weddingId} />
+
+          {/* Wave 2D: Family + relationships. Mom / planner / MOH /
+              vendor contacts live here instead of being mis-captured
+              as partner2. Renders next to AutoContextPanel because
+              both are "non-partner-ID" soft surfaces. */}
+          <RelationshipsPanel weddingId={weddingId} />
 
           {/* Planning Notes (extracted from Sage conversations) */}
           {planningNotes.length > 0 && (

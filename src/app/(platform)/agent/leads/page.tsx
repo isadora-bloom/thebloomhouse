@@ -13,6 +13,7 @@ import {
   AutoContextChipRender,
   useBatchAutoContextChips,
 } from '@/components/intel/auto-context-chip'
+import { SoloPill, useBatchPartnerCounts } from '@/components/intel/solo-pill'
 import { EssentialsSlider } from '@/components/shell/essentials-slider'
 import { TIER_STYLES, styleForTier, type HeatTier } from '@/lib/heat/tier-colors'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
@@ -646,6 +647,11 @@ export default function LeadsPage() {
   const autoContextChips = useBatchAutoContextChips(allWeddingIds, {
     venueId: scope.venueId ?? null,
   })
+  // Wave 2D (2026-05-09): Solo pill batch fetch. Defensive — only renders
+  // on a clean partner_count=1; NULL / unknown stays silent.
+  const partnerCounts = useBatchPartnerCounts(allWeddingIds, {
+    venueId: scope.venueId ?? null,
+  })
 
   return (
     <div className="space-y-6">
@@ -856,6 +862,10 @@ export default function LeadsPage() {
                               Sensitive notes redact to category only;
                               non-sensitive notes show body on hover. */}
                           <AutoContextChipRender chip={autoContextChips[lead.id]} />
+                          {/* Wave 2D: Solo pill — wedding has
+                              partner_count=1 set by chokepoint or
+                              backfill. Defensive: only on positive 1. */}
+                          <SoloPill partnerCount={partnerCounts[lead.id] ?? null} />
                           {/* T5-Rixey-UU Bug G: import-warning badge
                               for couple_name issues. Surfaces when the
                               CRM-import pipeline couldn't confidently

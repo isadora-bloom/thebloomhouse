@@ -21,6 +21,30 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 - **MINOR** — wording / instruction refinement that holds the
   contract. Bumps still get a changelog row.
 
+## 2026-05-09 (Wave 2D — coordinator UI for identity-evidence + relationships + phantom-partner)
+
+Phase 5 UI polish on the identity-capture redesign (mig 255). Coordinator
+surfaces now read the new `people.name_evidence`, `people.platform_handles`,
+`people.display_handle`, `people.name_confidence`, `weddings.partner_count`,
+`wedding_auto_context.sensitive`, and `wedding_auto_context.expires_at`
+columns. Manual override flow stamps a confidence-100 evidence row tagged
+`manual_override` and is logged to the structured logger as
+`identity.manual_override` for the analytics chain. "Add a person" on the
+relationships panel logs `identity.relationship_added`. The Solo pill on
+inbox + leads renders only on a positive `partner_count=1` (defensive — never
+on NULL / unknown).
+
+| Surface | Files | Reason |
+|---------|-------|--------|
+| `NameEvidencePanel` | `components/intel/NameEvidencePanel.tsx`, `app/api/intel/name-evidence/[weddingId]/route.ts`, `app/(platform)/intel/clients/[id]/page.tsx` | Per-partner evidence chain, confidence chip, manual override, platform-handle collection with click-through URLs. |
+| `RelationshipsPanel` | `components/intel/RelationshipsPanel.tsx`, `app/api/intel/relationships/[weddingId]/route.ts` | Family / planner / MOH home so they stop landing as `partner2`. |
+| Phantom-partner badge | `app/(platform)/intel/clients/[id]/page.tsx` (contacts panel) | "Single decision-maker" pill on `partner_count=1`. |
+| `AutoContextPanel` extension | `components/intel/auto-context-panel.tsx`, `app/api/intel/auto-context/[weddingId]/route.ts` | `sensitive` lock badge + "do not echo", expired notes collapsed under "Older context (archived by time)", < 14d-to-expiry get "expires soon" tag. |
+| `SoloPill` | `components/intel/solo-pill.tsx`, `app/api/intel/partner-counts/batch/route.ts`, `app/(platform)/agent/inbox/page.tsx`, `app/(platform)/agent/leads/page.tsx` | Inbox + leads row pill when `partner_count=1`. |
+
+No prompt versions bumped — this is UI/API only. Prompts already read
+`partner_count` and the soft-context block via Wave 1A.
+
 ## 2026-05-09 (Wave 1A — emotionally-blind couple-facing brains read auto-context)
 
 The IDENTITY-TRUTH-AUDIT (Tenant 1, table rows 1-2 + 9 + journey

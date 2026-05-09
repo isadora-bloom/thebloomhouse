@@ -41,6 +41,10 @@ interface NoteRow {
   is_active: boolean
   created_at: string
   archived_at: string | null
+  // Wave 2D (mig 255). Forward-compatible: legacy DBs read NULL here
+  // and the panel treats both columns as "no special handling".
+  sensitive?: boolean | null
+  expires_at?: string | null
 }
 
 async function loadWeddingForVenue(weddingId: string, venueId: string) {
@@ -76,17 +80,45 @@ export async function GET(
   const supabase = createServiceClient()
 
   // Active notes — pinned-first, most-recent. Cap at 20 for the surface
-  // (matches the brief's "most-recent 20 active").
-  const { data: activeRows } = await supabase
+  // (matches the brief's "most-recent 20 active"). Wave 2D extends the
+  // select to include the mig-255 columns (sensitive, expires_at) so
+  // the panel can render lock badges + the expired-archive section. We
+  // fall back to the legacy shape when those columns aren't deployed
+  // yet — the panel renders fine on either side of the migration.
+  let activeRows: Array<Record<string, unknown>> = []
+  const fullSelect =
+    'id, body, category, source, source_interaction_id, confidence, ' +
+    'pinned, is_active, created_at, archived_at, sensitive, expires_at'
+  const fullRes = await supabase
     .from('wedding_auto_context')
-    .select(
-      'id, body, category, source, source_interaction_id, confidence, pinned, is_active, created_at, archived_at',
-    )
+    .select(fullSelect)
     .eq('wedding_id', weddingId)
     .eq('is_active', true)
     .order('pinned', { ascending: false })
     .order('created_at', { ascending: false })
-    .limit(20)
+    .limit(40)
+  if (fullRes.error) {
+    const msg = (fullRes.error as { message?: string }).message ?? ''
+    if (/column .* does not exist/i.test(msg)) {
+      const legacy = await supabase
+        .from('wedding_auto_context')
+        .select(
+          'id, body, category, source, source_interaction_id, confidence, pinned, is_active, created_at, archived_at',
+        )
+        .eq('wedding_id', weddingId)
+        .eq('is_active', true)
+        .order('pinned', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(40)
+      activeRows = ((legacy.data ?? []) as unknown as Array<Record<string, unknown>>).map((r) => ({
+        ...r,
+        sensitive: false,
+        expires_at: null,
+      }))
+    }
+  } else {
+    activeRows = (fullRes.data ?? []) as unknown as Array<Record<string, unknown>>
+  }
 
   // 7-day rollup of NEW (not just active) notes added in the last week,
   // for the "What was learned this week" surface. Includes archived
@@ -110,7 +142,7 @@ export async function GET(
     .limit(1)
 
   return NextResponse.json({
-    notes: (activeRows ?? []) as NoteRow[],
+    notes: (activeRows ?? []) as unknown as NoteRow[],
     weekRollup: weekRows ?? [],
     lastEnrichedAt: lastRunRows?.[0]?.created_at ?? null,
     lastEnrichedTrigger: lastRunRows?.[0]?.trigger ?? null,

@@ -15,6 +15,7 @@ import {
   useBatchAutoContextChips,
   type AutoContextChip,
 } from '@/components/intel/auto-context-chip'
+import { SoloPill, useBatchPartnerCounts } from '@/components/intel/solo-pill'
 import { PriorTouchesChip } from '@/components/agent/PriorTouchesChip'
 import { GmailConnectionStatus } from '@/components/agent/gmail-connection-status'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
@@ -285,6 +286,7 @@ function EmailListItem({
   searchTerm,
   risk,
   autoContextChip,
+  partnerCount,
 }: {
   interaction: Interaction
   isSelected: boolean
@@ -293,6 +295,7 @@ function EmailListItem({
   searchTerm: string
   risk?: RiskSummary | null
   autoContextChip?: AutoContextChip | null
+  partnerCount?: 1 | null
 }) {
   const cls = interaction.classification ?? 'inquiry'
   const badge = classificationBadge(cls)
@@ -345,6 +348,11 @@ function EmailListItem({
               <AutoContextChipRender chip={autoContextChip} />
             </span>
           )}
+          {/* Wave 2D: Solo pill — wedding has partner_count=1 set by
+              the chokepoint or the Phase-3 backfill. Defensive: only
+              renders on a positive 1, never on NULL / unknown. Tells
+              the coordinator the salutation should be singular. */}
+          <SoloPill partnerCount={partnerCount} />
           {/* real-time-verified: bug 26 audit 2026-05-03.
               `interaction.timestamp` is `interactions.timestamp` from
               the SELECT above, which the email pipeline writes as
@@ -2098,6 +2106,12 @@ export default function InboxPage() {
   const autoContextChips = useBatchAutoContextChips(allWeddingIds, {
     venueId: scope.venueId ?? null,
   })
+  // Wave 2D (2026-05-09): Solo pill batch fetch. Returns partner_count
+  // for every wedding in scope; the row only renders the pill when the
+  // count is exactly 1.
+  const partnerCounts = useBatchPartnerCounts(allWeddingIds, {
+    venueId: scope.venueId ?? null,
+  })
 
   // ---- Stats ----
   const totalCount = interactions.length
@@ -2390,6 +2404,7 @@ export default function InboxPage() {
                     searchTerm={isSearching ? sanitizedQuery : ''}
                     risk={interaction.wedding_id ? riskFlags[interaction.wedding_id] : null}
                     autoContextChip={interaction.wedding_id ? autoContextChips[interaction.wedding_id] : null}
+                    partnerCount={interaction.wedding_id ? partnerCounts[interaction.wedding_id] ?? null : null}
                   />
                   {interaction.pending_draft && (
                     <InlineDraftApproval

@@ -23,6 +23,10 @@ import {
   Loader2,
   Sparkles,
   AlertCircle,
+  Lock,
+  Clock,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -37,6 +41,37 @@ interface NoteRow {
   is_active: boolean
   created_at: string
   archived_at: string | null
+  // Wave 2D (mig 255). Forward-compatible: legacy rows surface NULL.
+  sensitive?: boolean | null
+  expires_at?: string | null
+}
+
+const SENSITIVE_CATEGORIES = new Set([
+  'health',
+  'grief',
+  'financial_stress',
+  'family_conflict',
+  'mental_health',
+])
+
+const SOON_EXPIRES_DAYS = 14
+const MS_PER_DAY = 86_400_000
+
+function isSensitive(n: NoteRow): boolean {
+  if (n.sensitive === true) return true
+  if (n.category && SENSITIVE_CATEGORIES.has(n.category)) return true
+  return false
+}
+
+function isExpired(n: NoteRow): boolean {
+  if (!n.expires_at) return false
+  return new Date(n.expires_at).getTime() < Date.now()
+}
+
+function expiresSoon(n: NoteRow): boolean {
+  if (!n.expires_at) return false
+  const t = new Date(n.expires_at).getTime() - Date.now()
+  return t > 0 && t < SOON_EXPIRES_DAYS * MS_PER_DAY
 }
 
 interface WeekRollupRow {
@@ -98,6 +133,157 @@ function fmtRelative(iso: string): string {
   if (ms < 86400_000) return `${Math.floor(ms / 3600_000)}h ago`
   if (ms < 7 * 86400_000) return `${Math.floor(ms / 86400_000)}d ago`
   return new Date(iso).toLocaleDateString()
+}
+
+// ---------------------------------------------------------------------------
+// NoteList — Wave 2D split. Active rows on top; expired rows in a
+// collapsed "Older context (archived by time)" section beneath. Sensitive
+// rows render with a Lock badge + "do not echo" tag. Soon-expiring rows
+// (< 14 days) get a soft "expires soon" tag.
+// ---------------------------------------------------------------------------
+
+function NoteRowItem({
+  n,
+  actionId,
+  onPatch,
+  muted = false,
+}: {
+  n: NoteRow
+  actionId: string | null
+  onPatch: (id: string, action: 'pin' | 'unpin' | 'archive' | 'unarchive') => void
+  muted?: boolean
+}) {
+  const cat = n.category ?? 'misc'
+  const sensitive = isSensitive(n)
+  const soon = expiresSoon(n)
+
+  return (
+    <li
+      className={cn(
+        'border rounded-lg p-3',
+        muted
+          ? 'bg-slate-50 border-slate-200 opacity-90'
+          : sensitive
+            ? 'bg-slate-50 border-slate-200'
+            : n.pinned
+              ? 'bg-amber-50 border-amber-200'
+              : 'bg-warm-white border-sage-100',
+      )}
+    >
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+            <span
+              className={cn(
+                'text-[10px] px-1.5 py-0.5 rounded font-medium',
+                CATEGORY_COLOR[cat] ?? CATEGORY_COLOR.misc,
+              )}
+            >
+              {CATEGORY_LABELS[cat] ?? 'Note'}
+            </span>
+            <span className="text-[10px] text-sage-500">
+              {SOURCE_LABEL[n.source] ?? n.source}
+            </span>
+            {n.confidence != null && (
+              <span className="text-[10px] text-sage-400">· {n.confidence}%</span>
+            )}
+            {sensitive && (
+              <span
+                title="Sensitive note. Sage prompts see this in context but the universal rule forbids verbatim quotation."
+                className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded font-medium bg-slate-200 text-slate-700 border border-slate-300"
+              >
+                <Lock className="w-2.5 h-2.5" /> do not echo
+              </span>
+            )}
+            {soon && (
+              <span
+                title={`This note expires ${n.expires_at ? new Date(n.expires_at).toLocaleDateString() : 'soon'}.`}
+                className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded font-medium bg-amber-50 text-amber-700 border border-amber-200"
+              >
+                <Clock className="w-2.5 h-2.5" /> expires soon
+              </span>
+            )}
+            <span className="text-[10px] text-sage-400 ml-auto">
+              {fmtRelative(n.created_at)}
+            </span>
+          </div>
+          <p
+            className={cn(
+              'text-sm leading-snug whitespace-pre-wrap',
+              sensitive ? 'text-slate-700' : 'text-sage-800',
+            )}
+          >
+            {n.body}
+          </p>
+        </div>
+        <div className="flex flex-col gap-1 shrink-0">
+          {!muted && (
+            <button
+              type="button"
+              onClick={() => onPatch(n.id, n.pinned ? 'unpin' : 'pin')}
+              disabled={actionId === n.id}
+              title={n.pinned ? 'Unpin' : 'Pin'}
+              className="p-1 rounded hover:bg-sage-100 text-sage-600 disabled:opacity-50"
+            >
+              {n.pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => onPatch(n.id, 'archive')}
+            disabled={actionId === n.id}
+            title="Archive"
+            className="p-1 rounded hover:bg-sage-100 text-sage-600 disabled:opacity-50"
+          >
+            <Archive className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    </li>
+  )
+}
+
+function NoteList({
+  notes,
+  actionId,
+  onPatch,
+}: {
+  notes: NoteRow[]
+  actionId: string | null
+  onPatch: (id: string, action: 'pin' | 'unpin' | 'archive' | 'unarchive') => void
+}) {
+  const [showExpired, setShowExpired] = useState(false)
+  const active = notes.filter((n) => !isExpired(n))
+  const expired = notes.filter((n) => isExpired(n))
+
+  return (
+    <>
+      <ul className="space-y-2">
+        {active.map((n) => (
+          <NoteRowItem key={n.id} n={n} actionId={actionId} onPatch={onPatch} />
+        ))}
+      </ul>
+      {expired.length > 0 && (
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => setShowExpired((s) => !s)}
+            className="text-[11px] text-sage-600 hover:text-sage-900 inline-flex items-center gap-1"
+          >
+            {showExpired ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            Older context (archived by time) · {expired.length}
+          </button>
+          {showExpired && (
+            <ul className="mt-2 space-y-2">
+              {expired.map((n) => (
+                <NoteRowItem key={n.id} n={n} actionId={actionId} onPatch={onPatch} muted />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </>
+  )
 }
 
 export function AutoContextPanel({ weddingId }: { weddingId: string }) {
@@ -294,74 +480,20 @@ export function AutoContextPanel({ weddingId }: { weddingId: string }) {
         </div>
       )}
 
-      {/* Active note feed */}
+      {/* Active note feed — Wave 2D splits expired notes off into a
+          collapsed "Older context (archived by time)" section so the
+          active feed stays focused on what's still relevant. */}
       {notes.length === 0 ? (
         <div className="text-sm text-sage-500 italic">
           No context notes yet. The AI will populate this as new emails come in, or you can add
           one above.
         </div>
       ) : (
-        <ul className="space-y-2">
-          {notes.map((n) => {
-            const cat = n.category ?? 'misc'
-            return (
-              <li
-                key={n.id}
-                className={cn(
-                  'border rounded-lg p-3',
-                  n.pinned ? 'bg-amber-50 border-amber-200' : 'bg-warm-white border-sage-100',
-                )}
-              >
-                <div className="flex items-start gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                      <span
-                        className={cn(
-                          'text-[10px] px-1.5 py-0.5 rounded font-medium',
-                          CATEGORY_COLOR[cat] ?? CATEGORY_COLOR.misc,
-                        )}
-                      >
-                        {CATEGORY_LABELS[cat] ?? 'Note'}
-                      </span>
-                      <span className="text-[10px] text-sage-500">
-                        {SOURCE_LABEL[n.source] ?? n.source}
-                      </span>
-                      {n.confidence != null && (
-                        <span className="text-[10px] text-sage-400">· {n.confidence}%</span>
-                      )}
-                      <span className="text-[10px] text-sage-400 ml-auto">
-                        {fmtRelative(n.created_at)}
-                      </span>
-                    </div>
-                    <p className="text-sm text-sage-800 leading-snug whitespace-pre-wrap">
-                      {n.body}
-                    </p>
-                  </div>
-                  <div className="flex flex-col gap-1 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => patchNote(n.id, n.pinned ? 'unpin' : 'pin')}
-                      disabled={actionId === n.id}
-                      title={n.pinned ? 'Unpin' : 'Pin'}
-                      className="p-1 rounded hover:bg-sage-100 text-sage-600 disabled:opacity-50"
-                    >
-                      {n.pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => patchNote(n.id, 'archive')}
-                      disabled={actionId === n.id}
-                      title="Archive"
-                      className="p-1 rounded hover:bg-sage-100 text-sage-600 disabled:opacity-50"
-                    >
-                      <Archive className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </li>
-            )
-          })}
-        </ul>
+        <NoteList
+          notes={notes}
+          actionId={actionId}
+          onPatch={patchNote}
+        />
       )}
 
       <p className="text-[11px] text-sage-400 italic">
