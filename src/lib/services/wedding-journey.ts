@@ -53,6 +53,14 @@ export interface JourneyEvent {
   title: string
   /** One-line context shown under the title. Optional. */
   description?: string
+  /** Optional full version of the description shown when the row is
+   *  expanded. For communication events this is the full email body;
+   *  for ai_draft events it's the full draft markdown. Absent when
+   *  the row has nothing more to reveal beyond the description. */
+  fullBody?: string
+  /** Optional inbox-thread id so the click-expanded row can link out
+   *  to /agent/inbox?thread=... for full thread context. */
+  threadId?: string | null
   /** Source label: 'the_knot', 'calendly', 'website', 'gmail', etc. */
   source?: string | null
   /** Who initiated. Helps coordinator scan author at a glance. */
@@ -83,6 +91,13 @@ interface InteractionRow {
   direction: string
   subject: string | null
   body_preview: string | null
+  // 2026-05-09: full body + thread id selected so the journey-row
+  // click-expand can render the entire email inline + link to the
+  // inbox thread. Pre-fix the journey only carried the truncated
+  // body_preview, forcing the coordinator to bounce to a different
+  // surface to read the email that triggered each row.
+  full_body: string | null
+  gmail_thread_id: string | null
   from_email: string | null
   from_name: string | null
   timestamp: string
@@ -98,6 +113,11 @@ interface DraftRow {
   auto_sent: boolean | null
   auto_send_source: string | null
   subject: string | null
+  // 2026-05-09: pulled into the journey aggregator so the AI Draft
+  // event is click-expandable on the lead profile. Without this the
+  // row only showed a subject + status — the coordinator couldn't
+  // see what the AI actually wrote without bouncing to /agent/drafts.
+  draft_body: string | null
   approved_at: string | null
   approved_by: string | null
   created_at: string
@@ -268,13 +288,19 @@ export async function getWeddingJourney(
       .order('occurred_at', { ascending: true }),
     sb
       .from('interactions')
-      .select('id, type, direction, subject, body_preview, from_email, from_name, timestamp')
+      // 2026-05-09: select full_body + gmail_thread_id so the
+      // journey-row click-expand can render the entire email inline
+      // and link to the inbox thread. body_preview kept for the
+      // collapsed row.
+      .select('id, type, direction, subject, body_preview, full_body, gmail_thread_id, from_email, from_name, timestamp')
       .eq('venue_id', venueId)
       .eq('wedding_id', weddingId)
       .order('timestamp', { ascending: true }),
     sb
       .from('drafts')
-      .select('id, status, context_type, brain_used, model_used, confidence_score, auto_sent, auto_send_source, subject, approved_at, approved_by, created_at')
+      // 2026-05-09: select draft_body so the AI Draft journey row is
+      // click-expandable on the lead profile (Stream 2026-05-09 fix).
+      .select('id, status, context_type, brain_used, model_used, confidence_score, auto_sent, auto_send_source, subject, draft_body, approved_at, approved_by, created_at')
       .eq('venue_id', venueId)
       .eq('wedding_id', weddingId)
       .order('created_at', { ascending: true }),
@@ -425,12 +451,18 @@ export async function getWeddingJourney(
     const isInbound = ix.direction === 'inbound'
     const typeLabel = ix.type === 'email' ? 'Email' : ix.type === 'call' ? 'Call' : ix.type === 'voicemail' ? 'Voicemail' : 'SMS'
     const cleanPreview = htmlToText(ix.body_preview)
+    // 2026-05-09: also strip HTML on the full body so click-expand
+    // lands on legible text, not an HTML dump. Falls back to the
+    // preview when an old import didn't store full_body.
+    const cleanFull = htmlToText(ix.full_body) || cleanPreview
     events.push({
       id: `ix-${ix.id}`,
       timestamp: ix.timestamp,
       category: 'communication',
       title: `${typeLabel} ${isInbound ? 'received' : 'sent'}${ix.subject ? `: ${ix.subject}` : ''}`,
       description: cleanPreview ? cleanPreview.slice(0, 200) : undefined,
+      fullBody: cleanFull && cleanFull.length > 0 ? cleanFull : undefined,
+      threadId: ix.gmail_thread_id,
       actor: isInbound ? 'couple' : 'venue',
       evidence: { from_email: ix.from_email, from_name: ix.from_name, direction: ix.direction, type: ix.type },
     })
@@ -439,12 +471,17 @@ export async function getWeddingJourney(
   // ---- Drafts (AI generation + lifecycle) ----
   for (const d of (draftRes.data ?? []) as DraftRow[]) {
     const conf = d.confidence_score !== null ? ` · ${d.confidence_score}% confident` : ''
+    // 2026-05-09: full draft markdown ships in fullBody so the
+    // ai_draft journey row expands inline. htmlToText is a no-op for
+    // plain markdown but cleans signature-laden HTML drafts.
+    const cleanDraft = htmlToText(d.draft_body) || ''
     events.push({
       id: `draft-gen-${d.id}`,
       timestamp: d.created_at,
       category: 'ai_draft',
       title: `AI draft generated${conf}`,
       description: d.subject ?? undefined,
+      fullBody: cleanDraft.length > 0 ? cleanDraft : undefined,
       actor: 'ai',
       evidence: { brain: d.brain_used, model: d.model_used, status: d.status },
     })

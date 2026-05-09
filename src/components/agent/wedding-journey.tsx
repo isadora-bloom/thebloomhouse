@@ -18,6 +18,8 @@ import {
   Activity,
   Tag,
   Loader2,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import { formatSourceLabel } from '@/lib/utils/format-source-label'
 
@@ -56,6 +58,13 @@ interface JourneyEvent {
   category: JourneyCategory
   title: string
   description?: string
+  /** Full version of `description` shown when the row is expanded.
+   *  Only set for communication / ai_draft rows where there's a real
+   *  long-form body underneath the 200-char preview. */
+  fullBody?: string
+  /** Inbox-thread id so an expanded communication row can link to
+   *  /agent/inbox?thread=... for full thread context. */
+  threadId?: string | null
   source?: string | null
   actor: JourneyActor
   evidence?: Record<string, unknown>
@@ -122,6 +131,20 @@ export function WeddingJourney({ weddingId, initialLimit = 200, categories }: Pr
   const [activeCategories, setActiveCategories] = useState<Set<JourneyCategory>>(
     new Set<JourneyCategory>(categories ?? Object.keys(CATEGORY_STYLE) as JourneyCategory[])
   )
+  // 2026-05-09: per-row expand state for communication + ai_draft
+  // events that ship a `fullBody`. Coordinator clicks the row, the
+  // 200-char preview swaps for the full email / draft. The set is
+  // local to this component; nothing persists across navigation.
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
+
+  function toggleRow(id: string) {
+    setExpandedRows((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -238,8 +261,32 @@ export function WeddingJourney({ weddingId, initialLimit = 200, categories }: Pr
               {visible.map((e) => {
                 const style = CATEGORY_STYLE[e.category]
                 const sourceLabel = formatSource(e.source)
+                // 2026-05-09: communication + ai_draft rows expand
+                // on click when the API supplies a fullBody. Other
+                // categories (funnel_step, milestone, identity_merge)
+                // have nothing useful to reveal beyond the
+                // description, so the chevron + click hint don't
+                // render — keeps the timeline scannable.
+                const canExpand = !!e.fullBody && e.fullBody.length > 0
+                const isExpanded = expandedRows.has(e.id)
                 return (
-                  <div key={e.id} className="flex gap-3 relative">
+                  <div
+                    key={e.id}
+                    className={`flex gap-3 relative rounded-md ${
+                      canExpand ? 'cursor-pointer hover:bg-warm-white/50 -mx-2 px-2 py-1 transition-colors' : ''
+                    }`}
+                    onClick={() => canExpand && toggleRow(e.id)}
+                    onKeyDown={(ev) => {
+                      if (!canExpand) return
+                      if (ev.key === 'Enter' || ev.key === ' ') {
+                        ev.preventDefault()
+                        toggleRow(e.id)
+                      }
+                    }}
+                    role={canExpand ? 'button' : undefined}
+                    tabIndex={canExpand ? 0 : undefined}
+                    aria-expanded={canExpand ? isExpanded : undefined}
+                  >
                     <div
                       className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 z-10 ${style.bg} ${style.text}`}
                       aria-hidden
@@ -249,13 +296,25 @@ export function WeddingJourney({ weddingId, initialLimit = 200, categories }: Pr
                     <div className="flex-1 min-w-0 pb-1">
                       <div className="flex items-start justify-between gap-2 flex-wrap">
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-sage-900 leading-snug">
-                            {e.title}
+                          <p className="text-sm font-medium text-sage-900 leading-snug flex items-center gap-1">
+                            <span className="min-w-0 flex-1">{e.title}</span>
+                            {canExpand && (
+                              <span className="shrink-0 text-sage-400">
+                                {isExpanded
+                                  ? <ChevronUp className="w-3.5 h-3.5" aria-label="Collapse" />
+                                  : <ChevronDown className="w-3.5 h-3.5" aria-label="Expand" />}
+                              </span>
+                            )}
                           </p>
-                          {e.description && (
+                          {e.description && !isExpanded && (
                             <p className="text-xs text-sage-600 mt-0.5 line-clamp-2">
                               {e.description}
                             </p>
+                          )}
+                          {isExpanded && e.fullBody && (
+                            <div className="mt-1.5 text-xs text-sage-700 leading-relaxed whitespace-pre-wrap break-words bg-warm-white/60 rounded-md px-3 py-2 border border-sage-100">
+                              {e.fullBody}
+                            </div>
                           )}
                           <div className="flex items-center gap-2 mt-1 text-[11px] text-sage-500">
                             <span>{ACTOR_LABEL[e.actor]}</span>
@@ -265,6 +324,11 @@ export function WeddingJourney({ weddingId, initialLimit = 200, categories }: Pr
                                 <span className="font-medium">{sourceLabel}</span>
                               </>
                             )}
+                            {/* "View full thread" deliberately not
+                                rendered: the inbox doesn't ship a
+                                /agent/inbox/[threadId] route, so any
+                                link would dead-end. The full body
+                                already renders inline on expand. */}
                           </div>
                         </div>
                         <span className="text-[10px] text-sage-400 whitespace-nowrap shrink-0 mt-0.5 text-right">

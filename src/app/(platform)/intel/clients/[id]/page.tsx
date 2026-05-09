@@ -44,6 +44,8 @@ import {
   HelpCircle,
   TrendingDown,
   Minus,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { WeddingJourney } from '@/components/agent/wedding-journey'
@@ -135,7 +137,12 @@ interface DraftRow {
   id: string
   status: string
   subject: string | null
-  body_preview: string | null
+  // T5-Rixey: drafts table only has draft_body, not body_preview. The
+  // earlier select column (body_preview) was always returning undefined
+  // — the body cell was effectively dark on this page. Switched to
+  // draft_body so the AI Draft History rows actually render content,
+  // and so click-to-expand can show the full markdown.
+  draft_body: string | null
   confidence_score: number | null
   brain_used: string | null
   auto_sent: boolean
@@ -612,6 +619,42 @@ export default function ClientProfilePage() {
   const [error, setError] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState(false)
 
+  // 2026-05-09: click-to-expand state for the Communication History
+  // and AI Draft History sections. The set holds row ids of currently-
+  // expanded entries; toggling a row flips its membership. Kept as
+  // separate sets so expanding a draft doesn't collapse an open
+  // interaction row (or vice-versa). Plain Set instead of Map because
+  // we only need a presence check; clean reset across re-fetch handled
+  // by the [weddingId] dependency below.
+  const [expandedInteractions, setExpandedInteractions] = useState<Set<string>>(new Set())
+  const [expandedDrafts, setExpandedDrafts] = useState<Set<string>>(new Set())
+
+  function toggleInteraction(id: string) {
+    setExpandedInteractions((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleDraft(id: string) {
+    setExpandedDrafts((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  // Reset expanded state when navigating to a different wedding so a
+  // stale id from the previous client doesn't accidentally pre-open a
+  // row on the new one.
+  useEffect(() => {
+    setExpandedInteractions(new Set())
+    setExpandedDrafts(new Set())
+  }, [weddingId])
+
   const fetchData = useCallback(async () => {
     const supabase = createClient()
 
@@ -640,7 +683,13 @@ export default function ClientProfilePage() {
           .eq('venue_id', VENUE_ID),
         supabase
           .from('interactions')
-          .select('id, type, direction, subject, body_preview, timestamp')
+          // 2026-05-09: select full_body + gmail_thread_id alongside
+          // the truncated body_preview so each row can expand-on-click
+          // without a follow-up fetch, and link to the inbox thread
+          // when one exists. full_body lives on every row written by
+          // the live pipeline; pre-fix CRM-import rows may have
+          // full_body=null and the UI degrades gracefully.
+          .select('id, type, direction, subject, body_preview, full_body, gmail_thread_id, timestamp')
           .eq('wedding_id', weddingId)
           .eq('venue_id', VENUE_ID)
           .order('timestamp', { ascending: false })
@@ -658,7 +707,13 @@ export default function ClientProfilePage() {
           .order('calculated_at', { ascending: true }),
         supabase
           .from('drafts')
-          .select('id, status, subject, body_preview, confidence_score, brain_used, auto_sent, approved_by, approved_at, created_at')
+          // 2026-05-09: drafts.draft_body is the canonical full text
+          // (drafts has no body_preview column). The earlier select
+          // pulled the non-existent body_preview and silently dropped
+          // the body — meaning the AI Draft History rows on this page
+          // were always blank. Switched to draft_body to make the row
+          // body render at all, AND to power click-to-expand below.
+          .select('id, status, subject, draft_body, confidence_score, brain_used, auto_sent, approved_by, approved_at, created_at')
           .eq('wedding_id', weddingId)
           .order('created_at', { ascending: false })
           .limit(20),
@@ -1069,43 +1124,101 @@ export default function ClientProfilePage() {
               </div>
             ) : (
               <div className="divide-y divide-border max-h-[500px] overflow-y-auto">
-                {interactions.map((int) => (
-                  <div key={int.id} className="px-6 py-3 hover:bg-warm-white/50 transition-colors">
-                    <div className="flex items-start gap-3">
-                      <div className={cn(
-                        'mt-0.5 shrink-0',
-                        int.direction === 'inbound' ? 'text-blue-500' : 'text-emerald-500'
-                      )}>
-                        {interactionIcon(int.type, int.direction)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <p className="text-sm font-medium text-sage-900 truncate">
-                            {int.subject || `${int.type} ${int.direction}`}
-                          </p>
-                          <span className={cn(
-                            'text-[10px] font-medium px-1.5 py-0.5 rounded',
-                            int.direction === 'inbound'
-                              ? 'bg-blue-50 text-blue-600'
-                              : 'bg-emerald-50 text-emerald-600'
-                          )}>
-                            {int.direction}
-                          </span>
+                {interactions.map((int) => {
+                  // 2026-05-09: each row toggles between a 200-char
+                  // preview and the full body text. We always run
+                  // both columns through htmlToText for the same
+                  // T5-Rixey-EEE Bug 2 reason: legacy rows hold raw
+                  // HTML in either field, htmlToText is idempotent on
+                  // already-clean text. When full_body is empty (very
+                  // old imports) we fall back to body_preview so the
+                  // expanded state still shows something legible.
+                  const isExpanded = expandedInteractions.has(int.id)
+                  const cleanPreview = htmlToText(int.body_preview)
+                  const cleanFull = htmlToText(int.full_body) || cleanPreview
+                  const hasMore = cleanFull.length > cleanPreview.length
+                  const canExpand = !!cleanFull
+                  return (
+                    <div
+                      key={int.id}
+                      className={cn(
+                        'px-6 py-3 transition-colors',
+                        canExpand ? 'cursor-pointer hover:bg-warm-white/50' : '',
+                      )}
+                      onClick={() => canExpand && toggleInteraction(int.id)}
+                      onKeyDown={(e) => {
+                        if (!canExpand) return
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          toggleInteraction(int.id)
+                        }
+                      }}
+                      role={canExpand ? 'button' : undefined}
+                      tabIndex={canExpand ? 0 : undefined}
+                      aria-expanded={canExpand ? isExpanded : undefined}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={cn(
+                          'mt-0.5 shrink-0',
+                          int.direction === 'inbound' ? 'text-blue-500' : 'text-emerald-500'
+                        )}>
+                          {interactionIcon(int.type, int.direction)}
                         </div>
-                        {int.body_preview && (
-                          // T5-Rixey-EEE Bug 2 (display-time
-                          // sanitization, layer 2 of 3): historical
-                          // rows from MM bulk import + WW re-import
-                          // hold raw HTML in body_preview. Always
-                          // run htmlToText() — no-op for already-
-                          // plain text.
-                          <p className="text-xs text-sage-500 line-clamp-2">{htmlToText(int.body_preview)}</p>
-                        )}
-                        <p className="text-[11px] text-sage-400 mt-1">{fmtDatetime(int.timestamp)}</p>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <p className="text-sm font-medium text-sage-900 truncate">
+                              {int.subject || `${int.type} ${int.direction}`}
+                            </p>
+                            <span className={cn(
+                              'text-[10px] font-medium px-1.5 py-0.5 rounded',
+                              int.direction === 'inbound'
+                                ? 'bg-blue-50 text-blue-600'
+                                : 'bg-emerald-50 text-emerald-600'
+                            )}>
+                              {int.direction}
+                            </span>
+                            {canExpand && (
+                              <span className="ml-auto shrink-0 text-sage-400">
+                                {isExpanded
+                                  ? <ChevronUp className="w-3.5 h-3.5" aria-label="Collapse" />
+                                  : <ChevronDown className="w-3.5 h-3.5" aria-label="Expand" />}
+                              </span>
+                            )}
+                          </div>
+                          {cleanPreview && !isExpanded && (
+                            <p className="text-xs text-sage-500 line-clamp-2">{cleanPreview}</p>
+                          )}
+                          {isExpanded && cleanFull && (
+                            <div className="mt-1.5 text-xs text-sage-700 leading-relaxed whitespace-pre-wrap break-words bg-warm-white/60 rounded-md px-3 py-2 border border-sage-100">
+                              {cleanFull}
+                            </div>
+                          )}
+                          <div className="flex items-center gap-3 mt-1">
+                            <p className="text-[11px] text-sage-400">{fmtDatetime(int.timestamp)}</p>
+                            {/* "View full thread" deliberately not
+                                rendered here: the inbox UI doesn't
+                                ship a /agent/inbox/[threadId] route
+                                and its q-search doesn't index
+                                gmail_thread_id, so any link would be
+                                a dead end. The full email body
+                                already renders inline above on
+                                expand, which is what the coordinator
+                                actually needs. If a thread route
+                                lands later, hook it back in here +
+                                stopPropagation on the click handler
+                                so opening the thread doesn't also
+                                collapse the inline preview. */}
+                            {isExpanded && hasMore && (
+                              <span className="text-[10px] text-sage-400 italic">
+                                expanded · {cleanFull.length} chars
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -1119,36 +1232,76 @@ export default function ClientProfilePage() {
                 </h2>
               </div>
               <div className="divide-y divide-border">
-                {drafts.map((d) => (
-                  <div key={d.id} className="px-6 py-3">
-                    <div className="flex items-center gap-2 mb-1">
-                      <FileText className="w-3.5 h-3.5 text-sage-400" />
-                      <p className="text-sm font-medium text-sage-900 truncate">
-                        {d.subject || 'Draft'}
-                      </p>
-                      <span className={cn(
-                        'text-[10px] font-medium px-1.5 py-0.5 rounded',
-                        d.status === 'approved' ? 'bg-emerald-50 text-emerald-600' :
-                        d.status === 'rejected' ? 'bg-red-50 text-red-600' :
-                        d.status === 'sent' ? 'bg-teal-50 text-teal-600' :
-                        'bg-amber-50 text-amber-600'
-                      )}>
-                        {d.status}
-                      </span>
+                {drafts.map((d) => {
+                  // 2026-05-09: drafts row click toggles between a
+                  // 200-char preview and the full draft markdown.
+                  // d.draft_body is the canonical column; legacy rows
+                  // we previously fetched as body_preview are no
+                  // longer needed since we corrected the SELECT
+                  // above. htmlToText keeps signature-laden HTML
+                  // bodies legible in plain text.
+                  const isExpanded = expandedDrafts.has(d.id)
+                  const cleanFull = htmlToText(d.draft_body) || ''
+                  const cleanPreview = cleanFull.slice(0, 200)
+                  const canExpand = cleanFull.length > 0
+                  return (
+                    <div
+                      key={d.id}
+                      className={cn(
+                        'px-6 py-3 transition-colors',
+                        canExpand ? 'cursor-pointer hover:bg-warm-white/50' : '',
+                      )}
+                      onClick={() => canExpand && toggleDraft(d.id)}
+                      onKeyDown={(e) => {
+                        if (!canExpand) return
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          toggleDraft(d.id)
+                        }
+                      }}
+                      role={canExpand ? 'button' : undefined}
+                      tabIndex={canExpand ? 0 : undefined}
+                      aria-expanded={canExpand ? isExpanded : undefined}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <FileText className="w-3.5 h-3.5 text-sage-400" />
+                        <p className="text-sm font-medium text-sage-900 truncate">
+                          {d.subject || 'Draft'}
+                        </p>
+                        <span className={cn(
+                          'text-[10px] font-medium px-1.5 py-0.5 rounded',
+                          d.status === 'approved' ? 'bg-emerald-50 text-emerald-600' :
+                          d.status === 'rejected' ? 'bg-red-50 text-red-600' :
+                          d.status === 'sent' ? 'bg-teal-50 text-teal-600' :
+                          'bg-amber-50 text-amber-600'
+                        )}>
+                          {d.status}
+                        </span>
+                        {canExpand && (
+                          <span className="ml-auto shrink-0 text-sage-400">
+                            {isExpanded
+                              ? <ChevronUp className="w-3.5 h-3.5" aria-label="Collapse" />
+                              : <ChevronDown className="w-3.5 h-3.5" aria-label="Expand" />}
+                          </span>
+                        )}
+                      </div>
+                      {cleanPreview && !isExpanded && (
+                        <p className="text-xs text-sage-500 line-clamp-2 ml-5">{cleanPreview}</p>
+                      )}
+                      {isExpanded && cleanFull && (
+                        <div className="mt-1.5 ml-5 text-xs text-sage-700 leading-relaxed whitespace-pre-wrap break-words bg-warm-white/60 rounded-md px-3 py-2 border border-sage-100">
+                          {cleanFull}
+                        </div>
+                      )}
+                      {/* created-at-ok: drafts.created_at IS the AI
+                          generation time (action timestamp). Per the
+                          date-windows doctrine drafts is a TELEMETRY
+                          table — created_at is the meaningful per-row
+                          timestamp. */}
+                      <p className="text-[11px] text-sage-400 mt-1 ml-5">{fmtDatetime(d.created_at)}</p>
                     </div>
-                    {d.body_preview && (
-                      // T5-Rixey-EEE Bug 2: same display-time
-                      // sanitization as the inbound side.
-                      <p className="text-xs text-sage-500 line-clamp-2 ml-5">{htmlToText(d.body_preview)}</p>
-                    )}
-                    {/* created-at-ok: drafts.created_at IS the AI
-                        generation time (action timestamp). Per the
-                        date-windows doctrine drafts is a TELEMETRY
-                        table — created_at is the meaningful per-row
-                        timestamp. */}
-                    <p className="text-[11px] text-sage-400 mt-1 ml-5">{fmtDatetime(d.created_at)}</p>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}

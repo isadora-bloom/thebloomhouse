@@ -89,27 +89,29 @@ function nameCompletenessScore<T extends PersonNameLike>(p: T): number {
 
 /**
  * Build a stable bucket key for grouping people-rows that almost
- * certainly represent the same human. Two rows share a bucket when:
- *
- *   1. They share an email (case-insensitive), OR
- *   2. One's first name is a prefix of the other's first name AND
- *      either last names match OR one of the last names is an initial
- *      that is a prefix of the other.
- *
- * The prefix rule covers "Jen / Jennifer" (calculator legal name vs
- * Knot relay nickname) AND "Jen B / Jennifer Biaksangi" (single-letter
- * last vs full last). It deliberately doesn't try to be a full nickname
- * dictionary — that's the identity-resolver's job. This is the
- * defense-in-depth for when the resolver hasn't merged yet.
+ * certainly represent the same human. The first pass keys exactly so
+ * "Sarah Smith" and "Sarah Lee" end up in different buckets (two
+ * different humans named Sarah). The second pass — prefix-merge — then
+ * folds nicknames into legal names by walking name-keyed buckets and
+ * checking whether one's first name is a prefix of another's, with a
+ * last-name conflict guard.
  *
  * Returns null when there's not enough signal to bucket (no first name
- * + no email).
+ * + no last name + no email).
  */
 function bucketKey<T extends PersonNameLike>(p: T): string | null {
-  const fn = normalize(p.first_name)
   const email = (p.email ?? '').trim().toLowerCase()
   if (email) return `email:${email}`
-  if (!fn) return null
+  const fn = normalize(p.first_name)
+  const ln = normalize(p.last_name)
+  if (!fn && !ln) return null
+  // Single-initial last names (Knot-relay style "Jen B") are not
+  // discriminating — bucket purely on first name so they collapse with
+  // the same-first-name "Jennifer Biaksangi" row in the prefix-merge
+  // pass below. Without this, "Jen B" → "name:jen|b" and "Jennifer
+  // Biaksangi" → "name:jennifer|biaksangi", which the prefix-merge
+  // refuses to fold because the keys differ on both sides.
+  if (ln && !isInitialOnly(ln)) return `name:${fn}|${ln}`
   return `name:${fn}`
 }
 
@@ -141,25 +143,41 @@ export function pickCanonicalPeople<T extends PersonNameLike>(people: T[]): T[] 
     }
   })
 
-  // Prefix-merge name-keyed buckets only.
+  // Prefix-merge name-keyed buckets only. Bucket keys come in two
+  // shapes after bucketKey() above:
+  //   - "name:<first>|<last>"  — full first + non-initial last
+  //   - "name:<first>"         — first only (last missing or initial)
+  // Walk shorter first names and try to fold them into longer ones
+  // when (a) the long first name starts with the short, and (b) the
+  // last names don't conflict. firstNameOf() pulls the first part
+  // out of either key shape.
+  function firstNameOf(key: string): string {
+    const stripped = key.slice(5) // remove 'name:'
+    const pipe = stripped.indexOf('|')
+    return pipe >= 0 ? stripped.slice(0, pipe) : stripped
+  }
+
   const nameKeys = [...buckets.keys()].filter((k) => k.startsWith('name:'))
-  // Sort by length asc so "name:jen" gets folded into "name:jennifer".
-  nameKeys.sort((a, b) => a.length - b.length)
+  // Sort by first-name length ascending so "name:jen" gets folded
+  // into "name:jennifer|biaksangi" before any other pairing tries.
+  nameKeys.sort((a, b) => firstNameOf(a).length - firstNameOf(b).length)
   for (const shortKey of nameKeys) {
     const shortBucket = buckets.get(shortKey)
     if (!shortBucket) continue
-    const shortName = shortKey.slice(5) // strip 'name:'
-    if (shortName.length < 2) continue // single-letter names too noisy
+    const shortFirst = firstNameOf(shortKey)
+    if (shortFirst.length < 2) continue // single-letter first names too noisy
     for (const longKey of nameKeys) {
       if (longKey === shortKey) continue
       const longBucket = buckets.get(longKey)
       if (!longBucket) continue
-      const longName = longKey.slice(5)
-      if (longName.length <= shortName.length) continue
-      if (!longName.startsWith(shortName)) continue
-      // Optional last-name guard: if both buckets have any row with a
-      // non-initial last name and they conflict, do NOT merge —
-      // "Jen Smith" and "Jennifer Olkowski" are different people.
+      const longFirst = firstNameOf(longKey)
+      if (longFirst.length <= shortFirst.length) continue
+      if (!longFirst.startsWith(shortFirst)) continue
+      // Last-name conflict guard: if BOTH buckets carry a row with a
+      // non-initial last name and they don't share a prefix in either
+      // direction, refuse the merge — "Jen Smith" and "Jennifer
+      // Olkowski" are different humans even if one first is a prefix
+      // of the other.
       const shortLasts = shortBucket.rows
         .map((r) => normalize(r.last_name))
         .filter((s) => s && !isInitialOnly(s))
@@ -172,7 +190,8 @@ export function pickCanonicalPeople<T extends PersonNameLike>(people: T[]): T[] 
         )
         if (!overlap) continue
       }
-      // Merge short into long (long wins firstIdx if it came first).
+      // Merge short into long. firstIdx tracks first-appearance for
+      // stable output order — pick whichever came first in the input.
       longBucket.rows.push(...shortBucket.rows)
       if (shortBucket.firstIdx < longBucket.firstIdx) {
         longBucket.firstIdx = shortBucket.firstIdx
