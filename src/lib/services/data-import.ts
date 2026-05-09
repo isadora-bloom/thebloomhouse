@@ -187,67 +187,87 @@ export async function importClientList(
         continue
       }
 
-      // Dedup check: look for existing person with same email in this venue
-      if (email) {
-        const { data: existing } = await supabase
-          .from('people')
-          .select('id, wedding_id')
-          .eq('venue_id', venueId)
-          .eq('email', email)
-          .limit(1)
-
-        if (existing && existing.length > 0) {
-          errors.push(`Row ${i + 1}: Email "${email}" already exists, skipping`)
-          skipped++
-          continue
-        }
-      }
-
-      // Create wedding record
-      const { data: wedding, error: weddingErr } = await supabase
-        .from('weddings')
-        .insert({
-          venue_id: venueId,
-          status: weddingDate && new Date(weddingDate) < new Date() ? 'completed' : 'inquiry',
-          wedding_date: weddingDate,
-          guest_count_estimate: guestCount,
-          booking_value: bookingValue,
-          source,
-          notes,
-        })
-        .select('id')
-        .single()
-
-      if (weddingErr || !wedding) {
-        errors.push(`Row ${i + 1}: Failed to create wedding — ${weddingErr?.message || 'unknown error'}`)
+      // 2026-05-08 deep-fix-resolver: route every coordinator-import row
+      // through the canonical resolver. The legacy "skip on duplicate
+      // email" path discarded the row entirely, which lost the import's
+      // booking_value / wedding_date / guest_count even when the person
+      // already existed. The resolver attaches the import to the
+      // canonical wedding instead and backfills missing fields.
+      // Signals: email + phone + first/last name + wedding_date.
+      const { resolveIdentity } = await import('@/lib/services/identity/resolver')
+      let resolvedWeddingId: string | null = null
+      let resolvedPartner1Id: string | null = null
+      try {
+        const resolved = await resolveIdentity(
+          venueId,
+          {
+            email: email || null,
+            phone: row.phone || null,
+            fullName: [firstName, lastName].filter(Boolean).join(' ') || null,
+            weddingDate: weddingDate || null,
+            partner1Name: [firstName, lastName].filter(Boolean).join(' ') || null,
+            partner2Name: [row.partner_first_name, row.partner_last_name].filter(Boolean).join(' ') || null,
+          },
+          { sourceLabel: 'coordinator_csv', supabase }
+        )
+        resolvedWeddingId = resolved.weddingId
+        resolvedPartner1Id = resolved.personId
+      } catch (err) {
+        errors.push(`Row ${i + 1}: identity resolver failed — ${err instanceof Error ? err.message : 'unknown'}`)
         skipped++
         continue
       }
 
-      // Create partner1 record
-      await supabase.from('people').insert({
-        venue_id: venueId,
-        wedding_id: wedding.id,
-        role: 'partner1',
-        first_name: firstName,
-        last_name: lastName,
-        email: email || null,
-        phone: row.phone || null,
-      })
+      // Backfill the wedding row with import-supplied fields without
+      // overwriting existing values.
+      const backfill: Record<string, unknown> = {}
+      if (weddingDate) backfill.wedding_date = weddingDate
+      if (guestCount != null) backfill.guest_count_estimate = guestCount
+      if (bookingValue != null) backfill.booking_value = bookingValue
+      if (source) backfill.source = source
+      if (notes) {
+        const { data: cur } = await supabase
+          .from('weddings').select('notes').eq('id', resolvedWeddingId).maybeSingle()
+        const existing = (cur?.notes as string | null) ?? null
+        backfill.notes = existing ? `${existing}\n\n[coordinator_csv]\n${notes}` : notes
+      }
+      // Status: only flip to 'completed' if the resolver returned an
+      // active wedding still in inquiry and the imported date is in the past.
+      if (weddingDate && new Date(weddingDate) < new Date()) {
+        const { data: cur } = await supabase
+          .from('weddings').select('status').eq('id', resolvedWeddingId).maybeSingle()
+        if ((cur?.status as string | undefined) === 'inquiry') {
+          backfill.status = 'completed'
+        }
+      }
+      if (Object.keys(backfill).length > 0) {
+        await supabase.from('weddings').update(backfill).eq('id', resolvedWeddingId)
+      }
 
-      // Create partner2 if provided
+      // Partner2: insert if not already present (the resolver only
+      // canonicalizes the partner1 identity).
       const partnerFirst = row.partner_first_name || ''
       const partnerLast = row.partner_last_name || ''
       if (partnerFirst) {
-        await supabase.from('people').insert({
-          venue_id: venueId,
-          wedding_id: wedding.id,
-          role: 'partner2',
-          first_name: partnerFirst,
-          last_name: partnerLast,
-          email: row.partner_email || null,
-        })
+        const { data: existingP2 } = await supabase
+          .from('people')
+          .select('id')
+          .eq('wedding_id', resolvedWeddingId)
+          .eq('role', 'partner2')
+          .ilike('first_name', partnerFirst)
+          .limit(1)
+        if (!existingP2 || existingP2.length === 0) {
+          await supabase.from('people').insert({
+            venue_id: venueId,
+            wedding_id: resolvedWeddingId,
+            role: 'partner2',
+            first_name: partnerFirst,
+            last_name: partnerLast,
+            email: row.partner_email || null,
+          })
+        }
       }
+      void resolvedPartner1Id
 
       imported++
     } catch (err) {

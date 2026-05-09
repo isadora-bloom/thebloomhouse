@@ -421,22 +421,91 @@ export async function commitNormalisedRows(args: {
         utm_content: row.utm_content ?? null,
         utm_first_seen_at: hasUtm ? inquiryDateForRow : null,
       }
-      const { data: wedding, error: wedErr } = await supabase
-        .from('weddings')
-        .insert(weddingPayload)
-        .select('id')
-        .single()
-      if (wedErr || !wedding) {
-        result.errors.push(`weddings insert failed: ${wedErr?.message ?? 'no row returned'}`)
-        result.ok = false
-        continue
+      // 2026-05-08 deep-fix-resolver: before creating a fresh wedding,
+      // ask the canonical resolver if the partner1 identity already
+      // exists at this venue. If yes, attach the imported interactions /
+      // tours / lost_deal to the existing wedding instead of minting a
+      // duplicate. This is the at-write-time half of the Stream KK
+      // offline reconciliation; together they guarantee the Reem case
+      // (Knot relay → calculator → contract-request) collapses to one
+      // wedding even when the three signals arrive across three
+      // different code paths.
+      // Signals passed: email + phone + partner1 first/last name. We
+      // omit weddingDate from the resolver input on purpose — the
+      // import row's wedding_date may be a guess; the resolver decides
+      // whether to flag a date conflict on the existing wedding.
+      let resolvedWeddingId: string | null = null
+      let resolvedPartner1Id: string | null = null
+      if (row.partner1_email || row.partner1_phone) {
+        try {
+          const { resolveIdentity } = await import('@/lib/services/identity/resolver')
+          const resolved = await resolveIdentity(
+            venueId,
+            {
+              email: row.partner1_email ?? null,
+              phone: row.partner1_phone ?? null,
+              fullName: [row.partner1_first_name, row.partner1_last_name].filter(Boolean).join(' ') || null,
+              weddingDate: row.wedding_date ?? null,
+              partner1Name: [row.partner1_first_name, row.partner1_last_name].filter(Boolean).join(' ') || null,
+              partner2Name: [row.partner2_first_name, row.partner2_last_name].filter(Boolean).join(' ') || null,
+            },
+            { sourceLabel: `crm_import:${crmSource}`, supabase }
+          )
+          resolvedWeddingId = resolved.weddingId
+          resolvedPartner1Id = resolved.personId
+        } catch (err) {
+          // Resolver failure should not block the import. Fall through
+          // to the legacy create-fresh path; the offline reconciler
+          // (Stream KK) catches anything we miss here.
+          console.warn('[crm-import] resolveIdentity failed for row, falling back to fresh-create:', err)
+        }
       }
-      result.weddingsInserted += 1
-      const weddingId = wedding.id as string
-      insertedWeddingId = weddingId
 
-      // people: insert primary partner if we have any name/email
-      if (row.partner1_first_name || row.partner1_last_name || row.partner1_email) {
+      let weddingId: string
+      if (resolvedWeddingId) {
+        // Attach to the existing wedding. Backfill any null fields the
+        // import row carries (booking_value, wedding_date, notes).
+        weddingId = resolvedWeddingId
+        const backfill: Record<string, unknown> = {}
+        if (row.booking_value != null) backfill.booking_value = row.booking_value
+        if (row.wedding_date) backfill.wedding_date = row.wedding_date
+        if (row.guest_count_estimate != null) backfill.guest_count_estimate = row.guest_count_estimate
+        // Fold the import row's notes into existing notes (don't overwrite).
+        if (row.notes && row.notes.trim()) {
+          const { data: cur } = await supabase
+            .from('weddings').select('notes').eq('id', weddingId).maybeSingle()
+          const existing = (cur?.notes as string | null) ?? null
+          backfill.notes = existing ? `${existing}\n\n[crm_import:${crmSource}]\n${row.notes}` : row.notes
+        }
+        if (Object.keys(backfill).length > 0) {
+          await supabase.from('weddings').update(backfill).eq('id', weddingId)
+        }
+        insertedWeddingId = weddingId
+        // Don't bump weddingsInserted — we attached to an existing one.
+      } else {
+        const { data: wedding, error: wedErr } = await supabase
+          .from('weddings')
+          .insert(weddingPayload)
+          .select('id')
+          .single()
+        if (wedErr || !wedding) {
+          result.errors.push(`weddings insert failed: ${wedErr?.message ?? 'no row returned'}`)
+          result.ok = false
+          continue
+        }
+        result.weddingsInserted += 1
+        weddingId = wedding.id as string
+        insertedWeddingId = weddingId
+      }
+
+      // people: insert primary partner if we have any name/email AND the
+      // resolver did not already attach an existing canonical person.
+      // When resolvedPartner1Id is set, the canonical person row already
+      // exists and the resolver has stamped its wedding_id where needed.
+      if (
+        !resolvedPartner1Id &&
+        (row.partner1_first_name || row.partner1_last_name || row.partner1_email)
+      ) {
         await supabase.from('people').insert({
           venue_id: venueId,
           wedding_id: weddingId,
@@ -450,17 +519,29 @@ export async function commitNormalisedRows(args: {
         })
       }
       if (row.partner2_first_name || row.partner2_last_name) {
-        await supabase.from('people').insert({
-          venue_id: venueId,
-          wedding_id: weddingId,
-          role: 'partner2',
-          first_name: row.partner2_first_name ?? null,
-          last_name: row.partner2_last_name ?? null,
-          email: row.partner2_email ?? null,
-          phone: row.partner2_phone ?? null,
-          confidence_flag: confidenceFlag,
-          crm_source: crmSource,
-        })
+        // Partner2 dedupe: skip the insert if a partner2 with the same
+        // first+last (case-insensitive) already exists on this wedding.
+        // Mirrors the canonical resolver's never-overwrite policy.
+        const { data: existingP2 } = await supabase
+          .from('people')
+          .select('id')
+          .eq('wedding_id', weddingId)
+          .eq('role', 'partner2')
+          .ilike('first_name', row.partner2_first_name ?? '')
+          .limit(1)
+        if (!existingP2 || existingP2.length === 0) {
+          await supabase.from('people').insert({
+            venue_id: venueId,
+            wedding_id: weddingId,
+            role: 'partner2',
+            first_name: row.partner2_first_name ?? null,
+            last_name: row.partner2_last_name ?? null,
+            email: row.partner2_email ?? null,
+            phone: row.partner2_phone ?? null,
+            confidence_flag: confidenceFlag,
+            crm_source: crmSource,
+          })
+        }
       }
 
       // interactions

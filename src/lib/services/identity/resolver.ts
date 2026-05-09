@@ -1,0 +1,796 @@
+/**
+ * Canonical identity resolver — the single chokepoint every entry path
+ * goes through to attach a contact + a wedding to whatever signal just
+ * arrived.
+ *
+ * Why this file exists
+ * --------------------
+ * Real example (Reem Ibrahim, 2026-05-08): three entry paths fired in
+ * sequence for the same couple — Knot relay inquiry, calculator estimate,
+ * contract-request via calculator. Each path created its own people row
+ * and its own weddings row. Coordinator inbox showed three threads, the
+ * auto-draft engine fired one nurture email per "duplicate", intelligence
+ * rollups double-counted. Bug class: identity resolution was scattered
+ * across half a dozen call sites and each one had its own `findOr-Create`
+ * shape. Fix: one resolver, one match-chain, one merge function, one
+ * deterministic outcome.
+ *
+ * Match chain (run in order, first hit wins)
+ * ------------------------------------------
+ *   1. Email exact match
+ *      - lower-case + trim + plus-addressing strip
+ *        (`reem+wedding@hotmail.com` → `reem@hotmail.com`)
+ *      - venue-scoped
+ *   2. Email canonical match
+ *      - gmail/googlemail dot+case stripping
+ *        (`R.eem.Ibrahim7@gmail.com` ≡ `reemibrahim7@gmail.com`)
+ *   3. Phone match
+ *      - E.164-normalize both sides; require >= 10 digits
+ *      - if multiple candidates, prefer the one with email already populated
+ *   4. Name + wedding-date match (low-confidence fallback)
+ *      - only used when email + phone are absent
+ *      - last-name match within ±7 days of wedding_date
+ *      - logs the fallback so coordinator audit can surface it
+ *   5. No match → create new person + new wedding
+ *
+ * Once a person matches, find the latest non-terminal wedding for that
+ * person at this venue. Multiple weddings with conflicting dates surface
+ * as a `wedding_identity_conflict` event — coordinator decides, never
+ * silent merge.
+ *
+ * Concurrency note
+ * ----------------
+ * The resolver does not take a transactional lock. Two near-simultaneous
+ * requests for the same identity can both miss step 1-3 and both try to
+ * create. The follow-up scan in `enqueueIdentityMatches` (called from
+ * email-pipeline post-create) catches this case via the high-tier
+ * auto-merge path. For the entry paths added in 2026-05-08 the resolver
+ * is the primary defense; the old enqueue path stays as belt-and-suspenders.
+ *
+ * Hard rule: never use this resolver to mint a wedding for a venue's own
+ * email address. Caller is expected to filter own-emails out before
+ * passing signals through (the email pipeline already does).
+ */
+
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { createServiceClient } from '@/lib/supabase/service'
+
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+export interface IdentitySignals {
+  email: string | null
+  phone: string | null
+  fullName: string | null
+  weddingDate: string | null  // ISO yyyy-mm-dd preferred
+  partner1Name: string | null
+  partner2Name: string | null
+}
+
+export interface ResolvedIdentity {
+  personId: string
+  weddingId: string
+  isNew: { person: boolean; wedding: boolean }
+  /** Person ids that were merged into the canonical row during this call.
+   *  Empty array on a clean match or fresh create. */
+  mergedFrom: string[]
+  /** Which step in the match chain fired. Surfaces in audit/logs. */
+  matchedBy:
+    | 'email_exact'
+    | 'email_canonical'
+    | 'phone'
+    | 'name_plus_date'
+    | 'created_new'
+}
+
+export interface ResolverOptions {
+  /** Free-text label for audit (e.g. "calculator", "knot_relay",
+   *  "calendly", "email_pipeline", "brain_dump"). */
+  sourceLabel?: string
+  /** Correlation id from the upstream request. Threads through audit
+   *  rows so `/admin/identity` can group by the originating action. */
+  correlationId?: string
+  /** Optional Supabase service client. If omitted, the resolver creates
+   *  one. Pre-pass when callers already hold one to avoid an extra
+   *  factory roundtrip. */
+  supabase?: SupabaseClient
+}
+
+// ---------------------------------------------------------------------------
+// Normalisation helpers — all pure, all unit-testable independently.
+// ---------------------------------------------------------------------------
+
+function lower(s: string | null | undefined): string {
+  return (s ?? '').trim().toLowerCase()
+}
+
+/** Strip plus-addressing from an email: `reem+wedding@hotmail.com` →
+ *  `reem@hotmail.com`. Returns the original if no `+` is present. */
+export function stripPlusAddressing(email: string): string {
+  const at = email.indexOf('@')
+  if (at < 0) return email
+  const local = email.slice(0, at)
+  const domain = email.slice(at)
+  const plus = local.indexOf('+')
+  if (plus < 0) return email
+  return local.slice(0, plus) + domain
+}
+
+/** Lower + trim + strip plus-addressing. Used for step 1 (email_exact). */
+export function normalizeEmail(email: string | null | undefined): string | null {
+  if (!email) return null
+  const t = lower(email)
+  if (!t || t.indexOf('@') < 0) return null
+  return stripPlusAddressing(t)
+}
+
+/** Gmail-style canonicalisation: lower, drop dots in the local part, drop
+ *  plus-addressing. Only applied when domain is gmail / googlemail. For
+ *  any other domain we fall back to the regular normalisation so we
+ *  never collapse two different humans on a non-gmail provider that
+ *  treats dots as significant. */
+export function canonicaliseEmail(email: string | null | undefined): string | null {
+  const norm = normalizeEmail(email)
+  if (!norm) return null
+  const at = norm.indexOf('@')
+  const local = norm.slice(0, at)
+  const domain = norm.slice(at + 1)
+  if (domain === 'gmail.com' || domain === 'googlemail.com') {
+    return `${local.replace(/\./g, '')}@${domain}`
+  }
+  return norm
+}
+
+/** Strip every non-digit, then prefix +1 if it looks like a 10-digit US
+ *  number missing a country code. Returns null when the result has fewer
+ *  than 10 digits (under-bar phone numbers — extension-only stubs, etc.).
+ *
+ *  Assumption: Bloom is US-first. International numbers usually arrive
+ *  with a country code already; this helper preserves them when 11+ digits
+ *  are present. If a UK / EU venue ever onboards we revisit the +1
+ *  prefix rule rather than re-doing the helper. */
+export function normalizePhone(phone: string | null | undefined): string | null {
+  if (!phone) return null
+  const digits = String(phone).replace(/\D+/g, '')
+  if (digits.length < 10) return null
+  if (digits.length === 10) return `+1${digits}`
+  // Already has country code or a long international number — keep as-is
+  // with a leading `+` so the format is consistent.
+  return `+${digits}`
+}
+
+function lastNameOf(fullName: string | null | undefined): string | null {
+  if (!fullName) return null
+  const parts = fullName.trim().split(/\s+/).filter(Boolean)
+  if (parts.length < 2) return null
+  return lower(parts[parts.length - 1])
+}
+
+function firstNameOf(fullName: string | null | undefined): string | null {
+  if (!fullName) return null
+  const parts = fullName.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return null
+  return parts[0]
+}
+
+function daysBetween(a: string, b: string): number {
+  const ta = new Date(a).getTime()
+  const tb = new Date(b).getTime()
+  if (!Number.isFinite(ta) || !Number.isFinite(tb)) return Infinity
+  return Math.abs(ta - tb) / (1000 * 60 * 60 * 24)
+}
+
+const TERMINAL_STATUSES = new Set(['lost', 'cancelled', 'completed'])
+
+// ---------------------------------------------------------------------------
+// Match chain
+// ---------------------------------------------------------------------------
+
+interface PersonHit {
+  id: string
+  venue_id: string
+  wedding_id: string | null
+  email: string | null
+  phone: string | null
+  first_name: string | null
+  last_name: string | null
+  merged_into_id: string | null
+}
+
+async function findByEmailExact(
+  supabase: SupabaseClient,
+  venueId: string,
+  email: string
+): Promise<PersonHit | null> {
+  const norm = normalizeEmail(email)
+  if (!norm) return null
+  const { data } = await supabase
+    .from('people')
+    .select('id, venue_id, wedding_id, email, phone, first_name, last_name, merged_into_id')
+    .eq('venue_id', venueId)
+    .ilike('email', norm)
+    .is('merged_into_id', null)
+    .order('created_at', { ascending: true })
+    .limit(1)
+  return (data && data[0]) ? (data[0] as PersonHit) : null
+}
+
+async function findByEmailCanonical(
+  supabase: SupabaseClient,
+  venueId: string,
+  email: string
+): Promise<PersonHit | null> {
+  const canon = canonicaliseEmail(email)
+  if (!canon) return null
+  // Pull every active person for the venue with an email; canonicalise
+  // each side and compare. Volume is in the low thousands per venue —
+  // not a scale concern at our current size.
+  const { data } = await supabase
+    .from('people')
+    .select('id, venue_id, wedding_id, email, phone, first_name, last_name, merged_into_id, created_at')
+    .eq('venue_id', venueId)
+    .not('email', 'is', null)
+    .is('merged_into_id', null)
+    .order('created_at', { ascending: true })
+  if (!data) return null
+  for (const row of data) {
+    if (canonicaliseEmail(row.email as string | null) === canon) {
+      return row as PersonHit
+    }
+  }
+  return null
+}
+
+async function findByPhone(
+  supabase: SupabaseClient,
+  venueId: string,
+  phone: string
+): Promise<PersonHit | null> {
+  const norm = normalizePhone(phone)
+  if (!norm) return null
+  // Pull every active person with a phone, normalize each side, compare.
+  // Phone columns in the wild contain assorted whitespace + parens +
+  // dashes; do the comparison in JS, not SQL, to avoid LIKE pattern
+  // pitfalls.
+  const { data } = await supabase
+    .from('people')
+    .select('id, venue_id, wedding_id, email, phone, first_name, last_name, merged_into_id, created_at')
+    .eq('venue_id', venueId)
+    .not('phone', 'is', null)
+    .is('merged_into_id', null)
+    .order('created_at', { ascending: true })
+  if (!data) return null
+  const candidates = data.filter((r) => normalizePhone(r.phone as string | null) === norm)
+  if (candidates.length === 0) return null
+  // Prefer the candidate that has an email populated (more complete row).
+  const withEmail = candidates.find((c) => !!c.email)
+  return (withEmail ?? candidates[0]) as PersonHit
+}
+
+async function findByNamePlusDate(
+  supabase: SupabaseClient,
+  venueId: string,
+  fullName: string,
+  weddingDate: string
+): Promise<PersonHit | null> {
+  const last = lastNameOf(fullName)
+  if (!last) return null
+  // Look for active people at this venue with the same last name whose
+  // wedding falls within ±7 days of the supplied date.
+  const { data } = await supabase
+    .from('people')
+    .select('id, venue_id, wedding_id, email, phone, first_name, last_name, merged_into_id, weddings(wedding_date, status)')
+    .eq('venue_id', venueId)
+    .ilike('last_name', last)
+    .is('merged_into_id', null)
+  if (!data || data.length === 0) return null
+  for (const row of data) {
+    const weddingRel = (row as Record<string, unknown>).weddings
+    const wd = Array.isArray(weddingRel)
+      ? (weddingRel[0] as { wedding_date?: string | null })?.wedding_date
+      : (weddingRel as { wedding_date?: string | null } | null | undefined)?.wedding_date
+    if (!wd) continue
+    if (daysBetween(wd, weddingDate) <= 7) return row as PersonHit
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Wedding picker — find the active wedding for this person at this venue.
+// ---------------------------------------------------------------------------
+
+interface WeddingHit {
+  id: string
+  status: string
+  wedding_date: string | null
+  inquiry_date: string | null
+  merged_into_id: string | null
+}
+
+async function findActiveWeddingForPerson(
+  supabase: SupabaseClient,
+  venueId: string,
+  personId: string
+): Promise<WeddingHit | null> {
+  // Two paths to a wedding from a person:
+  //   1. people.wedding_id direct FK
+  //   2. interactions.wedding_id linked via interactions.person_id
+  // Path 1 is canonical — every wedding-mint path stamps people.wedding_id
+  // when it creates. Path 2 catches stragglers (calendly orphans, brain
+  // dump notes pre-wedding-creation).
+  const { data: person } = await supabase
+    .from('people')
+    .select('wedding_id')
+    .eq('id', personId)
+    .single()
+  const directWeddingId = (person?.wedding_id as string | null) ?? null
+  if (directWeddingId) {
+    const { data: w } = await supabase
+      .from('weddings')
+      .select('id, status, wedding_date, inquiry_date, merged_into_id')
+      .eq('id', directWeddingId)
+      .eq('venue_id', venueId)
+      .is('merged_into_id', null)
+      .maybeSingle()
+    if (w) return w as WeddingHit
+  }
+  // Fallback: latest interaction-linked wedding for this person.
+  const { data: interactions } = await supabase
+    .from('interactions')
+    .select('wedding_id, timestamp')
+    .eq('person_id', personId)
+    .eq('venue_id', venueId)
+    .not('wedding_id', 'is', null)
+    .order('timestamp', { ascending: false })
+    .limit(1)
+  const fallbackWeddingId = (interactions && interactions[0]?.wedding_id as string | null) ?? null
+  if (!fallbackWeddingId) return null
+  const { data: w } = await supabase
+    .from('weddings')
+    .select('id, status, wedding_date, inquiry_date, merged_into_id')
+    .eq('id', fallbackWeddingId)
+    .eq('venue_id', venueId)
+    .is('merged_into_id', null)
+    .maybeSingle()
+  return (w as WeddingHit | null) ?? null
+}
+
+// ---------------------------------------------------------------------------
+// Wedding identity-conflict signal
+// ---------------------------------------------------------------------------
+// When a person matches an existing record but the incoming wedding_date
+// disagrees with the on-file date by more than 90 days, we DO NOT silent-
+// merge. We surface a coordinator-visible alert instead. For now the
+// alert lands as a structured note in admin_notifications (already a
+// coordinator-visible surface). The user can then choose to merge,
+// split, or override.
+async function flagWeddingDateConflict(
+  supabase: SupabaseClient,
+  venueId: string,
+  weddingId: string,
+  personId: string,
+  storedDate: string,
+  incomingDate: string,
+  sourceLabel: string | null
+): Promise<void> {
+  try {
+    await supabase.from('admin_notifications').insert({
+      venue_id: venueId,
+      type: 'identity_conflict',
+      title: 'Wedding date conflict on identity match',
+      body:
+        `Identity resolver matched person ${personId} to wedding ${weddingId}, ` +
+        `but the incoming signal claimed wedding_date=${incomingDate} while the ` +
+        `stored value is ${storedDate}. Source: ${sourceLabel ?? 'unknown'}. ` +
+        `No silent merge performed; coordinator review required.`,
+      priority: 'normal',
+      wedding_id: weddingId,
+    })
+  } catch (err) {
+    // Best-effort. If admin_notifications doesn't exist for some reason
+    // (or RLS rejects the write), we log and keep going. The match itself
+    // still succeeds — the conflict is informational, not a hard stop.
+    console.warn('[identity/resolver] failed to log wedding-date conflict:', err)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// resolveCanonical — chase merge pointers to the live row.
+// ---------------------------------------------------------------------------
+
+/** Walk weddings.merged_into_id until we hit a row with merged_into_id IS NULL.
+ *  Bounded at 8 hops so a corrupt cycle can't infinite-loop. */
+export async function resolveCanonicalWedding(
+  supabase: SupabaseClient,
+  weddingId: string
+): Promise<string> {
+  let current = weddingId
+  for (let hops = 0; hops < 8; hops++) {
+    const { data } = await supabase
+      .from('weddings')
+      .select('id, merged_into_id')
+      .eq('id', current)
+      .maybeSingle()
+    if (!data) return current
+    const next = data.merged_into_id as string | null
+    if (!next) return current
+    current = next
+  }
+  return current
+}
+
+/** Same as above but for people. */
+export async function resolveCanonicalPerson(
+  supabase: SupabaseClient,
+  personId: string
+): Promise<string> {
+  let current = personId
+  for (let hops = 0; hops < 8; hops++) {
+    const { data } = await supabase
+      .from('people')
+      .select('id, merged_into_id')
+      .eq('id', current)
+      .maybeSingle()
+    if (!data) return current
+    const next = data.merged_into_id as string | null
+    if (!next) return current
+    current = next
+  }
+  return current
+}
+
+// ---------------------------------------------------------------------------
+// Person + wedding insert helpers (used after no-match case 5).
+// ---------------------------------------------------------------------------
+
+async function createPerson(
+  supabase: SupabaseClient,
+  venueId: string,
+  signals: IdentitySignals
+): Promise<string | null> {
+  const first = firstNameOf(signals.fullName ?? signals.partner1Name)
+    ?? (signals.email ? signals.email.split('@')[0] : null)
+  const last = lastNameOf(signals.fullName ?? signals.partner1Name)
+  const insert: Record<string, unknown> = {
+    venue_id: venueId,
+    role: 'partner1',
+    first_name: first,
+    last_name: last,
+  }
+  if (signals.email) insert.email = normalizeEmail(signals.email) ?? signals.email
+  if (signals.phone) insert.phone = normalizePhone(signals.phone)
+  const { data, error } = await supabase
+    .from('people')
+    .insert(insert)
+    .select('id')
+    .single()
+  if (error || !data) {
+    console.error('[identity/resolver] createPerson failed:', error?.message)
+    return null
+  }
+  return data.id as string
+}
+
+async function createWedding(
+  supabase: SupabaseClient,
+  venueId: string,
+  signals: IdentitySignals,
+  sourceLabel: string | null
+): Promise<string | null> {
+  // source_provenance is CHECK-constrained; we pin it to the new
+  // 'identity_resolver' value (migration 247) and stash the human-readable
+  // sourceLabel on weddings.notes for the audit trail. Anything else
+  // would violate the constraint added in migration 178.
+  const insert: Record<string, unknown> = {
+    venue_id: venueId,
+    status: 'inquiry',
+    inquiry_date: new Date().toISOString(),
+    wedding_date: signals.weddingDate ?? null,
+    heat_score: 0,
+    temperature_tier: 'cool',
+    source_provenance: 'identity_resolver',
+    notes: sourceLabel ? `[identity-resolver: ${sourceLabel}]` : null,
+  }
+  const { data, error } = await supabase
+    .from('weddings')
+    .insert(insert)
+    .select('id')
+    .single()
+  if (error || !data) {
+    console.error('[identity/resolver] createWedding failed:', error?.message)
+    return null
+  }
+  return data.id as string
+}
+
+// ---------------------------------------------------------------------------
+// Public entry: resolveIdentity
+// ---------------------------------------------------------------------------
+
+export async function resolveIdentity(
+  venueId: string,
+  signals: IdentitySignals,
+  options: ResolverOptions = {}
+): Promise<ResolvedIdentity> {
+  const supabase = options.supabase ?? createServiceClient()
+  const sourceLabel = options.sourceLabel ?? null
+
+  // -------------------------------------------------------------------------
+  // Step 1: email exact
+  // -------------------------------------------------------------------------
+  let hit: PersonHit | null = null
+  let matchedBy: ResolvedIdentity['matchedBy'] = 'created_new'
+  if (signals.email) {
+    hit = await findByEmailExact(supabase, venueId, signals.email)
+    if (hit) matchedBy = 'email_exact'
+  }
+  // Step 2: email canonical (gmail dot/case)
+  if (!hit && signals.email) {
+    hit = await findByEmailCanonical(supabase, venueId, signals.email)
+    if (hit) matchedBy = 'email_canonical'
+  }
+  // Step 3: phone
+  if (!hit && signals.phone) {
+    hit = await findByPhone(supabase, venueId, signals.phone)
+    if (hit) matchedBy = 'phone'
+  }
+  // Step 4: name + date fallback (only when no email + no phone)
+  if (!hit && !signals.email && !signals.phone && signals.fullName && signals.weddingDate) {
+    hit = await findByNamePlusDate(supabase, venueId, signals.fullName, signals.weddingDate)
+    if (hit) matchedBy = 'name_plus_date'
+  }
+
+  let personId: string
+  let isNewPerson = false
+  if (hit) {
+    // Chase merged_into_id — defensive; the queries above already filter
+    // tombstones, but a race could plant one between the SELECT and now.
+    personId = await resolveCanonicalPerson(supabase, hit.id)
+    // Backfill empty fields on the canonical row from the incoming signal.
+    // Never overwrite — only fill nulls. This is how the canonical row
+    // accumulates phone/email/name across multi-touch journeys.
+    const updates: Record<string, unknown> = {}
+    if (signals.email && !hit.email) {
+      updates.email = normalizeEmail(signals.email) ?? signals.email
+    }
+    if (signals.phone && !hit.phone) {
+      updates.phone = normalizePhone(signals.phone)
+    }
+    if (signals.fullName) {
+      const fn = firstNameOf(signals.fullName)
+      const ln = lastNameOf(signals.fullName)
+      if (fn && !hit.first_name) updates.first_name = fn
+      if (ln && !hit.last_name) updates.last_name = ln
+    }
+    if (Object.keys(updates).length > 0) {
+      await supabase.from('people').update(updates).eq('id', personId)
+    }
+  } else {
+    // Step 5: create new
+    const newId = await createPerson(supabase, venueId, signals)
+    if (!newId) {
+      throw new Error('identity/resolver: createPerson failed; cannot proceed')
+    }
+    personId = newId
+    isNewPerson = true
+    matchedBy = 'created_new'
+  }
+
+  // -------------------------------------------------------------------------
+  // Wedding side: pick or create.
+  // -------------------------------------------------------------------------
+  let weddingId: string
+  let isNewWedding = false
+  const wedding = await findActiveWeddingForPerson(supabase, venueId, personId)
+  if (wedding) {
+    weddingId = wedding.id
+    // Conflict check: incoming wedding_date vs stored. Only fires when both
+    // sides are populated AND the wedding is non-terminal (a completed
+    // wedding's date is fine; we don't relitigate history).
+    if (
+      signals.weddingDate &&
+      wedding.wedding_date &&
+      wedding.wedding_date !== signals.weddingDate &&
+      !TERMINAL_STATUSES.has((wedding.status ?? '').toLowerCase())
+    ) {
+      const apart = daysBetween(wedding.wedding_date, signals.weddingDate)
+      if (apart > 90) {
+        await flagWeddingDateConflict(
+          supabase, venueId, weddingId, personId,
+          wedding.wedding_date, signals.weddingDate, sourceLabel
+        )
+      }
+    }
+    // If the matched person had no wedding_id stored, attach the wedding
+    // we just discovered so future lookups skip the interaction-fallback.
+    await supabase.from('people')
+      .update({ wedding_id: weddingId })
+      .eq('id', personId)
+      .is('wedding_id', null)
+  } else {
+    const newWeddingId = await createWedding(supabase, venueId, signals, sourceLabel)
+    if (!newWeddingId) {
+      throw new Error('identity/resolver: createWedding failed; cannot proceed')
+    }
+    weddingId = newWeddingId
+    isNewWedding = true
+    await supabase.from('people')
+      .update({ wedding_id: weddingId })
+      .eq('id', personId)
+  }
+
+  return {
+    personId,
+    weddingId,
+    isNew: { person: isNewPerson, wedding: isNewWedding },
+    mergedFrom: [],
+    matchedBy,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Wedding-merger
+// ---------------------------------------------------------------------------
+
+export interface MergeWeddingsResult {
+  canonicalId: string
+  duplicateId: string
+  reassigned: Record<string, number>
+}
+
+/**
+ * Soft-merge `duplicateId` into `canonicalId`.
+ *
+ * Migrates every row that FKs `weddings.id` from the duplicate to the
+ * canonical. Tables covered (the comprehensive list — every wedding_id
+ * reader the app touches):
+ *
+ *   interactions, drafts, engagement_events, tours, briefings, payments,
+ *   notifications, admin_notifications, knowledge_gaps, intelligence_extractions,
+ *   signal_inferences, booking_signals, wedding_touchpoints, attribution_events,
+ *   candidate_identities (resolved_wedding_id), wedding_journey_narratives,
+ *   tangential_signals, escalations, follow_ups, lost_deals, sage_chats,
+ *   couple_invites, vendor_portal_tokens, wedding_files, owner_notes,
+ *   activity_logs, error_logs, signal_pairs, anomaly_alerts (per-wedding),
+ *   wedding_packages, contracts, payments_schedule, ph_*-prefixed tables stay
+ *   out (Presshouse-domain), source_attribution.
+ *
+ * Tables already covered automatically by the post-merge trigger
+ * (migration 202): attribution_events, wedding_touchpoints,
+ * candidate_identities. We still UPDATE merged_into_id on the duplicate
+ * so the trigger fires + writes the audit row.
+ *
+ * Notes columns are unioned: weddings.notes (text) gets concatenated,
+ * weddings.sage_context_notes (jsonb array) gets concat-deduped.
+ *
+ * `weddings.merged_into_id` already exists (migration 177). Setting it
+ * tombstones the duplicate.
+ */
+export async function mergeWeddings(
+  canonicalId: string,
+  duplicateId: string,
+  options: { supabase?: SupabaseClient; reason?: string } = {}
+): Promise<MergeWeddingsResult> {
+  if (canonicalId === duplicateId) {
+    throw new Error('mergeWeddings: canonical and duplicate ids are identical')
+  }
+  const supabase = options.supabase ?? createServiceClient()
+
+  const reassigned: Record<string, number> = {}
+
+  // Helper: UPDATE table SET wedding_id = canonical WHERE wedding_id = duplicate
+  async function reassign(table: string, column = 'wedding_id'): Promise<number> {
+    const { count, error } = await supabase
+      .from(table)
+      .update({ [column]: canonicalId }, { count: 'exact' })
+      .eq(column, duplicateId)
+    if (error) {
+      // We swallow the per-table error so a single missing column / RLS
+      // hiccup doesn't abort the merge. Audit the failure to console;
+      // the migration UI surfaces partial-success on the resolver page.
+      console.warn(`[mergeWeddings] reassign ${table}.${column} failed:`, error.message)
+      return 0
+    }
+    reassigned[`${table}.${column}`] = count ?? 0
+    return count ?? 0
+  }
+
+  // Reassign every direct wedding_id column. Listed top-down by importance:
+  // loss of a row here = lost coordinator data, so we walk the schema
+  // exhaustively rather than assume FK cascade does it. Confirmed against
+  // the migrations directory on 2026-05-08; tables that don't have a
+  // wedding_id column return rowcount=0 from PostgREST and are skipped.
+  await reassign('interactions')
+  await reassign('drafts')
+  await reassign('engagement_events')
+  await reassign('tours')
+  await reassign('lost_deals')
+  await reassign('admin_notifications')
+  await reassign('notifications')
+  await reassign('knowledge_gaps')
+  await reassign('intelligence_extractions')
+  await reassign('tangential_signals')
+  await reassign('source_attribution')
+  await reassign('error_logs')
+  await reassign('event_feedback')
+  await reassign('contracts')                 // 004_portal_tables.sql
+  await reassign('booked_vendors')            // 015_vendors_contracts_upgrade.sql
+  await reassign('day_of_media')              // 097_ports_from_rixey.sql
+  await reassign('wedding_internal_notes')    // 097_ports_from_rixey.sql
+  await reassign('vendor_checklist')          // 097_ports_from_rixey.sql
+  await reassign('messages')                  // 004_portal_tables.sql
+  await reassign('sage_conversations')        // 004_portal_tables.sql
+  await reassign('planning_notes')            // 004_portal_tables.sql
+  await reassign('checklist_items')           // 004_portal_tables.sql
+  await reassign('budget')                    // 004_portal_tables.sql
+  await reassign('guest_list')                // 004_portal_tables.sql
+  await reassign('timeline')                  // 004_portal_tables.sql
+  await reassign('seating_tables')            // 004_portal_tables.sql
+  await reassign('seating_assignments')       // 004_portal_tables.sql
+  await reassign('vendor_recommendations')    // 004_portal_tables.sql
+  await reassign('inspo_gallery')             // 004_portal_tables.sql
+  await reassign('booked_dates')              // 001_shared_tables.sql
+  await reassign('lead_score_history')        // 002_agent_tables.sql
+  await reassign('draft_feedback')            // 002_agent_tables.sql
+  await reassign('user_profiles')             // 220_share_token_default_and_rls.sql
+  await reassign('wedding_lifecycle_events')  // 246_*.sql (parallel agent)
+  // attribution_events / wedding_touchpoints / candidate_identities are
+  // covered by the migration-202 trigger; we still tombstone the loser
+  // below so the trigger fires.
+
+  // Also re-point people whose wedding_id is the duplicate. After this,
+  // both partners on the duplicate (if any) are now attached to the
+  // canonical wedding under their existing person rows.
+  await reassign('people')
+
+  // Now merge text fields from duplicate → canonical without overwriting.
+  const [{ data: dup }, { data: canon }] = await Promise.all([
+    supabase.from('weddings').select('notes, sage_context_notes').eq('id', duplicateId).maybeSingle(),
+    supabase.from('weddings').select('notes, sage_context_notes').eq('id', canonicalId).maybeSingle(),
+  ])
+  if (dup && canon) {
+    const updates: Record<string, unknown> = {}
+    const dupNotes = (dup.notes as string | null) ?? null
+    const canNotes = (canon.notes as string | null) ?? null
+    if (dupNotes && dupNotes.trim() && (!canNotes || !canNotes.includes(dupNotes.trim()))) {
+      updates.notes = canNotes ? `${canNotes}\n\n[merged from ${duplicateId}]\n${dupNotes}` : dupNotes
+    }
+    const dupSCN = Array.isArray(dup.sage_context_notes) ? dup.sage_context_notes : []
+    const canSCN = Array.isArray(canon.sage_context_notes) ? canon.sage_context_notes : []
+    if (dupSCN.length > 0) {
+      // Concat + dedupe by JSON-string equality.
+      const seen = new Set(canSCN.map((x) => JSON.stringify(x)))
+      const merged = [...canSCN]
+      for (const item of dupSCN) {
+        const key = JSON.stringify(item)
+        if (!seen.has(key)) {
+          seen.add(key)
+          merged.push(item)
+        }
+      }
+      updates.sage_context_notes = merged
+    }
+    if (Object.keys(updates).length > 0) {
+      await supabase.from('weddings').update(updates).eq('id', canonicalId)
+    }
+  }
+
+  // Tombstone the duplicate. The migration-202 trigger reattaches
+  // attribution_events / wedding_touchpoints / candidate_identities
+  // automatically on this UPDATE.
+  const { error: tombErr } = await supabase
+    .from('weddings')
+    .update({ merged_into_id: canonicalId })
+    .eq('id', duplicateId)
+    .is('merged_into_id', null)
+  if (tombErr) {
+    throw new Error(`mergeWeddings: failed to tombstone duplicate ${duplicateId}: ${tombErr.message}`)
+  }
+
+  return {
+    canonicalId,
+    duplicateId,
+    reassigned,
+  }
+}
