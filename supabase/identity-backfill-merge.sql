@@ -106,22 +106,40 @@ BEGIN
          AND v_loser_wedding <> v_canonical_wedding
       THEN
         -- Reassign every wedding_id-keyed row from the loser wedding to
-        -- the canonical wedding. List mirrors src/lib/services/identity/
-        -- resolver.ts mergeWeddings(). Tables that don't have wedding_id
-        -- (most won't be hit by this query) are no-ops.
-        UPDATE public.interactions SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-        UPDATE public.drafts SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-        UPDATE public.engagement_events SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-        UPDATE public.tours SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-        UPDATE public.admin_notifications SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-        -- public.notifications has no wedding_id column (mig 017 schema is venue + user only). Skip.
-        UPDATE public.knowledge_gaps SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-        UPDATE public.intelligence_extractions SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-        UPDATE public.tangential_signals SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-        UPDATE public.error_logs SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-        UPDATE public.event_feedback SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-        UPDATE public.lost_deals SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-        UPDATE public.source_attribution SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
+        -- the canonical wedding. The candidate-table list below is what
+        -- the resolver's mergeWeddings() walks; we introspect
+        -- information_schema before each UPDATE so a table that does NOT
+        -- carry wedding_id (notifications / knowledge_gaps /
+        -- tangential_signals / source_attribution / error_logs /
+        -- draft_feedback / user_profiles) is silently skipped instead
+        -- of throwing 42703 and aborting the whole transaction.
+        DECLARE
+          v_t text;
+          v_candidate_tables text[] := ARRAY[
+            'interactions','drafts','engagement_events','tours','lost_deals',
+            'admin_notifications','notifications','knowledge_gaps',
+            'intelligence_extractions','tangential_signals','source_attribution',
+            'error_logs','event_feedback','contracts','booked_vendors',
+            'day_of_media','wedding_internal_notes','vendor_checklist',
+            'messages','sage_conversations','planning_notes','checklist_items',
+            'budget','guest_list','timeline','seating_tables',
+            'seating_assignments','vendor_recommendations','inspo_gallery',
+            'booked_dates','lead_score_history','draft_feedback',
+            'wedding_lifecycle_events'
+          ];
+        BEGIN
+          FOREACH v_t IN ARRAY v_candidate_tables LOOP
+            IF EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'public'
+                AND table_name = v_t
+                AND column_name = 'wedding_id'
+            ) THEN
+              EXECUTE format('UPDATE public.%I SET wedding_id = $1 WHERE wedding_id = $2', v_t)
+                USING v_canonical_wedding, v_loser_wedding;
+            END IF;
+          END LOOP;
+        END;
         -- Tombstone the loser wedding. The migration-202 trigger
         -- reattaches attribution_events / wedding_touchpoints /
         -- candidate_identities to the canonical automatically.
@@ -207,21 +225,35 @@ BEGIN
     v_loser_wedding := r.loser_id;
     IF v_canonical_wedding = v_loser_wedding THEN CONTINUE; END IF;
 
-    -- Reassign FK-referencing rows. Same list as Pass A.
-    UPDATE public.interactions SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.drafts SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.engagement_events SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.tours SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.admin_notifications SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.notifications SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.knowledge_gaps SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.intelligence_extractions SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.tangential_signals SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.error_logs SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.event_feedback SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.lost_deals SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.source_attribution SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-    UPDATE public.people SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
+    -- Reassign FK-referencing rows. Same introspection-guarded loop as
+    -- Pass A so missing wedding_id columns are silently skipped.
+    DECLARE
+      v_t text;
+      v_candidate_tables text[] := ARRAY[
+        'interactions','drafts','engagement_events','tours','lost_deals',
+        'admin_notifications','notifications','knowledge_gaps',
+        'intelligence_extractions','tangential_signals','source_attribution',
+        'error_logs','event_feedback','contracts','booked_vendors',
+        'day_of_media','wedding_internal_notes','vendor_checklist',
+        'messages','sage_conversations','planning_notes','checklist_items',
+        'budget','guest_list','timeline','seating_tables',
+        'seating_assignments','vendor_recommendations','inspo_gallery',
+        'booked_dates','lead_score_history','draft_feedback',
+        'wedding_lifecycle_events','people'
+      ];
+    BEGIN
+      FOREACH v_t IN ARRAY v_candidate_tables LOOP
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = v_t
+            AND column_name = 'wedding_id'
+        ) THEN
+          EXECUTE format('UPDATE public.%I SET wedding_id = $1 WHERE wedding_id = $2', v_t)
+            USING v_canonical_wedding, v_loser_wedding;
+        END IF;
+      END LOOP;
+    END;
 
     -- Tombstone the loser; trigger handles attribution / touchpoints / candidates.
     UPDATE public.weddings
