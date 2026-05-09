@@ -886,6 +886,35 @@ export async function generateFollowUp(
     }
   }
 
+  // Continuous-enrichment auto-context (migration 253). Soft-context the
+  // AI extracted across emails / brain-dumps / tour transcripts. Top 5
+  // active, pinned first. Sage uses for tone, never quotes verbatim.
+  // 2026-05-09 user mandate.
+  try {
+    const { data: autoCtxRows } = await supabase
+      .from('wedding_auto_context')
+      .select('body, category, pinned')
+      .eq('wedding_id', weddingId)
+      .eq('is_active', true)
+      .order('pinned', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(5)
+    const autoCtx = ((autoCtxRows ?? []) as Array<{
+      body: string
+      category: string | null
+      pinned: boolean
+    }>)
+    if (autoCtx.length > 0) {
+      contextBlock += `\n\nSoft context (AI + coordinator knowledge of this couple, do NOT quote verbatim):`
+      for (const c of autoCtx) {
+        const tag = c.pinned ? '[pinned] ' : ''
+        contextBlock += `\n- ${tag}(${c.category ?? 'misc'}) ${c.body}`
+      }
+    }
+  } catch {
+    // Best-effort.
+  }
+
   if (lastInteraction) {
     contextBlock += `\n\n## LAST EMAIL:\nSubject: ${lastInteraction.subject ?? '(no subject)'}\nDirection: ${lastInteraction.direction}\nPreview: ${(lastInteraction.body_preview as string)?.slice(0, 300) ?? ''}`
   }

@@ -195,6 +195,14 @@ interface WeddingContext {
   budgetSpent: number | null
   checklistTotal: number
   checklistComplete: number
+  /** Soft-context observations from the continuous profile-enrichment
+   *  pipeline (migration 253). Pinned first, then most-recent active. */
+  autoContext: Array<{
+    body: string
+    category: string
+    pinned: boolean
+    source: string
+  }>
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +285,31 @@ export async function getWeddingContext(weddingId: string): Promise<WeddingConte
   const venueName =
     (wedding.venues as unknown as { name: string } | null)?.name ?? 'the venue'
 
+  // Auto-context notes (migration 253) — soft-context observations the
+  // continuous profile-enrichment pipeline pulled from emails, brain-dumps,
+  // and tour transcripts. Pinned first, then most-recent active. Tagged
+  // for the brain so Sage uses them for tone/empathy without echoing.
+  // 2026-05-09 user mandate.
+  const { data: autoCtxRows } = await supabase
+    .from('wedding_auto_context')
+    .select('body, category, source, pinned, created_at')
+    .eq('wedding_id', weddingId)
+    .eq('is_active', true)
+    .order('pinned', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(10)
+  const autoContext = ((autoCtxRows ?? []) as Array<{
+    body: string
+    category: string | null
+    source: string
+    pinned: boolean
+  }>).map((r) => ({
+    body: r.body,
+    category: r.category ?? 'misc',
+    pinned: r.pinned === true,
+    source: r.source,
+  }))
+
   return {
     coupleName: partner1
       ? `${partner1.first_name} ${partner1.last_name}`
@@ -293,6 +326,7 @@ export async function getWeddingContext(weddingId: string): Promise<WeddingConte
     budgetSpent: budgetSpent > 0 ? budgetSpent : null,
     checklistTotal: checklistTotal ?? 0,
     checklistComplete: checklistComplete ?? 0,
+    autoContext,
   }
 }
 
@@ -564,6 +598,21 @@ export async function generateSageResponse(
     if (weddingContext.checklistTotal > 0) {
       parts.push(
         `Checklist: ${weddingContext.checklistComplete}/${weddingContext.checklistTotal} complete`
+      )
+    }
+
+    // Soft context (coordinator + AI knowledge of this couple, do NOT
+    // quote verbatim). Pulled from wedding_auto_context — life mentions,
+    // mood, vendor preferences, family dynamics, dietary asks. Sage
+    // uses these for tone/empathy. Pinned items always come first; the
+    // loader already sorted them. Migration 253 / 2026-05-09.
+    if (weddingContext.autoContext.length > 0) {
+      const lines = weddingContext.autoContext.map((c) => {
+        const tag = c.pinned ? '[pinned] ' : ''
+        return `- ${tag}(${c.category}) ${c.body}`
+      })
+      parts.push(
+        `Soft context (coordinator + AI knowledge of this couple, do NOT quote verbatim):\n${lines.join('\n')}`,
       )
     }
 

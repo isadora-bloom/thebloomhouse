@@ -59,6 +59,7 @@ import { JourneyNarrative } from '@/components/agent/journey-narrative'
 import { TourInsightsPanel } from '@/components/agent/tour-insights-panel'
 import { CommitmentSignalsPanel } from '@/components/agent/commitment-signals-panel'
 import { HeatHistoryPanel } from '@/components/agent/heat-history-panel'
+import { AutoContextPanel } from '@/components/intel/auto-context-panel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1444,6 +1445,13 @@ export default function ClientProfilePage() {
               </div>
             </div>
           )}
+
+          {/* What we know about this couple — auto-context note feed
+              from the continuous profile-enrichment pipeline (mig 253).
+              Renders above Planning Notes because it's the broader
+              soft-context view; planningNotes are sage-conversation
+              extractions only. 2026-05-09. */}
+          <AutoContextPanel weddingId={weddingId} />
 
           {/* Planning Notes (extracted from Sage conversations) */}
           {planningNotes.length > 0 && (

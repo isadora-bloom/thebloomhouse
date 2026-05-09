@@ -2022,6 +2022,31 @@ export async function processIncomingEmail(
     })()
   }
 
+  // 2026-05-09 user mandate: continuous profile enrichment + soft-context
+  // notes. Sister service to name-upgrade. Picks up the BROADER profile
+  // fields (phone, employer, hometown, dietary_summary, family_context,
+  // guest_count_estimate refinements) AND the soft-context layer (life
+  // mentions, mood, vendor preferences). Cost-ceiling gated inside the
+  // service; tier-1 PII; never blocks the pipeline.
+  //
+  // Fire-and-forget after name-upgrade so the enrichment service sees
+  // the upgraded names if/when name-upgrade promoted any. The two run in
+  // sequence because they share the same wedding row; we don't want
+  // them racing on the people row update.
+  if (weddingId) {
+    void (async () => {
+      try {
+        const { enrichProfileFromTouchpoints } = await import('@/lib/services/identity/profile-enrichment')
+        await enrichProfileFromTouchpoints(weddingId, {
+          trigger: 'pipeline_email',
+          correlationId: correlationId ?? null,
+        })
+      } catch (err) {
+        console.warn('[pipeline] profile-enrichment failed:', err instanceof Error ? err.message : err)
+      }
+    })()
+  }
+
   // F6: classifier-derived heat signals. The router-brain already reads
   // the body, so we use its structured output instead of re-regexing for
   // tour requests, commitment phrases, or family mentions. Each fires as

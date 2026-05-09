@@ -145,7 +145,7 @@ export async function extractTourTranscript(
   // 1. Load tour
   const { data: tour, error: tourErr } = await supabase
     .from('tours')
-    .select('id, venue_id, transcript, attendees')
+    .select('id, venue_id, wedding_id, transcript, attendees')
     .eq('id', tourId)
     .maybeSingle()
 
@@ -248,6 +248,30 @@ Return valid JSON with no prose, no markdown, no commentary.`
         err instanceof Error ? err.message : err
       )
     }
+  }
+
+  // 6. Continuous profile enrichment. Tour transcripts carry the richest
+  // soft-context signal Bloom ever sees (in-person conversation, family
+  // mentioned, mood discussed, vendor preferences voiced). Fire the
+  // enrichment service so this tour's signal lands in
+  // wedding_auto_context + the structured profile fields. Tier-1 content
+  // gating + cost-ceiling gating happen inside the service. Best-effort.
+  // 2026-05-09.
+  const tourWeddingId = (tour as { wedding_id?: string | null }).wedding_id ?? null
+  if (tourWeddingId) {
+    void (async () => {
+      try {
+        const { enrichProfileFromTouchpoints } = await import(
+          '@/lib/services/identity/profile-enrichment'
+        )
+        await enrichProfileFromTouchpoints(tourWeddingId, { trigger: 'tour_transcript' })
+      } catch (err) {
+        console.warn(
+          '[tour-transcript-extract] profile-enrichment failed:',
+          err instanceof Error ? err.message : err,
+        )
+      }
+    })()
   }
 
   return parsed

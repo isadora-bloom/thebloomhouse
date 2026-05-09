@@ -265,6 +265,39 @@ async function loadWeddingContext(weddingId: string): Promise<string> {
     }
   }
 
+  // Continuous-enrichment auto-context (migration 253). Soft-context the
+  // AI extracted from emails / brain-dumps / tour transcripts: life
+  // mentions, mood, vendor prefs, dietary, cultural significance.
+  // Pinned-first, last 10 active. Tagged for the brain so it informs
+  // tone/empathy without echoing back. 2026-05-09 user mandate.
+  try {
+    const { data: autoCtxRows } = await supabase
+      .from('wedding_auto_context')
+      .select('body, category, pinned')
+      .eq('wedding_id', weddingId)
+      .eq('is_active', true)
+      .order('pinned', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(10)
+    const autoCtx = ((autoCtxRows ?? []) as Array<{
+      body: string
+      category: string | null
+      pinned: boolean
+    }>)
+    if (autoCtx.length > 0) {
+      const lines = autoCtx.map((c) => {
+        const tag = c.pinned ? '[pinned] ' : ''
+        return `- ${tag}(${c.category ?? 'misc'}) ${c.body}`
+      })
+      parts.push(
+        `Soft context (AI + coordinator knowledge of this couple, do NOT quote verbatim):\n${lines.join('\n')}`,
+      )
+    }
+  } catch {
+    // Best-effort. The auto-context is enrichment, not gate-quality
+    // signal — failing to load it must not block draft generation.
+  }
+
   // Check how close the wedding is
   if (wedding.wedding_date) {
     const weddingDate = new Date(wedding.wedding_date as string)

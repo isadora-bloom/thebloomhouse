@@ -267,6 +267,24 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       parse_result: { ...pr, confirmed_at: new Date().toISOString() },
       routed_to: [{ table: 'weddings', id: proposedNote.weddingId, action: 'append_sage_context_note' }],
     }).eq('id', id)
+
+    // 2026-05-09 user mandate: continuous profile enrichment. The brain-
+    // dump confirm path means a coordinator just told us something new
+    // about this couple — the perfect moment to also re-scan for soft
+    // context the body extractor may have missed and any structured
+    // fields the brain-dump narrative implies. Best-effort, never block
+    // the resolve response.
+    void (async () => {
+      try {
+        const { enrichProfileFromTouchpoints } = await import('@/lib/services/identity/profile-enrichment')
+        await enrichProfileFromTouchpoints(proposedNote.weddingId, {
+          trigger: 'brain_dump_confirm',
+        })
+      } catch (err) {
+        console.warn('[brain-dump/resolve] profile-enrichment failed:', err instanceof Error ? err.message : err)
+      }
+    })()
+
     const next = nextHrefFor({ intent: 'client_note', weddingId: proposedNote.weddingId })
     return NextResponse.json({
       id,
