@@ -18,6 +18,12 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 
+/** Prompt revision identifier. See PROMPTS-CHANGELOG.md / OPS-21.5.1.
+ *  v1.0 (LLM-CALL-INVENTORY backfill): initial versioning for the
+ *  weekly-digest executive-summary call. Was previously logging
+ *  api_costs.prompt_version=NULL. */
+export const WEEKLY_DIGEST_PROMPT_VERSION = 'weekly-digest.prompt.v1.0'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -666,6 +672,7 @@ Generate the executive summary.`,
       temperature: 0.3,
       venueId,
       taskType: 'weekly_digest_summary',
+      promptVersion: WEEKLY_DIGEST_PROMPT_VERSION,
     })
 
     return result.summary

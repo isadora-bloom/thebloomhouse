@@ -11,6 +11,13 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 
+/** Prompt revision identifier. See PROMPTS-CHANGELOG.md / OPS-21.5.1.
+ *  v1.0 (LLM-CALL-INVENTORY): initial versioning plus Sonnet to Haiku
+ *  tier demotion. Bounded extraction with closed REVIEW_THEMES enum;
+ *  sibling voice/gmail-backfill already runs on Haiku for the same
+ *  shape. */
+export const REVIEW_LANGUAGE_PROMPT_VERSION = 'review-language.prompt.v1.0'
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -103,6 +110,10 @@ export async function extractReviewLanguage(
     temperature: 0.2,
     venueId,
     taskType: 'review_language_extraction',
+    // Haiku per LLM-CALL-INVENTORY tier-correctness sweep: bounded
+    // extraction with closed REVIEW_THEMES enum, mirrors voice/gmail-backfill.
+    tier: 'haiku',
+    promptVersion: REVIEW_LANGUAGE_PROMPT_VERSION,
   })
 
   const phrases = (result.phrases ?? [])

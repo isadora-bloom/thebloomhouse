@@ -46,8 +46,12 @@ import { redactError } from '@/lib/observability/redact'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1.
  *  v1.0 (T5-Rixey-JJ): initial classifier covering migration 176's
- *  extended enum. */
-export const BRAIN_PROMPT_VERSION = 'cancellation-classifier.prompt.v1.0'
+ *  extended enum.
+ *  v1.1 (LLM-CALL-INVENTORY tier-correctness sweep): demoted Sonnet to
+ *  Haiku. Bounded 9-bucket enum with closed schema; sibling Haiku
+ *  classifiers (router-brain, lifecycle.signal-detector) handle the
+ *  same shape. */
+export const BRAIN_PROMPT_VERSION = 'cancellation-classifier.prompt.v1.1'
 
 // ---------------------------------------------------------------------------
 // Enum (mirrors migration 176's CHECK)
@@ -361,7 +365,7 @@ async function classifyViaLlm(
     aiCacheKey({
       systemPrompt: LLM_SYSTEM_PROMPT,
       userPrompt: normalised,
-      model: 'sonnet',
+      model: 'haiku',
       temperature: 0,
       promptVersion: BRAIN_PROMPT_VERSION,
     })
@@ -378,6 +382,9 @@ async function classifyViaLlm(
         // Tier 1: free-text reason can include couple PII / family
         // context. Same treatment as tour-cancellation-reason.ts.
         contentTier: 1,
+        // Haiku per LLM-CALL-INVENTORY tier-correctness sweep: bounded
+        // 9-bucket enum, same shape as router-brain + lifecycle signal.
+        tier: 'haiku',
         promptVersion: BRAIN_PROMPT_VERSION,
       }),
     )

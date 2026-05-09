@@ -26,6 +26,13 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 import { redactError } from '@/lib/observability/redact'
 
+/** Prompt revision identifier. See PROMPTS-CHANGELOG.md / OPS-21.5.1.
+ *  v1.0 (LLM-CALL-INVENTORY): initial versioning plus Sonnet to Haiku
+ *  tier demotion. Bounded extraction with closed REVIEW_THEMES enum;
+ *  identical shape to intel/review-language and voice/gmail-backfill
+ *  (already Haiku). */
+export const TRANSCRIPT_VOICE_LEARNING_PROMPT_VERSION = 'transcript-voice-learning.prompt.v1.0'
+
 // ---------------------------------------------------------------------------
 // Public constants & types
 // ---------------------------------------------------------------------------
@@ -117,6 +124,10 @@ async function extractFromTranscript(
       // health, finances during tours). OpenAI fallback uses store:false.
       // OPS-21.3.5.
       contentTier: 1,
+      // Haiku per LLM-CALL-INVENTORY tier-correctness sweep: bounded
+      // extraction with closed REVIEW_THEMES enum, mirrors voice/gmail-backfill.
+      tier: 'haiku',
+      promptVersion: TRANSCRIPT_VOICE_LEARNING_PROMPT_VERSION,
     })
 
     return (result.phrases ?? [])

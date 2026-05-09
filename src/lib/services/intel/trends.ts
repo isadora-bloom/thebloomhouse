@@ -14,6 +14,12 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 
+/** Prompt revision identifier. See PROMPTS-CHANGELOG.md / OPS-21.5.1.
+ *  v1.0 (LLM-CALL-INVENTORY backfill): initial versioning for the
+ *  trend-recommendations generator. Was previously logging
+ *  api_costs.prompt_version=NULL. */
+export const TRENDS_RECOMMENDATIONS_PROMPT_VERSION = 'trends-recommendations.prompt.v1.0'
+
 // ---------------------------------------------------------------------------
 // SerpAPI in-memory cache (24h TTL — OPS-21.4.5)
 //
@@ -458,6 +464,7 @@ Generate recommendations based on these deviations.`,
     temperature: 0.4,
     venueId,
     taskType: 'trend_recommendations',
+    promptVersion: TRENDS_RECOMMENDATIONS_PROMPT_VERSION,
   })
 
   if (!Array.isArray(recommendations) || recommendations.length === 0) {

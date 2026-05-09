@@ -21,6 +21,35 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 - **MINOR** — wording / instruction refinement that holds the
   contract. Bumps still get a changelog row.
 
+## 2026-05-09 (evening — couple-facing prompt unification)
+
+Canonical couple-facing prompt assembler (`src/lib/ai/couple-prompt.ts`)
+landed. One entry point (`buildCouplePrompt`) replaces the five different
+prompt assemblies catalogued in `LLM-CALL-INVENTORY.md` "Couple-facing
+observation". Every couple-facing surface now layers UNIVERSAL_RULES +
+COUPLE_RULES (new constant in `src/config/prompts/couple-rules.ts`) +
+buildPersonalityPrompt + per-task block + (optional) wedding context +
+(optional) file context. `loadPersonalityDataCached` is reused so the
+email-reply Sage and the couple-portal Sage now share one cache. Tier
+policy: tier-1 when `weddingId` set OR `fileContext` may carry PII;
+tier-2 otherwise (public preview + onboarding test-draft).
+
+Migrated call sites: 5 contract calls (`api/couple/contracts/route.ts`),
+1 portal file-extraction (`api/portal/sage/route.ts`), 1 event-feedback
+proactive draft (`api/portal/event-feedback/route.ts`), 1 public sage
+preview (`api/public/sage-preview/route.ts`), 1 onboarding test-draft
+(`api/onboarding/test-draft/route.ts`), and the chat path
+(`brain/sage.ts`, version sourced from the assembler).
+
+| Module | Old | New | Reason |
+|--------|-----|-----|--------|
+| sage-brain | v1.2 | couple-chat.prompt.v2 | Sage chat now routes through `buildCouplePrompt({task:'chat'})`. Floor (UNIVERSAL_RULES + new COUPLE_RULES + personality + Sage task scaffold) is assembled by the canonical helper; chat-specific KB / intel / wedding / file blocks still append after. v2 jump captures the introduction of COUPLE_RULES (tenant-isolation, contract-quote-only-from-fileContext, first-name greeting, sign-off as ai_name) into Sage's input. Behavior preserved: timeline / budget / checklist context still pass, prompt-injection sanitizer unchanged, sign-off post-processor unchanged. |
+| couple-contract | — | v1 | NEW. Used by 5 calls in `api/couple/contracts/route.ts` (vision OCR ×2, contract analysis, planning extraction, contract Q&A) and the PDF-binary fallback note. Prepends `TASK_CONTRACT_ANALYSIS` (the existing Sage contract scaffold with its lawyer disclaimer) so the same boundaries Sage already gives in chat carry over. fileContext block carries the contract text the model is allowed to cite. tier-1 (wedding-linked + document PII). |
+| couple-event-feedback | — | v1 | NEW. Used by `api/portal/event-feedback/route.ts` proactive review-response draft. Pre-fix opened with `You are a professional wedding venue coordinator` — no ai_name, no UNIVERSAL_RULES. Now layers full venue voice + COUPLE_RULES so the draft sounds like the same configured concierge across the venue's surfaces. tier-1 (wedding-linked partner names + guest count). |
+| couple-file-extraction | — | v1 | NEW. Used by `api/couple/contracts/route.ts` vision OCR (×2) and `api/portal/sage/route.ts` file-extraction. Pre-fix opened with `You are a document text extraction specialist` — no venue identity. Now wraps OCR with the venue voice + the COUPLE_RULES floor so any commentary the model emits stays in-brand. Prepends `TASK_FILE_CHAT` so document-discussion behavior is consistent. tier-1 (couple's uploaded PII). |
+| couple-sage-preview | — | v1 | NEW. Used by `api/public/sage-preview/route.ts`. Pre-fix the public marketing-site preview was the only Sage that skipped UNIVERSAL_RULES — banned phrases + AI-disclosure rule were not enforced. Now routes through the assembler so the public preview honors the same floor as the authenticated portal Sage. tier-2 (no auth, no wedding link). Friendly 400 still fires when `ai_name` is unset to avoid a public-facing chat speaking in another venue's brand. |
+| couple-onboarding-test | — | v1 | NEW. Used by `api/onboarding/test-draft/route.ts`. Pre-fix opened with `You are an AI assistant for "${venueName}"` — no ai_name, no UNIVERSAL_RULES. Now layers full venue voice + COUPLE_RULES; in-flight wizard dial values + edited FAQs are passed as a "PREVIEW DIAL OVERRIDES" block inside taskInstructions so the test draft reflects what the wizard currently shows even before the dials are saved. tier-2 (no auth-context wedding). |
+
 ## 2026-05-05
 
 | Module | Old | New | Reason |
@@ -43,6 +72,25 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 |--------|-----|-----|--------|
 | journey-narrative | — | v1.0 | Initial versioning; closed Tier-B #75 audit gap (call landed in api_costs with prompt_version=NULL) |
 | re-engagement-drafter | — | v1.0 | Initial versioning; closed Tier-B #75 audit gap (call landed in api_costs with prompt_version=NULL) |
+
+## 2026-05-09 (afternoon: LLM-CALL-INVENTORY tier-correctness sweep + promptVersion backfill)
+
+Tier-correctness fixes from `LLM-CALL-INVENTORY.md`. Four bounded enum
+classifiers demoted Sonnet to Haiku (cost). Two judgement calls promoted
+Haiku to Sonnet (quality). Five untagged call sites backfilled with
+prompt-version constants.
+
+| Module | Old | New | Reason |
+|--------|-----|-----|--------|
+| cancellation-classifier | v1.0 | v1.1 | Tier demote Sonnet to Haiku. Bounded 9-bucket enum classifier (`weather` / `date_conflict` / `family_emergency` / `venue_concern` / `travel_blocker` / `lost_to_competitor` / `venue_unavailable` / `health_emergency` / `rescheduled` / `no_show_followup` / `other`) with closed schema and 3-level confidence. Sibling Haiku classifiers (router-brain, lifecycle.signal-detector) handle the same shape. Cache-key model id flipped from `'sonnet'` to `'haiku'` so cached responses stay tier-correct. Prompt body unchanged. |
+| tour-cancellation-reason | — | v1.0 | Initial versioning plus tier demote Sonnet to Haiku. Bounded 8-bucket enum on inbound cancel-email body. Same shape as brain/cancellation-classifier. Was previously logging api_costs.prompt_version=NULL. |
+| review-language | — | v1.0 | Initial versioning plus tier demote Sonnet to Haiku. Bounded extraction with closed `REVIEW_THEMES` enum (12 buckets). Identical shape to voice/gmail-backfill which already runs on Haiku. Was previously logging api_costs.prompt_version=NULL. |
+| transcript-voice-learning | — | v1.0 | Initial versioning plus tier demote Sonnet to Haiku. Bounded extraction over the same `REVIEW_THEMES` enum as intel/review-language. Per-tour volume is moderate; the schema is the load-bearing constraint, not free-form judgement. Was previously logging api_costs.prompt_version=NULL. |
+| risk-flags | v1.0 | v1.1 | Tier promote Haiku to Sonnet on the sentiment-scan call (line 346). The classifier weighs hesitation, comparison-shopping, and stress signals across the last 3 inbound emails. The companion narrator (line 487) is Sonnet and treats this output as load-bearing input. If classification is wrong, narration compounds the error. Narrator call left at Sonnet. (Note: subsequently rolled into the v2.0 coordinator-prompt assembler migration; tier promote preserved.) |
+| candidate-ai-adjudicator | v1.0 | v1.1 | Tier promote Haiku to Sonnet. The adjudicator weighs first-name + last-initial + state + timing + funnel-depth + recent_email_subjects text patterns ("saw you on The Knot") to pick one of 2+ weddings. A wrong call lands the wrong wedding's history on the wrong couple. Qualitative attribution, not bounded classification. The original `Sonnet was overkill` rationale assumed the schema constraint did the work; the schema is bounded but the inputs are qualitative. |
+| portal-quick-add | — | v1.0 | Initial versioning for the document-to-CSV extraction surface. Covers the docx text path (callAIJson) + vision path (callAIVision) inside `app/api/portal/quick-add/route.ts`. Was previously logging api_costs.prompt_version=NULL on both calls. |
+| weekly-digest | — | v1.0 | Initial versioning for the executive-summary call inside the weekly-digest generator (`generateDigestSummary`). Was previously logging api_costs.prompt_version=NULL. |
+| trends-recommendations | — | v1.0 | Initial versioning for the trend-recommendations generator (`generateTrendRecommendations`). Was previously logging api_costs.prompt_version=NULL. |
 
 ## 2026-05-09
 
@@ -153,7 +201,13 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
   narration generator. Sonnet-tier; deterministic fallback runs when
   cost ceiling pauses the venue.
 
-### cancellation-classifier (`cancellation-classifier.prompt.v1.0`)
+### cancellation-classifier (`cancellation-classifier.prompt.v1.1`)
+- **v1.1** (2026-05-09) — LLM-CALL-INVENTORY tier-correctness sweep.
+  Demoted Sonnet to Haiku. The classifier output is a closed 9-bucket
+  enum plus 3-level confidence; the same shape as router-brain and
+  lifecycle.signal-detector which already run on Haiku. Cache key model
+  id flipped from `'sonnet'` to `'haiku'` so cached entries stay
+  tier-correct. Prompt body unchanged.
 - **v1.0** (2026-05-02) — T5-Rixey-JJ. Free-text → enum classifier for
   tour cancellation reasons. Mirrors migration 176's extended CHECK
   enum (lost_to_competitor / venue_unavailable / health_emergency
@@ -244,7 +298,16 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
   2026-05-09: switch to all-LLM narration until cost-optimisation
   matters; option C hybrid is parked.
 
-### candidate-ai-adjudicator (`candidate-ai-adjudicator.prompt.v1.0`)
+### candidate-ai-adjudicator (`candidate-ai-adjudicator.prompt.v1.1`)
+- **v1.1** (2026-05-09) — LLM-CALL-INVENTORY tier-correctness sweep.
+  Promoted Haiku to Sonnet. Schema is bounded but inputs are qualitative:
+  first-name + last-initial + state + timing + funnel-depth +
+  recent_email_subjects text patterns ("saw you on The Knot"). A wrong
+  call lands the wrong wedding's history on the wrong couple, and the
+  cost of that error far outweighs the 12x per-call delta. The original
+  v1.0 `Sonnet was overkill` rationale assumed the schema constraint did
+  the judgement work; the inventory pass found the schema is bounded
+  but the reasoning is not.
 - **v1.0** (2026-05-05) — Initial versioning baseline. Tier 2 ambiguous-match
   adjudicator: bounded JSON schema (match_wedding_id + confidence + reasoning).
   Haiku tier per OPS-21.4.2.
@@ -287,6 +350,58 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
   drafter (email + SMS variants) for re-engagement playbook. Sonnet tier;
   tier-1 content (couple first name / state / activity history). Closes
   Tier-B #75 telemetry gap — was logging api_costs.prompt_version=NULL.
+
+### risk-flags (`risk-flags.prompt.v2.0`)
+- **v2.0** (2026-05-09) — Coordinator-prompt assembler migration. Both
+  the sentiment-scan call and the narrator call now route through the
+  canonical `buildCoordinatorPrompt` so the addressee, voice, and
+  numbers-guard discipline match every other coordinator narrator.
+  Subsumes the v1.1 tier promote below.
+- **v1.1** (2026-05-09) — LLM-CALL-INVENTORY tier-correctness sweep.
+  Sentiment-scan call (line 346) promoted Haiku to Sonnet. Classifies
+  the last 3 inbound emails as negative-or-hesitant true/false. The
+  companion narrator on line 487 stays Sonnet and treats the
+  classification as load-bearing input. Haiku errors compounded
+  through the narrator. Narrator call left unchanged. Rolled forward
+  into v2.0 above.
+- **v1.0** (2026-05-05) — Initial versioning baseline. Sentiment scan
+  plus narrator pair for couple risk-flag detection.
+
+### tour-cancellation-reason (`tour-cancellation-reason.prompt.v1.0`)
+- **v1.0** (2026-05-09) — LLM-CALL-INVENTORY backfill plus tier demote.
+  Initial versioning of the inbound-email cancel-reason classifier.
+  Haiku tier (was Sonnet by default; bounded 8-bucket enum). Sibling
+  of brain/cancellation-classifier; same shape, same enum surface,
+  applied at email-pipeline scheduling-event handling instead of
+  coordinator free-text.
+
+### review-language (`review-language.prompt.v1.0`)
+- **v1.0** (2026-05-09) — LLM-CALL-INVENTORY backfill plus tier demote.
+  Initial versioning of the per-review phrase extractor. Haiku tier
+  (was Sonnet by default; closed `REVIEW_THEMES` enum, identical shape
+  to voice/gmail-backfill).
+
+### transcript-voice-learning (`transcript-voice-learning.prompt.v1.0`)
+- **v1.0** (2026-05-09) — LLM-CALL-INVENTORY backfill plus tier demote.
+  Initial versioning of the booked-and-5-star tour transcript phrase
+  extractor. Haiku tier (was Sonnet by default; closed `REVIEW_THEMES`
+  enum, same shape as voice/gmail-backfill and intel/review-language).
+
+### portal-quick-add (`portal-quick-add.prompt.v1.0`)
+- **v1.0** (2026-05-09) — LLM-CALL-INVENTORY backfill. Initial
+  versioning of the document-to-CSV extraction surface. Covers the docx
+  text path (callAIJson) and the vision path (callAIVision) inside
+  `app/api/portal/quick-add/route.ts`.
+
+### weekly-digest (`weekly-digest.prompt.v1.0`)
+- **v1.0** (2026-05-09) — LLM-CALL-INVENTORY backfill. Initial
+  versioning for the executive-summary call inside `generateDigestSummary`
+  (`src/lib/services/intel/weekly-digest.ts`).
+
+### trends-recommendations (`trends-recommendations.prompt.v1.0`)
+- **v1.0** (2026-05-09) — LLM-CALL-INVENTORY backfill. Initial
+  versioning for the trend-recommendations generator
+  (`src/lib/services/intel/trends.ts`).
 
 ## Adding a new brain prompt
 

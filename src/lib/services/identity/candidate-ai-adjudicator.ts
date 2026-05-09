@@ -34,7 +34,7 @@ import { callAIJson } from '@/lib/ai/client'
  * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
  * See PROMPTS-CHANGELOG.md for version history.
  */
-export const CANDIDATE_ADJUDICATOR_PROMPT_VERSION = 'candidate-ai-adjudicator.prompt.v1.0'
+export const CANDIDATE_ADJUDICATOR_PROMPT_VERSION = 'candidate-ai-adjudicator.prompt.v1.1'
 
 export interface CandidateContextForAI {
   id: string
@@ -158,11 +158,13 @@ export async function adjudicateAmbiguousMatch(args: {
     return { match_wedding_id: null, confidence: 0, reasoning: 'no candidate weddings' }
   }
   const userPrompt = buildUserPrompt(candidate, candidates)
-  // Haiku tier per Playbook OPS-21.4.2 / 19.8: candidate identity
-  // adjudication is a structured classification with bounded schema
-  // (match_wedding_id + confidence + short reasoning). Sonnet was
-  // overkill — this hits per-inquiry-resolution at scale and the
-  // 12× cost diff vs Haiku adds up. ARCH-19.8-B.
+  // Sonnet per LLM-CALL-INVENTORY tier-correctness sweep (v1.1).
+  // Earlier v1.0 ran on Haiku per OPS-21.4.2 (`Sonnet was overkill`)
+  // but this is qualitative attribution: first-name + last-initial +
+  // state + timing + funnel-depth + recent_email_subjects ("saw you on
+  // The Knot"). A wrong call lands the wrong wedding's history on the
+  // wrong couple, and the cost of that error far outweighs the 12x
+  // per-call delta.
   const response = await callAIJson<AIResponse>({
     systemPrompt: SYSTEM_PROMPT,
     userPrompt,
@@ -170,7 +172,7 @@ export async function adjudicateAmbiguousMatch(args: {
     temperature: 0.1,
     venueId,
     taskType: 'tier2_adjudicator',
-    tier: 'haiku',
+    tier: 'sonnet',
     promptVersion: CANDIDATE_ADJUDICATOR_PROMPT_VERSION,
   })
   return {

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import * as XLSX from 'xlsx'
 import { callAIJson, callAIVision } from '@/lib/ai/client'
+
+/** Prompt revision identifier. See PROMPTS-CHANGELOG.md / OPS-21.5.1.
+ *  v1.0 (LLM-CALL-INVENTORY backfill): initial versioning for the
+ *  document-to-CSV extraction surface (docx text path + vision path). */
+const PORTAL_QUICK_ADD_PROMPT_VERSION = 'portal-quick-add.prompt.v1.0'
 import {
   detectDataType,
   mapColumns,
@@ -291,6 +296,7 @@ If the text contains tabular data, preserve all columns. If it's a list or form,
             temperature: 0.1,
             venueId,
             taskType: 'document_extraction',
+            promptVersion: PORTAL_QUICK_ADD_PROMPT_VERSION,
           })
 
           content = csvResult.csv || extractedText
@@ -321,6 +327,7 @@ Return ONLY the CSV text. No explanation, no markdown code blocks. Just raw CSV.
             maxTokens: 4000,
             venueId,
             taskType: 'document_extraction',
+            promptVersion: PORTAL_QUICK_ADD_PROMPT_VERSION,
           })
 
           content = extracted.text.replace(/```csv\n?/g, '').replace(/```\n?/g, '').trim()

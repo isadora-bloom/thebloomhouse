@@ -21,6 +21,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson } from '@/lib/ai/client'
 import { redactError } from '@/lib/observability/redact'
 
+/** Prompt revision identifier. See PROMPTS-CHANGELOG.md / OPS-21.5.1.
+ *  v1.0 (LLM-CALL-INVENTORY): initial versioning plus Sonnet to Haiku
+ *  tier demotion. Bounded 8-bucket enum classifier, same shape as
+ *  brain/cancellation-classifier and router-brain. */
+export const TOUR_CANCELLATION_REASON_PROMPT_VERSION = 'tour-cancellation-reason.prompt.v1.0'
+
 /**
  * Mirror migration 166's CHECK enum. Keep in sync.
  */
@@ -91,6 +97,10 @@ export async function extractCancellationReason(args: {
       taskType: 'tour_cancellation_reason_extract',
       // Tier 1: raw inbound couple email body. OPS-21.3.5.
       contentTier: 1,
+      // Haiku per LLM-CALL-INVENTORY tier-correctness sweep: bounded
+      // 8-bucket enum, sibling of brain/cancellation-classifier.
+      tier: 'haiku',
+      promptVersion: TOUR_CANCELLATION_REASON_PROMPT_VERSION,
     })
     const reason = (raw as { reason?: unknown } | null)?.reason
     if (typeof reason === 'string' && REASON_SET.has(reason)) {
