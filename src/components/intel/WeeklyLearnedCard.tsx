@@ -22,6 +22,21 @@ interface WeeklyLearnedBullet {
 interface WeeklyLearnedResponse {
   aiName: string
   bullets: WeeklyLearnedBullet[]
+  /**
+   * 3-5 sentence weekly observation composed by Sonnet from the same
+   * structured counts the bullets are derived from. Null when the LLM
+   * call failed or the cost-ceiling gate closed; the bullets stay as
+   * the safety net.
+   */
+  narrative: string | null
+  /**
+   * Provenance of the narration. When 'llm', the paragraph IS the
+   * headline content and bullets render as a smaller "by the numbers"
+   * footer. When 'template', the bullets render as the primary content
+   * (legacy behaviour) and we drop the "[Sage] learned" framing on the
+   * heading.
+   */
+  narration_source: 'llm' | 'template'
 }
 
 // ---------------------------------------------------------------------------
@@ -121,34 +136,78 @@ export function WeeklyLearnedCard() {
   if (!data) return null
 
   const aiName = data.aiName || 'Your AI assistant'
+  const isLlm = data.narration_source === 'llm' && !!data.narrative
+
+  // AI-VS-TEMPLATED-AUDIT cross-cutting recommendation: only use the
+  // anthropomorphic "[Sage] learned this week" framing when the
+  // user-visible string actually came from a callAI/callAIJson
+  // invocation. When we are showing templated count bullets (LLM
+  // failed, gate closed, no signal), drop the "learned" framing in
+  // favour of a neutral "this week" heading.
+  const heading = isLlm
+    ? `What ${aiName} noticed this week`
+    : 'This week at a glance'
 
   return (
     <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
       <div className="flex items-center gap-2 mb-4">
         <Sparkles className="w-5 h-5 text-sage-600" />
         <h2 className="font-heading text-lg font-semibold text-sage-900">
-          What {aiName} learned this week
+          {heading}
         </h2>
       </div>
 
-      <ul className="space-y-3">
-        {data.bullets.map((bullet, idx) => {
-          const Icon = iconFor(bullet.kind)
-          const textClass = bullet.empty
-            ? 'text-sage-400 italic'
-            : 'text-sage-900'
-          return (
-            <li key={`${bullet.kind}-${idx}`} className="flex items-start gap-3">
-              <Icon
-                className={`w-4 h-4 shrink-0 mt-0.5 ${bullet.empty ? 'text-sage-300' : 'text-sage-600'}`}
-              />
-              <p className={`text-sm leading-relaxed ${textClass}`}>
-                {bullet.text}
+      {isLlm && data.narrative ? (
+        <>
+          <p className="text-sm leading-relaxed text-sage-900 whitespace-pre-line">
+            {data.narrative}
+          </p>
+          {data.bullets.some((b) => !b.empty) && (
+            <div className="mt-5 pt-4 border-t border-border">
+              <p className="text-xs uppercase tracking-wide text-sage-500 mb-2">
+                By the numbers
               </p>
-            </li>
-          )
-        })}
-      </ul>
+              <ul className="space-y-2">
+                {data.bullets
+                  .filter((b) => !b.empty)
+                  .map((bullet, idx) => {
+                    const Icon = iconFor(bullet.kind)
+                    return (
+                      <li
+                        key={`${bullet.kind}-${idx}`}
+                        className="flex items-start gap-3"
+                      >
+                        <Icon className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sage-500" />
+                        <p className="text-xs leading-relaxed text-sage-700">
+                          {bullet.text}
+                        </p>
+                      </li>
+                    )
+                  })}
+              </ul>
+            </div>
+          )}
+        </>
+      ) : (
+        <ul className="space-y-3">
+          {data.bullets.map((bullet, idx) => {
+            const Icon = iconFor(bullet.kind)
+            const textClass = bullet.empty
+              ? 'text-sage-400 italic'
+              : 'text-sage-900'
+            return (
+              <li key={`${bullet.kind}-${idx}`} className="flex items-start gap-3">
+                <Icon
+                  className={`w-4 h-4 shrink-0 mt-0.5 ${bullet.empty ? 'text-sage-300' : 'text-sage-600'}`}
+                />
+                <p className={`text-sm leading-relaxed ${textClass}`}>
+                  {bullet.text}
+                </p>
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </div>
   )
 }

@@ -44,6 +44,19 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 | journey-narrative | — | v1.0 | Initial versioning; closed Tier-B #75 audit gap (call landed in api_costs with prompt_version=NULL) |
 | re-engagement-drafter | — | v1.0 | Initial versioning; closed Tier-B #75 audit gap (call landed in api_costs with prompt_version=NULL) |
 
+## 2026-05-09
+
+| Module | Old | New | Reason |
+|--------|-----|-----|--------|
+| weekly-learned | — | v1 | AI-VS-TEMPLATED-AUDIT finding #5. Replaces the deterministic "[Sage] learned 5 voice preferences this week" bullets with a real Sonnet-narrated 3-5 sentence weekly observation. Structured counts (voice prefs / training responses / bookings vs last week / inquiries / top source quality / strongest correlation / multi-touch journey aggregate) become INPUT to the LLM call; the model composes a coordinator-readable paragraph and the bullets become a "by the numbers" footer. taskType `weekly_learned`, tier sonnet, temperature 0.6 (warmer for narrative voice), maxTokens 360. Cost-ceiling gate before the Sonnet call; deterministic bullets render alone when the gate closes or the call fails. Response stamped with `narration_source: 'llm' \| 'template'` so the UI can drop the anthropomorphic "[Sage] learned" framing on the template path. |
+| attendee-intel | — | v1 | AI-VS-TEMPLATED-AUDIT finding #6. Replaces the hardcoded "Parents have booked at 65% vs an overall 42%" format string with a real Sonnet narration that frames the outlier as a coordinator action ("when a couple mentions parents in their inquiry, prioritise getting all attendees onto the tour calendar"). Bucket math + outlier detection stay deterministic; only the `topInsight` string changes path. taskType `attendee_intelligence_top`, tier sonnet, temperature 0.4, maxTokens 220. Cost-ceiling gate before the Sonnet call; deterministic format string preserved as the fallback. Return shape adds `top_insight_source: 'llm' \| 'template' \| null` so callers can distinguish provenance. |
+| intel-brain | v1.1 | v1.2 | TRENDS-DIAGNOSIS Fix 4 / Finding F. Sage NLQ data block now enumerates the top-5 most-recent `correlation_narration` rows so questions like "what's the macro story for May" / "did Memorial Day weekend hurt our tour conversion" surface engine-confirmed cross-channel pairs. System prompt adds CORRELATION NARRATIONS section + USE-THESE-FIRST guidance. Cultural moments / FRED deltas / calendar events were already plumbed (T5-θ.2); this closes the macro-story gap. |
+| briefings (weekly) | v1.0 | v1.1 | TRENDS-DIAGNOSIS Fix 4 / Finding F. Weekly briefing now receives a MACRO CONTEXT block (cultural moments + FRED deltas + upcoming calendar events + correlation narrations). System prompt instructs the LLM to weave the most relevant macro signal into summary + recommendations, prefer quoting correlation-narration titles over re-describing numbers, and never invent macro relationships when the block is empty. Closes YC-partner HIGH 12. |
+| briefings (monthly) | v1.0 | v1.1 | TRENDS-DIAGNOSIS Fix 4 / Finding F. Same MACRO CONTEXT plumbing as weekly; monthly system prompt directs the macro signal into strategic_recommendations specifically. |
+| cultural-moments-llm-propose | — | v1 | TRENDS-DIAGNOSIS Fix 3 / Finding A. NEW judgement-tier proposer running ALONGSIDE the legacy z-score detector (cultural-moments-auto-propose). Sonnet, temp 0.4, maxTokens 800, taskType `cultural_moments_propose`. Proposes 0-3 NAMED cultural moments per venue per day with evidence URLs and dateable windows. Inserts as `proposed_by='ai_llm'` (CHECK constraint extended in migration 250). Cron: `cultural_moments_llm_propose` runs at 09:30 UTC daily — different time from the statistical proposer (08:15) so the two don't compete. Cost ceiling: ~$0.01/venue/day. |
+| weather-cancellation-narration | — | v1 | AI-VS-TEMPLATED-AUDIT Finding #3. NEW Sonnet narrator over the deterministic weather x cancellation detector in `insights/weather-cancellation.ts`. Pre-fix the file wrote `insight_type='correlation_narration'` rows with hardcoded title/body/action templates, impersonating real LLM-narrated `correlation_narration` rows from `correlation-narration.ts` on `/intel/insights`. Now the deterministic detector (rain-day vs baseline cancel-rate buckets) builds a struct of the numbers and the Sonnet narrator composes coordinator-voice {title, body, action} from it. callAIJson, tier 'sonnet', temp 0.4, maxTokens 360, taskType `weather_cancellation_narration`. Numbers-guard via `insights/persist.ts` rejects any number not in the struct. Persist path moves from a direct `intelligence_insights` insert to `persistInsight` (cache-key + numbers-guard contract). Fallback: deterministic template fires when `gateForBrainCall` closes (cost ceiling) OR Sonnet fails OR numbers-guard rejects; the template is constructed from struct numbers only and is guaranteed to pass the guard. Provenance recorded on `data_points.narration_source` ('ai' / 'template'). |
+| availability-anomaly-explanation | — | v1 | AI-VS-TEMPLATED-AUDIT Finding #4. NEW Sonnet narrator for `detectAvailabilityAnomalies` in `intel/anomaly-detection.ts`. Pre-fix both branches at l. 1052-1057 hardcoded the `ai_explanation` string ("Saturdays in October are filling fast..." / "Unusually high demand for October dates...") even though the column rendered alongside real-LLM `getAIExplanation` rows from `runAnomalyDetection`. The detector still computes the anomaly (80%/60-day rule for high demand, 90%/30% rule for Saturday skew); the LLM takes the struct (fill rate %, Saturday vs weekday split, slot counts, days out) and produces a 2-3 sentence `ai_explanation` in coordinator voice. callAIJson, tier 'sonnet', temp 0.3, maxTokens 300, taskType `availability_anomaly_explanation`. Cost-ceiling gate via `gateForBrainCall`; when closed OR Sonnet fails, falls back to the original templates so behaviour at the edge is unchanged. Migration 252 adds `anomaly_alerts.explanation_source` ('ai' / 'template' / 'rule') stamped on every new write — the UI can now distinguish a Sonnet hypothesis from a template fallback. `runAnomalyDetection` also stamps the column ('ai' when the existing `getAIExplanation` returned a result, 'rule' when it failed and the column stayed NULL). |
+
 ## 2026-05-08
 
 | Module | Old | New | Reason |
@@ -93,7 +106,14 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 - **v1.0** (2026-05-01) — Initial versioning baseline. Email
   classification on Haiku (per OPS-21.4.2) with the 7-class label set.
 
-### intel-brain (`intel-brain.prompt.v1.1`)
+### intel-brain (`intel-brain.prompt.v1.2`)
+- **v1.2** (2026-05-09) — TRENDS-DIAGNOSIS Fix 4 / Finding F. Added
+  CORRELATION NARRATIONS section (top-5 by surface_priority,
+  un-expired, un-dismissed) to gatherVenueData + formatDataContext so
+  Sage can quote engine-discovered cross-channel pairs by title + r +
+  lag instead of hedging on macro-story questions. System prompt's
+  "When answering" preamble updated to point the LLM at CORRELATION
+  NARRATIONS first when macro / FRED / cultural-moment questions land.
 - **v1.1** (2026-05-02) — T5-Rixey-PP. NLQ context-loader gaps closed
   per Stream MM real-data load (Q4 "busiest tour month" returned
   ungrounded; Q1 "Google Ads ROI" needed a manual cron refresh first).
@@ -174,10 +194,29 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
   admit uncertainty when no entry matches. Haiku tier, tier-3 content
   (no PII).
 
-### briefings (`briefings.prompt.v1.0` / `briefings.monthly.v1.0`)
+### briefings (`briefings.prompt.v1.1` / `briefings.monthly.v1.1`)
+- **v1.1** (2026-05-09) — TRENDS-DIAGNOSIS Fix 4 / Finding F. Weekly +
+  monthly briefings now receive a MACRO CONTEXT block from
+  `getBriefingMacroContext` (cultural moments + FRED deltas + upcoming
+  calendar events + top-5 correlation narrations). System prompts add
+  guidance to weave the most relevant macro signal into the briefing,
+  prefer quoting correlation-narration titles over re-describing
+  numbers, and never invent macro relationships when the block is
+  empty. Closes YC-partner HIGH 12.
 - **v1.0** (2026-05-05) — Initial versioning baseline. Weekly briefing uses
   `BRIEFING_PROMPT_VERSION`; monthly uses `MONTHLY_BRIEFING_PROMPT_VERSION`.
   ANTI-19.9-A numbers-discipline guard in both prompts.
+
+### cultural-moments-llm-propose (`cultural-moments-llm-propose.v1`)
+- **v1** (2026-05-09) — TRENDS-DIAGNOSIS Fix 3 / Finding A. NEW
+  judgement-tier proposer alongside the legacy z-score detector. Sonnet
+  (Haiku would template the output). Temperature 0.4, maxTokens 800.
+  Proposes 0-3 NAMED cultural moments per venue per day with evidence
+  URL + dateable window + one-sentence rationale. Five-criterion bar
+  enforced both in prompt + structurally (drop on missing URL / bad
+  category / unparseable date). Inserts as `proposed_by='ai_llm'` per
+  migration 250. Per-venue dedup against (kind='llm_propose', title,
+  weekStart). Cost ceiling gated.
 
 ### candidate-ai-adjudicator (`candidate-ai-adjudicator.prompt.v1.0`)
 - **v1.0** (2026-05-05) — Initial versioning baseline. Tier 2 ambiguous-match
