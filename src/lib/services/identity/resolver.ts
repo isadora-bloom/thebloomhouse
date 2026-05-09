@@ -707,7 +707,9 @@ export async function mergeWeddings(
   await reassign('tours')
   await reassign('lost_deals')
   await reassign('admin_notifications')
-  await reassign('notifications')
+  // public.notifications has no wedding_id column (mig 017 created it
+  // with venue + user only). Skipping prevents PostgREST 400s on
+  // missing column. Confirmed against schema 2026-05-08.
   await reassign('knowledge_gaps')
   await reassign('intelligence_extractions')
   await reassign('tangential_signals')

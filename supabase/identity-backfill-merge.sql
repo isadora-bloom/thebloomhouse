@@ -114,7 +114,7 @@ BEGIN
         UPDATE public.engagement_events SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
         UPDATE public.tours SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
         UPDATE public.admin_notifications SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
-        UPDATE public.notifications SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
+        -- public.notifications has no wedding_id column (mig 017 schema is venue + user only). Skip.
         UPDATE public.knowledge_gaps SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
         UPDATE public.intelligence_extractions SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
         UPDATE public.tangential_signals SET wedding_id = v_canonical_wedding WHERE wedding_id = v_loser_wedding;
