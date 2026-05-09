@@ -45,7 +45,11 @@ export interface CulturalMomentRow {
   evidence: Record<string, unknown>
   influence_weight: number | null
   geo_scope: string | null
-  proposed_by: 'system' | 'ai' | 'coordinator'
+  // 2026-05-09 (TRENDS-DIAGNOSIS Fix 3 / Finding A): added 'ai_llm' to
+  // distinguish judgement-tier proposals (cultural-moments-llm-propose)
+  // from the legacy statistical detector ('ai'). Migration 250 widened
+  // the CHECK constraint.
+  proposed_by: 'system' | 'ai' | 'ai_llm' | 'coordinator'
   reviewed_by: string | null
   reviewed_at: string | null
   created_at: string

@@ -399,7 +399,50 @@ async function buildSeries(
       // channel to the correlation matrix.
       loadGovernmentSeries(supabase, start, now, venueId),
     ])
-    const externalSeries = [...fredResult, ...calendarResult, ...governmentResult]
+    // TRENDS-DIAGNOSIS Fix 5 / Finding E (2026-05-09): detrend FRED
+    // series before pairing.
+    //
+    // The FRED loader forward-fills monthly series (CPI, mortgage rate,
+    // S&P 500) onto a daily grid, which is correct for "what was the
+    // value on day X" but disastrous for cross-correlation: any two
+    // slow-moving monotonic series correlate at r >= 0.95 over a 90-day
+    // window because their LEVELS are almost-linear ramps, even when
+    // their underlying CHANGES are unrelated. The engine then emits a
+    // top-5 dominated by macro × macro pairs (CPI vs SP500, etc.) that
+    // carry no coordinator signal.
+    //
+    // Fix: replace each fred_* channel's daily LEVEL with its 7-day
+    // rolling delta (level[t] - level[t-7]). This preserves alignment
+    // with the engine's daily grid (so lagged-Pearson math is unchanged)
+    // but kills the trend component — only matched CHANGES survive.
+    // Cross-class pairs (macro × venue) are unaffected in shape because
+    // the venue side already trades in counts/events, which are change-
+    // like by construction.
+    //
+    // Caveat: the calling layer should invalidate stale
+    // correlation_narration rows after this lands so the LLM doesn't
+    // narrate by-the-old-method numbers. See markStaleCorrelationNarrations
+    // helper at the bottom of this file.
+    const ROLLING_DELTA_DAYS = 7
+    const detrendedFred = fredResult.map((s) => {
+      // Sort the points by dayKey for the delta lookup.
+      const byDay = new Map<string, number>()
+      for (const p of s.points) byDay.set(p.dayKey, p.value)
+      const detrended = s.points.map((p) => {
+        const cursor = new Date(`${p.dayKey}T00:00:00Z`)
+        cursor.setUTCDate(cursor.getUTCDate() - ROLLING_DELTA_DAYS)
+        const priorKey = cursor.toISOString().slice(0, 10)
+        const prior = byDay.get(priorKey)
+        // When the prior-week observation is missing (first ROLLING_DELTA_DAYS
+        // days of the window), emit 0 — neutral signal. Pearson treats
+        // a constant prefix as no information and the lag math handles
+        // it gracefully.
+        const delta = prior == null ? 0 : p.value - prior
+        return { dayKey: p.dayKey, value: delta }
+      })
+      return { channel: s.channel, points: detrended }
+    })
+    const externalSeries = [...detrendedFred, ...calendarResult, ...governmentResult]
     // Cultural moments returns a single channel even when no rows match.
     if (cultural.points.length > 0) externalSeries.push(cultural)
 
@@ -564,7 +607,17 @@ export async function computeCorrelationsForVenue(args: {
 
       const a = arrays.get(nameA)!
       const b = arrays.get(nameB)!
-      if (nonZeroCount(a) < MIN_NONZERO_DAYS || nonZeroCount(b) < MIN_NONZERO_DAYS) continue
+      // TRENDS-DIAGNOSIS Fix 5 caveat: FRED channels are now detrended
+      // 7-day deltas, so monthly-released series (CPI = ~3 release days
+      // in a 90-day window, mortgage rate = ~13 weekly release days)
+      // legitimately have far fewer non-zero days than the venue side.
+      // Apply a relaxed floor for fred_* — the family-wise Bonferroni
+      // threshold downstream still gates on r magnitude, so loose
+      // presence-of-data is safe here. Daily series (SP500, UNRATE)
+      // sail past the regular floor.
+      const minA = nameA.startsWith('fred_') ? 3 : MIN_NONZERO_DAYS
+      const minB = nameB.startsWith('fred_') ? 3 : MIN_NONZERO_DAYS
+      if (nonZeroCount(a) < minA || nonZeroCount(b) < minB) continue
 
       // Stream YY (Z5): class-aware lag set. Macro × venue gets the
       // 30-180d slow-consumer-behaviour set; venue × social gets the
@@ -743,4 +796,54 @@ export async function computeCorrelationsAllVenues(
     }
   }
   return out
+}
+
+/**
+ * TRENDS-DIAGNOSIS Fix 5 helper (2026-05-09).
+ *
+ * Mark every existing `correlation_narration` row referencing a fred_*
+ * channel as superseded by the detrending math change. Adds the
+ * `replaced_at` audit timestamp via the data_points payload (the
+ * intelligence_insights table itself has no replaced_at column; a JSON
+ * stamp in data_points keeps the row queryable + auditable without a
+ * schema migration).
+ *
+ * Run this once after deploying the detrending change so the LLM
+ * narration cache doesn't keep narrating the engine's old outputs.
+ * Idempotent: a second run sees the existing replaced_at and is a no-op.
+ *
+ * Caller (one-shot script):
+ *   import { markStaleFredCorrelationNarrations } from '@/lib/services/intel/correlation-engine'
+ *   await markStaleFredCorrelationNarrations(serviceClient)
+ */
+export async function markStaleFredCorrelationNarrations(
+  supabase: SupabaseClient,
+): Promise<{ marked: number }> {
+  const { data: rows } = await supabase
+    .from('intelligence_insights')
+    .select('id, data_points')
+    .eq('insight_type', 'correlation_narration')
+    .neq('status', 'expired')
+  let marked = 0
+  for (const row of (rows ?? []) as Array<{
+    id: string
+    data_points: Record<string, unknown> | null
+  }>) {
+    const dp = row.data_points ?? {}
+    const channelA = String(dp.channel_a ?? dp.channelA ?? '')
+    const channelB = String(dp.channel_b ?? dp.channelB ?? '')
+    if (!channelA.startsWith('fred_') && !channelB.startsWith('fred_')) continue
+    if (dp.replaced_at) continue
+    const updated = {
+      ...dp,
+      replaced_at: new Date().toISOString(),
+      replaced_reason: 'fred_detrending_v1',
+    }
+    await supabase
+      .from('intelligence_insights')
+      .update({ data_points: updated, status: 'expired' })
+      .eq('id', row.id)
+    marked += 1
+  }
+  return { marked }
 }

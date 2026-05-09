@@ -5,6 +5,7 @@ import { fetchAllVenueTrends } from '@/lib/services/intel/trends'
 import { fetchWeatherForecast } from '@/lib/services/intel/weather'
 import { fetchAllDefaultFredSeries } from '@/lib/services/external-context/fred-fetch'
 import { autoProposeFromTrendSpikes } from '@/lib/services/insights/cultural-moments-auto-propose'
+import { autoProposeCulturalMomentsLlmAllVenues } from '@/lib/services/insights/cultural-moments-llm-propose'
 import { runAllVenueAnomalies } from '@/lib/services/intel/anomaly-detection'
 import {
   generateWeeklyBriefing,
@@ -73,6 +74,13 @@ const VALID_JOBS = [
   'fred_daily_refresh',
   'economic_indicators',
   'cultural_moments_auto_propose',
+  // TRENDS-DIAGNOSIS Fix 3 / Finding A (2026-05-09). LLM judgement-tier
+  // proposer running ALONGSIDE the statistical proposer. Names actual
+  // cultural events ("Royal Wedding 2026", "cottagecore Pinterest peak")
+  // instead of templated z-score headlines. Inserts as
+  // proposed_by='ai_llm' (CHECK constraint extended in migration 250);
+  // existing per-venue confirm/dismiss flow handles review.
+  'cultural_moments_llm_propose',
   'anomaly_detection',
   'intelligence_analysis',
   'weekly_briefing',
@@ -277,6 +285,12 @@ async function runJob(job: JobName): Promise<unknown> {
       // manual trigger at /api/intel/cultural-moments/auto-propose.
       // Audit yc-partner.md CRITICAL 3.
       return runCulturalMomentsAutoPropose()
+
+    case 'cultural_moments_llm_propose':
+      // TRENDS-DIAGNOSIS Fix 3 / Finding A (2026-05-09). Judgement-tier
+      // proposer. Sonnet, ~$0.01/venue/day, 0-3 NAMED proposals per
+      // venue per run. Cost-ceiling gated per-venue inside the service.
+      return autoProposeCulturalMomentsLlmAllVenues(createServiceClient())
 
     case 'anomaly_detection':
       return runAllVenueAnomalies()
@@ -684,11 +698,12 @@ async function runPruneMaintenance(): Promise<{
   bulk_read_anomaly: { users_flagged: number; notifications_created: number; errors: string[] }
   consumer_requests_expired: { rows_expired: number; errors: string[] }
   dunning: { reminder_1_fired: number; reminder_2_fired: number; sage_paused_fired: number; read_only_fired: number; errors: string[] }
+  source_freshness: Awaited<ReturnType<typeof runSourceFreshnessSweep>>
 }> {
   const { runAuditRetentionPrune } = await import('@/lib/services/audit-retention')
   const { detectBulkReadAnomalies } = await import('@/lib/services/bulk-read-anomaly')
   const { runDunningEscalate } = await import('@/lib/services/billing/dunning')
-  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning] = await Promise.allSettled([
+  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness] = await Promise.allSettled([
     runTelemetryRetentionPrune(),
     runPruneRateLimits(),
     runPruneBrainDumpStale(),
@@ -696,6 +711,13 @@ async function runPruneMaintenance(): Promise<{
     detectBulkReadAnomalies(),
     runConsumerRequestsExpire(),
     runDunningEscalate(),
+    // Folded in 2026-05-09 to keep the cron count under Vercel Pro's
+    // 40-cron limit. The source-freshness sweep ran as its own
+    // 'source_freshness' cron entry; collapsing it into prune_maintenance
+    // costs us nothing (both run daily, both are venue-fanout reads with
+    // a small admin_notifications write surface). The standalone
+    // 'source_freshness' job string is still accepted for ad-hoc runs.
+    runSourceFreshnessSweep(),
   ])
 
   const telemetryResult =
@@ -766,6 +788,14 @@ async function runPruneMaintenance(): Promise<{
           return { reminder_1_fired: 0, reminder_2_fired: 0, sage_paused_fired: 0, read_only_fired: 0, errors: [String(dunning.reason)] }
         })()
 
+  const sourceFreshnessResult =
+    sourceFreshness.status === 'fulfilled'
+      ? sourceFreshness.value
+      : (() => {
+          console.error('[prune_maintenance] source freshness sweep failed:', sourceFreshness.reason)
+          return { venues_scanned: 0, reminders_fired: 0, errors: 1 }
+        })()
+
   return {
     telemetry: telemetryResult,
     rate_limits: rateLimitsResult,
@@ -774,6 +804,7 @@ async function runPruneMaintenance(): Promise<{
     bulk_read_anomaly: bulkReadResult,
     consumer_requests_expired: expiredResult,
     dunning: dunningResult,
+    source_freshness: sourceFreshnessResult,
   }
 }
 

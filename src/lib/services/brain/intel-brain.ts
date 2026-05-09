@@ -15,7 +15,14 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { callAI, callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
-export const BRAIN_PROMPT_VERSION = 'intel-brain.prompt.v1.1'
+// TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09): bumped 1.1 → 1.2.
+// Sage NLQ data block now also enumerates the LATEST correlation_narration
+// rows from intelligence_insights so questions like "what's the macro
+// story for May" or "did Memorial Day weekend hurt our tour conversion"
+// surface engine-confirmed cross-channel relationships instead of being
+// hedged. Cultural moments / FRED / calendar / operational state were
+// already plumbed through (T5-θ.2); the narration block closes the loop.
+export const BRAIN_PROMPT_VERSION = 'intel-brain.prompt.v1.2'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -80,6 +87,10 @@ interface VenueDataContext {
   marketingSpendByMonth: MarketingSpendByMonthRow[]
   /** T5-Rixey-OO: GA4 (and future analytics-provider) channel rollups. */
   websiteTrafficHistory: WebsiteTrafficRow[]
+  /** TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09): top-5 most-recent
+   *  correlation_narration rows so Sage can answer macro-story questions
+   *  with engine-confirmed cross-channel relationships. */
+  correlationNarrations: CorrelationNarrationRow[]
 }
 
 interface WeddingSummary {
@@ -262,6 +273,23 @@ interface MarketingSpendByMonthRow {
   notes: string | null
 }
 
+// TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09): correlation_narration
+// row shape for the Sage NLQ data block. The narration is the LLM-
+// composed plain-English headline + body for a cross-channel
+// correlation engine row (correlation-narration.ts). Pulling the most
+// recent 5 lets Sage answer questions like "what's the macro story
+// for May" by quoting engine-confirmed pairs instead of hedging.
+interface CorrelationNarrationRow {
+  title: string
+  body: string
+  channel_a: string
+  channel_b: string
+  signal_class: string
+  r: number
+  lag_days: number
+  created_at: string
+}
+
 // T5-Rixey-OO platform finding (2026-05-02): website_traffic_history is
 // the dedicated GA4 (and future analytics-provider) channel-rollup
 // table created by migration 183. Reads here power Sage answers like
@@ -376,6 +404,11 @@ RECENT INBOUND INTERACTION SNIPPETS (last 90 days, top 20 by recency):
 TOUR CANCELLATION REASONS (last 365 days, lost-deal reason aggregates):
 - Aggregate count of cancellation / lost reasons across tours-stage and tour-stage lost deals. Grounds questions about WHY tours fall through.
 
+CORRELATION NARRATIONS (top 5 by surface_priority):
+- Engine-discovered cross-channel pairs from Bloom's correlation engine, narrated in plain English. Each row carries a title, a body, the channel pair (A × B), the pair signal_class (macro_x_venue / venue_x_social / etc.), Pearson r, and lag in days.
+- USE THESE FIRST when the user asks about macro-correlations, FRED-vs-venue relationships, cultural moments hitting the funnel, or "what's the macro story for May" / "did Memorial Day weekend hurt our tour conversion." Quote the title verbatim and cite r + lag. The narration body is the engine's own plain-English account; weave it in instead of paraphrasing.
+- If the data block carries no correlation narrations, say so plainly — do not invent macro relationships.
+
 When answering:
 - Be direct and actionable — venue owners are busy
 - Quote numbers from the data block; comparisons (this month vs last, one source vs another) are allowed when BOTH sides are present in the data
@@ -475,6 +508,8 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     toursByMonthResult,
     marketingSpendDirectResult,
     websiteTrafficResult,
+    // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09)
+    correlationNarrationsResult,
   ] = await Promise.all([
     // Venue name + state (state used to scope external_calendar_events)
     supabase
@@ -733,6 +768,23 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
       .eq('venue_id', venueId)
       .order('period_start', { ascending: false })
       .limit(50),
+
+    // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09): top-5 recent
+    // correlation_narration rows. Drives the macro-story answers in
+    // Sage NLQ + briefings. Order by surface_priority DESC (Stream YY
+    // Z1: |r| × pair-class multiplier) so the strongest venue-relevant
+    // pairs surface first; falls back to created_at when priorities
+    // tie.
+    supabase
+      .from('intelligence_insights')
+      .select('title, body, data_points, created_at, surface_priority')
+      .eq('venue_id', venueId)
+      .eq('insight_type', 'correlation_narration')
+      .neq('status', 'expired')
+      .neq('status', 'dismissed')
+      .order('surface_priority', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false })
+      .limit(5),
   ])
 
   // Build pipeline counts from active weddings
@@ -1132,6 +1184,40 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     source: r.source ?? 'ga4',
   }))
 
+  // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09): correlation
+  // narrations. data_points carries the engine's inputs; map to the
+  // typed row shape Sage's prompt enumerates. Skip rows missing
+  // channel ids — they're malformed.
+  type NarrationRaw = {
+    title: string | null
+    body: string | null
+    data_points: Record<string, unknown> | null
+    created_at: string | null
+  }
+  const correlationNarrations: CorrelationNarrationRow[] = (
+    (correlationNarrationsResult.data ?? []) as NarrationRaw[]
+  )
+    .map((r) => {
+      const dp = r.data_points ?? {}
+      const channelA = String(dp.channel_a ?? dp.channelA ?? '')
+      const channelB = String(dp.channel_b ?? dp.channelB ?? '')
+      if (!channelA || !channelB) return null
+      const r_val = Number(dp.r ?? 0)
+      const lagDays = Number(dp.lag_days ?? dp.lagDays ?? 0)
+      const signalClass = String(dp.signal_class ?? dp.signalClass ?? 'unknown')
+      return {
+        title: r.title ?? '',
+        body: r.body ?? '',
+        channel_a: channelA,
+        channel_b: channelB,
+        signal_class: signalClass,
+        r: Number.isFinite(r_val) ? r_val : 0,
+        lag_days: Number.isFinite(lagDays) ? lagDays : 0,
+        created_at: r.created_at ?? '',
+      } satisfies CorrelationNarrationRow
+    })
+    .filter((x): x is CorrelationNarrationRow => x !== null)
+
   return {
     venueName: (venueResult.data?.name as string) ?? 'Unknown Venue',
     recentWeddings: (weddingsResult.data ?? []) as WeddingSummary[],
@@ -1160,6 +1246,8 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     toursByMonth,
     marketingSpendByMonth,
     websiteTrafficHistory,
+    // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09)
+    correlationNarrations,
   }
 }
 
@@ -1517,6 +1605,35 @@ function formatDataContext(data: VenueDataContext): string {
     sections.push(
       `WEBSITE TRAFFIC (analytics-provider channel rollups, ` +
       `latest periods):\n${periodLines.join('\n')}`,
+    )
+  }
+
+  // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09): correlation
+  // narrations. The engine writes statistical pairs; the narration
+  // layer (correlation-narration.ts) composes plain-English headlines
+  // from them. Surfacing 5 of the most-recent ones in Sage's data
+  // block lets NLQ answer "what's the macro story for May" or "did
+  // Memorial Day weekend hurt our tour conversion" with engine-
+  // confirmed pairs instead of hedging that the data isn't there.
+  if (data.correlationNarrations.length > 0) {
+    const lines = data.correlationNarrations
+      .map((n) => {
+        const lagPart = n.lag_days === 0 ? 'same-day' : `${n.lag_days}-day lag`
+        const directionPart = n.r >= 0 ? 'positive' : 'inverse'
+        return [
+          `  - ${n.title}`,
+          `      pair=${n.channel_a} × ${n.channel_b}, class=${n.signal_class}, r=${n.r.toFixed(2)} (${directionPart}), ${lagPart}`,
+          `      narration: ${n.body.replace(/\s+/g, ' ').trim().slice(0, 280)}`,
+          `      written=${(n.created_at ?? '').split('T')[0]}`,
+        ].join('\n')
+      })
+      .join('\n')
+    sections.push(
+      `CORRELATION NARRATIONS (engine-discovered cross-channel pairs, ` +
+      `top 5 by surface_priority): These are the macro-stories Bloom ` +
+      `surfaces on /intel/macro-correlations. When the user asks about ` +
+      `macro-correlated channels, FRED-vs-venue relationships, or ` +
+      `cultural moments hitting the funnel, quote from these directly.\n${lines}`,
     )
   }
 

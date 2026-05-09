@@ -308,12 +308,24 @@ export default function MacroCorrelationsPage() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Stream YY (Z4): filter chip state. Defaults to "venue_relevant"
-  // because the user's complaint was that pure macro × macro
-  // correlations dominated the surface and aren't actionable for a
-  // wedding venue coordinator. The chip set still lets curious users
-  // pull up Macro only or All.
+  // TRENDS-DIAGNOSIS Fix 1 / Finding E (2026-05-09): the previous
+  // hard-coded `venue_relevant` default was correct in spirit (macro ×
+  // macro is rarely actionable for a wedding coordinator) but stranded
+  // the user when every cleared correlation was macro × macro — they
+  // saw "No correlations match this filter" with no path forward. The
+  // architectural fix is two-pronged:
+  //
+  //   1. After data loads, choose the default bucket from observed
+  //      counts: prefer venue_relevant, fall back to macro_only, then
+  //      all. (Initial render uses venue_relevant so the chip styling
+  //      is stable until counts arrive.)
+  //   2. The empty-state below renders an inline CTA "switch to {bucket}
+  //      to see {count} more correlations" — never a dead end.
+  //
+  // The user can still override the auto-pick with the chip set; this
+  // logic only fires once on initial load (filterAutoPicked guard).
   const [filter, setFilter] = useState<FilterMode>('venue_relevant')
+  const [filterAutoPicked, setFilterAutoPicked] = useState(false)
 
   const load = useCallback(async (refresh: boolean) => {
     if (refresh) setRefreshing(true)
@@ -357,6 +369,48 @@ export default function MacroCorrelationsPage() {
     }
     return { all: data.narrations.length, venue, macro }
   }, [data])
+
+  // TRENDS-DIAGNOSIS Fix 1 / Finding E: auto-pick the default bucket
+  // once on first data arrival. Prefer venue_relevant (most actionable
+  // for a coordinator), fall back to macro_only when only macro-on-macro
+  // pairs exist, then to all. Only fires once (guarded by
+  // filterAutoPicked) so any user click sticks.
+  useEffect(() => {
+    if (!data || filterAutoPicked || data.narrations.length === 0) return
+    if (counts.venue > 0) {
+      setFilter('venue_relevant')
+    } else if (counts.macro > 0) {
+      setFilter('macro_only')
+    } else {
+      setFilter('all')
+    }
+    setFilterAutoPicked(true)
+  }, [data, filterAutoPicked, counts])
+
+  // TRENDS-DIAGNOSIS Fix 1: empty-state CTA target. Picks the bucket
+  // with the most rows that ISN'T the active filter, so the empty
+  // state can render "switch to {bucket} to see {count}". Returns null
+  // when no other bucket has data (genuinely-empty surface).
+  const ctaTarget = useMemo<{
+    mode: FilterMode
+    label: string
+    count: number
+  } | null>(() => {
+    if (!data || data.narrations.length === 0) return null
+    const candidates: Array<{ mode: FilterMode; label: string; count: number }> = []
+    if (filter !== 'venue_relevant' && counts.venue > 0) {
+      candidates.push({ mode: 'venue_relevant', label: 'Venue-relevant', count: counts.venue })
+    }
+    if (filter !== 'macro_only' && counts.macro > 0) {
+      candidates.push({ mode: 'macro_only', label: 'Macro only', count: counts.macro })
+    }
+    if (filter !== 'all' && counts.all > 0) {
+      candidates.push({ mode: 'all', label: 'All', count: counts.all })
+    }
+    if (candidates.length === 0) return null
+    candidates.sort((a, b) => b.count - a.count)
+    return candidates[0]
+  }, [data, filter, counts])
 
   const sorted = useMemo(() => {
     if (!data) return []
@@ -476,6 +530,11 @@ export default function MacroCorrelationsPage() {
           <p className="text-sm text-rose-600 mt-1">{error}</p>
         </div>
       ) : sorted.length === 0 ? (
+        // TRENDS-DIAGNOSIS Fix 1 / Finding E (2026-05-09): never strand
+        // the coordinator on a filter that's hiding all the data.
+        // ctaTarget points at the highest-count alternate bucket; the
+        // CTA is a real button that flips the filter inline rather than
+        // a passive "switch to All" hint.
         <div className="bg-surface border border-border rounded-xl p-12 text-center">
           <Sparkles className="w-8 h-8 text-sage-300 mx-auto mb-3" />
           <p className="text-sage-600 font-medium">
@@ -485,9 +544,18 @@ export default function MacroCorrelationsPage() {
           </p>
           <p className="text-sm text-muted mt-1 max-w-md mx-auto">
             {data && data.narrations.length > 0
-              ? `${data.narrations.length} narration${data.narrations.length === 1 ? '' : 's'} ${data.narrations.length === 1 ? 'is' : 'are'} hidden by the current filter. Switch to "All" to see everything.`
+              ? `${data.narrations.length} narration${data.narrations.length === 1 ? '' : 's'} ${data.narrations.length === 1 ? 'is' : 'are'} hidden by the current filter.`
               : "Bloom's correlation engine surfaces cross-limb stories as your data accumulates. Click Refresh to narrate the most recent engine findings, or wait for the daily cron."}
           </p>
+          {ctaTarget && (
+            <button
+              onClick={() => setFilter(ctaTarget.mode)}
+              className="mt-4 px-4 py-2 text-sm rounded-lg bg-sage-600 text-white hover:bg-sage-700"
+            >
+              Switch to {ctaTarget.label} to see {ctaTarget.count} correlation
+              {ctaTarget.count === 1 ? '' : 's'}
+            </button>
+          )}
         </div>
       ) : (
         <div className="space-y-4">

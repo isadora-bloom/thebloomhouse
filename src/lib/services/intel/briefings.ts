@@ -28,9 +28,15 @@ import { sendEmail as sendTransactionalEmail } from '../email/transport'
  * Bump when the corresponding system prompt changes so the in-memory
  * cache (withAiCache) invalidates on prompt updates.
  * See PROMPTS-CHANGELOG.md for version history.
+ *
+ * 2026-05-09 (TRENDS-DIAGNOSIS Fix 4 / Finding F): bumped both v1.0 →
+ * v1.1. Briefings now receive a MACRO CONTEXT block (cultural moments
+ * + FRED deltas + upcoming calendar events + correlation narrations)
+ * and the system prompts instruct the LLM to weave them into the
+ * narrative when present.
  */
-export const BRIEFING_PROMPT_VERSION = 'briefings.prompt.v1.0'
-const MONTHLY_BRIEFING_PROMPT_VERSION = 'briefings.monthly.v1.0'
+export const BRIEFING_PROMPT_VERSION = 'briefings.prompt.v1.1'
+const MONTHLY_BRIEFING_PROMPT_VERSION = 'briefings.monthly.v1.1'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -216,6 +222,201 @@ async function getPhaseBWeeklyState(venueId: string): Promise<PhaseBWeeklyState>
 }
 
 /**
+ * TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09): macro context for
+ * briefings.
+ *
+ * The pre-fix briefing prompts had access to FRED demand-score and
+ * trend deviations only. They could NOT name a confirmed cultural
+ * moment, cite an upcoming federal holiday, quote an engine-discovered
+ * cross-channel pair, or reference the latest macro indicator deltas.
+ * Briefings therefore couldn't tell macro stories — exactly the YC-
+ * partner HIGH 12 complaint.
+ *
+ * This helper pulls all four:
+ *   - confirmed cultural_moments overlapping the last 60 days, scoped
+ *     to the venue's per-venue confirmation state (migration 167).
+ *   - top-5 most-recent correlation_narration rows by surface_priority.
+ *   - latest FRED indicator values + 30-day delta per panel series.
+ *   - upcoming external_calendar_events in the next 30 days, hierarchy-
+ *     matched to the venue's geo_scope (us → us_<state>).
+ *
+ * Returned as a pre-formatted string block so the briefing prompts can
+ * concatenate it into their userPrompt without re-shaping. Empty
+ * sections are omitted entirely so the LLM doesn't see "(none)" stubs.
+ */
+interface BriefingMacroContext {
+  block: string
+  hasContent: boolean
+}
+
+async function getBriefingMacroContext(venueId: string): Promise<BriefingMacroContext> {
+  const supabase = createServiceClient()
+  const NOW_MS = Date.now()
+  const DAY_MS = 86_400_000
+  const sixtyDaysAgo = new Date(NOW_MS - 60 * DAY_MS).toISOString()
+  const thirtyDaysFromNow = new Date(NOW_MS + 30 * DAY_MS).toISOString().slice(0, 10)
+  const today = new Date().toISOString().slice(0, 10)
+
+  const sections: string[] = []
+
+  // Resolve venue state for calendar-event geo filtering.
+  let venueState: string = ''
+  try {
+    const { data: venue } = await supabase
+      .from('venues')
+      .select('state')
+      .eq('id', venueId)
+      .maybeSingle()
+    venueState = ((venue?.state as string | null) ?? '').trim().toLowerCase()
+  } catch (err) {
+    console.warn('[briefings] macro context: venue state lookup failed:', err)
+  }
+  const venueScope = venueState && /^[a-z]{2}$/.test(venueState) ? `us_${venueState}` : 'us'
+  const allowedScopes = new Set<string>(['us'])
+  if (venueScope !== 'us') allowedScopes.add(venueScope)
+
+  // Run all four pulls in parallel; each is best-effort and zero-rows
+  // is a perfectly normal outcome (cultural channel may legitimately
+  // be empty for a venue that hasn't confirmed anything yet).
+  const [culturalRes, narrationRes, fredRes, calendarRes] = await Promise.all([
+    supabase
+      .from('venue_cultural_moment_state')
+      .select('cultural_moments!inner(title, category, start_at, end_at, influence_weight, geo_scope)')
+      .eq('venue_id', venueId)
+      .eq('state', 'confirmed')
+      .gte('cultural_moments.end_at', sixtyDaysAgo)
+      .order('cultural_moments(start_at)', { ascending: false })
+      .limit(20),
+    supabase
+      .from('intelligence_insights')
+      .select('title, body, data_points, created_at, surface_priority')
+      .eq('venue_id', venueId)
+      .eq('insight_type', 'correlation_narration')
+      .neq('status', 'expired')
+      .neq('status', 'dismissed')
+      .order('surface_priority', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false })
+      .limit(5),
+    supabase
+      .from('fred_indicators')
+      .select('series_id, value, observation_date')
+      .order('observation_date', { ascending: false })
+      .limit(50),
+    supabase
+      .from('external_calendar_events')
+      .select('title, category, start_date, end_date, geo_scope')
+      .is('deleted_at', null)
+      .lte('start_date', thirtyDaysFromNow)
+      .gte('end_date', today)
+      .order('start_date', { ascending: true })
+      .limit(50),
+  ])
+
+  // Cultural moments — venue-confirmed only.
+  type NestedMoment = {
+    cultural_moments:
+      | { title?: string; category?: string | null; start_at?: string; end_at?: string | null; influence_weight?: number | null }
+      | Array<{ title?: string; category?: string | null; start_at?: string; end_at?: string | null; influence_weight?: number | null }>
+      | null
+  }
+  const moments = ((culturalRes.data ?? []) as unknown as NestedMoment[])
+    .map((r) => {
+      const m = Array.isArray(r.cultural_moments) ? r.cultural_moments[0] : r.cultural_moments
+      return m ?? null
+    })
+    .filter((m): m is { title?: string; category?: string | null; start_at?: string; end_at?: string | null; influence_weight?: number | null } => m !== null)
+  if (moments.length > 0) {
+    const lines = moments
+      .map((m) => {
+        const parts = [`"${m.title ?? ''}"`]
+        if (m.category) parts.push(m.category)
+        const start = (m.start_at ?? '').split('T')[0]
+        const end = m.end_at ? (m.end_at ?? '').split('T')[0] : 'ongoing'
+        parts.push(`window=${start} to ${end}`)
+        if (m.influence_weight != null) parts.push(`influence=${m.influence_weight}`)
+        return `  - ${parts.join(', ')}`
+      })
+      .join('\n')
+    sections.push(`CONFIRMED CULTURAL MOMENTS (last 60 days):\n${lines}`)
+  }
+
+  // FRED latest + 30d delta.
+  type FredRow = { series_id: string; value: number | null; observation_date: string | null }
+  const seriesObservations = new Map<string, { date: string; value: number }[]>()
+  for (const r of (fredRes.data ?? []) as FredRow[]) {
+    if (r.value == null || !r.observation_date) continue
+    const arr = seriesObservations.get(r.series_id) ?? []
+    arr.push({ date: r.observation_date, value: Number(r.value) })
+    seriesObservations.set(r.series_id, arr)
+  }
+  const FRED_LABELS: Record<string, string> = {
+    CPIAUCSL: 'CPI (headline)',
+    MORTGAGE30US: '30y mortgage rate',
+    SP500: 'S&P 500',
+    UNRATE: 'US unemployment',
+    UMCSENT: 'Consumer sentiment',
+    PSAVERT: 'Personal savings rate',
+    CONCCONF: 'Consumer confidence',
+    HOUST: 'Housing starts',
+    DSPIC96: 'Real disposable income',
+  }
+  const fredLines: string[] = []
+  for (const [seriesId, obs] of seriesObservations) {
+    obs.sort((a, b) => b.date.localeCompare(a.date))
+    const latest = obs[0]
+    const cutoff30 = NOW_MS - 30 * DAY_MS
+    const prior = obs.find((o) => new Date(`${o.date}T00:00:00Z`).getTime() <= cutoff30)
+    const label = FRED_LABELS[seriesId] ?? seriesId
+    const parts = [`${label}=${latest.value} (as of ${latest.date})`]
+    if (prior) parts.push(`Δ30d=${(latest.value - prior.value).toFixed(2)}`)
+    fredLines.push(`  - ${parts.join(', ')}`)
+  }
+  if (fredLines.length > 0) {
+    sections.push(`FRED INDICATORS (latest + 30d delta):\n${fredLines.join('\n')}`)
+  }
+
+  // Upcoming calendar events (next 30d, hierarchy-matched to venue scope).
+  type CalRow = { title: string | null; category: string | null; start_date: string; end_date: string; geo_scope: string | null }
+  const upcomingCal = ((calendarRes.data ?? []) as CalRow[])
+    .filter((r) => allowedScopes.has((r.geo_scope ?? '').toLowerCase()))
+    .slice(0, 20)
+  if (upcomingCal.length > 0) {
+    const lines = upcomingCal
+      .map((e) => `  - ${e.start_date}: ${e.title ?? ''} [${e.category ?? 'other'}] (${e.geo_scope ?? 'us'})`)
+      .join('\n')
+    sections.push(`UPCOMING CALENDAR EVENTS (next 30d, region-scoped):\n${lines}`)
+  }
+
+  // Correlation narrations (top 5 most-recent).
+  type NarrationRow = { title: string | null; body: string | null; data_points: Record<string, unknown> | null; created_at: string | null }
+  const narrationLines: string[] = []
+  for (const r of (narrationRes.data ?? []) as NarrationRow[]) {
+    const dp = r.data_points ?? {}
+    const channelA = String(dp.channel_a ?? dp.channelA ?? '')
+    const channelB = String(dp.channel_b ?? dp.channelB ?? '')
+    if (!channelA || !channelB) continue
+    const r_val = Number(dp.r ?? 0)
+    const lagDays = Number(dp.lag_days ?? dp.lagDays ?? 0)
+    const lagPart = lagDays === 0 ? 'same-day' : `${lagDays}-day lag`
+    const directionPart = r_val >= 0 ? 'positive' : 'inverse'
+    const trimmedBody = (r.body ?? '').replace(/\s+/g, ' ').trim().slice(0, 240)
+    narrationLines.push(
+      `  - "${r.title ?? ''}" (${channelA} × ${channelB}, r=${r_val.toFixed(2)} ${directionPart}, ${lagPart}): ${trimmedBody}`,
+    )
+  }
+  if (narrationLines.length > 0) {
+    sections.push(
+      `CORRELATION NARRATIONS (engine-discovered cross-channel pairs, top 5):\n${narrationLines.join('\n')}`,
+    )
+  }
+
+  return {
+    block: sections.length > 0 ? sections.join('\n\n') : '',
+    hasContent: sections.length > 0,
+  }
+}
+
+/**
  * Query wedding-related metrics for a venue over a date window.
  */
 async function getWeddingMetrics(
@@ -303,6 +504,12 @@ The user prompt also includes a PLATFORM SIGNAL HEALTH section with new candidat
   - Mention them naturally in the summary (e.g. "We saw 23 new platform candidates land this week, 4 of which auto-linked to existing leads.")
   - When high-funnel non-converting > 5, add a recommendation about re-engaging them (the /intel/sources cohort panel surfaces who).
   - When conflicts > 0, add a recommendation to clear the candidate review queue.
+
+The user prompt may also include a MACRO CONTEXT section with confirmed cultural moments, FRED indicator deltas (CPI, mortgage rate, S&P, unemployment, sentiment), upcoming calendar events scoped to the venue's region, and correlation narrations (engine-discovered cross-channel pairs in plain English). When that section is present:
+  - Weave the most relevant macro signal into the summary (e.g. "Mortgage rates climbed 30bps this month and our engine flagged a 60-day lag to inquiry softening.").
+  - When a correlation narration is recent and venue-relevant (its pair_class isn't macro_x_macro), prefer quoting its title + r over re-describing the underlying numbers yourself.
+  - When an upcoming calendar event sits in the next 14 days, mention it as a context cue for the recommendations (e.g. "Memorial Day weekend lands inside this window — expect tour-request volatility.").
+  - Do NOT invent macro relationships; if the section is absent or empty, omit macro language from the briefing entirely.
 
 NUMBERS DISCIPLINE (anti-pattern guard, ANTI-19.9-A / playbook 19.9 #1):
 - Every number you reference must come from the user prompt VERBATIM.
