@@ -135,16 +135,24 @@ export async function classifyBrainDump(args: {
   const supabase = createServiceClient()
 
   // Pull the venue's active weddings + couple names so the classifier
-  // can resolve "Jamie" to a specific wedding. Keep the list tight —
-  // active = inquiry/tour_completed/proposal_sent/booked/completed.
+  // can resolve "Jamie" to a specific wedding. Bug 3 fix (2026-05-09):
+  // raise the cap from 500 to 2000 and order by wedding_date desc nulls
+  // last, then created_at desc, so the most-relevant couples (upcoming
+  // and recently inquired) sit at the head of the list. Pre-fix relied
+  // on the implicit Postgres order plus a slice(0, 200) below, which
+  // silently dropped older couples for venues like Rixey that carry
+  // > 200 active records, causing client_note classifications to fall
+  // through to ambiguous.
   const { data: weddings } = await supabase
     .from('weddings')
-    .select('id, wedding_date, status, people(first_name, last_name, role)')
+    .select('id, wedding_date, status, created_at, people(first_name, last_name, role)')
     .eq('venue_id', venueId)
     .in('status', ['inquiry', 'tour_scheduled', 'tour_completed', 'proposal_sent', 'booked', 'completed'])
-    .limit(500)
+    .order('wedding_date', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .limit(2000)
 
-  const coupleIndex = (weddings ?? []).map((w) => {
+  const coupleIndexAll = (weddings ?? []).map((w) => {
     const people = (w.people as Array<{ first_name: string | null; last_name: string | null; role: string | null }> | null) ?? []
     const p1 = people.find((p) => p.role === 'partner1') ?? people[0]
     const p2 = people.find((p) => p.role === 'partner2')
@@ -153,12 +161,52 @@ export async function classifyBrainDump(args: {
         ? `${p1.first_name ?? ''} & ${p2.first_name ?? ''}`.trim()
         : [p1.first_name, p1.last_name].filter(Boolean).join(' ')
       : '(unknown)'
+    // Capture raw lowercase first/last name tokens for the deterministic
+    // pre-filter below. Done here rather than re-derived from `label`
+    // because the human label collapses '&' joins ("Jamie & Pat").
+    const tokens = new Set<string>()
+    for (const p of people) {
+      if (p.first_name) tokens.add(p.first_name.toLowerCase())
+      if (p.last_name) tokens.add(p.last_name.toLowerCase())
+    }
     return {
       weddingId: w.id as string,
       label,
       wedding_date: w.wedding_date as string | null,
+      _tokens: tokens,
     }
   })
+
+  // Deterministic name pre-filter (Bug 3, second prong). Tokenize the
+  // rawText and only include couples whose first/last name appears
+  // verbatim. If the pre-filter narrows enough we cap at 200 to keep the
+  // prompt tight; if it returns zero matches we fall back to the top
+  // 1000 (the safer fallback called for in the audit) so the classifier
+  // still has venue-roster context for notes phrased entirely without
+  // names ("the couple from last weekend wants a different photographer").
+  const STOPWORDS = new Set([
+    'the', 'and', 'for', 'with', 'from', 'they', 'this', 'that', 'have',
+    'has', 'had', 'was', 'were', 'will', 'would', 'about', 'their', 'them',
+    'our', 'are', 'just', 'wedding', 'couple', 'bride', 'groom',
+  ])
+  const textTokens = new Set(
+    rawText
+      .toLowerCase()
+      .split(/[^a-z0-9']+/)
+      .filter((t) => t.length >= 3 && !STOPWORDS.has(t)),
+  )
+  const matched = coupleIndexAll.filter((c) => {
+    for (const tok of c._tokens) {
+      if (textTokens.has(tok)) return true
+    }
+    return false
+  })
+  const coupleIndex = (matched.length > 0 ? matched.slice(0, 200) : coupleIndexAll.slice(0, 1000))
+    .map((c) => ({
+      weddingId: c.weddingId,
+      label: c.label,
+      wedding_date: c.wedding_date,
+    }))
 
   const systemPrompt = `You classify free-text observations from a wedding venue coordinator.
 
@@ -186,7 +234,7 @@ Intent rules:
 
 Help vs knowledge_base disambiguation: a single question from the coordinator about the platform itself is help_question; a list of Q/A pairs the coordinator wants Sage to learn for couples is knowledge_base_import. "Where do I upload reviews?" is help. "Q: What time does the venue close? A: 11pm." is knowledge_base_import.
 
-COUPLES at this venue (JSON): ${JSON.stringify(coupleIndex.slice(0, 200))}
+COUPLES at this venue (JSON): ${JSON.stringify(coupleIndex)}
 
 Rules:
 - Never invent a weddingId. If you can't find one in the list, set clientMatch.weddingId to null and set intent="ambiguous".
@@ -413,8 +461,19 @@ export async function routeBrainDump(args: {
         helpAnswer,
       }
     } catch (err) {
+      // Bug 5 fix (2026-05-09): when answerHelpQuestion throws (Anthropic
+      // rate limit, network error, model refusal, etc.) the previous code
+      // logged a warn and fell through. parse_status was still 'pending'
+      // and the ambiguous handler below only fires when intent ===
+      // 'ambiguous' — a help_question that errored has intent =
+      // 'help_question', so the entry sat at 'pending' forever. Downgrade
+      // the intent to 'ambiguous' and synthesise a clarification question
+      // explaining the lookup failed; the existing ambiguous block then
+      // takes over and parks the entry properly.
       console.warn('[brain-dump] help-mode failed; falling back to ambiguous:', err)
-      // Fall through to the ambiguous handler below.
+      parsed.intent = 'ambiguous'
+      parsed.clarificationQuestion =
+        'I tried to answer your help question but the lookup failed. Try rephrasing, or tell me what you wanted to file.'
     }
   }
 
@@ -532,34 +591,55 @@ export async function routeBrainDump(args: {
     }
   }
 
-  // Staff observation: append to consultant_metrics notes if we can
-  // resolve the name; otherwise operational_note fallback.
+  // Staff observation: PROPOSE-AND-CONFIRM. Bug 1 fix (2026-05-09).
+  // Pre-fix this branch wrote directly to admin_notifications and
+  // pushed to routedTo with no coordinator review, violating Playbook
+  // INV-20.5.4-A (every brain-dump intent must propose, never silently
+  // file). The brain-dump misreads happen — "Sage's draft was sloppy"
+  // is about the AI not a person named Sage; "the new hire could push
+  // harder on Knot leads" is feedback meant for the system not a
+  // permanent note on someone's record. Mirror the client_note +
+  // knowledge_base_import patterns: park as needs_clarification with
+  // a proposed_staff_observation payload, fire a confirm notification,
+  // and let Case H in /api/brain-dump/[id]/resolve do the staff lookup
+  // and admin_notifications insert on confirm.
   if (parsed.intent === 'staff_observation' && parsed.staffName) {
-    // Try to find a user_profiles row whose first_name/last_name matches.
     const trimmed = parsed.staffName.trim()
-    const { data: match } = await supabase
-      .from('user_profiles')
-      .select('id, first_name, last_name')
-      .eq('venue_id', venueId)
-      .or(`first_name.ilike.%${trimmed}%,last_name.ilike.%${trimmed}%`)
-      .limit(1)
-      .maybeSingle()
-
     const noteBody = parsed.note || rawText
-    // consultant_metrics may not have a text notes column; store as a
-    // row in admin_notifications instead so the Intel Team view picks
-    // it up, and track the routing target.
+    const proposed = {
+      kind: 'staff_observation',
+      staffName: trimmed,
+      noteBody,
+    }
     await createNotification({
       venueId,
-      type: 'staff_observation',
-      title: match ? `Note on ${match.first_name ?? trimmed}` : `Staff observation — ${trimmed}`,
-      body: noteBody,
+      type: 'brain_dump_staff_observation_confirm',
+      title: `Confirm note on ${trimmed}`,
+      body: JSON.stringify({
+        entryId,
+        staffName: trimmed,
+        noteBody,
+        rawText,
+      }),
+      priority: 'high',
     })
-    routedTo.push({
-      table: 'admin_notifications',
-      id: null,
-      action: `staff_observation:${match?.id ?? 'unresolved'}`,
-    })
+    await supabase
+      .from('brain_dump_entries')
+      .update({
+        parse_status: 'needs_clarification',
+        clarification_question: `File this observation about ${trimmed}?`,
+        parsed_at: new Date().toISOString(),
+        parse_result: {
+          ...(parsed as unknown as Record<string, unknown>),
+          proposed_staff_observation: proposed,
+        },
+      })
+      .eq('id', entryId)
+    return {
+      routedTo: [],
+      needsClarification: true,
+      clarificationQuestion: `File this observation about ${trimmed}?`,
+    }
   }
 
   // Knowledge base import: PROPOSE-AND-CONFIRM. Pre-fix this auto-

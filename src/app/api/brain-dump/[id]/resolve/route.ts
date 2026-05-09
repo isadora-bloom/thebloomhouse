@@ -5,6 +5,8 @@ import { detectCsvShape, parseCsvRows } from '@/lib/services/brain-dump/csv-shap
 import { runCsvImport } from '@/app/api/brain-dump/route'
 import { importReviews } from '@/lib/services/brain-dump/imports'
 import { importStorefrontAnalytics } from '@/lib/services/ingestion/storefront-analytics'
+import { upsertSpendRows, type SpendRow } from '@/lib/services/intel/marketing-spend'
+import { createNotification } from '@/lib/services/admin-notifications'
 import { nextHrefFor } from '@/lib/services/brain-dump'
 
 /**
@@ -294,6 +296,106 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       id,
       status: 'confirmed',
       knowledge_gap_id: insertedRow.id,
+      nextHref: next?.nextHref ?? null,
+      nextLabel: next?.nextLabel ?? null,
+    })
+  }
+
+  // Case H: proposed staff observation. Bug 1 fix (2026-05-09).
+  // routeBrainDump used to write the admin_notification directly with
+  // no coordinator review, violating INV-20.5.4-A. Now the propose
+  // path parks a proposed_staff_observation payload and we run the
+  // staff lookup + notification insert here on confirm.
+  const proposedStaff = pr['proposed_staff_observation'] as
+    | { kind?: string; staffName?: string; noteBody?: string }
+    | undefined
+  if (proposedStaff?.kind === 'staff_observation' && proposedStaff.staffName && proposedStaff.noteBody) {
+    const trimmed = proposedStaff.staffName.trim()
+    const { data: match } = await supabase
+      .from('user_profiles')
+      .select('id, first_name, last_name')
+      .eq('venue_id', auth.venueId)
+      .or(`first_name.ilike.%${trimmed}%,last_name.ilike.%${trimmed}%`)
+      .limit(1)
+      .maybeSingle()
+    await createNotification({
+      venueId: auth.venueId,
+      type: 'staff_observation',
+      title: match ? `Note on ${match.first_name ?? trimmed}` : `Staff observation: ${trimmed}`,
+      body: proposedStaff.noteBody,
+    })
+    await supabase.from('brain_dump_entries').update({
+      parse_status: 'confirmed',
+      clarification_answer: body.answer?.trim() ?? null,
+      resolved_at: new Date().toISOString(),
+      parse_result: { ...pr, confirmed_at: new Date().toISOString(), staff_match_id: match?.id ?? null },
+      routed_to: [{
+        table: 'admin_notifications',
+        id: null,
+        action: `staff_observation:${match?.id ?? 'unresolved'}`,
+      }],
+    }).eq('id', id)
+    const next = nextHrefFor({ intent: 'staff_observation' })
+    return NextResponse.json({
+      id,
+      status: 'confirmed',
+      staffMatchId: match?.id ?? null,
+      nextHref: next?.nextHref ?? null,
+      nextLabel: next?.nextLabel ?? null,
+    })
+  }
+
+  // Case I: proposed analytics spend rows. Bug 2 fix (2026-05-09).
+  // routeBrainDump's analytics branch parks an `extractedSpendRows`
+  // array on parse_result for coordinator confirmation, but pre-fix
+  // there was no handler here — confirm fell through to Case G's plain
+  // stamp and the rows never reached marketing_spend. Mirror the
+  // pattern used by the storefront-analytics vision flow: upsert via
+  // the existing marketing-spend service so dedup-by-(venue, source,
+  // month) is preserved.
+  const proposedSpend = pr['extractedSpendRows'] as
+    | Array<{ source?: string; month?: string; amount?: number; campaign?: string | null; notes?: string | null }>
+    | undefined
+  if (Array.isArray(proposedSpend) && proposedSpend.length > 0) {
+    const rows: SpendRow[] = []
+    for (const r of proposedSpend) {
+      if (
+        r &&
+        typeof r.source === 'string' &&
+        typeof r.month === 'string' &&
+        typeof r.amount === 'number' &&
+        Number.isFinite(r.amount)
+      ) {
+        rows.push({
+          source: r.source,
+          month: r.month,
+          amount: r.amount,
+          campaign: typeof r.campaign === 'string' ? r.campaign : null,
+          notes: typeof r.notes === 'string' ? r.notes : null,
+        })
+      }
+    }
+    const summary = await upsertSpendRows({
+      venueId: auth.venueId,
+      rows,
+      provenance: 'brain_dump_text',
+    })
+    await supabase.from('brain_dump_entries').update({
+      parse_status: 'confirmed',
+      clarification_answer: body.answer?.trim() ?? null,
+      resolved_at: new Date().toISOString(),
+      parse_result: { ...pr, confirmed_at: new Date().toISOString(), import_summary: summary },
+      routed_to: [{
+        table: 'marketing_spend',
+        id: null,
+        action: `insert:${summary.inserted},update:${summary.updated},skipped:${summary.skipped}`,
+      }],
+    }).eq('id', id)
+    const next = nextHrefFor({ intent: 'analytics' })
+    return NextResponse.json({
+      id,
+      status: 'confirmed',
+      importSummary: summary,
       nextHref: next?.nextHref ?? null,
       nextLabel: next?.nextLabel ?? null,
     })
