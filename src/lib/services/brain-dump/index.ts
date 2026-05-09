@@ -82,6 +82,47 @@ export interface BrainDumpParseResult {
 }
 
 /**
+ * Build a specific clarification question for an ambiguous brain-dump
+ * entry. Beats a generic "can you give me a little more detail" by
+ * naming what the parser actually saw vs what it was unsure about.
+ * Used by the ambiguous + low-confidence fallback when the classifier
+ * did NOT supply its own clarificationQuestion.
+ */
+function synthesiseClarification(
+  parsed: BrainDumpParseResult,
+  rawText: string,
+): string {
+  const snippet = rawText.length > 80 ? `${rawText.slice(0, 80)}...` : rawText
+  const candidates = parsed.clientMatch?.ambiguousCandidates ?? []
+  if (candidates.length > 1) {
+    const names = candidates
+      .slice(0, 4)
+      .map((c) => c.label)
+      .filter(Boolean)
+      .join(', ')
+    return `Found multiple couple matches (${names}). Which couple is "${snippet}" about?`
+  }
+  if (parsed.intent === 'client_note' && !parsed.clientMatch?.weddingId) {
+    return `Looks like a couple note but I could not find a matching wedding for "${snippet}". Add the couple name, or open the brain dump again with the couple's name spelled out.`
+  }
+  if (parsed.intent === 'staff_observation' && !parsed.staffName) {
+    return `Looks like a staff observation but I could not pull a name from "${snippet}". Tell me which team member this is about.`
+  }
+  if (parsed.intent === 'availability') {
+    return `Got an availability change but the date or action was not clear in "${snippet}". Try "block June 14, 2027" or "release Aug 7."`
+  }
+  if (parsed.intent === 'analytics') {
+    return `Looks like marketing data but I could not pull source / metric / values cleanly. Try "Knot got 14 inquiries from $300 spend in May" so I can match a row to a column.`
+  }
+  if (parsed.intent === 'knowledge_base_import') {
+    return `Looks like a Q/A list but I could not split it into question + answer pairs cleanly. Re-paste with each pair on its own block.`
+  }
+  // Pure ambiguous (low confidence, no specific signal): show the
+  // snippet so the coordinator knows which entry the prompt is about.
+  return `I am not sure how to file "${snippet}". Tell me if this is about a couple, a team member, the venue, a date, or something else.`
+}
+
+/**
  * Classify a brain-dump submission. Uses callAIJson against the text —
  * images/PDFs/CSVs should be preprocessed by the route before calling
  * this (OCR or JSON summary), then passed as rawText.
@@ -379,8 +420,14 @@ export async function routeBrainDump(args: {
 
   // Low-confidence or explicitly ambiguous → clarification prompt.
   if (parsed.intent === 'ambiguous' || parsed.confidence < 75) {
-    const q = parsed.clarificationQuestion
-      || 'I can\'t tell what this observation should be filed under. Can you give me a little more detail?'
+    // Bug 8 (2026-05-09): replace generic "can you give me a little
+    // more detail" with a specific question keyed to what the parser
+    // saw. The classifier's clarificationQuestion (when set) is
+    // already specific; otherwise we synthesise one from the parsed
+    // signals (saw a couple-name match? mentioned a date? looked like
+    // analytics?). Coordinator sees what was confusing instead of
+    // bouncing off a wall of vague copy.
+    const q = parsed.clarificationQuestion || synthesiseClarification(parsed, rawText)
     await createNotification({
       venueId,
       type: 'brain_dump_needs_clarification',
