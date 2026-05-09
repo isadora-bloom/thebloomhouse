@@ -182,12 +182,19 @@ Classify and extract according to the schema. Respond with JSON only.`
   // Haiku tier per Playbook 19.8 — Stage 1 is classification (one of
   // ~15 input categories). Specialised extractors run downstream and
   // can use Sonnet if their work is more nuanced. OPS-21.4.2.
+  // 2026-05-08: maxTokens raised from 800 to 2500. The classifier's
+  // JSON response includes parsed observations / details, which are
+  // bounded by the input size. Coordinator pasting a multi-paragraph
+  // review (or a Knot screenshot transcript) blew past the 800-token
+  // cap and the response was truncated mid-string. Surfaced as
+  // "Unterminated string in JSON at position 3321" — Haiku was
+  // working, just cut off. 2500 covers ~5 pages of pasted text.
   const parsed = await callAIJson<BrainDumpParseResult>({
     systemPrompt,
     userPrompt,
     venueId,
     taskType: 'brain_dump_classify',
-    maxTokens: 800,
+    maxTokens: 2500,
     contentTier: 1,
     tier: 'haiku',
     promptVersion: BRAIN_DUMP_PROMPT_VERSION,

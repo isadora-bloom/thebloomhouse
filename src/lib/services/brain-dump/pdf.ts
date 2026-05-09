@@ -20,7 +20,67 @@
  * pdf-parse runs in Node only (uses pdfjs-dist). The brain-dump
  * route is a Node route handler so this is safe; do not import this
  * module from edge / browser code.
+ *
+ * Polyfill note (2026-05-08):
+ * pdf-parse 2.x ships pdfjs-dist 4.x, which references browser-only
+ * globals (DOMMatrix, Path2D, ImageData) at module scope. Without a
+ * polyfill the dynamic import throws "DOMMatrix is not defined" the
+ * first time a PDF lands. We install no-op stand-ins on globalThis
+ * BEFORE the pdfjs module is imported. They never get called for
+ * text extraction; the pdfjs renderer code references them but only
+ * uses them when rendering canvas, which we never trigger.
  */
+
+function installBrowserGlobalsForPdfjs(): void {
+  const g = globalThis as unknown as Record<string, unknown>
+  if (typeof g.DOMMatrix === 'undefined') {
+    class StubDOMMatrix {
+      a = 1; b = 0; c = 0; d = 1; e = 0; f = 0
+      constructor(_init?: unknown) {}
+      multiply() { return this }
+      translate() { return this }
+      scale() { return this }
+      rotate() { return this }
+      invertSelf() { return this }
+      transformPoint(p: { x?: number; y?: number; z?: number; w?: number }) {
+        return { x: p.x ?? 0, y: p.y ?? 0, z: p.z ?? 0, w: p.w ?? 1 }
+      }
+    }
+    g.DOMMatrix = StubDOMMatrix
+  }
+  if (typeof g.Path2D === 'undefined') {
+    class StubPath2D {
+      constructor(_init?: unknown) {}
+      addPath() {}
+      moveTo() {}
+      lineTo() {}
+      bezierCurveTo() {}
+      quadraticCurveTo() {}
+      arc() {}
+      arcTo() {}
+      ellipse() {}
+      rect() {}
+      closePath() {}
+    }
+    g.Path2D = StubPath2D
+  }
+  if (typeof g.ImageData === 'undefined') {
+    class StubImageData {
+      data: Uint8ClampedArray
+      width: number
+      height: number
+      colorSpace = 'srgb' as const
+      constructor(width: number, height: number) {
+        this.width = width
+        this.height = height
+        this.data = new Uint8ClampedArray(width * height * 4)
+      }
+    }
+    g.ImageData = StubImageData
+  }
+}
+
+installBrowserGlobalsForPdfjs()
 
 export const PDF_SIZE_CAP_BYTES = 10 * 1024 * 1024 // 10MB
 export const PDF_TEXT_CAP_CHARS = 50_000
