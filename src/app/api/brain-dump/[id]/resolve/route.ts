@@ -8,6 +8,15 @@ import { importStorefrontAnalytics } from '@/lib/services/ingestion/storefront-a
 import { upsertSpendRows, type SpendRow } from '@/lib/services/intel/marketing-spend'
 import { createNotification } from '@/lib/services/admin-notifications'
 import { nextHrefFor } from '@/lib/services/brain-dump'
+import {
+  isCsvPreview,
+  isVisionReviews,
+  isVisionStorefrontAnalytics,
+  isProposedClientNote,
+  isProposedKbRows,
+  isProposedOperationalNote,
+  readParseResultKind,
+} from '@/lib/services/brain-dump/parse-result-schema'
 
 /**
  * Resolve a pending brain-dump clarification.
@@ -66,11 +75,25 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 
   // Confirm — look for an actionable preview in parse_result.
+  // Bug 11 (2026-05-09): readers narrow with type guards on the
+  // discriminated `kind` field. Legacy rows persisted before Bug 11
+  // have no `kind`, so a fallback to the historical heuristic
+  // (sniff `pr.shape`, `pr.vision`, etc.) preserves back-compat reads.
   const pr = (entry.parse_result ?? {}) as Record<string, unknown>
+  const prKind = readParseResultKind(pr)
 
-  // Case A: CSV preview (shape + storagePath).
-  if (pr.shape && pr.storagePath && typeof pr.shape === 'string' && typeof pr.storagePath === 'string') {
-    const { data: file } = await supabase.storage.from('brain-dump').download(pr.storagePath)
+  // Case A: CSV preview. New writes carry kind='csv_preview'; legacy
+  // rows have shape + storagePath at the top level.
+  const isLegacyCsv =
+    !prKind &&
+    pr.shape &&
+    pr.storagePath &&
+    typeof pr.shape === 'string' &&
+    typeof pr.storagePath === 'string'
+  if (isCsvPreview(pr) || isLegacyCsv) {
+    const shape = (pr as { shape: string }).shape
+    const storagePath = (pr as { storagePath: string }).storagePath
+    const { data: file } = await supabase.storage.from('brain-dump').download(storagePath)
     if (!file) {
       return NextResponse.json({ error: 'Stored CSV could not be read' }, { status: 500 })
     }
@@ -88,7 +111,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       parse_result: { ...pr, summary, confirmed_at: new Date().toISOString() },
       resolved_at: new Date().toISOString(),
     }).eq('id', id)
-    const next = nextHrefFor({ intent: `${pr.shape}_preview` })
+    const next = nextHrefFor({ intent: `${shape}_preview` })
     return NextResponse.json({
       id,
       status: 'confirmed',
@@ -99,67 +122,84 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 
   // Case B: Vision output parked for confirm — reviews, storefront
-  // analytics, or other. Route each to the right importer.
-  if (pr.vision && typeof pr.vision === 'object') {
-    const v = pr.vision as {
-      intent?: string
-      reviews?: Array<{ reviewer_name: string; rating: number; body: string; review_date?: string | null; source?: string }>
-      analytics?: { source?: string; metric?: string; rows?: Array<{ label: string; value: number }> }
-    }
-    if (v.intent === 'reviews' && v.reviews?.length) {
-      const summary = await importReviews({
-        supabase,
-        venueId: auth.venueId,
-        rows: v.reviews.map((r) => ({
-          source: (r.source ?? 'other').toLowerCase(),
-          reviewer_name: r.reviewer_name,
-          rating: r.rating,
-          body: r.body,
-          review_date: r.review_date ?? null,
-        })),
-      })
-      await supabase.from('brain_dump_entries').update({
-        parse_status: 'confirmed',
-        clarification_answer: body.answer?.trim() ?? null,
-        parse_result: { ...pr, summary, confirmed_at: new Date().toISOString() },
-        resolved_at: new Date().toISOString(),
-      }).eq('id', id)
-      const next = nextHrefFor({ intent: 'reviews_from_screenshot' })
-      return NextResponse.json({
-        id,
-        status: 'confirmed',
-        importSummary: summary,
-        nextHref: next?.nextHref ?? null,
-        nextLabel: next?.nextLabel ?? null,
-      })
-    }
-    if (v.intent === 'storefront_analytics' && v.analytics?.rows?.length) {
-      const summary = await importStorefrontAnalytics({
-        supabase,
-        venueId: auth.venueId,
-        input: {
-          source: v.analytics.source ?? 'other',
-          metric: v.analytics.metric ?? 'other',
-          rows: v.analytics.rows,
-          brainDumpEntryId: id,
-        },
-      })
-      await supabase.from('brain_dump_entries').update({
-        parse_status: 'confirmed',
-        clarification_answer: body.answer?.trim() ?? null,
-        parse_result: { ...pr, summary, confirmed_at: new Date().toISOString() },
-        routed_to: [{ table: 'engagement_events', action: `storefront_analytics:${summary.inserted}`, id: null }],
-        resolved_at: new Date().toISOString(),
-      }).eq('id', id)
-      const next = nextHrefFor({ intent: 'storefront_analytics_preview' })
-      return NextResponse.json({
-        id,
-        status: 'confirmed',
-        importSummary: summary,
-        nextHref: next?.nextHref ?? null,
-        nextLabel: next?.nextLabel ?? null,
-      })
-    }
+  // analytics, or other. New writes carry kind='vision_reviews' or
+  // kind='vision_storefront_analytics'; legacy rows expose v.intent on
+  // a `vision` sub-object.
+  const legacyVision =
+    !prKind && pr.vision && typeof pr.vision === 'object'
+      ? (pr.vision as {
+          intent?: string
+          reviews?: Array<{ reviewer_name: string; rating: number; body: string; review_date?: string | null; source?: string }>
+          analytics?: { source?: string; metric?: string; rows?: Array<{ label: string; value: number }> }
+        })
+      : null
+
+  if (
+    isVisionReviews(pr) ||
+    (legacyVision && legacyVision.intent === 'reviews' && legacyVision.reviews?.length)
+  ) {
+    const reviewsSrc = isVisionReviews(pr)
+      ? pr.reviews
+      : (legacyVision!.reviews ?? [])
+    const summary = await importReviews({
+      supabase,
+      venueId: auth.venueId,
+      rows: reviewsSrc.map((r) => ({
+        source: (r.source ?? 'other').toLowerCase(),
+        reviewer_name: r.reviewer_name,
+        rating: r.rating,
+        body: r.body,
+        review_date: r.review_date ?? null,
+      })),
+    })
+    await supabase.from('brain_dump_entries').update({
+      parse_status: 'confirmed',
+      clarification_answer: body.answer?.trim() ?? null,
+      parse_result: { ...pr, summary, confirmed_at: new Date().toISOString() },
+      resolved_at: new Date().toISOString(),
+    }).eq('id', id)
+    const next = nextHrefFor({ intent: 'reviews_from_screenshot' })
+    return NextResponse.json({
+      id,
+      status: 'confirmed',
+      importSummary: summary,
+      nextHref: next?.nextHref ?? null,
+      nextLabel: next?.nextLabel ?? null,
+    })
+  }
+
+  if (
+    isVisionStorefrontAnalytics(pr) ||
+    (legacyVision && legacyVision.intent === 'storefront_analytics' && legacyVision.analytics?.rows?.length)
+  ) {
+    const analytics = isVisionStorefrontAnalytics(pr)
+      ? pr.analytics
+      : legacyVision!.analytics!
+    const summary = await importStorefrontAnalytics({
+      supabase,
+      venueId: auth.venueId,
+      input: {
+        source: analytics.source ?? 'other',
+        metric: analytics.metric ?? 'other',
+        rows: analytics.rows ?? [],
+        brainDumpEntryId: id,
+      },
+    })
+    await supabase.from('brain_dump_entries').update({
+      parse_status: 'confirmed',
+      clarification_answer: body.answer?.trim() ?? null,
+      parse_result: { ...pr, summary, confirmed_at: new Date().toISOString() },
+      routed_to: [{ table: 'engagement_events', action: `storefront_analytics:${summary.inserted}`, id: null }],
+      resolved_at: new Date().toISOString(),
+    }).eq('id', id)
+    const next = nextHrefFor({ intent: 'storefront_analytics_preview' })
+    return NextResponse.json({
+      id,
+      status: 'confirmed',
+      importSummary: summary,
+      nextHref: next?.nextHref ?? null,
+      nextLabel: next?.nextLabel ?? null,
+    })
   }
 
   // Case D: proposed client note for couple's forensic record. Per
@@ -167,10 +207,28 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   // graduable and require explicit confirmation before filing to
   // weddings.sage_context_notes. Pre-fix the brain-dump auto-filed;
   // now we propose, the coordinator confirms here.
-  const proposedNote = pr['proposed_client_note'] as
+  //
+  // Bug 11: prefer the discriminated `kind` narrow; fall back to the
+  // legacy `proposed_client_note` sub-object for pre-fix rows.
+  const legacyClientNote = pr['proposed_client_note'] as
     | { kind?: string; weddingId?: string; noteBody?: string; coupleLabel?: string | null }
     | undefined
-  if (proposedNote?.kind === 'client_note' && proposedNote.weddingId && proposedNote.noteBody) {
+  const proposedNote = isProposedClientNote(pr)
+    ? {
+        weddingId: pr.weddingId,
+        noteBody: pr.noteBody,
+        coupleLabel: pr.coupleLabel,
+      }
+    : legacyClientNote?.kind === 'client_note' &&
+      legacyClientNote.weddingId &&
+      legacyClientNote.noteBody
+      ? {
+          weddingId: legacyClientNote.weddingId,
+          noteBody: legacyClientNote.noteBody,
+          coupleLabel: legacyClientNote.coupleLabel ?? null,
+        }
+      : null
+  if (proposedNote) {
     // Re-fetch existing notes inside the confirm to avoid stomping on
     // a parallel note that landed between propose and confirm.
     const { data: wRow } = await supabase
@@ -221,9 +279,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   // Case E: proposed knowledge_base rows. Per INV-20.5.4-A, even
   // additive content is propose-and-confirm. Insert with venue
   // auth check + dedup against existing (venue_id, question) pairs.
-  const proposedKbRows = pr['proposed_kb_rows'] as
-    | Array<{ question: string; answer: string; category: string }>
-    | undefined
+  // Bug 11: prefer discriminated narrow; fall back to legacy
+  // `proposed_kb_rows` array for pre-fix rows.
+  const proposedKbRows = isProposedKbRows(pr)
+    ? pr.rows
+    : (pr['proposed_kb_rows'] as
+        | Array<{ question: string; answer: string; category: string }>
+        | undefined)
   if (Array.isArray(proposedKbRows) && proposedKbRows.length > 0) {
     const rows = proposedKbRows.map((r) => ({
       venue_id: auth.venueId,
@@ -269,7 +331,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 
   // Case F: proposed operational note → knowledge_gaps row.
-  const proposedOpNote = pr['proposed_operational_note'] as { noteBody?: string } | undefined
+  // Bug 11: prefer discriminated narrow; fall back to the legacy
+  // `proposed_operational_note` sub-object for pre-fix rows.
+  const proposedOpNote = isProposedOperationalNote(pr)
+    ? { noteBody: pr.noteBody }
+    : (pr['proposed_operational_note'] as { noteBody?: string } | undefined)
   if (proposedOpNote?.noteBody) {
     const { data: insertedRow, error: writeErr } = await supabase
       .from('knowledge_gaps')

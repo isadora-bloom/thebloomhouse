@@ -13,7 +13,7 @@
  * replaced an ad-hoc useEffect fetch with this synchronous hook.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -76,6 +76,10 @@ type SubmitState =
         // there is nothing to confirm but the entry still parks in
         // brain_dump_entries.parse_status='needs_clarification'.
         dismissOnly?: boolean
+        // Bug 17 (2026-05-09). PDF preview only — flag that the
+        // extractor hit the 50K-char cap so the bubble can render an
+        // explicit "this PDF was truncated" hint above Confirm.
+        pdfTruncated?: boolean
       } | null
       // Deep-link destination for "go where this lives now" affordance.
       nextHref?: string | null
@@ -125,6 +129,27 @@ export function FloatingBrainDump() {
   const [text, setText] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [state, setState] = useState<SubmitState>({ kind: 'idle' })
+  // Bug 9 (2026-05-09). Tracks whether the coordinator typed or pasted
+  // in this open lifecycle. Once true, reopen does NOT re-prefill the
+  // path-derived hint, even when textarea contents look "empty-ish"
+  // mid-paste. Reset on close + reset. Pre-fix the hint could prepend
+  // into an in-flight paste because the lazy useState initialiser
+  // evaluated AFTER the keystroke that triggered open, racing with a
+  // fast paste.
+  const hasUserTypedRef = useRef(false)
+
+  /**
+   * Decide whether to apply the path-derived prefill hint. Only when
+   * the textarea is empty AND the coordinator hasn't typed/pasted in
+   * the current open lifecycle.
+   */
+  const maybePrefill = useCallback(() => {
+    setText((cur) => {
+      if (cur) return cur
+      if (hasUserTypedRef.current) return cur
+      return pathPrefillHint(pathname)
+    })
+  }, [pathname])
 
   // Global Cmd+K / Ctrl+K opens the brain-dump from any work surface
   // with a context-aware pre-fill (ARCH-20.5.5). Skipped when an
@@ -139,17 +164,18 @@ export function FloatingBrainDump() {
       const isEditable = tag === 'input' || tag === 'textarea' || target?.isContentEditable
       if (isEditable) return
       e.preventDefault()
-      setText((cur) => (cur ? cur : pathPrefillHint(pathname)))
+      maybePrefill()
       setOpen(true)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [pathname])
+  }, [maybePrefill])
 
   const reset = useCallback(() => {
     setText('')
     setFile(null)
     setState({ kind: 'idle' })
+    hasUserTypedRef.current = false
   }, [])
 
   // Inline confirm for any propose-and-confirm intent (CSV preview,
@@ -300,6 +326,11 @@ export function FloatingBrainDump() {
         nextHref?: string | null
         nextLabel?: string | null
         helpAnswer?: { body: string; links: Array<{ label: string; href: string }> } | null
+        // Bug 17 (2026-05-09). PDF preview branch returns this when
+        // the 50K-char cap was hit. The bubble surfaces an explicit
+        // hint so the coordinator knows the rest of the file is
+        // sitting in storage waiting on a follow-up.
+        pdfTruncated?: boolean
       }
       // 2026-05-08 (Isadora feedback): inline-confirm every propose-and-
       // confirm intent, not just CSV previews. Any time the route returns
@@ -345,6 +376,9 @@ export function FloatingBrainDump() {
               intent: data.intent,
               previewRows: data.previewRows,
               confirmLabel: confirmLabelFor(data.intent),
+              // Bug 17: pass through truncation flag so the bubble can
+              // render a "this PDF was truncated" hint.
+              pdfTruncated: data.pdfTruncated,
             }
           : canDismissInline
             ? {
@@ -370,10 +404,12 @@ export function FloatingBrainDump() {
       <button
         onClick={() => {
           // Pre-fill with the path-derived hint so the LLM classifier
-          // has context. Only fires when the textarea is empty (don't
-          // stomp on a coordinator's in-progress draft from another
-          // open + close + reopen cycle). ARCH-20.5.5.
-          setText((cur) => (cur ? cur : pathPrefillHint(pathname)))
+          // has context. Only fires when the textarea is empty AND the
+          // coordinator hasn't typed/pasted in this open lifecycle. The
+          // hasUserTyped guard (Bug 9, 2026-05-09) protects an in-flight
+          // paste from being stomped by a hint that fires async after
+          // the lazy useState initialiser. ARCH-20.5.5.
+          maybePrefill()
           setOpen(true)
         }}
         className="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full shadow-lg flex items-center justify-center bg-sage-600 hover:bg-sage-700 text-white transition-transform hover:scale-105"
@@ -470,6 +506,15 @@ export function FloatingBrainDump() {
                           Confirm to import. {aiName} will cluster signals and match candidates against existing leads.
                         </p>
                       )}
+                      {/* Bug 17 (2026-05-09): visible truncation hint
+                          on PDF previews so a coordinator who dropped
+                          a 200-page brochure knows the rest of the
+                          file is in storage waiting on a follow-up. */}
+                      {state.pendingConfirm.pdfTruncated && (
+                        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">
+                          Heads up: this PDF was truncated at 50K characters. The rest is in storage; ask {aiName} to summarise the remainder if you need it.
+                        </p>
+                      )}
                       <div className="flex gap-2 mt-2">
                         {!state.pendingConfirm.dismissOnly && (
                           <button
@@ -488,23 +533,14 @@ export function FloatingBrainDump() {
                       </div>
                     </div>
                   </div>
-                ) : state.clarification ? (
-                  <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                    <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-amber-900">Needs clarification</p>
-                      <p className="text-xs text-amber-800 mt-1">{state.clarification}</p>
-                      <Link
-                        href="/agent/notifications"
-                        onClick={close}
-                        className="inline-flex items-center gap-1 text-xs text-amber-800 hover:text-amber-900 mt-2 underline-offset-2 hover:underline"
-                      >
-                        Open Notifications
-                        <ArrowRight className="w-3 h-3" />
-                      </Link>
-                    </div>
-                  </div>
                 ) : (
+                  // Bug 12 (2026-05-09): the pre-fix amber clarification
+                  // card with "Open Notifications" link is dead code
+                  // post-rebuild. Every needsClarification + entryId
+                  // path now populates pendingConfirm (confirm or
+                  // dismiss-only); help_question populates helpAnswer.
+                  // Pure clarification with no action is unreachable —
+                  // the success card renders directly here.
                   <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
                     <div className="min-w-0">
@@ -615,7 +651,26 @@ export function FloatingBrainDump() {
                 <textarea
                   rows={4}
                   value={text}
-                  onChange={(e) => setText(e.target.value)}
+                  onChange={(e) => {
+                    // Bug 9: any keystroke counts as the user owning
+                    // the field for this open lifecycle. Reopen will
+                    // not re-prefill once this flips.
+                    hasUserTypedRef.current = true
+                    setText(e.target.value)
+                  }}
+                  onPaste={() => {
+                    // Bug 9: paste fires before onChange but the new
+                    // value isn't in `text` yet. Flip the ref now so a
+                    // racing reopen-with-prefill can't prepend the
+                    // hint while the paste lands.
+                    hasUserTypedRef.current = true
+                  }}
+                  onKeyDown={() => {
+                    // Bug 9: belt-and-suspenders. onKeyDown fires before
+                    // onChange so the ref is set even if the keystroke
+                    // is async-batched.
+                    hasUserTypedRef.current = true
+                  }}
                   placeholder={`Type anything — "Jamie was stressed about seating today", "May 1st cancelled", "Sarah nailed the Henderson walkthrough"`}
                   className="w-full px-3 py-2 border border-sage-200 rounded-lg text-sm"
                   autoFocus

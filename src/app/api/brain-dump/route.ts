@@ -26,6 +26,117 @@ import {
   fetchAndExtractUrl,
 } from '@/lib/services/brain-dump/url'
 import { extractPdfText, PDF_SIZE_CAP_BYTES } from '@/lib/services/brain-dump/pdf'
+import {
+  readParseResultKind,
+  type BrainDumpParseResult,
+} from '@/lib/services/brain-dump/parse-result-schema'
+
+/**
+ * Derive the user-facing intent string for a parked brain-dump entry's
+ * `parse_result` blob. New (post-Bug-11) writes carry a `kind`
+ * discriminant we can map directly. Legacy rows fall back to the
+ * historical heuristic keys (`pr.shape`, `pr.vision`, `pr.url_fetch`,
+ * `pr.pdf`, `pr.proposed_*`).
+ *
+ * Used by the duplicate-upload path so a re-submission of an entry
+ * still parked at needs_clarification surfaces the original Confirm
+ * button instead of a dismiss-only "duplicate_upload" failure card.
+ */
+function deriveIntentFromParseResult(
+  pr: Record<string, unknown> | null
+): string | null {
+  if (!pr) return null
+
+  // Prefer the explicit kind discriminant added in Bug 11.
+  const kind = readParseResultKind(pr)
+  if (kind) {
+    switch (kind) {
+      case 'csv_preview': {
+        const shape = (pr as { shape?: unknown }).shape
+        return typeof shape === 'string' ? `${shape}_preview` : 'csv_preview'
+      }
+      case 'vision_reviews':
+        return 'reviews'
+      case 'vision_storefront_analytics':
+        return 'storefront_analytics_preview'
+      case 'vision_identity_signals':
+        return 'identity_signals'
+      case 'vision_other':
+        return 'other'
+      case 'pdf_preview':
+        return 'pdf_preview'
+      case 'pdf_extract_failed':
+        return 'pdf_extract_failed'
+      case 'pdf_oversized':
+        return 'pdf_oversized'
+      case 'url_pinterest_preview':
+        return 'url_pinterest_preview'
+      case 'url_generic_preview':
+        return 'url_generic_preview'
+      case 'url_google_doc_deferred':
+        return 'url_google_doc_deferred'
+      case 'json_parse_failed':
+        return 'json_parse_failed'
+      case 'json_contract_violation':
+        return 'json_contract_violation'
+      case 'proposed_client_note':
+        return 'client_note'
+      case 'proposed_kb_rows':
+        return 'knowledge_base_import'
+      case 'proposed_operational_note':
+        return 'operational_note'
+      case 'proposed_staff_observation':
+        return 'staff_observation'
+      case 'proposed_analytics':
+        return 'analytics'
+      case 'proposed_availability':
+        return 'availability'
+      case 'help_answer':
+        return 'help_question'
+      default:
+        // Exhaustive fallthrough; unknown kinds become 'duplicate_upload'.
+        return null
+    }
+  }
+
+  // Legacy heuristic for rows persisted before Bug 11. Mirrors the
+  // shape-sniffs in the resolve route's Cases A-G.
+  const intentField = (pr as { intent?: unknown }).intent
+  if (typeof intentField === 'string') return intentField
+  if (typeof (pr as { shape?: unknown }).shape === 'string') {
+    return `${(pr as { shape: string }).shape}_preview`
+  }
+  if ((pr as { proposed_client_note?: unknown }).proposed_client_note) {
+    return 'client_note'
+  }
+  if ((pr as { proposed_kb_rows?: unknown }).proposed_kb_rows) {
+    return 'knowledge_base_import'
+  }
+  if ((pr as { proposed_operational_note?: unknown }).proposed_operational_note) {
+    return 'operational_note'
+  }
+  const visionField = (pr as { vision?: { intent?: unknown } }).vision
+  if (visionField && typeof visionField === 'object') {
+    const vi = visionField.intent
+    if (vi === 'storefront_analytics') return 'storefront_analytics_preview'
+    if (typeof vi === 'string') return vi
+  }
+  const pdfField = (pr as { pdf?: unknown }).pdf
+  if (pdfField && typeof pdfField === 'object') {
+    if ((pdfField as { rejected?: unknown }).rejected === 'oversized') {
+      return 'pdf_oversized'
+    }
+    if ((pdfField as { error?: unknown }).error) return 'pdf_extract_failed'
+    return 'pdf_preview'
+  }
+  const urlField = (pr as { url_fetch?: { shape?: unknown } }).url_fetch
+  if (urlField && typeof urlField === 'object') {
+    const sh = urlField.shape
+    if (sh === 'google_doc') return 'url_google_doc_deferred'
+    if (typeof sh === 'string') return `url_${sh}_preview`
+  }
+  return null
+}
 
 const FILE_CONTENT_CAP = 40_000 // chars embedded into the classifier prompt
 const LARGE_CSV_ROW_THRESHOLD = 50 // rows above this → preview + confirm
@@ -115,8 +226,68 @@ async function readAttachedFileBuffer(
   }
 }
 
+/**
+ * Granular screenshot kinds (Bug 13, 2026-05-09). Pre-fix the vision
+ * branch only knew reviews / storefront_analytics / identity_signals /
+ * contract / other. Coordinator-dropped screenshots of lead inquiries,
+ * calendar entries, contracts, vendor invoices, and venue photos all
+ * fell through to "other" with no useful routing. screenshot_intent
+ * sub-classifies those so the route can show a tailored clarification
+ * (e.g. "want me to add this Knot lead?", "use upload-contract surface"
+ * for a contract scan, "add this to brand_assets?" for a venue photo).
+ */
+type VisionScreenshotIntent =
+  | 'lead_inquiry'
+  | 'reviews'
+  | 'storefront_analytics'
+  | 'identity_signals'
+  | 'calendar'
+  | 'contract'
+  | 'invoice'
+  | 'venue_photo'
+  | 'other'
+
+interface VisionLeadInquiry {
+  /** Couple / contact name as visible on the screenshot. */
+  name?: string
+  email?: string
+  phone?: string
+  /** Wedding date / desired event date if present. */
+  wedding_date?: string | null
+  /** Inquiry date / when they reached out. */
+  inquiry_date?: string | null
+  guest_count?: number | null
+  /** Source platform: "the_knot" / "zola" / "wedding_wire" / etc. */
+  source_platform?: string | null
+  /** Free-text notes / inquiry message visible. */
+  message?: string | null
+}
+
+interface VisionCalendarEvent {
+  title?: string
+  date?: string | null
+  start_time?: string | null
+  end_time?: string | null
+  /** "tour" / "rehearsal" / "block" / etc. when inferrable. */
+  kind?: string | null
+  notes?: string | null
+}
+
+interface VisionInvoice {
+  vendor?: string
+  total?: number | null
+  date?: string | null
+  notes?: string | null
+}
+
 interface VisionExtraction {
   intent: 'reviews' | 'storefront_analytics' | 'identity_signals' | 'contract' | 'other'
+  /**
+   * Granular screenshot kind. Optional for back-compat with older models
+   * that only return the top-level intent. When absent, the route falls
+   * back to dispatching on `intent` alone.
+   */
+  screenshot_intent?: VisionScreenshotIntent
   summary: string
   reviews?: Array<{ reviewer_name: string; rating: number; body: string; review_date?: string | null; source?: string }>
   analytics?: { source?: string; metric?: string; rows?: Array<{ label: string; value: number }> }
@@ -134,6 +305,12 @@ interface VisionExtraction {
     context?: string
     signal_type?: string
   }>
+  /** Bug 13: lead inquiry screenshot (Knot/Zola/etc. lead detail). */
+  lead_inquiry?: VisionLeadInquiry
+  /** Bug 13: calendar event / availability block visible. */
+  calendar_event?: VisionCalendarEvent
+  /** Bug 13: vendor invoice / receipt. */
+  invoice?: VisionInvoice
 }
 
 /**
@@ -152,18 +329,33 @@ async function extractFromImage(args: {
 Return JSON matching exactly:
 {
   "intent": "reviews" | "storefront_analytics" | "identity_signals" | "contract" | "other",
+  "screenshot_intent": "lead_inquiry" | "reviews" | "storefront_analytics" | "identity_signals" | "calendar" | "contract" | "invoice" | "venue_photo" | "other",
   "summary": "one sentence of what the screenshot shows",
   "reviews": [{"reviewer_name": "...", "rating": 1-5, "body": "full review text", "review_date": "YYYY-MM-DD or null", "source": "the_knot" | "wedding_wire" | "google" | "honeybook" | "instagram" | "facebook" | "other"}] or null,
   "analytics": {"source": "the_knot" | "wedding_wire" | "google_analytics" | "google_business" | "instagram" | "facebook" | "pinterest" | "tiktok" | "website" | "honeybook" | "email" | "other", "metric": "unique_visitors" | "page_views" | "sessions" | "leads" | "inquiries" | "likes" | "followers" | "saves" | "engagement_rate" | "impressions" | "reach" | "clicks" | "ctr" | "spend" | "other", "rows": [{"label": "Oct", "value": 123}]} or null,
-  "identities": [{"name": "full name if visible", "first_name": "...", "last_name": "...", "username": "handle without @", "handle": "@handle or URL", "platform": "instagram | facebook | pinterest | tiktok | the_knot | wedding_wire | other", "context": "what they did — liked a post, commented, saved, tagged, followed, was featured", "signal_type": "instagram_engagement | instagram_follow | review | mention | analytics_entry | referral | other"}] or null
+  "identities": [{"name": "full name if visible", "first_name": "...", "last_name": "...", "username": "handle without @", "handle": "@handle or URL", "platform": "instagram | facebook | pinterest | tiktok | the_knot | wedding_wire | other", "context": "what they did, e.g. liked a post, commented, saved, tagged, followed, was featured", "signal_type": "instagram_engagement | instagram_follow | review | mention | analytics_entry | referral | other"}] or null,
+  "lead_inquiry": {"name": "couple / contact name", "email": "...", "phone": "...", "wedding_date": "YYYY-MM-DD or null", "inquiry_date": "YYYY-MM-DD or null", "guest_count": 0, "source_platform": "the_knot | zola | wedding_wire | website | other", "message": "free-text inquiry visible"} or null,
+  "calendar_event": {"title": "...", "date": "YYYY-MM-DD or null", "start_time": "HH:MM or null", "end_time": "HH:MM or null", "kind": "tour | rehearsal | block | other", "notes": "..."} or null,
+  "invoice": {"vendor": "...", "total": 1234.56, "date": "YYYY-MM-DD or null", "notes": "..."} or null
 }
 
-Rules:
+Rules for top-level intent (back-compat — keep populating this):
 - reviews: a dashboard, page, or listing of testimonials. Extract every review visible with its full text. Do not summarise or dedupe.
 - storefront_analytics: a chart, table, or dashboard of any platform metric. Extract every data point.
-- identity_signals: the screenshot shows individual people (not metrics) — Instagram post comments, follower lists, tagged-user lists, storefront lead lists with names, email lists, event attendance lists. Extract each distinct person visible. Set first_name / last_name when you can split a full name; set username for @handles. Do not invent identities. If a row is anonymous (like "Jen B." on WeddingWire) keep first_name="Jen" and last_name="B." so downstream matching can still use the initial.
+- identity_signals: the screenshot shows individual people (not metrics), e.g. Instagram comments, follower lists, tagged-user lists, storefront lead lists with names, email lists, event attendance lists. Extract each distinct person visible. Set first_name / last_name when you can split a full name; set username for @handles. Do not invent identities. If a row is anonymous (like "Jen B." on WeddingWire) keep first_name="Jen" and last_name="B." so downstream matching can still use the initial.
 - contract: a PDF or image of a signed agreement. Do not extract; set summary and return.
-- other: anything else.
+- other: anything else (lead inquiries, calendars, invoices, venue photos all map to "other" at this top-level for back-compat).
+
+Rules for screenshot_intent (new, granular):
+- lead_inquiry: a Knot / Zola / WeddingWire / website lead detail page or inquiry email showing one couple. Populate lead_inquiry. Top-level intent = "other".
+- reviews: same as the top-level reviews bucket.
+- storefront_analytics: same as the top-level storefront_analytics bucket.
+- identity_signals: same as the top-level identity_signals bucket.
+- calendar: a calendar view, day grid, week grid, or single event detail showing dates, times, slots. Populate calendar_event. Top-level intent = "other".
+- contract: a PDF / scan of a signed agreement. Do not extract clause text; set summary only. Top-level intent = "contract".
+- invoice: a vendor invoice, receipt, or bill. Populate invoice. Top-level intent = "other".
+- venue_photo: a photograph of the venue itself (interior, exterior, ceremony space, dance floor, getting-ready suite). No text to extract. Top-level intent = "other".
+- other: anything that does not fit above.
 
 The same screenshot can carry BOTH analytics AND identities (e.g. a storefront with a visible lead list). Set the primary intent, then populate whichever fields apply.
 
@@ -199,6 +391,19 @@ Respond with JSON only.`
         receivedIntent: (parsed as { intent?: unknown })?.intent,
       })
       return null
+    }
+    // Bug 13: validate screenshot_intent when present. A model that
+    // returns an unknown screenshot_intent gets coerced to undefined so
+    // dispatch falls back to the legacy intent-only path.
+    const validScreenshotIntents: VisionScreenshotIntent[] = [
+      'lead_inquiry', 'reviews', 'storefront_analytics', 'identity_signals',
+      'calendar', 'contract', 'invoice', 'venue_photo', 'other',
+    ]
+    if (parsed.screenshot_intent && !validScreenshotIntents.includes(parsed.screenshot_intent)) {
+      console.warn('[brain-dump/vision] unexpected screenshot_intent, dropping field', {
+        receivedScreenshotIntent: parsed.screenshot_intent,
+      })
+      parsed.screenshot_intent = undefined
     }
     return parsed
   } catch {
@@ -262,12 +467,39 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'rawText exceeds 100 KB cap' }, { status: 400 })
   }
 
-  const inputType = (payload.inputType && ['text', 'voice', 'image', 'pdf', 'csv', 'mixed'].includes(payload.inputType))
+  // Bug 10 (2026-05-09). The client value is treated as a HINT, never
+  // authoritative. We re-derive inputType from the actual attachment
+  // (MIME or extension) below so a mis-tagged or malicious payload
+  // (e.g. inputType='csv' with a PDF attachment) cannot route binary
+  // garbage into the CSV sniffer. The branches further down that
+  // dispatch on attachment.type/name are the real guards; this value
+  // is for logging + the brain_dump_entries.input_type column.
+  const clientHintInputType = (payload.inputType && ['text', 'voice', 'image', 'pdf', 'csv', 'mixed'].includes(payload.inputType))
     ? payload.inputType
     : 'text'
 
   const supabase = createServiceClient()
   const attachment = extractAttachmentMeta(rawText)
+
+  // Bug 10: server-side derivation. MIME wins; extension is a fallback.
+  // No attachment → 'text' regardless of what the client sent.
+  function deriveInputType(att: { name: string; type: string } | null, hint: string): string {
+    if (!att) return 'text'
+    const mime = (att.type || '').toLowerCase()
+    const lower = (att.name || '').toLowerCase()
+    if (mime.startsWith('image/')) return 'image'
+    if (mime === 'application/pdf' || lower.endsWith('.pdf')) return 'pdf'
+    if (mime === 'text/csv' || lower.endsWith('.csv')) return 'csv'
+    if (mime === 'application/json' || lower.endsWith('.json')) return 'text'
+    if (mime.startsWith('text/')) return 'text'
+    // Unknown attachment type: trust the client hint when it's one of
+    // the simple shapes; otherwise fall back to 'text'. Either way the
+    // downstream branches dispatch on attachment.type/name directly,
+    // so this value is recorded but not load-bearing.
+    if (['text', 'image', 'pdf', 'csv', 'mixed'].includes(hint)) return hint
+    return 'text'
+  }
+  const inputType = deriveInputType(attachment, clientHintInputType)
 
   // C-INGEST-3 (2026-05-08). Idempotency on re-upload. Hash the canonical
   // input — for attachments that's the file bytes (the [Attached file: ...]
@@ -296,7 +528,7 @@ export async function POST(request: NextRequest) {
     const dedupCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
     const { data: dup } = await supabase
       .from('brain_dump_entries')
-      .select('id, parse_status, clarification_question, created_at')
+      .select('id, parse_status, clarification_question, created_at, parse_result')
       .eq('venue_id', auth.venueId)
       .eq('content_hash', contentHash)
       .gte('created_at', dedupCutoff)
@@ -306,11 +538,33 @@ export async function POST(request: NextRequest) {
       .maybeSingle()
     if (dup) {
       const ageHours = Math.floor((Date.now() - new Date(dup.created_at as string).getTime()) / 36e5)
+      // Bug 4 (2026-05-09). Pre-fix the duplicate path returned the
+      // NEW (no-op) row's id with intent='duplicate_upload', so when
+      // the prior entry was parked at needs_clarification the bubble
+      // showed a dismiss-only failure card. Coordinator clicked
+      // Dismiss, the no-op row got stamped dismissed, and the
+      // ORIGINAL parked entry was still sitting unresolved. They
+      // thought they handled it; they didn't.
+      //
+      // Fix: when the prior entry is needs_clarification, return the
+      // ORIGINAL entry's id + intent + clarificationQuestion so the
+      // bubble surfaces the actual Confirm/Dismiss the coordinator
+      // needs to act on. When the prior entry is confirmed or
+      // dismissed, the existing UX (just "already processed N hours
+      // ago") is fine.
+      const isParked = dup.parse_status === 'needs_clarification'
+      const priorParseResult =
+        (dup.parse_result ?? {}) as Record<string, unknown> | null
+      const resolvedPriorIntent = isParked
+        ? deriveIntentFromParseResult(priorParseResult)
+        : null
       return NextResponse.json({
         entryId: dup.id,
-        intent: 'duplicate_upload',
+        // When parked, surface the prior intent so the bubble shows the
+        // right Confirm button instead of a dismiss-only failure card.
+        intent: resolvedPriorIntent ?? 'duplicate_upload',
         confidence: 100,
-        needsClarification: dup.parse_status === 'needs_clarification',
+        needsClarification: isParked,
         clarificationQuestion: dup.clarification_question,
         deduped: true,
         message: `Already processed ${ageHours === 0 ? 'minutes' : `${ageHours} hour${ageHours === 1 ? '' : 's'}`} ago. Open the prior entry instead of re-running.`,
@@ -357,8 +611,62 @@ export async function POST(request: NextRequest) {
     if (urlOnly) {
       const fetchResult = await fetchAndExtractUrl(urlOnly)
 
-      // Successful Pinterest / generic fetch — propose with the
-      // extracted summary. Coordinator confirm routes through
+      // Bug 16 (2026-05-09). Auth-required social URL (private IG post,
+      // gated X, login-walled FB). Treat like Google Doc: propose-only
+      // with a paste-needed clarification. Place this check BEFORE the
+      // generic propose path so an empty body doesn't surface a useless
+      // confirm card.
+      if (
+        fetchResult.ok &&
+        fetchResult.proposeOnlyReason === 'auth_required'
+      ) {
+        const q = fetchResult.summaryForCoordinator
+        await createNotification({
+          venueId: auth.venueId,
+          type: 'brain_dump_url_auth_required',
+          title: `Social URL needs paste: ${fetchResult.url}`,
+          body: JSON.stringify({
+            entryId: entry.id,
+            url: fetchResult.url,
+            shape: fetchResult.shape,
+            reason: fetchResult.proposeOnlyReason,
+          }),
+        })
+        // No matching kind in the discriminated schema for auth-required
+        // social yet — store under url_google_doc_deferred (closest
+        // semantic: "URL we cannot read, paste needed") so the resolve
+        // route's existing handler picks it up. Reason carries the real
+        // shape for observability.
+        const authPayload: BrainDumpParseResult = {
+          kind: 'url_google_doc_deferred',
+          url: fetchResult.url,
+          reason: `${fetchResult.shape}:auth_required`,
+        }
+        await supabase.from('brain_dump_entries').update({
+          parse_status: 'needs_clarification',
+          clarification_question: q,
+          parse_result: {
+            ...authPayload,
+            url_fetch: {
+              url: fetchResult.url,
+              shape: fetchResult.shape,
+              proposeOnlyReason: 'auth_required',
+            },
+          },
+          parsed_at: new Date().toISOString(),
+        }).eq('id', entry.id)
+        return NextResponse.json({
+          entryId: entry.id,
+          intent: 'url_auth_required',
+          confidence: 60,
+          needsClarification: true,
+          clarificationQuestion: q,
+          urlShape: fetchResult.shape,
+        })
+      }
+
+      // Successful Pinterest / social / generic fetch — propose with
+      // the extracted summary. Coordinator confirm routes through
       // classifier.
       if (fetchResult.ok && fetchResult.shape !== 'google_doc') {
         const q = `Fetch as KB? ${fetchResult.summaryForCoordinator}`
@@ -376,10 +684,31 @@ export async function POST(request: NextRequest) {
             extractedText: fetchResult.extractedText,
           }),
         })
+        const urlPayload: BrainDumpParseResult =
+          fetchResult.shape === 'pinterest'
+            ? {
+                kind: 'url_pinterest_preview',
+                url: fetchResult.url,
+                title: fetchResult.title,
+                description: fetchResult.description,
+                imageUrl: fetchResult.imageUrl,
+                extractedText: fetchResult.extractedText,
+              }
+            : {
+                kind: 'url_generic_preview',
+                url: fetchResult.url,
+                title: fetchResult.title,
+                description: fetchResult.description,
+                extractedText: fetchResult.extractedText,
+              }
         await supabase.from('brain_dump_entries').update({
           parse_status: 'needs_clarification',
           clarification_question: q,
+          // Bug 11: discriminated parse_result. The legacy `url_fetch`
+          // sub-object stays alongside `kind` for back-compat with
+          // any reader that still sniffs the old shape.
           parse_result: {
+            ...urlPayload,
             url_fetch: {
               url: fetchResult.url,
               shape: fetchResult.shape,
@@ -415,10 +744,16 @@ export async function POST(request: NextRequest) {
             reason: fetchResult.proposeOnlyReason,
           }),
         })
+        const gdocPayload: BrainDumpParseResult = {
+          kind: 'url_google_doc_deferred',
+          url: fetchResult.url,
+          reason: fetchResult.proposeOnlyReason ?? 'oauth_required',
+        }
         await supabase.from('brain_dump_entries').update({
           parse_status: 'needs_clarification',
           clarification_question: q,
           parse_result: {
+            ...gdocPayload,
             url_fetch: {
               url: fetchResult.url,
               shape: 'google_doc',
@@ -456,10 +791,12 @@ export async function POST(request: NextRequest) {
       try {
         parsed = JSON.parse(fileText)
       } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        const payload: BrainDumpParseResult = { kind: 'json_parse_failed', reason }
         await supabase.from('brain_dump_entries').update({
           parse_status: 'needs_clarification',
           clarification_question: 'Could not parse the attached JSON. Re-export from your tool and try again.',
-          parse_result: { json_parse_error: err instanceof Error ? err.message : String(err) },
+          parse_result: { ...payload, json_parse_error: reason },
           parsed_at: new Date().toISOString(),
         }).eq('id', entry.id)
         return NextResponse.json({
@@ -474,10 +811,15 @@ export async function POST(request: NextRequest) {
       // Envelope validation. Empty rows is a no-op success, not an error.
       const rowsRaw = Array.isArray(parsed?.rows) ? parsed!.rows : null
       if (!rowsRaw) {
+        const cvPayload: BrainDumpParseResult = {
+          kind: 'json_contract_violation',
+          reason: 'missing rows[] array',
+          sample: parsed,
+        }
         await supabase.from('brain_dump_entries').update({
           parse_status: 'needs_clarification',
           clarification_question: 'JSON did not match the scraper contract (no rows[] array). See docs/ingest/scraper-contract.md.',
-          parse_result: { contract_violation: 'missing rows[] array', sample: parsed },
+          parse_result: { ...cvPayload, contract_violation: 'missing rows[] array' },
           parsed_at: new Date().toISOString(),
         }).eq('id', entry.id)
         return NextResponse.json({
@@ -529,9 +871,20 @@ export async function POST(request: NextRequest) {
         signalDate: typeof parsed?.captured_at === 'string' ? parsed.captured_at : null,
       })
 
+      const scraperPayload: BrainDumpParseResult = {
+        kind: 'scraper_json_imported',
+        source: typeof parsed?.source === 'string' ? parsed.source : null,
+        capturedAt: typeof parsed?.captured_at === 'string' ? parsed.captured_at : null,
+        rowCount: rowsRaw.length,
+      }
       await supabase.from('brain_dump_entries').update({
         parse_status: 'confirmed',
-        parse_result: { scraper_json: { source: parsed?.source, captured_at: parsed?.captured_at, rowCount: rowsRaw.length }, summary, errors },
+        parse_result: {
+          ...scraperPayload,
+          scraper_json: { source: parsed?.source, captured_at: parsed?.captured_at, rowCount: rowsRaw.length },
+          summary,
+          errors,
+        },
         routed_to: [{ table: 'tangential_signals', action: `scraper_import:${summary.written}`, id: null }],
         parsed_at: new Date().toISOString(),
         resolved_at: new Date().toISOString(),
@@ -574,10 +927,17 @@ export async function POST(request: NextRequest) {
       if (detection.confidence >= 70 && detection.shape !== 'unknown') {
         const sizeLabel = dataRows.length > LARGE_CSV_ROW_THRESHOLD ? '' : '(small) '
         const q = `This looks like ${sizeLabel}${humanShape(detection.shape)} data with ${dataRows.length} rows. Confirm to import.`
+        const csvPayload: BrainDumpParseResult = {
+          kind: 'csv_preview',
+          shape: detection.shape,
+          storagePath: attachment.path,
+          rowCount: dataRows.length,
+          columns: detection.columns as Record<string, number | string | undefined>,
+        }
         await supabase.from('brain_dump_entries').update({
           parse_status: 'needs_clarification',
           clarification_question: q,
-          parse_result: { shape: detection.shape, columns: detection.columns, rowCount: dataRows.length, storagePath: attachment.path },
+          parse_result: csvPayload,
           parsed_at: new Date().toISOString(),
         }).eq('id', entry.id)
         const previewIntent = `${detection.shape}_preview`
@@ -642,9 +1002,19 @@ export async function POST(request: NextRequest) {
             sourceEntryId: entry.id,
             signalDate: v.reviews[0]?.review_date ?? null,
           })
+          const reviewsPayload: BrainDumpParseResult = {
+            kind: 'vision_reviews',
+            reviews: v.reviews.map((r) => ({
+              source: (r.source ?? 'other').toLowerCase(),
+              reviewer_name: r.reviewer_name,
+              rating: r.rating,
+              body: r.body,
+              review_date: r.review_date ?? null,
+            })),
+          }
           await supabase.from('brain_dump_entries').update({
             parse_status: 'confirmed',
-            parse_result: { vision: v, summary, identitySummary },
+            parse_result: { ...reviewsPayload, vision: v, summary, identitySummary },
             routed_to: [
               { table: 'reviews', action: `vision_import:${summary.inserted}`, id: null },
               { table: 'tangential_signals', action: `identity_signals:${identitySummary.written}`, id: null },
@@ -699,10 +1069,19 @@ export async function POST(request: NextRequest) {
               id: null,
             })
           }
+          const storefrontPayload: BrainDumpParseResult = {
+            kind: 'vision_storefront_analytics',
+            analytics: {
+              source: v.analytics.source ?? 'other',
+              metric: v.analytics.metric ?? 'other',
+              rows: v.analytics.rows,
+            },
+            identities: v.identities,
+          }
           await supabase.from('brain_dump_entries').update({
             parse_status: 'needs_clarification',
             clarification_question: q,
-            parse_result: { vision: v, identitySummary },
+            parse_result: { ...storefrontPayload, vision: v, identitySummary },
             routed_to: routedTo,
             parsed_at: new Date().toISOString(),
           }).eq('id', entry.id)
@@ -729,9 +1108,14 @@ export async function POST(request: NextRequest) {
             sourceEntryId: entry.id,
             sourceContext: v.summary ?? null,
           })
+          const idPayload: BrainDumpParseResult = {
+            kind: 'vision_identity_signals',
+            summary: v.summary ?? null,
+            identities: v.identities,
+          }
           await supabase.from('brain_dump_entries').update({
             parse_status: 'confirmed',
-            parse_result: { vision: v, summary },
+            parse_result: { ...idPayload, vision: v, identitySummary: summary },
             routed_to: [{ table: 'tangential_signals', action: `identity_signals:${summary.written}`, id: null }],
             parsed_at: new Date().toISOString(),
             resolved_at: new Date().toISOString(),
@@ -750,19 +1134,77 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Other image types: store vision summary, park for triage.
+        // Bug 13 (2026-05-09). Granular screenshot dispatch. Pre-fix
+        // the only screenshots that produced useful routing were
+        // reviews / storefront_analytics / identity_signals / contract.
+        // Knot lead inquiries, calendar entries, contracts, vendor
+        // invoices, and venue photos all fell into "Other image types"
+        // with a generic clarification. Dispatch on screenshot_intent
+        // when present so each shape gets a tailored prompt + next-step
+        // hint. The parse_result kind stays 'vision_other' (Agent B's
+        // schema is owned elsewhere and we don't add new kinds here)
+        // but the clarification text steers the coordinator toward the
+        // right surface.
+
+        function visionClarificationFor(v: VisionExtraction): string {
+          const si = v.screenshot_intent
+          if (si === 'lead_inquiry' && v.lead_inquiry) {
+            const li = v.lead_inquiry
+            const bits: string[] = []
+            if (li.name) bits.push(li.name)
+            if (li.email) bits.push(li.email)
+            if (li.wedding_date) bits.push(`wedding ${li.wedding_date}`)
+            if (li.guest_count) bits.push(`${li.guest_count} guests`)
+            if (li.source_platform) bits.push(`from ${li.source_platform}`)
+            const summary = bits.length ? bits.join(', ') : (v.summary ?? 'a lead inquiry')
+            return `Looks like a lead inquiry (${summary}). Confirm to add the couple and the inquiry to your pipeline.`
+          }
+          if (si === 'calendar' && v.calendar_event) {
+            const ce = v.calendar_event
+            const parts: string[] = []
+            if (ce.title) parts.push(ce.title)
+            if (ce.date) parts.push(ce.date)
+            if (ce.start_time) parts.push(ce.start_time)
+            if (ce.kind) parts.push(`(${ce.kind})`)
+            const summary = parts.length ? parts.join(' ') : (v.summary ?? 'a calendar entry')
+            return `Looks like a calendar entry: ${summary}. Confirm to add it to your availability or events surface.`
+          }
+          if (si === 'contract') {
+            return 'Looks like a signed contract. Contracts are too risky to import from a screenshot. Use the upload-contract surface to file the signed PDF directly.'
+          }
+          if (si === 'invoice' && v.invoice) {
+            const inv = v.invoice
+            const parts: string[] = []
+            if (inv.vendor) parts.push(inv.vendor)
+            if (typeof inv.total === 'number') parts.push(`$${inv.total.toLocaleString()}`)
+            if (inv.date) parts.push(inv.date)
+            const summary = parts.length ? parts.join(', ') : (v.summary ?? 'a vendor invoice')
+            return `Looks like a vendor invoice (${summary}). I don't auto-import invoices from screenshots. Add it through your vendor / expense surface.`
+          }
+          if (si === 'venue_photo') {
+            return 'Looks like a venue photo. Want me to add it to your brand assets? Confirm to file under venue assets, or dismiss.'
+          }
+          return v.summary ?? 'Image attached, what should I do with it?'
+        }
+
+        const otherPayload: BrainDumpParseResult = {
+          kind: 'vision_other',
+          summary: v.summary ?? null,
+        }
+        const clarification = visionClarificationFor(v)
         await supabase.from('brain_dump_entries').update({
           parse_status: 'needs_clarification',
-          clarification_question: v.summary ?? 'Image attached — what should I do with it?',
-          parse_result: { vision: v },
+          clarification_question: clarification,
+          parse_result: { ...otherPayload, vision: v },
           parsed_at: new Date().toISOString(),
         }).eq('id', entry.id)
         return NextResponse.json({
           entryId: entry.id,
           intent: v.intent,
+          screenshotIntent: v.screenshot_intent ?? null,
           confidence: 50,
           needsClarification: true,
-          clarificationQuestion: v.summary ?? null,
+          clarificationQuestion: clarification,
         })
       }
     }
@@ -785,11 +1227,16 @@ export async function POST(request: NextRequest) {
     const buf = await readAttachedFileBuffer(supabase, attachment.path)
     if (buf) {
       if (buf.length > PDF_SIZE_CAP_BYTES) {
-        const q = `PDF (${attachment.name}) is ${(buf.length / 1024 / 1024).toFixed(1)}MB — over the ${PDF_SIZE_CAP_BYTES / 1024 / 1024}MB cap. Trim it down or paste the relevant section as text.`
+        const q = `PDF (${attachment.name}) is ${(buf.length / 1024 / 1024).toFixed(1)}MB, over the ${PDF_SIZE_CAP_BYTES / 1024 / 1024}MB cap. Trim it down or paste the relevant section as text.`
+        const oversizedPayload: BrainDumpParseResult = {
+          kind: 'pdf_oversized',
+          name: attachment.name,
+          bytes: buf.length,
+        }
         await supabase.from('brain_dump_entries').update({
           parse_status: 'needs_clarification',
           clarification_question: q,
-          parse_result: { pdf: { rejected: 'oversized', bytes: buf.length, name: attachment.name } },
+          parse_result: { ...oversizedPayload, pdf: { rejected: 'oversized', bytes: buf.length, name: attachment.name } },
           parsed_at: new Date().toISOString(),
         }).eq('id', entry.id)
         return NextResponse.json({
@@ -804,7 +1251,17 @@ export async function POST(request: NextRequest) {
       const pdf = await extractPdfText(buf)
       if (pdf.ok && pdf.text.length > 0) {
         const preview = pdf.text.slice(0, 800) + (pdf.text.length > 800 ? '…' : '')
-        const q = `PDF "${attachment.name}" (${pdf.pages ?? '?'} page${pdf.pages === 1 ? '' : 's'}, ${pdf.text.length.toLocaleString()} chars${pdf.truncated ? ', truncated' : ''}) parsed. Confirm to file via the standard classifier.\n\nPreview:\n${preview}`
+        // Bug 17 (2026-05-09). When the PDF was truncated at the 50K
+        // char cap, surface the loss explicitly in the clarification
+        // text so the coordinator knows the rest of the document is
+        // sitting in storage waiting on a follow-up. Pre-fix the only
+        // hint was a parenthetical "truncated" in the size summary,
+        // which a coordinator dropping a 200-page brochure would not
+        // notice.
+        const truncationNote = pdf.truncated
+          ? `\n\nNote: extracted ${pdf.pages ?? '?'} pages, but only the first ~50K characters fit in the classifier window. The rest of the PDF is in storage; let me know if you want me to summarise the rest separately.`
+          : ''
+        const q = `PDF "${attachment.name}" (${pdf.pages ?? '?'} page${pdf.pages === 1 ? '' : 's'}, ${pdf.text.length.toLocaleString()} chars${pdf.truncated ? ', truncated' : ''}) parsed. Confirm to file via the standard classifier.${truncationNote}\n\nPreview:\n${preview}`
         await createNotification({
           venueId: auth.venueId,
           type: 'brain_dump_pdf_confirm',
@@ -818,10 +1275,20 @@ export async function POST(request: NextRequest) {
             preview,
           }),
         })
+        const pdfPayload: BrainDumpParseResult = {
+          kind: 'pdf_preview',
+          name: attachment.name,
+          pages: pdf.pages,
+          chars: pdf.text.length,
+          truncated: pdf.truncated,
+          extractedText: pdf.text,
+          storagePath: attachment.path,
+        }
         await supabase.from('brain_dump_entries').update({
           parse_status: 'needs_clarification',
           clarification_question: q,
           parse_result: {
+            ...pdfPayload,
             pdf: {
               name: attachment.name,
               pages: pdf.pages,
@@ -841,6 +1308,10 @@ export async function POST(request: NextRequest) {
           clarificationQuestion: q,
           pdfPages: pdf.pages,
           pdfChars: pdf.text.length,
+          // Bug 17: surface truncation flag so the bubble can render a
+          // dedicated hint above the Confirm button. Pre-fix the bubble
+          // had no way to know the PDF was truncated.
+          pdfTruncated: pdf.truncated,
         })
       }
 
@@ -861,10 +1332,15 @@ export async function POST(request: NextRequest) {
           question: q,
         }),
       })
+      const failedPayload: BrainDumpParseResult = {
+        kind: 'pdf_extract_failed',
+        name: attachment.name,
+        reason: pdf.reason ?? 'unknown',
+      }
       await supabase.from('brain_dump_entries').update({
         parse_status: 'needs_clarification',
         clarification_question: q,
-        parse_result: { pdf: { name: attachment.name, error: pdf.reason ?? 'unknown' } },
+        parse_result: { ...failedPayload, pdf: { name: attachment.name, error: pdf.reason ?? 'unknown' } },
         parsed_at: new Date().toISOString(),
       }).eq('id', entry.id)
       return NextResponse.json({
