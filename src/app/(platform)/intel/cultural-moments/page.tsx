@@ -4,6 +4,7 @@ import { useState, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useSupabaseList } from '@/lib/hooks/use-supabase-list'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { useVenueScope } from '@/lib/contexts/venue-scope-context'
 import {
   Sparkles,
   Plus,
@@ -12,6 +13,8 @@ import {
   XCircle,
   Clock,
   Info,
+  Archive,
+  Wand2,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -48,7 +51,9 @@ interface Moment {
   evidence: Record<string, unknown>
   influence_weight: number | null
   geo_scope: string | null
-  proposed_by: 'system' | 'ai' | 'coordinator'
+  // 2026-05-09: 'ai_llm' added (mig 250) for the judgement-tier Sonnet
+  // proposer. Statistical proposer keeps 'ai'.
+  proposed_by: 'system' | 'ai' | 'ai_llm' | 'coordinator'
   reviewed_at: string | null
   created_at: string
   // Per-venue state — null when this venue hasn't decided.
@@ -146,6 +151,15 @@ function formatRange(startIso: string, endIso: string | null): string {
 export default function CulturalMomentsPage() {
   const supabase = createClient()
   const venueId = useVenueId()
+  // TRENDS-DIAGNOSIS Fix 2 (2026-05-09). isDemo from VenueScopeProvider
+  // gates the legacy demo-seed cultural moments (`evidence.source='demo
+  // seed'`). Pre-fix those 6 historical rows surfaced for every venue
+  // including production tenants — the seed data was inserted globally
+  // without venue scoping. We filter them at read time so non-demo
+  // venues never see them, while demo venues continue to use them
+  // (their `venue_cultural_moment_state` rows were backfilled by
+  // migration 167).
+  const { isDemo } = useVenueScope()
   const [error, setError] = useState<string | null>(null)
   const [showProposeForm, setShowProposeForm] = useState(false)
   // Stream HHH Bug 15: active category-group tab for the propose-and-
@@ -161,6 +175,12 @@ export default function CulturalMomentsPage() {
   const [newGeoScope, setNewGeoScope] = useState('us')
   const [newOngoing, setNewOngoing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  // TRENDS-DIAGNOSIS Fix 3 (2026-05-09). Manual-trigger button state
+  // for the LLM proposer. The cron fires daily at 09:30 UTC; the button
+  // POSTs to /api/intel/cultural-moments/llm-propose so a coordinator
+  // can refresh the queue NOW without waiting.
+  const [llmRunning, setLlmRunning] = useState(false)
+  const [llmResult, setLlmResult] = useState<string | null>(null)
 
   // 2026-05-01 (review pass 4 follow-up): use the shared list hook.
   // 2026-05-02 (migration 167): also pull this venue's state rows so each
@@ -325,21 +345,62 @@ export default function CulturalMomentsPage() {
   // Bucket by per-venue decision, falling back to global lifecycle for
   // the "awaiting your decision" pile. Migration 167.
   //   - awaiting       → no venue_state row + global status != dismissed
-  //                      (covers "proposed globally", "another venue
-  //                      confirmed but you haven't decided", etc.)
+  //                      AND end_at >= now()
+  //   - past           → no venue_state row + end_at < now() (history)
   //   - venueConfirmed → this venue's correlation engine reads it
   //   - venueDismissed → this venue ignores it
+  //
+  // TRENDS-DIAGNOSIS Fix 1 (2026-05-09). Pre-fix the awaiting bucket
+  // included rows whose end_at was already in the past. The cron sub-
+  // step archive_expired_moments now flips those to status='archived'
+  // daily, but we filter at read time too as a safety net so a fresh
+  // page load before the next cron run still shows a clean queue.
+  // Past moments render in the "Past moments (archive)" section
+  // collapsed by default — they're history, not actionable, but
+  // available for audit.
+  //
+  // TRENDS-DIAGNOSIS Fix 2 (2026-05-09). Demo-seed rows (evidence.source
+  // === 'demo seed') only render for demo callers. Production tenants
+  // never see the legacy fictional moments.
+  const nowMs = useMemo(() => Date.now(), [])
+  const visibleMoments = useMemo(() => {
+    return moments.filter((m) => {
+      const src = (m.evidence as Record<string, unknown> | null)?.source
+      if (src === 'demo seed' && !isDemo) return false
+      return true
+    })
+  }, [moments, isDemo])
+
+  function isExpired(m: Moment): boolean {
+    if (!m.end_at) return false
+    const endMs = new Date(m.end_at).getTime()
+    return Number.isFinite(endMs) && endMs < nowMs
+  }
+
   const awaiting = useMemo(
-    () => moments.filter((m) => m.venue_state === null && m.status !== 'dismissed'),
-    [moments],
+    () =>
+      visibleMoments.filter(
+        (m) =>
+          m.venue_state === null &&
+          m.status !== 'dismissed' &&
+          !isExpired(m),
+      ),
+    [visibleMoments, nowMs],
+  )
+  const past = useMemo(
+    () =>
+      visibleMoments.filter(
+        (m) => m.venue_state === null && m.status !== 'dismissed' && isExpired(m),
+      ),
+    [visibleMoments, nowMs],
   )
   const venueConfirmed = useMemo(
-    () => moments.filter((m) => m.venue_state === 'confirmed'),
-    [moments],
+    () => visibleMoments.filter((m) => m.venue_state === 'confirmed'),
+    [visibleMoments],
   )
   const venueDismissed = useMemo(
-    () => moments.filter((m) => m.venue_state === 'dismissed'),
-    [moments],
+    () => visibleMoments.filter((m) => m.venue_state === 'dismissed'),
+    [visibleMoments],
   )
 
   // Stream HHH Bug 15: per-group counts for the awaiting tab strip.
@@ -352,6 +413,47 @@ export default function CulturalMomentsPage() {
     }
     return map
   }, [awaiting])
+
+  // TRENDS-DIAGNOSIS Fix 3 (2026-05-09). Manual run of the LLM
+  // proposer. POSTs to /api/intel/cultural-moments/llm-propose with
+  // default scope=venue (caller's venue only). Refreshes the queue
+  // on success so newly proposed moments surface immediately.
+  async function handleRunLlmProposer() {
+    if (llmRunning) return
+    setLlmRunning(true)
+    setLlmResult(null)
+    setError(null)
+    try {
+      const res = await fetch('/api/intel/cultural-moments/llm-propose', {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error ?? `LLM proposer failed (${res.status})`)
+      }
+      const body = (await res.json()) as {
+        momentsProposed: number
+        momentsDeduped: number
+        sampleTitles: string[]
+        errors: number
+      }
+      const parts: string[] = []
+      if (body.momentsProposed > 0) {
+        parts.push(`${body.momentsProposed} new ${body.momentsProposed === 1 ? 'moment' : 'moments'} proposed`)
+      } else {
+        parts.push('No new moments proposed')
+      }
+      if (body.momentsDeduped > 0) parts.push(`${body.momentsDeduped} deduped`)
+      if (body.errors > 0) parts.push(`${body.errors} ${body.errors === 1 ? 'error' : 'errors'}`)
+      const summary = parts.join(', ') + '. Refreshing queue.'
+      setLlmResult(summary)
+      await fetchMoments()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'LLM proposer failed')
+    } finally {
+      setLlmRunning(false)
+    }
+  }
 
   const activeGroupRows = awaitingByGroup.get(activeGroup) ?? []
   const activeGroupDef = CATEGORY_GROUPS.find((g) => g.id === activeGroup) ?? CATEGORY_GROUPS[0]!
@@ -366,13 +468,29 @@ export default function CulturalMomentsPage() {
             <Sparkles className="w-5 h-5 text-sage-700" />
             <h1 className="font-heading text-2xl font-semibold text-sage-900">Cultural moments</h1>
           </div>
-          <button
-            onClick={() => setShowProposeForm(!showProposeForm)}
-            className="inline-flex items-center gap-1 rounded bg-sage-100 hover:bg-sage-200 text-sage-800 text-sm px-3 py-1.5"
-          >
-            <Plus className="w-4 h-4" />
-            {showProposeForm ? 'Cancel' : 'Propose moment'}
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* TRENDS-DIAGNOSIS Fix 3 (2026-05-09). Manual trigger for
+                the LLM proposer. The cron fires daily at 09:30 UTC; this
+                button POSTs to /api/intel/cultural-moments/llm-propose
+                so a coordinator can refresh the queue NOW. Sonnet call,
+                cost-ceiling gated per-venue inside the service. */}
+            <button
+              onClick={handleRunLlmProposer}
+              disabled={llmRunning}
+              className="inline-flex items-center gap-1 rounded bg-sage-700 hover:bg-sage-800 disabled:opacity-50 text-white text-sm px-3 py-1.5"
+              title="Run the AI proposer now. The cron normally fires once daily at 09:30 UTC."
+            >
+              <Wand2 className="w-4 h-4" />
+              {llmRunning ? 'Running…' : 'Run LLM proposer now'}
+            </button>
+            <button
+              onClick={() => setShowProposeForm(!showProposeForm)}
+              className="inline-flex items-center gap-1 rounded bg-sage-100 hover:bg-sage-200 text-sage-800 text-sm px-3 py-1.5"
+            >
+              <Plus className="w-4 h-4" />
+              {showProposeForm ? 'Cancel' : 'Propose moment'}
+            </button>
+          </div>
         </div>
         <p className="text-sm text-sage-600 max-w-2xl">
           Trends and cultural moments that affect wedding inquiries.
@@ -388,6 +506,25 @@ export default function CulturalMomentsPage() {
         <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
           <AlertTriangle className="w-4 h-4 mt-0.5" />
           <span>{displayError}</span>
+        </div>
+      )}
+
+      {/* TRENDS-DIAGNOSIS Fix 3 (2026-05-09). Toast for LLM proposer
+          result. Persists until the next run / manual dismiss so the
+          coordinator can read it after the queue refresh. */}
+      {llmResult && (
+        <div className="flex items-start justify-between gap-2 rounded-md bg-sage-50 border border-sage-200 px-3 py-2 text-sm text-sage-800">
+          <div className="flex items-start gap-2">
+            <Wand2 className="w-4 h-4 mt-0.5 text-sage-600" />
+            <span>{llmResult}</span>
+          </div>
+          <button
+            onClick={() => setLlmResult(null)}
+            className="text-sage-500 hover:text-sage-700 text-xs"
+            aria-label="Dismiss"
+          >
+            <XCircle className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
@@ -550,6 +687,73 @@ export default function CulturalMomentsPage() {
         showActions
         emptyMessage="Your venue has not dismissed any moments."
       />
+      {/* TRENDS-DIAGNOSIS Fix 1 (2026-05-09). Past moments (archive).
+          Rows whose end_at < now() are filtered out of the awaiting
+          bucket because they cannot affect future bookings. Surfacing
+          them here keeps the audit trail intact: a coordinator can
+          still see what was proposed but expired before they made a
+          decision. The daily archive_expired sub-step in the cron
+          flips status='archived' (and stamps archive_reason='expired'
+          + an evidence audit trail), at which point they leave this
+          list — but until the next cron tick fires, this is the
+          read-time safety net. */}
+      <PastMomentsSection rows={past.slice(0, 20)} />
+    </div>
+  )
+}
+
+interface PastMomentsSectionProps {
+  rows: Moment[]
+}
+
+function PastMomentsSection({ rows }: PastMomentsSectionProps) {
+  const [expanded, setExpanded] = useState(false)
+  if (rows.length === 0) return null
+  return (
+    <section className="space-y-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 text-sm font-medium text-sage-600 hover:text-sage-900"
+      >
+        <Archive className="w-4 h-4" />
+        <span>
+          Past moments (archive){' '}
+          <span className="text-sage-400 font-normal">({rows.length})</span>
+        </span>
+        <span className="text-xs text-sage-400">{expanded ? 'hide' : 'show'}</span>
+      </button>
+      {expanded && (
+        <ul className="rounded-lg border border-sage-200 bg-sage-50/30 divide-y divide-sage-100">
+          {rows.map((m) => (
+            <li key={m.id} className="px-4 py-3 opacity-75">
+              <PastMomentRow row={m} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function PastMomentRow({ row }: { row: Moment }) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-medium text-sage-700 line-through decoration-sage-300">
+            {row.title}
+          </span>
+          {row.category && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sage-50 text-[10px] font-medium text-sage-500 uppercase">
+              {row.category.replace(/_/g, ' ')}
+            </span>
+          )}
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sage-100 text-[10px] font-medium text-sage-600 uppercase">
+            expired
+          </span>
+        </div>
+        <p className="text-xs text-sage-500 mt-0.5">{formatRange(row.start_at, row.end_at)}</p>
+      </div>
     </div>
   )
 }
@@ -613,8 +817,21 @@ function MomentRow({ row, showActions, showWeight, onConfirm, onDismiss }: Momen
               {row.category.replace(/_/g, ' ')}
             </span>
           )}
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sage-50 text-[10px] font-medium text-sage-500">
-            proposed by {row.proposed_by}
+          <span
+            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+              row.proposed_by === 'ai_llm'
+                ? 'bg-violet-50 text-violet-700'
+                : 'bg-sage-50 text-sage-500'
+            }`}
+            title={
+              row.proposed_by === 'ai_llm'
+                ? 'Proposed by the LLM proposer (judgement-tier Sonnet, names cultural events with evidence URLs).'
+                : row.proposed_by === 'ai'
+                  ? 'Proposed by the statistical detector (search-trend z-score spikes).'
+                  : `Proposed by ${row.proposed_by}.`
+            }
+          >
+            proposed by {row.proposed_by === 'ai_llm' ? 'AI (LLM)' : row.proposed_by}
           </span>
           {row.geo_scope && (
             <span className="font-mono text-[10px] text-sage-500">{row.geo_scope}</span>

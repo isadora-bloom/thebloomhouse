@@ -6,6 +6,7 @@ import { fetchWeatherForecast } from '@/lib/services/intel/weather'
 import { fetchAllDefaultFredSeries } from '@/lib/services/external-context/fred-fetch'
 import { autoProposeFromTrendSpikes } from '@/lib/services/insights/cultural-moments-auto-propose'
 import { autoProposeCulturalMomentsLlmAllVenues } from '@/lib/services/insights/cultural-moments-llm-propose'
+import { archiveExpiredCulturalMoments } from '@/lib/services/external-context/cultural-moments'
 import { runAllVenueAnomalies } from '@/lib/services/intel/anomaly-detection'
 import {
   generateWeeklyBriefing,
@@ -1341,6 +1342,12 @@ async function runFredDailyRefresh(): Promise<{
  *
  * Per-venue dedup is handled inside the service (fingerprint on
  * (term, weekStart) across all venues) — calling repeatedly is safe.
+ *
+ * TRENDS-DIAGNOSIS Fix 1 (2026-05-09): also runs the daily
+ * archive-expired sweep as a sub-step. Folded in here (not a new
+ * Vercel cron entry) because we're at the 40-cron Pro plan limit
+ * and the work is logically contiguous with proposing — both
+ * keep the queue clean.
  */
 async function runCulturalMomentsAutoPropose(): Promise<{
   venuesChecked: number
@@ -1348,6 +1355,7 @@ async function runCulturalMomentsAutoPropose(): Promise<{
   proposed: number
   deduped: number
   errors: number
+  expiredArchived: number
   perVenue: Array<{ venueId: string; spikesDetected: number; proposed: number; deduped: number; errors: number }>
 }> {
   const supabase = createServiceClient()
@@ -1366,6 +1374,7 @@ async function runCulturalMomentsAutoPropose(): Promise<{
     proposed: 0,
     deduped: 0,
     errors: 0,
+    expiredArchived: 0,
     perVenue: [] as Array<{
       venueId: string
       spikesDetected: number
@@ -1373,6 +1382,20 @@ async function runCulturalMomentsAutoPropose(): Promise<{
       deduped: number
       errors: number
     }>,
+  }
+
+  // TRENDS-DIAGNOSIS Fix 1 (2026-05-09): archive expired proposed
+  // moments before re-running the proposer. Order matters: archiving
+  // first means a freshly-proposed moment whose window already closed
+  // (extremely unlikely but possible) gets caught on the NEXT run, not
+  // the same run — keeps the per-tick semantics simple. Service-role
+  // global table — no per-venue loop required.
+  try {
+    const archiveResult = await archiveExpiredCulturalMoments(supabase)
+    summary.expiredArchived = archiveResult.archivedCount
+  } catch (err) {
+    console.error('[cron][cultural_moments_archive_expired] failed:', err)
+    summary.errors += 1
   }
 
   for (const venueId of venueIds) {

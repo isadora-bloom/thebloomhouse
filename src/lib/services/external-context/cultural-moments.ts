@@ -328,3 +328,76 @@ export async function proposeFromAutoDetection(
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   return proposeMoment(supabase, { ...args, proposedBy: 'ai' })
 }
+
+/**
+ * TRENDS-DIAGNOSIS Fix 1 (2026-05-09). Daily auto-archive of expired
+ * proposed cultural moments.
+ *
+ * Pre-fix: rows with `end_at < now()` and `status='proposed'` stayed in
+ * the awaiting-decision queue forever. The user reported "6 awaiting-
+ * decision rows ALL from 2025" — moments whose windows had already
+ * closed but were still surfacing for confirmation. They cannot affect
+ * future bookings; they're history.
+ *
+ * Post-fix: this helper, called as a sub-step of the existing
+ * cultural_moments_auto_propose cron tick (no new Vercel cron entry
+ * — we're at the 40-cron Pro plan limit), flips `status='archived'`
+ * and stamps `archive_reason='expired'` plus an `archived_at` /
+ * `archived_by` audit trail in evidence so coordinators can trace why
+ * the row left the queue.
+ *
+ * Confirmed and dismissed moments are NEVER touched. A confirmed past
+ * moment is a permanent attribution-engine input; dismissing-then-
+ * archiving is two clicks the coordinator already chose. We only
+ * sweep the proposed bucket.
+ *
+ * Idempotent: re-running the function on a row that's already
+ * status='archived' is a no-op because the WHERE clause filters
+ * status='proposed'.
+ */
+export async function archiveExpiredCulturalMoments(
+  supabase: SupabaseClient,
+): Promise<{ archivedCount: number; ids: string[] }> {
+  // Read first so we can stamp the evidence audit trail per-row. A
+  // bulk UPDATE with jsonb_set would also work but row-by-row keeps
+  // the audit trail per-moment in case we ever add per-row reasoning
+  // (different reasons for different rows in the same batch).
+  const nowIso = new Date().toISOString()
+  const { data: expired } = await supabase
+    .from('cultural_moments')
+    .select('id, evidence, end_at')
+    .eq('status', 'proposed')
+    .not('end_at', 'is', null)
+    .lt('end_at', nowIso)
+    .limit(500)
+
+  const rows = (expired ?? []) as Array<{
+    id: string
+    evidence: Record<string, unknown> | null
+    end_at: string | null
+  }>
+  if (rows.length === 0) return { archivedCount: 0, ids: [] }
+
+  const archivedIds: string[] = []
+  for (const row of rows) {
+    const updatedEvidence = {
+      ...(row.evidence ?? {}),
+      archive_reason: 'expired',
+      archived_at: nowIso,
+      archived_by: 'cron:cultural_moments_archive_expired',
+    }
+    const { error } = await supabase
+      .from('cultural_moments')
+      .update({
+        status: 'archived',
+        archive_reason: 'expired',
+        evidence: updatedEvidence,
+        updated_at: nowIso,
+      })
+      .eq('id', row.id)
+      .eq('status', 'proposed') // re-assert to avoid races
+    if (!error) archivedIds.push(row.id)
+  }
+
+  return { archivedCount: archivedIds.length, ids: archivedIds }
+}
