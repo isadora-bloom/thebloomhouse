@@ -40,8 +40,15 @@ import type { ClassicalEvidence, InsightNarration } from '@/lib/services/insight
 
 // 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
 // when migrated to the canonical coordinator-prompt assembler.
+//
+// 2026-05-09 Wave 1C — emotional themes: bumped to v2.1 when the
+// emotional_theme_pulse family landed. The detector reads
+// `aggregateAutoContextThemes` and surfaces wedding-industry-relevant
+// theme uptakes; the narrator validates counts against the per-family
+// allowlist (numbers-guard) and treats sensitive-tagged categories as
+// counts only — never names couples alongside sensitive themes.
 export const BRAIN_INTEL_ENGINE_PROMPT_VERSION =
-  'intelligence-engine-narration.v2'
+  'intelligence-engine-narration.v2.1'
 
 /** All 9 shape-families the 14 detectors fall into. Each family's
  *  framing block lives in `framingFor()` below. */
@@ -72,6 +79,12 @@ export type IntelInsightFamily =
   /** Repeated operational pattern ("Last 3 weddings had delays in
    *  reception_setup phase"). */
   | 'operational_pattern'
+  /** Wave 1C — venue-aggregate emotional theme pulse. Reports a
+   *  category of soft-context observation (cultural ceremony asks,
+   *  vendor preferences, dietary mentions) trending across multiple
+   *  couples. Sensitive-tagged categories (health, grief, etc.) are
+   *  counts-only; couples are never named. */
+  | 'emotional_theme_pulse'
 
 /** Structured numeric facts the narrator passes to the LLM, plus the
  *  template the detector already composed (used as the fallback prose
@@ -174,6 +187,13 @@ function framingFor(family: IntelInsightFamily): string {
         'This insight reports a repeated operational pattern across recent events (timeline delay phases, day-of friction modes).',
         'Frame it as a recurring pattern, not a one-off.',
         'Action: a process or template change that addresses the root cause.',
+      ].join(' ')
+    case 'emotional_theme_pulse':
+      return [
+        'This insight reports a wedding-industry-relevant theme that has trended across multiple couples this period (cultural ceremony asks, vendor preferences, multi-cultural blends, dietary diversity).',
+        'Frame the count and the trend ("8 couples this month vs 2 last month").',
+        'When the framing notes the theme is sensitive (health, grief, financial stress, family conflict), report counts only and NEVER name a couple. Treat it as an audience signal, not a per-couple disclosure.',
+        'Action: a venue-level positioning, vendor-mix, or messaging change that meets the trending need.',
       ].join(' ')
   }
 }

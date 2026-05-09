@@ -76,6 +76,18 @@ interface BriefingContent {
   title?: string
   week_start?: string
   week_end?: string
+  // Wave 1C (2026-05-09): emotional theme rollup. The "Couples we
+  // learned about this week" section consumes this. Sensitive bodies
+  // are pre-redacted upstream; the UI layer NEVER names a couple
+  // alongside a sensitive theme (aggregate ≠ disclose doctrine).
+  emotional_themes?: Array<{
+    category: string
+    noteCount: number
+    weddingCount: number
+    trendDelta: number
+    exemplars: Array<{ body: string; sensitive: boolean; weddingId: string }>
+    containsSensitive: boolean
+  }>
 }
 
 interface Briefing {
@@ -251,6 +263,105 @@ function priorityBg(priority: 'high' | 'medium' | 'low') {
 // ---------------------------------------------------------------------------
 // Digest Section Card — renders one section of the new structured digest
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// EmotionalThemesSection — Wave 1C (2026-05-09)
+// ---------------------------------------------------------------------------
+//
+// "Couples we learned about this week" — surfaces the venue-aggregate
+// theme rollup the briefings service computes via
+// aggregateAutoContextThemes. Sensitive themes show counts only with a
+// muted "private — see lead profiles" pill; the rollup never names a
+// couple in this view.
+
+function EmotionalThemesSection({
+  themes,
+}: {
+  themes: NonNullable<BriefingContent['emotional_themes']>
+}) {
+  if (!themes || themes.length === 0) return null
+  const visible = themes.filter((t) => t.noteCount > 0).slice(0, 8)
+  if (visible.length === 0) return null
+
+  return (
+    <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+      <h3 className="font-heading text-base font-semibold text-sage-900 mb-1 flex items-center gap-2">
+        Couples we learned about this week
+      </h3>
+      <p className="text-xs text-sage-500 mb-4">
+        Soft-context themes the AI heard across all couples in this
+        period. Counts and trends only. Sensitive categories are not
+        attributed to individuals here.
+      </p>
+      <ul className="space-y-3">
+        {visible.map((t) => {
+          const trendLabel =
+            t.trendDelta === 0
+              ? 'flat vs prior'
+              : t.trendDelta > 0
+                ? `up ${Math.round(t.trendDelta)}% vs prior`
+                : `down ${Math.abs(Math.round(t.trendDelta))}% vs prior`
+          return (
+            <li
+              key={t.category}
+              className="flex items-start gap-2.5 border-l-2 border-sage-100 pl-3"
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium text-sage-900 capitalize">
+                    {t.category.replace(/_/g, ' ')}
+                  </span>
+                  <span className="text-[11px] text-sage-500">
+                    {t.noteCount} note{t.noteCount === 1 ? '' : 's'} from{' '}
+                    {t.weddingCount} couple{t.weddingCount === 1 ? '' : 's'}
+                  </span>
+                  <span
+                    className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                      t.trendDelta > 0
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : t.trendDelta < 0
+                          ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                          : 'bg-sage-50 text-sage-600 border border-sage-200'
+                    }`}
+                  >
+                    {trendLabel}
+                  </span>
+                  {t.containsSensitive && (
+                    <span
+                      className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200"
+                      title="Contains sensitive content. Couples are not named in aggregate views; review individual lead profiles for context."
+                    >
+                      private
+                    </span>
+                  )}
+                </div>
+                {/* Exemplars: sensitive ones already redacted upstream
+                    by aggregateAutoContextThemes. Render up to 2 short
+                    bullets. */}
+                {t.exemplars.length > 0 && (
+                  <ul className="mt-1.5 space-y-1">
+                    {t.exemplars.slice(0, 2).map((ex, i) => (
+                      <li
+                        key={i}
+                        className={`text-[12px] leading-snug ${
+                          ex.sensitive
+                            ? 'italic text-slate-500'
+                            : 'text-sage-700'
+                        }`}
+                      >
+                        {ex.body}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
 
 function DigestSectionCard({ section }: { section: DigestSection }) {
   if (!section || !section.items) return null
@@ -658,6 +769,13 @@ export default function BriefingsPage() {
             label="Revenue Booked"
           />
         </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Wave 1C: Couples we learned about this week                         */}
+      {/* ------------------------------------------------------------------ */}
+      {!loading && content && content.emotional_themes && content.emotional_themes.length > 0 && (
+        <EmotionalThemesSection themes={content.emotional_themes} />
       )}
 
       {/* ------------------------------------------------------------------ */}

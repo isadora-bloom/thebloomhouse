@@ -10,6 +10,11 @@ import { VenueChip } from '@/components/intel/venue-chip'
 // only — page-spam was the lived problem (same banner on every page,
 // coordinator dismissed without reading).
 import { RiskFlagChip, useBatchRiskFlags, type RiskSummary } from '@/components/intel/risk-flag-chip'
+import {
+  AutoContextChipRender,
+  useBatchAutoContextChips,
+  type AutoContextChip,
+} from '@/components/intel/auto-context-chip'
 import { PriorTouchesChip } from '@/components/agent/PriorTouchesChip'
 import { GmailConnectionStatus } from '@/components/agent/gmail-connection-status'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
@@ -279,6 +284,7 @@ function EmailListItem({
   showVenueChip,
   searchTerm,
   risk,
+  autoContextChip,
 }: {
   interaction: Interaction
   isSelected: boolean
@@ -286,6 +292,7 @@ function EmailListItem({
   showVenueChip: boolean
   searchTerm: string
   risk?: RiskSummary | null
+  autoContextChip?: AutoContextChip | null
 }) {
   const cls = interaction.classification ?? 'inquiry'
   const badge = classificationBadge(cls)
@@ -327,6 +334,15 @@ function EmailListItem({
           {risk && risk.flag_count > 0 && (
             <span onClick={(e) => e.stopPropagation()}>
               <RiskFlagChip summary={risk} />
+            </span>
+          )}
+          {/* Wave 1C: auto-context chip. One per row, highest-priority
+              pinned note (or category-only redaction for sensitive).
+              Stop propagation so the title-tooltip doesn't open the
+              thread when the coordinator hovers. */}
+          {autoContextChip && (
+            <span onClick={(e) => e.stopPropagation()}>
+              <AutoContextChipRender chip={autoContextChip} />
             </span>
           )}
           {/* real-time-verified: bug 26 audit 2026-05-03.
@@ -2076,6 +2092,12 @@ export default function InboxPage() {
   const riskFlags = useBatchRiskFlags(allWeddingIds, {
     venueId: scope.venueId ?? null,
   })
+  // Wave 1C (2026-05-09): one chip per inbox row showing the highest-
+  // priority cached auto-context note. Same batch pattern, different
+  // endpoint. Sensitive notes redact to category only on the wire.
+  const autoContextChips = useBatchAutoContextChips(allWeddingIds, {
+    venueId: scope.venueId ?? null,
+  })
 
   // ---- Stats ----
   const totalCount = interactions.length
@@ -2367,6 +2389,7 @@ export default function InboxPage() {
                     showVenueChip={showVenueChip}
                     searchTerm={isSearching ? sanitizedQuery : ''}
                     risk={interaction.wedding_id ? riskFlags[interaction.wedding_id] : null}
+                    autoContextChip={interaction.wedding_id ? autoContextChips[interaction.wedding_id] : null}
                   />
                   {interaction.pending_draft && (
                     <InlineDraftApproval

@@ -9,6 +9,10 @@ import { VenueChip } from '@/components/intel/venue-chip'
 // Stream HHH Bug 10: InlineInsightBanner removed from /agent/leads.
 import { HeatBadge } from '@/components/intel/heat-badge'
 import { RiskFlagChip, useBatchRiskFlags } from '@/components/intel/risk-flag-chip'
+import {
+  AutoContextChipRender,
+  useBatchAutoContextChips,
+} from '@/components/intel/auto-context-chip'
 import { EssentialsSlider } from '@/components/shell/essentials-slider'
 import { TIER_STYLES, styleForTier, type HeatTier } from '@/lib/heat/tier-colors'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
@@ -636,6 +640,12 @@ export default function LeadsPage() {
   const riskFlags = useBatchRiskFlags(allWeddingIds, {
     venueId: scope.venueId ?? null,
   })
+  // Wave 1C (2026-05-09): one chip per lead surfacing the highest-priority
+  // pinned auto-context note (or category-only redaction for sensitive).
+  // Same batch pattern as risk flags.
+  const autoContextChips = useBatchAutoContextChips(allWeddingIds, {
+    venueId: scope.venueId ?? null,
+  })
 
   return (
     <div className="space-y-6">
@@ -842,6 +852,10 @@ export default function LeadsPage() {
                           {/* Risk-flag chip (T5-ζ.2). Hidden if no
                               cached risk_flag insight or zero flags. */}
                           <RiskFlagChip summary={riskFlags[lead.id]} />
+                          {/* Wave 1C: highest-priority auto-context chip.
+                              Sensitive notes redact to category only;
+                              non-sensitive notes show body on hover. */}
+                          <AutoContextChipRender chip={autoContextChips[lead.id]} />
                           {/* T5-Rixey-UU Bug G: import-warning badge
                               for couple_name issues. Surfaces when the
                               CRM-import pipeline couldn't confidently

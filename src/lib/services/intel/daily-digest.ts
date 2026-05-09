@@ -23,6 +23,10 @@ import {
   enabledCategories,
   type DigestPreferences,
 } from '@/lib/services/intel/digest-preferences'
+import {
+  loadVenueAutoContextRollup,
+  type AutoContextThemeRollup,
+} from '@/lib/services/identity/auto-context-loader'
 
 /**
  * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
@@ -31,8 +35,13 @@ import {
  *
  * 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
  * when migrated to the canonical coordinator-prompt assembler.
+ *
+ * 2026-05-09 Wave 1C — emotional themes: bumped to v2.1 when the
+ * daily digest started receiving a YESTERDAY EMOTIONAL PULSE block
+ * over a 1-day window. Sensitive categories surface as counts only;
+ * couples are never named alongside sensitive themes.
  */
-export const DAILY_DIGEST_PROMPT_VERSION = 'daily-digest.prompt.v2.0'
+export const DAILY_DIGEST_PROMPT_VERSION = 'daily-digest.prompt.v2.1'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -61,6 +70,11 @@ export interface DigestSections {
   }
   alerts: string[]
   briefing_highlight?: string
+  // Wave 1C (2026-05-09): yesterday's emotional theme pulse. 1d window,
+  // tighter exemplar list (1 per category). Sensitive bodies redacted
+  // upstream. Persisted so the digest HTML email can render counts +
+  // redacted exemplars without re-querying.
+  emotional_themes?: AutoContextThemeRollup[]
 }
 
 export interface Digest {
@@ -146,6 +160,14 @@ export async function generateDigest(
     'Team'
 
   // ---- Gather all data in parallel ----
+  // Wave 1C (2026-05-09): include the 1-day emotional theme rollup
+  // alongside the operational pulls so the morning summary can weave
+  // any high-priority sensitive themes from yesterday into the
+  // narrative (counts only, never naming couples).
+  const themePulsePromise = loadVenueAutoContextRollup(supabase, venueId, 1, {
+    headerLabel: 'YESTERDAY EMOTIONAL PULSE',
+    maxThemes: 6,
+  })
   const [
     newInquiriesResult,
     pendingDraftsResult,
@@ -335,6 +357,9 @@ export async function generateDigest(
       )
     : []
 
+  // Resolve the yesterday emotional pulse alongside the section build.
+  const themePulse = await themePulsePromise
+
   const sections: DigestSections = {
     action_needed: {
       pending_drafts: pendingDraftsResult.count ?? 0,
@@ -357,6 +382,7 @@ export async function generateDigest(
       ai_cost: Math.round(aiCost * 100) / 100,
     },
     alerts,
+    emotional_themes: themePulse.rollups,
   }
 
   // ---- Briefing highlight: pull 1-2 recommendations from the latest weekly briefing ----
@@ -426,7 +452,13 @@ export async function generateDigest(
   // Only the LLM call is cached; all DB queries above run fresh every time.
   const digestTaskInstructions =
     'Write a 2-3 sentence summary of the coordinator\'s day. Be warm, direct, and actionable. ' +
-    'If there are items needing attention, lead with those. No markdown.'
+    'If there are items needing attention, lead with those. No markdown. ' +
+    'The user prompt may include a YESTERDAY EMOTIONAL PULSE block listing categories ' +
+    'with note + couple counts. Some categories are tagged "[contains sensitive , do not name couples]". ' +
+    'When that block is present and a high-priority sensitive theme is showing (health, grief, ' +
+    'family_conflict, mental_health, financial_stress), you may briefly flag it as a count ' +
+    '("two couples flagged sensitive context yesterday, check the lead profiles"). ' +
+    'NEVER name a couple alongside a sensitive theme. NEVER quote a sensitive exemplar verbatim.'
   const digestUserPrompt = `Venue: ${venueName}
 Coordinator: ${coordinatorName}
 Date: ${todayStr}
@@ -438,7 +470,7 @@ Performance: ${approvalRate}% approval rate, $${sections.performance.ai_cost} AI
 Alerts: ${alerts.length > 0 ? alerts.join('; ') : 'None'}
 New engagement events: ${engagementResult.count ?? 0}
 ${sections.briefing_highlight ? `Weekly briefing insight: ${sections.briefing_highlight}` : ''}
-
+${themePulse.block ? `\n${themePulse.block}\n` : ''}
 Write the morning summary.`
 
   const digestBuilt = await buildCoordinatorPrompt({

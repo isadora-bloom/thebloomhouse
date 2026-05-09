@@ -68,6 +68,21 @@ export interface SourceQualityRow {
   costPerLead: number | null
   costPerTour: number | null
   costPerBooking: number | null
+
+  // Wave 1C (2026-05-09): per-source emotional theme correlation.
+  // Pulled from wedding_auto_context joined on the source's booked +
+  // first-touch weddings inside the window. Shape:
+  //   { category, noteCount, weddingShare, sensitive }
+  // weddingShare is the percentage of the source's weddings that
+  // mentioned this category (0-100). Sensitive=true means the category
+  // contains health/grief/financial_stress/family_conflict/mental_health
+  // signals — the UI must NOT name couples alongside it. Counts only.
+  topEmotionalThemes: Array<{
+    category: string
+    noteCount: number
+    weddingShare: number
+    sensitive: boolean
+  }>
 }
 
 export async function computeSourceQuality(
@@ -307,6 +322,8 @@ export async function computeSourceQuality(
       costPerLead: null,
       costPerTour: null,
       costPerBooking: null,
+      // Wave 1C: theme correlation populated below.
+      topEmotionalThemes: [],
     })
   }
 
@@ -430,6 +447,7 @@ export async function computeSourceQuality(
         costPerLead: null,
         costPerTour: null,
         costPerBooking: null,
+        topEmotionalThemes: [],
       })
     }
   }
@@ -460,6 +478,153 @@ export async function computeSourceQuality(
     row.costPerLead = row.firstTouchLeads > 0 ? row.spendInWindow / row.firstTouchLeads : null
     row.costPerTour = row.firstTouchTours > 0 ? row.spendInWindow / row.firstTouchTours : null
     row.costPerBooking = row.firstTouchBookings > 0 ? row.spendInWindow / row.firstTouchBookings : null
+  }
+
+  // ---- Wave 1C (2026-05-09): per-source emotional theme correlation ----
+  //
+  // For each source, fetch the soft-context categories that the
+  // source's booked + first-touched weddings have produced inside the
+  // window. This lets the scorecard say "couples from The Knot mention
+  // budget concerns at 2x the rate of direct inquiries".
+  //
+  // Aggregate ≠ disclose: sensitive categories are surfaced as COUNTS
+  // ONLY (per-source weddingShare). The UI must NOT name couples
+  // alongside a sensitive theme.
+  //
+  // Soft-fail: any error returns empty themes for that source. The
+  // scorecard is enrichment, never blocking.
+  try {
+    const SENSITIVE_CATS = new Set([
+      'health',
+      'grief',
+      'financial_stress',
+      'family_conflict',
+      'mental_health',
+    ])
+
+    // Build the source → wedding-id map. We use BOTH booked weddings
+    // (bySource) AND first-touch weddings (ftWeddingsBySource) so a
+    // source with many leads but few bookings still gets coverage.
+    const sourceWeddingMap = new Map<string, Set<string>>()
+    for (const [src, data] of Object.entries(bySource)) {
+      const set = sourceWeddingMap.get(src) ?? new Set<string>()
+      for (const id of data.ids) set.add(id)
+      sourceWeddingMap.set(src, set)
+    }
+    for (const [src, set] of ftWeddingsBySource) {
+      const cur = sourceWeddingMap.get(src) ?? new Set<string>()
+      for (const id of set) cur.add(id)
+      sourceWeddingMap.set(src, cur)
+    }
+
+    // One pass: gather every wedding ID across all sources, fetch the
+    // notes in chunks, then redistribute to source-keyed buckets.
+    const allWeddingIds = Array.from(
+      new Set(Array.from(sourceWeddingMap.values()).flatMap((s) => Array.from(s))),
+    )
+    if (allWeddingIds.length > 0) {
+      type ThemeRow = {
+        wedding_id: string
+        category: string | null
+        sensitive: boolean | null
+      }
+      const allThemes: ThemeRow[] = []
+      const CHUNK = 200
+      for (let i = 0; i < allWeddingIds.length; i += CHUNK) {
+        const chunk = allWeddingIds.slice(i, i + CHUNK)
+        try {
+          const { data, error } = await supabase
+            .from('wedding_auto_context')
+            .select('wedding_id, category, sensitive')
+            .eq('venue_id', venueId)
+            .eq('is_active', true)
+            .in('wedding_id', chunk)
+          if (error) {
+            // Pre-mig-255 fallback (no `sensitive` column).
+            const message = (error as { message?: string }).message ?? ''
+            if (/column .* does not exist/i.test(message)) {
+              const legacy = await supabase
+                .from('wedding_auto_context')
+                .select('wedding_id, category')
+                .eq('venue_id', venueId)
+                .eq('is_active', true)
+                .in('wedding_id', chunk)
+              for (const r of (legacy.data ?? []) as Array<{ wedding_id: string; category: string | null }>) {
+                allThemes.push({ wedding_id: r.wedding_id, category: r.category, sensitive: null })
+              }
+            }
+          } else {
+            for (const r of (data ?? []) as ThemeRow[]) allThemes.push(r)
+          }
+        } catch {
+          // Skip this chunk; theme correlation is enrichment.
+        }
+      }
+
+      // Build per-source theme maps.
+      type Bucket = {
+        // category → set of wedding IDs that mentioned it
+        catWeddings: Map<string, Set<string>>
+        catNotes: Map<string, number>
+        catSensitive: Map<string, boolean>
+      }
+      const themesBySource = new Map<string, Bucket>()
+      // Index theme rows by wedding_id for fast lookup.
+      const themesByWedding = new Map<string, ThemeRow[]>()
+      for (const t of allThemes) {
+        const arr = themesByWedding.get(t.wedding_id) ?? []
+        arr.push(t)
+        themesByWedding.set(t.wedding_id, arr)
+      }
+
+      for (const [src, weddings] of sourceWeddingMap) {
+        const bucket: Bucket = {
+          catWeddings: new Map(),
+          catNotes: new Map(),
+          catSensitive: new Map(),
+        }
+        for (const wid of weddings) {
+          const rows = themesByWedding.get(wid) ?? []
+          for (const r of rows) {
+            const cat = r.category && r.category.trim().length > 0 ? r.category : 'misc'
+            const ws = bucket.catWeddings.get(cat) ?? new Set<string>()
+            ws.add(wid)
+            bucket.catWeddings.set(cat, ws)
+            bucket.catNotes.set(cat, (bucket.catNotes.get(cat) ?? 0) + 1)
+            const wasSensitive = bucket.catSensitive.get(cat) ?? false
+            const nowSensitive = wasSensitive || r.sensitive === true || SENSITIVE_CATS.has(cat)
+            bucket.catSensitive.set(cat, nowSensitive)
+          }
+        }
+        themesBySource.set(src, bucket)
+      }
+
+      // Attach top-3 themes per source row.
+      for (const row of results) {
+        const bucket = themesBySource.get(row.source)
+        if (!bucket) continue
+        const total = sourceWeddingMap.get(row.source)?.size ?? 0
+        if (total === 0) continue
+        const entries = Array.from(bucket.catNotes.entries())
+          .map(([category, noteCount]) => {
+            const ws = bucket.catWeddings.get(category)?.size ?? 0
+            return {
+              category,
+              noteCount,
+              weddingShare: total > 0 ? Math.round((ws / total) * 1000) / 10 : 0,
+              sensitive: bucket.catSensitive.get(category) === true,
+            }
+          })
+          .sort((a, b) => {
+            if (b.weddingShare !== a.weddingShare) return b.weddingShare - a.weddingShare
+            return b.noteCount - a.noteCount
+          })
+          .slice(0, 3)
+        row.topEmotionalThemes = entries
+      }
+    }
+  } catch (err) {
+    console.warn('[source-quality] theme correlation failed:', err)
   }
 
   return results.sort((a, b) => {

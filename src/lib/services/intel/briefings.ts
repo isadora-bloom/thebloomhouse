@@ -23,6 +23,10 @@ import { getLatestIndicators, calculateDemandScore } from './fred-demand'
 import { getActiveAlerts } from './anomaly-detection'
 import { sendEmail as sendGmail } from '../email/gmail'
 import { sendEmail as sendTransactionalEmail } from '../email/transport'
+import {
+  loadVenueAutoContextRollup,
+  type AutoContextThemeRollup,
+} from '../identity/auto-context-loader'
 
 /**
  * Prompt revision identifiers. Per Playbook OPS-21.5.1 / T1-E.
@@ -38,8 +42,15 @@ import { sendEmail as sendTransactionalEmail } from '../email/transport'
  */
 // 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
 // when migrated to the canonical coordinator-prompt assembler.
-export const BRIEFING_PROMPT_VERSION = 'briefings.prompt.v2.0'
-const MONTHLY_BRIEFING_PROMPT_VERSION = 'briefings.monthly.v2.0'
+//
+// 2026-05-09 (Wave 1C — emotional themes) bumped both v2.0 → v2.1:
+// briefings now receive an EMOTIONAL THEMES THIS PERIOD block built by
+// `aggregateAutoContextThemes` so the venue's strategic surface
+// reflects what couples are carrying beyond logistics. Sensitive
+// categories are aggregated as counts; couples are never named
+// alongside sensitive themes (aggregate ≠ disclose doctrine).
+export const BRIEFING_PROMPT_VERSION = 'briefings.prompt.v2.1'
+const MONTHLY_BRIEFING_PROMPT_VERSION = 'briefings.monthly.v2.1'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -88,6 +99,12 @@ interface BriefingContent {
     explanation: string
     top_action: string | null
   }>
+  // Wave 1C (2026-05-09): emotional theme rollup. Counts + trend deltas
+  // by category, with redacted exemplars for sensitive content. Never
+  // names couples alongside sensitive themes — aggregate ≠ disclose.
+  // Briefings page renders this as a "Couples we learned about this
+  // week" section.
+  emotional_themes?: AutoContextThemeRollup[]
 }
 
 interface MonthlyBriefingContent extends BriefingContent {
@@ -514,6 +531,11 @@ The user prompt may also include a MACRO CONTEXT section with confirmed cultural
   - When an upcoming calendar event sits in the next 14 days, mention it as a context cue for the recommendations (e.g. "Memorial Day weekend lands inside this window, expect tour-request volatility.").
   - Do NOT invent macro relationships; if the section is absent or empty, omit macro language from the briefing entirely.
 
+The user prompt may also include an EMOTIONAL THEMES THIS PERIOD section listing categories (life_context / family / vendors / budget / health / dietary / cultural / preferences / etc.) with note counts, distinct couple counts, and percentage trend deltas vs the prior period. Some categories are tagged "[contains sensitive , do not name couples]". When that section is present:
+  - Weave 1-2 of the strongest themes into the narrative, what the venue is hearing from couples right now beyond logistics. ("Five couples flagged vendor preferences this week and three mentioned cultural ceremony asks, both up vs last week.")
+  - For categories tagged sensitive, report the count only. NEVER name a couple alongside a sensitive theme. NEVER quote a sensitive exemplar verbatim. Treat the theme as a signal about the venue's audience, not about an individual.
+  - Do NOT invent themes. If the section is absent or empty, omit emotional-theme language entirely.
+
 Be direct and specific. Quote provided numbers. Do not hedge or use vague language.`
 
 const MONTHLY_TASK_INSTRUCTIONS = `Generate a strategic monthly briefing. Focus on big-picture trends, month-over-month momentum, and longer-term strategic recommendations. Tone: professional but warm, like a trusted advisor delivering a board-level summary.
@@ -530,6 +552,11 @@ The user prompt may include a MACRO CONTEXT block with cultural moments, FRED in
   - Surface the most relevant macro signal in the strategic_recommendations (e.g. "Mortgage rate climbed 60bps over the month and the engine flagged an inverse correlation with tour completions at 60-day lag, consider revisiting payment-plan messaging.").
   - Prefer quoting a correlation narration's title verbatim rather than re-describing the underlying numbers yourself.
   - Do NOT invent macro relationships; if the block is absent or empty, write the briefing without macro language.
+
+The user prompt may also include an EMOTIONAL THEMES THIS PERIOD block listing what couples are mentioning beyond logistics, with counts, distinct couple counts, and trend deltas vs the prior month. Some categories are tagged "[contains sensitive , do not name couples]". When that block is present:
+  - Weave 1-2 of the strongest themes into the strategic narrative ("Cultural ceremony asks doubled vs last month, plus six couples mentioned multi-religious blends, the venue is hearing a clear shift toward fusion programming.").
+  - For sensitive-tagged categories report counts only. NEVER name a couple alongside a sensitive theme. NEVER quote a sensitive exemplar.
+  - Do NOT invent themes; if the block is absent or empty, omit emotional-theme language.
 
 Be decisive in your recommendations.`
 
@@ -565,7 +592,12 @@ export async function generateWeeklyBriefing(
   // The 14-7 day prior window is the canonical comparison.
   const priorFrom = daysAgo(14)
   const priorTo = daysAgo(7)
-  const [metrics, priorMetrics, deviations, weather, indicators, alerts, phaseB, macroContext] = await Promise.all([
+  // Wave 1C (2026-05-09): emotional theme rollup over 7d, with the
+  // prior 7d implied by the loader for trend deltas. Soft-context is
+  // enrichment, so a load failure returns empty rollups + null block
+  // and the LLM simply doesn't see the section.
+  const supabaseForThemes = createServiceClient()
+  const [metrics, priorMetrics, deviations, weather, indicators, alerts, phaseB, macroContext, themePulse] = await Promise.all([
     getWeddingMetrics(venueId, fromDate, toDate),
     getWeddingMetrics(venueId, priorFrom, priorTo),
     detectTrendDeviations(venueId),
@@ -575,6 +607,10 @@ export async function generateWeeklyBriefing(
     getPhaseBWeeklyState(venueId),
     // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09).
     getBriefingMacroContext(venueId),
+    loadVenueAutoContextRollup(supabaseForThemes, venueId, 7, {
+      headerLabel: 'EMOTIONAL THEMES THIS WEEK',
+      maxThemes: 8,
+    }),
   ])
 
   // Classical compute: deltas + change percentages. The LLM never
@@ -658,7 +694,7 @@ PLATFORM SIGNAL HEALTH (last 7 days):
 - Auto-linked to leads: ${phaseB.autoLinked} (Tier 1 deterministic + Tier 2 AI)
 - High-funnel non-converting: ${phaseB.highFunnelNonConverting} candidates engaged deeply but didn't inquire
 - Conflicts to review: ${phaseB.openConflicts}
-${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / correlation narrations):\n${macroContext.block}\n` : ''}
+${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / correlation narrations):\n${macroContext.block}\n` : ''}${themePulse.block ? `\n${themePulse.block}\n` : ''}
 Generate the weekly briefing.`
 
   // Call AI to generate the briefing narrative.
@@ -747,6 +783,10 @@ Generate the weekly briefing.`
       open_conflicts: phaseB.openConflicts,
     },
     anomaly_details,
+    // Wave 1C: persist the structured rollup so the briefings page can
+    // render the "Couples we learned about this week" section without
+    // re-querying. Sensitive bodies are already redacted upstream.
+    emotional_themes: themePulse.rollups,
   }
 
   // Persist to ai_briefings
@@ -792,6 +832,7 @@ export async function generateMonthlyBriefing(
   const priorTo = daysAgo(31)
 
   // Gather current period + prior period metrics + all other data sources
+  const supabaseForMonthlyThemes = createServiceClient()
   const [
     currentMetrics,
     priorMetrics,
@@ -800,6 +841,7 @@ export async function generateMonthlyBriefing(
     indicators,
     alerts,
     macroContext,
+    themePulse,
   ] = await Promise.all([
     getWeddingMetrics(venueId, currentFrom, currentTo),
     getWeddingMetrics(venueId, priorFrom, priorTo),
@@ -809,6 +851,11 @@ export async function generateMonthlyBriefing(
     getActiveAlerts(venueId),
     // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09).
     getBriefingMacroContext(venueId),
+    // Wave 1C (2026-05-09): 30d emotional theme rollup.
+    loadVenueAutoContextRollup(supabaseForMonthlyThemes, venueId, 30, {
+      headerLabel: 'EMOTIONAL THEMES THIS MONTH',
+      maxThemes: 10,
+    }),
   ])
 
   const demandScore = calculateDemandScore(indicators)
@@ -879,7 +926,7 @@ ${weatherSummary}
 
 ANOMALY ALERTS:
 ${alertSummary}
-${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / correlation narrations):\n${macroContext.block}\n` : ''}
+${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / correlation narrations):\n${macroContext.block}\n` : ''}${themePulse.block ? `\n${themePulse.block}\n` : ''}
 Generate the monthly briefing with strategic recommendations.`
 
   // Call AI to generate the monthly briefing.
@@ -936,6 +983,8 @@ Generate the monthly briefing with strategic recommendations.`
     month_over_month: mom,
     strategic_recommendations: aiResult.strategic_recommendations ?? [],
     generated_at: new Date().toISOString(),
+    // Wave 1C: persist the structured rollup for monthly UI render.
+    emotional_themes: themePulse.rollups,
   }
 
   // Persist to ai_briefings

@@ -33,6 +33,7 @@ import {
   type IntelInsightFamily,
   type NarratorFacts,
 } from './intelligence-engine-narration'
+import { aggregateAutoContextThemes } from '../identity/auto-context-loader'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -2747,6 +2748,141 @@ async function detectTimelineAdherence(
 }
 
 // ---------------------------------------------------------------------------
+// Detector 15 (Wave 1C): Emotional Theme Pulse
+// ---------------------------------------------------------------------------
+//
+// Reads `aggregateAutoContextThemes` for the venue and surfaces
+// wedding-industry-relevant themes that show meaningful uptake.
+//
+// Sensitive handling:
+//   - Sensitive categories (health, grief, financial_stress,
+//     family_conflict, mental_health) NEVER fire as `priority: 'high'`
+//     and the narrator framing carries an explicit "counts only, do
+//     not name couples" rule. Numbers-guard validates the theme counts.
+//   - Insights from sensitive categories report COUNTS ONLY in the
+//     framing string. Exemplar bodies are not surfaced to the LLM at
+//     all (they're already redacted upstream by the rollup, and a
+//     belt-and-suspenders strip here keeps the brain prompt clean).
+//
+// Threshold logic:
+//   - Trigger when noteCount >= 4 OR weddingCount >= 3 within the
+//     30d window AND there's a notable trend delta (>=50% increase OR
+//     a fresh category with no prior period activity).
+//   - Caps at the top 3 themes so a single run doesn't flood the
+//     intelligence dashboard.
+
+async function detectEmotionalThemes(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<InsightCandidate[]> {
+  const insights: InsightCandidate[] = []
+  try {
+    const rollups = await aggregateAutoContextThemes(supabase, venueId, 30)
+
+    // Filter to themes worth surfacing.
+    const candidates = rollups
+      .filter((r) => {
+        const meaningful = r.noteCount >= 4 || r.weddingCount >= 3
+        const trending =
+          r.trendDelta >= 50 || (r.trendDelta === 100 && r.noteCount >= 3)
+        return meaningful && trending
+      })
+      .slice(0, 3)
+
+    for (const r of candidates) {
+      const isSensitive = r.containsSensitive
+      // Title structure: "8 couples mentioned cultural ceremony asks
+      // this month, up 300% vs last month".
+      const trendPart =
+        r.trendDelta >= 999
+          ? 'fresh signal vs last month'
+          : r.trendDelta > 0
+            ? `up ${r.trendDelta.toFixed(0)}% vs last month`
+            : 'flat vs last month'
+      const titleTemplate =
+        `${r.weddingCount} couple${r.weddingCount === 1 ? '' : 's'} mentioned ` +
+        `${r.category.replace(/_/g, ' ')} this month, ${trendPart}`
+      const bodyTemplate =
+        `${r.noteCount} soft-context note${r.noteCount === 1 ? '' : 's'} ` +
+        `landed on ${r.category.replace(/_/g, ' ')} from ${r.weddingCount} ` +
+        `distinct couple${r.weddingCount === 1 ? '' : 's'} in the last 30 days. ` +
+        (isSensitive
+          ? 'This is a sensitive category — review the lead profiles individually rather than acting on the aggregate.'
+          : 'A meaningful uptick the venue may want to weave into its positioning.')
+
+      // Framing for the narrator. For sensitive categories, the
+      // framing explicitly forbids couple-naming. For non-sensitive
+      // categories, the framing includes one short non-redacted
+      // exemplar so the prose has color.
+      const safeExemplar = !isSensitive
+        ? r.exemplars.find((e) => !e.sensitive)?.body ?? ''
+        : ''
+      const framingParts = [
+        `${r.weddingCount} couples mentioned ${r.category.replace(/_/g, ' ')} ` +
+          `in ${r.noteCount} soft-context notes over the last 30 days.`,
+        `Trend vs the prior 30 days: ${r.trendDelta.toFixed(0)} percent change.`,
+      ]
+      if (isSensitive) {
+        framingParts.push(
+          'This category is SENSITIVE. Report counts only. Do NOT name any couple. Do NOT quote any exemplar.',
+        )
+      } else if (safeExemplar) {
+        framingParts.push(
+          `One representative observation: "${safeExemplar.slice(0, 140)}".`,
+        )
+      }
+
+      // Numbers allowlist for the guard.
+      const numbers: Array<number | string> = [
+        r.noteCount,
+        r.weddingCount,
+        Math.abs(Math.round(r.trendDelta)),
+        30,
+        '30 days',
+        '30-day',
+      ]
+
+      insights.push({
+        insight_type: 'emotional_theme',
+        category: 'emotional',
+        title: titleTemplate,
+        body: bodyTemplate,
+        action: isSensitive
+          ? 'Review the lead profiles individually. Consider quiet outreach via Sage where appropriate. Do not surface this theme in any outbound copy.'
+          : `Consider how the venue's marketing copy, vendor mix, or onboarding content reflects ${r.category.replace(/_/g, ' ')}.`,
+        // Sensitive themes are never priority high — they're informational,
+        // not action-prompting at the venue level.
+        priority: isSensitive ? 'low' : r.weddingCount >= 5 ? 'medium' : 'low',
+        confidence: confidenceFromN(r.noteCount, 4, 12),
+        data_points: {
+          category: r.category,
+          note_count: r.noteCount,
+          wedding_count: r.weddingCount,
+          trend_delta_pct: r.trendDelta,
+          contains_sensitive: r.containsSensitive,
+          // We deliberately do NOT include exemplar bodies in
+          // data_points for sensitive themes. This keeps the audit
+          // trail clean and prevents downstream surfaces from
+          // accidentally rendering them.
+          window_days: 30,
+        },
+        compared_to: 'prior_30d',
+        expires_at: expiresInDays(14),
+        narrator_facts: {
+          family: 'emotional_theme_pulse',
+          framing: framingParts.join(' '),
+          numbers,
+        },
+      })
+    }
+    return insights
+  } catch (err) {
+    console.error('[intelligence-engine] detectEmotionalThemes failed:', err)
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Analysis Runner
 // ---------------------------------------------------------------------------
 
@@ -2776,6 +2912,8 @@ export async function runIntelligenceAnalysis(venueId: string): Promise<number> 
     detectReviewPrediction,
     detectVendorPerformance,
     detectTimelineAdherence,
+    // --- Emotional theme detector (Wave 1C, 2026-05-09) ---
+    detectEmotionalThemes,
   ]
 
   const candidates: InsightCandidate[] = []

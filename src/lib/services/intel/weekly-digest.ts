@@ -18,14 +18,23 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
+import {
+  loadVenueAutoContextRollup,
+  type AutoContextThemeRollup,
+} from '@/lib/services/identity/auto-context-loader'
 
 /** Prompt revision identifier. See PROMPTS-CHANGELOG.md / OPS-21.5.1.
  *  v1.0 (LLM-CALL-INVENTORY backfill): initial versioning for the
  *  weekly-digest executive-summary call. Was previously logging
  *  api_costs.prompt_version=NULL.
  *  v2.0 (2026-05-09 LLM-CALL-INVENTORY personality drift #3): bumped
- *  when migrated to the canonical coordinator-prompt assembler. */
-export const WEEKLY_DIGEST_PROMPT_VERSION = 'weekly-digest.prompt.v2.0'
+ *  when migrated to the canonical coordinator-prompt assembler.
+ *  v2.1 (2026-05-09 Wave 1C — emotional themes): bumped when the
+ *  weekly digest started receiving an EMOTIONAL THEMES THIS WEEK
+ *  block aggregated across all couples. Sensitive categories
+ *  surface as counts only; couples are never named alongside
+ *  sensitive themes. */
+export const WEEKLY_DIGEST_PROMPT_VERSION = 'weekly-digest.prompt.v2.1'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,6 +72,11 @@ export interface WeeklyDigest {
   sections: DigestSection[]
   metrics: DigestMetrics
   generated_at: string
+  // Wave 1C (2026-05-09): emotional theme rollup. Surfaces in the
+  // digest summary prompt as a WEEKLY EMOTIONAL PULSE block; persisted
+  // here so downstream UI / email can render counts + redacted
+  // exemplars without re-querying.
+  emotional_themes?: AutoContextThemeRollup[]
 }
 
 // ---------------------------------------------------------------------------
@@ -639,6 +653,10 @@ async function buildQuickWins(
 
 const DIGEST_SUMMARY_TASK = `Based on the structured weekly digest data provided, write a concise 1-2 sentence executive summary that captures the most important takeaway for the venue coordinator. Be specific with numbers. Tone: professional but warm, like a trusted advisor.
 
+The user prompt may include a WEEKLY EMOTIONAL PULSE block listing categories (life_context / family / vendors / budget / health / dietary / cultural / preferences / etc.) with counts of couples mentioning them this week. Some categories are tagged "[contains sensitive , do not name couples]". When that block is present and notable:
+  - You may weave one strong theme into the summary (e.g. "Five couples flagged vendor preferences this week and three mentioned cultural ceremony asks.").
+  - For sensitive-tagged categories, report the count only. NEVER name a couple alongside a sensitive theme. NEVER quote a sensitive exemplar.
+
 Return a JSON object with:
 - summary: string (1-2 sentence executive summary)`
 
@@ -646,7 +664,8 @@ async function generateDigestSummary(
   venueName: string,
   sections: DigestSection[],
   metrics: DigestMetrics,
-  venueId: string
+  venueId: string,
+  themeBlock: string | null,
 ): Promise<string> {
   try {
     const sectionsText = sections
@@ -683,7 +702,7 @@ METRICS:
 
 SECTIONS:
 ${sectionsText}
-
+${themeBlock ? `\n${themeBlock}\n` : ''}
 Generate the executive summary.`,
       maxTokens: 300,
       temperature: 0.3,
@@ -729,8 +748,10 @@ export async function generateWeeklyDigest(
   const wsStart = weekStart()
   const wsEnd = today()
 
-  // Build all sections in parallel
-  const [leadsSection, performanceResult, patternSection, seasonalSection, eventPrepSection, quickWinsSection] =
+  // Build all sections in parallel + load the 7d theme rollup. Wave 1C
+  // (2026-05-09): theme aggregator surfaces what couples are flagging
+  // beyond logistics. Sensitive bodies are redacted upstream.
+  const [leadsSection, performanceResult, patternSection, seasonalSection, eventPrepSection, quickWinsSection, themePulse] =
     await Promise.all([
       buildLeadsSection(venueId),
       buildPerformanceSection(venueId),
@@ -738,6 +759,10 @@ export async function generateWeeklyDigest(
       buildSeasonalAdvisory(venueId),
       buildEventPrepAlerts(venueId),
       buildQuickWins(venueId),
+      loadVenueAutoContextRollup(supabase, venueId, 7, {
+        headerLabel: 'WEEKLY EMOTIONAL PULSE',
+        maxThemes: 8,
+      }),
     ])
 
   const sections: DigestSection[] = [
@@ -754,7 +779,8 @@ export async function generateWeeklyDigest(
     venueName,
     sections,
     performanceResult.metrics,
-    venueId
+    venueId,
+    themePulse.block,
   )
 
   // Format the week title
@@ -771,6 +797,7 @@ export async function generateWeeklyDigest(
     sections,
     metrics: performanceResult.metrics,
     generated_at: new Date().toISOString(),
+    emotional_themes: themePulse.rollups,
   }
 
   // Store in ai_briefings
@@ -792,6 +819,9 @@ export async function generateWeeklyDigest(
       weather_outlook: '',
       anomaly_summary: [],
       recommendations: [],
+      // Wave 1C: emotional theme rollup persisted for the briefings
+      // page "Couples we learned about this week" section.
+      emotional_themes: digest.emotional_themes ?? [],
     },
   })
 
