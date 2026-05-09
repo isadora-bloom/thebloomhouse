@@ -7,6 +7,7 @@ import { createNotification } from '@/lib/services/admin-notifications'
 import { runEscalationCheck } from '@/lib/services/email/escalation-detector'
 import { checkEscalationForVenue } from '@/config/escalation-keywords'
 import { callAIVision, CLAUDE_MODEL } from '@/lib/ai/client'
+import { buildCouplePrompt } from '@/lib/ai/couple-prompt'
 import { checkRateLimit, secondsUntil } from '@/lib/rate-limit'
 import { getCoupleAuth, getPlatformAuth } from '@/lib/api/auth-helpers'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
@@ -240,14 +241,25 @@ export async function POST(request: NextRequest) {
               ? contentType
               : 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
 
+            const filePrompt = await buildCouplePrompt({
+              venueId,
+              weddingId: weddingId || null,
+              fileContext: null,
+              task: 'file_extraction',
+              taskInstructions:
+                'Extract ALL text from the image exactly as it appears. Preserve formatting, structure, and details. Return only the extracted text. No commentary.',
+            })
+
             const extractResult = await callAIVision({
-              systemPrompt: 'You are a document text extraction specialist. Extract ALL text from this document image. Preserve formatting, structure, and details.',
+              systemPrompt: filePrompt.systemPrompt,
               userPrompt: 'Extract the complete text from this image. Include all text, headings, fine print, dates, and amounts.',
               imageBase64: base64,
               mediaType,
               maxTokens: 4000,
               venueId,
               taskType: 'sage_file_extraction_vision',
+              contentTier: filePrompt.contentTier,
+              promptVersion: filePrompt.promptVersion,
             })
             resolvedFileContext = extractResult.text
           }

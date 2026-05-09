@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI, callAIJson, callAIVision } from '@/lib/ai/client'
+import { buildCouplePrompt } from '@/lib/ai/couple-prompt'
 import { getCoupleAuth, unauthorized, badRequest, serverError } from '@/lib/api/auth-helpers'
 
 // ---------------------------------------------------------------------------
@@ -211,14 +212,25 @@ async function handleAnalyze(
         ? (mediaType as typeof validMediaTypes[number])
         : 'image/jpeg'
 
+      const visionPrompt = await buildCouplePrompt({
+        venueId: auth.venueId,
+        weddingId: auth.weddingId,
+        fileContext: null,
+        task: 'file_extraction',
+        taskInstructions:
+          'Extract ALL text from this document image exactly as it appears. Preserve formatting, line breaks, and structure. Include every word, number, date, and detail. Return only the extracted text. No commentary.',
+      })
+
       const extractResult = await callAIVision({
-        systemPrompt: 'You are a document text extraction specialist. Extract ALL text from this document image exactly as it appears. Preserve formatting, line breaks, and structure. Include every word, number, date, and detail.',
+        systemPrompt: visionPrompt.systemPrompt,
         userPrompt: 'Extract the complete text from this document image. Include all text, headings, fine print, signatures, dates, and amounts.',
         imageBase64,
         mediaType: resolvedMediaType,
         maxTokens: 4000,
         venueId: auth.venueId,
         taskType: 'contract_text_extraction_vision',
+        contentTier: visionPrompt.contentTier,
+        promptVersion: visionPrompt.promptVersion,
       })
 
       extractedText = extractResult.text
@@ -239,14 +251,25 @@ async function handleAnalyze(
             : fileType === 'webp' ? 'image/webp'
             : 'image/jpeg'
 
+          const visionPrompt2 = await buildCouplePrompt({
+            venueId: auth.venueId,
+            weddingId: auth.weddingId,
+            fileContext: null,
+            task: 'file_extraction',
+            taskInstructions:
+              'Extract ALL text from this document image exactly as it appears. Preserve formatting, line breaks, and structure. Return only the extracted text. No commentary.',
+          })
+
           const extractResult = await callAIVision({
-            systemPrompt: 'You are a document text extraction specialist. Extract ALL text from this document image exactly as it appears. Preserve formatting, line breaks, and structure.',
+            systemPrompt: visionPrompt2.systemPrompt,
             userPrompt: 'Extract the complete text from this document image. Include all text, headings, fine print, signatures, dates, and amounts.',
             imageBase64: base64,
             mediaType: mType as 'image/jpeg' | 'image/png' | 'image/webp',
             maxTokens: 4000,
             venueId: auth.venueId,
             taskType: 'contract_text_extraction_vision',
+            contentTier: visionPrompt2.contentTier,
+            promptVersion: visionPrompt2.promptVersion,
           })
 
           extractedText = extractResult.text
@@ -256,13 +279,25 @@ async function handleAnalyze(
           if (text && text.length > 50) {
             extractedText = text
           } else {
-            // PDF binary - ask AI to note this limitation
+            // PDF binary - ask AI to note this limitation. Routed through
+            // the contract-question task so the note carries the venue
+            // voice + couple rules even on this fallback path.
+            const noteBuilt = await buildCouplePrompt({
+              venueId: auth.venueId,
+              weddingId: auth.weddingId,
+              fileContext: null,
+              task: 'contract_question',
+              taskInstructions:
+                'A binary PDF was uploaded. Briefly let the couple know the file is stored but text extraction is limited to image-based documents at this time, and offer next steps.',
+            })
             const extractResult = await callAI({
-              systemPrompt: 'You are a document analysis assistant.',
-              userPrompt: `The document "${contract.filename}" was uploaded as a ${fileType} file but could not be read directly. Please note that PDF text extraction requires OCR or a PDF parser. The file has been stored but text extraction is limited to image-based documents at this time.`,
+              systemPrompt: noteBuilt.systemPrompt,
+              userPrompt: `The document "${contract.filename}" was uploaded as a ${fileType} file but could not be read directly. Note that PDF text extraction requires OCR or a PDF parser. The file has been stored but text extraction is limited to image-based documents at this time.`,
               maxTokens: 500,
               venueId: auth.venueId,
               taskType: 'contract_text_extraction_note',
+              contentTier: noteBuilt.contentTier,
+              promptVersion: noteBuilt.promptVersion,
             })
             extractedText = extractResult.text
           }
@@ -281,8 +316,12 @@ async function handleAnalyze(
   // -----------------------------------------------------------------------
   // Step 2: AI analysis — extract key terms and summary
   // -----------------------------------------------------------------------
-  const analysisResult = await callAI({
-    systemPrompt: `You are a wedding contract analysis specialist. Analyze the following contract text and provide a clear, structured summary. Focus on:
+  const analysisBuilt = await buildCouplePrompt({
+    venueId: auth.venueId,
+    weddingId: auth.weddingId,
+    fileContext: extractedText.slice(0, 8000),
+    task: 'contract_question',
+    taskInstructions: `Provide a clear, structured analysis of the contract above. Focus on:
 1. Payment schedule (deposits, installments, final payment)
 2. Important dates and deadlines
 3. Cancellation and refund policy
@@ -294,11 +333,17 @@ async function handleAnalyze(
 9. Guest count commitments or minimums
 10. Special conditions or restrictions
 
-Format your response as a clear summary with sections. Be specific about dollar amounts, percentages, and dates.`,
-    userPrompt: `Analyze this wedding vendor contract:\n\n${extractedText.slice(0, 8000)}`,
+Format the response as a clear summary with sections. Be specific about dollar amounts, percentages, and dates.`,
+  })
+
+  const analysisResult = await callAI({
+    systemPrompt: analysisBuilt.systemPrompt,
+    userPrompt: 'Analyze the wedding vendor contract above and produce the structured summary requested.',
     maxTokens: 2000,
     venueId: auth.venueId,
     taskType: 'contract_analysis',
+    contentTier: analysisBuilt.contentTier,
+    promptVersion: analysisBuilt.promptVersion,
   })
 
   // -----------------------------------------------------------------------
@@ -321,18 +366,28 @@ Format your response as a clear summary with sections. Be specific about dollar 
   let planningNotes: Array<{ category: string; content: string }> = []
 
   try {
-    planningNotes = await callAIJson<Array<{ category: string; content: string }>>({
-      systemPrompt: `Extract key planning details from this wedding vendor contract. Return a JSON array of objects.
+    const planningBuilt = await buildCouplePrompt({
+      venueId: auth.venueId,
+      weddingId: auth.weddingId,
+      fileContext: extractedText.slice(0, 6000),
+      task: 'contract_question',
+      taskInstructions: `Extract key planning details from the contract above. Return a JSON array of objects.
 Each object must have:
 - "category": one of "vendor", "cost", "date", "policy", "note"
 - "content": a concise, specific detail (include names, amounts, dates)
 
 Include: vendor name and contact info, all dollar amounts with context, all dates and deadlines, cancellation terms, payment schedule, liability terms, overtime rates, gratuity requirements.
 Return 5-15 items. Be specific and factual.`,
-      userPrompt: extractedText.slice(0, 6000),
+    })
+
+    planningNotes = await callAIJson<Array<{ category: string; content: string }>>({
+      systemPrompt: planningBuilt.systemPrompt,
+      userPrompt: 'Return the JSON array of planning details extracted from the contract above.',
       maxTokens: 1500,
       venueId: auth.venueId,
       taskType: 'contract_planning_extraction',
+      contentTier: planningBuilt.contentTier,
+      promptVersion: planningBuilt.promptVersion,
     })
   } catch (err) {
     console.warn('[contracts/analyze] Planning notes extraction failed:', err)
@@ -415,22 +470,31 @@ async function handleAsk(
     )
   }
 
+  // Compose the contract text + (optional) prior analysis as the file
+  // context so COUPLE_RULES' "never quote a contract verbatim that
+  // wasn't passed in fileContext" applies cleanly.
+  const fileContext = `CONTRACT: "${contract.filename}"\n\nEXTRACTED TEXT:\n${contract.extracted_text.slice(0, 6000)}${
+    contract.analysis ? `\n\nPRIOR AI ANALYSIS SUMMARY:\n${contract.analysis}` : ''
+  }`
+
+  const qaBuilt = await buildCouplePrompt({
+    venueId: auth.venueId,
+    weddingId: auth.weddingId,
+    fileContext,
+    task: 'contract_question',
+    taskInstructions:
+      'Answer the couple\'s question based only on what is in the contract above. If the answer is not in the contract text, say so plainly. Be specific with dates, amounts, and terms. Keep your answer concise (2-4 sentences).',
+  })
+
   const result = await callAI({
-    systemPrompt: `You are a helpful wedding planning assistant answering questions about a vendor contract.
-
-CONTRACT: "${contract.filename}"
-
-EXTRACTED TEXT:
-${contract.extracted_text.slice(0, 6000)}
-
-${contract.analysis ? `\nAI ANALYSIS SUMMARY:\n${contract.analysis}` : ''}
-
-Answer the couple's question based ONLY on what is in this contract. If the answer is not in the contract text, say so clearly. Be specific with dates, amounts, and terms. Keep your answer concise (2-4 sentences).`,
+    systemPrompt: qaBuilt.systemPrompt,
     userPrompt: question,
     maxTokens: 500,
     temperature: 0.2,
     venueId: auth.venueId,
     taskType: 'contract_qa',
+    contentTier: qaBuilt.contentTier,
+    promptVersion: qaBuilt.promptVersion,
   })
 
   return NextResponse.json({

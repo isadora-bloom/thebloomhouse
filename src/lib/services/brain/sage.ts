@@ -14,19 +14,27 @@
 
 import { callAI } from '@/lib/ai/client'
 import {
-  buildPersonalityPrompt,
   buildSignoffBlock,
   requireAiName,
   type PersonalityData,
 } from '@/lib/ai/personality-builder'
 import { buildSageIntelligenceContext } from '../intel/sage-intelligence'
+import { buildCouplePrompt, COUPLE_PROMPT_VERSIONS } from '@/lib/ai/couple-prompt'
 
-/** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
-export const BRAIN_PROMPT_VERSION = 'sage-brain.prompt.v1.2'
+/**
+ * Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1.
+ *
+ * Sage chat now routes through the canonical couple-facing assembler
+ * (buildCouplePrompt) so contract Q&A, file extraction, event-feedback
+ * drafts, sage-preview, and onboarding test-drafts all share the same
+ * UNIVERSAL_RULES + COUPLE_RULES + personality stack. The version
+ * constant is sourced from COUPLE_PROMPT_VERSIONS.chat to keep the
+ * analytics chain unified.
+ */
+export const BRAIN_PROMPT_VERSION = COUPLE_PROMPT_VERSIONS.chat
 import { searchKnowledgeBase } from '../knowledge-base'
 import { createServiceClient } from '@/lib/supabase/service'
 import { createNotification } from '@/lib/services/admin-notifications'
-import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
 import { getSageTaskPrompt } from '@/config/prompts/task-prompts-sage'
 
 // ---------------------------------------------------------------------------
@@ -487,17 +495,32 @@ export async function generateSageResponse(
       getWeddingContext(weddingId),
     ])
 
-  // Build prompt layers. Extract aiName up-front so the task prompt's
-  // {AI_NAME} substitution honors the venue's configured name. Pre-fix
-  // task-prompts-sage hardcoded "Sage" in TASK_WELCOME, so every venue
-  // welcomed couples as if they were Rixey — INV-4.4-A violation.
-  // T5-β.1: ai_name is required — throw rather than default to "Sage".
+  // Extract aiName up-front so the task prompt's {AI_NAME} substitution
+  // honors the venue's configured name. Pre-fix task-prompts-sage
+  // hardcoded "Sage" in TASK_WELCOME, so every venue welcomed couples as
+  // if they were Rixey — INV-4.4-A violation. T5-β.1: ai_name is
+  // required — throw rather than default to "Sage".
   const aiNameForTask = requireAiName(
     personalityData.config as { ai_name?: string | null },
     venueId
   )
-  const personalityPrompt = buildPersonalityPrompt(personalityData)
   const taskPrompt = getSageTaskPrompt(taskType ?? 'couple_question', aiNameForTask)
+
+  // Route the universal/couple/personality/task floor through the
+  // canonical couple-facing assembler. weddingId is intentionally null
+  // here — sage-brain owns its own enriched wedding-context block (with
+  // timeline / budget / checklist surfaces from getWeddingContext) that
+  // the assembler does not produce. The fileContext is also handled
+  // here so the assembler doesn't double-wrap it. KB + intel + wedding
+  // blocks are appended after the assembler's floor so chat behaviour
+  // is preserved.
+  const built = await buildCouplePrompt({
+    venueId,
+    weddingId: null,
+    fileContext: null,
+    task: 'chat',
+    taskInstructions: taskPrompt,
+  })
 
   // Format KB results for context
   let kbContext = ''
@@ -510,7 +533,9 @@ export async function generateSageResponse(
     kbContext = `\n--- KNOWLEDGE BASE MATCHES ---\nUse these answers when relevant. Cite them naturally, don't say "according to our KB".\n\n${kbLines.join('\n\n')}\n--- END KB ---\n`
   }
 
-  // Format wedding context
+  // Format wedding context (chat-specific — richer than the assembler's
+  // weddingBlock because chat surfaces timeline, budget, and checklist
+  // progress that contract / preview surfaces don't need).
   let weddingBlock = ''
   if (weddingContext) {
     const parts: string[] = []
@@ -551,11 +576,9 @@ export async function generateSageResponse(
     fileContextBlock = `\n--- ATTACHED FILE CONTEXT ---\nThe user has attached a file or is asking about a specific contract. Here is the content:\n\n${fileContext}\n\nAnswer questions about this file in the context of their wedding planning. Be specific about dates, amounts, and terms you find in the document.\n--- END FILE CONTEXT ---\n`
   }
 
-  // Assemble full system prompt
+  // Assemble full system prompt: assembler floor + chat-specific context.
   const systemPrompt = [
-    UNIVERSAL_RULES,
-    personalityPrompt,
-    taskPrompt,
+    built.systemPrompt,
     weddingBlock,
     kbContext,
     intelligenceContext,

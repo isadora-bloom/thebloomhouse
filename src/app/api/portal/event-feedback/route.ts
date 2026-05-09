@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI } from '@/lib/ai/client'
+import { buildCouplePrompt } from '@/lib/ai/couple-prompt'
 import {
   getPlatformAuth,
   assertCanAccessVenue,
@@ -111,17 +112,22 @@ export async function POST(request: NextRequest) {
       .eq('id', venueId)
       .single()
 
-    // Build the AI prompt
-    const systemPrompt = `You are a professional wedding venue coordinator crafting a proactive response draft.
-This response is prepared in advance in case the couple leaves a public review.
-It should be warm, professional, and empathetic. Acknowledge specific positives from the event.
-If there were any issues, acknowledge them gracefully without being defensive.
-The tone should match a high-end wedding venue — elegant, personal, and sincere.
-Keep the response between 150-250 words.`
+    // Build the AI prompt via the canonical couple-facing assembler so
+    // the proactive draft sounds like the same configured concierge the
+    // couple already hears in chat / contract Q&A. wedding link is set
+    // because partner names + guest count are in scope here.
+    const built = await buildCouplePrompt({
+      venueId,
+      weddingId: feedback.wedding_id as string | null,
+      fileContext: null,
+      task: 'event_feedback',
+      taskInstructions:
+        'Draft a proactive response that the venue team can use if the couple posts a public review. Warm, sincere, and specific. Start with "Thank you" and address the couple by first names if known. 150-250 words.',
+    })
 
     const vendorSummary = (vendorRatings ?? [])
       .map((v: { vendor_name: string; vendor_type: string; rating: number; notes: string | null }) =>
-        `- ${v.vendor_name} (${v.vendor_type}): ${v.rating}/5${v.notes ? ` — ${v.notes}` : ''}`
+        `- ${v.vendor_name} (${v.vendor_type}): ${v.rating}/5${v.notes ? `: ${v.notes}` : ''}`
       )
       .join('\n')
 
@@ -137,7 +143,7 @@ Keep the response between 150-250 words.`
 - Couple Satisfaction: ${feedback.couple_satisfaction ?? 'Not rated'}/5
 - Timeline: ${feedback.timeline_adherence ?? 'Not noted'}
 ${feedback.delay_notes ? `- Delay Notes: ${feedback.delay_notes}` : ''}
-- Guest Complaints: ${feedback.guest_complaint_count ?? 0} complaints${feedback.guest_complaints ? ` — ${feedback.guest_complaints}` : ''}
+- Guest Complaints: ${feedback.guest_complaint_count ?? 0} complaints${feedback.guest_complaints ? `: ${feedback.guest_complaints}` : ''}
 
 **Catering:**
 - Quality: ${feedback.catering_quality ?? 'Not rated'}/5
@@ -152,15 +158,17 @@ ${vendorSummary || 'No vendor ratings submitted'}
 **What to Change:** ${feedback.what_to_change ?? 'Not provided'}
 **Review Readiness:** ${feedback.review_readiness ?? 'Unknown'}
 
-Write a warm, professional response that the venue team could use if a review comes in. Start with "Thank you" and address the couple by first names if known.`
+Write a warm, professional response the venue team could use if a review comes in. Start with "Thank you" and address the couple by first names if known.`
 
     const result = await callAI({
-      systemPrompt,
+      systemPrompt: built.systemPrompt,
       userPrompt,
       maxTokens: 1000,
       temperature: 0.5,
       venueId,
       taskType: 'review_response_draft',
+      contentTier: built.contentTier,
+      promptVersion: built.promptVersion,
     })
 
     // Save the draft to the feedback record
