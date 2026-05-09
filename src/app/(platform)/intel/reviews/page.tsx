@@ -412,11 +412,13 @@ function SourceReviewCard({
   review,
   showVenue,
   onSaveResponse,
+  onPhrasesExtracted,
   aiName,
 }: {
   review: SourceReview
   showVenue: boolean
   onSaveResponse: (id: string, text: string) => Promise<void>
+  onPhrasesExtracted: () => void | Promise<void>
   aiName: string
 }) {
   const [responseText, setResponseText] = useState(review.response_text ?? '')
@@ -446,6 +448,11 @@ function SourceReviewCard({
       if (!res.ok) throw new Error(data.error ?? 'Extraction failed')
       const n = data.phrases_extracted ?? 0
       setExtractMsg(n === 0 ? 'No new phrases' : `${n} phrase${n === 1 ? '' : 's'} added`)
+      if (n > 0) {
+        // Refresh the Phrases tab so the new haul appears immediately
+        // when the coordinator switches over.
+        await Promise.resolve(onPhrasesExtracted())
+      }
       setTimeout(() => setExtractMsg(null), 3500)
     } catch (err) {
       setExtractMsg('Extraction failed')
@@ -1072,6 +1079,7 @@ export default function ReviewAnalysisPage() {
                   review={review}
                   showVenue={scope.level !== 'venue'}
                   onSaveResponse={handleSaveResponse}
+                  onPhrasesExtracted={fetchPhrases}
                   aiName={aiName}
                 />
               ))}

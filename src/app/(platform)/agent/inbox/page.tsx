@@ -107,7 +107,18 @@ interface PendingDraft {
   created_at: string
 }
 
-type FilterTab = 'all' | 'inquiries' | 'client' | 'unread'
+// Lifecycle-folder tabs (mig 242). Six folders + 'unread' as a
+// cross-cutting filter so coordinator can still surface anything they
+// have not opened. 'new_inquiry' is the default tab — virgin
+// first-touch leads are the highest-priority bucket on every load.
+type FilterTab =
+  | 'new_inquiry'
+  | 'potential_client'
+  | 'client'
+  | 'vendor'
+  | 'advertiser'
+  | 'other'
+  | 'unread'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1246,7 +1257,10 @@ export default function InboxPage() {
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<FilterTab>('all')
+  // Default to the New Inquiries folder per spec — virgin first-touch
+  // leads are the highest-priority bucket on every page load. The
+  // coordinator clicks across the other five folders on demand.
+  const [activeTab, setActiveTab] = useState<FilterTab>('new_inquiry')
   const [searchQuery, setSearchQuery] = useState(initialSearchQuery)
   // Debounce 300ms — keeps the URL stable and avoids hammering Postgres on
   // every keystroke. The server query keys off the debounced value; the
@@ -1358,6 +1372,7 @@ export default function InboxPage() {
           gmail_thread_id,
           timestamp,
           confidence_flag,
+          lifecycle_folder,
           venues:venue_id ( name ),
           people!interactions_person_id_fkey ( first_name, last_name, email ),
           weddings!interactions_wedding_id_fkey (
@@ -1445,6 +1460,7 @@ export default function InboxPage() {
           gmail_thread_id: row.gmail_thread_id,
           timestamp: row.timestamp,
           confidence_flag: (row.confidence_flag as string | null) ?? null,
+          lifecycle_folder: (row.lifecycle_folder as LifecycleFolder | null) ?? null,
           person_name: personName || undefined,
           person_email: personEmail || undefined,
           wedding_status: weddingStatus,
@@ -1930,8 +1946,17 @@ export default function InboxPage() {
   const liveSearching = liveSanitized.length >= MIN_QUERY_LEN
   const filteredInteractions = interactions.filter((i) => {
     // Tab filter
-    if (activeTab === 'inquiries' && i.classification !== 'inquiry') return false
-    if (activeTab === 'client' && i.classification !== 'client') return false
+    // Lifecycle folder tabs (mig 242). Rows with NULL lifecycle_folder
+    // (pre-backfill or freshly-orphaned) fall through to the 'other'
+    // bucket — that matches the migration's ELSE branch and keeps
+    // the inbox count math closed (every row appears in exactly one tab).
+    const folder = i.lifecycle_folder ?? 'other'
+    if (activeTab === 'new_inquiry' && folder !== 'new_inquiry') return false
+    if (activeTab === 'potential_client' && folder !== 'potential_client') return false
+    if (activeTab === 'client' && folder !== 'client') return false
+    if (activeTab === 'vendor' && folder !== 'vendor') return false
+    if (activeTab === 'advertiser' && folder !== 'advertiser') return false
+    if (activeTab === 'other' && folder !== 'other') return false
     if (activeTab === 'unread' && i.is_read) return false
 
     if (liveSearching && liveSanitized !== sanitizedQuery) {
@@ -1966,17 +1991,62 @@ export default function InboxPage() {
 
   const selectedInteraction = interactions.find((i) => i.id === selectedId) ?? null
 
+  // Lifecycle-folder tab set (mig 242). Order matches the spec exactly:
+  // New Inquiries first (default), then progression through the funnel
+  // (Potential Clients → Clients), then non-lead surfaces (Vendors,
+  // Advertisers, Other), with Unread as a cross-cutting filter on the
+  // far right. Counts pass through filterCount() which treats NULL
+  // lifecycle_folder as 'other' so the totals close.
+  //
+  // We dedupe by gmail_thread_id so the count represents threads, not
+  // raw interactions. A single thread with 4 inbound + 2 outbound
+  // would otherwise count as 6 in its folder; the user-visible meaning
+  // of "Potential Clients (12)" is "twelve couples on this venue's
+  // active page right now". Rows with no thread id (rare; pre-Gmail
+  // ingest) fall back to interaction id so they still count once.
+  const filterCount = (folder: LifecycleFolder) => {
+    const seen = new Set<string>()
+    let n = 0
+    for (const i of interactions) {
+      if ((i.lifecycle_folder ?? 'other') !== folder) continue
+      const key = i.gmail_thread_id ?? `single:${i.id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      n += 1
+    }
+    return n
+  }
+
   const tabs: { key: FilterTab; label: string; count?: number }[] = [
-    { key: 'all', label: 'All' },
     {
-      key: 'inquiries',
-      label: 'Inquiries',
-      count: interactions.filter((i) => i.classification === 'inquiry').length,
+      key: 'new_inquiry',
+      label: LIFECYCLE_LABELS.new_inquiry,
+      count: filterCount('new_inquiry'),
+    },
+    {
+      key: 'potential_client',
+      label: LIFECYCLE_LABELS.potential_client,
+      count: filterCount('potential_client'),
     },
     {
       key: 'client',
-      label: 'Client',
-      count: interactions.filter((i) => i.classification === 'client').length,
+      label: LIFECYCLE_LABELS.client,
+      count: filterCount('client'),
+    },
+    {
+      key: 'vendor',
+      label: LIFECYCLE_LABELS.vendor,
+      count: filterCount('vendor'),
+    },
+    {
+      key: 'advertiser',
+      label: LIFECYCLE_LABELS.advertiser,
+      count: filterCount('advertiser'),
+    },
+    {
+      key: 'other',
+      label: LIFECYCLE_LABELS.other,
+      count: filterCount('other'),
     },
     { key: 'unread', label: 'Unread', count: unreadCount },
   ]
@@ -2131,9 +2201,9 @@ export default function InboxPage() {
             <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">
               {searchQuery.trim()
                 ? `No matches for "${searchQuery.trim()}"`
-                : activeTab !== 'all'
-                  ? `No ${activeTab} emails`
-                  : 'Inbox is empty'}
+                : activeTab === 'unread'
+                  ? 'No unread emails'
+                  : `No ${LIFECYCLE_LABELS[activeTab].toLowerCase()}`}
             </h3>
             <p className="text-sm text-sage-600 max-w-md mx-auto">
               {searchQuery.trim()

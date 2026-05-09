@@ -82,7 +82,7 @@ export interface DraftResult {
 // fires on every client draft generation without meaningful staleness risk.
 const personalityCache = new Map<string, { data: PersonalityData; expiresAt: number }>()
 
-async function loadPersonalityDataCached(venueId: string): Promise<PersonalityData> {
+export async function loadPersonalityDataCached(venueId: string): Promise<PersonalityData> {
   const cached = personalityCache.get(venueId)
   if (cached && Date.now() < cached.expiresAt) return cached.data
 
