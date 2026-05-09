@@ -21,6 +21,29 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 - **MINOR** — wording / instruction refinement that holds the
   contract. Bumps still get a changelog row.
 
+## 2026-05-09 (Wave 3 — LLM-driven identity extraction at the email layer)
+
+Deep fix at the extractor layer. Wave 2.5 (commit 35f9430) shipped reject-list
+hardening at the chokepoint as a band-aid; Wave 3 replaces the upstream
+extractor with structured email-anatomy parsing + Haiku LLM-driven identity
+classification so the chokepoint sees a clean, layout-aware payload by the
+time it picks. The reject-list now operates as a safety net.
+
+| Prompt | Version | Files | Rationale |
+|--------|---------|-------|-----------|
+| `email-identity-extract` | `email-identity-extract.v1` | `src/lib/services/extraction/identity-from-email.ts`, `src/lib/services/extraction/email-anatomy.ts` | New brain. Receives parsed salutation / body / signature / forwarded blocks plus venue identity context (venue name, business name, AI assistant name, team member full names, owned email domains). Returns sender_identity (with source: from_header / signature / body_self_reference), mentioned_humans (partner / family / planner / vendor / friend / unclear roles), venue_side_echoes, rejected_tokens. Numbers-guard validates every name appears verbatim in the input. Cross-validates sender_identity against venue's own outbound domain. Tier=haiku (~$0.0002/email). |
+
+Pipeline wiring: `src/lib/services/email/pipeline.ts` calls
+`extractEmailIdentity` alongside the legacy `extractIdentityFromEmail`,
+merges the output into `interactions.extracted_identity` (legacy `names[]`
+preserved for back-compat; new `sender_identity` / `mentioned_humans` /
+`venue_echoes` / `rejected_tokens` fields added). The chokepoint adopts
+three new sources — `email_signature_extraction` (75 base confidence),
+`email_identity_extract_header` (60), `email_identity_extract_body` (50).
+Backfill endpoint `/api/admin/identity/rebuild-names` re-runs
+`extractEmailIdentity` on historical interactions whose `extracted_identity`
+lacks `sender_identity` (capped at 50 per wedding per call).
+
 ## 2026-05-09 (Wave 2D — coordinator UI for identity-evidence + relationships + phantom-partner)
 
 Phase 5 UI polish on the identity-capture redesign (mig 255). Coordinator

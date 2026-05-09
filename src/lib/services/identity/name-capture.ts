@@ -78,6 +78,13 @@ export type NameSource =
   | 'csv_import'
   | 'form_relay'
   | 'manual_override'
+  // Wave 3 — LLM-driven structured extraction sources. The chokepoint
+  // treats these as high-confidence per-email signals because they
+  // come from a parser that has salutation / body / signature layout
+  // context, not flat regex.
+  | 'email_signature_extraction'   // Wave-3 sender_identity from signature
+  | 'email_identity_extract_header' // Wave-3 sender_identity from from_header (still LLM-classified, lower confidence)
+  | 'email_identity_extract_body'   // Wave-3 sender_identity from body self-reference
 
 export type Platform =
   | 'pinterest'
@@ -162,7 +169,7 @@ export interface PickResult {
 }
 
 // ---------------------------------------------------------------------------
-// Wave 2.5 — rejection list + shape hardening
+// Wave 2.5 — rejection list + shape hardening (now: SAFETY NET, not primary)
 // ---------------------------------------------------------------------------
 //
 // Live data (May 2026) showed three classes of junk slipping into the
@@ -178,9 +185,18 @@ export interface PickResult {
 //   3. Raw HTML — `</strong>` ending up as a first_name because the
 //      extracted_identity JSON preserved unescaped tags.
 //
-// All three need to be rejected at the chokepoint BEFORE the value is
-// stored, not after. The `rejected` shape is dropped from name evidence
-// entirely so the picker has no chance of selecting it.
+// Wave 2.5 (commit 35f9430) shipped these guards as the PRIMARY defense.
+// Wave 3 (this commit) replaced the upstream extractor with a structured
+// email-anatomy parser + LLM-driven identity classifier
+// (src/lib/services/extraction/identity-from-email.ts). The LLM has
+// salutation / body / signature / forwarded layout context AND venue-
+// identity context, so it correctly distinguishes addressee from sender,
+// venue echo from prospect, and signoff phrase from name.
+//
+// The reject-list below is now a SAFETY NET, not the primary defense.
+// It catches anything that slips past the LLM (LLM unavailable, malformed
+// JSON, the Wave-3 path bypassed). Keeping it ensures the picker never
+// emits a known-junk value even when the upstream layer fails.
 
 export const REJECTED_NAME_TOKENS: ReadonlySet<string> = new Set([
   // greetings — the most common live-data offender
@@ -284,6 +300,12 @@ function normaliseVenueNameToken(value: string | null | undefined): string {
  * SELECT for every signal in a hot loop. Keyed by venueId. Populated
  * lazily; cleared by chokepoint when the supabase client doesn't match
  * (cheap protection against stale state in cron loops).
+ *
+ * Wave 3 expanded the set: in addition to `venues.name` and
+ * `venue_config.business_name`, the cache now also includes the
+ * `venue_ai_config.ai_name` (e.g. "Sage") and every team member's
+ * full name from `user_profiles`. Those values are equally "venue-side"
+ * — they should never be promoted to a prospect's identity.
  */
 const VENUE_NAME_CACHE = new Map<string, { names: Set<string>; cachedAt: number }>()
 const VENUE_NAME_CACHE_TTL_MS = 5 * 60 * 1000  // 5 minutes is plenty; venue rename is rare.
@@ -296,16 +318,41 @@ async function loadVenueOwnNames(
   if (cached && Date.now() - cached.cachedAt < VENUE_NAME_CACHE_TTL_MS) return cached.names
   const names = new Set<string>()
   try {
-    const [venueResp, configResp] = await Promise.all([
+    const [venueResp, configResp, aiResp, teamResp] = await Promise.all([
       supabase.from('venues').select('name').eq('id', venueId).maybeSingle(),
       supabase.from('venue_config').select('business_name').eq('venue_id', venueId).maybeSingle(),
+      supabase.from('venue_ai_config').select('ai_name').eq('venue_id', venueId).maybeSingle(),
+      supabase
+        .from('user_profiles')
+        .select('first_name, last_name')
+        .eq('venue_id', venueId)
+        .limit(50),
     ])
     const venueName = (venueResp.data?.name as string | null | undefined) ?? null
     const businessName = (configResp.data?.business_name as string | null | undefined) ?? null
+    const aiName = (aiResp.data?.ai_name as string | null | undefined) ?? null
     const norm1 = normaliseVenueNameToken(venueName)
     const norm2 = normaliseVenueNameToken(businessName)
+    const norm3 = normaliseVenueNameToken(aiName)
     if (norm1) names.add(norm1)
     if (norm2) names.add(norm2)
+    if (norm3) names.add(norm3)
+    // Team member names — full name only. We deliberately DO NOT add
+    // first-only matches here: a prospect named "Megan" and a coordinator
+    // also named "Megan" must not collide. Full-name signature matches
+    // are safe (very unlikely two distinct full names align). The Wave-3
+    // LLM extractor's `venue_side_echoes` output is the better instrument
+    // for ambiguous first-only matches because it has the salutation /
+    // signature context.
+    const teamRows = (teamResp.data ?? []) as Array<{
+      first_name: string | null
+      last_name: string | null
+    }>
+    for (const t of teamRows) {
+      const composed = [t.first_name ?? '', t.last_name ?? ''].filter(Boolean).join(' ').trim()
+      const composedNorm = normaliseVenueNameToken(composed)
+      if (composedNorm) names.add(composedNorm)
+    }
   } catch {
     // Swallow — venue-name detection is a guard, not a hard requirement.
   }
@@ -338,6 +385,14 @@ const CONFIDENCE_BY_SOURCE: Record<NameSource, number> = {
   pinterest_scraper: 25,
   instagram_handle: 25,
   email_handle_parse: 20,
+  // Wave 3 — LLM-driven extractor sources. The LLM-with-layout signal
+  // is the strongest per-email signal we have; a clean signature carries
+  // a legal name with very high reliability. Header is lower because the
+  // LLM still has to trust the from_header which can carry a relay
+  // username; body self-reference is lowest because it's an inference.
+  email_signature_extraction: 75,
+  email_identity_extract_header: 60,
+  email_identity_extract_body: 50,
 }
 
 /** Sources whose confidence depends on shape, not source. */

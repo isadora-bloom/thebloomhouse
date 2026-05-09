@@ -454,6 +454,67 @@ export async function venueOwnEmails(venueId: string): Promise<Set<string>> {
   return own
 }
 
+/**
+ * Wave 3 — assemble the venue identity context that the LLM identity
+ * extractor uses to flag venue-side echoes (the venue's own name, AI
+ * assistant name, team member names) and reject the from_header when
+ * the from_email's domain is venue-owned.
+ *
+ * Caller passes the already-resolved `ownEmails` set so we don't issue
+ * a duplicate SELECT — `processIncomingEmail` always loads it just
+ * before calling the extractor.
+ */
+async function loadVenueIdentityContext(
+  venueId: string,
+  ownEmails: Set<string>,
+): Promise<{
+  venueName: string | null
+  businessName: string | null
+  aiName: string | null
+  ownEmails: Set<string>
+  teamMemberNames: string[]
+}> {
+  const supabase = createServiceClient()
+  const empty = {
+    venueName: null,
+    businessName: null,
+    aiName: null,
+    ownEmails,
+    teamMemberNames: [] as string[],
+  }
+  try {
+    const [venueResp, configResp, aiResp, teamResp] = await Promise.all([
+      supabase.from('venues').select('name').eq('id', venueId).maybeSingle(),
+      supabase.from('venue_config').select('business_name').eq('venue_id', venueId).maybeSingle(),
+      supabase.from('venue_ai_config').select('ai_name').eq('venue_id', venueId).maybeSingle(),
+      supabase
+        .from('user_profiles')
+        .select('first_name, last_name')
+        .eq('venue_id', venueId)
+        .limit(50),
+    ])
+    const venueName = (venueResp.data?.name as string | null | undefined) ?? null
+    const businessName = (configResp.data?.business_name as string | null | undefined) ?? null
+    const aiName = (aiResp.data?.ai_name as string | null | undefined) ?? null
+    const teamRows = (teamResp.data ?? []) as Array<{ first_name: string | null; last_name: string | null }>
+    const teamMemberNames: string[] = []
+    for (const t of teamRows) {
+      const composed = [t.first_name ?? '', t.last_name ?? ''].filter(Boolean).join(' ').trim()
+      if (composed) teamMemberNames.push(composed)
+    }
+    return {
+      venueName,
+      businessName,
+      aiName,
+      ownEmails,
+      teamMemberNames,
+    }
+  } catch (err) {
+    console.warn('[pipeline] loadVenueIdentityContext failed:', err instanceof Error ? err.message : err)
+    return empty
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -913,10 +974,76 @@ export async function processIncomingEmail(
   //      venue-own alias or a generic shared relay (otherwise the
   //      venue itself becomes "the prospect" and the real prospect
   //      vanishes — Rixey 2026-04-30 calculator orphan pattern).
-  const extractedIdentity = extractIdentityFromEmail(
+  const baseExtractedIdentity = extractIdentityFromEmail(
     { subject: email.subject, body: email.body },
     { ownEmails },
   )
+
+  // Wave 3 (deep fix): structured email-anatomy + LLM-driven identity
+  // extraction. Runs alongside the legacy regex extractor and merges
+  // its output into `extracted_identity` so downstream consumers see
+  // BOTH the legacy `names[]` array (back-compat) AND the new
+  // `sender_identity` + `mentioned_humans` + `venue_echoes` fields. The
+  // chokepoint reads `sender_identity` as the strongest single per-
+  // email signal of the SENDER (not the addressee, not the venue's own
+  // signature). Cost: ~$0.0002/email via Haiku — see
+  // IDENTITY-EXTRACTION-V2.md for the cost breakdown.
+  //
+  // Behaviour on LLM failure: extractEmailIdentity never throws — it
+  // returns an empty result, so the pipeline keeps using the legacy
+  // regex output and ships the email without delay.
+  let extractedIdentity: Record<string, unknown> = { ...(baseExtractedIdentity as unknown as Record<string, unknown>) }
+  try {
+    const { extractEmailIdentity } = await import('@/lib/services/extraction/identity-from-email')
+    const venueContext = await loadVenueIdentityContext(venueId, ownEmails)
+    const wave3 = await extractEmailIdentity({
+      venueId,
+      rawBody: email.body ?? '',
+      fromEmail: rawFromEmail,
+      fromHeader: email.from ?? '',
+      subject: email.subject ?? null,
+      threadId: email.threadId ?? null,
+      venueContext,
+    })
+
+    // Merge: keep legacy fields, add Wave-3 fields. The legacy
+    // `names[]` array stays populated for back-compat (it's read by
+    // candidate-clusterer, name-upgrade, rebuild-names, etc.). The new
+    // `sender_identity`, `mentioned_humans`, `venue_echoes` and
+    // `rejected_tokens` fields are picked up by the Wave-3-aware
+    // chokepoint AND surfaced on the lead-detail evidence panel.
+    extractedIdentity = {
+      ...extractedIdentity,
+      sender_identity: wave3.sender_identity,
+      mentioned_humans: wave3.mentioned_humans,
+      venue_echoes: wave3.venue_side_echoes,
+      rejected_tokens: wave3.rejected_tokens,
+    }
+
+    // Augment the legacy `names[]` array with the LLM-classified humans
+    // so downstream consumers that already iterate `names[]` pick up
+    // the better signal. The chokepoint's shape detector handles
+    // de-duplication; we only add net-new entries.
+    const baseNames = Array.isArray((extractedIdentity as { names?: unknown[] }).names)
+      ? ((extractedIdentity as { names: string[] }).names ?? [])
+      : []
+    const augmented = new Set<string>(baseNames)
+    if (wave3.sender_identity?.first || wave3.sender_identity?.last) {
+      const composed = [wave3.sender_identity.first, wave3.sender_identity.last]
+        .filter(Boolean)
+        .join(' ')
+        .trim()
+      if (composed) augmented.add(composed)
+    }
+    for (const h of wave3.mentioned_humans) {
+      if (h.name) augmented.add(h.name)
+    }
+    extractedIdentity.names = Array.from(augmented)
+  } catch (err) {
+    // Don't fail the pipeline on identity-extractor error. Legacy
+    // regex output is still in place; downstream is unaffected.
+    console.warn('[pipeline] Wave-3 identity extractor failed:', err instanceof Error ? err.message : err)
+  }
 
   // Step 1a.55: Scheduling-tool detection already ran at 1a.0 to bypass
   // the universal-ignore short-circuit. Reuse the same result here so
@@ -999,14 +1126,17 @@ export async function processIncomingEmail(
   //      header is a venue-own alias (the calculator orphan pattern)
   //      or a known shared relay; otherwise the From is the prospect
   //   4. Raw From header — default fallback
+  const extractedPrimaryEmail = typeof extractedIdentity.primary_email === 'string'
+    ? extractedIdentity.primary_email
+    : null
   const useExtractedFallback =
-    extractedIdentity.primary_email !== null &&
+    extractedPrimaryEmail !== null &&
     (ownEmails.has(rawFromEmail) || /^messages@(weddingwire|theknotww)\.com$/i.test(rawFromEmail))
   const fromEmail =
     formLead?.leadEmail ??
     schedulingEvent?.inviteeEmail ??
     forwardedOriginalSender ??
-    (useExtractedFallback ? extractedIdentity.primary_email! : rawFromEmail)
+    (useExtractedFallback ? extractedPrimaryEmail! : rawFromEmail)
   // When a form relay, scheduling tool, or forwarded email fires, the
   // raw From display name is the platform / venue / coordinator name,
   // not the prospect. Falling back to that would stamp the wrong name
@@ -1360,6 +1490,43 @@ export async function processIncomingEmail(
   }
 
   const interactionId = interaction.id as string
+
+  // Wave 3 (deep fix): feed the LLM-extracted sender_identity into the
+  // name-capture chokepoint as a HIGH-CONFIDENCE per-email signal. This
+  // is the strongest single signal we have on a single inbound email
+  // because the LLM had structured anatomy + venue identity context to
+  // distinguish addressee from sender from venue echo. Source maps:
+  //   - signature → email_signature_extraction (75 base confidence)
+  //   - from_header → email_identity_extract_header (60)
+  //   - body_self_reference → email_identity_extract_body (50)
+  // Best-effort — chokepoint failure must not block draft generation.
+  if (personId) {
+    const wave3Sender = (extractedIdentity as { sender_identity?: unknown }).sender_identity
+    if (wave3Sender && typeof wave3Sender === 'object') {
+      const sender = wave3Sender as { first?: string | null; last?: string | null; source?: string }
+      if (sender.first || sender.last) {
+        try {
+          const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+          const sourceMap: Record<string, 'email_signature_extraction' | 'email_identity_extract_header' | 'email_identity_extract_body'> = {
+            signature: 'email_signature_extraction',
+            from_header: 'email_identity_extract_header',
+            body_self_reference: 'email_identity_extract_body',
+            unknown: 'email_identity_extract_header',
+          }
+          const captureSource = sourceMap[sender.source ?? 'unknown'] ?? 'email_identity_extract_header'
+          await captureNameEvidence(supabase, personId, {
+            first: sender.first ?? null,
+            last: sender.last ?? null,
+            email: fromEmail,
+            source: captureSource,
+            interactionId,
+          })
+        } catch (err) {
+          console.warn('[pipeline] Wave-3 sender capture failed:', err instanceof Error ? err.message : err)
+        }
+      }
+    }
+  }
 
   // Inbox lifecycle folder (migration 242). Decided per-thread, written
   // to every interaction on the thread so the inbox tab counts move

@@ -118,6 +118,15 @@ interface PostBody {
   /** Skip the first N weddings — coordinator-side runner uses this to
    *  page through a venue across multiple invocations. Defaults to 0. */
   offset?: number
+  /** Wave 3: re-run the LLM identity extractor on historical
+   *  interactions whose extracted_identity lacks `sender_identity`.
+   *  Defaults to true on write-mode calls. Set false to skip the LLM
+   *  pass and only re-pick from existing evidence. */
+  runWave3Extract?: boolean
+  /** Wave 3: cap LLM re-extracts per wedding per call. Default 50.
+   *  Each wedding processed in parallel batches across calls until
+   *  every interaction is migrated. */
+  wave3PerWeddingCap?: number
 }
 
 interface DiffEntry {
@@ -243,7 +252,58 @@ function signalsFromInteraction(row: InteractionRow): NameSignal[] {
       })
     }
 
-    // 3. extracted_identity.names[] body-extracted pairs.
+    // Wave 3: read the LLM-extracted sender_identity if present. This
+    // is the strongest single per-email signal we have. Backfill runs
+    // produce this on interactions that pre-date Wave 3 via the on-
+    // demand extractor in `extractMissingSenderIdentitiesForWedding`
+    // BEFORE this signal harvest runs.
+    const senderRaw = (ei as { sender_identity?: unknown }).sender_identity
+    if (senderRaw && typeof senderRaw === 'object') {
+      const sender = senderRaw as { first?: string | null; last?: string | null; source?: string }
+      if (sender.first || sender.last) {
+        const sourceMap: Record<string, NameSource> = {
+          signature: 'email_signature_extraction',
+          from_header: 'email_identity_extract_header',
+          body_self_reference: 'email_identity_extract_body',
+          unknown: 'email_identity_extract_header',
+        }
+        const captureSource = sourceMap[sender.source ?? 'unknown'] ?? 'email_identity_extract_header'
+        out.push({
+          first: sender.first ?? null,
+          last: sender.last ?? null,
+          email: fromEmail,
+          source: captureSource,
+          capturedAt: ts,
+          interactionId: row.id,
+        })
+      }
+    }
+
+    // Wave 3: mentioned_humans — feed partner-role mentions in as
+    // partner_mention_in_body signals, family/planner/vendor/friend
+    // get their own structured handling in `wedding_relationships`
+    // (out of scope for this pure-name capture; the LLM data on
+    // interactions.extracted_identity stays available for that
+    // downstream consumer).
+    const mentionedRaw = (ei as { mentioned_humans?: unknown }).mentioned_humans
+    if (Array.isArray(mentionedRaw)) {
+      for (const m of mentionedRaw) {
+        if (!m || typeof m !== 'object') continue
+        const mh = m as { name?: unknown; role?: unknown }
+        if (typeof mh.name !== 'string' || !mh.name.trim()) continue
+        if (mh.role !== 'partner') continue
+        out.push({
+          full: mh.name.trim(),
+          email: fromEmail,
+          source: 'partner_mention_in_body',
+          capturedAt: ts,
+          interactionId: row.id,
+        })
+      }
+    }
+
+    // 3. extracted_identity.names[] body-extracted pairs (legacy field,
+    //    still populated alongside Wave-3 data for back-compat).
     const names = Array.isArray(ei.names) ? (ei.names as unknown[]) : []
     for (const n of names) {
       if (typeof n !== 'string') continue
@@ -407,6 +467,166 @@ async function loadVenueOwnNamesForRebuild(
 }
 
 // ---------------------------------------------------------------------------
+// Wave 3 — on-demand re-extraction of historical interactions
+// ---------------------------------------------------------------------------
+
+interface VenueWave3Context {
+  venueName: string | null
+  businessName: string | null
+  aiName: string | null
+  ownEmails: Set<string>
+  teamMemberNames: string[]
+}
+
+let CACHED_VENUE_WAVE3_CONTEXT: { venueId: string; ctx: VenueWave3Context } | null = null
+
+async function loadVenueWave3Context(
+  supabase: ReturnType<typeof createServiceClient>,
+  venueId: string,
+): Promise<VenueWave3Context> {
+  if (CACHED_VENUE_WAVE3_CONTEXT && CACHED_VENUE_WAVE3_CONTEXT.venueId === venueId) {
+    return CACHED_VENUE_WAVE3_CONTEXT.ctx
+  }
+  const ctx: VenueWave3Context = {
+    venueName: null,
+    businessName: null,
+    aiName: null,
+    ownEmails: new Set<string>(),
+    teamMemberNames: [],
+  }
+  try {
+    const [venueResp, configResp, aiResp, gmailResp, teamResp] = await Promise.all([
+      supabase.from('venues').select('name').eq('id', venueId).maybeSingle(),
+      supabase.from('venue_config').select('business_name, automation_emails').eq('venue_id', venueId).maybeSingle(),
+      supabase.from('venue_ai_config').select('ai_name, ai_email').eq('venue_id', venueId).maybeSingle(),
+      supabase.from('gmail_connections').select('email_address').eq('venue_id', venueId),
+      supabase.from('user_profiles').select('first_name, last_name, email').eq('venue_id', venueId).limit(50),
+    ])
+    ctx.venueName = (venueResp.data?.name as string | null | undefined) ?? null
+    ctx.businessName = (configResp.data?.business_name as string | null | undefined) ?? null
+    ctx.aiName = (aiResp.data?.ai_name as string | null | undefined) ?? null
+    const aiEmail = (aiResp.data?.ai_email as string | null | undefined) ?? null
+    if (aiEmail) ctx.ownEmails.add(aiEmail.toLowerCase().trim())
+    for (const c of ((gmailResp.data ?? []) as Array<{ email_address: string }>)) {
+      const e = (c.email_address || '').toLowerCase().trim()
+      if (e) ctx.ownEmails.add(e)
+    }
+    for (const a of ((configResp.data?.automation_emails ?? []) as string[])) {
+      const e = (a || '').toLowerCase().trim()
+      if (e) ctx.ownEmails.add(e)
+    }
+    const teamRows = (teamResp.data ?? []) as Array<{ first_name: string | null; last_name: string | null; email: string | null }>
+    for (const t of teamRows) {
+      const composed = [t.first_name ?? '', t.last_name ?? ''].filter(Boolean).join(' ').trim()
+      if (composed) ctx.teamMemberNames.push(composed)
+      const e = (t.email || '').toLowerCase().trim()
+      if (e) ctx.ownEmails.add(e)
+    }
+  } catch (err) {
+    console.warn('[rebuild-names] loadVenueWave3Context failed:', err instanceof Error ? err.message : err)
+  }
+  CACHED_VENUE_WAVE3_CONTEXT = { venueId, ctx }
+  return ctx
+}
+
+/**
+ * Wave 3 — re-run the LLM identity extractor on historical interactions
+ * whose `extracted_identity` lacks the new `sender_identity` field. Caps
+ * extractions to `cap` per wedding per call so cost stays bounded.
+ *
+ * Mutates the in-memory interactions array (replacing the
+ * extracted_identity jsonb with the new shape) AND patches each touched
+ * row on disk so subsequent calls don't re-spend.
+ *
+ * Per-call cost: ~$0.0002 × min(cap, missing). At cap=50 worst case
+ * ~$0.01 per wedding × 700 weddings = ~$7 for a full venue lifetime
+ * backfill. One-time cost.
+ *
+ * Skips interactions that already carry sender_identity OR that lack
+ * a body (no work to do).
+ */
+async function rebuildWave3IdentityForInteractions(
+  supabase: ReturnType<typeof createServiceClient>,
+  venueId: string,
+  interactions: InteractionRow[],
+  cap: number,
+): Promise<InteractionRow[]> {
+  if (cap <= 0 || interactions.length === 0) return interactions
+
+  // Find candidates that lack sender_identity AND have a body to work with.
+  const missing = interactions.filter((i) => {
+    const ei = i.extracted_identity ?? null
+    if (!ei) return true
+    const sender = (ei as { sender_identity?: unknown }).sender_identity
+    if (sender) return false
+    return Boolean(i.full_body && i.full_body.trim())
+  })
+  if (missing.length === 0) return interactions
+
+  const todo = missing.slice(0, cap)
+  const ctx = await loadVenueWave3Context(supabase, venueId)
+  const { extractEmailIdentity } = await import('@/lib/services/extraction/identity-from-email')
+
+  // Mutate the in-memory copies; build a parallel patch list for disk.
+  const patched = new Map<string, Record<string, unknown>>()
+  for (const row of todo) {
+    try {
+      const wave3 = await extractEmailIdentity({
+        venueId,
+        rawBody: row.full_body ?? '',
+        fromEmail: row.from_email ?? '',
+        fromHeader: row.from_name ?? '',
+        subject: row.subject ?? null,
+        venueContext: ctx,
+      })
+      const merged: Record<string, unknown> = {
+        ...((row.extracted_identity ?? {}) as Record<string, unknown>),
+        sender_identity: wave3.sender_identity,
+        mentioned_humans: wave3.mentioned_humans,
+        venue_echoes: wave3.venue_side_echoes,
+        rejected_tokens: wave3.rejected_tokens,
+      }
+      // Keep the legacy names[] array but augment with new candidates.
+      const existingNames = Array.isArray((merged as { names?: unknown[] }).names)
+        ? ((merged as { names: unknown[] }).names ?? [])
+        : []
+      const namesSet = new Set<string>(existingNames.filter((n): n is string => typeof n === 'string'))
+      if (wave3.sender_identity?.first || wave3.sender_identity?.last) {
+        const composed = [wave3.sender_identity.first, wave3.sender_identity.last]
+          .filter(Boolean)
+          .join(' ')
+          .trim()
+        if (composed) namesSet.add(composed)
+      }
+      for (const m of wave3.mentioned_humans) {
+        if (m.name) namesSet.add(m.name)
+      }
+      merged.names = Array.from(namesSet)
+
+      patched.set(row.id, merged)
+      row.extracted_identity = merged
+    } catch (err) {
+      console.warn('[rebuild-names] Wave-3 re-extract failed', { interactionId: row.id, err: err instanceof Error ? err.message : err })
+    }
+  }
+
+  // Write the patched extracted_identity back to disk so future calls
+  // skip these interactions.
+  for (const [id, merged] of patched.entries()) {
+    try {
+      await supabase
+        .from('interactions')
+        .update({ extracted_identity: merged })
+        .eq('id', id)
+    } catch (err) {
+      console.warn('[rebuild-names] Wave-3 patch write failed', { interactionId: id, err: err instanceof Error ? err.message : err })
+    }
+  }
+
+  return interactions
+}
+
+// ---------------------------------------------------------------------------
 // Per-wedding processing
 // ---------------------------------------------------------------------------
 
@@ -422,6 +642,7 @@ async function processOneWedding(
   weddingId: string,
   dryRun: boolean,
   venueOwnNames: ReadonlySet<string>,
+  options: { runWave3Extract: boolean; wave3PerWeddingCap: number },
 ): Promise<WeddingProcessResult> {
   const result: WeddingProcessResult = {
     weddingId,
@@ -469,9 +690,25 @@ async function processOneWedding(
   if (!wedding || wedding.merged_into_id) return result
   const people = (peopleResp.data ?? []) as PersonShape[]
   if (people.length === 0) return result
-  const interactions = (interactionsResp.data ?? []) as InteractionRow[]
+  let interactions = (interactionsResp.data ?? []) as InteractionRow[]
   const contracts = (contractsResp.data ?? []) as ContractRow[]
   const tangentials = (tangentialsResp.data ?? []) as TangentialSignalRow[]
+
+  // Wave 3 backfill: on interactions whose extracted_identity lacks the
+  // new sender_identity field, re-run the LLM extractor and patch the
+  // jsonb on disk. Cost-bounded: cap N per wedding per call so even a
+  // 1000-interaction wedding can't blow the budget. Skip when caller
+  // opted out (dry-run defaults to NO, write-mode defaults to YES with
+  // the cap). The harvested signals downstream will then pick up the
+  // freshly-stamped sender_identity.
+  if (options.runWave3Extract && !dryRun && options.wave3PerWeddingCap > 0) {
+    interactions = await rebuildWave3IdentityForInteractions(
+      supabase,
+      venueId,
+      interactions,
+      options.wave3PerWeddingCap,
+    )
+  }
 
   // Build the universal signal pool for this wedding.
   const sharedSignals: NameSignal[] = []
@@ -683,6 +920,12 @@ export async function POST(req: NextRequest) {
   const limit = Math.max(1, Math.min(HARD_MAX_LIMIT, Math.floor(limitRaw)))
   const offsetRaw = typeof body.offset === 'number' ? body.offset : 0
   const offset = Math.max(0, Math.floor(offsetRaw))
+  // Wave 3 — defaults: write-mode runs the LLM extractor with a 50/wedding
+  // cap. Caller can opt out (skip the LLM) or change the cap.
+  const runWave3Extract = body.runWave3Extract === false ? false : true
+  const wave3PerWeddingCap = typeof body.wave3PerWeddingCap === 'number'
+    ? Math.max(0, Math.min(200, Math.floor(body.wave3PerWeddingCap)))
+    : 50
 
   const supabase = createServiceClient()
 
@@ -720,7 +963,10 @@ export async function POST(req: NextRequest) {
   for (const w of weddings) {
     let processed: WeddingProcessResult
     try {
-      processed = await processOneWedding(supabase, venueId, w.id, dryRun, venueOwnNames)
+      processed = await processOneWedding(supabase, venueId, w.id, dryRun, venueOwnNames, {
+        runWave3Extract,
+        wave3PerWeddingCap,
+      })
     } catch (err) {
       console.warn('[rebuild-names] wedding sweep failed', {
         weddingId: w.id,
@@ -783,5 +1029,7 @@ export async function POST(req: NextRequest) {
     next_offset: hasMore ? processedSoFar : null,
     hasMore,
     diffs: allDiffs,
+    wave3_extract_enabled: runWave3Extract && !dryRun,
+    wave3_per_wedding_cap: wave3PerWeddingCap,
   })
 }
