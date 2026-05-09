@@ -185,15 +185,37 @@ export default function CulturalMomentsPage() {
   // 2026-05-01 (review pass 4 follow-up): use the shared list hook.
   // 2026-05-02 (migration 167): also pull this venue's state rows so each
   // moment knows whether THIS venue confirmed/dismissed/snoozed.
+  // 2026-05-09 (TRENDS-DIAGNOSIS Fix 1 follow-up): the demo-seed filter
+  // moved DOWN to the database query. Pre-fix the client-side memo
+  // filter passed `evidence.source` through an `as Record<...> | null`
+  // cast that silently fell to `undefined?.source` when supabase-js
+  // serialised jsonb as something other than a plain object on the
+  // first paint, and the 6 fictional 2025 moments leaked into the
+  // queue for production tenants. Filtering at the PostgREST level
+  // with `evidence->>source` removes the entire class of client-side
+  // race conditions: the row never reaches the bucket logic to begin
+  // with. Demo callers (`isDemo === true`) skip the filter so the
+  // Hawthorne demo continues to surface the 6 seeded moments.
   const fetcher = useCallback(async (): Promise<Moment[]> => {
+    let momentsQuery = supabase
+      .from('cultural_moments')
+      .select('id, status, title, description, start_at, end_at, category, evidence, influence_weight, geo_scope, proposed_by, reviewed_at, created_at')
+      .neq('status', 'archived')
+      .order('created_at', { ascending: false })
+      .limit(200)
+    // Server-side scope of the demo-seed jsonb tag for non-demo
+    // callers. The `evidence->>source` operator returns the inner
+    // text value of the `source` key (or NULL when the key is
+    // absent), and `.not(..., 'eq', 'demo seed')` keeps the row
+    // when the value is null too — which is what we want, since
+    // real moments either have no evidence.source or set it to
+    // something like 'serpapi_trends' / 'sonnet_proposal'.
+    if (!isDemo) {
+      momentsQuery = momentsQuery.not('evidence->>source', 'eq', 'demo seed')
+    }
     const [{ data: momentRows, error: momentErr }, { data: stateRows, error: stateErr }] =
       await Promise.all([
-        supabase
-          .from('cultural_moments')
-          .select('id, status, title, description, start_at, end_at, category, evidence, influence_weight, geo_scope, proposed_by, reviewed_at, created_at')
-          .neq('status', 'archived')
-          .order('created_at', { ascending: false })
-          .limit(200),
+        momentsQuery,
         supabase
           .from('venue_cultural_moment_state')
           .select('cultural_moment_id, state, decided_at, note')
@@ -214,14 +236,17 @@ export default function CulturalMomentsPage() {
         venue_note: s?.note ?? null,
       }
     })
-  }, [supabase, venueId])
+  }, [supabase, venueId, isDemo])
 
+  // Refetch when isDemo flips so a demo→real handoff (e.g. bloom_demo
+  // cookie cleared mid-session) re-runs the server-side scoping query
+  // instead of leaving the previous fetch's rows in memory.
   const {
     rows: moments,
     loading,
     error: loadError,
     reload: fetchMoments,
-  } = useSupabaseList<Moment>(fetcher, [])
+  } = useSupabaseList<Moment>(fetcher, [venueId, isDemo])
   const displayError = error ?? loadError
 
   async function handlePropose(e: React.FormEvent) {
