@@ -10,7 +10,7 @@ import {
   BookOpen, UtensilsCrossed, Wine, Flower2, Camera, Sparkles, Lightbulb,
   Store, Star, BedDouble, Hotel, Car, HardHat, MapPin,
   Heart, Package, ShoppingBag,
-  Globe, Download, CalendarPlus, ClipboardList, FileSignature,
+  Globe, Download, FileDown, CalendarPlus, ClipboardList, FileSignature,
   MessagesSquare, ChevronDown, X, CalendarRange, ShieldCheck,
 } from 'lucide-react'
 
@@ -113,7 +113,10 @@ export function buildCoupleSidebarSections(
         { label: 'Final Review', href: `${base}/final-review`, icon: ClipboardList },
         { label: 'Wedding Website', href: `${base}/website`, icon: Globe },
         { label: 'Downloads', href: `${base}/downloads`, icon: Download },
-        { label: 'Resources', href: `${base}/resources`, icon: BookOpen },
+        // Resources page (rebuilt 2026-05-08) reads brand_assets where
+        // couple_facing = true. Watercolors, floor plans, favor templates,
+        // programs - whatever the venue has flagged for couples.
+        { label: 'Resources', href: `${base}/resources`, icon: FileDown },
       ],
     },
     {

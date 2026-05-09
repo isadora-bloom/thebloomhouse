@@ -30,6 +30,8 @@ interface VenueConfig {
   font_pair: string
   portal_tagline: string | null
   logo_url: string | null
+  // Migration 244: Sage email auto-attach opt-in. Off by default.
+  auto_attach_photos?: boolean
 }
 
 interface VenueRow {
@@ -55,6 +57,16 @@ interface BrandAsset {
   url: string
   sort_order: number
   created_at: string
+  // Migration 243: shared schema for Sage email auto-attach + couple
+  // portal Resources page. caption + category drive Sage matching;
+  // couple_facing + couple_category drive the couple-portal grouping.
+  caption?: string | null
+  category?: string | null
+  couple_facing?: boolean
+  couple_category?: string | null
+  sage_eligible?: boolean
+  file_size_bytes?: number | null
+  mime_type?: string | null
   venues?: { name: string | null } | null
 }
 
@@ -76,6 +88,43 @@ const ASSET_TYPE_COLORS: Record<string, string> = {
   texture: 'bg-rose-50 text-rose-700',
   icon: 'bg-indigo-50 text-indigo-700',
   other: 'bg-sage-50 text-sage-700',
+}
+
+// Migration 243: internal taxonomy for Sage matching. Coordinator picks
+// one of these so Sage can pick "a ceremony photo" for a ceremony-question
+// email and "a tent photo" for a rain-plan question. Distinct from
+// asset_type which is media-type.
+const ASSET_CATEGORY_OPTIONS = [
+  { value: 'ceremony', label: 'Ceremony' },
+  { value: 'tent', label: 'Tent' },
+  { value: 'reception', label: 'Reception' },
+  { value: 'detail', label: 'Detail shot' },
+  { value: 'aerial', label: 'Aerial / drone' },
+  { value: 'venue_exterior', label: 'Venue exterior' },
+  { value: 'staff', label: 'Staff / coordinator' },
+  { value: 'other', label: 'Other' },
+]
+
+// Migration 243: categorization shown to couples on the Resources page.
+const COUPLE_CATEGORY_OPTIONS = [
+  { value: 'favors', label: 'Favors' },
+  { value: 'programs', label: 'Programs' },
+  { value: 'decor', label: 'Decor' },
+  { value: 'planning', label: 'Planning' },
+  { value: 'other', label: 'Other' },
+]
+
+// Categories that are typically safe for Sage to auto-attach in emails.
+// Used to default the toggle on for these uploads.
+const DEFAULT_SAGE_ELIGIBLE_CATEGORIES = new Set([
+  'ceremony', 'tent', 'reception', 'detail', 'aerial', 'venue_exterior',
+])
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (!bytes || bytes <= 0) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 const TIMEZONE_OPTIONS = [
@@ -271,6 +320,18 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
   const [newAssetLabel, setNewAssetLabel] = useState('')
   const [newAssetUrl, setNewAssetUrl] = useState('')
   const [savingAsset, setSavingAsset] = useState(false)
+  // Migration 243: extended brand-asset fields. Capture these at upload
+  // time so a single row can power Sage auto-attach (caption+category+
+  // sage_eligible) and couple-portal Resources (couple_facing+couple_category).
+  const [newAssetCaption, setNewAssetCaption] = useState('')
+  const [newAssetCategory, setNewAssetCategory] = useState<string>('other')
+  const [newAssetCoupleFacing, setNewAssetCoupleFacing] = useState(false)
+  const [newAssetCoupleCategory, setNewAssetCoupleCategory] = useState<string>('planning')
+  const [newAssetSageEligible, setNewAssetSageEligible] = useState(false)
+  const [newAssetFileSize, setNewAssetFileSize] = useState<number | null>(null)
+  const [newAssetMimeType, setNewAssetMimeType] = useState<string | null>(null)
+  const [uploadingAsset, setUploadingAsset] = useState(false)
+  const [assetUploadError, setAssetUploadError] = useState<string | null>(null)
 
   // Load venue config for the scoped venue
   useEffect(() => {
@@ -351,6 +412,75 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
     setConfig((prev) => (prev ? { ...prev, [key]: value } : prev))
   }
 
+  // Reset the new-asset form to defaults. Used by close, save, and the
+  // category change so toggling category re-applies the sage-eligible default.
+  const resetAssetForm = useCallback(() => {
+    setNewAssetLabel('')
+    setNewAssetUrl('')
+    setNewAssetType('photography')
+    setNewAssetCaption('')
+    setNewAssetCategory('other')
+    setNewAssetCoupleFacing(false)
+    setNewAssetCoupleCategory('planning')
+    setNewAssetSageEligible(false)
+    setNewAssetFileSize(null)
+    setNewAssetMimeType(null)
+    setAssetUploadError(null)
+  }, [])
+
+  // Migration 243: upload the chosen file to the venue-assets bucket
+  // under brand/{timestamp}-{slug}.{ext}, mirroring the LogoUploadField
+  // pattern. On success we populate the URL + size + mime fields so
+  // the rest of the form (caption / flags) can be filled in before save.
+  const handleAssetFileUpload = useCallback(async (file: File) => {
+    if (!scope.venueId) {
+      setAssetUploadError('Pick a venue first.')
+      return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setAssetUploadError('File must be under 10 MB. Try compressing it first.')
+      return
+    }
+    if (!/^image\//.test(file.type) && file.type !== 'application/pdf') {
+      setAssetUploadError('Only image files and PDFs are supported.')
+      return
+    }
+
+    setUploadingAsset(true)
+    setAssetUploadError(null)
+    try {
+      const ext = (file.name.split('.').pop() || 'bin').toLowerCase()
+      const baseName = file.name
+        .replace(/\.[^.]+$/, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || 'asset'
+      const timestamp = Date.now()
+      const path = `${scope.venueId}/brand/${timestamp}-${baseName}.${ext}`
+
+      const { error: uploadErr } = await supabase.storage
+        .from('venue-assets')
+        .upload(path, file, { upsert: false, contentType: file.type })
+      if (uploadErr) throw uploadErr
+
+      const { data: urlData } = supabase.storage.from('venue-assets').getPublicUrl(path)
+      setNewAssetUrl(urlData.publicUrl)
+      setNewAssetFileSize(file.size)
+      setNewAssetMimeType(file.type || null)
+      // Pre-fill the label from the filename when it's still empty.
+      if (!newAssetLabel.trim()) {
+        const friendly = baseName.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+        setNewAssetLabel(friendly)
+      }
+    } catch (uploadFail) {
+      console.error('[settings] brand asset upload failed:', uploadFail)
+      setAssetUploadError('Upload failed. Try a different file or paste a URL instead.')
+    } finally {
+      setUploadingAsset(false)
+    }
+  }, [scope.venueId, newAssetLabel])
+
   // Brand asset handlers
   const handleAddAsset = useCallback(async () => {
     if (!scope.venueId || !newAssetLabel.trim() || !newAssetUrl.trim()) return
@@ -363,24 +493,41 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
         label: newAssetLabel.trim(),
         url: newAssetUrl.trim(),
         sort_order: brandAssets.length,
+        caption: newAssetCaption.trim() || null,
+        category: newAssetCategory || null,
+        couple_facing: newAssetCoupleFacing,
+        couple_category: newAssetCoupleFacing ? (newAssetCoupleCategory || null) : null,
+        sage_eligible: newAssetSageEligible,
+        file_size_bytes: newAssetFileSize,
+        mime_type: newAssetMimeType,
       })
       .select()
       .single()
     if (!error && data) {
       setBrandAssets((prev) => [...prev, data as BrandAsset])
-      setNewAssetLabel('')
-      setNewAssetUrl('')
-      setNewAssetType('photography')
+      resetAssetForm()
       setShowAssetForm(false)
     }
     setSavingAsset(false)
-  }, [scope.venueId, newAssetType, newAssetLabel, newAssetUrl, brandAssets.length])
+  }, [
+    scope.venueId, newAssetType, newAssetLabel, newAssetUrl, brandAssets.length,
+    newAssetCaption, newAssetCategory, newAssetCoupleFacing, newAssetCoupleCategory,
+    newAssetSageEligible, newAssetFileSize, newAssetMimeType, resetAssetForm,
+  ])
 
   const handleDeleteAsset = useCallback(async (assetId: string) => {
     const { error } = await supabase.from('brand_assets').delete().eq('id', assetId)
     if (!error) {
       setBrandAssets((prev) => prev.filter((a) => a.id !== assetId))
     }
+  }, [])
+
+  // When the coordinator picks a category that's typically safe for
+  // Sage to auto-attach (ceremony / tent / reception / etc.), default
+  // the sage_eligible toggle on. They can still un-flip it.
+  const handleCategoryChange = useCallback((value: string) => {
+    setNewAssetCategory(value)
+    setNewAssetSageEligible(DEFAULT_SAGE_ELIGIBLE_CATEGORIES.has(value))
   }, [])
 
   // Current font pair for preview
@@ -724,13 +871,64 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
 
           {/* Add asset form */}
           {showAssetForm && (
-            <div className="mb-4 p-4 border border-sage-200 rounded-xl bg-warm-white space-y-3">
+            <div className="mb-4 p-4 border border-sage-200 rounded-xl bg-warm-white space-y-4">
               <div className="flex items-center justify-between">
                 <h4 className="text-sm font-semibold text-sage-800">New Brand Asset</h4>
-                <button onClick={() => setShowAssetForm(false)} className="p-1 text-sage-400 hover:text-sage-600">
+                <button
+                  onClick={() => { resetAssetForm(); setShowAssetForm(false) }}
+                  className="p-1 text-sage-400 hover:text-sage-600"
+                >
                   <X className="w-4 h-4" />
                 </button>
               </div>
+
+              {/* Upload OR paste URL — mirrors LogoUploadField */}
+              <div>
+                <label className="block text-xs font-medium text-sage-600 mb-1">File</label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-sage-300 hover:bg-sage-50 text-sage-800 rounded-lg cursor-pointer transition-colors">
+                    {uploadingAsset ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Upload className="w-4 h-4" />
+                    )}
+                    {uploadingAsset ? 'Uploading...' : newAssetUrl ? 'Replace file' : 'Upload file'}
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0]
+                        if (f) void handleAssetFileUpload(f)
+                        e.target.value = ''
+                      }}
+                      disabled={uploadingAsset || !scope.venueId}
+                    />
+                  </label>
+                  <span className="text-xs text-sage-500">Images or PDFs. Up to 10 MB.</span>
+                </div>
+                <input
+                  type="text"
+                  value={newAssetUrl}
+                  onChange={(e) => {
+                    setNewAssetUrl(e.target.value)
+                    // External URL — clear the size/mime captured from a prior upload.
+                    setNewAssetFileSize(null)
+                    setNewAssetMimeType(null)
+                  }}
+                  placeholder="Or paste a hosted URL (e.g. https://...)"
+                  className={inputClasses + ' text-sm mt-2 max-w-xl'}
+                />
+                {assetUploadError && (
+                  <p className="text-xs text-red-600 mt-1">{assetUploadError}</p>
+                )}
+                {newAssetFileSize && newAssetMimeType && (
+                  <p className="text-xs text-sage-500 mt-1">
+                    Uploaded - {formatBytes(newAssetFileSize)} - {newAssetMimeType}
+                  </p>
+                )}
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-sage-600 mb-1">Type</label>
@@ -755,20 +953,89 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-sage-600 mb-1">URL</label>
-                  <input
-                    type="text"
-                    value={newAssetUrl}
-                    onChange={(e) => setNewAssetUrl(e.target.value)}
-                    placeholder="https://..."
-                    className={inputClasses + ' text-sm'}
-                  />
+                  <label className="block text-xs font-medium text-sage-600 mb-1">Category</label>
+                  <select
+                    value={newAssetCategory}
+                    onChange={(e) => handleCategoryChange(e.target.value)}
+                    className={selectClasses + ' text-sm'}
+                  >
+                    {ASSET_CATEGORY_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-sage-500 mt-1">Used by Sage to match images to email replies.</p>
                 </div>
               </div>
+
+              <div>
+                <label className="block text-xs font-medium text-sage-600 mb-1">
+                  Caption <span className="text-sage-400 font-normal">(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={newAssetCaption}
+                  onChange={(e) => setNewAssetCaption(e.target.value.slice(0, 200))}
+                  placeholder="Late-afternoon ceremony in the meadow"
+                  maxLength={200}
+                  className={inputClasses + ' text-sm'}
+                />
+                <p className="text-[11px] text-sage-500 mt-1">
+                  One line describing what is shown. Sage reads this when picking a photo. {newAssetCaption.length}/200
+                </p>
+              </div>
+
+              {/* Sharing toggles */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <label className="flex items-start gap-3 p-3 rounded-lg border border-sage-200 bg-white cursor-pointer hover:border-sage-300 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={newAssetSageEligible}
+                    onChange={(e) => setNewAssetSageEligible(e.target.checked)}
+                    className="mt-0.5 accent-sage-500"
+                  />
+                  <div>
+                    <div className="text-sm font-medium text-sage-800">Sage may auto-attach</div>
+                    <div className="text-xs text-sage-500">
+                      Lets Sage pick this when replying to emails about a matching topic.
+                    </div>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-3 p-3 rounded-lg border border-sage-200 bg-white cursor-pointer hover:border-sage-300 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={newAssetCoupleFacing}
+                    onChange={(e) => setNewAssetCoupleFacing(e.target.checked)}
+                    className="mt-0.5 accent-sage-500"
+                  />
+                  <div>
+                    <div className="text-sm font-medium text-sage-800">Show on couple portal</div>
+                    <div className="text-xs text-sage-500">
+                      Couples can download this from their Resources page.
+                    </div>
+                  </div>
+                </label>
+              </div>
+
+              {newAssetCoupleFacing && (
+                <div className="max-w-xs">
+                  <label className="block text-xs font-medium text-sage-600 mb-1">Couple category</label>
+                  <select
+                    value={newAssetCoupleCategory}
+                    onChange={(e) => setNewAssetCoupleCategory(e.target.value)}
+                    className={selectClasses + ' text-sm'}
+                  >
+                    {COUPLE_CATEGORY_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="flex justify-end">
                 <button
                   onClick={handleAddAsset}
-                  disabled={!newAssetLabel.trim() || !newAssetUrl.trim() || savingAsset}
+                  disabled={!newAssetLabel.trim() || !newAssetUrl.trim() || savingAsset || uploadingAsset}
                   className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-sage-500 hover:bg-sage-600 disabled:opacity-50 text-white rounded-lg transition-colors"
                 >
                   <Save className="w-3.5 h-3.5" />
@@ -783,40 +1050,79 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
             <div className="p-4 border border-dashed border-sage-300 rounded-xl text-center bg-warm-white">
               <ImageIcon className="w-6 h-6 text-sage-300 mx-auto mb-2" />
               <p className="text-sm text-sage-500">No brand assets yet.</p>
-              <p className="text-xs text-sage-400 mt-1">Add logos, hero images, watercolors, photography, and textures.</p>
+              <p className="text-xs text-sage-400 mt-1">Add ceremony, tent, and reception photos for Sage to use, plus floor plans and watercolors for your couples to download.</p>
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-              {brandAssets.map((asset) => (
-                <div
-                  key={asset.id}
-                  className="group relative border border-border rounded-xl overflow-hidden bg-warm-white hover:shadow-md transition-shadow"
-                >
-                  <div className="aspect-[4/3] bg-sage-50 flex items-center justify-center overflow-hidden">
-                    <img
-                      src={asset.url}
-                      alt={asset.label}
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        ;(e.target as HTMLImageElement).style.display = 'none'
-                      }}
-                    />
-                  </div>
-                  <div className="p-2.5">
-                    <p className="text-xs font-medium text-sage-800 truncate">{asset.label}</p>
-                    <span className={`inline-block mt-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${ASSET_TYPE_COLORS[asset.asset_type] ?? ASSET_TYPE_COLORS.other}`}>
-                      {ASSET_TYPE_OPTIONS.find((o) => o.value === asset.asset_type)?.label ?? asset.asset_type}
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => handleDeleteAsset(asset.id)}
-                    className="absolute top-2 right-2 p-1.5 rounded-lg bg-white/80 text-red-500 opacity-0 group-hover:opacity-100 hover:bg-red-50 transition-all"
-                    title="Delete asset"
+              {brandAssets.map((asset) => {
+                const isPdf = asset.mime_type === 'application/pdf' || asset.url.toLowerCase().endsWith('.pdf')
+                return (
+                  <div
+                    key={asset.id}
+                    className="group relative border border-border rounded-xl overflow-hidden bg-warm-white hover:shadow-md transition-shadow"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              ))}
+                    <div className="aspect-[4/3] bg-sage-50 flex items-center justify-center overflow-hidden">
+                      {isPdf ? (
+                        <div className="flex flex-col items-center justify-center text-sage-400">
+                          <ImageIcon className="w-8 h-8 mb-1" />
+                          <span className="text-[10px] font-semibold uppercase">PDF</span>
+                        </div>
+                      ) : (
+                        <img
+                          src={asset.url}
+                          alt={asset.label}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            ;(e.target as HTMLImageElement).style.display = 'none'
+                          }}
+                        />
+                      )}
+                    </div>
+                    <div className="p-2.5">
+                      <p className="text-xs font-medium text-sage-800 truncate" title={asset.label}>
+                        {asset.label}
+                      </p>
+                      {asset.caption && (
+                        <p className="text-[11px] text-sage-500 line-clamp-2 mt-0.5" title={asset.caption}>
+                          {asset.caption}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                        <span className={`inline-block text-[10px] font-medium px-1.5 py-0.5 rounded-full ${ASSET_TYPE_COLORS[asset.asset_type] ?? ASSET_TYPE_COLORS.other}`}>
+                          {ASSET_TYPE_OPTIONS.find((o) => o.value === asset.asset_type)?.label ?? asset.asset_type}
+                        </span>
+                        {asset.category && asset.category !== 'other' && (
+                          <span className="inline-block text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-sage-100 text-sage-700">
+                            {ASSET_CATEGORY_OPTIONS.find((o) => o.value === asset.category)?.label ?? asset.category}
+                          </span>
+                        )}
+                        {asset.sage_eligible && (
+                          <span className="inline-block text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700" title="Sage may auto-attach this">
+                            Sage
+                          </span>
+                        )}
+                        {asset.couple_facing && (
+                          <span className="inline-block text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-700" title="Visible on couple portal">
+                            Couples
+                          </span>
+                        )}
+                      </div>
+                      {(asset.file_size_bytes || asset.mime_type) && (
+                        <p className="text-[10px] text-sage-400 mt-1">
+                          {[formatBytes(asset.file_size_bytes), asset.mime_type].filter(Boolean).join(' - ')}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleDeleteAsset(asset.id)}
+                      className="absolute top-2 right-2 p-1.5 rounded-lg bg-white/80 text-red-500 opacity-0 group-hover:opacity-100 hover:bg-red-50 transition-all"
+                      title="Delete asset"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>

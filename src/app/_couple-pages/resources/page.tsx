@@ -1,341 +1,353 @@
 'use client'
 
+// ---------------------------------------------------------------------------
+// Couple portal Resources page
+// ---------------------------------------------------------------------------
+// Surfaces venue brand_assets where couple_facing = true, grouped by
+// couple_category. Coordinator uploads watercolors, sketches, floor plans,
+// favor templates, programs etc. via Settings. Couples download from here
+// for their stationery, favors, programs, and planning.
+//
+// Migration 243 added couple_facing + couple_category + caption +
+// file_size_bytes + mime_type. The page reads brand_assets directly via
+// the new couple_read_brand_assets RLS policy that gates on
+// people.user_id = auth.uid() and venue_id matching the couple's wedding.
+//
+// Download flow:
+//   - venue-assets bucket URLs - generate a 1-hour signed URL on click
+//     so private buckets work even if the asset is not in a public bucket.
+//   - external URLs (legacy URL-paste rows) - open in a new tab with
+//     download semantics.
+//
+// Empty-state copy: "Your venue hasn't shared any resources yet."
+// ---------------------------------------------------------------------------
+
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useCoupleContext } from '@/lib/hooks/use-couple-context'
-import { cn } from '@/lib/utils'
 import {
-  BookOpen,
-  Link as LinkIcon,
-  BookMarked,
-  Camera,
-  Calendar,
-  Map,
-  Phone,
-  Mail,
-  Globe,
+  FileDown,
   FileText,
-  Star,
-  Heart,
-  Home,
-  Users,
-  ExternalLink,
-  Sparkles,
-  Music,
-  Utensils,
-  MapPin,
-  ShoppingBag,
-  MessageCircle,
+  ImageIcon,
   Loader2,
-  Clock,
-  Info,
+  Download,
 } from 'lucide-react'
-import { useRouter } from 'next/navigation'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-interface VenueResource {
+interface BrandAssetRow {
   id: string
   venue_id: string
-  title: string
-  subtitle: string | null
+  asset_type: string
+  label: string
   url: string
-  icon: string
-  is_external: boolean
+  caption: string | null
+  category: string | null
+  couple_category: string | null
+  couple_facing: boolean
+  sage_eligible: boolean | null
+  file_size_bytes: number | null
+  mime_type: string | null
   sort_order: number
-  is_active: boolean
 }
 
 // ---------------------------------------------------------------------------
-// Icon Mapping
+// Constants
 // ---------------------------------------------------------------------------
 
-const ICON_MAP: Record<string, React.ElementType> = {
-  link: LinkIcon,
-  book: BookMarked,
-  camera: Camera,
-  calendar: Calendar,
-  map: Map,
-  phone: Phone,
-  mail: Mail,
-  globe: Globe,
-  file: FileText,
-  star: Star,
-  heart: Heart,
-  home: Home,
-  users: Users,
-  sparkles: Sparkles,
-  music: Music,
-  utensils: Utensils,
-  'map-pin': MapPin,
-  shopping: ShoppingBag,
-  message: MessageCircle,
-  clock: Clock,
-  info: Info,
-  'external-link': ExternalLink,
-  'book-open': BookOpen,
+// Couple-facing groups, in display order. Each row's couple_category
+// drives which group it lands in. Anything missing or unrecognised falls
+// into "Other".
+const COUPLE_CATEGORY_GROUPS: { value: string; label: string; description: string }[] = [
+  { value: 'favors',   label: 'Favors',   description: 'Tags, labels, and inserts for guest favors' },
+  { value: 'programs', label: 'Programs', description: 'Ceremony programs and printable inserts' },
+  { value: 'decor',    label: 'Decor',    description: 'Watercolors, motifs, and decorative artwork' },
+  { value: 'planning', label: 'Planning', description: 'Floor plans, layouts, and reference sheets' },
+  { value: 'other',    label: 'Other',    description: 'Everything else your venue has shared' },
+]
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatBytes(bytes: number | null): string {
+  if (!bytes || bytes <= 0) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function getIcon(iconName: string): React.ElementType {
-  return ICON_MAP[iconName] || LinkIcon
+function isPdfAsset(asset: BrandAssetRow): boolean {
+  if (asset.mime_type === 'application/pdf') return true
+  return asset.url.toLowerCase().split('?')[0].endsWith('.pdf')
 }
 
-// ---------------------------------------------------------------------------
-// Default Resources (fallback when none configured)
-// ---------------------------------------------------------------------------
+function isImageAsset(asset: BrandAssetRow): boolean {
+  if (asset.mime_type?.startsWith('image/')) return true
+  const lower = asset.url.toLowerCase().split('?')[0]
+  return /\.(png|jpg|jpeg|webp|svg|gif)$/i.test(lower)
+}
 
-function getDefaultResources(slug: string, venueId: string, aiName: string): VenueResource[] {
-  return [
-    {
-      id: 'default-vendors',
-      venue_id: venueId,
-      title: 'Vendor Directory',
-      subtitle: 'Browse preferred vendors for your wedding',
-      url: `/couple/${slug}/vendors`,
-      icon: 'users',
-      is_external: false,
-      sort_order: 0,
-      is_active: true,
-    },
-    {
-      id: 'default-stays',
-      venue_id: venueId,
-      title: 'Accommodations',
-      subtitle: 'Nearby lodging for you and your guests',
-      url: `/couple/${slug}/stays`,
-      icon: 'home',
-      is_external: false,
-      sort_order: 1,
-      is_active: true,
-    },
-    {
-      id: 'default-chat',
-      venue_id: venueId,
-      title: `Chat with ${aiName}`,
-      subtitle: 'Your AI wedding concierge is here to help',
-      url: `/couple/${slug}/chat`,
-      icon: 'sparkles',
-      is_external: false,
-      sort_order: 2,
-      is_active: true,
-    },
-  ]
+// Recognise URLs hosted in our own venue-assets Supabase Storage bucket.
+// We extract the path-after-bucket so we can mint a signed URL on click.
+// Public-URL shape:
+//   {SUPABASE_URL}/storage/v1/object/public/venue-assets/{path}
+// Sign-URL shape (legacy):
+//   {SUPABASE_URL}/storage/v1/object/sign/venue-assets/{path}?token=...
+function extractVenueAssetsPath(url: string): string | null {
+  const m = url.match(/\/storage\/v1\/object\/(?:public|sign)\/venue-assets\/([^?#]+)/)
+  if (!m) return null
+  try {
+    return decodeURIComponent(m[1])
+  } catch {
+    return m[1]
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Resource Card
+// Asset card
 // ---------------------------------------------------------------------------
 
-function ResourceCard({
-  resource,
-  onClick,
-}: {
-  resource: VenueResource
-  onClick: () => void
-}) {
-  const Icon = getIcon(resource.icon)
+function AssetCard({ asset, onDownload }: { asset: BrandAssetRow; onDownload: (a: BrandAssetRow) => Promise<void> }) {
+  const [downloading, setDownloading] = useState(false)
+  const isPdf = isPdfAsset(asset)
+  const isImage = isImageAsset(asset)
+  const filename = asset.label || asset.url.split('/').pop() || 'asset'
+
+  async function handleClick() {
+    setDownloading(true)
+    try {
+      await onDownload(asset)
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   return (
-    <button
-      onClick={onClick}
-      className={cn(
-        'w-full text-left bg-white rounded-xl border border-gray-100 p-6',
-        'shadow-sm hover:shadow-md transition-all duration-200',
-        'group cursor-pointer',
-        'hover:border-gray-200'
-      )}
-    >
-      <div className="flex items-start gap-4">
-        <div
-          className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
-          style={{
-            backgroundColor:
-              'color-mix(in srgb, var(--couple-primary) 10%, transparent)',
-          }}
-        >
-          <Icon
-            className="w-5 h-5"
-            style={{ color: 'var(--couple-primary)' }}
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
+      {/* Thumbnail */}
+      <div className="aspect-[4/3] bg-gray-50 flex items-center justify-center overflow-hidden">
+        {isImage ? (
+          <img
+            src={asset.url}
+            alt={asset.label}
+            className="w-full h-full object-cover"
+            onError={(e) => {
+              const t = e.target as HTMLImageElement
+              t.style.display = 'none'
+            }}
           />
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="font-medium text-gray-900 group-hover:text-gray-700 truncate">
-              {resource.title}
-            </h3>
-            {resource.is_external && (
-              <ExternalLink className="w-3.5 h-3.5 text-gray-300 shrink-0 group-hover:text-gray-400 transition-colors" />
-            )}
+        ) : isPdf ? (
+          <div className="flex flex-col items-center gap-2 text-gray-400">
+            <FileText className="w-14 h-14" />
+            <span className="text-xs font-semibold uppercase">PDF</span>
           </div>
-          {resource.subtitle && (
-            <p className="text-sm text-gray-500 mt-0.5 line-clamp-2">
-              {resource.subtitle}
-            </p>
+        ) : (
+          <div className="flex flex-col items-center gap-2 text-gray-300">
+            <ImageIcon className="w-14 h-14" />
+            <span className="text-xs font-semibold uppercase">File</span>
+          </div>
+        )}
+      </div>
+
+      {/* Body */}
+      <div className="p-4 flex-1 flex flex-col">
+        <h3
+          className="text-sm font-semibold mb-1"
+          style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+        >
+          {asset.label}
+        </h3>
+        {asset.caption && (
+          <p className="text-sm text-gray-500 leading-relaxed line-clamp-2 mb-3">
+            {asset.caption}
+          </p>
+        )}
+
+        <div className="flex items-center gap-2 mt-auto mb-3">
+          {asset.mime_type && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-500 uppercase">
+              {isPdf ? 'PDF' : isImage ? 'IMAGE' : 'FILE'}
+            </span>
+          )}
+          {asset.file_size_bytes && asset.file_size_bytes > 0 && (
+            <span className="text-[11px] text-gray-400">{formatBytes(asset.file_size_bytes)}</span>
           )}
         </div>
+
+        <button
+          onClick={handleClick}
+          disabled={downloading}
+          aria-label={`Download ${filename}`}
+          className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-lg text-sm font-medium text-white transition-colors hover:opacity-90 disabled:opacity-60"
+          style={{ backgroundColor: 'var(--couple-primary, #7D8471)' }}
+        >
+          {downloading ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Preparing...
+            </>
+          ) : (
+            <>
+              <Download className="w-4 h-4" />
+              Download
+            </>
+          )}
+        </button>
       </div>
-    </button>
+    </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Resources Page
+// Page
 // ---------------------------------------------------------------------------
 
 export default function ResourcesPage() {
-  const { venueId, aiName, loading: contextLoading } = useCoupleContext()
-  const [resources, setResources] = useState<VenueResource[]>([])
+  const { venueId, loading: contextLoading } = useCoupleContext()
+  const [assets, setAssets] = useState<BrandAssetRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [usingDefaults, setUsingDefaults] = useState(false)
-  const router = useRouter()
+  const [error, setError] = useState<string | null>(null)
 
-  // Derive slug from URL
-  const getSlug = useCallback(() => {
-    if (typeof window === 'undefined') return 'hawthorne-manor'
-    const parts = window.location.pathname.split('/')
-    // URL: /couple/{slug}/resources
-    const coupleIdx = parts.indexOf('couple')
-    if (coupleIdx !== -1 && parts[coupleIdx + 1]) {
-      return parts[coupleIdx + 1]
-    }
-    return 'hawthorne-manor'
-  }, [])
+  const supabase = createClient()
 
-  // ---- Load resources on mount ----
+  // ---- Fetch couple-facing brand assets ----
   useEffect(() => {
     if (contextLoading || !venueId) return
-    async function loadResources() {
-      try {
-        const supabase = createClient()
-
-        const { data, error } = await supabase
-          .from('venue_resources')
-          .select('*')
-          .eq('venue_id', venueId!)
-          .eq('is_active', true)
-          .order('sort_order', { ascending: true })
-
-        if (error) {
-          console.error('Failed to load resources:', error)
-        }
-
-        if (data && data.length > 0) {
-          setResources(data as VenueResource[])
-          setUsingDefaults(false)
-        } else {
-          // Use defaults
-          const slug = getSlug()
-          setResources(getDefaultResources(slug, venueId!, aiName))
-          setUsingDefaults(true)
-        }
-      } catch (err) {
-        console.error('Failed to load resources:', err)
-        const slug = getSlug()
-        setResources(getDefaultResources(slug, venueId!, aiName))
-        setUsingDefaults(true)
-      } finally {
-        setLoading(false)
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      setError(null)
+      const { data, error: fetchErr } = await supabase
+        .from('brand_assets')
+        .select('id, venue_id, asset_type, label, url, caption, category, couple_category, couple_facing, sage_eligible, file_size_bytes, mime_type, sort_order')
+        .eq('venue_id', venueId!)
+        .eq('couple_facing', true)
+        .order('sort_order', { ascending: true })
+        .order('label', { ascending: true })
+      if (cancelled) return
+      if (fetchErr) {
+        console.error('[resources] failed to load brand assets:', fetchErr)
+        setError('We could not load your venue resources.')
+      } else {
+        setAssets((data ?? []) as BrandAssetRow[])
       }
+      setLoading(false)
     }
+    void load()
+    return () => { cancelled = true }
+  }, [venueId, contextLoading, supabase])
 
-    loadResources()
-  }, [getSlug, venueId, contextLoading])
-
-  // ---- Handle click ----
-  function handleResourceClick(resource: VenueResource) {
-    if (resource.is_external) {
-      window.open(resource.url, '_blank', 'noopener,noreferrer')
-    } else {
-      router.push(resource.url)
+  // ---- Download click handler. Signed URL for our bucket, link for external. ----
+  const handleDownload = useCallback(async (asset: BrandAssetRow) => {
+    const internalPath = extractVenueAssetsPath(asset.url)
+    if (internalPath) {
+      const { data, error: signErr } = await supabase.storage
+        .from('venue-assets')
+        .createSignedUrl(internalPath, 3600)
+      if (!signErr && data?.signedUrl) {
+        window.open(data.signedUrl, '_blank', 'noopener,noreferrer')
+        return
+      }
+      console.error('[resources] sign url failed, falling back to public url:', signErr)
     }
-  }
+    // External URL or sign failure - just open in a new tab. The browser
+    // download attribute is best-effort; cross-origin servers can opt out.
+    window.open(asset.url, '_blank', 'noopener,noreferrer')
+  }, [supabase])
 
+  // ---- Group assets by couple_category ----
+  const groups = (() => {
+    const map = new Map<string, BrandAssetRow[]>()
+    for (const asset of assets) {
+      const key = (asset.couple_category && COUPLE_CATEGORY_GROUPS.some((g) => g.value === asset.couple_category))
+        ? asset.couple_category
+        : 'other'
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(asset)
+    }
+    return COUPLE_CATEGORY_GROUPS
+      .map((g) => ({ ...g, items: map.get(g.value) ?? [] }))
+      .filter((g) => g.items.length > 0)
+  })()
+
+  // ---- Loading state ----
   if (contextLoading || !venueId || loading) {
     return (
       <div className="flex items-center justify-center py-24">
-        <Loader2
-          className="w-8 h-8 animate-spin"
-          style={{ color: 'var(--couple-primary)' }}
-        />
+        <Loader2 className="w-8 h-8 animate-spin" style={{ color: 'var(--couple-primary)' }} />
       </div>
     )
   }
 
   return (
-    <div className="space-y-8">
-      {/* ---- Header ---- */}
-      <div className="flex items-center gap-3">
-        <div
-          className="w-10 h-10 rounded-full flex items-center justify-center"
-          style={{ backgroundColor: 'var(--couple-primary)' }}
-        >
-          <BookOpen className="w-5 h-5 text-white" />
-        </div>
-        <div>
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <div className="flex items-center gap-2 mb-1">
+          <FileDown className="w-6 h-6" style={{ color: 'var(--couple-primary)' }} />
           <h1
-            className="text-xl font-semibold"
-            style={{
-              fontFamily: 'var(--couple-font-heading)',
-              color: 'var(--couple-primary)',
-            }}
+            className="text-3xl font-bold"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
           >
             Resources
           </h1>
-          <p className="text-sm text-gray-500">
-            Helpful links and tools for your planning
-          </p>
         </div>
+        <p className="text-gray-500 text-sm">
+          Watercolors, floor plans, and templates your venue has shared. Use them for your favors, programs, and planning.
+        </p>
       </div>
 
-      {/* ---- Resource Grid ---- */}
-      {resources.length === 0 ? (
-        /* ---- Empty State ---- */
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-8 text-center max-w-md mx-auto">
-          <div
-            className="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-4"
-            style={{
-              backgroundColor:
-                'color-mix(in srgb, var(--couple-primary) 10%, transparent)',
-            }}
-          >
-            <BookOpen
-              className="w-7 h-7"
-              style={{ color: 'var(--couple-primary)' }}
-            />
-          </div>
-          <h3
-            className="text-lg font-semibold mb-2"
-            style={{
-              fontFamily: 'var(--couple-font-heading)',
-              color: 'var(--couple-primary)',
-            }}
-          >
-            No resources yet
-          </h3>
-          <p className="text-sm text-gray-500">
-            Your venue has not added any resources yet. Check back soon!
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {resources.map((resource) => (
-            <ResourceCard
-              key={resource.id}
-              resource={resource}
-              onClick={() => handleResourceClick(resource)}
-            />
-          ))}
+      {/* Error */}
+      {error && (
+        <div className="bg-red-50 border border-red-100 text-red-700 text-sm px-4 py-3 rounded-lg">
+          {error}
         </div>
       )}
 
-      {/* ---- Defaults hint ---- */}
-      {usingDefaults && (
-        <p className="text-xs text-gray-400 text-center pt-2">
-          Showing default resources. Your venue can customize this list.
-        </p>
+      {/* Empty state */}
+      {assets.length === 0 ? (
+        <div className="text-center py-16 bg-white rounded-xl border border-gray-100 shadow-sm">
+          <FileDown
+            className="w-12 h-12 mx-auto mb-4"
+            style={{ color: 'var(--couple-primary)', opacity: 0.3 }}
+          />
+          <h3
+            className="text-lg font-semibold mb-2"
+            style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+          >
+            Nothing here yet
+          </h3>
+          <p className="text-gray-500 text-sm">
+            Your venue hasn&apos;t shared any resources yet.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-10">
+          {groups.map((group) => (
+            <section key={group.value}>
+              <div className="mb-3">
+                <h2
+                  className="text-xl font-semibold"
+                  style={{ fontFamily: 'var(--couple-font-heading)', color: 'var(--couple-primary)' }}
+                >
+                  {group.label}
+                  <span className="text-xs font-normal text-gray-400 ml-2">
+                    ({group.items.length})
+                  </span>
+                </h2>
+                <p className="text-xs text-gray-400">{group.description}</p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {group.items.map((asset) => (
+                  <AssetCard key={asset.id} asset={asset} onDownload={handleDownload} />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
       )}
     </div>
   )
