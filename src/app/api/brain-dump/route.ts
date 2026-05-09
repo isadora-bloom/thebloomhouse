@@ -844,10 +844,23 @@ export async function POST(request: NextRequest) {
         })
       }
 
-      // pdf-parse failed — degrade to a clarification asking for a
-      // paste rather than silently filing a binary that nobody can
-      // read.
+      // pdf extraction failed - degrade to a clarification asking
+      // for a paste rather than silently filing a binary that nobody
+      // can read. Mirror the success branch and ALSO push a
+      // notification so the entry is reachable from the bell, not
+      // only buried in /agent/brain-dump.
       const q = `Couldn't extract text from PDF "${attachment.name}"${pdf.reason ? ` (${pdf.reason})` : ''}. Paste the relevant section as text instead.`
+      await createNotification({
+        venueId: auth.venueId,
+        type: 'brain_dump_pdf_failed',
+        title: `PDF needs manual paste: ${attachment.name}`,
+        body: JSON.stringify({
+          entryId: entry.id,
+          name: attachment.name,
+          reason: pdf.reason ?? 'unknown',
+          question: q,
+        }),
+      })
       await supabase.from('brain_dump_entries').update({
         parse_status: 'needs_clarification',
         clarification_question: q,
