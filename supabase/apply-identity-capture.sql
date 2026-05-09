@@ -1,14 +1,10 @@
 -- ---------------------------------------------------------------------------
--- Combined apply: identity-capture + auto-context migrations 253-257
+-- Combined apply: identity-capture + auto-context migrations 253-257 (v2)
 -- ---------------------------------------------------------------------------
 -- Paste into https://supabase.com/dashboard/project/jsxxgwprxuqgcauzlxcb/sql/new
 -- All idempotent. Safe to re-run. Skips already-applied migs cleanly.
---
--- 253: wedding_auto_context table + people.employer/hometown + weddings.field_source/dietary_summary/family_context + profile_enrichment_runs
--- 254: cultural_moments.archive_reason
--- 255: identity-evidence schema (people.name_evidence/display_handle/name_confidence/platform_handles/partner_role_kind, weddings.partner_count, wedding_relationships table, wedding_auto_context.sensitive/expires_at)
--- 256: emotional_theme insight_type + venue_config.notify_on_sensitive_auto_context
--- 257: weddings.previous_wedding_id (re-engagement-after-loss link)
+-- v2 fix: mig 256 dynamic-constraint lookup now matches even when
+--        Postgres normalised IN (...) to ANY (ARRAY[...]) in pg_get_constraintdef.
 
 -- ============================================
 -- MIGRATION 253
@@ -768,16 +764,23 @@ NOTIFY pgrst, 'reload schema';
 -- STEP 1 — widen intelligence_insights.insight_type CHECK
 -- ============================================================================
 
+-- Postgres normalises `IN (...)` to `ANY (ARRAY[...])` inside
+-- pg_get_constraintdef, so a LIKE '%IN%' lookup misses. Drop by
+-- known name + fall back to a definition-text search for legacy
+-- installs that may have a different constraint name.
 DO $$
 DECLARE
   con_name text;
 BEGIN
+  ALTER TABLE public.intelligence_insights
+    DROP CONSTRAINT IF EXISTS intelligence_insights_insight_type_check;
+
   SELECT conname
     INTO con_name
     FROM pg_constraint
    WHERE conrelid = 'public.intelligence_insights'::regclass
      AND contype = 'c'
-     AND pg_get_constraintdef(oid) LIKE '%insight_type%IN%'
+     AND pg_get_constraintdef(oid) LIKE '%insight_type%'
    LIMIT 1;
 
   IF con_name IS NOT NULL THEN

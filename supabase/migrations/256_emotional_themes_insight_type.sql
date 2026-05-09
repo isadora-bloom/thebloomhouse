@@ -23,16 +23,23 @@
 -- STEP 1 — widen intelligence_insights.insight_type CHECK
 -- ============================================================================
 
+-- Postgres normalises `IN (...)` to `ANY (ARRAY[...])` inside
+-- pg_get_constraintdef, so a LIKE '%IN%' lookup misses. Drop by
+-- known name + fall back to a definition-text search for legacy
+-- installs that may have a different constraint name.
 DO $$
 DECLARE
   con_name text;
 BEGIN
+  ALTER TABLE public.intelligence_insights
+    DROP CONSTRAINT IF EXISTS intelligence_insights_insight_type_check;
+
   SELECT conname
     INTO con_name
     FROM pg_constraint
    WHERE conrelid = 'public.intelligence_insights'::regclass
      AND contype = 'c'
-     AND pg_get_constraintdef(oid) LIKE '%insight_type%IN%'
+     AND pg_get_constraintdef(oid) LIKE '%insight_type%'
    LIMIT 1;
 
   IF con_name IS NOT NULL THEN
