@@ -24,6 +24,7 @@
 // ---------------------------------------------------------------------------
 
 import type { createServiceClient } from '@/lib/supabase/service'
+import { loadVendorDomains } from './vendor-domains'
 
 export type LifecycleFolder =
   | 'new_inquiry'
@@ -209,6 +210,16 @@ export interface LifecycleDecisionInput {
    * for the long tail. Pass null/undefined to skip the AI branch.
    */
   aiClassification?: LifecycleFolder | null
+  /**
+   * Per-venue vendor-domain allow-list (migration 258). Sister of the
+   * global ADVERTISER_DOMAINS but venue-scoped. When the rule chain
+   * would otherwise fall to 'other', if the sender domain is on this
+   * allow-list AND there's no wedding link, return 'vendor' directly —
+   * skipping the Haiku reclass call. Loaded once per
+   * updateThreadLifecycleFolder via loadVendorDomains() (5min cache).
+   * Pass null/undefined or an empty set to disable the check.
+   */
+  venueVendorDomains?: Set<string> | null
 }
 
 /**
@@ -229,6 +240,7 @@ export function decideLifecycleFolder(
     senderRole,
     senderClassification,
     aiClassification,
+    venueVendorDomains,
   } = input
 
   // 1) Advertiser — sender domain in allow-list AND no wedding link.
@@ -281,6 +293,35 @@ export function decideLifecycleFolder(
     inboundCount <= 1
   ) {
     return 'new_inquiry'
+  }
+
+  // 5b) Vendor — per-venue vendor-domain allow-list (mig 258). Sister
+  //     of the global ADVERTISER_DOMAINS pass at step 1, but for the
+  //     other side of the long tail. A coordinator (or Haiku via the
+  //     reclass-folders-ai sweep) has previously confirmed this domain
+  //     belongs to a real wedding-vendor business. Subsequent emails
+  //     from the same domain skip the Haiku call and land in 'vendor'
+  //     directly. Saves ~$0.0003/email × thousands per year.
+  //
+  //     Same no-wedding-link gate as the advertiser pass: a real
+  //     vendor coordinating a SPECIFIC booked wedding still belongs
+  //     under the wedding's lifecycle (client/potential_client),
+  //     which the rule chain has already established by step 4. We
+  //     only catch the un-tied case here.
+  if (
+    !weddingStatus &&
+    senderDomain &&
+    venueVendorDomains &&
+    venueVendorDomains.size > 0
+  ) {
+    if (venueVendorDomains.has(senderDomain)) {
+      return 'vendor'
+    }
+    // Suffix match — `notifications.gibsonrental.com` matches
+    // `gibsonrental.com`. Mirrors isAdvertiserDomain() behaviour.
+    for (const dom of venueVendorDomains) {
+      if (senderDomain.endsWith(`.${dom}`)) return 'vendor'
+    }
   }
 
   // 6) AI fallback — the rule chain is about to return 'other'. If
@@ -460,6 +501,18 @@ export async function updateThreadLifecycleFolder(
     ? senderEmail.split('@').pop()!.toLowerCase()
     : null
 
+  // Load the per-venue vendor-domain allow-list once. Cached 5min
+  // inside loadVendorDomains, so the cron polling 50 emails on the
+  // same venue pays the DB hit once. Defensive empty-set on error.
+  // Best-effort: if the load fails the rule chain still works; the
+  // vendor pass simply degrades to "no allow-list match".
+  let venueVendorDomains: Set<string> | null = null
+  try {
+    venueVendorDomains = await loadVendorDomains(venueId)
+  } catch {
+    venueVendorDomains = null
+  }
+
   const ruleFolder = decideLifecycleFolder({
     weddingStatus,
     bookedAt,
@@ -468,6 +521,7 @@ export async function updateThreadLifecycleFolder(
     hasTourEvent,
     senderDomain,
     senderRole,
+    venueVendorDomains,
   })
 
   // Step 6b: AI fallback — only when caller opted in AND the rule chain
@@ -520,6 +574,7 @@ export async function updateThreadLifecycleFolder(
         senderDomain,
         senderRole,
         aiClassification: ai.folder,
+        venueVendorDomains,
       })
     }
   }

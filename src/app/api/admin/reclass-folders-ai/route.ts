@@ -41,6 +41,7 @@ import {
 } from '@/lib/api/auth-helpers'
 import { classifyFolderAI } from '@/lib/services/inbox/folder-ai-classifier'
 import type { LifecycleFolder } from '@/lib/services/inbox/lifecycle'
+import { promoteVendorDomain } from '@/lib/services/inbox/vendor-domains'
 
 // 5-minute cap. Vercel Pro functions allow up to 300s. A full 2000-row
 // sweep at 200ms/row = 400s, so the UI must call with a smaller cap if
@@ -53,6 +54,12 @@ const MAX_BATCH_SIZE = 50
 const DEFAULT_MAX_ROWS = 2000
 const HARD_MAX_ROWS = 5000
 const CONFIDENCE_THRESHOLD = 70
+// Vendor-domain auto-promotion uses a stricter bar than reclass.
+// Reclass at ≥ 70 is safe because we're labelling ONE row; auto-promoting
+// a domain to the venue's vendor allow-list affects every FUTURE email
+// from that domain, so we want a clearly-confident Haiku call. Mismatch
+// the constants on purpose — the comment is the spec.
+const VENDOR_PROMOTION_THRESHOLD = 80
 // Stop processing new batches when the elapsed time crosses this bound.
 // Leaves headroom for the final batch + JSON serialization before the
 // platform's 300s wall.
@@ -141,6 +148,11 @@ export async function POST(req: NextRequest) {
   let updated = 0
   let aiErrors = 0
   let lowConfidence = 0
+  let vendorDomainsPromoted = 0
+  // Track domains already promoted in this sweep so a venue with 47
+  // Gibson Rental emails fires one upsert, not 47. Carries across
+  // batches for the lifetime of the request.
+  const firedVendorDomains = new Set<string>()
   const byFolder: Record<string, number> = {
     new_inquiry: 0,
     potential_client: 0,
@@ -205,6 +217,42 @@ export async function POST(req: NextRequest) {
       updatesByFolder.set(ai.folder, list)
     }
 
+    // Vendor-domain auto-promotion (mig 258). Stricter confidence bar
+    // than reclass (80 vs 70) because promoting a domain affects every
+    // FUTURE email from it. Collect distinct domains in this batch
+    // first, then fire one upsert per new-this-sweep domain. firedVendorDomains
+    // dedupes across batches for the lifetime of the request.
+    const batchDomainsToPromote = new Set<string>()
+    for (const result of results) {
+      if (!result) continue
+      const { row, ai } = result
+      if (ai.folder !== 'vendor') continue
+      if (ai.confidence < VENDOR_PROMOTION_THRESHOLD) continue
+      const fromEmail = (row.from_email ?? '').toLowerCase().trim()
+      const at = fromEmail.lastIndexOf('@')
+      const domain = at > 0 ? fromEmail.slice(at + 1) : ''
+      if (!domain) continue
+      if (firedVendorDomains.has(domain)) continue
+      batchDomainsToPromote.add(domain)
+    }
+    for (const domain of batchDomainsToPromote) {
+      firedVendorDomains.add(domain)
+      try {
+        const ok = await promoteVendorDomain({
+          venueId,
+          domain,
+          confidence: VENDOR_PROMOTION_THRESHOLD,
+          source: 'ai_classifier',
+        })
+        if (ok) vendorDomainsPromoted += 1
+      } catch (err) {
+        console.warn('[reclass-folders-ai] vendor-domain promotion failed', {
+          domain,
+          err: err instanceof Error ? err.message : 'unknown',
+        })
+      }
+    }
+
     // Issue one UPDATE per target folder. Each update is scoped to the
     // caller's venue and the ids we just classified -- no risk of
     // re-stamping an already-correct row.
@@ -233,6 +281,7 @@ export async function POST(req: NextRequest) {
     ok: true,
     scanned,
     updated,
+    vendor_domains_promoted: vendorDomainsPromoted,
     by_folder: byFolder,
     ai_errors: aiErrors,
     low_confidence: lowConfidence,

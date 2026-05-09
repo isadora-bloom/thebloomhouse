@@ -91,11 +91,23 @@ interface PhantomDiff {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await getPlatformAuth()
-  if (!auth) return unauthorized()
-  if (auth.isDemo) return forbidden('demo cannot run phantom-partner cleanup')
-  if (!auth.venueId) return badRequest('caller has no resolved venue')
-  const venueId: string = auth.venueId
+  // Two auth paths — coordinator session via getPlatformAuth, or
+  // CRON_SECRET + explicit `venueId` in the body for ops-side runs.
+  // Same dryRun-defaults-true semantics either way.
+  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  let venueId: string
+  if (cronAuth) {
+    let parsed: { venueId?: string } = {}
+    try { parsed = await req.clone().json() as { venueId?: string } } catch { /* ignore */ }
+    if (!parsed.venueId) return badRequest('CRON_SECRET path requires venueId in body')
+    venueId = parsed.venueId
+  } else {
+    const auth = await getPlatformAuth()
+    if (!auth) return unauthorized()
+    if (auth.isDemo) return forbidden('demo cannot run phantom-partner cleanup')
+    if (!auth.venueId) return badRequest('caller has no resolved venue')
+    venueId = auth.venueId
+  }
 
   let body: PostBody = {}
   try {

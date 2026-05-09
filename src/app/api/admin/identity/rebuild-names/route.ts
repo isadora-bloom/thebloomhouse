@@ -899,11 +899,27 @@ async function processOneWedding(
 // ---------------------------------------------------------------------------
 
 export async function POST(req: NextRequest) {
-  const auth = await getPlatformAuth()
-  if (!auth) return unauthorized()
-  if (auth.isDemo) return forbidden('demo cannot run identity name backfill')
-  if (!auth.venueId) return badRequest('caller has no resolved venue')
-  const venueId: string = auth.venueId
+  // Two auth paths: (1) coordinator session via getPlatformAuth (the
+  // primary, what the browser console uses), or (2) CRON_SECRET +
+  // explicit `venueId` in the body for ops/agent-side runs that don't
+  // hold a user session. The CRON_SECRET path is needed because a Wave
+  // 3 backfill is multi-minute and a coordinator can't always sit in
+  // their browser. Same write semantics either way; dryRun still
+  // defaults true.
+  const cronAuth = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  let venueId: string
+  if (cronAuth) {
+    let parsed: { venueId?: string } = {}
+    try { parsed = await req.clone().json() as { venueId?: string } } catch { /* ignore */ }
+    if (!parsed.venueId) return badRequest('CRON_SECRET path requires venueId in body')
+    venueId = parsed.venueId
+  } else {
+    const auth = await getPlatformAuth()
+    if (!auth) return unauthorized()
+    if (auth.isDemo) return forbidden('demo cannot run identity name backfill')
+    if (!auth.venueId) return badRequest('caller has no resolved venue')
+    venueId = auth.venueId
+  }
 
   let body: PostBody = {}
   try {
