@@ -7,16 +7,32 @@
  * dashboards and briefings.
  *
  * Design principles:
- *  - No AI calls for detection — pure statistical/heuristic analysis
- *  - Each detector is self-contained, defensive, and returns []  on failure
- *  - Confidence reflects data quality (more data points = higher confidence)
- *  - body/action text uses template strings, not AI (AI is for weekly digest)
- *  - data_points always contains the raw numbers for transparency
+ *  - DETECTION is pure statistical / heuristic — same numeric pass as
+ *    before. Each detector emits structured `narrator_facts` (family +
+ *    framing string + numeric allowlist) alongside its template
+ *    prose.
+ *  - NARRATION runs through `narrateIntelligenceInsight` (Sonnet-tier,
+ *    numbers-guarded). Fall back to the deterministic template only
+ *    when the cost-ceiling gate is closed, the LLM call fails, or the
+ *    numbers-guard rejects the output. Per AI-VS-TEMPLATED-AUDIT.md
+ *    finding #1 (2026-05-09) + Isadora directive 2026-05-09.
+ *  - Each persisted row carries `narration_source = 'llm' | 'template'`
+ *    (migration 251) so a future UI badge can distinguish.
+ *  - Each detector is self-contained, defensive, and returns [] on failure.
+ *  - Confidence reflects data quality (more data points = higher confidence).
+ *  - data_points always contains the raw numbers for transparency.
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { asCents, centsToDollars } from '@/lib/types/monetary'
+import {
+  narrateIntelligenceInsight,
+  BRAIN_INTEL_ENGINE_PROMPT_VERSION,
+  INTEL_ENGINE_NARRATION_MODEL,
+  type IntelInsightFamily,
+  type NarratorFacts,
+} from './intelligence-engine-narration'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,8 +41,12 @@ import { asCents, centsToDollars } from '@/lib/types/monetary'
 export interface InsightCandidate {
   insight_type: string
   category: string
+  /** Detector-composed template title. Surfaces as the FALLBACK title
+   *  when the LLM narrator fails. Replaced by LLM output otherwise. */
   title: string
+  /** Detector-composed template body. Same fallback contract as title. */
   body: string
+  /** Detector-composed template action. Same fallback contract. */
   action?: string
   priority: 'critical' | 'high' | 'medium' | 'low'
   confidence: number
@@ -34,6 +54,17 @@ export interface InsightCandidate {
   data_points: Record<string, unknown>
   compared_to?: string
   expires_at?: string
+  /** Family + framing + numeric allowlist for the LLM narrator. When
+   *  set, the runner pipes the candidate through
+   *  `narrateIntelligenceInsight`; the result replaces title / body /
+   *  action and stamps `narration_source='llm'`. When omitted (or the
+   *  narrator falls back), title / body / action stay as the
+   *  detector-composed template and `narration_source='template'`. */
+  narrator_facts?: {
+    family: IntelInsightFamily
+    framing: string
+    numbers: Array<number | string>
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -150,13 +181,17 @@ async function detectResponseTimeConversion(
 
     const multiplier = worst.rate > 0 ? (best.rate / worst.rate).toFixed(1) : 'infinitely more'
 
+    const bestPct = pct(best.rate, 1)
+    const worstPct = pct(worst.rate, 1)
+    const deltaPct = pct(delta, 1)
+
     const insights: InsightCandidate[] = [{
       insight_type: 'correlation',
       category: 'response_time',
       title: `${best.bucket} responses convert ${multiplier}x vs ${worst.bucket}`,
-      body: `Leads who get a response within ${best.bucket} book at ${pct(best.rate, 1)}% compared to ${pct(worst.rate, 1)}% for those waiting ${worst.bucket}. ` +
-        `That's a ${pct(delta, 1)} percentage point gap across ${weddings.length} leads with response data. ` +
-        `Faster responses don't just feel better — they measurably drive revenue.`,
+      body: `Leads who get a response within ${best.bucket} book at ${bestPct}% compared to ${worstPct}% for those waiting ${worst.bucket}. ` +
+        `That is a ${deltaPct} percentage point gap across ${weddings.length} leads with response data. ` +
+        `Faster responses don't just feel better, they measurably drive revenue.`,
       action: `Set a team goal to respond to all new inquiries within ${best.bucket}. Consider enabling auto-send for initial responses to hit this window consistently.`,
       priority: delta > 0.3 ? 'high' : 'medium',
       confidence: confidenceFromN(weddings.length),
@@ -167,12 +202,32 @@ async function detectResponseTimeConversion(
         ),
         total_leads_analyzed: weddings.length,
         best_bucket: best.bucket,
-        best_rate: pct(best.rate, 1),
+        best_rate: bestPct,
         worst_bucket: worst.bucket,
-        worst_rate: pct(worst.rate, 1),
+        worst_rate: worstPct,
       },
       compared_to: 'internal_buckets',
       expires_at: expiresInDays(30),
+      narrator_facts: {
+        family: 'conversion_comparison',
+        framing:
+          `Leads responded to in the ${best.bucket} bucket converted at the highest ` +
+          `rate, and leads waiting until the ${worst.bucket} bucket converted at the ` +
+          `lowest rate, across ${weddings.length} leads with response-time data. ` +
+          `The faster bucket is roughly ${multiplier} times the slower bucket.`,
+        numbers: [
+          bestPct, worstPct, deltaPct,
+          weddings.length,
+          best.total, worst.total,
+          Number(multiplier),
+          best.bucket, worst.bucket,
+          // Numeric thresholds inside the bucket labels ("<30min" /
+          // "1-4hr"). The numbers-guard tokenises the LLM output by
+          // numeric runs, so a bucket label that gets quoted in the
+          // body would be flagged unless the inner numbers are listed.
+          30, 60, 1, 4, 24, 240, 1440,
+        ],
+      },
     }]
 
     return insights
@@ -258,14 +313,17 @@ async function detectDayOfWeekPatterns(
         const delta = best.rate - worst.rate
 
         if (delta > 0.15) {
+          const bestPct = pct(best.rate, 1)
+          const worstPct = pct(worst.rate, 1)
+          const deltaPct = pct(delta, 1)
           insights.push({
             insight_type: 'correlation',
             category: 'lead_conversion',
-            title: `${dayName(best.day)} tours convert at ${pct(best.rate, 1)}% vs ${pct(worst.rate, 1)}% on ${dayName(worst.day)}s`,
+            title: `${dayName(best.day)} tours convert at ${bestPct}% vs ${worstPct}% on ${dayName(worst.day)}s`,
             body: `Across ${tours.length} tours, ${dayName(best.day)} consistently produces the highest booking rate. ` +
               `${dayName(worst.day)} tours complete but don't convert at the same rate. ` +
               `This could reflect couple readiness, competition for attention, or the tour experience itself on different days.`,
-            action: `Prioritize offering ${dayName(best.day)} tour slots to your hottest leads. Consider what makes ${dayName(worst.day)} different — is it more rushed? Is the venue set up differently?`,
+            action: `Prioritize offering ${dayName(best.day)} tour slots to your hottest leads. Consider what makes ${dayName(worst.day)} different. Is it more rushed? Is the venue set up differently?`,
             priority: delta > 0.3 ? 'high' : 'medium',
             confidence: confidenceFromN(tours.length, 15, 40),
             data_points: {
@@ -273,13 +331,26 @@ async function detectDayOfWeekPatterns(
                 Object.entries(dayStats).map(([d, s]) => [dayName(Number(d)), s])
               ),
               best_day: dayName(best.day),
-              best_rate: pct(best.rate, 1),
+              best_rate: bestPct,
               worst_day: dayName(worst.day),
-              worst_rate: pct(worst.rate, 1),
+              worst_rate: worstPct,
               total_tours: tours.length,
             },
             compared_to: 'internal_days',
             expires_at: expiresInDays(30),
+            narrator_facts: {
+              family: 'conversion_comparison',
+              framing:
+                `${dayName(best.day)} tours convert at the highest rate; ` +
+                `${dayName(worst.day)} tours convert at the lowest, across ` +
+                `${tours.length} completed tours. The gap is meaningful enough ` +
+                `to favour ${dayName(best.day)} slots for the hottest leads.`,
+              numbers: [
+                bestPct, worstPct, deltaPct,
+                tours.length, best.tours, worst.tours,
+                dayName(best.day), dayName(worst.day),
+              ],
+            },
           })
         }
       }
@@ -308,14 +379,16 @@ async function detectDayOfWeekPatterns(
         .sort((a, b) => a[1].total - b[1].total)[0]
 
       if (peakDay && lowDay && peakDay[1].total > lowDay[1].total * 1.5) {
+        const peakName = dayName(Number(peakDay[0]))
+        const lowName = dayName(Number(lowDay[0]))
         insights.push({
           insight_type: 'trend',
           category: 'lead_conversion',
-          title: `${dayName(Number(peakDay[0]))}s generate the most inquiries (${peakDay[1].total})`,
-          body: `${dayName(Number(peakDay[0]))} is your highest-volume inquiry day with ${peakDay[1].total} inquiries, ` +
-            `while ${dayName(Number(lowDay[0]))} is the quietest with ${lowDay[1].total}. ` +
+          title: `${peakName}s generate the most inquiries (${peakDay[1].total})`,
+          body: `${peakName} is your highest-volume inquiry day with ${peakDay[1].total} inquiries, ` +
+            `while ${lowName} is the quietest with ${lowDay[1].total}. ` +
             `Knowing when couples are actively searching helps you staff appropriately and ensure fast responses on peak days.`,
-          action: `Ensure full staffing and fast response capability on ${dayName(Number(peakDay[0]))}s. Consider scheduling marketing pushes for ${dayName(Number(lowDay[0]))}s to fill the gap.`,
+          action: `Ensure full staffing and fast response capability on ${peakName}s. Consider scheduling marketing pushes for ${lowName}s to fill the gap.`,
           priority: 'low',
           confidence: confidenceFromN(weddings.length),
           data_points: {
@@ -326,6 +399,18 @@ async function detectDayOfWeekPatterns(
           },
           compared_to: 'internal_days',
           expires_at: expiresInDays(30),
+          narrator_facts: {
+            family: 'volume_comparison',
+            framing:
+              `${peakName} is the busiest inquiry day with ${peakDay[1].total} ` +
+              `inquiries across the analysed window, while ${lowName} is the ` +
+              `quietest with ${lowDay[1].total}. Total inquiries analysed: ` +
+              `${weddings.length}.`,
+            numbers: [
+              peakDay[1].total, lowDay[1].total, weddings.length,
+              peakName, lowName,
+            ],
+          },
         })
       }
     }
@@ -427,16 +512,17 @@ async function detectSourceQuality(
     if (topVolume.source !== topQuality.source && topVolume.inquiries > topQuality.inquiries * 1.5) {
       const volConv = pct(topVolume.convRate, 1)
       const qualConv = pct(topQuality.convRate, 1)
+      const avgValRounded = Math.round(topQuality.avgValue)
 
       insights.push({
         insight_type: 'recommendation',
         category: 'source_attribution',
-        title: `${topQuality.source} books at ${qualConv}% vs ${topVolume.source} at ${volConv}% — quality over volume`,
+        title: `${topQuality.source} books at ${qualConv}% vs ${topVolume.source} at ${volConv}%, quality over volume`,
         body: `${topVolume.source} generates the most inquiries (${topVolume.inquiries}) but converts at only ${volConv}%. ` +
           `Meanwhile, ${topQuality.source} sends fewer leads (${topQuality.inquiries}) but converts at ${qualConv}%` +
           (topQuality.avgValue > 0 ? ` with an average booking value of ${formatDollars(topQuality.avgValue)}` : '') +
           `. Dollar for dollar, ${topQuality.source} delivers more revenue per inquiry.`,
-        action: `Consider shifting marketing spend toward ${topQuality.source}. If you can't reduce ${topVolume.source} spend, improve the ${topVolume.source} funnel — the leads are there but something is breaking in conversion.`,
+        action: `Consider shifting marketing spend toward ${topQuality.source}. If you can't reduce ${topVolume.source} spend, improve the ${topVolume.source} funnel; the leads are there but something is breaking in conversion.`,
         priority: 'high',
         confidence: confidenceFromN(weddings.length),
         impact_score: (topQuality.convRate - topVolume.convRate) * topVolume.inquiries * (topQuality.avgValue || 15000),
@@ -453,6 +539,24 @@ async function detectSourceQuality(
         },
         compared_to: 'internal_sources',
         expires_at: expiresInDays(30),
+        narrator_facts: {
+          family: 'source_quality',
+          framing:
+            `${topVolume.source} sends the most leads (${topVolume.inquiries}) ` +
+            `but converts at ${volConv}%. ${topQuality.source} sends fewer ` +
+            `(${topQuality.inquiries}) but converts at ${qualConv}%` +
+            (topQuality.avgValue > 0
+              ? ` with an average booking value around ${formatDollars(topQuality.avgValue)}`
+              : '') +
+            `. Across ${weddings.length} leads with source attribution.`,
+          numbers: [
+            volConv, qualConv,
+            topVolume.inquiries, topQuality.inquiries,
+            weddings.length,
+            avgValRounded,
+            topVolume.source, topQuality.source,
+          ],
+        },
       })
     }
 
@@ -464,24 +568,40 @@ async function detectSourceQuality(
       const slowest = withBookingTime[withBookingTime.length - 1]
 
       if (slowest.avgDaysToBook > fastest.avgDaysToBook * 1.5) {
+        const fastDays = Math.round(fastest.avgDaysToBook)
+        const slowDays = Math.round(slowest.avgDaysToBook)
         insights.push({
           insight_type: 'benchmark',
           category: 'source_attribution',
-          title: `${fastest.source} leads book in ${Math.round(fastest.avgDaysToBook)} days vs ${Math.round(slowest.avgDaysToBook)} from ${slowest.source}`,
-          body: `Leads from ${fastest.source} move through your pipeline fastest, booking in an average of ${Math.round(fastest.avgDaysToBook)} days. ` +
-            `${slowest.source} leads take ${Math.round(slowest.avgDaysToBook)} days. ` +
+          title: `${fastest.source} leads book in ${fastDays} days vs ${slowDays} from ${slowest.source}`,
+          body: `Leads from ${fastest.source} move through your pipeline fastest, booking in an average of ${fastDays} days. ` +
+            `${slowest.source} leads take ${slowDays} days. ` +
             `Faster cycles mean less follow-up work and less risk of losing the lead to a competitor.`,
           action: `Map out what makes ${fastest.source} leads decide faster. Are they further along in planning when they inquire? Use that insight to qualify ${slowest.source} leads earlier.`,
           priority: 'low',
           confidence: confidenceFromN(fastest.inquiries + slowest.inquiries),
           data_points: {
             fastest_source: fastest.source,
-            fastest_days: Math.round(fastest.avgDaysToBook),
+            fastest_days: fastDays,
             slowest_source: slowest.source,
-            slowest_days: Math.round(slowest.avgDaysToBook),
+            slowest_days: slowDays,
           },
           compared_to: 'internal_sources',
           expires_at: expiresInDays(30),
+          narrator_facts: {
+            family: 'source_quality',
+            framing:
+              `${fastest.source} leads close fastest at an average of ${fastDays} ` +
+              `days from inquiry to booking, while ${slowest.source} leads ` +
+              `take ${slowDays} days on average. Combined sample size is ` +
+              `${fastest.booked + slowest.booked} bookings.`,
+            numbers: [
+              fastDays, slowDays,
+              fastest.booked, slowest.booked,
+              fastest.inquiries, slowest.inquiries,
+              fastest.source, slowest.source,
+            ],
+          },
         })
       }
     }
@@ -560,14 +680,17 @@ async function detectCoordinatorPatterns(
       const slowest = responseData[responseData.length - 1]
 
       if (slowest.responseTime > fastest.responseTime * 2 && slowest.responseTime > 30) {
+        const ratio = Number((slowest.responseTime / fastest.responseTime).toFixed(1))
+        const fastestMins = Math.round(fastest.responseTime)
+        const slowestMins = Math.round(slowest.responseTime)
         insights.push({
           insight_type: 'risk',
           category: 'team_performance',
-          title: `${slowest.name}'s avg response time is ${formatMinutes(slowest.responseTime)} — ${(slowest.responseTime / fastest.responseTime).toFixed(1)}x slower than ${fastest.name}`,
+          title: `${slowest.name}'s avg response time is ${formatMinutes(slowest.responseTime)}, ${ratio}x slower than ${fastest.name}`,
           body: `${fastest.name} responds in an average of ${formatMinutes(fastest.responseTime)}, while ${slowest.name} takes ${formatMinutes(slowest.responseTime)}. ` +
             `If response time correlates with conversion (check the Response Time insight), this gap could be costing bookings. ` +
             `The difference could indicate workload imbalance, scheduling issues, or process differences.`,
-          action: `Check ${slowest.name}'s workload — are they overloaded on specific days? Consider load-balancing inquiry assignments or enabling auto-send for their initial responses.`,
+          action: `Check ${slowest.name}'s workload. Are they overloaded on specific days? Consider load-balancing inquiry assignments or enabling auto-send for their initial responses.`,
           priority: slowest.responseTime > 240 ? 'high' : 'medium',
           confidence: confidenceFromN(metrics.length, 5, 20),
           data_points: {
@@ -580,6 +703,19 @@ async function detectCoordinatorPatterns(
           },
           compared_to: 'internal_team',
           expires_at: expiresInDays(14),
+          narrator_facts: {
+            family: 'entity_outlier',
+            framing:
+              `${fastest.name} averages ${fastestMins} minutes to first response; ` +
+              `${slowest.name} averages ${slowestMins} minutes, roughly ` +
+              `${ratio} times slower. Compared across ${responseData.length} ` +
+              `coordinators on file.`,
+            numbers: [
+              fastestMins, slowestMins, ratio,
+              responseData.length,
+              fastest.name, slowest.name,
+            ],
+          },
         })
       }
 
@@ -592,13 +728,16 @@ async function detectCoordinatorPatterns(
         const convDelta = bestConv.convRate - worstConv.convRate
 
         if (convDelta > 0.15) {
+          const bestPct = pct(bestConv.convRate, 1)
+          const worstPct = pct(worstConv.convRate, 1)
+          const deltaPct = pct(convDelta, 1)
           insights.push({
             insight_type: 'benchmark',
             category: 'team_performance',
-            title: `${bestConv.name} converts at ${pct(bestConv.convRate, 1)}% vs ${worstConv.name} at ${pct(worstConv.convRate, 1)}%`,
-            body: `There's a ${pct(convDelta, 1)} percentage point gap in conversion rates between coordinators. ` +
+            title: `${bestConv.name} converts at ${bestPct}% vs ${worstConv.name} at ${worstPct}%`,
+            body: `There is a ${deltaPct} percentage point gap in conversion rates between coordinators. ` +
               `${bestConv.name} is booking more of the leads they work. ` +
-              `Understanding what ${bestConv.name} does differently — in tour style, follow-up cadence, or communication approach — can lift the whole team.`,
+              `Understanding what ${bestConv.name} does differently in tour style, follow-up cadence, or communication approach can lift the whole team.`,
             action: `Have ${bestConv.name} share their process with the team. Shadow their tours and compare follow-up sequences to identify what drives the higher conversion.`,
             priority: convDelta > 0.25 ? 'high' : 'medium',
             confidence: confidenceFromN(metrics.length, 5, 20),
@@ -611,6 +750,18 @@ async function detectCoordinatorPatterns(
             },
             compared_to: 'internal_team',
             expires_at: expiresInDays(14),
+            narrator_facts: {
+              family: 'entity_outlier',
+              framing:
+                `${bestConv.name} converts at ${bestPct}% and ${worstConv.name} ` +
+                `converts at ${worstPct}%, a gap of ${deltaPct} percentage ` +
+                `points. Compared across ${convData.length} coordinators on file.`,
+              numbers: [
+                bestPct, worstPct, deltaPct,
+                convData.length,
+                bestConv.name, worstConv.name,
+              ],
+            },
           })
         }
       }
@@ -705,17 +856,22 @@ async function detectCoupleBehaviorPredictors(
 
       if (emailRatio > 1.4 || emailRatio < 0.7) {
         const moreOrFewer = emailRatio > 1 ? 'more' : 'fewer'
+        const ratioRounded = Number(emailRatio.toFixed(1))
+        const bookedAvg = Number(bookedStats.avgEmails.toFixed(1))
+        const bookedInb = Number(bookedStats.avgInbound.toFixed(1))
+        const lostAvg = Number(lostStats.avgEmails.toFixed(1))
+        const lostInb = Number(lostStats.avgInbound.toFixed(1))
         insights.push({
           insight_type: 'prediction',
           category: 'couple_behavior',
-          title: `Couples who book exchange ${emailRatio.toFixed(1)}x ${moreOrFewer} emails before signing`,
-          body: `Booked couples averaged ${bookedStats.avgEmails.toFixed(1)} emails (${bookedStats.avgInbound.toFixed(1)} inbound), ` +
-            `while lost couples averaged ${lostStats.avgEmails.toFixed(1)} emails (${lostStats.avgInbound.toFixed(1)} inbound). ` +
+          title: `Couples who book exchange ${ratioRounded}x ${moreOrFewer} emails before signing`,
+          body: `Booked couples averaged ${bookedAvg} emails (${bookedInb} inbound), ` +
+            `while lost couples averaged ${lostAvg} emails (${lostInb} inbound). ` +
             `Email engagement is a strong predictor of booking intent. ` +
             `Couples who go quiet may need a different approach than more follow-up emails.`,
           action: emailRatio > 1
             ? `Leads with low email engagement after the first 2 touchpoints are at risk. Flag them for a phone call or personal video message instead of another email.`
-            : `High email volume from lost leads may indicate confusion or unresolved objections. Look for patterns in what they're asking — it may reveal a gap in your pitch.`,
+            : `High email volume from lost leads may indicate confusion or unresolved objections. Look for patterns in what they're asking; it may reveal a gap in your pitch.`,
           priority: 'medium',
           confidence: confidenceFromN(bookedIds.length + lostIds.length),
           data_points: {
@@ -728,6 +884,20 @@ async function detectCoupleBehaviorPredictors(
           },
           compared_to: 'booked_vs_lost',
           expires_at: expiresInDays(30),
+          narrator_facts: {
+            family: 'conversion_comparison',
+            framing:
+              `Couples who eventually booked averaged ${bookedAvg} emails ` +
+              `(${bookedInb} inbound) before signing; couples who were lost ` +
+              `averaged ${lostAvg} emails (${lostInb} inbound). The booked ` +
+              `cohort exchanged about ${ratioRounded} times ${moreOrFewer} ` +
+              `emails. Compared across ${bookedIds.length} booked and ` +
+              `${lostIds.length} lost couples.`,
+            numbers: [
+              ratioRounded, bookedAvg, bookedInb, lostAvg, lostInb,
+              bookedIds.length, lostIds.length,
+            ],
+          },
         })
       }
     }
@@ -761,24 +931,45 @@ async function detectCoupleBehaviorPredictors(
       const pointsRatio = bookedEng.avgPoints / lostEng.avgPoints
 
       if (pointsRatio > 1.5) {
+        const ratioRounded = Number(pointsRatio.toFixed(1))
+        const bookedAvgPoints = Math.round(bookedEng.avgPoints)
+        const lostAvgPoints = Math.round(lostEng.avgPoints)
+        const bookedAvgEvents = Number(bookedEng.avgEvents.toFixed(1))
+        const lostAvgEvents = Number(lostEng.avgEvents.toFixed(1))
+        const threshold = Math.round(bookedEng.avgPoints * 0.7)
         insights.push({
           insight_type: 'prediction',
           category: 'couple_behavior',
-          title: `Booked couples have ${pointsRatio.toFixed(1)}x higher engagement scores`,
-          body: `Couples who eventually book accumulate an average engagement score of ${Math.round(bookedEng.avgPoints)} ` +
-            `(${bookedEng.avgEvents.toFixed(1)} events), compared to ${Math.round(lostEng.avgPoints)} for lost leads ` +
-            `(${lostEng.avgEvents.toFixed(1)} events). Heat scores above ${Math.round(bookedEng.avgPoints * 0.7)} are strong buying signals.`,
-          action: `Set a heat score threshold of ${Math.round(bookedEng.avgPoints * 0.7)} to flag "likely to book" leads. Give these leads priority scheduling and personalized attention.`,
+          title: `Booked couples have ${ratioRounded}x higher engagement scores`,
+          body: `Couples who eventually book accumulate an average engagement score of ${bookedAvgPoints} ` +
+            `(${bookedAvgEvents} events), compared to ${lostAvgPoints} for lost leads ` +
+            `(${lostAvgEvents} events). Heat scores above ${threshold} are strong buying signals.`,
+          action: `Set a heat score threshold of ${threshold} to flag "likely to book" leads. Give these leads priority scheduling and personalized attention.`,
           priority: 'medium',
           confidence: confidenceFromN(bookedIds.length + lostIds.length),
           data_points: {
-            booked_avg_engagement_score: Math.round(bookedEng.avgPoints),
+            booked_avg_engagement_score: bookedAvgPoints,
             booked_avg_events: bookedEng.avgEvents.toFixed(1),
-            lost_avg_engagement_score: Math.round(lostEng.avgPoints),
+            lost_avg_engagement_score: lostAvgPoints,
             lost_avg_events: lostEng.avgEvents.toFixed(1),
           },
           compared_to: 'booked_vs_lost',
           expires_at: expiresInDays(30),
+          narrator_facts: {
+            family: 'conversion_comparison',
+            framing:
+              `Booked couples averaged an engagement score of ${bookedAvgPoints} ` +
+              `over ${bookedAvgEvents} events; lost couples averaged ` +
+              `${lostAvgPoints} over ${lostAvgEvents} events. Booked is ` +
+              `roughly ${ratioRounded} times higher. Suggested ` +
+              `likely-to-book threshold based on these averages: ${threshold}.`,
+            numbers: [
+              ratioRounded, bookedAvgPoints, lostAvgPoints,
+              bookedAvgEvents, lostAvgEvents,
+              threshold,
+              bookedIds.length, lostIds.length,
+            ],
+          },
         })
       }
     }
@@ -885,17 +1076,20 @@ async function detectPipelineStalls(
         ? formatDollars(atRiskRevenue) + ' at risk'
         : 'action needed'
 
+      const atRiskRounded = Math.round(atRiskRevenue)
+      const totalStalledValueRounded = Math.round(totalStalledValue)
+      const baselineLossPct = hasReliableLossRate ? pct(baselineLossRate, 1) : 0
       insights.push({
         insight_type: 'risk',
         category: 'lead_conversion',
-        title: `${totalStalled} lead${totalStalled > 1 ? 's' : ''} stalled for 14+ days — ${riskLabel}`,
+        title: `${totalStalled} lead${totalStalled > 1 ? 's' : ''} stalled for 14+ days, ${riskLabel}`,
         body: `${totalStalled} active leads haven't moved forward in over ${STALL_THRESHOLD_DAYS} days: ${stageBreakdown}. ` +
           (hasReliableLossRate
             ? `Based on your historical data, leads that stall this long convert at a significantly lower rate. `
             : `Stalled leads are at elevated risk of going cold. `) +
           (totalStalledValue > 0 && hasReliableLossRate ? `These leads represent ${formatDollars(totalStalledValue)} in potential revenue. ` : '') +
           `Every additional day of inaction makes recovery less likely.`,
-        action: `Review each stalled lead this week. For "proposal_sent" leads, call directly — email hasn't worked. For "tour_scheduled" leads, confirm or reschedule. For "inquiry" leads, try a different channel (text, phone, social).`,
+        action: `Review each stalled lead this week. For "proposal_sent" leads, call directly; email hasn't worked. For "tour_scheduled" leads, confirm or reschedule. For "inquiry" leads, try a different channel (text, phone, social).`,
         priority,
         confidence: 0.8, // Pipeline stalls are highly concrete
         impact_score: hasReliableLossRate ? atRiskRevenue : undefined,
@@ -903,14 +1097,37 @@ async function detectPipelineStalls(
           total_stalled: totalStalled,
           total_stalled_value: totalStalledValue,
           stall_threshold_days: STALL_THRESHOLD_DAYS,
-          at_risk_revenue: hasReliableLossRate ? Math.round(atRiskRevenue) : null,
-          baseline_loss_rate: hasReliableLossRate ? pct(baselineLossRate, 1) : null,
+          at_risk_revenue: hasReliableLossRate ? atRiskRounded : null,
+          baseline_loss_rate: hasReliableLossRate ? baselineLossPct : null,
           historical_sample_size: totalResolved,
           stages: Object.fromEntries(stalledByStage),
           total_active_pipeline: weddings.length,
         },
         compared_to: 'stall_threshold',
-        expires_at: expiresInDays(7), // This is urgent — refresh weekly
+        expires_at: expiresInDays(7), // This is urgent, refresh weekly
+        narrator_facts: {
+          family: 'count_with_risk',
+          framing:
+            `${totalStalled} active leads have not moved forward in over ` +
+            `${STALL_THRESHOLD_DAYS} days. Stage breakdown: ${stageBreakdown}. ` +
+            (hasReliableLossRate
+              ? `Historical loss rate at this venue is ${baselineLossPct}%, ` +
+                `so the at-risk revenue estimate is roughly ` +
+                `${formatDollars(atRiskRevenue)}. `
+              : `Historical loss-rate baseline is unreliable on this venue ` +
+                `right now; treat the count as the actionable signal. `) +
+            `Total pipeline value of stalled leads: ` +
+            `${formatDollars(totalStalledValue)}.`,
+          numbers: [
+            totalStalled, STALL_THRESHOLD_DAYS,
+            atRiskRounded, totalStalledValueRounded,
+            baselineLossPct,
+            totalResolved, weddings.length,
+            ...Array.from(stalledByStage.entries()).flatMap(([stage, d]) => [
+              d.count, Math.round(d.maxDays), stage,
+            ]),
+          ],
+        },
       })
     }
 
@@ -1005,10 +1222,11 @@ async function detectSeasonalOpportunities(
 
       if (fillRate >= 0.7 && monthsAway >= 3) {
         // Month is filling fast
+        const fillPct = Math.round(fillRate * 100)
         insights.push({
           insight_type: 'opportunity',
           category: 'seasonal',
-          title: `${monthNames[m]} is ${Math.round(fillRate * 100)}% booked with ${monthsAway} months to go`,
+          title: `${monthNames[m]} is ${fillPct}% booked with ${monthsAway} months to go`,
           body: `${monthNames[m]} already has ${datesBooked} dates booked out of ~${estimatedMonthlyCapacity} available weekends. ` +
             `With ${monthsAway} months remaining, this month is nearly sold out. ` +
             `Scarcity messaging for ${monthNames[m]} can accelerate remaining bookings and justify premium pricing.`,
@@ -1025,17 +1243,28 @@ async function detectSeasonalOpportunities(
           },
           compared_to: 'capacity',
           expires_at: expiresInDays(14),
+          narrator_facts: {
+            family: 'capacity_signal',
+            framing:
+              `${monthNames[m]} has ${datesBooked} dates booked out of an ` +
+              `estimated ${estimatedMonthlyCapacity} weekend slots, roughly ` +
+              `${fillPct}% full with ${monthsAway} months still to go.`,
+            numbers: [
+              fillPct, datesBooked, estimatedMonthlyCapacity, monthsAway,
+              monthNames[m],
+            ],
+          },
         })
       } else if (booked === 0 && datesBooked === 0 && monthsAway >= 2 && monthsAway <= 6) {
         // Month is empty and approaching
         insights.push({
           insight_type: 'risk',
           category: 'seasonal',
-          title: `${monthNames[m]} has zero bookings — ${monthsAway} months away`,
+          title: `${monthNames[m]} has zero bookings, ${monthsAway} months away`,
           body: `${monthNames[m]} is completely open with ${monthsAway} months to go. ` +
             `If this month historically has low demand, consider whether targeted promotions or pricing adjustments could help. ` +
-            `If it should be busy, something may be blocking bookings — check if leads are being lost at a specific stage.`,
-          action: `Run a targeted promotion for ${monthNames[m]} — consider a small discount, added value package, or social media campaign highlighting the season. Reach out to any lost leads who had interest in this time period.`,
+            `If it should be busy, something may be blocking bookings; check if leads are being lost at a specific stage.`,
+          action: `Run a targeted promotion for ${monthNames[m]}. Consider a small discount, added value package, or social media campaign highlighting the season. Reach out to any lost leads who had interest in this time period.`,
           priority: monthsAway <= 3 ? 'high' : 'medium',
           confidence: 0.7,
           data_points: {
@@ -1045,6 +1274,13 @@ async function detectSeasonalOpportunities(
           },
           compared_to: 'capacity',
           expires_at: expiresInDays(14),
+          narrator_facts: {
+            family: 'capacity_signal',
+            framing:
+              `${monthNames[m]} has zero bookings on the calendar with ` +
+              `${monthsAway} months remaining before the month begins.`,
+            numbers: [0, monthsAway, monthNames[m]],
+          },
         })
       }
     }
@@ -1161,7 +1397,7 @@ async function detectLostDealPatterns(
           insights.push({
             insight_type: 'recommendation',
             category: 'lead_conversion',
-            title: `${topReasonPct}% of lost deals cite "${topReasonName}" — ${topReason[1].count} of last ${lostDeals.length}`,
+            title: `${topReasonPct}% of lost deals cite "${topReasonName}", ${topReason[1].count} of last ${lostDeals.length}`,
             body: `The leading reason for lost deals is "${topReasonName}", accounting for ${topReason[1].count} of your ${lostDeals.length} recorded losses (${topReasonPct}%).${bodyExtra} ` +
               `This concentration in a single reason suggests a systematic issue rather than random loss.`,
             action: actionText,
@@ -1179,6 +1415,29 @@ async function detectLostDealPatterns(
             },
             compared_to: 'internal_losses',
             expires_at: expiresInDays(30),
+            narrator_facts: {
+              family: 'concentration_pattern',
+              framing:
+                `"${topReasonName}" is cited in ${topReason[1].count} of the ` +
+                `${lostDeals.length} most recent lost deals (${topReasonPct}%). ` +
+                (stageDistribution.size > 0
+                  ? `Stage distribution: ` +
+                    [...stageDistribution.entries()]
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([s, c]) => `${c} at ${s}`)
+                      .join(', ') +
+                    '. '
+                  : '') +
+                (uniqueCompetitors.length > 0
+                  ? `Competitors mentioned: ${uniqueCompetitors.join(', ')}.`
+                  : ''),
+              numbers: [
+                topReasonPct, topReason[1].count, lostDeals.length,
+                topReasonName,
+                ...Array.from(stageDistribution.entries()).flatMap(([s, c]) => [c, s]),
+                ...uniqueCompetitors,
+              ],
+            },
           })
           } // end confidence gate
         }
@@ -1227,12 +1486,14 @@ async function detectLostDealPatterns(
           let sourcePriority: InsightCandidate['priority'] = worstSource.lossRate > 0.7 ? 'high' : 'medium'
           if (sourceConfidence < 0.5 && sourcePriority === 'high') sourcePriority = 'medium'
 
+          const worstPct = pct(worstSource.lossRate, 1)
+          const bestPct = pct(bestSource.lossRate, 1)
           insights.push({
             insight_type: 'risk',
             category: 'source_attribution',
-            title: `${pct(worstSource.lossRate, 1)}% of ${worstSource.source} leads are lost — worst among your sources`,
-            body: `${worstSource.source} has the highest loss rate at ${pct(worstSource.lossRate, 1)}% (${worstSource.lost} of ${worstSource.total}), ` +
-              `compared to ${bestSource.source} at ${pct(bestSource.lossRate, 1)}% (${bestSource.lost} of ${bestSource.total}). ` +
+            title: `${worstPct}% of ${worstSource.source} leads are lost, worst among your sources`,
+            body: `${worstSource.source} has the highest loss rate at ${worstPct}% (${worstSource.lost} of ${worstSource.total}), ` +
+              `compared to ${bestSource.source} at ${bestPct}% (${bestSource.lost} of ${bestSource.total}). ` +
               `This suggests either the leads from ${worstSource.source} aren't a good fit, or the way you handle them needs adjustment.`,
             action: `Review your ${worstSource.source} listing/profile. Are expectations being set correctly? Are you attracting the right budget and style of couple? Consider adding pre-qualifying questions.`,
             priority: sourcePriority,
@@ -1247,6 +1508,22 @@ async function detectLostDealPatterns(
             },
             compared_to: 'internal_sources',
             expires_at: expiresInDays(30),
+            narrator_facts: {
+              family: 'concentration_pattern',
+              framing:
+                `${worstSource.source} loses ${worstPct}% of its leads ` +
+                `(${worstSource.lost} of ${worstSource.total}); ${bestSource.source} ` +
+                `loses ${bestPct}% (${bestSource.lost} of ${bestSource.total}). ` +
+                `Worst-performing source compared against best on ` +
+                `${sourceLossRates.length} sources with at least 3 leads each.`,
+              numbers: [
+                worstPct, bestPct,
+                worstSource.lost, worstSource.total,
+                bestSource.lost, bestSource.total,
+                sourceLossRates.length,
+                worstSource.source, bestSource.source,
+              ],
+            },
           })
         }
       }
@@ -1448,13 +1725,31 @@ async function detectPortalEngagementQuality(
           },
           compared_to: 'venue_average',
           expires_at: expiresInDays(7),
+          narrator_facts: {
+            family: 'per_couple_score',
+            framing:
+              `${coupleName}'s wedding is on ${dateStr}, ${weeksToGo} ` +
+              `week${weeksToGo !== 1 ? 's' : ''} away. Their readiness score ` +
+              `is ${readiness} out of 100. Checklist is ${checklistPct}% ` +
+              `complete; ${finalisedCount} of ${TOTAL_SECTIONS} sections ` +
+              `finalised; ${vendorCount} vendor${vendorCount !== 1 ? 's' : ''} ` +
+              `booked; ${contractCount} contract${contractCount !== 1 ? 's' : ''} ` +
+              `on file. Venue average sections-finalised at this stage: ` +
+              `${avgPct}%.`,
+            numbers: [
+              readiness, weeksToGo, daysToGo,
+              checklistPct, finalisedCount, TOTAL_SECTIONS,
+              vendorCount, contractCount, avgPct,
+              coupleName, dateStr,
+            ],
+          },
         })
       } else if (readiness < 60 && weeksToGo <= 6) {
         // Medium-priority warning for moderately behind couples
         insights.push({
           insight_type: 'risk',
           category: 'operational',
-          title: `${coupleName} may need a planning check-in — readiness at ${readiness}/100`,
+          title: `${coupleName} may need a planning check-in, readiness at ${readiness}/100`,
           body: `Wedding for ${coupleName} on ${dateStr} has a readiness score of ${readiness}/100 with ${weeksToGo} weeks to go. ` +
             `They've completed ${checklistPct}% of checklist items and finalized ${finalisedCount} of ${TOTAL_SECTIONS} sections. ` +
             `The venue average at this stage is ${avgPct}% of sections finalized.`,
@@ -1473,6 +1768,19 @@ async function detectPortalEngagementQuality(
           },
           compared_to: 'venue_average',
           expires_at: expiresInDays(7),
+          narrator_facts: {
+            family: 'per_couple_score',
+            framing:
+              `${coupleName}'s wedding is on ${dateStr}, ${weeksToGo} weeks ` +
+              `away. Readiness score: ${readiness} out of 100. Checklist ` +
+              `${checklistPct}% complete; ${finalisedCount} of ${TOTAL_SECTIONS} ` +
+              `sections finalised. Venue average at this stage: ${avgPct}%.`,
+            numbers: [
+              readiness, weeksToGo, checklistPct, finalisedCount,
+              TOTAL_SECTIONS, vendorCount, avgPct,
+              coupleName, dateStr,
+            ],
+          },
         })
       }
     }
@@ -1607,7 +1915,7 @@ async function detectGuestExperienceRisks(
           body: `${coupleName}'s wedding on ${dateStr} has ${guests.missingDietary} attending guests without dietary restriction information (${dietaryCompletePct}% complete). ` +
             `Past events with incomplete dietary data had increased catering complaints. ` +
             (allergies && allergies.severe > 0
-              ? `There are also ${allergies.severe} guests with severe allergies already registered — gaps in dietary data are especially risky.`
+              ? `There are also ${allergies.severe} guests with severe allergies already registered, so gaps in dietary data are especially risky.`
               : `Completing this data before the event ensures accurate catering orders and a better guest experience.`),
           action: `Send ${coupleName} a reminder to complete dietary information for their remaining guests. The portal's allergy registry makes this easy.`,
           priority: daysToGo <= 7 && guests.missingDietary >= 10 ? 'high' : 'medium',
@@ -1625,6 +1933,24 @@ async function detectGuestExperienceRisks(
           },
           compared_to: 'completeness_threshold',
           expires_at: expiresInDays(daysToGo > 0 ? Math.min(daysToGo, 14) : 3),
+          narrator_facts: {
+            family: 'count_with_risk',
+            framing:
+              `${coupleName}'s wedding on ${dateStr} has ${guests.missingDietary} ` +
+              `attending guests without dietary info on file out of ` +
+              `${guests.attending} attending; dietary data is ${dietaryCompletePct}% ` +
+              `complete. ${daysToGo} days to go.` +
+              (allergies && allergies.severe > 0
+                ? ` ${allergies.severe} severe-allergy guests are already ` +
+                  `registered.`
+                : ''),
+            numbers: [
+              guests.missingDietary, guests.attending, guests.total,
+              dietaryCompletePct, daysToGo,
+              allergies?.severe ?? 0, allergies?.total ?? 0,
+              coupleName, dateStr,
+            ],
+          },
         })
       }
 
@@ -1648,6 +1974,16 @@ async function detectGuestExperienceRisks(
           },
           compared_to: 'guest_count_threshold',
           expires_at: expiresInDays(daysToGo > 0 ? Math.min(daysToGo, 14) : 3),
+          narrator_facts: {
+            family: 'count_with_risk',
+            framing:
+              `${coupleName}'s wedding on ${dateStr} has ${guests.attending} ` +
+              `attending guests but no shuttle scheduled. ${daysToGo} days to go.`,
+            numbers: [
+              guests.attending, daysToGo, 0,
+              coupleName, dateStr,
+            ],
+          },
         })
       }
 
@@ -1669,6 +2005,17 @@ async function detectGuestExperienceRisks(
           },
           compared_to: 'safety_threshold',
           expires_at: expiresInDays(daysToGo > 0 ? Math.min(daysToGo, 7) : 3),
+          narrator_facts: {
+            family: 'count_with_risk',
+            framing:
+              `${coupleName}'s wedding on ${dateStr} has ${allergies.severe} ` +
+              `guests registered with severe or life-threatening allergies, ` +
+              `but zero guest care notes are on file. ${daysToGo} days to go.`,
+            numbers: [
+              allergies.severe, 0, daysToGo,
+              coupleName, dateStr,
+            ],
+          },
         })
       }
     }
@@ -1774,15 +2121,16 @@ async function detectCoupleReadiness(
       const delta = overallAvg - finalisedCount
 
       if (delta >= 3 && finalisedCount < TOTAL_SECTIONS * 0.5) {
+        const deltaRounded = Math.round(delta * 10) / 10
         insights.push({
           insight_type: 'risk',
           category: 'readiness',
-          title: `${coupleName}: ${finalisedCount} of ${TOTAL_SECTIONS} sections finalized — behind average`,
+          title: `${coupleName}: ${finalisedCount} of ${TOTAL_SECTIONS} sections finalized, behind average`,
           body: `${coupleName} has finalized ${finalisedCount} of ${TOTAL_SECTIONS} sections with ${weeksToGo} weeks to go. ` +
             `The average for couples at this point is ${avgRounded}. ` +
             (checklistPct > 0 ? `Their checklist is ${checklistPct}% complete. ` : '') +
             `Consider a coordinator check-in to help them catch up and avoid last-minute stress.`,
-          action: `Schedule a check-in with ${coupleName} to review remaining sections. Prioritize vendor confirmations, timeline, and guest logistics — these have the highest impact on day-of execution.`,
+          action: `Schedule a check-in with ${coupleName} to review remaining sections. Prioritize vendor confirmations, timeline, and guest logistics; these have the highest impact on day-of execution.`,
           priority: delta >= 5 ? 'high' : 'medium',
           confidence: confidenceFromN(allCounts.length, 5, 15),
           data_points: {
@@ -1794,10 +2142,26 @@ async function detectCoupleReadiness(
             total_sections: TOTAL_SECTIONS,
             venue_average: avgRounded,
             checklist_completion_pct: checklistPct,
-            delta_from_average: Math.round(delta * 10) / 10,
+            delta_from_average: deltaRounded,
           },
           compared_to: 'venue_average',
           expires_at: expiresInDays(7),
+          narrator_facts: {
+            family: 'per_couple_score',
+            framing:
+              `${coupleName} has finalised ${finalisedCount} of ${TOTAL_SECTIONS} ` +
+              `sections with ${weeksToGo} weeks to go. Venue average for ` +
+              `couples at this stage is ${avgRounded}. ` +
+              (checklistPct > 0
+                ? `Their checklist is ${checklistPct}% complete. `
+                : '') +
+              `Sample-size baseline: ${allCounts.length} historical weddings.`,
+            numbers: [
+              finalisedCount, TOTAL_SECTIONS, weeksToGo, avgRounded,
+              checklistPct, deltaRounded, allCounts.length,
+              coupleName,
+            ],
+          },
         })
       }
     }
@@ -1951,13 +2315,14 @@ async function detectReviewPrediction(
 
       if (score > 75) {
         const actionTiming = isPast ? 'within 48 hours' : 'shortly after the event'
+        const sectionsFinal = finalisationsRes.data?.filter(f => (f.wedding_id as string) === wid && f.couple_signed_off).length || 0
         insights.push({
           insight_type: 'opportunity',
           category: 'review_prediction',
           title: `${coupleName} likely to leave a positive review (score: ${score}/100)`,
           body: `Based on planning engagement, ${coupleName} scored ${score}/100 on review likelihood. ` +
             `They engaged actively with the portal (${sageCount} Sage conversations), ` +
-            `${finalisationsRes.data?.filter(f => (f.wedding_id as string) === wid && f.couple_signed_off).length || 0} sections finalized, ` +
+            `${sectionsFinal} sections finalized, ` +
             `and maintained strong vendor coordination. ` +
             `Proactively requesting a review ${actionTiming} significantly increases the chance of getting one.`,
           action: `Send a personalized review request to ${coupleName} ${actionTiming}. Include a direct link to your preferred review platform. A warm, personal ask converts better than an automated email.`,
@@ -1973,6 +2338,19 @@ async function detectReviewPrediction(
           },
           compared_to: 'engagement_composite',
           expires_at: expiresInDays(isPast ? 7 : 21),
+          narrator_facts: {
+            family: 'per_couple_score',
+            framing:
+              `${coupleName}'s composite review-likelihood score is ${score} ` +
+              `out of 100, computed across ${signalCount} engagement signals. ` +
+              `Sage conversations: ${sageCount}. Sections finalised: ` +
+              `${sectionsFinal}. The wedding ` +
+              (isPast ? 'has already taken place.' : 'is upcoming.'),
+            numbers: [
+              score, signalCount, sageCount, sectionsFinal,
+              coupleName,
+            ],
+          },
         })
       } else if (score < 40) {
         insights.push({
@@ -1995,6 +2373,18 @@ async function detectReviewPrediction(
           },
           compared_to: 'engagement_composite',
           expires_at: expiresInDays(isPast ? 7 : 21),
+          narrator_facts: {
+            family: 'per_couple_score',
+            framing:
+              `${coupleName}'s composite review-likelihood score is ${score} ` +
+              `out of 100, computed across ${signalCount} engagement signals. ` +
+              `Sage conversations: ${sageCount}. The wedding ` +
+              (isPast ? 'has already taken place.' : 'is upcoming.'),
+            numbers: [
+              score, signalCount, sageCount,
+              coupleName,
+            ],
+          },
         })
       }
     }
@@ -2114,6 +2504,25 @@ async function detectVendorPerformance(
           },
           compared_to: 'vendor_rating_threshold',
           expires_at: expiresInDays(30),
+          narrator_facts: {
+            family: 'entity_outlier',
+            framing:
+              `Vendor "${stats.name}" (${stats.type}) is averaging ${roundedAvg} ` +
+              `out of 5 across ${stats.events} events. ` +
+              (stats.wouldNotRecommend > 0
+                ? `${stats.wouldNotRecommend} coordinator${stats.wouldNotRecommend > 1 ? 's' : ''} ` +
+                  `would not recommend them. `
+                : '') +
+              (stats.wouldRecommend > 0
+                ? `${stats.wouldRecommend} would recommend them.`
+                : ''),
+            numbers: [
+              roundedAvg, stats.events,
+              stats.wouldRecommend, stats.wouldNotRecommend,
+              5,
+              stats.name, stats.type,
+            ],
+          },
         })
       }
 
@@ -2122,7 +2531,7 @@ async function detectVendorPerformance(
         insights.push({
           insight_type: 'opportunity',
           category: 'vendor_quality',
-          title: `Vendor "${stats.name}" is performing excellently — consider featuring them`,
+          title: `Vendor "${stats.name}" is performing excellently, consider featuring them`,
           body: `${stats.name} (${stats.type}) has an average rating of ${roundedAvg}/5 across ${stats.events} events. ` +
             (stats.wouldRecommend > 0
               ? `${stats.wouldRecommend} coordinator${stats.wouldRecommend > 1 ? 's' : ''} would recommend them. `
@@ -2140,6 +2549,20 @@ async function detectVendorPerformance(
           },
           compared_to: 'vendor_rating_threshold',
           expires_at: expiresInDays(60),
+          narrator_facts: {
+            family: 'entity_outlier',
+            framing:
+              `Vendor "${stats.name}" (${stats.type}) is averaging ${roundedAvg} ` +
+              `out of 5 across ${stats.events} events.` +
+              (stats.wouldRecommend > 0
+                ? ` ${stats.wouldRecommend} coordinator${stats.wouldRecommend > 1 ? 's' : ''} ` +
+                  `would recommend them.`
+                : ''),
+            numbers: [
+              roundedAvg, stats.events, stats.wouldRecommend, 5,
+              stats.name, stats.type,
+            ],
+          },
         })
       }
     }
@@ -2214,14 +2637,21 @@ async function detectTimelineAdherence(
       const phaseName = phase.replace(/_/g, ' ')
       const bufferSuggestion = count >= 3 ? '20-minute' : '15-minute'
 
+      const avgDelayRating = delayRatings.length > 0
+        ? Math.round((delayRatings.reduce((s, v) => s + v, 0) / delayRatings.length) * 10) / 10
+        : null
+      const avgOntimeRating = onTimeRatings.length > 0
+        ? Math.round((onTimeRatings.reduce((s, v) => s + v, 0) / onTimeRatings.length) * 10) / 10
+        : null
+
       insights.push({
         insight_type: 'recommendation',
         category: 'operational',
         title: `Last ${count} weddings had delays during ${phaseName}`,
         body: `The "${phaseName}" phase has shown up as a delay on ${count} of your last ${feedback.length} events. ` +
           `This pattern suggests a systemic timing issue rather than a one-off problem. ` +
-          (delayRatings.length > 0 && onTimeRatings.length > 0
-            ? `Events with delays averaged a ${(delayRatings.reduce((s, v) => s + v, 0) / delayRatings.length).toFixed(1)}/5 rating vs ${(onTimeRatings.reduce((s, v) => s + v, 0) / onTimeRatings.length).toFixed(1)}/5 for on-time events. `
+          (avgDelayRating !== null && avgOntimeRating !== null
+            ? `Events with delays averaged a ${avgDelayRating}/5 rating vs ${avgOntimeRating}/5 for on-time events. `
             : '') +
           `Adding buffer time to this transition can prevent cascading delays through the rest of the evening.`,
         action: `Add a ${bufferSuggestion} buffer before or after ${phaseName} in your standard timeline template. Brief your day-of team to manage this transition proactively.`,
@@ -2234,15 +2664,28 @@ async function detectTimelineAdherence(
           total_with_delays: totalWithDelays,
           total_on_time: totalOnTime,
           all_delay_phases: Object.fromEntries(sortedPhases),
-          avg_delay_rating: delayRatings.length > 0
-            ? Math.round((delayRatings.reduce((s, v) => s + v, 0) / delayRatings.length) * 10) / 10
-            : null,
-          avg_ontime_rating: onTimeRatings.length > 0
-            ? Math.round((onTimeRatings.reduce((s, v) => s + v, 0) / onTimeRatings.length) * 10) / 10
-            : null,
+          avg_delay_rating: avgDelayRating,
+          avg_ontime_rating: avgOntimeRating,
         },
         compared_to: 'event_history',
         expires_at: expiresInDays(30),
+        narrator_facts: {
+          family: 'operational_pattern',
+          framing:
+            `The "${phaseName}" phase shows up as a delay on ${count} of the ` +
+            `last ${feedback.length} events analysed. ` +
+            (avgDelayRating !== null && avgOntimeRating !== null
+              ? `Events with delays averaged ${avgDelayRating} out of 5; ` +
+                `on-time events averaged ${avgOntimeRating} out of 5. `
+              : '') +
+            `Suggested buffer to add to the standard template: ${bufferSuggestion}.`,
+          numbers: [
+            count, feedback.length,
+            totalWithDelays, totalOnTime,
+            avgDelayRating ?? 0, avgOntimeRating ?? 0, 5,
+            phaseName, bufferSuggestion,
+          ],
+        },
       })
     }
 
@@ -2250,14 +2693,21 @@ async function detectTimelineAdherence(
     if (totalWithDelays > 0 && feedback.length >= 5) {
       const delayRate = totalWithDelays / feedback.length
       if (delayRate > 0.5) {
+        const delayRatePct = Math.round(delayRate * 100)
+        const avgDelayRating = delayRatings.length > 0
+          ? Number((delayRatings.reduce((s, v) => s + v, 0) / delayRatings.length).toFixed(1))
+          : null
+        const avgOntimeRating = onTimeRatings.length > 0
+          ? Number((onTimeRatings.reduce((s, v) => s + v, 0) / onTimeRatings.length).toFixed(1))
+          : null
         insights.push({
           insight_type: 'risk',
           category: 'operational',
-          title: `${Math.round(delayRate * 100)}% of recent events had timeline delays`,
+          title: `${delayRatePct}% of recent events had timeline delays`,
           body: `${totalWithDelays} of your last ${feedback.length} events experienced timeline delays. ` +
             `A delay rate above 50% suggests your standard timeline templates may need adjustment. ` +
-            (delayRatings.length > 0
-              ? `Delayed events averaged ${(delayRatings.reduce((s, v) => s + v, 0) / delayRatings.length).toFixed(1)}/5 vs on-time events at ${onTimeRatings.length > 0 ? (onTimeRatings.reduce((s, v) => s + v, 0) / onTimeRatings.length).toFixed(1) : 'N/A'}/5.`
+            (avgDelayRating !== null
+              ? `Delayed events averaged ${avgDelayRating}/5 vs on-time events at ${avgOntimeRating ?? 'N/A'}/5.`
               : ''),
           action: `Review your standard timeline template against actual event timings. Consider adding 10-15 minutes of buffer between each major transition.`,
           priority: delayRate > 0.7 ? 'high' : 'medium',
@@ -2266,10 +2716,25 @@ async function detectTimelineAdherence(
             total_events: feedback.length,
             delayed_events: totalWithDelays,
             on_time_events: totalOnTime,
-            delay_rate_pct: Math.round(delayRate * 100),
+            delay_rate_pct: delayRatePct,
           },
           compared_to: 'event_history',
           expires_at: expiresInDays(30),
+          narrator_facts: {
+            family: 'operational_pattern',
+            framing:
+              `${totalWithDelays} of the last ${feedback.length} events ` +
+              `experienced timeline delays, a ${delayRatePct}% delay rate. ` +
+              (avgDelayRating !== null && avgOntimeRating !== null
+                ? `Delayed events averaged ${avgDelayRating} out of 5; ` +
+                  `on-time events averaged ${avgOntimeRating} out of 5.`
+                : ''),
+            numbers: [
+              delayRatePct, totalWithDelays, totalOnTime,
+              feedback.length,
+              avgDelayRating ?? 0, avgOntimeRating ?? 0, 5,
+            ],
+          },
         })
       }
     }
@@ -2347,33 +2812,101 @@ export async function runIntelligenceAnalysis(venueId: string): Promise<number> 
   )
 
   if (newCandidates.length > 0) {
-    // Batch insert
-    const rows = newCandidates.map(c => ({
-      venue_id: venueId,
-      insight_type: c.insight_type,
-      category: c.category,
-      title: c.title,
-      body: c.body,
-      action: c.action ?? null,
-      priority: c.priority,
-      confidence: c.confidence,
-      impact_score: c.impact_score ?? null,
-      data_points: c.data_points,
-      compared_to: c.compared_to ?? null,
-      status: 'new',
-      expires_at: c.expires_at ?? null,
-    }))
+    // LLM narration pass — for every candidate that exposes
+    // narrator_facts, hand the structured facts to Sonnet via
+    // narrateIntelligenceInsight; the result replaces title / body /
+    // action and stamps narration_source='llm'. When the cost-ceiling
+    // gate is closed, the LLM call fails, or numbers-guard rejects the
+    // output, the detector's deterministic template surfaces unchanged
+    // and narration_source='template'. Per AI-VS-TEMPLATED-AUDIT.md
+    // finding #1 (2026-05-09).
+    //
+    // Sequential rather than parallel: each narration is one Sonnet
+    // call gated by the same cost-ceiling. Running in parallel could
+    // blow through the ceiling before later iterations get to check
+    // it. Worst-case 14 * 1-2s ≈ 30s on a fully-templated cron run;
+    // acceptable for a once-daily cron path. Mirrors the same
+    // sequential design used in correlation-narration.ts.
+    const narratedRows: Array<Record<string, unknown>> = []
+    let llmNarrated = 0
+    let templateFallback = 0
+
+    for (const c of newCandidates) {
+      let title = c.title
+      let body = c.body
+      let action = c.action ?? null
+      let narrationSource: 'llm' | 'template' = 'template'
+      let llmModelUsed: string | null = null
+      let promptVersionUsed: string | null = null
+
+      if (c.narrator_facts) {
+        try {
+          const narrated = await narrateIntelligenceInsight({
+            venueId,
+            facts: {
+              family: c.narrator_facts.family,
+              framing: c.narrator_facts.framing,
+              numbers: c.narrator_facts.numbers,
+              category: c.category,
+              fallback: { title: c.title, body: c.body, action: c.action ?? null },
+            },
+          })
+          title = narrated.narration.title
+          body = narrated.narration.body
+          action = narrated.narration.action
+          narrationSource = narrated.source
+          if (narrated.source === 'llm') {
+            llmNarrated++
+            llmModelUsed = INTEL_ENGINE_NARRATION_MODEL
+            promptVersionUsed = BRAIN_INTEL_ENGINE_PROMPT_VERSION
+          } else {
+            templateFallback++
+          }
+        } catch (err) {
+          // Defense-in-depth: a thrown error inside the narrator
+          // (which already has its own try/catch) shouldn't drop the
+          // insight — surface the template instead.
+          console.error(
+            '[intelligence-engine] narration unexpected throw, surfacing template:',
+            err,
+          )
+          templateFallback++
+        }
+      } else {
+        templateFallback++
+      }
+
+      narratedRows.push({
+        venue_id: venueId,
+        insight_type: c.insight_type,
+        category: c.category,
+        title,
+        body,
+        action,
+        priority: c.priority,
+        confidence: c.confidence,
+        impact_score: c.impact_score ?? null,
+        data_points: c.data_points,
+        compared_to: c.compared_to ?? null,
+        status: 'new',
+        expires_at: c.expires_at ?? null,
+        narration_source: narrationSource,
+        llm_model_used: llmModelUsed,
+        prompt_version_used: promptVersionUsed,
+      })
+    }
 
     const { error } = await supabase
       .from('intelligence_insights')
-      .insert(rows)
+      .insert(narratedRows)
 
     if (error) {
       console.error('[intelligence-engine] Failed to insert insights:', error.message)
     } else {
       console.log(
         `[intelligence-engine] Generated ${newCandidates.length} new insights for venue ${venueId} ` +
-        `(${candidates.length - newCandidates.length} deduplicated)`
+        `(${candidates.length - newCandidates.length} deduplicated, ` +
+        `${llmNarrated} LLM-narrated, ${templateFallback} template-fallback)`
       )
     }
   }

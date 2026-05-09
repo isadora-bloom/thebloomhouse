@@ -56,6 +56,7 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 | cultural-moments-llm-propose | — | v1 | TRENDS-DIAGNOSIS Fix 3 / Finding A. NEW judgement-tier proposer running ALONGSIDE the legacy z-score detector (cultural-moments-auto-propose). Sonnet, temp 0.4, maxTokens 800, taskType `cultural_moments_propose`. Proposes 0-3 NAMED cultural moments per venue per day with evidence URLs and dateable windows. Inserts as `proposed_by='ai_llm'` (CHECK constraint extended in migration 250). Cron: `cultural_moments_llm_propose` runs at 09:30 UTC daily — different time from the statistical proposer (08:15) so the two don't compete. Cost ceiling: ~$0.01/venue/day. |
 | weather-cancellation-narration | — | v1 | AI-VS-TEMPLATED-AUDIT Finding #3. NEW Sonnet narrator over the deterministic weather x cancellation detector in `insights/weather-cancellation.ts`. Pre-fix the file wrote `insight_type='correlation_narration'` rows with hardcoded title/body/action templates, impersonating real LLM-narrated `correlation_narration` rows from `correlation-narration.ts` on `/intel/insights`. Now the deterministic detector (rain-day vs baseline cancel-rate buckets) builds a struct of the numbers and the Sonnet narrator composes coordinator-voice {title, body, action} from it. callAIJson, tier 'sonnet', temp 0.4, maxTokens 360, taskType `weather_cancellation_narration`. Numbers-guard via `insights/persist.ts` rejects any number not in the struct. Persist path moves from a direct `intelligence_insights` insert to `persistInsight` (cache-key + numbers-guard contract). Fallback: deterministic template fires when `gateForBrainCall` closes (cost ceiling) OR Sonnet fails OR numbers-guard rejects; the template is constructed from struct numbers only and is guaranteed to pass the guard. Provenance recorded on `data_points.narration_source` ('ai' / 'template'). |
 | availability-anomaly-explanation | — | v1 | AI-VS-TEMPLATED-AUDIT Finding #4. NEW Sonnet narrator for `detectAvailabilityAnomalies` in `intel/anomaly-detection.ts`. Pre-fix both branches at l. 1052-1057 hardcoded the `ai_explanation` string ("Saturdays in October are filling fast..." / "Unusually high demand for October dates...") even though the column rendered alongside real-LLM `getAIExplanation` rows from `runAnomalyDetection`. The detector still computes the anomaly (80%/60-day rule for high demand, 90%/30% rule for Saturday skew); the LLM takes the struct (fill rate %, Saturday vs weekday split, slot counts, days out) and produces a 2-3 sentence `ai_explanation` in coordinator voice. callAIJson, tier 'sonnet', temp 0.3, maxTokens 300, taskType `availability_anomaly_explanation`. Cost-ceiling gate via `gateForBrainCall`; when closed OR Sonnet fails, falls back to the original templates so behaviour at the edge is unchanged. Migration 252 adds `anomaly_alerts.explanation_source` ('ai' / 'template' / 'rule') stamped on every new write — the UI can now distinguish a Sonnet hypothesis from a template fallback. `runAnomalyDetection` also stamps the column ('ai' when the existing `getAIExplanation` returned a result, 'rule' when it failed and the column stayed NULL). |
+| intelligence-engine-narration | — | v1 | AI-VS-TEMPLATED-AUDIT.md finding #1. NEW LLM narrator over the 14 deterministic detectors in `src/lib/services/intel/intelligence-engine.ts`. Each detector still does the math (which day converts best, which source has the highest conversion, etc.) and emits `narrator_facts` (family + framing string + numeric allowlist). The narrator dispatches by family (9 shape-families: conversion_comparison / volume_comparison / source_quality / concentration_pattern / count_with_risk / capacity_signal / per_couple_score / entity_outlier / operational_pattern) into one Sonnet call (temp 0.4, maxTokens 320, taskType `intelligence_engine_narration`). Output is numbers-guarded against the detector's allowlist (reuses `insights/numbers-guard.ts`). Falls back to the existing detector-composed template when the cost-ceiling gate is closed, the LLM call fails, or the numbers-guard rejects the narration. Each persisted row stamps `narration_source = 'llm' \| 'template'` (migration 251) so a future UI badge can distinguish real LLM narration from template-fallback rows. Per Isadora directive 2026-05-09: switch to all-LLM narration until cost-optimisation matters; option C hybrid is parked. |
 
 ## 2026-05-08
 
@@ -217,6 +218,31 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
   category / unparseable date). Inserts as `proposed_by='ai_llm'` per
   migration 250. Per-venue dedup against (kind='llm_propose', title,
   weekStart). Cost ceiling gated.
+
+### intelligence-engine-narration (`intelligence-engine-narration.v1`)
+- **v1** (2026-05-09) — AI-VS-TEMPLATED-AUDIT.md finding #1. Replaces
+  the 14 deterministic detector templates in
+  `src/lib/services/intel/intelligence-engine.ts` with a real
+  numbers-guarded LLM narrator. Detectors still compute the
+  numeric pass (which day converts best, source quality, pipeline
+  stalls, etc.) and emit `narrator_facts` with three parts:
+  `family` (one of 9 shape-families: conversion_comparison /
+  volume_comparison / source_quality / concentration_pattern /
+  count_with_risk / capacity_signal / per_couple_score /
+  entity_outlier / operational_pattern), a plain-English `framing`
+  string, and a `numbers` allowlist. The narrator dispatches by
+  family into one Sonnet call (temp 0.4, maxTokens 320, taskType
+  `intelligence_engine_narration`). Output is numbers-guarded
+  against the allowlist via `insights/numbers-guard.ts` (same
+  guard used by every other LLM-narrating insight surface). Falls
+  back to the existing detector template when (a) the cost-ceiling
+  gate is closed, (b) the LLM call fails, or (c) the numbers-guard
+  rejects the narration. Per-row provenance recorded in
+  `intelligence_insights.narration_source` ('llm' / 'template')
+  via migration 251 so a future UI badge can distinguish real LLM
+  narration from template-fallback rows. Per Isadora directive
+  2026-05-09: switch to all-LLM narration until cost-optimisation
+  matters; option C hybrid is parked.
 
 ### candidate-ai-adjudicator (`candidate-ai-adjudicator.prompt.v1.0`)
 - **v1.0** (2026-05-05) — Initial versioning baseline. Tier 2 ambiguous-match
