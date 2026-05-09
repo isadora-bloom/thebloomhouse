@@ -20,12 +20,16 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 
 /**
  * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
  * See PROMPTS-CHANGELOG.md for version history.
+ *
+ * 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+ * when migrated to the canonical coordinator-prompt assembler.
  */
-export const ANOMALY_DETECTION_PROMPT_VERSION = 'anomaly-detection.prompt.v1.0'
+export const ANOMALY_DETECTION_PROMPT_VERSION = 'anomaly-detection.prompt.v2.0'
 
 /**
  * Availability-anomaly explanation narrator. Sonnet narrates the
@@ -37,8 +41,10 @@ export const ANOMALY_DETECTION_PROMPT_VERSION = 'anomaly-detection.prompt.v1.0'
  *
  * AI-VS-TEMPLATED-AUDIT Finding #4 (2026-05-09).
  */
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
 export const AVAILABILITY_ANOMALY_EXPLANATION_PROMPT_VERSION =
-  'availability-anomaly-explanation.v1'
+  'availability-anomaly-explanation.v2'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -747,15 +753,9 @@ async function getAIExplanation(
     )
     const internalCtxBlock = formatInternalContextForPrompt(internalCtx)
 
-    const result = await callAIJson<AIExplanation>({
-      systemPrompt: `You are a wedding venue operations analyst. When given a metric anomaly,
-provide a concise explanation and 2-3 possible causes ranked by likelihood, each with one
-concrete action the venue team can take this week.
+    const taskInstructions = `When given a metric anomaly, provide a concise explanation and 2-3 possible causes ranked by likelihood, each with one concrete action the venue team can take this week.
 
-If the venue's Internal Context (coordinator absences, property state changes, pricing
-changes, marketing channels) is provided, weigh those causes BEFORE generic funnel shape
-explanations. A coordinator on vacation explains a response-time drop better than
-"funnel issues" does.
+If the venue's Internal Context (coordinator absences, property state changes, pricing changes, marketing channels) is provided, weigh those causes BEFORE generic funnel shape explanations. A coordinator on vacation explains a response-time drop better than "funnel issues" does.
 
 Return JSON with this exact shape:
 {
@@ -769,28 +769,41 @@ Return JSON with this exact shape:
   ]
 }
 
-Be specific to the wedding venue industry. Reference seasonality, marketing channels,
-competitor behavior, and operational factors where relevant.`,
+Be specific to the wedding venue industry. Reference seasonality, marketing channels, competitor behavior, and operational factors where relevant.`
 
+    const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+      venueId,
+      surface: 'narration_anomaly_metric',
+      taskInstructions,
+      numbersGuard: {
+        current_value: Number(currentValue.toFixed(4)),
+        baseline_value: Number(baselineValue.toFixed(4)),
+        change_pct: Number((changePercent * 100).toFixed(1)),
+      },
+    })
+
+    const result = await callAIJson<AIExplanation>({
+      systemPrompt,
       userPrompt: `Anomaly detected for a wedding venue:
 
 Metric: ${metricName} (${METRICS[metricName]?.description ?? metricName})
 Current period value: ${formatMetricValue(metricName, currentValue)}
 Baseline (prior period): ${formatMetricValue(metricName, baselineValue)}
 Change: ${changePercent > 0 ? '+' : ''}${(changePercent * 100).toFixed(1)}%
-Analysis window: ${periodStart} → ${periodEnd}
+Analysis window: ${periodStart} to ${periodEnd}
 
 ${internalCtxBlock}
 
 Provide 2-3 possible causes ranked by likelihood, each with one concrete action.
-Weight Internal Context findings heavily — if a coordinator was out, the venue was
+Weight Internal Context findings heavily, if a coordinator was out, the venue was
 in renovation, or pricing changed, those are more likely than generic funnel causes.`,
 
       maxTokens: 600,
       temperature: 0.3,
       venueId,
       taskType: 'anomaly_explanation',
-      promptVersion: ANOMALY_DETECTION_PROMPT_VERSION,
+      promptVersion,
+      contentTier,
     })
 
     return result
@@ -998,9 +1011,7 @@ async function getAvailabilityAnomalyExplanation(
   venueId: string,
   s: AvailabilityAnomalyStruct,
 ): Promise<string | null> {
-  const systemPrompt = `You are a wedding venue operations analyst writing a short
-explanation of an availability anomaly that a coordinator will read on
-their dashboard. Output JSON with one field:
+  const taskInstructions = `Write a short explanation of an availability anomaly that the coordinator will read on their dashboard. Output JSON with one field:
   - explanation: 2-3 plain-English sentences describing the pattern and
     why it matters for inventory / pricing decisions this week.
 
@@ -1013,16 +1024,8 @@ The two anomaly flavours are:
     consider weekday incentives or repositioning the Friday/Sunday slots".
 
 CRITICAL RULES:
-- Never invent numbers. The ONLY numbers you may reference are the ones
-  in the user prompt: overall fill rate %, Saturday fill rate %, weekday
-  fill rate %, booked slot count, total slot count, days until the
-  earliest date in the month. No other percentages, ratios, or counts.
 - Never mention specific couples, vendors, or competitors.
-- Never claim the venue WILL sell out / definitely book up. Use "is
-  trending toward", "is filling faster than usual", "looks tight".
-- Use neutral coordinator voice. No exclamation points.
-- 2-3 sentences. Coordinator-readable, not engineer-readable.
-- No em dashes anywhere.`
+- 2-3 sentences. Coordinator-readable, not engineer-readable.`
 
   const userPrompt = `AVAILABILITY ANOMALY
 
@@ -1042,6 +1045,20 @@ Saturday vs weekday split:
 Compose the JSON explanation. 2-3 sentences, plain English, no
 made-up numbers, no em dashes.`
 
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_anomaly_availability',
+    taskInstructions,
+    numbersGuard: {
+      fill_rate_pct: s.fillRatePct,
+      saturday_fill_pct: s.saturdayFillPct,
+      non_saturday_fill_pct: s.nonSaturdayFillPct,
+      booked_slots: s.bookedSlots,
+      total_slots: s.totalSlots,
+      days_out: s.daysOut,
+    },
+  })
+
   try {
     const result = await callAIJson<{ explanation?: string }>({
       systemPrompt,
@@ -1051,7 +1068,8 @@ made-up numbers, no em dashes.`
       venueId,
       taskType: 'availability_anomaly_explanation',
       tier: 'sonnet',
-      promptVersion: AVAILABILITY_ANOMALY_EXPLANATION_PROMPT_VERSION,
+      promptVersion,
+      contentTier,
     })
     if (!result.explanation || typeof result.explanation !== 'string') return null
     return result.explanation.trim()

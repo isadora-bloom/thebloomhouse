@@ -26,11 +26,17 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 
-export const RISK_FLAGS_PROMPT_VERSION = 'risk-flags.prompt.v1.0'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler. Both
+// the Haiku sentiment scan AND the Sonnet narration use the shared
+// assembler so the addressee, voice, and numbers-guard discipline
+// match every other coordinator narrator.
+export const RISK_FLAGS_PROMPT_VERSION = 'risk-flags.prompt.v2.0'
 
 /**
  * Strip likely PII (emails / phone numbers) from a free-text friction
@@ -294,15 +300,6 @@ async function classicalRiskPass(
   }
 }
 
-async function loadAiName(supabase: SupabaseClient, venueId: string): Promise<string> {
-  const { data } = await supabase
-    .from('venue_ai_config')
-    .select('ai_name')
-    .eq('venue_id', venueId)
-    .maybeSingle()
-  return ((data?.ai_name as string | undefined)?.trim()) || 'your assistant'
-}
-
 interface SentimentResult {
   negative: boolean
   evidence: string
@@ -312,7 +309,6 @@ async function sentimentScan(
   supabase: SupabaseClient,
   venueId: string,
   weddingId: string,
-  aiName: string,
 ): Promise<SentimentResult | null> {
   const { data: recentInbound } = await supabase
     .from('interactions')
@@ -329,20 +325,33 @@ async function sentimentScan(
     .map((i, idx) => `[${idx + 1}] ${(i.subject ?? '').slice(0, 100)}\n${(i.body_preview ?? i.full_body ?? '').slice(0, 280)}`)
     .join('\n\n')
 
-  const systemPrompt = `You are ${aiName}, classifying whether a couple's recent inbound messages
-contain NEGATIVE OR HESITANT sentiment that signals potential lead-loss risk. Examples:
+  const taskInstructions = `Classify whether a couple's recent inbound messages contain NEGATIVE OR HESITANT sentiment that signals potential lead-loss risk. Examples:
   - frustration with response time, venue policy, or coordination
   - hesitation expressed about budget, capacity, or fit
   - signals of comparison-shopping that lean unfavourable to this venue
   - unanswered questions accumulating
+
 Output JSON: { negative: boolean, evidence: "1 short sentence describing the signal" }
 The evidence should reference the SHAPE of the signal, not invent quotes. If sentiment is
 neutral or positive, output { negative: false, evidence: "" }.
-Don't hedge — when uncertain, output negative: false.`
+Don't hedge, when uncertain, output negative: false.`
 
   const userPrompt = `Last 3 inbound messages:\n\n${excerpts}\n\nClassify sentiment.`
 
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_risk',
+    taskInstructions,
+    contentTier: 1,
+  })
+
   try {
+    // Sonnet per LLM-CALL-INVENTORY tier-correctness sweep. The
+    // sentiment scan weighs hesitation, comparison-shopping, and stress
+    // signals across multiple inbound emails. The companion narrator
+    // (line 487) is Sonnet and treats this output as load-bearing
+    // input; if the classification is wrong the narration is wrong.
+    // Cost worth paying.
     const result = await callAIJson<SentimentResult>({
       systemPrompt,
       userPrompt,
@@ -350,8 +359,9 @@ Don't hedge — when uncertain, output negative: false.`
       temperature: 0.2,
       venueId,
       taskType: 'risk_sentiment_scan',
-      tier: 'haiku',
-      promptVersion: RISK_FLAGS_PROMPT_VERSION,
+      tier: 'sonnet',
+      promptVersion,
+      contentTier,
     })
     return result
   } catch (err) {
@@ -381,8 +391,6 @@ export async function generateRiskFlags(
   const classical = await classicalRiskPass(supabase, venueId, weddingId)
   if (!classical) return null
 
-  const aiName = await loadAiName(supabase, venueId)
-
   // Cost-ceiling gate (T5-α.2). One gate check covers both the
   // sentiment overlay AND the narration LLM call below — both are
   // tier-1 brain spends. When paused, the rule-based classical flags
@@ -392,8 +400,11 @@ export async function generateRiskFlags(
 
   // Sentiment overlay (LLM). Adds a flag if negative. Skipped when
   // ceiling-paused so we don't spend Haiku on a paused venue.
+  // 2026-05-09: Agent O's coordinator-prompt assembler refactor
+  // dropped the aiName arg from sentimentScan (the assembler loads
+  // personality internally now). Reconciled the call here.
   const sentiment = gate.ok
-    ? await sentimentScan(supabase, venueId, weddingId, aiName)
+    ? await sentimentScan(supabase, venueId, weddingId)
     : null
   if (sentiment?.negative) {
     classical.flags.push({
@@ -443,19 +454,30 @@ export async function generateRiskFlags(
     ...classical.flags.map((f) => f.severity),
   ]
 
-  const systemPrompt = `You are ${aiName}, summarising a couple's risk flags for a venue
-coordinator. Output JSON:
+  // 2026-05-09: routed through buildCoordinatorPrompt (Agent O's
+  // assembler) so the venue's ai_name + COORDINATOR_RULES + numbers
+  // guard fire consistently. The risk-flag specific rules layer on
+  // as taskInstructions; numeric facts pass through numbersGuard.
+  const taskInstructions = `Summarise a couple's risk flags for the venue coordinator. Output JSON:
   - title: short headline (~60 chars)
   - body: 1 sentence summarising the top 2-3 flags
-  - action: one specific next step the coordinator can take this week.
-            null if every flag is below severity 2.
+  - action: one specific next step the coordinator can take this week. null if every flag is below severity 2.
 
-CRITICAL RULES:
-- Don't invent numbers. The only numbers you may use: the risk score
-  (${classical.risk_score}), the flag count (${classical.flags.length}),
-  and the per-flag severities listed below.
-- Don't quote the couple's messages directly; reference flag shapes.
+Risk-flag specific rules:
+- Do not quote the couple's messages directly; reference flag shapes.
 - Prioritise the highest-severity flags in the body.`
+
+  const built = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_risk',
+    taskInstructions,
+    numbersGuard: {
+      risk_score: classical.risk_score,
+      flag_count: classical.flags.length,
+    },
+    contentTier: 1,
+  })
+  const systemPrompt = built.systemPrompt
 
   const userPrompt = `RISK FLAG SUMMARY
 

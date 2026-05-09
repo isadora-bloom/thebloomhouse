@@ -52,12 +52,15 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
 export const WEATHER_CANCELLATION_NARRATION_PROMPT_VERSION =
-  'weather-cancellation-narration.v1'
+  'weather-cancellation-narration.v2'
 
 export interface WeatherCancellationResult {
   ok: boolean
@@ -190,8 +193,7 @@ async function narrateWithSonnet(
   venueId: string,
   s: WeatherCancellationStruct,
 ): Promise<InsightNarration | null> {
-  const systemPrompt = `You are explaining a weather-driven tour-cancellation pattern to a wedding
-venue coordinator who is not a statistician. Output JSON with:
+  const taskInstructions = `Explain a weather-driven tour-cancellation pattern to the coordinator who is not a statistician. Output JSON with:
   - title: short headline (max ~100 chars). Reference the bucket label
     plainly (e.g. "heavy-rain days" or "snow days"). Include the bucket
     cancel rate AND the baseline cancel rate so the contrast is
@@ -206,18 +208,11 @@ venue coordinator who is not a statistician. Output JSON with:
     upcoming tours and proactively offer reschedule").
 
 CRITICAL RULES:
-- Never invent numbers. The ONLY numbers you may reference are the
-  ones listed in the user prompt: bucket cancel rate %, baseline cancel
-  rate %, total tours in window, total cancellations in window, bucket
-  tour count, bucket cancellation count, lookback days, multiplier vs
-  baseline. No other percentages, ratios, or counts.
 - Never claim causation. Use "drives", "tracks with", "elevated on".
   The pattern is a correlation between weather conditions and tour
   outcomes, not a proof of mechanism.
 - Never name specific couples or vendors.
-- Use neutral, factual coordinator voice. No exclamation points.
-- 2-3 sentences in body. Coordinator-readable, not engineer-readable.
-- No em dashes anywhere.`
+- 2-3 sentences in body. Coordinator-readable, not engineer-readable.`
 
   const userPrompt = `WEATHER x TOUR CANCELLATION PATTERN
 
@@ -236,6 +231,22 @@ Bucket-specific stats:
 Compose the JSON narration. 2-3 sentence body, plain English, no
 made-up numbers, no em dashes.`
 
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_weather',
+    taskInstructions,
+    numbersGuard: {
+      trigger_bucket_rate_pct: s.triggerBucketRatePct,
+      baseline_rate_pct: s.baselineRatePct,
+      total_tours: s.totalTours,
+      total_cancellations: s.totalCancellations,
+      trigger_bucket_tours: s.triggerBucketTours,
+      trigger_bucket_cancellations: s.triggerBucketCancellations,
+      lookback_days: s.lookbackDays,
+      multiplier_vs_baseline: Number(s.multiplierVsBaseline.toFixed(2)),
+    },
+  })
+
   try {
     const result = await callAIJson<Partial<InsightNarration>>({
       systemPrompt,
@@ -245,7 +256,8 @@ made-up numbers, no em dashes.`
       venueId,
       taskType: 'weather_cancellation_narration',
       tier: 'sonnet',
-      promptVersion: WEATHER_CANCELLATION_NARRATION_PROMPT_VERSION,
+      promptVersion,
+      contentTier,
     })
     if (!result.title || !result.body) return null
     return {

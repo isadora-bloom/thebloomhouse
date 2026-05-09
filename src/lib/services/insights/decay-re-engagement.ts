@@ -40,11 +40,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 
-export const DECAY_RE_ENGAGEMENT_PROMPT_VERSION = 'decay-re-engagement.prompt.v1.0'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
+export const DECAY_RE_ENGAGEMENT_PROMPT_VERSION = 'decay-re-engagement.prompt.v2.0'
 
 const DAY_MS = 86_400_000
 
@@ -229,15 +232,6 @@ async function loadClassicalDecayEvidence(
   }
 }
 
-async function loadAiName(supabase: SupabaseClient, venueId: string): Promise<string> {
-  const { data } = await supabase
-    .from('venue_ai_config')
-    .select('ai_name')
-    .eq('venue_id', venueId)
-    .maybeSingle()
-  return ((data?.ai_name as string | undefined)?.trim()) || 'your assistant'
-}
-
 export async function generateDecayReEngagement(
   supabase: SupabaseClient,
   venueId: string,
@@ -299,42 +293,38 @@ export async function generateDecayReEngagement(
     }
   }
 
-  const aiName = await loadAiName(supabase, venueId)
   const questionsBlock = classical.unresolved_questions.length > 0
     ? classical.unresolved_questions.map((q) => `  - ${q}`).join('\n')
     : '  (none detected)'
 
-  const systemPrompt = `You are ${aiName}, diagnosing why a wedding-venue lead has gone quiet.
+  const taskInstructions = `Diagnose why a wedding-venue lead has gone quiet.
 
 Output JSON:
   - cause: one of 'missing_info' | 'waiting_on_partner' | 'researching_alternatives'
            | 'cooling_on_venue' | 'logistics_block' | 'unknown'
   - reasoning: 1 short sentence explaining your diagnosis. Reference the
     SHAPE of evidence (unresolved question, length of silence, decline
-    magnitude) — not specific numbers unless they appear in the user prompt.
+    magnitude), not specific numbers unless they appear in the user prompt.
   - recommendation: 1 sentence with a SPECIFIC re-engagement action
     grounded in the diagnosed cause. NOT a generic check-in. Examples:
-      - missing_info → 'Answer their question about the catering policy first.'
-      - waiting_on_partner → 'Acknowledge they may need partner alignment; offer
+      - missing_info -> 'Answer their question about the catering policy first.'
+      - waiting_on_partner -> 'Acknowledge they may need partner alignment; offer
                               flexible reply timing.'
-      - researching_alternatives → 'Reinforce the venue's distinguishing
-                                    feature — your river-front ceremony spot.'
-      - cooling_on_venue → 'Send a soft re-introduction with new photos or a
+      - researching_alternatives -> "Reinforce the venue's distinguishing
+                                    feature, your river-front ceremony spot."
+      - cooling_on_venue -> 'Send a soft re-introduction with new photos or a
                             referenced past wedding.'
-      - logistics_block → 'Address the logistics blocker directly: parking,
+      - logistics_block -> 'Address the logistics blocker directly: parking,
                           shuttle, accessibility, etc.'
-  - confidence: 0.0-1.0 — how confident you are in the cause. Default 0.5
+  - confidence: 0.0-1.0, how confident you are in the cause. Default 0.5
     when ambiguous, higher when evidence is unmistakable.
 
 CRITICAL RULES:
-- Numbers in your output must come from the user prompt. The only
-  numbers you may use are the heat score, the decline magnitude, and
-  the days-since-last-inbound count.
 - Reference the unresolved question by SHAPE if present ("they asked
   about pricing"); never invent a quote.
 - 'missing_info' is the default when unresolved_questions is non-empty
   AND the cause isn't otherwise obvious.
-- 'unknown' when evidence is genuinely insufficient — be honest.`
+- 'unknown' when evidence is genuinely insufficient, be honest.`
 
   const userPrompt = `LEAD DECAY DIAGNOSTIC
 
@@ -352,6 +342,19 @@ ${classical.last_inbound_excerpt ?? '(empty)'}
 
 Diagnose the cause + recommend a specific re-engagement action.`
 
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_decay',
+    taskInstructions,
+    numbersGuard: {
+      current_score: classical.current_score,
+      peak_score: classical.peak_score,
+      decline_magnitude: classical.decline_magnitude,
+      days_since_last_inbound: classical.days_since_last_inbound,
+    },
+    contentTier: 1,
+  })
+
   let result: DiagnosticResult | null = null
   // Cost-ceiling gate (T5-α.2). Deterministic fallback below covers the
   // paused case so coordinator still sees a diagnostic.
@@ -366,7 +369,8 @@ Diagnose the cause + recommend a specific re-engagement action.`
         venueId,
         taskType: 'decay_re_engagement',
         tier: 'sonnet',
-        promptVersion: DECAY_RE_ENGAGEMENT_PROMPT_VERSION,
+        promptVersion,
+        contentTier,
       })
       if (raw && CAUSE_LABEL[raw.cause as DecayCause]) {
         result = {

@@ -36,11 +36,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 
-export const COORDINATOR_OVERRIDE_PROMPT_VERSION = 'coordinator-override-pattern.prompt.v1.0'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
+export const COORDINATOR_OVERRIDE_PROMPT_VERSION = 'coordinator-override-pattern.prompt.v2.0'
 
 const DAY_MS = 86_400_000
 const RECENT_WINDOW_DAYS = 28          // last 4 weeks
@@ -205,14 +208,6 @@ async function loadClassicalCoordinatorEvidence(
   }
 }
 
-async function loadAiName(supabase: SupabaseClient, venueId: string): Promise<string> {
-  const { data } = await supabase
-    .from('venue_ai_config')
-    .select('ai_name')
-    .eq('venue_id', venueId)
-    .maybeSingle()
-  return ((data?.ai_name as string | undefined)?.trim()) || 'your assistant'
-}
 
 interface CoordinatorDiagnostic {
   reasoning: string
@@ -296,8 +291,6 @@ export async function generateCoordinatorOverridePattern(
     }
   }
 
-  const aiName = await loadAiName(supabase, venueId)
-
   const driftBlock = classical.prior !== null
     ? `Prior 4-week window: ${classical.prior.total} drafts, approved ${classical.prior.approved_pct}% / edited ${classical.prior.edited_pct}% / rejected ${classical.prior.rejected_pct}%. Recent rejection rate moved by ${classical.rejection_drift_pp}pp.`
     : 'No prior 4-week sample available for trend comparison.'
@@ -308,8 +301,7 @@ export async function generateCoordinatorOverridePattern(
       ).join('\n')
     : '  (no day-of-week anomalies)'
 
-  const systemPrompt = `You are ${aiName}, helping the venue coordinator
-audit how their AI-drafted email collaboration is going.
+  const taskInstructions = `Audit how the venue's AI-drafted email collaboration is going.
 
 Output JSON:
   - reasoning: 1 short sentence. Frame NEUTRALLY ("drafts are being
@@ -317,20 +309,16 @@ Output JSON:
     and any DoW anomaly.
   - recommendation: 1 sentence with a SPECIFIC action grounded in the
     pattern:
-      - Rising rejection drift → "Review the prompts that fired most
+      - Rising rejection drift -> "Review the prompts that fired most
                                    in the rejected drafts."
-      - DoW anomaly → "Investigate Tuesday-context inquiries — usually
+      - DoW anomaly -> "Investigate Tuesday-context inquiries, usually
                        the AI lands on those, but recent week didn't."
-      - Stable but high edit rate → "Consider tightening the prompt
+      - Stable but high edit rate -> "Consider tightening the prompt
                                      for inquiry vs. client context."
   - confidence: 0.0-1.0. Higher when total > 50 + clear drift; lower
     when N near minimum or DoW anomaly is just past threshold.
 
 CRITICAL RULES:
-- Numbers in your output must come from the user prompt. The only
-  numbers you may use are the recent total, approved/edited/rejected
-  percentages (recent and prior), the drift pp, and any anomaly's
-  rejected % / diff pp / n.
 - Do not blame the coordinator OR the AI specifically. Frame as
   "drafts and coordinator are calibrating" or "the AI's draft fit
   has shifted".`
@@ -349,6 +337,30 @@ ${dowBlock}
 
 Diagnose the pattern + recommend a specific next step.`
 
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_override',
+    taskInstructions,
+    numbersGuard: {
+      recent_total: classical.recent.total,
+      recent_approved_pct: classical.recent.approved_pct,
+      recent_edited_pct: classical.recent.edited_pct,
+      recent_rejected_pct: classical.recent.rejected_pct,
+      prior_total: classical.prior?.total ?? null,
+      prior_approved_pct: classical.prior?.approved_pct ?? null,
+      prior_edited_pct: classical.prior?.edited_pct ?? null,
+      prior_rejected_pct: classical.prior?.rejected_pct ?? null,
+      rejection_drift_pp: classical.rejection_drift_pp,
+      ...Object.fromEntries(
+        classical.dow_anomalies.flatMap((a) => [
+          [`anomaly_${a.day_label}_rejected_pct`, a.rejected_pct],
+          [`anomaly_${a.day_label}_diff_pp`, a.diff_from_mean_pp],
+          [`anomaly_${a.day_label}_n`, a.n],
+        ]),
+      ),
+    },
+  })
+
   let result: CoordinatorDiagnostic | null = null
   // Cost-ceiling gate (T5-α.2). Drift-word fallback below covers paused.
   const gate = await gateForBrainCall(venueId)
@@ -362,7 +374,8 @@ Diagnose the pattern + recommend a specific next step.`
         venueId,
         taskType: 'coordinator_override_pattern',
         tier: 'sonnet',
-        promptVersion: COORDINATOR_OVERRIDE_PROMPT_VERSION,
+        promptVersion,
+        contentTier,
       })
       if (raw && typeof raw.reasoning === 'string') {
         result = {

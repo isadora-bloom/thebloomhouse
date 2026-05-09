@@ -32,11 +32,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 
-export const COHORT_MATCH_PROMPT_VERSION = 'cohort-match.prompt.v1.0'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
+export const COHORT_MATCH_PROMPT_VERSION = 'cohort-match.prompt.v2.0'
 
 const DAY_MS = 86_400_000
 const COHORT_K = 10
@@ -369,14 +372,6 @@ async function loadClassicalCohortEvidence(
   }
 }
 
-async function loadAiName(supabase: SupabaseClient, venueId: string): Promise<string> {
-  const { data } = await supabase
-    .from('venue_ai_config')
-    .select('ai_name')
-    .eq('venue_id', venueId)
-    .maybeSingle()
-  return ((data?.ai_name as string | undefined)?.trim()) || 'your assistant'
-}
 
 interface CohortDiagnostic {
   pattern: 'high_converting' | 'low_converting' | 'mixed' | 'sparse_signal'
@@ -465,14 +460,12 @@ export async function generateCohortMatch(
     }
   }
 
-  const aiName = await loadAiName(supabase, venueId)
-
   // Brief the LLM on the cohort + the lead. Show booked vs lost
   // breakdown so the recommendation can lean on what differentiated
   // the converted from the unconverted.
   const sampleCohort = classical.members.slice(0, 5).map((m, i) =>
     `  ${i + 1}. ${m.outcome.toUpperCase()} (similarity ${m.similarity.toFixed(2)})`
-    + (m.outcome === 'booked' && m.booking_value ? ` — booked at $${Math.round(m.booking_value)}` : '')
+    + (m.outcome === 'booked' && m.booking_value ? `, booked at $${Math.round(m.booking_value)}` : '')
     + (m.days_to_book !== null ? `, ${m.days_to_book} days to book` : ''),
   ).join('\n')
 
@@ -484,8 +477,7 @@ export async function generateCohortMatch(
     `  - Day of week: ${classical.current.day_of_week !== null ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][classical.current.day_of_week] : 'unknown'}`,
   ].join('\n')
 
-  const systemPrompt = `You are ${aiName}, helping a wedding-venue coordinator
-read the venue's track record with leads similar to this one.
+  const taskInstructions = `Read the venue's track record with leads similar to this one.
 
 Output JSON:
   - pattern: 'high_converting' (>= 70% booked) | 'low_converting' (<= 30%
@@ -496,25 +488,22 @@ Output JSON:
   - recommendation: 1 sentence with a SPECIFIC action grounded in what
     DIFFERENTIATED the booked from the lost members of this cohort.
     Examples:
-      - high_converting → "Lean into your repeatable offer for this segment;
+      - high_converting -> "Lean into your repeatable offer for this segment;
                             propose a tour within 5 days like the prior 6
                             who booked."
-      - low_converting → "This profile historically went elsewhere —
+      - low_converting -> "This profile historically went elsewhere,
                           surface the differentiator early; consider a
                           discounted hold."
-      - mixed → "Outcome was split; book a tour and watch for the
+      - mixed -> "Outcome was split; book a tour and watch for the
                 differentiator (specific question about pricing or a
                 second visit)."
-      - sparse_signal → "Treat this as a fresh lead; cohort too small
+      - sparse_signal -> "Treat this as a fresh lead; cohort too small
                           to anchor on."
-  - confidence: 0.0-1.0 — how confident you are in the pattern. Default
+  - confidence: 0.0-1.0, how confident you are in the pattern. Default
     0.5 when conversion is split mid-range; higher for extreme rates.
 
 CRITICAL RULES:
-- Numbers in your output must come from the user prompt. The only
-  numbers you may use are cohort size, booked count, lost count,
-  conversion percentage, median booking value, and median days-to-book.
-- Refer to the cohort by SHAPE only — never invent a name or quote.
+- Refer to the cohort by SHAPE only, never invent a name or quote.
 - Do not claim causation from a small cohort. With < 10 members say
   "the venue's small look-alike sample suggests..." not "this segment
   always books."`
@@ -544,7 +533,24 @@ ${confidenceMixLine}
 Top 5 cohort members (closest match):
 ${sampleCohort}
 
-Diagnose the pattern + recommend an action.${classical.n_low_confidence > 0 ? ' If a meaningful share of the cohort is backfilled-low, acknowledge that the comparison group is partly inferred from Gmail backfill (one short clause is enough — the UI also surfaces the count separately).' : ''}`
+Diagnose the pattern + recommend an action.${classical.n_low_confidence > 0 ? ' If a meaningful share of the cohort is backfilled-low, acknowledge that the comparison group is partly inferred from Gmail backfill (one short clause is enough, the UI also surfaces the count separately).' : ''}`
+
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_cohort',
+    taskInstructions,
+    numbersGuard: {
+      n_total: classical.n_total,
+      n_booked: classical.n_booked,
+      n_lost: classical.n_lost,
+      conversion_pct: classical.conversion_pct,
+      median_booking_value: classical.median_booking_value,
+      median_days_to_book: classical.median_days_to_book,
+      n_low_confidence: classical.n_low_confidence,
+      n_high_confidence: classical.n_high_confidence,
+    },
+    contentTier: 1,
+  })
 
   let result: CohortDiagnostic | null = null
   // Cost-ceiling gate (T5-α.2). Conversion-rate fallback below covers
@@ -560,7 +566,8 @@ Diagnose the pattern + recommend an action.${classical.n_low_confidence > 0 ? ' 
         venueId,
         taskType: 'cohort_match',
         tier: 'sonnet',
-        promptVersion: COHORT_MATCH_PROMPT_VERSION,
+        promptVersion,
+        contentTier,
       })
       if (raw && ['high_converting', 'low_converting', 'mixed', 'sparse_signal'].includes(raw.pattern)) {
         result = {

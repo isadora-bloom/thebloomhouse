@@ -29,22 +29,28 @@ import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
 import { getCohortBookingRate, applyCohortDamping } from '@/lib/services/heat-mapping'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 
-// T5-followup-AA (2026-05-02): bumped to v1.1 — trajectory bucket
+// T5-followup-AA (2026-05-02): bumped to v1.1, trajectory bucket
 // added to the prompt so the LLM grounds its prose in rising / falling
 // / plateau / volatile direction, not just the static score.
-// T5-Rixey-FFF (2026-05-02): bumped to v1.2 — cohort damping signal
+// T5-Rixey-FFF (2026-05-02): bumped to v1.2, cohort damping signal
 // added. When the look-alike cohort booking rate is < 20% the heat
 // score is multiplicatively damped and the narration MUST acknowledge
-// the damping ("100 raw points but cohort signal damps to 70 —
+// the damping ("100 raw points but cohort signal damps to 70,
 // comparable leads aren't booking; needs intervention"). Pre-fix the
 // narration would describe the raw score as "Hot" while the cohort
-// tile right next to it said the lead was likely to walk away — the
+// tile right next to it said the lead was likely to walk away, the
 // two intelligence layers were not talking to each other.
-export const HEAT_NARRATION_PROMPT_VERSION = 'heat-narration.prompt.v1.2'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler. System
+// prompt now flows UNIVERSAL_RULES + COORDINATOR_RULES + venue
+// personality + numbers-guard + task — same identity layers every
+// other coordinator narrator now uses.
+export const HEAT_NARRATION_PROMPT_VERSION = 'heat-narration.prompt.v2.0'
 
 interface HeatEventForNarration {
   event_type: string
@@ -303,16 +309,6 @@ async function loadClassicalHeatEvidence(
   return { payload, allowedNumbers }
 }
 
-async function loadAiName(supabase: SupabaseClient, venueId: string): Promise<string> {
-  const { data } = await supabase
-    .from('venue_ai_config')
-    .select('ai_name')
-    .eq('venue_id', venueId)
-    .maybeSingle()
-  const name = (data?.ai_name as string | undefined)?.trim()
-  return name || 'your assistant'
-}
-
 /**
  * Generate (or fetch from cache) the heat-score narration for a
  * wedding. Always returns a row even when narration fails — falls
@@ -392,7 +388,6 @@ export async function generateHeatNarration(
     }
   }
 
-  const aiName = await loadAiName(supabase, venueId)
   const eventsBlock = payload.top_events
     .map((e) => `  - ${e.event_type} (${e.points >= 0 ? '+' : ''}${e.points} pts)${e.occurred_at ? ' on ' + e.occurred_at.slice(0, 10) : ''}`)
     .join('\n')
@@ -402,36 +397,48 @@ export async function generateHeatNarration(
     ? `${payload.cohort_n_booked}/${payload.cohort_n_total} comparable leads booked (${Math.round(payload.cohort_rate * 100)}%)`
     : 'no comparable cohort on file'
 
-  const systemPrompt = `You are ${aiName}, a wedding-venue concierge. You're explaining to a venue
-coordinator WHY a particular lead's heat score is what it is. Output JSON with:
+  const taskInstructions = `Explain to the coordinator WHY a particular lead's heat score is what it is. Output JSON with:
   - title: a short headline (max ~60 chars). Refer to the lead via the
-    score + tier (e.g. "Strong lead — sustained engagement but cohort doubt").
+    score + tier (e.g. "Strong lead, sustained engagement but cohort doubt").
   - body: 1-2 sentences. Ground every claim in the events listed below
     AND in the heat trajectory (see "Trajectory" in user prompt) AND in
     the cohort damping signal (see "Cohort damping" in user prompt) when
-    it fired. When damping fired, the body MUST acknowledge it explicitly
-    — say something like "X raw points damped to Y because comparable
+    it fired. When damping fired, the body MUST acknowledge it explicitly,
+    say something like "X raw points damped to Y because comparable
     leads aren't booking" rather than describing the damped score as if
     it stood on its own. When the trajectory is rising / falling /
     plateau / volatile, that direction must be referenced too.
   - action: one specific next step the coordinator can take this week,
     matched to the heat tier AND trajectory AND cohort signal. When
     damping fired, the action should reflect that the cohort suggests
-    this lead is structurally at risk — e.g. "intervene with the
+    this lead is structurally at risk, e.g. "intervene with the
     differentiator" rather than "push to contract". null if no clear
     action (informational only).
 
 CRITICAL RULES:
-- Never invent numbers. The ONLY numbers you may reference are the heat
-  score, the raw (pre-damping) heat score, the cohort booked / total /
-  percentage, the events' point values, and the total event count — all
-  listed in the user prompt. No percentages, ratios, or ranks unless they
-  are exact matches to the listed numbers.
 - Never reference other couples or venues; only this lead and the cohort
   by SHAPE (e.g. "comparable leads" / "look-alike cohort" / "this segment").
-- Never claim to know what the couple is "thinking" or "feeling" — narrate
-  observed signals, not interpretations.
-- Use the venue's voice but stay neutral / factual.`
+- Never claim to know what the couple is "thinking" or "feeling", narrate
+  observed signals, not interpretations.`
+
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_heat',
+    taskInstructions,
+    numbersGuard: {
+      heat_score: payload.heat_score,
+      raw_heat_score: payload.raw_heat_score,
+      cohort_n_booked: payload.cohort_n_booked,
+      cohort_n_total: payload.cohort_n_total,
+      cohort_rate_pct: payload.cohort_rate !== null ? Math.round(payload.cohort_rate * 100) : null,
+      cohort_multiplier: payload.cohort_multiplier,
+      total_events: payload.total_events,
+      ...Object.fromEntries(
+        payload.top_events.map((e, i) => [`event_${i + 1}_points`, e.points]),
+      ),
+    },
+    contentTier: 1,
+  })
 
   const userPrompt = `LEAD HEAT NARRATION
 
@@ -467,7 +474,8 @@ this lead is moving.${dampingFired ? ' And acknowledge the cohort damping — wi
         venueId,
         taskType: 'heat_narration',
         tier: 'sonnet',
-        promptVersion: HEAT_NARRATION_PROMPT_VERSION,
+        promptVersion,
+        contentTier,
       })
       const parsed = JSON.parse(
         result.text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim(),

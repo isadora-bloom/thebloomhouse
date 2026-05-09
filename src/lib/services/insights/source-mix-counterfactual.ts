@@ -52,12 +52,15 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 import { computeSourceQuality, type SourceQualityRow } from '@/lib/services/intel/source-quality'
 
-export const SOURCE_MIX_COUNTERFACTUAL_PROMPT_VERSION = 'source-mix-counterfactual.prompt.v1.0'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
+export const SOURCE_MIX_COUNTERFACTUAL_PROMPT_VERSION = 'source-mix-counterfactual.prompt.v2.0'
 
 const ANALYSIS_WINDOW_DAYS = 90
 const MIN_ELIGIBLE_SOURCES = 3
@@ -238,15 +241,6 @@ async function loadClassicalSourceMixEvidence(
   }
 }
 
-async function loadAiName(supabase: SupabaseClient, venueId: string): Promise<string> {
-  const { data } = await supabase
-    .from('venue_ai_config')
-    .select('ai_name')
-    .eq('venue_id', venueId)
-    .maybeSingle()
-  return ((data?.ai_name as string | undefined)?.trim()) || 'your assistant'
-}
-
 interface CounterfactualDiagnostic {
   reasoning: string
   recommendation: string
@@ -329,33 +323,28 @@ export async function generateSourceMixCounterfactual(
     }
   }
 
-  const aiName = await loadAiName(supabase, venueId)
   const sourceTable = classical.per_source_summary
     .map((s) => `  - ${s.source}: spend $${s.spendInWindow.toLocaleString()}, ${s.firstTouchBookings} bookings, CAC $${s.costPerBooking.toLocaleString()}`)
     .join('\n')
 
   const qualityFlag = classical.pair.attribution_quality_gap_flag
-    ? `WARNING: ${classical.pair.high.source} and ${classical.pair.low.source} have very different auto-link rates (${(classical.pair.high.autoLinkRate * 100).toFixed(0)}% vs ${(classical.pair.low.autoLinkRate * 100).toFixed(0)}%). Attribution quality varies between them — treat the projection as suggestive, not exact.`
+    ? `WARNING: ${classical.pair.high.source} and ${classical.pair.low.source} have very different auto-link rates (${(classical.pair.high.autoLinkRate * 100).toFixed(0)}% vs ${(classical.pair.low.autoLinkRate * 100).toFixed(0)}%). Attribution quality varies between them, treat the projection as suggestive, not exact.`
     : 'Attribution quality is comparable between the donor and recipient sources.'
 
-  const systemPrompt = `You are ${aiName}, helping a wedding-venue coordinator
-read a source-mix reallocation simulation.
+  const taskInstructions = `Read a source-mix reallocation simulation.
 
 Output JSON:
   - reasoning: 1 short sentence explaining WHY this reallocation looks
     favourable. Reference the CAC gap, sample sizes, and (if present) the
     attribution-quality flag.
   - recommendation: 1 sentence with a SPECIFIC action grounded in the
-    numbers — name both sources, the dollar amount, and the projected
+    numbers, name both sources, the dollar amount, and the projected
     booking delta. Add a caveat if the attribution-quality flag is set.
   - confidence: 0.0-1.0. Default 0.5. Higher when CAC gap is large
     (>=2x) AND attribution-quality flag is OFF AND venue has >=10
     bookings in window. Lower when sample is small or quality flag is on.
 
 CRITICAL RULES:
-- Numbers in your output must come from the user prompt. The only
-  numbers you may use are per-source spend / bookings / CAC, the
-  reallocation amount, the projected delta, and the CAC ratio.
 - Never project beyond the recommended reallocation; the model uses a
   concave sqrt response curve and overshoots beyond MAX_REALLOCATION_PCT
   are unreliable.
@@ -392,6 +381,24 @@ ${qualityFlag}
 
 Diagnose + recommend.`
 
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_source_mix',
+    taskInstructions,
+    numbersGuard: {
+      cac_ratio: classical.pair.cac_ratio,
+      reallocation_amount: classical.pair.reallocation_amount,
+      projected_donor_loss: classical.pair.projected_donor_loss,
+      projected_recipient_gain: classical.pair.projected_recipient_gain,
+      projected_delta_bookings: classical.pair.projected_delta_bookings,
+      donor_cac: Math.round(classical.pair.high.costPerBooking),
+      recipient_cac: Math.round(classical.pair.low.costPerBooking),
+      donor_bookings: classical.pair.high.firstTouchBookings,
+      recipient_bookings: classical.pair.low.firstTouchBookings,
+      total_window_bookings: classical.total_window_bookings,
+    },
+  })
+
   let result: CounterfactualDiagnostic | null = null
   // Cost-ceiling gate (T5-α.2). Deterministic fallback below covers
   // paused case.
@@ -406,7 +413,8 @@ Diagnose + recommend.`
         venueId,
         taskType: 'source_mix_counterfactual',
         tier: 'sonnet',
-        promptVersion: SOURCE_MIX_COUNTERFACTUAL_PROMPT_VERSION,
+        promptVersion,
+        contentTier,
       })
       if (raw && typeof raw.reasoning === 'string') {
         result = {

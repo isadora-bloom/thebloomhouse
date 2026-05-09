@@ -42,6 +42,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -54,8 +55,10 @@ import {
   rankMultiplierForPair,
 } from '@/lib/utils/format-series-label'
 
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
 export const CORRELATION_NARRATION_PROMPT_VERSION =
-  'correlation-narration.prompt.v1.0'
+  'correlation-narration.prompt.v2.0'
 
 // Weak-signal thresholds — surfaced as a "weak signal" badge on the
 // card AND told to the LLM so the narration can disclaim. The
@@ -583,30 +586,23 @@ async function narrateOne(
   const directionWord = r >= 0 ? 'rose together' : 'moved in opposite directions'
   const lagDescription = lagDays === 0 ? 'on the same day' : `with about a ${lagDays}-day lag`
 
-  const systemPrompt = `You are explaining a statistical correlation to a wedding venue
-coordinator who is not a statistician. Output JSON with:
+  const taskInstructions = `Explain a statistical correlation to the coordinator who is not a statistician. Output JSON with:
   - title: short headline (max ~80 chars). Reference both channels by their
     plain-English names. Do not include r-values or p-values in the title.
   - body: 2-3 plain-English sentences. Ground every claim in the
     listed numbers. Frame the cross-channel story as a coordinator
     would understand it ("mortgage rates went up; tour completions
-    dropped two weeks later" — not "Pearson r=0.42, lag=14d").
+    dropped two weeks later", not "Pearson r=0.42, lag=14d").
   - action: ONE specific thing the coordinator should do this week,
     OR null if the signal is weak.
 
 CRITICAL RULES:
-- Never invent numbers. The ONLY numbers you may reference are the
-  correlation strength, the lag in days, the window in days, and the
-  recent min/max/latest values for each channel — all listed in the
-  user prompt. No percentages, ratios, or ranks unless they are exact
-  matches to the listed numbers.
 - Never speculate beyond the data. If the correlation is weak (the
   user prompt will say "WEAK SIGNAL"), say so explicitly: "this signal
   is weak; the platform is flagging it but not staking a claim."
 - Never claim causation. Use "preceded", "moved with", "tracked",
   "tended to", not "caused".
 - Never name specific couples or vendors.
-- Use the venue's voice but stay neutral / factual.
 - Keep the body to 2-3 sentences. Coordinator-readable, not
   engineer-readable.`
 
@@ -635,6 +631,15 @@ Channel B recent activity:
 Compose the JSON narration. 2-3 sentence body, plain English, no
 made-up numbers.`
 
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_correlation',
+    taskInstructions,
+    numbersGuard: Object.fromEntries(
+      allowedNumbers.map((n, i) => [`allowed_${i}`, n]),
+    ),
+  })
+
   let narration: InsightNarration | null = null
 
   // Cost-ceiling gate (Stream B / T5-α.2). When the venue is at 100%
@@ -651,7 +656,8 @@ made-up numbers.`
         venueId,
         taskType: 'correlation_narration',
         tier: 'sonnet',
-        promptVersion: CORRELATION_NARRATION_PROMPT_VERSION,
+        promptVersion,
+        contentTier,
       })
       const parsed = JSON.parse(
         result.text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim(),

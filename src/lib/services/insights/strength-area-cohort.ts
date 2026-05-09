@@ -39,11 +39,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 
-export const STRENGTH_AREA_PROMPT_VERSION = 'strength-area-cohort.prompt.v1.0'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
+export const STRENGTH_AREA_PROMPT_VERSION = 'strength-area-cohort.prompt.v2.0'
 
 const ANALYSIS_WINDOW_DAYS = 180
 const MIN_PER_BAND_RESOLVED = 5
@@ -166,14 +169,6 @@ async function loadClassicalStrengthEvidence(
   }
 }
 
-async function loadAiName(supabase: SupabaseClient, venueId: string): Promise<string> {
-  const { data } = await supabase
-    .from('venue_ai_config')
-    .select('ai_name')
-    .eq('venue_id', venueId)
-    .maybeSingle()
-  return ((data?.ai_name as string | undefined)?.trim()) || 'your assistant'
-}
 
 interface StrengthDiagnostic {
   reasoning: string
@@ -247,18 +242,16 @@ export async function generateStrengthAreaCohort(
     }
   }
 
-  const aiName = await loadAiName(supabase, venueId)
   const bandTable = classical.bands
     .map((b) => `  - ${b.label}: ${b.resolved} resolved, ${b.conversion_pct}% conversion${b.qualifies ? '' : ' (insufficient data)'}`)
     .join('\n')
 
-  const systemPrompt = `You are ${aiName}, helping a wedding-venue coordinator
-read the venue's strength-area breakdown by guest-count band.
+  const taskInstructions = `Read the venue's strength-area breakdown by guest-count band.
 
 Output JSON:
   - reasoning: 1 short sentence comparing the strongest band to the
     weakest band. Reference the bands by NAME and the gap in pp.
-  - recommendation: 1 sentence. Lean into the strongest band — name a
+  - recommendation: 1 sentence. Lean into the strongest band, name a
     concrete action (target marketing toward that segment, build a
     package for it, surface it in tour scripts). Briefly note the
     weakest band as a deprioritisation candidate.
@@ -266,11 +259,8 @@ Output JSON:
     gap; lower when bands are barely qualifying.
 
 CRITICAL RULES:
-- Numbers in your output must come from the user prompt. The only
-  numbers you may use are per-band conversion %, per-band N, the
-  gap pp, and the total resolved count.
 - Frame the strength as VENUE-RELATIVE ("you convert 51-100 better
-  than 200+") — not absolute industry-norm ("0-50 always converts
+  than 200+"), not absolute industry-norm ("0-50 always converts
   well"). The data is your venue's track record, not industry truth.
 - Do NOT speculate about why one band converts better. Stick to the
   pattern + a strategic move grounded in the pattern.`
@@ -289,6 +279,27 @@ Gap:                        ${classical.gap_pp}pp
 
 Diagnose + recommend.`
 
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_strength',
+    taskInstructions,
+    numbersGuard: {
+      total_resolved: classical.total_resolved,
+      strongest_conversion_pct: classical.strongest.conversion_pct,
+      strongest_n: classical.strongest.resolved,
+      weakest_conversion_pct: classical.weakest.conversion_pct,
+      weakest_n: classical.weakest.resolved,
+      gap_pp: classical.gap_pp,
+      window_days: classical.windowDays,
+      ...Object.fromEntries(
+        classical.bands.flatMap((b) => [
+          [`band_${b.label}_conversion_pct`, b.conversion_pct],
+          [`band_${b.label}_n`, b.resolved],
+        ]),
+      ),
+    },
+  })
+
   let result: StrengthDiagnostic | null = null
   // Cost-ceiling gate (T5-α.2). Per-band stats fallback below covers
   // paused.
@@ -303,7 +314,8 @@ Diagnose + recommend.`
         venueId,
         taskType: 'strength_area_cohort',
         tier: 'sonnet',
-        promptVersion: STRENGTH_AREA_PROMPT_VERSION,
+        promptVersion,
+        contentTier,
       })
       if (raw && typeof raw.reasoning === 'string') {
         result = {

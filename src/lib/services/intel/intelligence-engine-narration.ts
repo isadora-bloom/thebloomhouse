@@ -35,10 +35,13 @@ import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
 import { checkNarrationNumbers } from '@/lib/services/insights/numbers-guard'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import type { ClassicalEvidence, InsightNarration } from '@/lib/services/insights/types'
 
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
 export const BRAIN_INTEL_ENGINE_PROMPT_VERSION =
-  'intelligence-engine-narration.v1'
+  'intelligence-engine-narration.v2'
 
 /** All 9 shape-families the 14 detectors fall into. Each family's
  *  framing block lives in `framingFor()` below. */

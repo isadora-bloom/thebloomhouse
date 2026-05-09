@@ -62,11 +62,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
 
-export const PRICING_ELASTICITY_PROMPT_VERSION = 'pricing-elasticity.prompt.v1.0'
+// 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
+// when migrated to the canonical coordinator-prompt assembler.
+export const PRICING_ELASTICITY_PROMPT_VERSION = 'pricing-elasticity.prompt.v2.0'
 
 const DAY_MS = 86_400_000
 const ANALYSIS_WINDOW_DAYS = 90
@@ -384,15 +387,6 @@ export function classifyElasticity(args: {
   return 'inelastic'
 }
 
-async function loadAiName(supabase: SupabaseClient, venueId: string): Promise<string> {
-  const { data } = await supabase
-    .from('venue_ai_config')
-    .select('ai_name')
-    .eq('venue_id', venueId)
-    .maybeSingle()
-  return ((data?.ai_name as string | undefined)?.trim()) || 'your assistant'
-}
-
 interface ElasticityDiagnostic {
   classification: ElasticityClassification
   reasoning: string
@@ -486,24 +480,22 @@ export async function generatePricingElasticity(
     }
   }
 
-  const aiName = await loadAiName(supabase, venueId)
   const selfReportedDominant = classical.marketing_spend?.is_self_reported_dominant === true
   const confoundBlock = marketing_confound
-    ? `WARNING: Marketing spend changed ${classical.marketing_spend!.delta_pct}% pre→post — treat elasticity as confounded.`
+    ? `WARNING: Marketing spend changed ${classical.marketing_spend!.delta_pct}% pre to post, treat elasticity as confounded.`
     : (classical.marketing_spend
-        ? `Marketing spend stable (${classical.marketing_spend.delta_pct}% delta — within tolerance).`
+        ? `Marketing spend stable (${classical.marketing_spend.delta_pct}% delta, within tolerance).`
         : 'No marketing spend data on file for this window.')
 
   const provenanceBlock = selfReportedDominant
-    ? `NOTE: ${Math.round(classical.marketing_spend!.brain_dump_share * 100)}% of marketing-spend rows in this window are self-reported (brain-dump text extraction). Treat the spend trend as approximate — the comparison itself rests on rough figures.`
+    ? `NOTE: ${Math.round(classical.marketing_spend!.brain_dump_share * 100)}% of marketing-spend rows in this window are self-reported (brain-dump text extraction). Treat the spend trend as approximate, the comparison itself rests on rough figures.`
     : ''
 
   const adjacentBlock = classical.has_adjacent_change
-    ? 'WARNING: Another base_price change occurred within ±60 days — windows leak across interventions.'
+    ? 'WARNING: Another base_price change occurred within ±60 days, windows leak across interventions.'
     : 'Single isolated price change in the window.'
 
-  const systemPrompt = `You are ${aiName}, helping a wedding-venue coordinator
-read whether a recent price change moved conversion rates.
+  const taskInstructions = `Read whether a recent price change moved conversion rates.
 
 Output JSON:
   - classification: 'elastic' | 'inelastic' | 'positive' | 'inconclusive'
@@ -511,29 +503,26 @@ Output JSON:
                 conversion proportionately)
     inelastic = |elasticity| < 0.5 (pricing power; conversion barely
                 moved)
-    positive  = elasticity > 0 (raised price → more conversion;
+    positive  = elasticity > 0 (raised price -> more conversion;
                 premium-positioning signal OR a confound)
     inconclusive = signal too small / confounded / windows too short
   - reasoning: 1 short sentence. Reference the SHAPE of the data (pre vs
     post conversion rates, sample sizes, presence of confound).
   - recommendation: 1 sentence with a SPECIFIC action grounded in the
     classification:
-      elastic     → "Walk back X% of the price increase OR pair it with
+      elastic     -> "Walk back X% of the price increase OR pair it with
                     a tour-experience upgrade to justify."
-      inelastic   → "You have pricing power; consider testing a further
+      inelastic   -> "You have pricing power; consider testing a further
                     Y% increase next quarter."
-      positive    → "Premium-positioning signal — but verify by looking
+      positive    -> "Premium-positioning signal, but verify by looking
                     at the marketing spend delta before assuming."
-      inconclusive→ "Wait until N more weddings resolve, or annotate the
+      inconclusive-> "Wait until N more weddings resolve, or annotate the
                     confound and re-run."
   - confidence: 0.0-1.0. Default 0.5. Higher when classification is
     elastic/inelastic with stable marketing + clean window;
     lower when inconclusive.
 
 CRITICAL RULES:
-- Numbers in your output must come from the user prompt. The only
-  numbers you may use are the price change %, pre/post conversion %,
-  pre/post sample sizes, and the elasticity value.
 - Never invent dates, weddings, or specific figures.
 - If marketing spend confound or adjacent change is flagged, you MUST
   output classification='inconclusive' regardless of elasticity sign.
@@ -546,7 +535,7 @@ CRITICAL RULES:
   const userPrompt = `PRICING ELASTICITY DIAGNOSTIC
 
 Most-recent base_price change:
-  - From $${classical.old_price.toLocaleString()} → $${classical.new_price.toLocaleString()}
+  - From $${classical.old_price.toLocaleString()} to $${classical.new_price.toLocaleString()}
   - Price change: ${classical.price_change_pct}%
   - Changed at: ${classical.changed_at.slice(0, 10)}
   - Days since change: ${Math.round((Date.now() - Date.parse(classical.changed_at)) / DAY_MS)}
@@ -568,6 +557,21 @@ Confound checks:
 
 Diagnose + recommend.`
 
+  const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
+    venueId,
+    surface: 'narration_pricing',
+    taskInstructions,
+    numbersGuard: {
+      price_change_pct: classical.price_change_pct,
+      pre_conversion_pct,
+      post_conversion_pct,
+      pre_resolved: classical.pre.resolved,
+      post_resolved: classical.post.resolved,
+      elasticity: classical.elasticity,
+      marketing_delta_pct: classical.marketing_spend?.delta_pct ?? null,
+    },
+  })
+
   let result: ElasticityDiagnostic | null = null
   // Cost-ceiling gate (T5-α.2). Pure classifier fallback covers the
   // paused case.
@@ -582,7 +586,8 @@ Diagnose + recommend.`
         venueId,
         taskType: 'pricing_elasticity',
         tier: 'sonnet',
-        promptVersion: PRICING_ELASTICITY_PROMPT_VERSION,
+        promptVersion,
+        contentTier,
       })
       if (raw && CLASSIFICATION_LABEL[raw.classification as ElasticityClassification]) {
         result = {
