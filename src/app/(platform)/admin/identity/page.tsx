@@ -122,12 +122,13 @@ export default function IdentityAdminPage() {
             the pointer to the canonical row.
           </p>
         </div>
-        {/* Wave 2C stub — surfaces the handle-merge-proposals endpoint.
-            Full UI lands in Wave 2D; this is a read-the-JSON link for now. */}
+        {/* Wave 2D — full coordinator UI for handle convergence proposals.
+            Links to /admin/identity/handle-merges (mig 259 + accept/reject/defer
+            endpoints). */}
         <Link
-          href="/api/admin/identity/handle-merge-proposals"
+          href="/admin/identity/handle-merges"
           className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-sage-300 bg-warm-white text-sm text-sage-700 hover:bg-sage-50 whitespace-nowrap"
-          title="Cross-platform handle convergence proposals (Wave 2C — JSON)"
+          title="Cross-platform handle convergence proposals — accept, reject, or defer"
         >
           <Network className="w-4 h-4" />
           Handle merge proposals
