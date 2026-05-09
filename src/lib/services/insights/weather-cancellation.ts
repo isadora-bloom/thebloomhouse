@@ -1,5 +1,5 @@
 /**
- * Weather × tour cancellation correlation insight (T5-Rixey-ZZ / Z7).
+ * Weather x tour cancellation correlation insight (T5-Rixey-ZZ / Z7).
  *
  * Hypothesis the user flagged after the Feb 2026 weather slowed Rixey's
  * tours: when the weather is bad on a scheduled tour day, cancellations
@@ -15,20 +15,49 @@
  *        extreme_heat / severe_weather / unknown
  *   4. Compute cancellation_rate per bucket (cancelled+no_show / total).
  *   5. If any bad-weather bucket has cancellation_rate >= 1.5x baseline
- *      AND >= MIN_BUCKET_TOURS samples, persist a 'correlation_narration'
- *      insight with signal_class='weather_x_venue'.
+ *      AND >= MIN_BUCKET_TOURS samples, the deterministic detector
+ *      composes a struct of the numbers and we hand it to a Sonnet
+ *      narrator. The narrator produces {title, body, action} in
+ *      coordinator voice, numbers-guarded against the exact bucket
+ *      counts. The persisted row uses insight_type='correlation_narration'
+ *      with signal_class='weather_x_venue', identical shape to the real
+ *      LLM-narrated correlation rows from correlation-narration.ts.
  *
  * Skip-and-stop rules (don't fabricate):
- *   - venue has no lat/lon AND no NOAA station id → return data_gated.
- *   - weather_data has zero rows in the window → return data_gated.
- *   - tours has < MIN_TOTAL_TOURS in the window → return data_gated.
+ *   - venue has no lat/lon AND no NOAA station id -> data_gated.
+ *   - weather_data has zero rows in the window -> data_gated.
+ *   - tours has < MIN_TOTAL_TOURS in the window -> data_gated.
  *
- * Per Z7 brief: stub the service when weather_data is unavailable,
- * emit the insight when it lands.
+ * AI-VS-TEMPLATED-AUDIT Finding #3 (2026-05-09): the prior persist path
+ * was a direct intelligence_insights insert with deterministic title +
+ * body + action strings, written under insight_type='correlation_narration'
+ * (the same type real LLM-narrated correlation rows use). Coordinators
+ * filtering /intel/insights on "Correlation" got a mix of real Sonnet
+ * narration and template strings. We now route through a Sonnet narrator
+ * with the SAME hybrid contract used by correlation-narration.ts:
+ *   - Deterministic detector keeps doing the math (the math IS the truth).
+ *   - LLM takes the struct and writes 2-3 sentences in coordinator voice.
+ *   - Numbers-guard rejects any LLM number not present in the struct.
+ *   - Cost-ceiling gate (gateForBrainCall) runs BEFORE the Sonnet call.
+ *   - Fall back to the existing deterministic template when the gate is
+ *     closed OR the LLM call fails OR the numbers-guard rejects.
+ *
+ * The persist path moves from a direct insert (l. 280-318 in the prior
+ * version) to insights/persist.ts, which already enforces the
+ * cache-key + numbers-guard contract every other LLM-narrated insight
+ * uses.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
+import { confidenceFor, buildCacheKey } from './confidence'
+import { persistInsight } from './persist'
+import type { ClassicalEvidence, InsightNarration } from './types'
+
+export const WEATHER_CANCELLATION_NARRATION_PROMPT_VERSION =
+  'weather-cancellation-narration.v1'
 
 export interface WeatherCancellationResult {
   ok: boolean
@@ -49,6 +78,10 @@ export interface WeatherCancellationResult {
   baselineRate?: number
   /** Insight written, when the signal cleared the threshold. */
   insightId?: string
+  /** Provenance of the persisted narration. 'ai' when Sonnet wrote it,
+   *  'template' when the deterministic fallback fired (cost-ceiling
+   *  closed, LLM failed, or numbers-guard rejected). */
+  narrationSource?: 'ai' | 'template'
 }
 
 interface TourRow {
@@ -96,7 +129,7 @@ function bucketWeather(w: WeatherRow): string {
  * Determine whether a tour was a cancellation-style outcome. We bucket
  * cancelled + no_show together because both indicate the tour didn't
  * happen as scheduled (which is what weather affects). 'rescheduled'
- * is NOT counted as a cancellation — a successful reschedule is the
+ * is NOT counted as a cancellation: a successful reschedule is the
  * weather-mitigation outcome we want to encourage.
  */
 function isCancellationOutcome(t: TourRow): boolean {
@@ -104,8 +137,133 @@ function isCancellationOutcome(t: TourRow): boolean {
   return t.outcome === 'cancelled' || t.outcome === 'no_show'
 }
 
+interface WeatherCancellationStruct {
+  lookbackDays: number
+  totalTours: number
+  totalCancellations: number
+  baselineRatePct: number
+  triggerBucket: string
+  triggerBucketLabel: string
+  triggerBucketTours: number
+  triggerBucketCancellations: number
+  triggerBucketRatePct: number
+  multiplierVsBaseline: number
+}
+
 /**
- * Run the weather × cancellation analysis for a venue. Pure read +
+ * Build the deterministic fallback narration. Used when the cost ceiling
+ * closes the gate, the LLM fails, or the numbers-guard rejects the LLM
+ * output. Every number references the struct; this body MUST pass the
+ * numbers-guard or the whole surface goes silent.
+ */
+function buildTemplateFallbackNarration(s: WeatherCancellationStruct): InsightNarration {
+  const title =
+    `Weather drives tour cancellations: ${s.triggerBucketRatePct}% cancel rate on ${s.triggerBucketLabel} days vs ${s.baselineRatePct}% baseline`
+  const body =
+    `Across the last ${s.lookbackDays} days, ${s.triggerBucketTours} tours were `
+    + `scheduled on ${s.triggerBucketLabel} days; ${s.triggerBucketCancellations} cancelled or `
+    + `no-showed (${s.triggerBucketRatePct}%). Baseline cancellation rate across all weather is `
+    + `${s.baselineRatePct}% over ${s.totalTours} tours. Weather is materially affecting `
+    + `tour completion, and the recovery offer that converts a weather-cancel into `
+    + `a reschedule (vs a hard loss) is a high-leverage script.`
+  const action =
+    'Add an indoor-rain-plan upgrade upsell to outdoor-tour confirmation emails. '
+    + 'For tours scheduled within 48 hours, run a weather check and send a proactive '
+    + 'reschedule offer when severe weather is forecast: this converts a forced cancel '
+    + 'into a coordinator-driven save.'
+  return { title, body, action }
+}
+
+/**
+ * Sonnet narrator. Takes the deterministic struct and produces a
+ * coordinator-voice narration grounded in the exact numbers the
+ * detector computed. Returns null on any failure so the caller can
+ * fall back to the deterministic template.
+ *
+ * Numbers contract: the narrator may reference triggerBucketRatePct,
+ * baselineRatePct, lookbackDays, totalTours, totalCancellations,
+ * triggerBucketTours, triggerBucketCancellations, multiplierVsBaseline.
+ * The numbers-guard at persist time enforces this; the prompt asks
+ * the LLM to stay within it.
+ */
+async function narrateWithSonnet(
+  venueId: string,
+  s: WeatherCancellationStruct,
+): Promise<InsightNarration | null> {
+  const systemPrompt = `You are explaining a weather-driven tour-cancellation pattern to a wedding
+venue coordinator who is not a statistician. Output JSON with:
+  - title: short headline (max ~100 chars). Reference the bucket label
+    plainly (e.g. "heavy-rain days" or "snow days"). Include the bucket
+    cancel rate AND the baseline cancel rate so the contrast is
+    obvious. No statistical jargon (no "r=" / "p<" / "Pearson").
+  - body: 2-3 plain-English sentences. Frame the story as a coordinator
+    would understand it: bad weather days cancel more often than
+    baseline, the gap is large enough to act on, and the venue can
+    recover most of those by offering a reschedule before they hard-cancel.
+  - action: ONE specific thing the coordinator should do this week.
+    Concrete and named (e.g. "add an indoor-rain plan upsell to
+    outdoor-tour confirmation emails", "run a 48h weather check on
+    upcoming tours and proactively offer reschedule").
+
+CRITICAL RULES:
+- Never invent numbers. The ONLY numbers you may reference are the
+  ones listed in the user prompt: bucket cancel rate %, baseline cancel
+  rate %, total tours in window, total cancellations in window, bucket
+  tour count, bucket cancellation count, lookback days, multiplier vs
+  baseline. No other percentages, ratios, or counts.
+- Never claim causation. Use "drives", "tracks with", "elevated on".
+  The pattern is a correlation between weather conditions and tour
+  outcomes, not a proof of mechanism.
+- Never name specific couples or vendors.
+- Use neutral, factual coordinator voice. No exclamation points.
+- 2-3 sentences in body. Coordinator-readable, not engineer-readable.
+- No em dashes anywhere.`
+
+  const userPrompt = `WEATHER x TOUR CANCELLATION PATTERN
+
+Bucket: ${s.triggerBucketLabel} (raw: ${s.triggerBucket})
+Lookback window: ${s.lookbackDays} days
+Total tours in window: ${s.totalTours}
+Total cancellations + no-shows in window: ${s.totalCancellations}
+Baseline cancel rate (all weather): ${s.baselineRatePct}%
+
+Bucket-specific stats:
+- Tours scheduled on ${s.triggerBucketLabel} days: ${s.triggerBucketTours}
+- Of those, cancelled or no-showed: ${s.triggerBucketCancellations}
+- Bucket cancel rate: ${s.triggerBucketRatePct}%
+- Multiplier vs baseline: ${s.multiplierVsBaseline.toFixed(2)}x
+
+Compose the JSON narration. 2-3 sentence body, plain English, no
+made-up numbers, no em dashes.`
+
+  try {
+    const result = await callAIJson<Partial<InsightNarration>>({
+      systemPrompt,
+      userPrompt,
+      maxTokens: 360,
+      temperature: 0.4,
+      venueId,
+      taskType: 'weather_cancellation_narration',
+      tier: 'sonnet',
+      promptVersion: WEATHER_CANCELLATION_NARRATION_PROMPT_VERSION,
+    })
+    if (!result.title || !result.body) return null
+    return {
+      title: result.title,
+      body: result.body,
+      action: result.action ?? null,
+    }
+  } catch (err) {
+    console.warn(
+      '[weather-cancellation] LLM narration failed:',
+      redactError(err),
+    )
+    return null
+  }
+}
+
+/**
+ * Run the weather x cancellation analysis for a venue. Pure read +
  * compute; the caller (cron entry) decides whether to persist via the
  * insights pipeline.
  *
@@ -180,7 +338,7 @@ export async function analyzeWeatherCancellations(
     if (!t.scheduled_at) continue
     const day = t.scheduled_at.slice(0, 10)
     const w = weatherByDate.get(day)
-    if (!w) continue // tour day with no weather observation — skip
+    if (!w) continue // tour day with no weather observation: skip
     const bucket = bucketWeather(w)
     if (!buckets[bucket]) buckets[bucket] = { tours: 0, cancellations: 0, rate: 0 }
     buckets[bucket].tours++
@@ -225,26 +383,69 @@ export async function analyzeWeatherCancellations(
 
   const [bucketName, bucketStats] = triggerBucket
 
-  // Persist insight via the centralised intelligence_insights table.
-  // We use the older direct-row pattern (rather than insights/persist.ts
-  // which requires LLM-narration shape) because the title + body here
-  // are deterministically composed — no LLM-numbers-guard concerns.
   const ratePct = Math.round(bucketStats.rate * 100)
   const baselinePct = Math.round(baselineRate * 100)
   const bucketLabel = humanBucket(bucketName)
-  const title = `Weather drives tour cancellations: ${ratePct}% cancel rate on ${bucketLabel} days vs ${baselinePct}% baseline`
-  const body =
-    `Across the last ${lookbackDays} days, ${bucketStats.tours} tours were `
-    + `scheduled on ${bucketLabel} days; ${bucketStats.cancellations} cancelled or `
-    + `no-showed (${ratePct}%). Baseline cancellation rate across all weather is `
-    + `${baselinePct}% over ${totalTours} tours. Weather is materially affecting `
-    + `tour completion — and the recovery offer that converts a weather-cancel into `
-    + `a reschedule (vs a hard loss) is a high-leverage script.`
-  const action =
-    'Add an indoor-rain-plan upgrade upsell to outdoor-tour confirmation emails. '
-    + 'For tours scheduled within 48 hours, run a weather check + send a proactive '
-    + 'reschedule offer when severe weather is forecast — converts a forced cancel '
-    + 'into a coordinator-driven save.'
+  const multiplierVsBaseline = baselineRate > 0 ? bucketStats.rate / baselineRate : 0
+
+  const struct: WeatherCancellationStruct = {
+    lookbackDays,
+    totalTours,
+    totalCancellations,
+    baselineRatePct: baselinePct,
+    triggerBucket: bucketName,
+    triggerBucketLabel: bucketLabel,
+    triggerBucketTours: bucketStats.tours,
+    triggerBucketCancellations: bucketStats.cancellations,
+    triggerBucketRatePct: ratePct,
+    multiplierVsBaseline,
+  }
+
+  // Numbers-guard allowlist: every primitive a narration may reference.
+  // Both raw + rounded forms so phrasing variants ("42%" / "42") match.
+  const multiplierRounded = Number(multiplierVsBaseline.toFixed(2))
+  const allowedNumbers: Array<number | string> = [
+    ratePct, baselinePct,
+    lookbackDays, totalTours, totalCancellations,
+    bucketStats.tours, bucketStats.cancellations,
+    multiplierVsBaseline,
+    multiplierRounded,
+    Math.round(multiplierVsBaseline),
+    Math.round(multiplierVsBaseline * 10) / 10,
+    // Day-window phrasing: the LLM may say "the past year" but if it
+    // says "365 days" that should match. Already covered by lookbackDays.
+    // 48 (hours) is a fixed-action phrase the template uses; allow it
+    // so the deterministic fallback's "within 48 hours" line passes
+    // the guard.
+    48,
+  ]
+
+  // Cost-ceiling gate (Stream B / T5-alpha.2). When closed, fall back
+  // to the deterministic template so the surface still produces SOMETHING.
+  let narration: InsightNarration | null = null
+  let narrationSource: 'ai' | 'template' = 'template'
+  const gate = await gateForBrainCall(venueId)
+  if (gate.ok) {
+    const llmNarration = await narrateWithSonnet(venueId, struct)
+    if (llmNarration) {
+      narration = llmNarration
+      narrationSource = 'ai'
+    }
+  }
+  if (!narration) {
+    narration = buildTemplateFallbackNarration(struct)
+    narrationSource = 'template'
+  }
+
+  // Stable cache key on the deterministic struct. Same struct -> same
+  // key -> idempotent upsert; new bucket / new rate -> fresh narration.
+  const cacheKey = buildCacheKey({
+    bucket: bucketName,
+    rate: ratePct,
+    baseline: baselinePct,
+    totalTours,
+    multiplier: multiplierRounded,
+  })
 
   const dataPoints = {
     signal_class: 'weather_x_venue',
@@ -252,76 +453,98 @@ export async function analyzeWeatherCancellations(
     total_tours: totalTours,
     total_cancellations: totalCancellations,
     baseline_rate: baselineRate,
+    baseline_rate_pct: baselinePct,
     trigger_bucket: bucketName,
+    trigger_bucket_label: bucketLabel,
     trigger_bucket_tours: bucketStats.tours,
     trigger_bucket_cancellations: bucketStats.cancellations,
     trigger_bucket_rate: bucketStats.rate,
-    multiplier_vs_baseline: baselineRate > 0 ? bucketStats.rate / baselineRate : null,
+    trigger_bucket_rate_pct: ratePct,
+    multiplier_vs_baseline: multiplierVsBaseline,
     buckets,
     pair_key: `weather_${bucketName}|tour_cancellations`,
+    narration_source: narrationSource,
   }
 
-  // Use the fnv32 helper inline for context_id derivation. Keep
-  // deterministic so re-runs upsert the same row.
+  const classical: ClassicalEvidence = {
+    cacheKey,
+    numbers: allowedNumbers,
+    payload: dataPoints,
+    sampleSize: bucketStats.tours,
+    effectSize: Math.min(1, Math.max(0, multiplierVsBaseline - 1) / 2),
+  }
+
+  // Deterministic context_id derivation so re-runs collapse onto one row.
   const contextId = buildContextUuidV5(
     `weather-cancellation:${venueId}:${bucketName}`,
   )
+  const conf = confidenceFor({
+    sampleSize: classical.sampleSize,
+    effectSize: classical.effectSize,
+  })
 
-  // Lookup-then-insert/update against (venue_id, insight_type, context_id)
-  // — same pattern persist.ts uses.
-  const { data: existing } = await supabase
-    .from('intelligence_insights')
-    .select('id')
-    .eq('venue_id', venueId)
-    .eq('insight_type', 'correlation_narration')
-    .eq('context_id', contextId)
-    .maybeSingle()
-
-  const row = {
-    venue_id: venueId,
-    insight_type: 'correlation_narration',
+  const persistResult = await persistInsight(supabase, {
+    venueId,
+    insightType: 'correlation_narration',
+    contextId,
     category: 'market',
-    title,
-    body,
-    action,
+    surfaceLayer: 'on_demand',
+    classical,
+    narration,
+    llmModelUsed: narrationSource === 'ai' ? CLAUDE_MODEL : 'template',
+    promptVersionUsed: WEATHER_CANCELLATION_NARRATION_PROMPT_VERSION,
+    confidence: conf.value,
+    surfacePriority: bucketStats.tours * Math.max(1, multiplierVsBaseline),
     priority: bucketStats.rate >= baselineRate * 2 ? 'high' : 'medium',
-    confidence: Math.min(0.95, 0.5 + Math.min(0.3, bucketStats.tours / 100)),
-    data_points: dataPoints,
-    status: 'new',
-    context_id: contextId,
-  }
+  })
 
-  let insightId: string | undefined
-  if (existing) {
-    const { data: updated, error: updErr } = await supabase
-      .from('intelligence_insights')
-      .update({ ...row, updated_at: new Date().toISOString() })
-      .eq('id', existing.id as string)
-      .select('id')
-      .single()
-    if (updErr || !updated) {
-      console.error('[weather-cancellation] update failed:', updErr?.message)
-      return { ok: false, buckets, baselineRate }
+  if (!persistResult.ok) {
+    // Numbers-guard rejected the LLM narration. Re-persist with the
+    // deterministic template (which is constructed from struct numbers
+    // only and is guaranteed to pass the guard).
+    if (persistResult.numbersGuardViolations) {
+      console.warn(
+        '[weather-cancellation] numbers-guard rejected narration:',
+        persistResult.numbersGuardViolations.map((v) => v.token).join(', '),
+      )
     }
-    insightId = updated.id as string
-  } else {
-    const { data: inserted, error: insErr } = await supabase
-      .from('intelligence_insights')
-      .insert(row)
-      .select('id')
-      .single()
-    if (insErr || !inserted) {
-      console.error('[weather-cancellation] insert failed:', insErr?.message)
-      return { ok: false, buckets, baselineRate }
+    const safeNarration = buildTemplateFallbackNarration(struct)
+    const retry = await persistInsight(supabase, {
+      venueId,
+      insightType: 'correlation_narration',
+      contextId,
+      category: 'market',
+      surfaceLayer: 'on_demand',
+      classical: {
+        ...classical,
+        payload: { ...dataPoints, narration_source: 'template' },
+      },
+      narration: safeNarration,
+      llmModelUsed: 'template',
+      promptVersionUsed: WEATHER_CANCELLATION_NARRATION_PROMPT_VERSION,
+      confidence: conf.value,
+      surfacePriority: bucketStats.tours * Math.max(1, multiplierVsBaseline),
+      priority: bucketStats.rate >= baselineRate * 2 ? 'high' : 'medium',
+    })
+    if (!retry.ok) {
+      console.error('[weather-cancellation] template fallback persist also failed')
+      return { ok: false, buckets, baselineRate, narrationSource: 'template' }
     }
-    insightId = inserted.id as string
+    return {
+      ok: true,
+      buckets,
+      baselineRate,
+      insightId: retry.insightId,
+      narrationSource: 'template',
+    }
   }
 
   return {
     ok: true,
     buckets,
     baselineRate,
-    insightId,
+    insightId: persistResult.insightId,
+    narrationSource,
   }
 }
 
@@ -339,7 +562,7 @@ function humanBucket(bucket: string): string {
 
 /**
  * Deterministic UUID v5 derivation for the insight's context_id. Same
- * input → same UUID forever. Mirrors the helper in correlation-engine.ts
+ * input -> same UUID forever. Mirrors the helper in correlation-engine.ts
  * so the two services use the same namespace convention.
  */
 const WEATHER_CANCEL_NAMESPACE = 'a3f1c2d4-5e6b-4f7d-9a0c-3b1d2e4f5a6b'
@@ -367,7 +590,7 @@ function buildContextUuidV5(name: string): string {
 }
 
 /**
- * Batch entry point — runs analyzeWeatherCancellations for every active
+ * Batch entry point: runs analyzeWeatherCancellations for every active
  * venue, swallows per-venue errors. Designed to be called from a cron
  * handler; same shape as computeCorrelationsAllVenues.
  */

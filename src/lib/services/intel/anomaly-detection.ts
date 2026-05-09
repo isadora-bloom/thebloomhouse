@@ -18,12 +18,27 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
+import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import { redactError } from '@/lib/observability/redact'
 
 /**
  * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
  * See PROMPTS-CHANGELOG.md for version history.
  */
 export const ANOMALY_DETECTION_PROMPT_VERSION = 'anomaly-detection.prompt.v1.0'
+
+/**
+ * Availability-anomaly explanation narrator. Sonnet narrates the
+ * detector struct (fill rate, Saturday vs weekday split, slot counts,
+ * months out) into a 2-3 sentence ai_explanation. Falls back to the
+ * deterministic templates when the cost-ceiling gate closes OR the
+ * LLM call fails. Provenance stamped via anomaly_alerts.explanation_source
+ * (migration 252) so the UI can distinguish ai vs template.
+ *
+ * AI-VS-TEMPLATED-AUDIT Finding #4 (2026-05-09).
+ */
+export const AVAILABILITY_ANOMALY_EXPLANATION_PROMPT_VERSION =
+  'availability-anomaly-explanation.v1'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,6 +80,11 @@ interface AnomalyAlert {
   causes: AICause[] | null
   acknowledged: boolean
   created_at: string
+  /** Migration 252: provenance of ai_explanation. 'ai' = real LLM
+   *  narrator output; 'template' = deterministic-template fallback
+   *  fired (cost ceiling closed or call failed); 'rule' = no LLM
+   *  attempted. NULL on legacy rows. */
+  explanation_source?: 'ai' | 'template' | 'rule' | null
   venues?: { name: string | null } | null
 }
 
@@ -877,7 +897,9 @@ export async function runAnomalyDetection(
     const direction = changePercent > 0 ? 'increase' : 'decrease'
     const alertType = `${metricName}_${direction}`
 
-    // Insert the alert
+    // Insert the alert. explanation_source (migration 252) stamps
+    // provenance so /intel/anomalies UI can tell real Sonnet hypothesis
+    // apart from a row where the LLM was unreachable.
     const { data, error } = await supabase
       .from('anomaly_alerts')
       .insert({
@@ -891,6 +913,7 @@ export async function runAnomalyDetection(
         ai_explanation: aiResult?.explanation ?? null,
         causes: aiResult?.causes ?? null,
         acknowledged: false,
+        explanation_source: aiResult?.explanation ? 'ai' : 'rule',
       })
       .select()
       .single()
@@ -932,14 +955,141 @@ interface MonthBucket {
   earliestDate: Date
 }
 
+interface AvailabilityAnomalyStruct {
+  alertType: 'availability_high_demand' | 'availability_saturday_demand'
+  monthName: string
+  monthKey: string
+  bookedSlots: number
+  totalSlots: number
+  fillRatePct: number
+  saturdayFillPct: number
+  nonSaturdayFillPct: number
+  daysOut: number
+}
+
+/**
+ * Deterministic-template fallback for the availability anomaly explanation.
+ * Mirrors the strings used pre-LLM-narrator (AI-VS-TEMPLATED-AUDIT Finding #4)
+ * so behaviour at the cost-ceiling-closed edge is unchanged.
+ */
+function buildAvailabilityTemplateExplanation(s: AvailabilityAnomalyStruct): string {
+  if (s.alertType === 'availability_saturday_demand') {
+    return `Saturdays in ${s.monthName} are filling fast; weekdays still wide open.`
+  }
+  return (
+    `Unusually high demand for ${s.monthName} dates. ` +
+    `Currently ${s.bookedSlots}/${s.totalSlots} slots filled.`
+  )
+}
+
+/**
+ * Sonnet narrator for availability anomaly explanations. Takes the
+ * deterministic detector struct (fill rate, Saturday split, slot counts)
+ * and produces a 2-3 sentence ai_explanation in coordinator voice.
+ *
+ * Numbers contract: the narrator may reference fillRatePct,
+ * saturdayFillPct, nonSaturdayFillPct, bookedSlots, totalSlots, daysOut,
+ * and the month name. No other numbers. Returns null on any failure
+ * so the caller can fall back to the deterministic template.
+ *
+ * AI-VS-TEMPLATED-AUDIT Finding #4 (2026-05-09).
+ */
+async function getAvailabilityAnomalyExplanation(
+  venueId: string,
+  s: AvailabilityAnomalyStruct,
+): Promise<string | null> {
+  const systemPrompt = `You are a wedding venue operations analyst writing a short
+explanation of an availability anomaly that a coordinator will read on
+their dashboard. Output JSON with one field:
+  - explanation: 2-3 plain-English sentences describing the pattern and
+    why it matters for inventory / pricing decisions this week.
+
+The two anomaly flavours are:
+  - availability_high_demand: a month is filling unusually early (>80%
+    booked while still more than 60 days out). Frame as "demand pressure
+    on this month, lock in pricing or hold remaining dates carefully".
+  - availability_saturday_demand: Saturdays in a month are >90% filled
+    but weekdays are <30% filled. Frame as "Saturday is saturated,
+    consider weekday incentives or repositioning the Friday/Sunday slots".
+
+CRITICAL RULES:
+- Never invent numbers. The ONLY numbers you may reference are the ones
+  in the user prompt: overall fill rate %, Saturday fill rate %, weekday
+  fill rate %, booked slot count, total slot count, days until the
+  earliest date in the month. No other percentages, ratios, or counts.
+- Never mention specific couples, vendors, or competitors.
+- Never claim the venue WILL sell out / definitely book up. Use "is
+  trending toward", "is filling faster than usual", "looks tight".
+- Use neutral coordinator voice. No exclamation points.
+- 2-3 sentences. Coordinator-readable, not engineer-readable.
+- No em dashes anywhere.`
+
+  const userPrompt = `AVAILABILITY ANOMALY
+
+Anomaly type: ${s.alertType}
+Month: ${s.monthName}
+Days until earliest date in this month: ${s.daysOut}
+
+Slot counts:
+- Booked slots: ${s.bookedSlots}
+- Total slots: ${s.totalSlots}
+- Overall fill rate: ${s.fillRatePct}%
+
+Saturday vs weekday split:
+- Saturday fill rate: ${s.saturdayFillPct}%
+- Weekday fill rate: ${s.nonSaturdayFillPct}%
+
+Compose the JSON explanation. 2-3 sentences, plain English, no
+made-up numbers, no em dashes.`
+
+  try {
+    const result = await callAIJson<{ explanation?: string }>({
+      systemPrompt,
+      userPrompt,
+      maxTokens: 300,
+      temperature: 0.3,
+      venueId,
+      taskType: 'availability_anomaly_explanation',
+      tier: 'sonnet',
+      promptVersion: AVAILABILITY_ANOMALY_EXPLANATION_PROMPT_VERSION,
+    })
+    if (!result.explanation || typeof result.explanation !== 'string') return null
+    return result.explanation.trim()
+  } catch (err) {
+    console.warn(
+      '[anomaly] availability LLM explanation failed:',
+      redactError(err),
+    )
+    return null
+  }
+}
+
 /**
  * Detect seasonal availability anomalies: months with unusually high demand,
  * or months where Saturdays are filling fast while weekdays remain wide open.
  *
- * Reads venue_availability for the next 12 months. Uses static templates for
- * ai_explanation (no AI call). Idempotent via causes->>'source'='availability'
- * + causes->>'month' lookup. No-ops cleanly if the venue has no availability
- * rows yet (the data may simply not have been touched by the coordinator).
+ * Reads venue_availability for the next 12 months. The deterministic
+ * detector identifies the anomaly (the math IS the truth: 80%/60-day
+ * rule for high demand, 90%/30% rule for Saturday skew). The
+ * ai_explanation is then composed by a Sonnet narrator from a struct of
+ * those numbers; the column gets stamped with explanation_source='ai'.
+ *
+ * Fallback contract: when gateForBrainCall closes (cost ceiling at 100%)
+ * OR the LLM call fails OR returns an empty payload, we fall back to the
+ * deterministic template ("Saturdays in October are filling fast..." /
+ * "Unusually high demand for October dates...") and stamp
+ * explanation_source='template'. This keeps the prior behaviour as a
+ * safety net so the surface still produces SOMETHING when AI is paused.
+ *
+ * Idempotent via causes->>'source'='availability' + causes->>'month'
+ * lookup. No-ops cleanly if the venue has no availability rows yet.
+ *
+ * AI-VS-TEMPLATED-AUDIT Finding #4 (2026-05-09): pre-fix, both branches
+ * hardcoded the explanation string. Coordinators saw a real Sonnet
+ * hypothesis ("Heat dropped because the coordinator was on vacation
+ * Mar 10-17") and a templated string ("Saturdays in October are filling
+ * fast") under the same ai_explanation column. Migration 252 +
+ * explanation_source stamping closes that gap.
  */
 export async function detectAvailabilityAnomalies(
   venueId: string
@@ -1045,19 +1195,47 @@ export async function detectAvailabilityAnomalies(
 
     // Prefer the more specific Saturday signal over the general one when both
     // trip, so the venue sees one actionable alert, not two.
-    let alertType: string | null = null
-    let explanation: string | null = null
+    let alertType: 'availability_high_demand' | 'availability_saturday_demand' | null = null
     if (isSaturdayDemand) {
       alertType = 'availability_saturday_demand'
-      explanation = `Saturdays in ${monthName} are filling fast; weekdays still wide open.`
     } else if (isHighDemand) {
       alertType = 'availability_high_demand'
-      explanation =
-        `Unusually high demand for ${monthName} dates. ` +
-        `Currently ${b.bookedSlots}/${b.totalSlots} slots filled.`
     }
 
-    if (!alertType || !explanation) continue
+    if (!alertType) continue
+
+    // Build the deterministic struct the narrator will work from. Every
+    // number here came from the rule-based detector above; the LLM is
+    // forbidden from referencing anything else.
+    const struct: AvailabilityAnomalyStruct = {
+      alertType,
+      monthName,
+      monthKey: key,
+      bookedSlots: b.bookedSlots,
+      totalSlots: b.totalSlots,
+      fillRatePct: Math.round(fillRate * 100),
+      saturdayFillPct: Math.round(satFill * 100),
+      nonSaturdayFillPct: Math.round(nonSatFill * 100),
+      daysOut,
+    }
+
+    // LLM narrator with cost-ceiling gate. When closed OR Sonnet fails,
+    // fall back to the deterministic template. explanation_source
+    // (migration 252) records which path produced the row.
+    let explanation: string | null = null
+    let explanationSource: 'ai' | 'template' = 'template'
+    const gate = await gateForBrainCall(venueId)
+    if (gate.ok) {
+      const aiExplanation = await getAvailabilityAnomalyExplanation(venueId, struct)
+      if (aiExplanation) {
+        explanation = aiExplanation
+        explanationSource = 'ai'
+      }
+    }
+    if (!explanation) {
+      explanation = buildAvailabilityTemplateExplanation(struct)
+      explanationSource = 'template'
+    }
 
     // Idempotent upsert: look for an existing row with the same source+month.
     const { data: existing, error: existingErr } = await supabase
@@ -1102,6 +1280,7 @@ export async function detectAvailabilityAnomalies(
           severity,
           ai_explanation: explanation,
           causes,
+          explanation_source: explanationSource,
         })
         .eq('id', existing[0].id)
         .select()
@@ -1128,6 +1307,7 @@ export async function detectAvailabilityAnomalies(
         ai_explanation: explanation,
         causes,
         acknowledged: false,
+        explanation_source: explanationSource,
       })
       .select()
       .single()
