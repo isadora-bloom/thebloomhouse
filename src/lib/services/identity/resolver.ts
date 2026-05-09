@@ -213,7 +213,29 @@ async function findByEmailExact(
     .is('merged_into_id', null)
     .order('created_at', { ascending: true })
     .limit(1)
-  return (data && data[0]) ? (data[0] as PersonHit) : null
+  if (data && data[0]) return data[0] as PersonHit
+
+  // Wave 2C: also check alias_emails (mig 194). The Naina-case bug —
+  // first wedding had a Knot relay email like
+  // `naina.davidar.<hash>@member.theknot.com`, the WeddingPro close-out
+  // arrived under a different from_email shape. The alias-merge sweep
+  // (people-merge-aliases.ts) eventually folds the relay alias under
+  // the canonical row's `alias_emails` jsonb array; subsequent lookups
+  // by either email shape should match the canonical row directly
+  // rather than minting a fresh person + wedding.
+  //
+  // Postgres `?` operator on text arrays / jsonb works through
+  // PostgREST as `cs` (contains); we use a `contains` filter with a
+  // single-element array.
+  const { data: aliasData } = await supabase
+    .from('people')
+    .select('id, venue_id, wedding_id, email, phone, first_name, last_name, merged_into_id')
+    .eq('venue_id', venueId)
+    .contains('alias_emails', [norm])
+    .is('merged_into_id', null)
+    .order('created_at', { ascending: true })
+    .limit(1)
+  return (aliasData && aliasData[0]) ? (aliasData[0] as PersonHit) : null
 }
 
 async function findByEmailCanonical(
@@ -356,6 +378,61 @@ async function findActiveWeddingForPerson(
   return (w as WeddingHit | null) ?? null
 }
 
+/**
+ * Wave 2C — list ALL non-tombstoned weddings for a person at a venue,
+ * ordered by inquiry_date DESC. Used by the same-person multi-wedding
+ * rule to decide between attaching to a non-terminal existing wedding
+ * vs. minting a new re-engagement-after-loss wedding linked via
+ * previous_wedding_id.
+ *
+ * Naina-case (RM-0200 lost → RM-0204 re-engagement): the existing
+ * `findActiveWeddingForPerson` returns whichever wedding the person.
+ * wedding_id pointer or the most-recent interaction lands on. That's
+ * fine when the matched wedding is non-terminal, but when it's
+ * terminal (lost / cancelled / completed) and a fresh inquiry arrives
+ * for the SAME PERSON, the right move is to mint a NEW wedding so
+ * coordinator funnel + intel rollups treat the re-engagement as
+ * what it is: a fresh opportunity. Linking back via
+ * `previous_wedding_id` keeps the forensic record intact per
+ * Constitution.
+ */
+async function listWeddingsForPerson(
+  supabase: SupabaseClient,
+  venueId: string,
+  personId: string
+): Promise<WeddingHit[]> {
+  // Gather candidate wedding ids from both paths and dedupe.
+  const ids = new Set<string>()
+  const { data: person } = await supabase
+    .from('people')
+    .select('wedding_id')
+    .eq('id', personId)
+    .maybeSingle()
+  const directWeddingId = (person?.wedding_id as string | null) ?? null
+  if (directWeddingId) ids.add(directWeddingId)
+
+  const { data: interactions } = await supabase
+    .from('interactions')
+    .select('wedding_id')
+    .eq('person_id', personId)
+    .eq('venue_id', venueId)
+    .not('wedding_id', 'is', null)
+  if (interactions) {
+    for (const i of interactions as Array<{ wedding_id: string | null }>) {
+      if (i.wedding_id) ids.add(i.wedding_id)
+    }
+  }
+  if (ids.size === 0) return []
+  const { data: weddings } = await supabase
+    .from('weddings')
+    .select('id, status, wedding_date, inquiry_date, merged_into_id')
+    .in('id', [...ids])
+    .eq('venue_id', venueId)
+    .is('merged_into_id', null)
+    .order('inquiry_date', { ascending: false, nullsFirst: false })
+  return ((weddings ?? []) as WeddingHit[])
+}
+
 // ---------------------------------------------------------------------------
 // Wedding identity-conflict signal
 // ---------------------------------------------------------------------------
@@ -447,16 +524,37 @@ export async function resolveCanonicalPerson(
 async function createPerson(
   supabase: SupabaseClient,
   venueId: string,
-  signals: IdentitySignals
+  signals: IdentitySignals,
+  sourceLabel: string | null,
 ): Promise<string | null> {
-  const first = firstNameOf(signals.fullName ?? signals.partner1Name)
-    ?? (signals.email ? signals.email.split('@')[0] : null)
-  const last = lastNameOf(signals.fullName ?? signals.partner1Name)
+  // Wave 2B: route the resolver's createPerson through the identity
+  // name-capture chokepoint instead of writing first/last directly. The
+  // legacy fallback `signals.email.split('@')[0]` is the bug that
+  // produced `Rosaliehoyle` from `rosaliehoyle@gmail.com` — the chokepoint
+  // shape detector classifies that as `username` and routes it to
+  // `display_handle` instead of `first_name`.
+  //
+  // Strategy:
+  //   1. INSERT the people row with NULL first/last,
+  //   2. capture every available signal through the chokepoint (which
+  //      runs the picker and dual-writes the legacy columns).
+  //
+  // Each resolver caller passes a sourceLabel ("calculator",
+  // "knot_relay", "calendly", "email_pipeline", "brain_dump",
+  // "coordinator_csv", "crm_import:<provider>"). We map that to the
+  // most-honest NameSource for the chokepoint via pickNameSourceForLabel.
+  const importedSource = pickNameSourceForLabel(sourceLabel)
+
+  // Lazy-import the chokepoint so resolver doesn't pay the import cost
+  // when resolveIdentity is called from cold paths that never create a
+  // new person.
+  const { captureNameEvidence } = await import('./name-capture')
+
   const insert: Record<string, unknown> = {
     venue_id: venueId,
     role: 'partner1',
-    first_name: first,
-    last_name: last,
+    first_name: null,
+    last_name: null,
   }
   if (signals.email) insert.email = normalizeEmail(signals.email) ?? signals.email
   if (signals.phone) insert.phone = normalizePhone(signals.phone)
@@ -469,19 +567,83 @@ async function createPerson(
     console.error('[identity/resolver] createPerson failed:', error?.message)
     return null
   }
-  return data.id as string
+  const personId = data.id as string
+
+  // Now route every available name signal through the chokepoint. Order
+  // doesn't matter — the picker will pick by confidence.
+  try {
+    const fullForCapture = signals.fullName ?? signals.partner1Name
+    if (fullForCapture) {
+      await captureNameEvidence(supabase, personId, {
+        full: fullForCapture,
+        email: signals.email ?? null,
+        source: importedSource,
+      })
+    }
+    if (signals.email) {
+      // Always also try the email-handle parse — the chokepoint already
+      // routes username-shaped local-parts to display_handle and only
+      // promotes a real-name-shaped local-part (e.g. "rosalie.hoyle").
+      // Confidence is intentionally low (20).
+      await captureNameEvidence(supabase, personId, {
+        email: signals.email,
+        full: null,
+        source: 'email_handle_parse',
+      })
+    }
+  } catch (err) {
+    // Capture must never break the resolver. Legacy callers will see
+    // the row with null first/last; the picker will run when the next
+    // signal arrives.
+    console.warn('[identity/resolver] name-capture in createPerson failed:',
+      err instanceof Error ? err.message : err)
+  }
+
+  return personId
+}
+
+/**
+ * Map the resolver's free-text sourceLabel to the chokepoint's
+ * NameSource enum. Conservative on unknowns.
+ */
+function pickNameSourceForLabel(label: string | null):
+  | 'calculator_form'
+  | 'knot_relay'
+  | 'weddingwire_relay'
+  | 'gmail_from_name'
+  | 'form_relay'
+  | 'brain_dump_note'
+  | 'csv_import'
+  | 'partner_mention_in_body'
+{
+  const v = (label ?? '').toLowerCase()
+  if (!v) return 'form_relay'
+  if (v.includes('calculator') || v.includes('web_form') || v.includes('webform')) return 'calculator_form'
+  if (v.includes('knot')) return 'knot_relay'
+  if (v.includes('weddingwire') || v.includes('wedding_wire')) return 'weddingwire_relay'
+  if (v.includes('email_pipeline') || v.includes('gmail') || v.includes('email-pipeline')) return 'gmail_from_name'
+  if (v.includes('calendly') || v.includes('form_relay') || v.includes('form-relay')) return 'form_relay'
+  if (v.includes('brain') || v.includes('dump')) return 'brain_dump_note'
+  if (v.includes('csv') || v.includes('crm_import') || v.includes('coordinator')) return 'csv_import'
+  if (v.includes('partner_mention') || v.includes('body_extraction')) return 'partner_mention_in_body'
+  return 'form_relay'
 }
 
 async function createWedding(
   supabase: SupabaseClient,
   venueId: string,
   signals: IdentitySignals,
-  sourceLabel: string | null
+  sourceLabel: string | null,
+  previousWeddingId: string | null = null,
 ): Promise<string | null> {
   // source_provenance is CHECK-constrained; we pin it to the new
   // 'identity_resolver' value (migration 247) and stash the human-readable
   // sourceLabel on weddings.notes for the audit trail. Anything else
   // would violate the constraint added in migration 178.
+  //
+  // Wave 2C: previousWeddingId set when this wedding is a
+  // re-engagement-after-loss for a person whose only existing wedding
+  // is terminal. The FK was added in migration 257.
   const insert: Record<string, unknown> = {
     venue_id: venueId,
     status: 'inquiry',
@@ -490,7 +652,14 @@ async function createWedding(
     heat_score: 0,
     temperature_tier: 'cool',
     source_provenance: 'identity_resolver',
-    notes: sourceLabel ? `[identity-resolver: ${sourceLabel}]` : null,
+    notes: sourceLabel
+      ? (previousWeddingId
+          ? `[identity-resolver: ${sourceLabel}; re-engagement of ${previousWeddingId}]`
+          : `[identity-resolver: ${sourceLabel}]`)
+      : null,
+  }
+  if (previousWeddingId) {
+    insert.previous_wedding_id = previousWeddingId
   }
   const { data, error } = await supabase
     .from('weddings')
@@ -498,6 +667,21 @@ async function createWedding(
     .select('id')
     .single()
   if (error || !data) {
+    // mig-257-not-yet-applied: retry without previous_wedding_id so the
+    // resolver doesn't crash on a fresh checkout that hasn't run
+    // migrations. This mirrors the chokepoint pattern in name-capture.ts.
+    if (previousWeddingId && error?.code === '42703') {
+      const fallback = { ...insert }
+      delete fallback.previous_wedding_id
+      const { data: data2, error: error2 } = await supabase
+        .from('weddings')
+        .insert(fallback)
+        .select('id')
+        .single()
+      if (!error2 && data2) return data2.id as string
+      console.error('[identity/resolver] createWedding (mig-257-fallback) failed:', error2?.message)
+      return null
+    }
     console.error('[identity/resolver] createWedding failed:', error?.message)
     return null
   }
@@ -548,8 +732,17 @@ export async function resolveIdentity(
     // tombstones, but a race could plant one between the SELECT and now.
     personId = await resolveCanonicalPerson(supabase, hit.id)
     // Backfill empty fields on the canonical row from the incoming signal.
-    // Never overwrite — only fill nulls. This is how the canonical row
-    // accumulates phone/email/name across multi-touch journeys.
+    // Email + phone are non-name flat columns — keep the legacy never-
+    // overwrite rule (only fill nulls).
+    //
+    // Wave 2B: site #8. The legacy "fill if null" name backfill is the
+    // path that left junk-first names ("Erinhorrigan", "Rosaliehoyle")
+    // un-fixable once they landed first. Replace the direct first_name
+    // / last_name update with a chokepoint capture so the picker decides
+    // whether the new signal beats the existing column. The chokepoint
+    // dual-writes the flat columns when its picker confidence beats the
+    // current name_confidence — preserving the email-canonical match
+    // path while letting better signals override junk.
     const updates: Record<string, unknown> = {}
     if (signals.email && !hit.email) {
       updates.email = normalizeEmail(signals.email) ?? signals.email
@@ -557,18 +750,43 @@ export async function resolveIdentity(
     if (signals.phone && !hit.phone) {
       updates.phone = normalizePhone(signals.phone)
     }
-    if (signals.fullName) {
-      const fn = firstNameOf(signals.fullName)
-      const ln = lastNameOf(signals.fullName)
-      if (fn && !hit.first_name) updates.first_name = fn
-      if (ln && !hit.last_name) updates.last_name = ln
-    }
     if (Object.keys(updates).length > 0) {
       await supabase.from('people').update(updates).eq('id', personId)
     }
+    // Route name signals through the chokepoint instead of a direct
+    // column write. Picker confidence + existing name_confidence
+    // arbitrate, so a calculator_form signal arriving second (95) can
+    // overwrite a gmail_from_name first signal that scored 5 (username
+    // shape).
+    if (signals.fullName || signals.partner1Name || signals.email) {
+      try {
+        const { captureNameEvidence } = await import('./name-capture')
+        const importedSource = pickNameSourceForLabel(sourceLabel)
+        const fullForCapture = signals.fullName ?? signals.partner1Name
+        if (fullForCapture) {
+          await captureNameEvidence(supabase, personId, {
+            full: fullForCapture,
+            email: signals.email ?? null,
+            source: importedSource,
+          })
+        }
+        if (signals.email) {
+          await captureNameEvidence(supabase, personId, {
+            email: signals.email,
+            full: null,
+            source: 'email_handle_parse',
+          })
+        }
+      } catch (err) {
+        // Best-effort. Legacy flow already returned a person; the picker
+        // will catch up on the next signal.
+        console.warn('[identity/resolver] name-capture (canon backfill) failed:',
+          err instanceof Error ? err.message : err)
+      }
+    }
   } else {
     // Step 5: create new
-    const newId = await createPerson(supabase, venueId, signals)
+    const newId = await createPerson(supabase, venueId, signals, sourceLabel)
     if (!newId) {
       throw new Error('identity/resolver: createPerson failed; cannot proceed')
     }
@@ -580,10 +798,43 @@ export async function resolveIdentity(
   // -------------------------------------------------------------------------
   // Wedding side: pick or create.
   // -------------------------------------------------------------------------
+  // Wave 2C — same-person multi-wedding rule (Naina case).
+  //
+  // Walk every non-tombstoned wedding for the matched person at this
+  // venue. The picker fires three branches:
+  //
+  //   A. The person has at least one NON-TERMINAL wedding (inquiry /
+  //      tour_scheduled / proposal_sent / booked / etc.). Attach to the
+  //      most-recent non-terminal wedding — re-engagement on an open
+  //      file is normal, not a fresh wedding. This is what
+  //      `findActiveWeddingForPerson` did before the patch.
+  //
+  //   B. The person's ONLY weddings are terminal (lost / cancelled /
+  //      completed). The new arrival is legitimately a fresh
+  //      opportunity — re-engagement after loss, second wedding,
+  //      whatever. Mint a NEW wedding and stamp `previous_wedding_id`
+  //      so the coordinator surface can render history.
+  //
+  //   C. The person has no wedding at all. Mint a fresh wedding (the
+  //      pre-patch fall-through branch).
+  //
+  // Branches B and C both go through createWedding. Branch B is the
+  // new behaviour and the audit fix. Branch A preserves the
+  // pre-existing behaviour exactly so we don't churn the common case.
   let weddingId: string
   let isNewWedding = false
-  const wedding = await findActiveWeddingForPerson(supabase, venueId, personId)
-  if (wedding) {
+  const allWeddings = await listWeddingsForPerson(supabase, venueId, personId)
+  const nonTerminalWedding = allWeddings.find(
+    (w) => !TERMINAL_STATUSES.has((w.status ?? '').toLowerCase())
+  ) ?? null
+  // Most-recent terminal wedding (for branch B's previous_wedding_id link).
+  const mostRecentTerminalWedding = allWeddings.find(
+    (w) => TERMINAL_STATUSES.has((w.status ?? '').toLowerCase())
+  ) ?? null
+
+  if (nonTerminalWedding) {
+    // Branch A — attach to existing non-terminal wedding.
+    const wedding = nonTerminalWedding
     weddingId = wedding.id
     // Conflict check: incoming wedding_date vs stored. Only fires when both
     // sides are populated AND the wedding is non-terminal (a completed
@@ -591,8 +842,7 @@ export async function resolveIdentity(
     if (
       signals.weddingDate &&
       wedding.wedding_date &&
-      wedding.wedding_date !== signals.weddingDate &&
-      !TERMINAL_STATUSES.has((wedding.status ?? '').toLowerCase())
+      wedding.wedding_date !== signals.weddingDate
     ) {
       const apart = daysBetween(wedding.wedding_date, signals.weddingDate)
       if (apart > 90) {
@@ -608,7 +858,52 @@ export async function resolveIdentity(
       .update({ wedding_id: weddingId })
       .eq('id', personId)
       .is('wedding_id', null)
+  } else if (mostRecentTerminalWedding) {
+    // Branch B — re-engagement after loss. Mint a new wedding linked
+    // back to the previous via previous_wedding_id (mig 257). Keeps the
+    // coordinator funnel honest: a lost wedding stays lost, a fresh
+    // inquiry from the same person counts as a fresh inquiry, and the
+    // history thread is preserved.
+    const newWeddingId = await createWedding(
+      supabase,
+      venueId,
+      signals,
+      sourceLabel ? `${sourceLabel}:re-engagement` : 're-engagement',
+      mostRecentTerminalWedding.id,
+    )
+    if (!newWeddingId) {
+      throw new Error('identity/resolver: createWedding (re-engagement) failed; cannot proceed')
+    }
+    weddingId = newWeddingId
+    isNewWedding = true
+    // Re-point the person to the FRESH wedding so future signals from
+    // the same human attach here, not back on the terminal record.
+    await supabase.from('people')
+      .update({ wedding_id: weddingId })
+      .eq('id', personId)
+
+    // Surface the re-engagement to the coordinator so they're aware of
+    // the history. Best-effort; never fails the resolver.
+    try {
+      await supabase.from('admin_notifications').insert({
+        venue_id: venueId,
+        type: 'identity_re_engagement',
+        title: 'Re-engagement detected — fresh wedding minted',
+        body:
+          `Identity resolver matched person ${personId} to a previous ` +
+          `wedding (${mostRecentTerminalWedding.id}, status=` +
+          `${mostRecentTerminalWedding.status ?? 'unknown'}). The new arrival ` +
+          `was treated as a fresh opportunity and a new wedding ` +
+          `(${weddingId}) was minted, linked back via previous_wedding_id. ` +
+          `Source: ${sourceLabel ?? 'unknown'}.`,
+        priority: 'normal',
+        wedding_id: weddingId,
+      })
+    } catch (err) {
+      console.warn('[identity/resolver] re-engagement notification insert failed:', err)
+    }
   } else {
+    // Branch C — fresh person, fresh wedding.
     const newWeddingId = await createWedding(supabase, venueId, signals, sourceLabel)
     if (!newWeddingId) {
       throw new Error('identity/resolver: createWedding failed; cannot proceed')

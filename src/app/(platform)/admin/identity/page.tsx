@@ -17,7 +17,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { GitMerge, ArrowRight, AlertCircle, Users, Calendar } from 'lucide-react'
+import { GitMerge, ArrowRight, AlertCircle, Users, Calendar, Network } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 
@@ -122,6 +122,16 @@ export default function IdentityAdminPage() {
             the pointer to the canonical row.
           </p>
         </div>
+        {/* Wave 2C stub — surfaces the handle-merge-proposals endpoint.
+            Full UI lands in Wave 2D; this is a read-the-JSON link for now. */}
+        <Link
+          href="/api/admin/identity/handle-merge-proposals"
+          className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-sage-300 bg-warm-white text-sm text-sage-700 hover:bg-sage-50 whitespace-nowrap"
+          title="Cross-platform handle convergence proposals (Wave 2C — JSON)"
+        >
+          <Network className="w-4 h-4" />
+          Handle merge proposals
+        </Link>
       </header>
 
       {error && (
