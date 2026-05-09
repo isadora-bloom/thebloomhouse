@@ -112,7 +112,22 @@ export function NotificationBell({ venueId }: { venueId: string }) {
     if (type === 'escalation') return 'Escalation'
     if (type === 'auto_send_pending') return 'Auto-send pending'
     if (type === 'sage_uncertain') return 'Needs review'
+    if (type === 'source_freshness_reminder') return 'Source upload due'
     return type.replace(/_/g, ' ')
+  }
+
+  /**
+   * Route a notification to its actionable surface. Returning null
+   * means the row is informational only (no click-through).
+   */
+  function typeHref(type: string): string | null {
+    if (type === 'source_freshness_reminder') return '/intel/sources/track'
+    if (type === 'payment_failed') return '/settings/billing'
+    if (type === 'subscription_canceled') return '/settings/billing'
+    if (type === 'escalation') return '/agent/inbox'
+    if (type === 'auto_send_pending') return '/agent/inbox'
+    if (type === 'sage_uncertain') return '/agent/inbox'
+    return null
   }
 
   return (
@@ -159,9 +174,10 @@ export function NotificationBell({ venueId }: { venueId: string }) {
             </div>
           ) : (
             <ul className="max-h-96 overflow-y-auto divide-y divide-border">
-              {notifications.map((n) => (
-                <li key={n.id} className="flex items-start gap-3 px-4 py-3 hover:bg-sage-50 transition-colors">
-                  <div className="flex-1 min-w-0">
+              {notifications.map((n) => {
+                const href = typeHref(n.type)
+                const innerBody = (
+                  <>
                     <div className="flex items-center gap-1.5 mb-0.5">
                       <span
                         className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${
@@ -181,17 +197,35 @@ export function NotificationBell({ venueId }: { venueId: string }) {
                     <p className="text-[11px] text-sage-400 mt-1">
                       {formatDistanceToNow(new Date(n.created_at), { addSuffix: true })}
                     </p>
-                  </div>
-                  <button
-                    onClick={() => markRead(n.id)}
-                    className="flex-shrink-0 mt-0.5 text-sage-300 hover:text-sage-500 transition-colors"
-                    aria-label="Mark as read"
-                    title="Mark as read"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </li>
-              ))}
+                  </>
+                )
+                return (
+                  <li key={n.id} className="flex items-start gap-3 px-4 py-3 hover:bg-sage-50 transition-colors">
+                    {href ? (
+                      <a
+                        href={href}
+                        className="flex-1 min-w-0"
+                        onClick={() => {
+                          setOpen(false)
+                          markRead(n.id)
+                        }}
+                      >
+                        {innerBody}
+                      </a>
+                    ) : (
+                      <div className="flex-1 min-w-0">{innerBody}</div>
+                    )}
+                    <button
+                      onClick={() => markRead(n.id)}
+                      className="flex-shrink-0 mt-0.5 text-sage-300 hover:text-sage-500 transition-colors"
+                      aria-label="Mark as read"
+                      title="Mark as read"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           )}
 

@@ -159,6 +159,10 @@
     {
       "path": "/api/cron?job=booked_data_recovery",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron?job=source_freshness",
+      "schedule": "0 9 * * *"
     }
   ]
 }

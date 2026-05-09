@@ -49,6 +49,10 @@ import { mergePeopleAliasesAllVenues } from '@/lib/services/identity/people-merg
 import { classifyTourOutcomesAllVenues } from '@/lib/services/tour/outcome-classifier'
 import { recoverBookedDataAllVenues } from '@/lib/services/booked-data-recovery'
 import { runTelemetryRetentionPrune } from '@/lib/services/telemetry-retention'
+import {
+  computeFreshnessReports,
+  suggestNextCadence,
+} from '@/lib/services/intel/source-freshness'
 
 // ---------------------------------------------------------------------------
 // Valid job names
@@ -224,6 +228,15 @@ const VALID_JOBS = [
   // paused; Day 30 read-only. Forward-only state machine on
   // venues.dunning_stage; idempotent re-runs.
   'dunning_escalate',
+  // 2026-05-09. Source-freshness AI monitor. Reads tracked_sources for
+  // every venue, compares the most-recent marketing_spend upload per
+  // source against the row's expected cadence, and fires
+  // admin_notifications (type='source_freshness_reminder') when a row
+  // crosses cadence. Suppression: 7d since last reminder, 14d since
+  // last coordinator dismissal. Stamps last_reminded_at on fire so
+  // the next tick is a no-op until either suppression expires or the
+  // coordinator uploads (which collapses the gap).
+  'source_freshness',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -584,6 +597,16 @@ async function runJob(job: JobName): Promise<unknown> {
       // no AI. Sequenced 03:00 UTC, BEFORE tour_outcome_classifier
       // (06:00) so dedup-merged rows are not re-classified.
       return recoverBookedDataAllVenues()
+
+    case 'source_freshness':
+      // 2026-05-09. Daily fan-out across every venue. For each tracked
+      // source the cron computes current_gap_days vs expected cadence
+      // and, when overdue + suppression windows have expired, inserts
+      // an admin_notifications row + stamps last_reminded_at. The
+      // page at /intel/sources/track + the banner on /intel/sources
+      // both read the same FreshnessReport[] so coordinator state is
+      // single-sourced.
+      return runSourceFreshnessSweep()
   }
 }
 
@@ -816,6 +839,100 @@ async function runConsumerRequestsExpire(): Promise<{
   }
   console.log(`[consumer_requests_expire] rows_expired=${updated}` + (errors.length ? ` errors=${errors.length}` : ''))
   return { rows_expired: updated, errors }
+}
+
+/**
+ * 2026-05-09. Source-freshness sweep. Daily fan-out across every venue
+ * (active rows in venues; we filter on plan_tier IS NOT NULL to skip
+ * tombstoned / pre-onboarding venues). For each venue we compute the
+ * full FreshnessReport[] then fire admin_notifications for any row
+ * with `reminder_due === true`. After a successful insert we stamp
+ * tracked_sources.last_reminded_at so the next tick is a no-op until
+ * the suppression window expires.
+ *
+ * Returns a small rollup — venues scanned, reminders fired, errors —
+ * for cron telemetry. Failures on a single venue are logged + counted
+ * but never abort the sweep.
+ */
+async function runSourceFreshnessSweep(): Promise<{
+  venues_scanned: number
+  reminders_fired: number
+  errors: number
+}> {
+  const supabase = createServiceClient()
+
+  const { data: venues, error: venuesErr } = await supabase
+    .from('venues')
+    .select('id, name')
+    .not('plan_tier', 'is', null)
+
+  if (venuesErr) {
+    console.error('[source_freshness] venues lookup failed:', venuesErr)
+    return { venues_scanned: 0, reminders_fired: 0, errors: 1 }
+  }
+
+  const venueRows = (venues ?? []) as Array<{ id: string; name: string | null }>
+  let venuesScanned = 0
+  let remindersFired = 0
+  let errors = 0
+  const nowIso = new Date().toISOString()
+
+  for (const venue of venueRows) {
+    try {
+      const reports = await computeFreshnessReports(venue.id)
+      venuesScanned += 1
+
+      const due = reports.filter((r) => r.reminder_due)
+      for (const r of due) {
+        const monthKey = nowIso.slice(0, 7)
+        await createNotification({
+          venueId: r.venueId,
+          type: 'source_freshness_reminder',
+          title: `Time to upload ${r.source_label} for ${monthKey}`,
+          body: JSON.stringify({
+            source_key: r.source_key,
+            source_label: r.source_label,
+            last_upload_at: r.last_upload_at,
+            current_gap_days: r.current_gap_days,
+            expected_cadence_days: r.expected_cadence_days,
+            status: r.status,
+            suggested_next_cadence: suggestNextCadence(r),
+          }),
+          priority: 'normal',
+        })
+
+        // Stamp last_reminded_at so suppression kicks in. We update
+        // by composite key (venue_id, source_key) — the unique
+        // constraint guarantees one row.
+        const { error: stampErr } = await supabase
+          .from('tracked_sources')
+          .update({ last_reminded_at: nowIso })
+          .eq('venue_id', r.venueId)
+          .eq('source_key', r.source_key)
+        if (stampErr) {
+          console.error(
+            `[source_freshness] stamp failed for ${r.venueId}/${r.source_key}:`,
+            stampErr,
+          )
+          errors += 1
+          continue
+        }
+        remindersFired += 1
+      }
+    } catch (err) {
+      errors += 1
+      console.error(`[source_freshness] venue ${venue.id} failed:`, err)
+    }
+  }
+
+  console.log(
+    `[source_freshness] venues_scanned=${venuesScanned} reminders_fired=${remindersFired} errors=${errors}`,
+  )
+  return {
+    venues_scanned: venuesScanned,
+    reminders_fired: remindersFired,
+    errors,
+  }
 }
 
 /**

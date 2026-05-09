@@ -21,6 +21,7 @@ import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { SpendImporter } from '@/components/intel/spend-importer'
 import { ReEngagementROIPanel } from '@/components/intel/ReEngagementROIPanel'
+import { SourceFreshnessBanner } from '@/components/intel/source-freshness-banner'
 import {
   formatSourceLabel,
   isUntrackedKey,
@@ -1789,6 +1790,9 @@ export default function SourceAttributionPage() {
           </p>
         )}
       </div>
+
+      {/* ---- Source-freshness banner (only renders when overdue uploads exist) ---- */}
+      <SourceFreshnessBanner />
 
       {/* ---- Attribution model selector + backtrace link ---- */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
