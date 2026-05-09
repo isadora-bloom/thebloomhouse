@@ -487,8 +487,20 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
 
   // Brand asset handlers
   const handleAddAsset = useCallback(async () => {
-    if (!scope.venueId || !newAssetLabel.trim() || !newAssetUrl.trim()) return
+    if (!scope.venueId) {
+      setAssetUploadError('Pick a venue first.')
+      return
+    }
+    if (!newAssetLabel.trim()) {
+      setAssetUploadError('Add a label so you can find this asset later.')
+      return
+    }
+    if (!newAssetUrl.trim()) {
+      setAssetUploadError('Upload a file or paste a URL before saving.')
+      return
+    }
     setSavingAsset(true)
+    setAssetUploadError(null)
     const { data, error } = await supabase
       .from('brand_assets')
       .insert({
@@ -511,6 +523,13 @@ function VenueSettings({ scope }: { scope: Scope & { loading: boolean } }) {
       setBrandAssets((prev) => [...prev, data as BrandAsset])
       resetAssetForm()
       setShowAssetForm(false)
+    } else {
+      // Surface the actual failure so the coordinator does not stare
+      // at a frozen modal. The previous code dropped the error on the
+      // floor and the spinner just stopped, leaving no clue.
+      console.error('[settings] brand asset insert failed:', error)
+      const msg = error?.message ?? 'Save failed for an unknown reason.'
+      setAssetUploadError(`Save failed: ${msg}`)
     }
     setSavingAsset(false)
   }, [
