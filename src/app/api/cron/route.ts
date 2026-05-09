@@ -917,8 +917,15 @@ async function runSourceFreshnessSweep(): Promise<{
       const due = reports.filter((r) => r.reminder_due)
       for (const r of due) {
         const monthKey = nowIso.slice(0, 7)
-        await createNotification({
-          venueId: r.venueId,
+        // Direct insert (bypassing createNotification's 5-minute
+        // dedup on (venue_id, type)). Suppression here is owned by
+        // tracked_sources.last_reminded_at (7d) + last_dismissed_at
+        // (14d), which run per-source. If we fanned through
+        // createNotification, a venue with multiple overdue sources
+        // would only fire ONE reminder per cron tick — every source
+        // after the first would collide on the 5-minute dedup key.
+        const { error: insertErr } = await supabase.from('admin_notifications').insert({
+          venue_id: r.venueId,
           type: 'source_freshness_reminder',
           title: `Time to upload ${r.source_label} for ${monthKey}`,
           body: JSON.stringify({
@@ -932,6 +939,14 @@ async function runSourceFreshnessSweep(): Promise<{
           }),
           priority: 'normal',
         })
+        if (insertErr) {
+          console.error(
+            `[source_freshness] notification insert failed for ${r.venueId}/${r.source_key}:`,
+            insertErr,
+          )
+          errors += 1
+          continue
+        }
 
         // Stamp last_reminded_at so suppression kicks in. We update
         // by composite key (venue_id, source_key) — the unique
