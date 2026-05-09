@@ -18,7 +18,7 @@ export async function GET() {
   const supabase = createServiceClient()
   const { data, error } = await supabase
     .from('brain_dump_pattern_grants')
-    .select('id, pattern_signature, description, intent, routed_table, routed_action, granted_at, granted_by, hit_count, last_used_at, revoked_at')
+    .select('id, pattern_signature, description, intent, routed_table, routed_action, granted_at, granted_by, hit_count, last_used_at, revoked_at, is_active')
     .eq('venue_id', auth.venueId)
     .order('granted_at', { ascending: false })
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

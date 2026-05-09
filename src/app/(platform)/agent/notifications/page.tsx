@@ -6,6 +6,7 @@ import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { BrainDumpClarifications } from '@/components/agent/brain-dump-clarifications'
+import { ActiveGrantsBanner } from '@/components/agent/active-grants-banner'
 import { formatSourceLabel } from '@/lib/utils/format-source-label'
 import {
   Bell,
@@ -164,6 +165,53 @@ function timeAgo(dateStr: string): string {
   if (hours < 24) return `${hours}h ago`
   const days = Math.floor(hours / 24)
   return `${days}d ago`
+}
+
+/**
+ * Render a brain_dump_grant_fired notification body. The body is JSON
+ * carrying entryId / signature / intent / grantId / routedTable plus
+ * an inserted/preview snippet. Default rendering would dump the raw
+ * JSON; this helper makes it human-readable. Bug 6 (2026-05-09).
+ */
+interface GrantFiredBodyShape {
+  entryId?: string
+  signature?: string
+  intent?: string
+  grantId?: string
+  routedTable?: string
+  inserted?: number
+  notePreview?: string
+}
+
+function GrantFiredBody({ body }: { body: string }) {
+  let parsed: GrantFiredBodyShape | null
+  try {
+    parsed = JSON.parse(body) as GrantFiredBodyShape
+  } catch {
+    return <p className="text-xs text-sage-500 truncate mt-0.5">{body}</p>
+  }
+  if (!parsed) return null
+  const tableLabel = parsed.routedTable === 'knowledge_base'
+    ? 'knowledge base'
+    : parsed.routedTable === 'knowledge_gaps'
+      ? 'knowledge gaps'
+      : parsed.routedTable ?? 'a downstream table'
+  const detail = parsed.inserted !== undefined
+    ? `${parsed.inserted} row${parsed.inserted === 1 ? '' : 's'} into ${tableLabel}`
+    : parsed.notePreview
+      ? `to ${tableLabel}: "${parsed.notePreview}"`
+      : `to ${tableLabel}`
+  return (
+    <p className="text-xs text-sage-500 mt-0.5">
+      Routed {detail}.{' '}
+      <a
+        href="/agent/brain-dump/grants"
+        className="text-sage-700 underline hover:text-sage-900"
+      >
+        Manage rule
+      </a>
+    </p>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,6 +1058,9 @@ export default function NotificationsPage() {
         </div>
       )}
 
+      {/* ---- Active grants banner (Bug 6 — 2026-05-09) ---- */}
+      <ActiveGrantsBanner />
+
       {/* ---- Phase B candidate review pile-ups (gap F — 2026-04-30) ---- */}
       <PhaseBPileupCard scope={scope} />
 
@@ -1084,9 +1135,16 @@ export default function NotificationsPage() {
                       {notif.title}
                     </p>
                     {showVenueChip && <VenueChip venueName={notif.venue_name} />}
+                    {notif.type === 'brain_dump_grant_fired' && (
+                      <span className="text-[10px] font-medium uppercase tracking-wider text-sage-700 bg-sage-100 px-1.5 py-0.5 rounded">
+                        Auto-filed via rule
+                      </span>
+                    )}
                   </div>
                   {notif.body && (
-                    <p className="text-xs text-sage-500 truncate mt-0.5">{notif.body}</p>
+                    notif.type === 'brain_dump_grant_fired'
+                      ? <GrantFiredBody body={notif.body} />
+                      : <p className="text-xs text-sage-500 truncate mt-0.5">{notif.body}</p>
                   )}
                 </div>
                 <span className="text-xs text-sage-400 shrink-0 whitespace-nowrap">

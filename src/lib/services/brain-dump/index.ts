@@ -31,6 +31,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAIJson } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
+import type { BrainDumpParseResult as DiscriminatedParseResult } from '@/lib/services/brain-dump/parse-result-schema'
 
 /**
  * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
@@ -441,6 +442,12 @@ export async function routeBrainDump(args: {
         venueId,
         question: rawText,
       })
+      // Bug 11: discriminated parse_result for help-mode answer.
+      const helpDU: DiscriminatedParseResult = {
+        kind: 'help_answer',
+        body: helpAnswer.body,
+        links: helpAnswer.links,
+      }
       await supabase
         .from('brain_dump_entries')
         .update({
@@ -449,6 +456,7 @@ export async function routeBrainDump(args: {
           resolved_at: new Date().toISOString(),
           parse_result: {
             ...(parsed as unknown as Record<string, unknown>),
+            ...helpDU,
             help_answer: helpAnswer,
           },
           routed_to: [{ table: 'help_answer', id: null, action: 'inline_help' }],
@@ -542,13 +550,28 @@ export async function routeBrainDump(args: {
       }),
       priority: 'high',
     })
+    // Bug 11 (2026-05-09): write the discriminated `kind` so the
+    // resolve route can narrow with isProposedClientNote() instead of
+    // sniffing for a `proposed_client_note` key. Legacy sub-object
+    // stays for back-compat reads of pre-Bug-11 rows in other code
+    // paths.
+    const proposedDU: DiscriminatedParseResult = {
+      kind: 'proposed_client_note',
+      weddingId: proposed.weddingId,
+      noteBody: proposed.noteBody,
+      coupleLabel: proposed.coupleLabel,
+    }
     await supabase
       .from('brain_dump_entries')
       .update({
         parse_status: 'needs_clarification',
         clarification_question: `Add this note to ${proposed.coupleLabel ?? 'the couple'}'s record?`,
         parsed_at: new Date().toISOString(),
-        parse_result: { ...(parsed as unknown as Record<string, unknown>), proposed_client_note: proposed },
+        parse_result: {
+          ...(parsed as unknown as Record<string, unknown>),
+          ...proposedDU,
+          proposed_client_note: proposed,
+        },
       })
       .eq('id', entryId)
     return {
@@ -575,13 +598,22 @@ export async function routeBrainDump(args: {
       }),
       priority: 'high',
     })
+    // Bug 11: discriminated parse_result for availability proposals.
+    const availDU: DiscriminatedParseResult = {
+      kind: 'proposed_availability',
+      date,
+      action,
+    }
     await supabase
       .from('brain_dump_entries')
       .update({
         parse_status: 'needs_clarification',
-        clarification_question: `Looking at "${rawText}" — should I mark ${date} as ${action}?`,
+        clarification_question: `Looking at "${rawText}", should I mark ${date} as ${action}?`,
         parsed_at: new Date().toISOString(),
-        parse_result: parsed as unknown as Record<string, unknown>,
+        parse_result: {
+          ...(parsed as unknown as Record<string, unknown>),
+          ...availDU,
+        },
       })
       .eq('id', entryId)
     return {
@@ -695,6 +727,24 @@ export async function routeBrainDump(args: {
             routed_to: routedTo,
           })
           .eq('id', entryId)
+        // Bug 6 (2026-05-09): see operational_note path above for the
+        // why. Mirror the audit notification so KB-import grants are
+        // visible in the bell + notifications feed.
+        await createNotification({
+          venueId,
+          type: 'brain_dump_grant_fired',
+          title: `Brain-dump auto-filed ${toInsert.length} Q/A row${toInsert.length === 1 ? '' : 's'} via standing rule`,
+          body: JSON.stringify({
+            entryId,
+            signature,
+            intent: 'knowledge_base_import',
+            grantId: activeGrant.id,
+            routedTable: 'knowledge_base',
+            inserted: toInsert.length,
+            deduped: existingSet.size,
+          }),
+          priority: 'low',
+        })
         return { routedTo, needsClarification: false, clarificationQuestion: null }
       }
 
@@ -706,13 +756,27 @@ export async function routeBrainDump(args: {
         body: JSON.stringify({ entryId, rowCount: rows.length, sample: rows.slice(0, 3) }),
         priority: 'high',
       })
+      // Bug 11: discriminated parse_result. Legacy proposed_kb_rows
+      // key stays for back-compat with any reader that still sniffs.
+      const kbDU: DiscriminatedParseResult = {
+        kind: 'proposed_kb_rows',
+        rows: rows.map((r) => ({
+          question: r.question,
+          answer: r.answer,
+          category: r.category,
+        })),
+      }
       await supabase
         .from('brain_dump_entries')
         .update({
           parse_status: 'needs_clarification',
           clarification_question: `Add ${rows.length} Q/A row${rows.length === 1 ? '' : 's'} to the knowledge base?`,
           parsed_at: new Date().toISOString(),
-          parse_result: { ...(parsed as unknown as Record<string, unknown>), proposed_kb_rows: rows },
+          parse_result: {
+            ...(parsed as unknown as Record<string, unknown>),
+            ...kbDU,
+            proposed_kb_rows: rows,
+          },
         })
         .eq('id', entryId)
 
@@ -760,6 +824,27 @@ export async function routeBrainDump(args: {
           routed_to: routedTo,
         })
         .eq('id', entryId)
+      // Bug 6 (2026-05-09): grant-fire was previously silent. The
+      // coordinator had no surface telling them an auto-route just
+      // happened, so a forgotten months-old grant could create
+      // surprise knowledge_gaps rows. Drop a low-priority audit
+      // notification with entryId + signature + grantId so the bell
+      // and the notifications listing both render the trail. JSON
+      // body keeps it parseable for the notifications-page label.
+      await createNotification({
+        venueId,
+        type: 'brain_dump_grant_fired',
+        title: 'Brain-dump auto-filed via standing rule',
+        body: JSON.stringify({
+          entryId,
+          signature,
+          intent: 'operational_note',
+          grantId: activeGrant.id,
+          routedTable: 'knowledge_gaps',
+          notePreview: noteBody.slice(0, 120),
+        }),
+        priority: 'low',
+      })
       return { routedTo, needsClarification: false, clarificationQuestion: null }
     }
 
@@ -771,13 +856,22 @@ export async function routeBrainDump(args: {
       body: JSON.stringify({ entryId, noteBody, rawText }),
       priority: 'high',
     })
+    // Bug 11: discriminated parse_result.
+    const opDU: DiscriminatedParseResult = {
+      kind: 'proposed_operational_note',
+      noteBody,
+    }
     await supabase
       .from('brain_dump_entries')
       .update({
         parse_status: 'needs_clarification',
         clarification_question: 'File this as an operational note in knowledge_gaps?',
         parsed_at: new Date().toISOString(),
-        parse_result: { ...(parsed as unknown as Record<string, unknown>), proposed_operational_note: { noteBody } },
+        parse_result: {
+          ...(parsed as unknown as Record<string, unknown>),
+          ...opDU,
+          proposed_operational_note: { noteBody },
+        },
       })
       .eq('id', entryId)
 

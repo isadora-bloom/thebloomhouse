@@ -43,6 +43,22 @@ const FOREVER_DEDUP_TYPES = new Set<string>([
   'booking_confirmation_prompt',
 ])
 
+/**
+ * Notification types that NEVER dedup. Each call results in a new
+ * row regardless of how recent the previous one was.
+ *
+ * Why: some events are inherently per-action audit trails. The
+ * default 5-minute dedup window collapses repeated fires of the
+ * same type into one row, which is correct for "new-inquiry"-style
+ * alerts but wrong for grant-fired audit (Bug 6, 2026-05-09): if a
+ * coordinator pastes 5 brain-dumps in 60 seconds and all auto-route
+ * via the same standing rule, we want 5 rows in the audit feed,
+ * not 1.
+ */
+const NEVER_DEDUP_TYPES = new Set<string>([
+  'brain_dump_grant_fired',
+])
+
 export async function createNotification(options: {
   venueId: string
   weddingId?: string
@@ -66,8 +82,11 @@ export async function createNotification(options: {
     const supabase = createServiceClient()
 
     const foreverDedup = FOREVER_DEDUP_TYPES.has(options.type)
+    const neverDedup = NEVER_DEDUP_TYPES.has(options.type)
 
     // Dedup strategy:
+    //  - NEVER_DEDUP_TYPES skip the dedup probe entirely — every call
+    //    inserts a new row.
     //  - FOREVER_DEDUP_TYPES dedup on (venue_id, wedding_id, type) with
     //    no time window. Weddingless notifs in this set fall back to
     //    (venue_id, type) since we have no wedding discriminator.
@@ -77,28 +96,30 @@ export async function createNotification(options: {
     //  - When userId is set we dedup on (venue_id, user_id, type) so
     //    per-user notifications don't collide with venue-broadcast ones
     //    of the same type.
-    let dupeQuery = supabase
-      .from('admin_notifications')
-      .select('id')
-      .eq('venue_id', options.venueId)
-      .eq('type', options.type)
-      .limit(1)
+    if (!neverDedup) {
+      let dupeQuery = supabase
+        .from('admin_notifications')
+        .select('id')
+        .eq('venue_id', options.venueId)
+        .eq('type', options.type)
+        .limit(1)
 
-    if (!foreverDedup) {
-      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
-      dupeQuery = dupeQuery.gte('created_at', fiveMinutesAgo)
+      if (!foreverDedup) {
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+        dupeQuery = dupeQuery.gte('created_at', fiveMinutesAgo)
+      }
+
+      if (options.weddingId) {
+        dupeQuery = dupeQuery.eq('wedding_id', options.weddingId)
+      }
+
+      if (options.userId) {
+        dupeQuery = dupeQuery.eq('user_id', options.userId)
+      }
+
+      const { data: existing } = await dupeQuery
+      if (existing && existing.length > 0) return
     }
-
-    if (options.weddingId) {
-      dupeQuery = dupeQuery.eq('wedding_id', options.weddingId)
-    }
-
-    if (options.userId) {
-      dupeQuery = dupeQuery.eq('user_id', options.userId)
-    }
-
-    const { data: existing } = await dupeQuery
-    if (existing && existing.length > 0) return
 
     const insertPayload: Record<string, unknown> = {
       venue_id: options.venueId,

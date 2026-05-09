@@ -17,7 +17,7 @@ import type { ComponentType } from 'react'
 import {
   // Agent
   Mail, FileCheck, Kanban, Flame, Workflow, BarChart3,
-  HelpCircle, UsersRound, ListOrdered, Inbox, Newspaper, Activity,
+  HelpCircle, UsersRound, ListOrdered, Inbox, Newspaper, Activity, Brain,
   // Weddings
   Heart, CalendarRange, Upload, MessagesSquare, MessageCircleQuestion,
   Printer, MapPinIcon as TableMap,
@@ -93,7 +93,8 @@ export interface ModeConfig {
 // Pages covered: /agent/inbox, /agent/drafts, /agent/pipeline, /agent/leads,
 // /agent/sequences, /agent/analytics, /agent/knowledge-gaps,
 // /agent/relationships, /agent/codes, /agent/omi-inbox,
-// /agent/notifications, /agent/errors
+// /agent/notifications, /agent/errors, /agent/brain-dump,
+// /agent/brain-dump/grants
 
 export const MODE_AGENT: ModeConfig = {
   mode: 'agent',
@@ -128,6 +129,7 @@ export const MODE_AGENT: ModeConfig = {
         { label: 'Knowledge Gaps', href: '/agent/knowledge-gaps', icon: HelpCircle },
         { label: 'Relationships', href: '/agent/relationships', icon: UsersRound },
         { label: 'Client Codes', href: '/agent/codes', icon: ListOrdered },
+        { label: 'Brain-dump', href: '/agent/brain-dump', icon: Brain },
       ],
     },
     {

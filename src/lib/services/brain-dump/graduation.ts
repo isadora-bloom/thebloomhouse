@@ -72,12 +72,16 @@ export async function evaluateGraduation(
   }
 
   // Active grant check first — if one already exists, no graduation
-  // prompt needed (coordinator already opted in).
+  // prompt needed (coordinator already opted in). Migration 248 added
+  // is_active; we filter on that for forward compatibility with future
+  // soft-pause UX while keeping the revoked_at filter as belt-and-
+  // suspenders for any legacy rows that may have only the timestamp set.
   const { data: grant } = await supabase
     .from('brain_dump_pattern_grants')
     .select('id')
     .eq('venue_id', venueId)
     .eq('pattern_signature', signature)
+    .eq('is_active', true)
     .is('revoked_at', null)
     .maybeSingle()
   if (grant?.id) {
@@ -119,12 +123,14 @@ export async function grantPattern(
   args: GrantPatternArgs,
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   // Re-check for existing active grant (race window between
-  // evaluateGraduation and grantPattern call).
+  // evaluateGraduation and grantPattern call). is_active gate per
+  // migration 248.
   const { data: existing } = await supabase
     .from('brain_dump_pattern_grants')
     .select('id')
     .eq('venue_id', args.venueId)
     .eq('pattern_signature', args.signature)
+    .eq('is_active', true)
     .is('revoked_at', null)
     .maybeSingle()
   if (existing?.id) return { ok: true, id: existing.id as string }
@@ -147,8 +153,14 @@ export async function grantPattern(
 }
 
 /**
- * Coordinator revokes a grant from /settings/brain-dump-log.
- * Future entries with this signature go back to propose-and-confirm.
+ * Coordinator revokes a grant from /agent/brain-dump/grants (or the
+ * legacy /settings/brain-dump-log surface). Future entries with this
+ * signature go back to propose-and-confirm.
+ *
+ * Per Bug 6 / migration 248: revoke flips is_active=false AND stamps
+ * revoked_at + revoked_by. Audit row is preserved (no DELETE) so the
+ * coordinator can see who revoked when, and the trigger in 248 syncs
+ * is_active down if a legacy caller updates revoked_at alone.
  */
 export async function revokePatternGrant(
   supabase: SupabaseClient,
@@ -157,11 +169,12 @@ export async function revokePatternGrant(
   const { error } = await supabase
     .from('brain_dump_pattern_grants')
     .update({
+      is_active: false,
       revoked_at: new Date().toISOString(),
       revoked_by: args.revokedBy,
     })
     .eq('id', args.grantId)
-    .is('revoked_at', null)
+    .eq('is_active', true)
   if (error) return { ok: false, error: error.message }
   return { ok: true }
 }
@@ -181,6 +194,7 @@ export async function consumeGrantIfActive(
     .select('id, intent, routed_table, routed_action, hit_count')
     .eq('venue_id', venueId)
     .eq('pattern_signature', signature)
+    .eq('is_active', true)
     .is('revoked_at', null)
     .maybeSingle()
   if (!data?.id) return null
