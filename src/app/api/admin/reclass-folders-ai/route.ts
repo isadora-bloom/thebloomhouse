@@ -100,11 +100,18 @@ export async function POST(req: NextRequest) {
   // the id for the update. Order by created_at desc so the most recent
   // misclassifications get fixed first (newer rows are higher value to
   // a coordinator triaging today's inbox).
+  // Restrict to inbound only. Outbound rows are messages WE sent
+  // (Sage nurture sequences, coordinator replies). Classifying them
+  // as "new inquiries" or "vendors" makes no sense — they are our
+  // own voice. The lifecycle_folder column is per-thread so the
+  // inbound row's classification represents the thread; outbound
+  // rows can stay 'other' without harm.
   const { data: rows, error } = await supabase
     .from('interactions')
     .select('id, venue_id, from_email, from_name, subject, full_body, direction')
     .eq('venue_id', venueId)
     .eq('type', 'email')
+    .eq('direction', 'inbound')
     .eq('lifecycle_folder', 'other')
     .not('from_email', 'is', null)
     .not('full_body', 'is', null)

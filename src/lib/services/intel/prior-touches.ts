@@ -73,12 +73,17 @@ export async function getPriorTouches(args: {
   }
 
   // Prior interactions (excluding today's — the caller is usually the
-  // inquiry that triggered the lookup).
+  // inquiry that triggered the lookup). Restricted to direction =
+  // 'inbound' so the count represents times the LEAD touched us, not
+  // times we sent them a nurture email. A 12-step Sage sequence going
+  // out had been counted as 12 touchpoints, which made every cold
+  // followup look like a hot lead.
   const { data: ints } = await supabase
     .from('interactions')
     .select('type, direction, subject, timestamp, body_preview')
     .eq('venue_id', venueId)
     .eq('person_id', personId)
+    .eq('direction', 'inbound')
     .lt('timestamp', before)
     .order('timestamp', { ascending: false })
     .limit(20)

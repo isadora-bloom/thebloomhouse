@@ -1256,6 +1256,15 @@ export default function InboxPage() {
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState<string | null>(null)
+  // Show outbound (Sage replies + coordinator-typed sends) toggle.
+  // Default false so the inbox reads as an "incoming" view. Outbound
+  // emails are still in the database, just hidden from the list and
+  // the folder counts when this is off. localStorage-persisted so
+  // the choice survives a refresh.
+  const [showOutbound, setShowOutbound] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem('inbox.showOutbound') === '1'
+  })
   // AI folder reclass state. Drives the "Auto-classify Other" button +
   // its progress banner. Status string surfaces in the same banner row as
   // syncStatus (one-at-a-time UX since both are venue-wide operations).
@@ -2005,6 +2014,12 @@ export default function InboxPage() {
   const liveSanitized = sanitizeSearchQuery(searchQuery)
   const liveSearching = liveSanitized.length >= MIN_QUERY_LEN
   const filteredInteractions = interactions.filter((i) => {
+    // Direction filter — hide our own outbound by default. Sage's
+    // nurture sequences clutter the lifecycle counts otherwise; they
+    // are not inquiries, they are us. Toggle in the header lets the
+    // coordinator see "Sent" when they want to.
+    if (!showOutbound && i.direction === 'outbound') return false
+
     // Tab filter
     // Lifecycle folder tabs (mig 242). Rows with NULL lifecycle_folder
     // (pre-backfill or freshly-orphaned) fall through to the 'other'
@@ -2068,6 +2083,11 @@ export default function InboxPage() {
     const seen = new Set<string>()
     let n = 0
     for (const i of interactions) {
+      // Mirror the list filter: when "Show sent" is off, exclude
+      // outbound rows from the per-folder count too. Otherwise the
+      // count overstates how many real inquiries / vendors are
+      // sitting in the bucket.
+      if (!showOutbound && i.direction === 'outbound') continue
       if ((i.lifecycle_folder ?? 'other') !== folder) continue
       const key = i.gmail_thread_id ?? `single:${i.id}`
       if (seen.has(key)) continue
@@ -2157,6 +2177,25 @@ export default function InboxPage() {
           >
             <Sparkles className={`w-4 h-4 ${reclassing ? 'animate-pulse' : ''}`} />
             {reclassing ? 'Classifying...' : 'Auto-classify Other'}
+          </button>
+          <button
+            onClick={() => {
+              const next = !showOutbound
+              setShowOutbound(next)
+              if (typeof window !== 'undefined') {
+                window.localStorage.setItem('inbox.showOutbound', next ? '1' : '0')
+              }
+            }}
+            title={showOutbound
+              ? "Hide your outbound replies and Sage's nurture sequence"
+              : "Show your outbound replies and Sage's nurture sequence inline"}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors border ${
+              showOutbound
+                ? 'bg-sage-100 text-sage-800 border-sage-300'
+                : 'text-sage-700 border-sage-300 hover:bg-sage-50'
+            }`}
+          >
+            {showOutbound ? 'Hide sent' : 'Show sent'}
           </button>
         </div>
       </div>
