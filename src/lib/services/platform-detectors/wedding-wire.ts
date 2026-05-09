@@ -37,18 +37,30 @@ function actionClass(activity: string): string {
   return 'other'
 }
 
-function parseFirstLast(raw: string): { first_name: string | null; last_initial: string | null; last_name: string | null } {
+function parseFirstLast(raw: string): { first_name: string | null; last_initial: string | null; last_name: string | null; username: string | null } {
   const trimmed = raw.trim()
-  if (!trimmed) return { first_name: null, last_initial: null, last_name: null }
+  if (!trimmed) return { first_name: null, last_initial: null, last_name: null, username: null }
+  // Wave 2B: relay-proxy / handle shapes route to username, not first_name.
+  if (/^user\s+[a-f0-9]{20,}$/i.test(trimmed)) {
+    return { first_name: null, last_initial: null, last_name: null, username: trimmed }
+  }
   const parts = trimmed.split(/\s+/).filter(Boolean)
-  if (parts.length === 0) return { first_name: null, last_initial: null, last_name: null }
-  if (parts.length === 1) return { first_name: parts[0], last_initial: null, last_name: null }
+  if (parts.length === 0) return { first_name: null, last_initial: null, last_name: null, username: null }
+  if (parts.length === 1) {
+    // Single-token smush = handle. Real first names are typically <11
+    // chars; smush handles ("Erinhorrigan", "Catesbyandben") run longer
+    // and have caps mid-word.
+    if (parts[0].length >= 11 && /[A-Z]/.test(parts[0].slice(1))) {
+      return { first_name: null, last_initial: null, last_name: null, username: parts[0] }
+    }
+    return { first_name: parts[0], last_initial: null, last_name: null, username: null }
+  }
   const last = parts[parts.length - 1].replace(/\.$/, '')
   const first = parts.slice(0, -1).join(' ')
   if (last.length === 1) {
-    return { first_name: first, last_initial: last.toUpperCase(), last_name: null }
+    return { first_name: first, last_initial: last.toUpperCase(), last_name: null, username: null }
   }
-  return { first_name: first, last_initial: last.charAt(0).toUpperCase(), last_name: last }
+  return { first_name: first, last_initial: last.charAt(0).toUpperCase(), last_name: last, username: null }
 }
 
 export const WeddingWireDetector: PlatformDetector = {
@@ -98,7 +110,7 @@ export const WeddingWireDetector: PlatformDetector = {
     for (let i = 0; i < headers.length; i++) rawRow[headers[i]] = row[i] ?? ''
 
     const userRaw = (hUser >= 0 ? row[hUser] : '') ?? ''
-    const { first_name, last_initial, last_name } = parseFirstLast(userRaw)
+    const { first_name, last_initial, last_name, username } = parseFirstLast(userRaw)
     const activity = (hActivity >= 0 ? row[hActivity] : '') ?? ''
     const dateRaw = (hDate >= 0 ? row[hDate] : '') ?? ''
 
@@ -117,7 +129,7 @@ export const WeddingWireDetector: PlatformDetector = {
       first_name,
       last_initial,
       last_name,
-      username: null,
+      username,
       email: null,
       city,
       state,

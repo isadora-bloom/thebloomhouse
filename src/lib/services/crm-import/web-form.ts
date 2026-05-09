@@ -846,6 +846,10 @@ async function commitWebForm(args: {
     // default. Per-row overrides (the synthetic interaction above
     // already declares 'touchpoint' explicitly) take precedence.
     defaultInteractionSignalClass: 'touchpoint',
+    // Wave 2B: calculator-form fields are coordinator-shaped + structured.
+    // Highest non-coordinator NameSource (95) — the picker should beat
+    // anything but a contract signer or coordinator override.
+    chokepointNameSource: 'calculator_form',
   })
 
   if (!baseResult.ok) return baseResult

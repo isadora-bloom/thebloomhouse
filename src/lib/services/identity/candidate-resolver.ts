@@ -665,6 +665,62 @@ async function writeAttributionEvents(args: {
     .eq('id', candidate.id)
   if (updErr) return { flagged_conflict: false, error: `candidate resolve update: ${updErr.message}` }
 
+  // Wave 2B: emit the candidate's name + handle through the identity
+  // name-capture chokepoint onto the resolved person row. This is the
+  // moment a sub-zero handle (Pinterest "rosaliehoyle", Knot proxy "User
+  // <hex>", IG "@sarah_p") binds to a known human — chokepoint records
+  // it as evidence + populates platform_handles. Cross-platform handle
+  // convergence (Wave 2C merge candidates) reads platform_handles to
+  // detect same-person across platforms.
+  if (match.person_id) {
+    try {
+      const { captureNameEvidence } = await import('./name-capture')
+      const platform = candidate.source_platform ?? null
+      const platformKey = mapPlatformForChokepoint(platform)
+      const platformSourceKind = mapPlatformSourceForChokepoint(platform)
+
+      // Push the candidate's parsed first/last + handle. Chokepoint
+      // applies shape detection — proxy / username shapes route to
+      // display_handle, not first_name.
+      const candFirst = candidate.first_name ?? null
+      const candLast = candidate.last_name
+        ?? (candidate.last_initial ?? null)
+
+      // Pull the most recent signal-level extracted_identity to surface
+      // the username (handle) when the candidate row only carries the
+      // parsed first_name. Best-effort.
+      let handleFromSignal: string | null = null
+      for (const s of signals) {
+        const ei = (s as { extracted_identity?: Record<string, unknown> | null })
+          .extracted_identity ?? null
+        if (ei && typeof ei.username === 'string' && ei.username.trim()) {
+          handleFromSignal = ei.username.trim()
+          break
+        }
+      }
+
+      if (candFirst || candLast) {
+        await captureNameEvidence(supabase, match.person_id, {
+          first: candFirst,
+          last: candLast,
+          source: platformSourceKind,
+          handle: handleFromSignal,
+          platform: platformKey,
+        })
+      } else if (handleFromSignal) {
+        // Handle-only signal — chokepoint stamps platform_handles.
+        await captureNameEvidence(supabase, match.person_id, {
+          handle: handleFromSignal,
+          platform: platformKey,
+          source: platformSourceKind,
+        })
+      }
+    } catch (err) {
+      console.warn('[candidate-resolver] chokepoint emit failed:',
+        err instanceof Error ? err.message : err)
+    }
+  }
+
   for (const s of signals) {
     await backfillTouchpoint(supabase, s, match, candidate)
   }
@@ -1009,4 +1065,58 @@ export async function resolveForWedding(args: {
   }
 
   return resolveVenueCandidates({ supabase, venueId })
+}
+
+// ---------------------------------------------------------------------------
+// Wave 2B: platform → chokepoint mapping helpers.
+// ---------------------------------------------------------------------------
+
+/**
+ * Map a platform-detector key (the_knot, wedding_wire, instagram,
+ * pinterest, ...) to the chokepoint's NameSource enum. Knot proxy IDs
+ * land as `knot_relay` (dynamic shape — proxy gets confidence 0). IG /
+ * Pinterest get their own platform sources (handle confidence 25).
+ */
+function mapPlatformSourceForChokepoint(platform: string | null):
+  | 'knot_relay'
+  | 'weddingwire_relay'
+  | 'instagram_handle'
+  | 'pinterest_scraper'
+  | 'partner_mention_in_body'
+{
+  const v = (platform ?? '').toLowerCase()
+  if (v.includes('knot')) return 'knot_relay'
+  if (v.includes('wedding_wire') || v.includes('weddingwire')) return 'weddingwire_relay'
+  if (v.includes('instagram')) return 'instagram_handle'
+  if (v.includes('pinterest')) return 'pinterest_scraper'
+  // Generic platform fallback — chokepoint will still apply shape
+  // detection; partner_mention_in_body is the lowest non-zero match.
+  return 'partner_mention_in_body'
+}
+
+/**
+ * Map a platform-detector key to the Platform enum the chokepoint uses
+ * for `platform_handles[platform]`. Returns null when we don't have a
+ * canonical slot for the platform yet.
+ */
+function mapPlatformForChokepoint(platform: string | null):
+  | 'pinterest'
+  | 'knot'
+  | 'weddingwire'
+  | 'instagram'
+  | 'tiktok'
+  | 'facebook'
+  | 'twitter'
+  | null
+{
+  const v = (platform ?? '').toLowerCase()
+  if (!v) return null
+  if (v.includes('pinterest')) return 'pinterest'
+  if (v.includes('knot')) return 'knot'
+  if (v.includes('wedding_wire') || v.includes('weddingwire')) return 'weddingwire'
+  if (v.includes('instagram')) return 'instagram'
+  if (v.includes('tiktok')) return 'tiktok'
+  if (v.includes('facebook')) return 'facebook'
+  if (v.includes('twitter') || v === 'x') return 'twitter'
+  return null
 }

@@ -548,7 +548,7 @@ async function createPerson(
   // Lazy-import the chokepoint so resolver doesn't pay the import cost
   // when resolveIdentity is called from cold paths that never create a
   // new person.
-  const { captureNameEvidence } = await import('./name-capture')
+  const { captureNameEvidence, inferNameFromEmail } = await import('./name-capture')
 
   const insert: Record<string, unknown> = {
     venue_id: venueId,
@@ -581,15 +581,20 @@ async function createPerson(
       })
     }
     if (signals.email) {
-      // Always also try the email-handle parse — the chokepoint already
-      // routes username-shaped local-parts to display_handle and only
-      // promotes a real-name-shaped local-part (e.g. "rosalie.hoyle").
-      // Confidence is intentionally low (20).
-      await captureNameEvidence(supabase, personId, {
-        email: signals.email,
-        full: null,
-        source: 'email_handle_parse',
-      })
+      // Email-handle parse: pre-derive (first, last) from the local part
+      // ("rosalie.hoyle@gmail.com" → "Rosalie Hoyle") and let the
+      // chokepoint apply shape detection. Username-shaped local parts
+      // (e.g. "rosaliehoyle@gmail.com") collapse to display_handle.
+      // Confidence is the source's static 20.
+      const fromEmail = inferNameFromEmail(signals.email)
+      if (fromEmail) {
+        await captureNameEvidence(supabase, personId, {
+          first: fromEmail.first,
+          last: fromEmail.last,
+          email: signals.email,
+          source: 'email_handle_parse',
+        })
+      }
     }
   } catch (err) {
     // Capture must never break the resolver. Legacy callers will see
@@ -760,7 +765,7 @@ export async function resolveIdentity(
     // shape).
     if (signals.fullName || signals.partner1Name || signals.email) {
       try {
-        const { captureNameEvidence } = await import('./name-capture')
+        const { captureNameEvidence, inferNameFromEmail } = await import('./name-capture')
         const importedSource = pickNameSourceForLabel(sourceLabel)
         const fullForCapture = signals.fullName ?? signals.partner1Name
         if (fullForCapture) {
@@ -771,11 +776,15 @@ export async function resolveIdentity(
           })
         }
         if (signals.email) {
-          await captureNameEvidence(supabase, personId, {
-            email: signals.email,
-            full: null,
-            source: 'email_handle_parse',
-          })
+          const fromEmail = inferNameFromEmail(signals.email)
+          if (fromEmail) {
+            await captureNameEvidence(supabase, personId, {
+              first: fromEmail.first,
+              last: fromEmail.last,
+              email: signals.email,
+              source: 'email_handle_parse',
+            })
+          }
         }
       } catch (err) {
         // Best-effort. Legacy flow already returned a person; the picker

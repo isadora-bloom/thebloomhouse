@@ -164,6 +164,12 @@ async function parseGenericCsv(config: AdapterConfig): Promise<ParseResult> {
     return { ok: false, rows: [], errors: ['no mappable fields resolved against the csv header'], warnings }
   }
 
+  // Wave 2B: lift the chokepoint import out of the row loop. Used by the
+  // double-name detector below ("Mary and Mendy Pratt").
+  const { detectDoubleNameString } = await import(
+    '@/lib/services/identity/name-capture'
+  )
+
   const rows: NormalisedLeadRow[] = []
   for (let r = 1; r < csvRows.length; r++) {
     const data = csvRows[r]
@@ -178,14 +184,43 @@ async function parseGenericCsv(config: AdapterConfig): Promise<ParseResult> {
       warnings.push(`row ${r}: unknown status '${get('status')}' — defaulting to 'inquiry'`)
     }
 
+    // Wave 2B: detect "Mary and Mendy Pratt" / "Mary & Mendy Pratt" /
+    // "Mary y Mendy Pratt" jammed into a single partner1 cell. When
+    // detected, split into proper partner1 + partner2 rows with shared
+    // last name. The legacy splitName took the first whitespace token
+    // as first_name and the rest as last_name → "Mary" + "and Mendy
+    // Pratt". Every downstream surface that joined on last_name broke.
+    let p1First = get('partner1_first_name')
+    let p1Last = get('partner1_last_name')
+    let p2First = get('partner2_first_name')
+    let p2Last = get('partner2_last_name')
+    if (p1First && !p1Last && !p2First) {
+      // Only fire the split when partner1_last_name is empty (the typical
+      // shape of the failure) AND partner2 is empty (don't clobber a
+      // coordinator-supplied partner2 cell). Try the detector against
+      // the raw single-cell string the coordinator pasted.
+      const cell = p1First.trim()
+      const dbl = detectDoubleNameString(cell)
+      if (dbl) {
+        p1First = dbl.first1
+        p1Last = dbl.last
+        p2First = dbl.first2
+        p2Last = dbl.last
+        warnings.push(
+          `row ${r}: detected double-name string "${cell}" — split into ` +
+          `partner1 ${dbl.first1} ${dbl.last} + partner2 ${dbl.first2} ${dbl.last}`
+        )
+      }
+    }
+
     const row: NormalisedLeadRow = {
       source_id: get('source_id'),
-      partner1_first_name: get('partner1_first_name'),
-      partner1_last_name: get('partner1_last_name'),
+      partner1_first_name: p1First,
+      partner1_last_name: p1Last,
       partner1_email: get('partner1_email'),
       partner1_phone: get('partner1_phone'),
-      partner2_first_name: get('partner2_first_name'),
-      partner2_last_name: get('partner2_last_name'),
+      partner2_first_name: p2First,
+      partner2_last_name: p2Last,
       wedding_date: coerceWeddingDate(get('wedding_date')),
       guest_count_estimate: coerceNumber(get('guest_count_estimate')),
       booking_value: coerceMoneyToCents(get('booking_value')),

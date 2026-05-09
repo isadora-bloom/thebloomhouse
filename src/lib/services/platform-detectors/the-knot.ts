@@ -62,42 +62,66 @@ function knotActionClass(action: string): string {
 }
 
 /**
- * Parse "Kara P." / "Sarah  R." / "Denise  P." / " ." into structured
- * first_name + last_initial. Vendor exports inconsistently use 1 or 2
- * spaces; some entries are wholly anonymized as " ." (used by Knot
- * when the visitor is logged out or has opted out of name disclosure).
+ * Parse "Kara P." / "Sarah  R." / "Denise  P." / " ." / "User <hex>"
+ * into structured first_name + last_initial. Vendor exports
+ * inconsistently use 1 or 2 spaces; some entries are wholly anonymized
+ * as " ." (used by Knot when the visitor is logged out or has opted
+ * out of name disclosure). Newer Knot relay UIs occasionally surface a
+ * `User <opaque-hex>` proxy ID — those must NEVER become a first_name.
  *
- * Returns name_raw + first_name + last_initial. last_name stays null
- * because Knot only ships the initial.
+ * Returns name_raw + first_name + last_initial + username. last_name
+ * stays null because Knot only ships the initial. proxy-shaped names
+ * land in `username` (so the platform-signals importer routes them to
+ * tangential_signals.extracted_identity.username, not .first_name) and
+ * leave first_name null.
  */
 function parseKnotVisitorName(raw: string): {
   name_raw: string
   first_name: string | null
   last_initial: string | null
+  username: string | null
 } {
   const trimmed = raw.trim()
   if (!trimmed || trimmed === '.') {
-    return { name_raw: trimmed, first_name: null, last_initial: null }
+    return { name_raw: trimmed, first_name: null, last_initial: null, username: null }
+  }
+  // Wave 2B: "User 89436314x630a2de3b6d57e165fc99f" proxy ID.
+  // Pass through as a handle, NOT a first_name. Chokepoint's isProxyShaped
+  // catches the same pattern downstream; we apply it at the parser level
+  // so tangential_signals.extracted_identity carries the right shape.
+  if (/^user\s+[a-f0-9]{20,}$/i.test(trimmed)) {
+    return {
+      name_raw: trimmed,
+      first_name: null,
+      last_initial: null,
+      username: trimmed,
+    }
   }
   // Split on whitespace, drop empty segments produced by double spaces.
   const parts = trimmed.split(/\s+/).filter((p) => p.length > 0)
   if (parts.length === 0) {
-    return { name_raw: trimmed, first_name: null, last_initial: null }
+    return { name_raw: trimmed, first_name: null, last_initial: null, username: null }
   }
   if (parts.length === 1) {
     // "Kara" — first name only, no initial.
-    return { name_raw: trimmed, first_name: parts[0], last_initial: null }
+    // But: a single-token smush ("Erinhorrigan") should land as a
+    // handle. Apply a quick username heuristic without importing the
+    // chokepoint (synchronous parser path).
+    if (parts[0].length >= 11 && /[A-Z]/.test(parts[0].slice(1))) {
+      return { name_raw: trimmed, first_name: null, last_initial: null, username: parts[0] }
+    }
+    return { name_raw: trimmed, first_name: parts[0], last_initial: null, username: null }
   }
   // "Kara P." — first + initial. The initial token is usually one
   // letter optionally followed by a dot; tolerate both "P" and "P.".
   const last = parts[parts.length - 1].replace(/\.$/, '')
   const first = parts.slice(0, -1).join(' ')
   if (last.length === 1 && /^[A-Za-z]$/.test(last)) {
-    return { name_raw: trimmed, first_name: first, last_initial: last.toUpperCase() }
+    return { name_raw: trimmed, first_name: first, last_initial: last.toUpperCase(), username: null }
   }
   // Edge case: "Sarah Anne P." — multi-token first name. The trailing
   // single letter is the initial; the rest is first.
-  return { name_raw: trimmed, first_name: first, last_initial: null }
+  return { name_raw: trimmed, first_name: first, last_initial: null, username: null }
 }
 
 export const TheKnotDetector: PlatformDetector = {
@@ -165,7 +189,7 @@ export const TheKnotDetector: PlatformDetector = {
       first_name: parsedName.first_name,
       last_initial: parsedName.last_initial,
       last_name: null,
-      username: null,
+      username: parsedName.username,
       email: null,
       city,
       state,

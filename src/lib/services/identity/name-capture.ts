@@ -796,3 +796,181 @@ export async function captureNameEvidence(
   result.recorded = true
   return result
 }
+
+// ---------------------------------------------------------------------------
+// Cross-platform handle lookup (Wave 2B / Tenant 2 prep)
+// ---------------------------------------------------------------------------
+
+/**
+ * Find people rows whose `platform_handles[platform]` contains the given
+ * handle, scoped to a venue. When `platform` is omitted, scans ALL
+ * platforms on each person's handle map and returns any row whose map
+ * contains the handle on any platform.
+ *
+ * Used by:
+ *   - The resolver's same-person multi-platform path: when an inquiry
+ *     arrives with a Pinterest handle that already exists on another
+ *     person row at the venue, that's a same-person signal.
+ *   - Wave 2C's merge-candidate emitter: cross-platform handle
+ *     convergence is a Tier-1 same-person hint.
+ *
+ * Implementation note: Supabase's jsonb operator `?` (key exists) doesn't
+ * help here because we want to match the VALUE at a key, not the key
+ * itself. The `->>` text projection works for an exact value match, so
+ * `platform_handles->>pinterest = 'rosaliehoyle'` is the right pattern
+ * when we know the platform. For the platform-agnostic path we pull all
+ * rows that have ANY entry in platform_handles and JS-filter — at venue
+ * scope this is bounded (low thousands per venue).
+ *
+ * Returns an array of person ids. Empty array on no matches or table-
+ * not-yet-migrated (Phase 1 schema-only installs may not have the column;
+ * we tolerate the error).
+ */
+export async function findPeopleByHandle(
+  supabase: SupabaseClient,
+  venueId: string,
+  handle: string,
+  platform?: Platform | null,
+): Promise<string[]> {
+  const trimmed = (handle ?? '').trim()
+  if (!venueId || !trimmed) return []
+
+  // Strip a leading '@' so callers can pass IG-style handles either way.
+  const needle = trimmed.replace(/^@+/, '')
+  if (!needle) return []
+
+  // Fast path: caller knows the platform.
+  if (platform) {
+    try {
+      const { data, error } = await supabase
+        .from('people')
+        .select('id, platform_handles')
+        .eq('venue_id', venueId)
+        .is('merged_into_id', null)
+        .not('platform_handles', 'is', null)
+      if (error) return []
+      const rows = (data ?? []) as Array<{
+        id: string
+        platform_handles: Record<string, string | null> | null
+      }>
+      const out: string[] = []
+      for (const r of rows) {
+        const map = r.platform_handles ?? {}
+        const v = (map[platform] ?? '').trim().replace(/^@+/, '')
+        if (v && v.toLowerCase() === needle.toLowerCase()) {
+          out.push(r.id)
+        }
+      }
+      return out
+    } catch {
+      return []
+    }
+  }
+
+  // Platform-agnostic: any platform on the handle map matches.
+  try {
+    const { data, error } = await supabase
+      .from('people')
+      .select('id, platform_handles')
+      .eq('venue_id', venueId)
+      .is('merged_into_id', null)
+      .not('platform_handles', 'is', null)
+    if (error) return []
+    const rows = (data ?? []) as Array<{
+      id: string
+      platform_handles: Record<string, string | null> | null
+    }>
+    const out: string[] = []
+    for (const r of rows) {
+      const map = r.platform_handles ?? {}
+      for (const v of Object.values(map)) {
+        const cand = (v ?? '').trim().replace(/^@+/, '').toLowerCase()
+        if (cand && cand === needle.toLowerCase()) {
+          out.push(r.id)
+          break
+        }
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Parenthetical-role descriptor classifier (Wave 2B)
+// ---------------------------------------------------------------------------
+
+/**
+ * Map a parenthetical-role substring to a structured wedding_relationships
+ * role. "(mother of the Bride)" → 'mother', "(planner)" → 'planner',
+ * "(MOH)" → 'maid_of_honor', "(family)" → 'family_friend' fallback.
+ *
+ * Returns null when no descriptor recognised.
+ */
+export function classifyParentheticalRole(value: string): {
+  role: string
+  detail: string | null
+} | null {
+  if (!value) return null
+  const m = value.match(/\(([^)]+)\)/)
+  if (!m) return null
+  const inner = m[1].trim().toLowerCase()
+  if (!inner) return null
+
+  // Mother / mom variants.
+  if (/\b(mother|mom|mum|mama)\b/.test(inner)) {
+    return { role: 'mother', detail: m[1].trim() }
+  }
+  // Father / dad variants.
+  if (/\b(father|dad|papa)\b/.test(inner)) {
+    return { role: 'father', detail: m[1].trim() }
+  }
+  // Planner / wedding planner / coordinator.
+  if (/\b(planner|coordinator|wedding\s*planner)\b/.test(inner)) {
+    return { role: 'planner', detail: m[1].trim() }
+  }
+  // Maid of honor / MOH.
+  if (/\b(maid\s*of\s*honou?r|moh)\b/.test(inner)) {
+    return { role: 'maid_of_honor', detail: m[1].trim() }
+  }
+  // Best man.
+  if (/\bbest\s*man\b/.test(inner)) {
+    return { role: 'best_man', detail: m[1].trim() }
+  }
+  // Sibling.
+  if (/\b(sister|brother|sibling)\b/.test(inner)) {
+    return { role: 'sibling', detail: m[1].trim() }
+  }
+  // Family / family friend / aunt / uncle / cousin.
+  if (/\b(family|aunt|uncle|cousin|grandma|grandpa|grandmother|grandfather)\b/.test(inner)) {
+    return { role: 'family_friend', detail: m[1].trim() }
+  }
+  // In-laws.
+  if (/\b(mother.?in.?law)\b/.test(inner)) {
+    return { role: 'mother_in_law', detail: m[1].trim() }
+  }
+  if (/\b(father.?in.?law)\b/.test(inner)) {
+    return { role: 'father_in_law', detail: m[1].trim() }
+  }
+  // Vendor contact.
+  if (/\b(vendor|caterer|florist|photographer|dj|venue\s*manager)\b/.test(inner)) {
+    return { role: 'vendor_contact', detail: m[1].trim() }
+  }
+  // Friend.
+  if (/\bfriend\b/.test(inner)) {
+    return { role: 'family_friend', detail: m[1].trim() }
+  }
+  // Anything else — recognise as a role but tag 'other'.
+  return { role: 'other', detail: m[1].trim() }
+}
+
+/**
+ * Strip the trailing `'s` / `’s` from a token. Used by HoneyBook /
+ * tour-scheduler / data-import paths where "Mike's Wedding" leaves
+ * "Mike's" as a partner first name.
+ */
+export function stripTrailingPossessive(value: string): string {
+  if (!value) return value
+  return value.replace(/['’][sS]$/u, '')
+}

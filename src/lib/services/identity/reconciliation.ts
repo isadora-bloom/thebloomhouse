@@ -182,7 +182,18 @@ function normalizeName(s: string | null | undefined): string {
 
 /** Two names "match" if either is empty OR both normalize to the same
  *  string OR one is a substring of the other (e.g. "John" vs "John W").
- *  Conservative — used only for the auto-merge gate. */
+ *  Conservative — used only for the auto-merge gate.
+ *
+ *  Wave 2B note: post-mig-255 the `first_name` / `last_name` flat
+ *  columns are populated via the chokepoint's picker output (the
+ *  highest-confidence evidence projection). So this check already
+ *  reflects picker output — the chokepoint dual-writes whenever a
+ *  better signal lands. Phase 4 (Wave 2C) will tighten this further by
+ *  reading `name_evidence` directly to compare evidence arrays rather
+ *  than the projected columns; for Phase 2 the flat-column compare is
+ *  sufficient because the picker has already arbitrated which evidence
+ *  row populates each column.
+ */
 function namesAreCompatible(a: string | null | undefined, b: string | null | undefined): boolean {
   const na = normalizeName(a)
   const nb = normalizeName(b)
@@ -200,6 +211,60 @@ function namesAreConflicting(a: string | null | undefined, b: string | null | un
   if (na === nb) return false
   if (na.startsWith(nb) || nb.startsWith(na)) return false
   return true
+}
+
+/**
+ * Wave 2B (Phase 2): picker-aware name compatibility check. Compares
+ * BOTH flat columns AND the picker output of the evidence array. Two
+ * weddings compare compatible when either path agrees.
+ *
+ * Used in addition to namesAreCompatible() at the merger sites — the
+ * old check stays for back-compat (callers that don't carry evidence
+ * arrays). Phase 4 will remove the flat-column path entirely.
+ *
+ * Returns true on:
+ *   - flat-column compat (existing behaviour)
+ *   - OR picker output compat (picked first agrees on either side)
+ *   - OR either side has evidence with shape !== 'username' that matches
+ *
+ * The picker is intentionally not re-run here — the caller's people
+ * row already carries the projected first_name / last_name from the
+ * chokepoint's dual-write at capture time.
+ */
+export function namesAreCompatibleWithEvidence(
+  aFlat: string | null | undefined,
+  bFlat: string | null | undefined,
+  aEvidence?: Array<{ value?: { first?: string | null }; shape?: string; confidence?: number }> | null,
+  bEvidence?: Array<{ value?: { first?: string | null }; shape?: string; confidence?: number }> | null,
+): boolean {
+  // 1. Flat-column compat.
+  if (namesAreCompatible(aFlat, bFlat)) return true
+  // 2. Picker / evidence cross-check: when either side has evidence
+  //    rows whose value matches the other side's flat column or
+  //    evidence, treat as compat. Skips username/proxy shapes.
+  const aSet = collectFirstNamesFromEvidence(aEvidence)
+  const bSet = collectFirstNamesFromEvidence(bEvidence)
+  if (aFlat && bSet.has(normalizeName(aFlat))) return true
+  if (bFlat && aSet.has(normalizeName(bFlat))) return true
+  for (const a of aSet) {
+    if (bSet.has(a)) return true
+  }
+  return false
+}
+
+function collectFirstNamesFromEvidence(
+  evidence?: Array<{ value?: { first?: string | null }; shape?: string; confidence?: number }> | null,
+): Set<string> {
+  const out = new Set<string>()
+  if (!Array.isArray(evidence)) return out
+  for (const ev of evidence) {
+    if (!ev || ev.shape === 'username' || ev.shape === 'proxy') continue
+    const v = ev.value?.first ?? null
+    if (!v) continue
+    const norm = normalizeName(v)
+    if (norm) out.add(norm)
+  }
+  return out
 }
 
 function daysBetween(a: string | null | undefined, b: string | null | undefined): number | null {

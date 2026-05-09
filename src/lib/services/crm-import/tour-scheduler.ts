@@ -1106,6 +1106,9 @@ async function commitTourScheduler(args: {
     ...args,
     crmSource: 'generic_csv',
     defaultInteractionSignalClass: 'touchpoint',
+    // Wave 2B: tour-scheduler is form-relay-flavoured (Calendly invitee
+    // answers + Acuity questions). NameSource = form_relay (60).
+    chokepointNameSource: 'form_relay',
   })
 }
 

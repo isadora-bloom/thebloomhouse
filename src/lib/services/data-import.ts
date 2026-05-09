@@ -114,9 +114,54 @@ function parseInt_(value: string): number | null {
 
 /** Split a full name into first + last */
 function splitName(fullName: string): { first: string; last: string } {
-  const parts = fullName.trim().split(/\s+/)
+  // Wave 2B: strip a parenthetical role descriptor BEFORE splitting.
+  // "Carolynn Boutivas (mother of the Bride)" → "Carolynn Boutivas"
+  // for the partner1 row, and a wedding_relationships row gets created
+  // separately by the importer (see role-descriptor branch in
+  // importClientList).
+  const cleaned = fullName.trim().replace(/\s*\([^)]*\)\s*$/u, '').trim()
+  const parts = cleaned.split(/\s+/)
   if (parts.length === 1) return { first: parts[0], last: '' }
   return { first: parts[0], last: parts.slice(1).join(' ') }
+}
+
+/**
+ * Detect a parenthetical role descriptor in a raw name cell. Returns
+ * the role classification (mother / father / planner / etc.) plus the
+ * cleaned name (parenthetical stripped) so the partner1 row gets a
+ * usable name AND a wedding_relationships row gets created for the
+ * named human in their actual role.
+ */
+function detectRoleDescriptor(rawName: string): {
+  role: string
+  detail: string | null
+  cleanName: string
+} | null {
+  if (!rawName) return null
+  const m = rawName.match(/\(([^)]+)\)/)
+  if (!m) return null
+  const cleanName = rawName.replace(/\s*\([^)]*\)\s*/g, ' ').trim()
+  const inner = m[1].trim().toLowerCase()
+  // Mirrors classifyParentheticalRole in identity/name-capture.ts; the
+  // duplication is deliberate to avoid an import cycle when this module
+  // is bundled into Edge Functions.
+  if (/\b(mother|mom|mum|mama)\b/.test(inner)) return { role: 'mother', detail: m[1].trim(), cleanName }
+  if (/\b(father|dad|papa)\b/.test(inner)) return { role: 'father', detail: m[1].trim(), cleanName }
+  if (/\b(planner|coordinator|wedding\s*planner)\b/.test(inner)) return { role: 'planner', detail: m[1].trim(), cleanName }
+  if (/\b(maid\s*of\s*honou?r|moh)\b/.test(inner)) return { role: 'maid_of_honor', detail: m[1].trim(), cleanName }
+  if (/\bbest\s*man\b/.test(inner)) return { role: 'best_man', detail: m[1].trim(), cleanName }
+  if (/\b(sister|brother|sibling)\b/.test(inner)) return { role: 'sibling', detail: m[1].trim(), cleanName }
+  if (/\b(family|aunt|uncle|cousin|grandma|grandpa|grandmother|grandfather|friend)\b/.test(inner)) {
+    return { role: 'family_friend', detail: m[1].trim(), cleanName }
+  }
+  if (/\bmother.?in.?law\b/.test(inner)) return { role: 'mother_in_law', detail: m[1].trim(), cleanName }
+  if (/\bfather.?in.?law\b/.test(inner)) return { role: 'father_in_law', detail: m[1].trim(), cleanName }
+  if (/\b(vendor|caterer|florist|photographer|dj|venue\s*manager)\b/.test(inner)) {
+    return { role: 'vendor_contact', detail: m[1].trim(), cleanName }
+  }
+  // Anything else parenthetical — recognise as a role but tag 'other'
+  // so coordinator can re-classify in the UI.
+  return { role: 'other', detail: m[1].trim(), cleanName }
 }
 
 /** Parse boolean from various string formats */
@@ -147,14 +192,35 @@ export async function importClientList(
       // Parse names
       let firstName = row.first_name || ''
       let lastName = row.last_name || ''
+      // Wave 2B: detect parenthetical role descriptors on the raw name
+      // ("Carolynn Boutivas (mother of the Bride)") and route the row to
+      // wedding_relationships instead of inserting a partner2 person.
+      // The cleanName (parenthetical stripped) is the actual human's
+      // name for the relationship row.
+      let p1RoleDescriptor: { role: string; detail: string | null; cleanName: string } | null = null
+      let p2RoleDescriptor: { role: string; detail: string | null; cleanName: string } | null = null
 
-      // If we have a combined "couple_name" or "name" but no first/last, split it
+      // Combined name cell: detect role on it BEFORE splitting.
       if (!firstName && !lastName) {
         const rawName = rows[i]['Name'] || rows[i]['name'] || rows[i]['Couple Name'] || rows[i]['couple_name'] || ''
         if (rawName) {
-          const split = splitName(rawName)
-          firstName = split.first
-          lastName = split.last
+          // If the raw cell carries a role descriptor, the named human
+          // is NOT the partner — they're a relative / planner / etc.
+          // Skip the partner row creation entirely; the relationship
+          // capture below will record them.
+          p1RoleDescriptor = detectRoleDescriptor(rawName)
+          if (p1RoleDescriptor) {
+            // Don't populate firstName/lastName — the importer would
+            // create a partner1 person for a non-partner human. Leave
+            // both blank; the wedding_relationships insert downstream
+            // catches them.
+            firstName = ''
+            lastName = ''
+          } else {
+            const split = splitName(rawName)
+            firstName = split.first
+            lastName = split.last
+          }
         }
       }
 
@@ -246,8 +312,105 @@ export async function importClientList(
 
       // Partner2: insert if not already present (the resolver only
       // canonicalizes the partner1 identity).
-      const partnerFirst = row.partner_first_name || ''
-      const partnerLast = row.partner_last_name || ''
+      //
+      // Wave 2B fixes:
+      //   1. Parenthetical role descriptor on partner_first_name (e.g.
+      //      "Carrie Merlin (mother of the Bride)") — route to
+      //      wedding_relationships instead of partner2.
+      //   2. Phantom partner detector — drop "Brett & Brett" duplicates
+      //      and stamp partner_count=1 on the wedding.
+      //   3. Empty-string ilike bug — only fire dedup query when
+      //      partner_first_name is non-empty.
+      //   4. Route partner2 INSERT through chokepoint with csv_import.
+      const partnerFirstRaw = row.partner_first_name || ''
+      const partnerLastRaw = row.partner_last_name || ''
+      const partnerFullForRole = `${partnerFirstRaw} ${partnerLastRaw}`.trim()
+      p2RoleDescriptor = detectRoleDescriptor(partnerFullForRole)
+
+      // Lazy-import the chokepoint helpers.
+      const { captureNameEvidence, detectPhantomPartner } = await import(
+        '@/lib/services/identity/name-capture'
+      )
+
+      let partnerFirst = partnerFirstRaw
+      let partnerLast = partnerLastRaw
+      // If the partner cell carries a role descriptor, strip parenthetical
+      // and route the named human to wedding_relationships instead of
+      // partner2.
+      if (p2RoleDescriptor) {
+        // Suppress any later partner2 insertion — clear the raw cells
+        // so the dedupe + insert branches below don't fire.
+        partnerFirst = ''
+        partnerLast = ''
+        // Insert the relationship row.
+        try {
+          await supabase.from('wedding_relationships').insert({
+            venue_id: venueId,
+            wedding_id: resolvedWeddingId,
+            full_name: p2RoleDescriptor.cleanName || partnerFullForRole,
+            relationship_role: p2RoleDescriptor.role,
+            detail: p2RoleDescriptor.detail,
+            email: row.partner_email || null,
+            source: 'csv_import',
+            confidence: 80,
+          })
+        } catch (err) {
+          // wedding_relationships table missing (mig 255 not yet
+          // applied) — fall back to leaving the partner2 cell blank;
+          // the coordinator will see the unmapped name in the audit
+          // warning rather than as a bogus partner row.
+          errors.push(
+            `Row ${i + 1}: detected role descriptor "${p2RoleDescriptor.detail ?? p2RoleDescriptor.role}" ` +
+            `but failed to write wedding_relationships: ${err instanceof Error ? err.message : 'unknown'}`,
+          )
+        }
+      }
+
+      // Same role-descriptor rescue for partner1 when detected on the
+      // combined-name cell upstream.
+      if (p1RoleDescriptor) {
+        try {
+          await supabase.from('wedding_relationships').insert({
+            venue_id: venueId,
+            wedding_id: resolvedWeddingId,
+            full_name: p1RoleDescriptor.cleanName,
+            relationship_role: p1RoleDescriptor.role,
+            detail: p1RoleDescriptor.detail,
+            email: email || null,
+            source: 'csv_import',
+            confidence: 80,
+          })
+        } catch (err) {
+          errors.push(
+            `Row ${i + 1}: detected role descriptor "${p1RoleDescriptor.detail ?? p1RoleDescriptor.role}" ` +
+            `on partner1 cell, but failed to write wedding_relationships: ` +
+            (err instanceof Error ? err.message : 'unknown'),
+          )
+        }
+      }
+
+      // Phantom partner detector — partner2 first === partner1 first AND
+      // no last AND no own email → drop and stamp partner_count=1.
+      if (partnerFirst) {
+        const isPhantom = detectPhantomPartner(
+          { first: firstName || null, last: lastName || null, email: email || null },
+          { first: partnerFirst, last: partnerLast || null, email: row.partner_email || null },
+        )
+        if (isPhantom) {
+          try {
+            await supabase
+              .from('weddings')
+              .update({ partner_count: 1 })
+              .eq('id', resolvedWeddingId)
+          } catch (err) {
+            console.warn('[data-import] partner_count phantom stamp failed:',
+              err instanceof Error ? err.message : err)
+          }
+          partnerFirst = ''
+          partnerLast = ''
+        }
+      }
+
       if (partnerFirst) {
         const { data: existingP2 } = await supabase
           .from('people')
@@ -257,17 +420,50 @@ export async function importClientList(
           .ilike('first_name', partnerFirst)
           .limit(1)
         if (!existingP2 || existingP2.length === 0) {
-          await supabase.from('people').insert({
-            venue_id: venueId,
-            wedding_id: resolvedWeddingId,
-            role: 'partner2',
-            first_name: partnerFirst,
-            last_name: partnerLast,
-            email: row.partner_email || null,
-          })
+          const { data: p2 } = await supabase
+            .from('people')
+            .insert({
+              venue_id: venueId,
+              wedding_id: resolvedWeddingId,
+              role: 'partner2',
+              first_name: partnerFirst,
+              last_name: partnerLast,
+              email: row.partner_email || null,
+            })
+            .select('id')
+            .single()
+          if (p2?.id) {
+            try {
+              await captureNameEvidence(supabase, p2.id as string, {
+                first: partnerFirst,
+                last: partnerLast || null,
+                email: row.partner_email || null,
+                source: 'csv_import',
+              })
+            } catch (err) {
+              console.warn('[data-import] name-capture (partner2) failed:',
+                err instanceof Error ? err.message : err)
+            }
+          }
         }
       }
-      void resolvedPartner1Id
+      // Capture partner1 evidence onto the resolver-attached canonical
+      // person row so the importer's structured first/last enters the
+      // evidence list. Skip when neither partner1 cell carried a name
+      // (e.g. because of a role descriptor that emptied the cells).
+      if (resolvedPartner1Id && (firstName || lastName)) {
+        try {
+          await captureNameEvidence(supabase, resolvedPartner1Id, {
+            first: firstName || null,
+            last: lastName || null,
+            email: email || null,
+            source: 'csv_import',
+          })
+        } catch (err) {
+          console.warn('[data-import] name-capture (partner1) failed:',
+            err instanceof Error ? err.message : err)
+        }
+      }
 
       imported++
     } catch (err) {
