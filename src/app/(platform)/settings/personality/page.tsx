@@ -119,6 +119,13 @@ export default function PersonalityPage() {
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [newExpression, setNewExpression] = useState('')
+  // Live preview state. The hardcoded string-template fallback in
+  // generatePreviewEmail() runs first on initial render so the user
+  // sees something instantly; once the AI preview lands, it replaces
+  // the fallback. Debounced fetch fires when config changes.
+  const [aiPreview, setAiPreview] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
 
   // Load venue-specific AI config. Previously did `.limit(1).single()`
   // with no filter, which loaded whichever venue_ai_config row Postgres
@@ -149,6 +156,50 @@ export default function PersonalityPage() {
     }
     load()
   }, [venueId, scopeLoading])
+
+  // Debounced live preview: when config changes, wait 800ms then fetch
+  // a real Sage-generated preview using the in-flight working state.
+  // 800ms balances responsiveness against the cost of every slider
+  // wiggle firing a Claude call.
+  useEffect(() => {
+    if (!config || !venueId) return
+    if (!config.ai_name) {
+      setAiPreview(null)
+      setPreviewError('Set the AI Name field to render a live preview.')
+      return
+    }
+    setPreviewError(null)
+    const controller = new AbortController()
+    const timer = setTimeout(async () => {
+      setPreviewLoading(true)
+      try {
+        const res = await fetch('/api/settings/personality/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ config }),
+          signal: controller.signal,
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          setPreviewError(data.error ?? 'Preview failed')
+          setAiPreview(null)
+        } else {
+          setAiPreview((data.draft as string) ?? null)
+          setPreviewError(null)
+        }
+      } catch (err) {
+        if ((err as { name?: string })?.name !== 'AbortError') {
+          setPreviewError('Preview request failed')
+        }
+      } finally {
+        setPreviewLoading(false)
+      }
+    }, 800)
+    return () => {
+      controller.abort()
+      clearTimeout(timer)
+    }
+  }, [config, venueId])
 
   // Save handler
   const handleSave = useCallback(async () => {
@@ -707,9 +758,12 @@ ${name}`
         <div className="flex items-center gap-2 mb-4">
           <Sparkles className="w-5 h-5 text-sage-500" />
           <h2 className="font-heading text-xl font-semibold text-sage-900">Live Preview</h2>
+          {previewLoading && (
+            <span className="text-xs text-sage-500 italic">{config.ai_name || 'Sage'} is drafting...</span>
+          )}
         </div>
         <p className="text-xs text-sage-500 mb-4">
-          This is how {config.ai_name || 'your AI'} would write an initial response to a new inquiry with the current settings.
+          A real {config.ai_name || 'AI'} draft using the same engine that ships your live emails. Drag a slider, the preview re-renders.
         </p>
 
         <div className="bg-warm-white border border-border rounded-xl p-6">
@@ -728,10 +782,17 @@ ${name}`
             </div>
           </div>
 
-          {/* Email body */}
+          {/* Email body. AI draft when available, otherwise the
+              hardcoded string-template fallback. The fallback runs
+              instantly so the section is never empty. */}
           <div className="whitespace-pre-line text-sm text-sage-800 leading-relaxed">
-            {generatePreviewEmail()}
+            {aiPreview ?? generatePreviewEmail()}
           </div>
+          {previewError && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded mt-3 px-3 py-2">
+              {previewError}
+            </p>
+          )}
         </div>
       </section>
 
