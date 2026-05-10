@@ -1,0 +1,752 @@
+/**
+ * Bloom House — Wave 4 Identity Reconstruction Service
+ *
+ * Anchor docs:
+ *   - bloom-constitution.md (forensic identity reconstruction is the
+ *     thesis; every populated claim has a verbatim evidence_quote)
+ *   - bloom-wave4-identity-reconstruction.md (this service is the ONE
+ *     Sonnet judge per couple that replaces ~15 heuristic detectors)
+ *   - bloom-may9-llm-vs-template.md (every "AI / Sage / smart" surface
+ *     is backed by a real callAI; Wave 4 extends to extractors)
+ *
+ * What this service does
+ * ----------------------
+ * Given a wedding_id, gather every signal we have on disk (interactions,
+ * calculator submissions, HoneyBook contacts, calendar invites,
+ * Calendly bookings, reviews, contracts, payments, tangential signals /
+ * cross-platform handles) → feed it all into one Sonnet call → parse +
+ * validate the structured response → upsert into
+ * couple_identity_profile.
+ *
+ * One LLM call per couple. Cost target $0.03-$0.08 per reconstruction.
+ *
+ * What this service does NOT do (Phase 1)
+ * ---------------------------------------
+ * - It does NOT enqueue jobs into identity_reconstruction_jobs (Phase
+ *   2 wires the pipeline + cron).
+ * - It does NOT delete or modify heuristic detectors (Phase 4).
+ * - It does NOT migrate read surfaces (Phase 3).
+ * - It does NOT touch the live `people.first_name` / `last_name`
+ *   columns — those still flow through the Wave 2/3 chokepoint until
+ *   Phase 4 retires the heuristic detectors.
+ *
+ * The service is idempotent on signal-stable data (temperature 0.2
+ * keeps the model close to deterministic). Re-running on a clean
+ * wedding produces a profile that differs by trivial wording, not by
+ * structural shape.
+ */
+
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { createServiceClient } from '@/lib/supabase/service'
+import { callAI } from '@/lib/ai/client'
+import {
+  buildSystemPrompt,
+  buildUserPrompt,
+  validateCoupleIdentityProfile,
+  IDENTITY_RECONSTRUCTION_PROMPT_VERSION,
+  type CoupleIdentityProfile,
+  type ReconstructionEvidence,
+  type InteractionEvidence,
+  type CalculatorEvidence,
+  type HoneyBookEvidence,
+  type CalendarEvidence,
+  type ReviewEvidence,
+  type ContractEvidence,
+  type PaymentEvidence,
+  type HandleEvidence,
+} from '@/config/prompts/identity-reconstruction'
+
+// Re-export so callers don't have to import from two places.
+export {
+  IDENTITY_RECONSTRUCTION_PROMPT_VERSION,
+  type CoupleIdentityProfile,
+} from '@/config/prompts/identity-reconstruction'
+
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+export interface EvidenceSummary {
+  interactions_count: number
+  calculator_count: number
+  honeybook_present: boolean
+  calendar_count: number
+  reviews_count: number
+  contracts_count: number
+  tangentials_count: number
+  payments_count: number
+}
+
+export interface ReconstructResult {
+  profile: CoupleIdentityProfile
+  costCents: number
+  promptVersion: string
+  evidenceSummary: EvidenceSummary
+  inputTokens: number
+  outputTokens: number
+  reconstructionCount: number
+  lastSignalAt: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Bounds — kept here (not in the prompt module) because the bounds are
+// pipeline-cost knobs, not prompt-shape contracts.
+// ---------------------------------------------------------------------------
+
+const MAX_INTERACTIONS_FETCHED = 200
+const MAX_REVIEW_FETCHED = 25
+const MAX_TANGENTIAL_FETCHED = 50
+const MAX_CALENDAR_FETCHED = 25
+
+// ---------------------------------------------------------------------------
+// Evidence loaders. Each is best-effort: if the table doesn't exist on
+// this environment OR RLS blocks the read OR the schema drifts, we log
+// and continue. Identity reconstruction is forensic — partial evidence
+// is better than none.
+// ---------------------------------------------------------------------------
+
+interface WeddingRow {
+  id: string
+  venue_id: string
+  inquiry_date: string | null
+  wedding_date: string | null
+  status: string | null
+  source: string | null
+  guest_count_estimate: number | null
+  notes: string | null
+  // HoneyBook-shaped CRM fields (present when an import has run for
+  // this wedding; null otherwise). Migration 175 added these.
+  crm_external_id: string | null
+  crm_team_members: unknown
+  // merged_into_id is checked by the resolver upstream; we still
+  // accept tombstoned weddings here because the caller may want to
+  // re-reconstruct a tombstoned record for debugging. The endpoint
+  // layer enforces non-tombstone for normal calls.
+  merged_into_id: string | null
+}
+
+interface PersonRow {
+  role: string | null
+  first_name: string | null
+  last_name: string | null
+  email: string | null
+  phone: string | null
+}
+
+interface InteractionRow {
+  id: string
+  direction: string | null
+  from_email: string | null
+  from_name: string | null
+  subject: string | null
+  full_body: string | null
+  body_preview: string | null
+  timestamp: string | null
+}
+
+interface ContractRow {
+  id: string
+  filename: string | null
+  extracted_text: string | null
+  created_at: string | null
+}
+
+interface ReviewRow {
+  id: string
+  reviewer_name: string | null
+  source: string | null
+  rating: number | null
+  body: string | null
+  review_date: string | null
+}
+
+interface TangentialRow {
+  id: string
+  source_platform: string | null
+  signal_date: string | null
+  source_context: string | null
+  extracted_identity: Record<string, unknown> | null
+}
+
+async function loadWedding(
+  supabase: SupabaseClient,
+  weddingId: string,
+): Promise<WeddingRow | null> {
+  const { data, error } = await supabase
+    .from('weddings')
+    .select(
+      'id, venue_id, inquiry_date, wedding_date, status, source, guest_count_estimate, notes, crm_external_id, crm_team_members, merged_into_id',
+    )
+    .eq('id', weddingId)
+    .maybeSingle()
+  if (error) {
+    throw new Error(`reconstruct.loadWedding failed: ${error.message}`)
+  }
+  return (data as WeddingRow | null) ?? null
+}
+
+async function loadPeople(
+  supabase: SupabaseClient,
+  weddingId: string,
+): Promise<PersonRow[]> {
+  const { data, error } = await supabase
+    .from('people')
+    .select('role, first_name, last_name, email, phone, merged_into_id')
+    .eq('wedding_id', weddingId)
+    .is('merged_into_id', null)
+  if (error) {
+    console.warn('[reconstruct] loadPeople failed:', error.message)
+    return []
+  }
+  return (data ?? []).map((r) => ({
+    role: (r as { role: string | null }).role,
+    first_name: (r as { first_name: string | null }).first_name,
+    last_name: (r as { last_name: string | null }).last_name,
+    email: (r as { email: string | null }).email,
+    phone: (r as { phone: string | null }).phone,
+  }))
+}
+
+async function loadInteractions(
+  supabase: SupabaseClient,
+  weddingId: string,
+): Promise<InteractionRow[]> {
+  const { data, error } = await supabase
+    .from('interactions')
+    .select('id, direction, from_email, from_name, subject, full_body, body_preview, timestamp')
+    .eq('wedding_id', weddingId)
+    .order('timestamp', { ascending: true })
+    .limit(MAX_INTERACTIONS_FETCHED)
+  if (error) {
+    console.warn('[reconstruct] loadInteractions failed:', error.message)
+    return []
+  }
+  return (data ?? []) as InteractionRow[]
+}
+
+async function loadContracts(
+  supabase: SupabaseClient,
+  weddingId: string,
+): Promise<ContractRow[]> {
+  const { data, error } = await supabase
+    .from('contracts')
+    .select('id, filename, extracted_text, created_at')
+    .eq('wedding_id', weddingId)
+    .order('created_at', { ascending: true })
+  if (error) {
+    console.warn('[reconstruct] loadContracts failed:', error.message)
+    return []
+  }
+  return (data ?? []) as ContractRow[]
+}
+
+async function loadTangentials(
+  supabase: SupabaseClient,
+  weddingId: string,
+  venueId: string,
+): Promise<TangentialRow[]> {
+  // tangential_signals is venue-scoped; it links to a person, not a
+  // wedding directly. We collect signals matched to any people on this
+  // wedding via the people table's resolution.
+  const { data: peopleData } = await supabase
+    .from('people')
+    .select('id')
+    .eq('wedding_id', weddingId)
+  const peopleIds = ((peopleData ?? []) as Array<{ id: string }>).map((p) => p.id)
+  if (peopleIds.length === 0) return []
+  const { data, error } = await supabase
+    .from('tangential_signals')
+    .select('id, source_platform, signal_date, source_context, extracted_identity, matched_person_id')
+    .eq('venue_id', venueId)
+    .in('matched_person_id', peopleIds)
+    .order('signal_date', { ascending: false })
+    .limit(MAX_TANGENTIAL_FETCHED)
+  if (error) {
+    console.warn('[reconstruct] loadTangentials failed:', error.message)
+    return []
+  }
+  return ((data ?? []) as Array<TangentialRow & { matched_person_id: string }>)
+}
+
+async function loadReviewsForCouple(
+  supabase: SupabaseClient,
+  venueId: string,
+  people: PersonRow[],
+): Promise<ReviewRow[]> {
+  // Reviews are venue-scoped (no wedding_id FK). Loose match by
+  // reviewer_name containing one of the partner first or last names.
+  const candidates = new Set<string>()
+  for (const p of people) {
+    if (p.first_name && p.first_name.length >= 3) candidates.add(p.first_name.toLowerCase())
+    if (p.last_name && p.last_name.length >= 3) candidates.add(p.last_name.toLowerCase())
+  }
+  if (candidates.size === 0) return []
+  const { data, error } = await supabase
+    .from('reviews')
+    .select('id, reviewer_name, source, rating, body, review_date')
+    .eq('venue_id', venueId)
+    .order('review_date', { ascending: false })
+    .limit(100) // pre-filter cap; downstream filter narrows
+  if (error) {
+    console.warn('[reconstruct] loadReviewsForCouple failed:', error.message)
+    return []
+  }
+  const filtered: ReviewRow[] = []
+  for (const r of ((data ?? []) as ReviewRow[])) {
+    if (filtered.length >= MAX_REVIEW_FETCHED) break
+    const name = (r.reviewer_name ?? '').toLowerCase()
+    if (!name) continue
+    let hit = false
+    for (const c of candidates) {
+      if (name.includes(c)) {
+        hit = true
+        break
+      }
+    }
+    if (hit) filtered.push(r)
+  }
+  return filtered
+}
+
+// ---------------------------------------------------------------------------
+// HoneyBook + Calendar + Payment loaders.
+//
+// HoneyBook lives in the weddings row itself in this codebase (the
+// importer writes crm_external_id, crm_team_members, plus the partner
+// names go into people rows + booking_value into the wedding shell).
+// We expose what we have on the row + a synthesised "honeybook_present"
+// flag for the evidence_summary; the model gets the team_members blob
+// plus the person rows already on the wedding.
+//
+// Calendars + payments do NOT have dedicated tables in this codebase
+// today. Calendar evidence is implicit in interactions whose subject
+// contains "Tour" / "Calendly" / "Invitation" — the model reads those
+// from the interactions section directly. This loader returns empty
+// arrays and the caller treats that as "no dedicated calendar source"
+// → calendar_count counts implicit calendar-shaped interactions.
+// ---------------------------------------------------------------------------
+
+function deriveHoneyBookEvidence(
+  wedding: WeddingRow,
+  people: PersonRow[],
+): HoneyBookEvidence | null {
+  // If there's no crm_external_id at all and no team members, treat
+  // this wedding as not having a HoneyBook record.
+  if (!wedding.crm_external_id && !wedding.crm_team_members) return null
+
+  const partner1 = people.find((p) => p.role === 'partner1') ?? null
+  const partner2 = people.find((p) => p.role === 'partner2') ?? null
+
+  return {
+    external_id: wedding.crm_external_id,
+    client_name: partner1
+      ? [partner1.first_name, partner1.last_name].filter(Boolean).join(' ').trim() || null
+      : null,
+    partner_name: partner2
+      ? [partner2.first_name, partner2.last_name].filter(Boolean).join(' ').trim() || null
+      : null,
+    email: partner1?.email ?? null,
+    phone: partner1?.phone ?? null,
+    team_members: wedding.crm_team_members ?? null,
+    notes: wedding.notes,
+  }
+}
+
+/** Pull calendar-shaped interactions (Calendly invites, tour
+ *  confirmations, Google Calendar invites that landed via email) from
+ *  the interactions list. The model still sees these interactions in
+ *  the email section; this function exists so we can count them in the
+ *  evidence_summary and surface them as a separate top-level section
+ *  the model can reason about. */
+function deriveCalendarEvidence(interactions: InteractionRow[]): CalendarEvidence[] {
+  const out: CalendarEvidence[] = []
+  let idx = 0
+  for (const i of interactions) {
+    if (out.length >= MAX_CALENDAR_FETCHED) break
+    const subj = (i.subject ?? '').toLowerCase()
+    const body = (i.full_body ?? '').toLowerCase()
+    const isCalendar =
+      subj.includes('invitation') ||
+      subj.includes('calendly') ||
+      subj.includes('tour confirmation') ||
+      subj.includes('your tour') ||
+      subj.includes('appointment') ||
+      body.includes('calendly.com') ||
+      body.includes('google.com/calendar')
+    if (!isCalendar) continue
+    idx += 1
+    out.push({
+      index: idx,
+      source: subj.includes('calendly') || body.includes('calendly.com') ? 'calendly' : 'calendar_invite',
+      title: i.subject,
+      attendees: [i.from_name, i.from_email].filter(Boolean).join(' | ') || null,
+      timestamp: i.timestamp,
+      notes: i.body_preview,
+    })
+  }
+  return out
+}
+
+/** Pull calculator-shaped interactions. The codebase doesn't have a
+ *  dedicated calculator_submissions table; calculator data lands as a
+ *  parsed interaction with a recognisable subject/body. */
+function deriveCalculatorEvidence(interactions: InteractionRow[]): CalculatorEvidence[] {
+  const out: CalculatorEvidence[] = []
+  let idx = 0
+  for (const i of interactions) {
+    const subj = (i.subject ?? '').toLowerCase()
+    const body = (i.full_body ?? '').toLowerCase()
+    const isCalc =
+      subj.includes('estimate') ||
+      subj.includes('calculator') ||
+      body.includes('new calculator submission') ||
+      body.includes('estimate calculator')
+    if (!isCalc) continue
+    idx += 1
+    out.push({
+      index: idx,
+      timestamp: i.timestamp,
+      // Use the interaction body as the "form_data" payload. The model
+      // will parse field labels (Name, Email, Date, Guest Count, etc.)
+      // out of the body itself.
+      form_data: i.full_body ?? i.body_preview ?? '(empty)',
+    })
+  }
+  return out
+}
+
+function deriveHandleEvidence(tangentials: TangentialRow[]): HandleEvidence[] {
+  const out: HandleEvidence[] = []
+  for (const t of tangentials) {
+    const ei = t.extracted_identity ?? null
+    if (!ei) continue
+    const username = typeof ei.username === 'string' ? ei.username : null
+    const handle = typeof ei.handle === 'string' ? ei.handle : null
+    const value = (username ?? handle ?? '').trim()
+    if (!value) continue
+    out.push({
+      platform: t.source_platform ?? 'unknown',
+      handle: value,
+      signal_date: t.signal_date,
+      context: t.source_context,
+    })
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// Build the ReconstructionEvidence object.
+// ---------------------------------------------------------------------------
+
+async function buildEvidence(
+  supabase: SupabaseClient,
+  weddingId: string,
+): Promise<{
+  evidence: ReconstructionEvidence
+  summary: EvidenceSummary
+  lastSignalAt: string | null
+  venueId: string
+}> {
+  const wedding = await loadWedding(supabase, weddingId)
+  if (!wedding) {
+    throw new Error(`reconstruct: wedding ${weddingId} not found`)
+  }
+  const venueId = wedding.venue_id
+
+  const [people, interactions, contracts, tangentials, venueRow] = await Promise.all([
+    loadPeople(supabase, weddingId),
+    loadInteractions(supabase, weddingId),
+    loadContracts(supabase, weddingId),
+    loadTangentials(supabase, weddingId, venueId),
+    supabase.from('venues').select('name').eq('id', venueId).maybeSingle(),
+  ])
+  // Reviews depend on people being loaded first (loose name match).
+  const reviews = await loadReviewsForCouple(supabase, venueId, people)
+
+  const honeybook = deriveHoneyBookEvidence(wedding, people)
+  const calendars = deriveCalendarEvidence(interactions)
+  const calculators = deriveCalculatorEvidence(interactions)
+  const handles = deriveHandleEvidence(tangentials)
+
+  // Map interactions to InteractionEvidence with canonicalised
+  // direction values + bounded body.
+  const interactionEvidence: InteractionEvidence[] = interactions.map((i, idx) => ({
+    index: idx + 1,
+    direction: (i.direction === 'outbound' ? 'outbound' : 'inbound') as 'inbound' | 'outbound',
+    from_email: i.from_email,
+    from_name: i.from_name,
+    subject: i.subject,
+    body: i.full_body ?? i.body_preview ?? null,
+    timestamp: i.timestamp,
+  }))
+
+  const contractEvidence: ContractEvidence[] = contracts.map((c, idx) => ({
+    index: idx + 1,
+    filename: c.filename,
+    extracted_text: c.extracted_text,
+    created_at: c.created_at,
+  }))
+
+  const reviewEvidence: ReviewEvidence[] = reviews.map((r, idx) => ({
+    index: idx + 1,
+    reviewer_name: r.reviewer_name,
+    source: r.source ?? 'unknown',
+    rating: r.rating,
+    body: r.body,
+    date: r.review_date,
+  }))
+
+  // Payments table doesn't exist as a couple-scoped concept here; the
+  // codebase tracks payment amounts on contract / wedding rows. Keep
+  // the array empty so the prompt section is suppressed cleanly.
+  const payments: PaymentEvidence[] = []
+
+  const venueLabel = (venueRow.data as { name?: string } | null)?.name ?? null
+
+  // last_signal_at = newest of (interaction, contract, tangential).
+  const candidates: number[] = []
+  for (const i of interactions) {
+    if (i.timestamp) candidates.push(Date.parse(i.timestamp))
+  }
+  for (const c of contracts) {
+    if (c.created_at) candidates.push(Date.parse(c.created_at))
+  }
+  for (const t of tangentials) {
+    if (t.signal_date) candidates.push(Date.parse(t.signal_date))
+  }
+  const lastSignalAt =
+    candidates.length > 0 ? new Date(Math.max(...candidates)).toISOString() : null
+
+  const evidence: ReconstructionEvidence = {
+    weddingId,
+    venueLabel,
+    weddingShell: {
+      inquiry_date: wedding.inquiry_date,
+      wedding_date: wedding.wedding_date,
+      status: wedding.status,
+      source: wedding.source,
+      guest_count_estimate: wedding.guest_count_estimate,
+      notes: wedding.notes,
+    },
+    people: people.map((p) => ({
+      role: p.role,
+      first_name: p.first_name,
+      last_name: p.last_name,
+      email: p.email,
+      phone: p.phone,
+    })),
+    interactions: interactionEvidence,
+    calculators,
+    honeybook,
+    calendars,
+    reviews: reviewEvidence,
+    contracts: contractEvidence,
+    payments,
+    handles,
+  }
+
+  const summary: EvidenceSummary = {
+    interactions_count: interactionEvidence.length,
+    calculator_count: calculators.length,
+    honeybook_present: honeybook !== null,
+    calendar_count: calendars.length,
+    reviews_count: reviewEvidence.length,
+    contracts_count: contractEvidence.length,
+    tangentials_count: tangentials.length,
+    payments_count: payments.length,
+  }
+
+  return { evidence, summary, lastSignalAt, venueId }
+}
+
+// ---------------------------------------------------------------------------
+// Strip code fences from the model output. callAI returns raw text;
+// the prompt instructs the model to omit fences but defensive parsing
+// still strips them in case the model adds them anyway.
+// ---------------------------------------------------------------------------
+function stripJsonFences(text: string): string {
+  return text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+}
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
+
+export interface ReconstructOptions {
+  /** Optional client override (tests). Defaults to service-role. */
+  supabase?: SupabaseClient
+  /** Optional correlation id (threaded into api_costs.correlation_id). */
+  correlationId?: string
+}
+
+/**
+ * Reconstruct couple identity for a single wedding. One Sonnet call.
+ * Upserts into couple_identity_profile.
+ *
+ * Throws on:
+ *   - wedding not found
+ *   - LLM call fails (callAI handles fallback; if both Anthropic AND
+ *     OpenAI fail, callAI itself throws)
+ *   - LLM response cannot be JSON-parsed or fails schema validation —
+ *     the error message includes the raw response for postmortem.
+ */
+export async function reconstructCoupleIdentity(
+  weddingId: string,
+  options: ReconstructOptions = {},
+): Promise<ReconstructResult> {
+  const supabase = options.supabase ?? createServiceClient()
+  const correlationId = options.correlationId
+
+  // 1. Gather evidence in parallel.
+  const { evidence, summary, lastSignalAt, venueId } = await buildEvidence(supabase, weddingId)
+
+  // 2. Build prompts.
+  const systemPrompt = buildSystemPrompt()
+  const userPrompt = buildUserPrompt(evidence)
+
+  // 3. Call the Sonnet judge.
+  const aiResult = await callAI({
+    systemPrompt,
+    userPrompt,
+    tier: 'sonnet',
+    taskType: 'identity_reconstruction',
+    contentTier: 2,
+    promptVersion: IDENTITY_RECONSTRUCTION_PROMPT_VERSION,
+    venueId,
+    maxTokens: 4000,
+    temperature: 0.2,
+    correlationId,
+  })
+
+  // 4. Parse + validate.
+  const cleaned = stripJsonFences(aiResult.text)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(cleaned)
+  } catch (parseErr) {
+    const message = parseErr instanceof Error ? parseErr.message : String(parseErr)
+    throw new Error(
+      `reconstruct: LLM returned non-JSON. parseError=${message} ` +
+        `rawResponse=${cleaned.slice(0, 2000)}`,
+    )
+  }
+  const validation = validateCoupleIdentityProfile(parsed)
+  if (!validation.ok) {
+    throw new Error(
+      `reconstruct: schema validation failed. error=${validation.error} ` +
+        `rawResponse=${cleaned.slice(0, 2000)}`,
+    )
+  }
+  const profile = validation.profile
+
+  // 5. Upsert. cost_cents accumulates across reconstructions, so we
+  //    read the existing row's cumulative cost first and add the new
+  //    call's cost on top. reconstruction_count increments by 1.
+  //
+  //    aiResult.cost is dollars; cost_cents column stores cents.
+  const newCallCostCents = aiResult.cost * 100
+
+  const { data: existing } = await supabase
+    .from('couple_identity_profile')
+    .select('cost_cents, reconstruction_count')
+    .eq('wedding_id', weddingId)
+    .maybeSingle()
+
+  const existingCostCents = existing
+    ? Number((existing as { cost_cents: number | string }).cost_cents) || 0
+    : 0
+  const existingCount = existing
+    ? Number((existing as { reconstruction_count: number }).reconstruction_count) || 0
+    : 0
+  const cumulativeCostCents = existingCostCents + newCallCostCents
+  const newCount = existing ? existingCount + 1 : 1
+
+  const upsertRow = {
+    wedding_id: weddingId,
+    venue_id: venueId,
+    profile,
+    evidence_summary: summary,
+    last_reconstructed_at: new Date().toISOString(),
+    last_signal_at: lastSignalAt,
+    reconstruction_count: newCount,
+    prompt_version: IDENTITY_RECONSTRUCTION_PROMPT_VERSION,
+    cost_cents: cumulativeCostCents,
+  }
+
+  const { error: upsertErr } = await supabase
+    .from('couple_identity_profile')
+    .upsert(upsertRow, { onConflict: 'wedding_id' })
+
+  if (upsertErr) {
+    throw new Error(`reconstruct: upsert failed: ${upsertErr.message}`)
+  }
+
+  return {
+    profile,
+    costCents: newCallCostCents,
+    promptVersion: IDENTITY_RECONSTRUCTION_PROMPT_VERSION,
+    evidenceSummary: summary,
+    inputTokens: aiResult.inputTokens,
+    outputTokens: aiResult.outputTokens,
+    reconstructionCount: newCount,
+    lastSignalAt,
+  }
+}
+
+/**
+ * Read the stored profile for a wedding. Returns null when no row
+ * exists. Used by GET /api/admin/identity/reconstruct and by every
+ * read surface (Phase 3) to avoid re-extracting from raw bodies.
+ */
+export interface StoredCoupleIdentityProfile {
+  weddingId: string
+  venueId: string
+  profile: CoupleIdentityProfile
+  evidenceSummary: EvidenceSummary
+  lastReconstructedAt: string
+  lastSignalAt: string | null
+  reconstructionCount: number
+  promptVersion: string
+  costCents: number
+}
+
+export async function getStoredCoupleIdentityProfile(
+  weddingId: string,
+  options: { supabase?: SupabaseClient } = {},
+): Promise<StoredCoupleIdentityProfile | null> {
+  const supabase = options.supabase ?? createServiceClient()
+  const { data, error } = await supabase
+    .from('couple_identity_profile')
+    .select(
+      'wedding_id, venue_id, profile, evidence_summary, last_reconstructed_at, last_signal_at, reconstruction_count, prompt_version, cost_cents',
+    )
+    .eq('wedding_id', weddingId)
+    .maybeSingle()
+  if (error) {
+    console.warn('[reconstruct] getStoredCoupleIdentityProfile failed:', error.message)
+    return null
+  }
+  if (!data) return null
+  const row = data as {
+    wedding_id: string
+    venue_id: string
+    profile: CoupleIdentityProfile
+    evidence_summary: EvidenceSummary
+    last_reconstructed_at: string
+    last_signal_at: string | null
+    reconstruction_count: number
+    prompt_version: string
+    cost_cents: number | string
+  }
+  return {
+    weddingId: row.wedding_id,
+    venueId: row.venue_id,
+    profile: row.profile,
+    evidenceSummary: row.evidence_summary,
+    lastReconstructedAt: row.last_reconstructed_at,
+    lastSignalAt: row.last_signal_at,
+    reconstructionCount: row.reconstruction_count,
+    promptVersion: row.prompt_version,
+    costCents: Number(row.cost_cents) || 0,
+  }
+}
