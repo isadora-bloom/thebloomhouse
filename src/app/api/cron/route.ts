@@ -262,6 +262,24 @@ const VALID_JOBS = [
   // Routed through the dispatcher to stay under the 40-cron Vercel Pro
   // ceiling.
   'couple_intel_sweep',
+  // Wave 5B (2026-05-10). Per-venue cohort rollup synthesizer. Sonnet
+  // weekly aggregation across the venue's couples → emerging themes,
+  // conversion correlations, voice calibration, service demand,
+  // timing patterns. Cost ~$2-5/venue/week. Drains venue_intel_jobs +
+  // refreshes 7d-stale drift candidates.
+  'cohort_rollup_sweep',
+  // Wave 6A (2026-05-10). Marketing spend connector sync. Iterates
+  // venues with spend_auto_sync_enabled. Connector stubs for Google
+  // Ads / Meta / TikTok; manual + Knot fee paths live. Idempotent on
+  // (venue, channel, campaign, date) unique constraint.
+  'spend_sync_sweep',
+  // Wave 7B (2026-05-10). Forensic channel-role classifier. Reads
+  // attribution_role_jobs queue + drift-refreshes events whose
+  // role_classified_at < 30d. Forensic rule first; Sonnet judge for
+  // ambiguous mixed/unknown cases. Reveals validation-vs-acquisition
+  // distortion (~18-19% of Rixey Knot leads forensically reclassify
+  // as validation-not-acquisition).
+  'attribution_role_sweep',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -655,6 +673,31 @@ async function runJob(job: JobName): Promise<unknown> {
       // (Sonnet, ~3000 max output tokens).
       const { runCoupleIntelSweep } = await import('@/lib/services/intel/couple-intel-sweep')
       return runCoupleIntelSweep()
+    }
+
+    case 'cohort_rollup_sweep': {
+      // Wave 5B. Drains venue_intel_jobs + 7d-stale drift refresh. 5
+      // venue rollups per tick (cohort rollup is per-venue not per-couple
+      // so volume is low). Sonnet aggregation, ~$2-5/venue/week.
+      const { runCohortRollupSweep } = await import('@/lib/services/intel/cohort-rollup-sweep')
+      return runCohortRollupSweep()
+    }
+
+    case 'spend_sync_sweep': {
+      // Wave 6A. Iterates venues with spend_auto_sync_enabled, dispatches
+      // to configured connector. Stubs for Google Ads / Meta / TikTok;
+      // manual + Knot fee paths live. Returns connector status per venue.
+      const { runSpendSyncSweep } = await import('@/lib/services/marketing-spend/spend-sync-sweep')
+      return runSpendSyncSweep()
+    }
+
+    case 'attribution_role_sweep': {
+      // Wave 7B. Drains attribution_role_jobs + 30d-stale drift refresh.
+      // 50 events per tick. Forensic rule first (acquisition vs
+      // validation vs conversion based on pre-inquiry engagement
+      // evidence); defers to Sonnet judge for mixed/unknown cases.
+      const { runRoleSweep } = await import('@/lib/services/attribution-roles/role-sweep')
+      return runRoleSweep()
     }
   }
 }

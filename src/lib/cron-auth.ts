@@ -61,6 +61,12 @@ export const DESTRUCTIVE_JOBS: ReadonlySet<string> = new Set([
   // cost class as identity_judge_sweep — drains couple_intel_jobs and
   // refreshes drift. Same destructive treatment.
   'couple_intel_sweep',
+  // Wave 5B (2026-05-10). Per-venue cohort rollup synthesizer.
+  'cohort_rollup_sweep',
+  // Wave 6A (2026-05-10). Marketing spend connector sync.
+  'spend_sync_sweep',
+  // Wave 7B (2026-05-10). Forensic channel-role classifier.
+  'attribution_role_sweep',
 ])
 
 export type CronAuthResult =

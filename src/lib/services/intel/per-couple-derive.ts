@@ -413,6 +413,17 @@ export async function deriveCoupleIntel(
     throw new Error(`deriveCoupleIntel: upsert failed: ${upsertErr.message}`)
   }
 
+  // Wave 6A reconciliation (2026-05-10). After couple_intel updates,
+  // refresh persona_overlay snapshots on this wedding's
+  // attribution_events so spend ROI rollups (Wave 6B) can join through
+  // a current persona. Fire-and-forget — never fail the derive on this.
+  try {
+    const { enqueuePersonaOverlayRefresh } = await import('@/lib/services/marketing-spend/persona-overlay')
+    await enqueuePersonaOverlayRefresh({ weddingId, supabase })
+  } catch (err) {
+    console.warn('[deriveCoupleIntel] persona_overlay enqueue failed (non-fatal):', err instanceof Error ? err.message : err)
+  }
+
   return {
     intel,
     costCents: newCallCostCents,
