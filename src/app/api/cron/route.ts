@@ -280,6 +280,18 @@ const VALID_JOBS = [
   // distortion (~18-19% of Rixey Knot leads forensically reclassify
   // as validation-not-acquisition).
   'attribution_role_sweep',
+  // Wave 5C (2026-05-10). External-signal cohort matcher. Scans
+  // venues for vendor mentions, regional benchmarks, competitor
+  // mentions, cultural-moment cohort fit, cross-platform handle
+  // activity. Forensic rules first; Sonnet judge for cohort-fit
+  // scoring on cultural moments. Writes intel_matches.
+  'external_match_sweep',
+  // Wave 6B (2026-05-10). Per-venue persona × channel × revenue
+  // rollup recompute. Joins marketing_spend_records + attribution_events
+  // (with persona_overlay) + weddings booking_value to produce CAC,
+  // conversion%, ROI per (channel, persona, time-window) cell.
+  // n_too_small suppression at n<10 enforced at write time.
+  'persona_channel_rollup_sweep',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -698,6 +710,24 @@ async function runJob(job: JobName): Promise<unknown> {
       // evidence); defers to Sonnet judge for mixed/unknown cases.
       const { runRoleSweep } = await import('@/lib/services/attribution-roles/role-sweep')
       return runRoleSweep()
+    }
+
+    case 'external_match_sweep': {
+      // Wave 5C. Drains intel_match_jobs + 24h drift refresh per venue.
+      // 5 venues per tick (signal scanning is venue-level, low volume).
+      // Vendor-mention forensic rule, competitor mention scan,
+      // cross-platform handle activity, cultural-moment cohort fit.
+      const { runExternalMatchSweep } = await import('@/lib/services/intel/external-match-sweep')
+      return runExternalMatchSweep()
+    }
+
+    case 'persona_channel_rollup_sweep': {
+      // Wave 6B. Recomputes persona_channel_rollups for venues with
+      // recent marketing_spend_records. 5 venues per tick. Joins spend
+      // + attribution_events.persona_overlay + booking_value to produce
+      // CAC/conversion/ROI per (channel, persona, window) cell.
+      const { runPersonaChannelRollupSweep } = await import('@/lib/services/intel/persona-channel-rollup/sweep')
+      return runPersonaChannelRollupSweep()
     }
   }
 }

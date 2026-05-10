@@ -67,6 +67,11 @@ export const DESTRUCTIVE_JOBS: ReadonlySet<string> = new Set([
   'spend_sync_sweep',
   // Wave 7B (2026-05-10). Forensic channel-role classifier.
   'attribution_role_sweep',
+  // Wave 5C (2026-05-10). External-signal cohort matcher (vendor
+  // mentions, competitor scan, cohort-fit cultural moment scoring).
+  'external_match_sweep',
+  // Wave 6B (2026-05-10). Persona × channel × revenue rollup recompute.
+  'persona_channel_rollup_sweep',
 ])
 
 export type CronAuthResult =
