@@ -58,8 +58,15 @@ import type { CoupleIdentityProfile } from '@/config/prompts/identity-reconstruc
 // the venue level, never named to an external proposer). The LLM
 // becomes "what cultural moment matches the cohort's actual emotional
 // landscape" rather than "what's in season."
+//
+// 2026-05-10 Wave 5C: bumped to v4. The proposer now also reads the
+// venue_intel.rollup persona distribution (Wave 5B output) and biases
+// proposals toward moments that plausibly match the cohort's actual
+// PERSONA mix — not just emotional themes. Proposer becomes "what
+// cultural moment matches the cohort's actual persona landscape AND
+// emotional themes." Output shape unchanged; reasoning richer.
 export const CULTURAL_MOMENTS_LLM_PROPOSE_VERSION =
-  'cultural-moments-llm-propose.v3'
+  'cultural-moments-llm-propose.v4'
 
 const DAY_MS = 86_400_000
 
@@ -314,6 +321,41 @@ export async function autoProposeCulturalMomentsLlm(
     // Non-fatal — proposer still runs without the cohort context.
   }
 
+  // Wave 5C (2026-05-10): also fold the venue_intel rollup's persona
+  // distribution into the proposer context. The aggregated cohort
+  // PERSONA mix biases proposals toward moments that plausibly match
+  // the actual archetype landscape — Heritage-Forward Planner cohorts
+  // get different moment recommendations than Cost-Conscious Pragmatist
+  // cohorts. Best-effort, non-fatal.
+  let personaBlock: string | null = null
+  try {
+    const { data: venueIntelRow } = await supabase
+      .from('venue_intel')
+      .select('rollup, couples_in_window')
+      .eq('venue_id', venueId)
+      .maybeSingle()
+    type VoiceCalibrationItem = {
+      persona_label?: string | null
+    }
+    type RollupShape = {
+      voice_calibration?: VoiceCalibrationItem[] | null
+    }
+    const row = venueIntelRow as
+      | { rollup: RollupShape | null; couples_in_window: number | null }
+      | null
+    if (row && row.rollup && row.couples_in_window && row.couples_in_window >= 5) {
+      const personas = (row.rollup.voice_calibration ?? [])
+        .map((v) => (typeof v?.persona_label === 'string' ? v.persona_label : null))
+        .filter((s): s is string => !!s && s.length > 0)
+      if (personas.length > 0) {
+        const lines = personas.slice(0, 8).map((p) => `- ${p}`)
+        personaBlock = `VENUE COHORT PERSONA LANDSCAPE (Wave 5B rollup, ${row.couples_in_window} couples):\n${lines.join('\n')}\n\nWeight cultural-moment proposals toward moments that plausibly resonate with these personas. Do not echo persona labels in your output titles or rationales.`
+      }
+    }
+  } catch {
+    // Non-fatal.
+  }
+
   const todayIso = new Date().toISOString().slice(0, 10)
   const userPrompt = `Today's date: ${todayIso}.
 Venue state: ${venueState.toUpperCase()} (${venueState.toLowerCase()}).
@@ -321,9 +363,13 @@ Allowed categories: ${CATEGORY_LIST.join(', ')}.
 
 Propose 0-3 cultural moments active or imminent in the last 30 days for a wedding venue in ${venueState.toUpperCase()}. Apply all five criteria from the system prompt strictly. ${recentBlock}`
 
-  const taskInstructionsWithCohort = cohortBlock
-    ? `${TASK_INSTRUCTIONS}\n\n${cohortBlock}\n\nWhen proposing, weight your selection toward moments that PLAUSIBLY connect to the cohort's emotional landscape above. The cohort context is for selection bias only; do not echo theme names directly in your proposal titles or rationales.`
-    : TASK_INSTRUCTIONS
+  let taskInstructionsWithCohort = TASK_INSTRUCTIONS
+  if (cohortBlock) {
+    taskInstructionsWithCohort += `\n\n${cohortBlock}\n\nWhen proposing, weight your selection toward moments that PLAUSIBLY connect to the cohort's emotional landscape above. The cohort context is for selection bias only; do not echo theme names directly in your proposal titles or rationales.`
+  }
+  if (personaBlock) {
+    taskInstructionsWithCohort += `\n\n${personaBlock}`
+  }
   const { systemPrompt, promptVersion } = await buildCoordinatorPrompt({
     venueId,
     surface: 'cultural_moments_propose',
