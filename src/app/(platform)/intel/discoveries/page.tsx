@@ -35,7 +35,11 @@ import {
   ChevronDown,
   ChevronUp,
   Lightbulb,
+  Send,
+  Filter as FilterIcon,
+  CheckCircle2,
 } from 'lucide-react'
+import DiscoveryFeedbackPanel from '@/components/intel/DiscoveryFeedbackPanel'
 
 interface DiscoveryRow {
   id: string
@@ -55,8 +59,17 @@ interface DiscoveryRow {
   confidence_0_100: number
   validation_status: string
   validation_result_summary: string | null
-  validation_metric: Record<string, unknown> | null
+  validation_metric: {
+    metric?: string
+    lift_pct?: number | null
+    n_treatment?: number | null
+    n_control?: number | null
+    p_value_approx?: number | null
+    interpretation?: string
+    confidence_0_100?: number
+  } | null
   validated_at: string | null
+  feedback_applied_at?: string | null
   dismissed_at: string | null
   dismissed_by: string | null
   dismissal_reason: string | null
@@ -159,18 +172,27 @@ function DiscoveryCard({
   busy,
   onAction,
   onDismiss,
+  onValidate,
+  onApplyFeedback,
 }: {
   d: DiscoveryRow
   busy: boolean
   onAction: (id: string, actionTaken: string) => void
   onDismiss: (id: string, reason: string) => void
+  onValidate: (id: string) => void
+  onApplyFeedback: (id: string) => void
 }) {
   const [evidenceOpen, setEvidenceOpen] = useState(false)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
   const evidence = d.evidence_summary
   const observations = evidence?.key_observations ?? []
   const stats = evidence?.aggregate_stats ?? {}
   const statKeys = Object.keys(stats)
   const isPending = d.validation_status === 'pending'
+  const isInProgress = d.validation_status === 'in_progress'
+  const isValidated = d.validation_status === 'validated'
+  const canRunValidate = isPending || isInProgress
+  const metric = d.validation_metric
 
   return (
     <div className="bg-surface border border-border rounded-xl shadow-sm">
@@ -217,43 +239,67 @@ function DiscoveryCard({
               </span>
             </div>
           </div>
-          {isPending && (
-            <div className="flex flex-col items-end gap-1.5">
-              <div className="flex items-center gap-1.5">
+          <div className="flex flex-col items-end gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap justify-end">
+              {canRunValidate && (
                 <button
                   type="button"
-                  onClick={() => onAction(d.id, 'tested')}
+                  onClick={() => onValidate(d.id)}
                   disabled={busy}
-                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] border border-sage-300 text-sage-700 rounded hover:bg-sage-50 disabled:opacity-50"
-                  title="Mark a test was run by Wave 7C or manually"
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] border border-blue-300 text-blue-700 rounded hover:bg-blue-50 disabled:opacity-50"
+                  title="Run Wave 7C validation now (designs + executes + interprets)"
                 >
-                  <FlaskConical className="w-3 h-3" />
-                  Test
+                  {busy ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <FlaskConical className="w-3 h-3" />
+                  )}
+                  Run validation
                 </button>
+              )}
+              {isValidated && !d.feedback_applied_at && (
                 <button
                   type="button"
-                  onClick={() => onAction(d.id, 'rolled_into_strategy')}
+                  onClick={() => onApplyFeedback(d.id)}
                   disabled={busy}
-                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] border border-sage-300 text-sage-700 rounded hover:bg-sage-50 disabled:opacity-50"
-                  title="Coordinator acted on this without a formal test"
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] border border-emerald-300 text-emerald-700 rounded hover:bg-emerald-50 disabled:opacity-50"
+                  title="Apply feedback to consuming Wave 5/6 systems now"
                 >
-                  <CheckCheck className="w-3 h-3" />
-                  Actioned
+                  {busy ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Send className="w-3 h-3" />
+                  )}
+                  Apply feedback now
                 </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onDismiss(d.id, 'dismissed_from_dashboard')
-                  }
-                  disabled={busy}
-                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] border border-sage-200 text-sage-600 rounded hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50"
-                  title="Dismiss"
-                >
-                  <XIcon className="w-3 h-3" />
-                </button>
-              </div>
+              )}
+              {isPending && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onAction(d.id, 'rolled_into_strategy')}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-[10px] border border-sage-300 text-sage-700 rounded hover:bg-sage-50 disabled:opacity-50"
+                    title="Coordinator acted on this without a formal test"
+                  >
+                    <CheckCheck className="w-3 h-3" />
+                    Actioned
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onDismiss(d.id, 'dismissed_from_dashboard')
+                    }
+                    disabled={busy}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-[10px] border border-sage-200 text-sage-600 rounded hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50"
+                    title="Dismiss"
+                  >
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
       <div className="px-6 py-4 space-y-4">
@@ -344,9 +390,66 @@ function DiscoveryCard({
             <div className="text-[11px] font-medium text-blue-800 uppercase tracking-wide mb-1">
               Validation result
             </div>
+            {metric && (
+              <div className="flex flex-wrap gap-2 mb-1.5 text-[11px] text-blue-900 font-mono">
+                {typeof metric.lift_pct === 'number' && (
+                  <span>lift={metric.lift_pct.toFixed(1)}%</span>
+                )}
+                {typeof metric.n_treatment === 'number' && (
+                  <span>
+                    n={metric.n_treatment}
+                    {typeof metric.n_control === 'number'
+                      ? ` / ${metric.n_control}`
+                      : ''}
+                  </span>
+                )}
+                {typeof metric.p_value_approx === 'number' && (
+                  <span>p≈{metric.p_value_approx.toFixed(3)}</span>
+                )}
+                {metric.interpretation && (
+                  <span className="text-blue-700">
+                    verdict={metric.interpretation}
+                  </span>
+                )}
+              </div>
+            )}
             <p className="text-xs text-blue-900 leading-snug">
               {d.validation_result_summary}
             </p>
+          </div>
+        )}
+
+        {isValidated && (
+          <div className="bg-emerald-50/30 border border-emerald-100 rounded-lg">
+            <button
+              type="button"
+              onClick={() => setFeedbackOpen((v) => !v)}
+              className="w-full px-4 py-2 flex items-center justify-between text-xs text-emerald-800 hover:bg-emerald-50/60"
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                Feedback into Wave 5/6
+                {d.feedback_applied_at ? (
+                  <span className="text-emerald-600 text-[10px]">
+                    · applied {relativeTime(d.feedback_applied_at)}
+                  </span>
+                ) : (
+                  <span className="text-amber-700 text-[10px]">
+                    · not yet applied
+                  </span>
+                )}
+              </span>
+              {feedbackOpen ? (
+                <ChevronUp className="w-3.5 h-3.5" />
+              ) : (
+                <ChevronDown className="w-3.5 h-3.5" />
+              )}
+            </button>
+            {feedbackOpen && (
+              <div className="px-4 pb-3 pt-1">
+                <DiscoveryFeedbackPanel discoveryId={d.id} compact />
+              </div>
+            )}
           </div>
         )}
 
@@ -368,6 +471,14 @@ export default function DiscoveriesDashboard() {
   const [running, setRunning] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [runStatus, setRunStatus] = useState<string | null>(null)
+
+  // Wave 7D — filters.
+  const [statusFilters, setStatusFilters] = useState<Set<StatusKey>>(
+    new Set(STATUS_ORDER),
+  )
+  const [categoryFilters, setCategoryFilters] = useState<Set<string>>(new Set())
+  const [confidenceFloor, setConfidenceFloor] = useState<number>(0)
+  const [filtersOpen, setFiltersOpen] = useState(false)
 
   const fetchList = useCallback(async () => {
     try {
@@ -395,6 +506,16 @@ export default function DiscoveriesDashboard() {
     fetchList().finally(() => setLoading(false))
   }, [fetchList])
 
+  // All categories present in the data — used for the filter chip list.
+  const allCategories = useMemo(() => {
+    const set = new Set<string>()
+    for (const d of data?.discoveries ?? []) {
+      if (d.hypothesis_category) set.add(d.hypothesis_category)
+    }
+    return Array.from(set).sort()
+  }, [data])
+
+  // Filtered grouped — applies status / category / confidence filters.
   const grouped = useMemo(() => {
     const out: Record<StatusKey, DiscoveryRow[]> = {
       pending: [],
@@ -405,9 +526,30 @@ export default function DiscoveriesDashboard() {
     }
     for (const d of data?.discoveries ?? []) {
       const status = d.validation_status as StatusKey
-      if (out[status]) out[status].push(d)
+      if (!out[status]) continue
+      if (!statusFilters.has(status)) continue
+      if (
+        categoryFilters.size > 0 &&
+        !categoryFilters.has(d.hypothesis_category)
+      ) {
+        continue
+      }
+      if ((d.confidence_0_100 ?? 0) < confidenceFloor) continue
+      out[status].push(d)
     }
     return out
+  }, [data, statusFilters, categoryFilters, confidenceFloor])
+
+  // "This week" validated count for the dashboard header chip.
+  const validatedThisWeek = useMemo(() => {
+    const cutoffMs = Date.now() - 7 * 24 * 60 * 60 * 1000
+    let count = 0
+    for (const d of data?.discoveries ?? []) {
+      if (d.validation_status !== 'validated' || !d.validated_at) continue
+      const t = Date.parse(d.validated_at)
+      if (Number.isFinite(t) && t >= cutoffMs) count += 1
+    }
+    return count
   }, [data])
 
   const pendingByCategory = useMemo(() => {
@@ -505,6 +647,76 @@ export default function DiscoveriesDashboard() {
     }
   }
 
+  async function validateInline(id: string) {
+    setBusyId(id)
+    setError(null)
+    try {
+      const res = await fetch(
+        `/api/admin/intel/discoveries/${id}/validate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        },
+      )
+      const body = (await res.json()) as {
+        ok: boolean
+        error?: string
+        interpretation?: string
+        costCents?: number
+      }
+      if (!res.ok || !body.ok) {
+        setError(body.error || `HTTP ${res.status}`)
+      } else {
+        const cost =
+          typeof body.costCents === 'number' ? body.costCents.toFixed(2) : '0'
+        setRunStatus(
+          `Validation complete: ${body.interpretation ?? 'unknown'} (~${cost}¢).`,
+        )
+      }
+      await fetchList()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'unknown error')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function applyFeedbackInline(id: string) {
+    setBusyId(id)
+    setError(null)
+    try {
+      const res = await fetch(
+        `/api/admin/intel/discoveries/${id}/apply-feedback`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: true }),
+        },
+      )
+      const body = (await res.json()) as {
+        ok: boolean
+        error?: string
+        actionsApplied?: number
+        errors?: string[]
+      }
+      if (!res.ok || !body.ok) {
+        setError(body.error || `HTTP ${res.status}`)
+      } else {
+        const errs = body.errors ?? []
+        setRunStatus(
+          `Feedback applied: ${body.actionsApplied ?? 0} action${(body.actionsApplied ?? 0) === 1 ? '' : 's'}` +
+            (errs.length > 0 ? ` (${errs.length} error${errs.length === 1 ? '' : 's'})` : ''),
+        )
+      }
+      await fetchList()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'unknown error')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -575,19 +787,119 @@ export default function DiscoveriesDashboard() {
         </div>
       )}
 
-      {/* Counts strip */}
-      <div className="bg-surface border border-border rounded-xl p-4 shadow-sm flex flex-wrap items-center gap-3">
+      {/* Counts strip + Wave 7D filters */}
+      <div className="bg-surface border border-border rounded-xl p-4 shadow-sm space-y-3">
         <div className="flex items-center gap-3 text-xs text-sage-500 flex-wrap">
           {STATUS_ORDER.map((s) => (
-            <span key={s} className="inline-flex items-center gap-1">
-              <span className="font-medium text-sage-700">{counts[s]}</span>
-              <span className="text-sage-500">{s.replace(/_/g, ' ')}</span>
-            </span>
+            <button
+              key={s}
+              type="button"
+              onClick={() => {
+                setStatusFilters((prev) => {
+                  const next = new Set(prev)
+                  if (next.has(s)) next.delete(s)
+                  else next.add(s)
+                  return next
+                })
+              }}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${
+                statusFilters.has(s)
+                  ? 'border-sage-300 bg-sage-50/60 text-sage-700'
+                  : 'border-slate-200 text-slate-400 hover:border-sage-200'
+              }`}
+              title={`Toggle ${s.replace(/_/g, ' ')} filter`}
+            >
+              <span className="font-medium">{counts[s]}</span>
+              <span>{s.replace(/_/g, ' ')}</span>
+            </button>
           ))}
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700">
+            <span className="font-medium">{validatedThisWeek}</span>
+            <span>validated this week</span>
+          </span>
           <span className="ml-auto text-sage-400">
             {totalDiscoveries} total
           </span>
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((v) => !v)}
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] border border-sage-200 text-sage-600 rounded hover:bg-sage-50/60"
+            title="Toggle category + confidence filters"
+          >
+            <FilterIcon className="w-3 h-3" />
+            Filters
+            {(categoryFilters.size > 0 || confidenceFloor > 0) && (
+              <span className="text-emerald-700">
+                · {categoryFilters.size > 0 ? `${categoryFilters.size} cat` : ''}
+                {confidenceFloor > 0 ? ` ≥${confidenceFloor}` : ''}
+              </span>
+            )}
+          </button>
         </div>
+
+        {filtersOpen && (
+          <div className="border-t border-border pt-3 space-y-3">
+            <div className="space-y-1">
+              <div className="text-[11px] font-medium text-sage-700">
+                Hypothesis category{' '}
+                {categoryFilters.size > 0 && (
+                  <button
+                    type="button"
+                    className="text-sage-500 hover:text-rose-700 underline ml-2"
+                    onClick={() => setCategoryFilters(new Set())}
+                  >
+                    clear
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {allCategories.length === 0 && (
+                  <span className="text-xs text-sage-400 italic">
+                    no categories yet
+                  </span>
+                )}
+                {allCategories.map((cat) => {
+                  const active = categoryFilters.has(cat)
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => {
+                        setCategoryFilters((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(cat)) next.delete(cat)
+                          else next.add(cat)
+                          return next
+                        })
+                      }}
+                      className={`text-[11px] px-2 py-0.5 rounded border ${
+                        active
+                          ? categoryColor(cat)
+                          : 'border-slate-200 text-slate-400 hover:border-sage-200'
+                      }`}
+                    >
+                      {humaniseCategory(cat)}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <div className="text-[11px] font-medium text-sage-700">
+                Min confidence: {confidenceFloor}
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={confidenceFloor}
+                onChange={(e) => setConfidenceFloor(Number(e.target.value))}
+                className="w-full max-w-md"
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -647,6 +959,8 @@ export default function DiscoveriesDashboard() {
                     busy={busyId === d.id}
                     onAction={action}
                     onDismiss={dismiss}
+                    onValidate={validateInline}
+                    onApplyFeedback={applyFeedbackInline}
                   />
                 ))}
               </div>
@@ -679,6 +993,8 @@ export default function DiscoveriesDashboard() {
                     busy={busyId === d.id}
                     onAction={action}
                     onDismiss={dismiss}
+                    onValidate={validateInline}
+                    onApplyFeedback={applyFeedbackInline}
                   />
                 ))}
               </div>

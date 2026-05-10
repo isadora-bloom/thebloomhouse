@@ -58,9 +58,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import { runDiscoveryEngine } from './engine'
 import { enqueueDiscoveryRun } from './enqueue'
+import { applyDiscoveryFeedback } from './feedback-loop'
 
 const MAX_JOBS_PER_TICK = 3
 const MAX_DRIFT_PER_TICK = 6
+const MAX_FEEDBACK_PER_TICK = 10
 const TIMEBOX_MS = 280_000
 const DRIFT_AGE_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
@@ -76,6 +78,8 @@ export interface DiscoverySweepResult {
   done: number
   failed: number
   drift_enqueued: number
+  feedback_applied: number
+  feedback_failed: number
   total_cost_cents: number
   total_inserted: number
   timeboxed: boolean
@@ -87,7 +91,73 @@ export interface RunDiscoverySweepOptions {
   supabase?: SupabaseClient
   maxJobs?: number
   maxDrift?: number
+  maxFeedback?: number
   timeboxMs?: number
+}
+
+interface FeedbackBackfillStats {
+  applied: number
+  failed: number
+}
+
+/**
+ * Wave 7D — backfill applyDiscoveryFeedback for any validated discovery
+ * whose feedback_applied_at is still NULL. The Wave 7C post-validation
+ * hook normally fires this inline, but this catches:
+ *   - Validations that completed before Wave 7D existed.
+ *   - Cases where the inline hook threw (try/catch swallowed the failure).
+ *   - Manual data fixes where validation_status was flipped to validated
+ *     by an operator script outside the validator.
+ *
+ * Runs at MAX_FEEDBACK_PER_TICK at a time. Each fire is independent;
+ * partial failures don't cascade.
+ */
+async function backfillFeedback(
+  supabase: SupabaseClient,
+  startedAt: number,
+  maxFeedback: number,
+  timeboxMs: number,
+): Promise<FeedbackBackfillStats> {
+  const stats: FeedbackBackfillStats = { applied: 0, failed: 0 }
+  const { data, error } = await supabase
+    .from('intel_discoveries')
+    .select('id, venue_id')
+    .eq('validation_status', 'validated')
+    .is('feedback_applied_at', null)
+    .order('validated_at', { ascending: true })
+    .limit(maxFeedback)
+  if (error) {
+    console.warn(
+      '[discovery-engine-sweep] feedback backfill query failed',
+      error.message,
+    )
+    return stats
+  }
+  const rows = (data ?? []) as Array<{ id: string; venue_id: string }>
+  for (const row of rows) {
+    if (Date.now() - startedAt >= timeboxMs) break
+    try {
+      const r = await applyDiscoveryFeedback({
+        discoveryId: row.id,
+        supabase,
+      })
+      if (r.actionsApplied > 0 || r.errors.length === 0) {
+        stats.applied += 1
+      } else {
+        stats.failed += 1
+      }
+    } catch (err) {
+      stats.failed += 1
+      console.warn(
+        '[discovery-engine-sweep] feedback backfill threw',
+        {
+          discoveryId: row.id,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      )
+    }
+  }
+  return stats
 }
 
 async function processQueuedJobs(
@@ -281,6 +351,7 @@ export async function runDiscoverySweep(
   const supabase = options.supabase ?? createServiceClient()
   const maxJobs = options.maxJobs ?? MAX_JOBS_PER_TICK
   const maxDrift = options.maxDrift ?? MAX_DRIFT_PER_TICK
+  const maxFeedback = options.maxFeedback ?? MAX_FEEDBACK_PER_TICK
   const timeboxMs = options.timeboxMs ?? TIMEBOX_MS
   const startedAt = Date.now()
 
@@ -302,12 +373,32 @@ export async function runDiscoverySweep(
       )
     }
 
+    // Wave 7D — feedback backfill. Independent of the discovery + drift
+    // paths; runs against the same time budget. Picks up any validated
+    // discovery still missing feedback_applied_at and fires the loop.
+    let feedbackStats: FeedbackBackfillStats = { applied: 0, failed: 0 }
+    try {
+      feedbackStats = await backfillFeedback(
+        supabase,
+        startedAt,
+        maxFeedback,
+        timeboxMs,
+      )
+    } catch (err) {
+      console.warn(
+        '[discovery-engine-sweep] feedback backfill failed',
+        err instanceof Error ? err.message : err,
+      )
+    }
+
     return {
       ok: true,
       processed: sweep.processed,
       done: sweep.done,
       failed: sweep.failed,
       drift_enqueued: driftEnqueued,
+      feedback_applied: feedbackStats.applied,
+      feedback_failed: feedbackStats.failed,
       total_cost_cents: Math.round(sweep.totalCostCents * 10_000) / 10_000,
       total_inserted: sweep.totalInserted,
       timeboxed: sweep.timeboxed,
@@ -321,6 +412,8 @@ export async function runDiscoverySweep(
       done: 0,
       failed: 0,
       drift_enqueued: 0,
+      feedback_applied: 0,
+      feedback_failed: 0,
       total_cost_cents: 0,
       total_inserted: 0,
       timeboxed: false,

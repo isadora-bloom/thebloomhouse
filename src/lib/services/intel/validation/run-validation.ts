@@ -443,6 +443,39 @@ export async function runHypothesisValidation(
     )
   }
 
+  // Wave 7D — non-fatal post-validation hook. When this run produced a
+  // 'validated' verdict, fire applyDiscoveryFeedback so the consuming
+  // Wave 5/6 systems incorporate the insight automatically. Mirrors the
+  // Wave 5A → persona-overlay pattern: try/catch swallows the failure
+  // so a feedback-loop bug never blocks the validator's primary output.
+  // The discovery's feedback_applied_at + the discovery_feedback_actions
+  // audit log carry the truth even on partial failure.
+  if (newStatus === 'validated') {
+    try {
+      const { applyDiscoveryFeedback } = await import(
+        '../discovery/feedback-loop'
+      )
+      const fb = await applyDiscoveryFeedback({
+        discoveryId,
+        supabase,
+      })
+      if (fb.errors.length > 0) {
+        console.warn(
+          '[run-hypothesis-validation] feedback-loop reported errors',
+          { discoveryId, errors: fb.errors, actionsApplied: fb.actionsApplied },
+        )
+      }
+    } catch (err) {
+      console.warn(
+        '[run-hypothesis-validation] feedback-loop hook threw',
+        {
+          discoveryId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      )
+    }
+  }
+
   return {
     runId,
     discoveryId,
