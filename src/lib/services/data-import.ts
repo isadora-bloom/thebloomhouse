@@ -327,8 +327,9 @@ export async function importClientList(
       const partnerFullForRole = `${partnerFirstRaw} ${partnerLastRaw}`.trim()
       p2RoleDescriptor = detectRoleDescriptor(partnerFullForRole)
 
-      // Lazy-import the chokepoint helpers.
-      const { captureNameEvidence, detectPhantomPartner } = await import(
+      // Lazy-import the chokepoint helpers. Wave 4 Phase 4 (2026-05-10):
+      // detectPhantomPartner retired — reconstruct.ts judges phantoms.
+      const { captureNameEvidence } = await import(
         '@/lib/services/identity/name-capture'
       )
 
@@ -389,27 +390,10 @@ export async function importClientList(
         }
       }
 
-      // Phantom partner detector — partner2 first === partner1 first AND
-      // no last AND no own email → drop and stamp partner_count=1.
-      if (partnerFirst) {
-        const isPhantom = detectPhantomPartner(
-          { first: firstName || null, last: lastName || null, email: email || null },
-          { first: partnerFirst, last: partnerLast || null, email: row.partner_email || null },
-        )
-        if (isPhantom) {
-          try {
-            await supabase
-              .from('weddings')
-              .update({ partner_count: 1 })
-              .eq('id', resolvedWeddingId)
-          } catch (err) {
-            console.warn('[data-import] partner_count phantom stamp failed:',
-              err instanceof Error ? err.message : err)
-          }
-          partnerFirst = ''
-          partnerLast = ''
-        }
-      }
+      // Wave 4 Phase 4 (2026-05-10): synchronous phantom-partner heuristic
+      // retired. Reconstruct.ts emits is_phantom_partner_relationship and
+      // profile-to-people-sync tombstones the phantom partner2 row after
+      // the judge fires.
 
       if (partnerFirst) {
         const { data: existingP2 } = await supabase

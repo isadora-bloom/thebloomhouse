@@ -454,66 +454,10 @@ export async function venueOwnEmails(venueId: string): Promise<Set<string>> {
   return own
 }
 
-/**
- * Wave 3 — assemble the venue identity context that the LLM identity
- * extractor uses to flag venue-side echoes (the venue's own name, AI
- * assistant name, team member names) and reject the from_header when
- * the from_email's domain is venue-owned.
- *
- * Caller passes the already-resolved `ownEmails` set so we don't issue
- * a duplicate SELECT — `processIncomingEmail` always loads it just
- * before calling the extractor.
- */
-async function loadVenueIdentityContext(
-  venueId: string,
-  ownEmails: Set<string>,
-): Promise<{
-  venueName: string | null
-  businessName: string | null
-  aiName: string | null
-  ownEmails: Set<string>
-  teamMemberNames: string[]
-}> {
-  const supabase = createServiceClient()
-  const empty = {
-    venueName: null,
-    businessName: null,
-    aiName: null,
-    ownEmails,
-    teamMemberNames: [] as string[],
-  }
-  try {
-    const [venueResp, configResp, aiResp, teamResp] = await Promise.all([
-      supabase.from('venues').select('name').eq('id', venueId).maybeSingle(),
-      supabase.from('venue_config').select('business_name').eq('venue_id', venueId).maybeSingle(),
-      supabase.from('venue_ai_config').select('ai_name').eq('venue_id', venueId).maybeSingle(),
-      supabase
-        .from('user_profiles')
-        .select('first_name, last_name')
-        .eq('venue_id', venueId)
-        .limit(50),
-    ])
-    const venueName = (venueResp.data?.name as string | null | undefined) ?? null
-    const businessName = (configResp.data?.business_name as string | null | undefined) ?? null
-    const aiName = (aiResp.data?.ai_name as string | null | undefined) ?? null
-    const teamRows = (teamResp.data ?? []) as Array<{ first_name: string | null; last_name: string | null }>
-    const teamMemberNames: string[] = []
-    for (const t of teamRows) {
-      const composed = [t.first_name ?? '', t.last_name ?? ''].filter(Boolean).join(' ').trim()
-      if (composed) teamMemberNames.push(composed)
-    }
-    return {
-      venueName,
-      businessName,
-      aiName,
-      ownEmails,
-      teamMemberNames,
-    }
-  } catch (err) {
-    console.warn('[pipeline] loadVenueIdentityContext failed:', err instanceof Error ? err.message : err)
-    return empty
-  }
-}
+// Wave 4 Phase 4 (2026-05-10): loadVenueIdentityContext removed — the
+// only caller was the retired Wave-3 extractEmailIdentity. The chokepoint
+// (identity/name-capture.ts) carries an equivalent venue-name guard via
+// loadVenueOwnNames keyed by its own per-call cache.
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -979,71 +923,16 @@ export async function processIncomingEmail(
     { ownEmails },
   )
 
-  // Wave 3 (deep fix): structured email-anatomy + LLM-driven identity
-  // extraction. Runs alongside the legacy regex extractor and merges
-  // its output into `extracted_identity` so downstream consumers see
-  // BOTH the legacy `names[]` array (back-compat) AND the new
-  // `sender_identity` + `mentioned_humans` + `venue_echoes` fields. The
-  // chokepoint reads `sender_identity` as the strongest single per-
-  // email signal of the SENDER (not the addressee, not the venue's own
-  // signature). Cost: ~$0.0002/email via Haiku — see
-  // IDENTITY-EXTRACTION-V2.md for the cost breakdown.
-  //
-  // Behaviour on LLM failure: extractEmailIdentity never throws — it
-  // returns an empty result, so the pipeline keeps using the legacy
-  // regex output and ships the email without delay.
-  let extractedIdentity: Record<string, unknown> = { ...(baseExtractedIdentity as unknown as Record<string, unknown>) }
-  try {
-    const { extractEmailIdentity } = await import('@/lib/services/extraction/identity-from-email')
-    const venueContext = await loadVenueIdentityContext(venueId, ownEmails)
-    const wave3 = await extractEmailIdentity({
-      venueId,
-      rawBody: email.body ?? '',
-      fromEmail: rawFromEmail,
-      fromHeader: email.from ?? '',
-      subject: email.subject ?? null,
-      threadId: email.threadId ?? null,
-      venueContext,
-    })
-
-    // Merge: keep legacy fields, add Wave-3 fields. The legacy
-    // `names[]` array stays populated for back-compat (it's read by
-    // candidate-clusterer, name-upgrade, rebuild-names, etc.). The new
-    // `sender_identity`, `mentioned_humans`, `venue_echoes` and
-    // `rejected_tokens` fields are picked up by the Wave-3-aware
-    // chokepoint AND surfaced on the lead-detail evidence panel.
-    extractedIdentity = {
-      ...extractedIdentity,
-      sender_identity: wave3.sender_identity,
-      mentioned_humans: wave3.mentioned_humans,
-      venue_echoes: wave3.venue_side_echoes,
-      rejected_tokens: wave3.rejected_tokens,
-    }
-
-    // Augment the legacy `names[]` array with the LLM-classified humans
-    // so downstream consumers that already iterate `names[]` pick up
-    // the better signal. The chokepoint's shape detector handles
-    // de-duplication; we only add net-new entries.
-    const baseNames = Array.isArray((extractedIdentity as { names?: unknown[] }).names)
-      ? ((extractedIdentity as { names: string[] }).names ?? [])
-      : []
-    const augmented = new Set<string>(baseNames)
-    if (wave3.sender_identity?.first || wave3.sender_identity?.last) {
-      const composed = [wave3.sender_identity.first, wave3.sender_identity.last]
-        .filter(Boolean)
-        .join(' ')
-        .trim()
-      if (composed) augmented.add(composed)
-    }
-    for (const h of wave3.mentioned_humans) {
-      if (h.name) augmented.add(h.name)
-    }
-    extractedIdentity.names = Array.from(augmented)
-  } catch (err) {
-    // Don't fail the pipeline on identity-extractor error. Legacy
-    // regex output is still in place; downstream is unaffected.
-    console.warn('[pipeline] Wave-3 identity extractor failed:', err instanceof Error ? err.message : err)
-  }
+  // Wave 4 Phase 4 (2026-05-10): the per-email Wave-3 LLM identity
+  // extractor (extraction/identity-from-email.ts) is retired. The
+  // per-couple Sonnet judge in identity/reconstruct.ts reads message
+  // bodies directly to produce the canonical names + relationships +
+  // emotional_truths on couple_identity_profile. profile-to-people-sync
+  // back-writes the canonical names onto people rows. The chokepoint
+  // here keeps the people row in a workable state at write-time using
+  // the From-header / regex bootstrap; reconstruct.ts upgrades to the
+  // forensic record asynchronously after enqueue.
+  const extractedIdentity: Record<string, unknown> = { ...(baseExtractedIdentity as unknown as Record<string, unknown>) }
 
   // Step 1a.55: Scheduling-tool detection already ran at 1a.0 to bypass
   // the universal-ignore short-circuit. Reuse the same result here so
@@ -1491,42 +1380,11 @@ export async function processIncomingEmail(
 
   const interactionId = interaction.id as string
 
-  // Wave 3 (deep fix): feed the LLM-extracted sender_identity into the
-  // name-capture chokepoint as a HIGH-CONFIDENCE per-email signal. This
-  // is the strongest single signal we have on a single inbound email
-  // because the LLM had structured anatomy + venue identity context to
-  // distinguish addressee from sender from venue echo. Source maps:
-  //   - signature → email_signature_extraction (75 base confidence)
-  //   - from_header → email_identity_extract_header (60)
-  //   - body_self_reference → email_identity_extract_body (50)
-  // Best-effort — chokepoint failure must not block draft generation.
-  if (personId) {
-    const wave3Sender = (extractedIdentity as { sender_identity?: unknown }).sender_identity
-    if (wave3Sender && typeof wave3Sender === 'object') {
-      const sender = wave3Sender as { first?: string | null; last?: string | null; source?: string }
-      if (sender.first || sender.last) {
-        try {
-          const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
-          const sourceMap: Record<string, 'email_signature_extraction' | 'email_identity_extract_header' | 'email_identity_extract_body'> = {
-            signature: 'email_signature_extraction',
-            from_header: 'email_identity_extract_header',
-            body_self_reference: 'email_identity_extract_body',
-            unknown: 'email_identity_extract_header',
-          }
-          const captureSource = sourceMap[sender.source ?? 'unknown'] ?? 'email_identity_extract_header'
-          await captureNameEvidence(supabase, personId, {
-            first: sender.first ?? null,
-            last: sender.last ?? null,
-            email: fromEmail,
-            source: captureSource,
-            interactionId,
-          })
-        } catch (err) {
-          console.warn('[pipeline] Wave-3 sender capture failed:', err instanceof Error ? err.message : err)
-        }
-      }
-    }
-  }
+  // Wave 4 Phase 4 (2026-05-10): Wave-3 per-email sender_identity capture
+  // retired. The Sonnet judge in identity/reconstruct.ts is the source of
+  // truth for canonical names; profile-to-people-sync writes them onto
+  // people rows. The chokepoint here keeps the row workable at write-time
+  // via Gmail from-name + handle inference; reconstruct.ts upgrades it.
 
   // Inbox lifecycle folder (migration 242). Decided per-thread, written
   // to every interaction on the thread so the inbox tab counts move
@@ -1908,54 +1766,24 @@ export async function processIncomingEmail(
       // the detail/kanban has a couple label. Best-effort — skip silently
       // if a partner2 already exists (race on concurrent emails).
       //
-      // Wave 2A: route through the name-capture chokepoint, AND run the
-      // phantom-partner detector first. "Brett & Brett" / "Hannah Lord &
-      // Hannah Lord" land here when the classifier reads a sign-off that
-      // happens to be the sender's own first name. Phantom rows clutter
-      // the couple label and confuse Sage's prompts. When detected, we
-      // stamp weddings.partner_count=1 so prompts know to address one
-      // person AND skip the partner2 insert entirely.
+      // Wave 4 Phase 4 (2026-05-10): synchronous phantom-partner heuristic
+      // retired. The Sonnet judge in reconstruct.ts now emits
+      // `is_phantom_partner_relationship` on couple_identity_profile, and
+      // profile-to-people-sync tombstones phantom partner2 rows after the
+      // job completes. We still insert partner2 from the LLM-extracted
+      // sign-off so the people row exists for the chokepoint; if it's
+      // a phantom, sync removes it post-reconstruction.
       if (extracted.partnerName) {
-        const { detectPhantomPartner, captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+        const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
         const trimmedP2 = extracted.partnerName.trim()
         const [p2First, ...p2Rest] = trimmedP2.split(/\s+/)
         const p2Last = p2Rest.join(' ') || null
 
-        // Read partner1 to phantom-check (personId is the inquiry sender,
-        // already inserted as partner1). We pull first/last/email and
-        // compare against the LLM-extracted partnerName.
-        let p1First: string | null = null
-        let p1Last: string | null = null
-        let p1Email: string | null = null
-        if (personId) {
-          const { data: p1 } = await supabase
-            .from('people')
-            .select('first_name, last_name, email')
-            .eq('id', personId)
-            .maybeSingle()
-          p1First = (p1?.first_name as string | null) ?? null
-          p1Last = (p1?.last_name as string | null) ?? null
-          p1Email = (p1?.email as string | null) ?? null
-        }
-        const isPhantom = detectPhantomPartner(
-          { first: p1First, last: p1Last, email: p1Email },
-          { first: p2First || null, last: p2Last, email: null },
-        )
-
-        if (isPhantom) {
-          // Stamp partner_count=1 and DO NOT insert partner2.
-          try {
-            await supabase
-              .from('weddings')
-              .update({ partner_count: 1 })
-              .eq('id', weddingId)
-          } catch (err) {
-            console.warn('[pipeline] partner_count phantom stamp failed:', err)
-          }
-        } else if (p2First) {
-          // Real partner2. Insert with placeholder name then route the
-          // signal through the chokepoint so name_evidence + display_handle
-          // pick up correctly.
+        if (p2First) {
+          // Insert partner2 placeholder and route through the chokepoint
+          // so name_evidence + display_handle pick up correctly. Phantom
+          // tombstoning is handled async by profile-to-people-sync after
+          // reconstruct.ts judges the wedding.
           const { data: p2 } = await supabase
             .from('people')
             .insert({
@@ -2743,73 +2571,41 @@ export async function processIncomingEmail(
         // Seed partner2 from the Calendly extras if present — most
         // Calendly booking forms capture the second partner's name.
         //
-        // Wave 2A: phantom-partner detector before insert. A Calendly
-        // form where the partner-name answer is blank but the body
-        // fallback dumps the inviteeName again would land "Brett &
-        // Brett". When detected, stamp partner_count=1 on the wedding
-        // and skip the partner2 insert. Real partner2 rows route the
-        // signal through the chokepoint.
+        // Wave 4 Phase 4 (2026-05-10): synchronous phantom-partner heuristic
+        // retired. Reconstruct.ts + profile-to-people-sync handle phantoms
+        // post-judge. We always insert if partner2 first-name is present.
         if (schedulingEvent.extras?.partnerName) {
-          const { detectPhantomPartner, captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+          const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
           const trimmedP2 = schedulingEvent.extras.partnerName.trim()
           const [p2First, ...rest] = trimmedP2.split(/\s+/)
           const p2Last = rest.join(' ') || null
           const p2Email = schedulingEvent.extras.partnerEmail ?? null
           if (p2First) {
-            // Phantom check against partner1.
-            let p1First: string | null = null
-            let p1Last: string | null = null
-            let p1Email: string | null = null
-            if (personId) {
-              const { data: p1 } = await supabase
-                .from('people')
-                .select('first_name, last_name, email')
-                .eq('id', personId)
-                .maybeSingle()
-              p1First = (p1?.first_name as string | null) ?? null
-              p1Last = (p1?.last_name as string | null) ?? null
-              p1Email = (p1?.email as string | null) ?? null
-            }
-            const isPhantom = detectPhantomPartner(
-              { first: p1First, last: p1Last, email: p1Email },
-              { first: p2First, last: p2Last, email: p2Email },
-            )
-            if (isPhantom) {
+            const { data: p2 } = await supabase
+              .from('people')
+              .insert({
+                venue_id: venueId,
+                wedding_id: weddingId,
+                role: 'partner2',
+                first_name: p2First,
+                last_name: p2Last,
+                email: p2Email,
+                phone: schedulingEvent.extras.phone ?? null,
+              })
+              .select('id')
+              .single()
+            if (p2?.id) {
               try {
-                await supabase
-                  .from('weddings')
-                  .update({ partner_count: 1 })
-                  .eq('id', weddingId)
-              } catch (err) {
-                console.warn('[pipeline] partner_count phantom stamp (scheduling) failed:', err)
-              }
-            } else {
-              const { data: p2 } = await supabase
-                .from('people')
-                .insert({
-                  venue_id: venueId,
-                  wedding_id: weddingId,
-                  role: 'partner2',
-                  first_name: p2First,
-                  last_name: p2Last,
+                // form_relay confidence — Calendly forms are coordinator-
+                // approved structured data, slightly stronger than a
+                // body-mention but weaker than calculator/contract.
+                await captureNameEvidence(supabase, p2.id as string, {
+                  full: trimmedP2,
                   email: p2Email,
-                  phone: schedulingEvent.extras.phone ?? null,
+                  source: 'form_relay',
                 })
-                .select('id')
-                .single()
-              if (p2?.id) {
-                try {
-                  // form_relay confidence — Calendly forms are coordinator-
-                  // approved structured data, slightly stronger than a
-                  // body-mention but weaker than calculator/contract.
-                  await captureNameEvidence(supabase, p2.id as string, {
-                    full: trimmedP2,
-                    email: p2Email,
-                    source: 'form_relay',
-                  })
-                } catch (err) {
-                  console.warn('[pipeline] name-capture (scheduling partner2) failed:', err instanceof Error ? err.message : err)
-                }
+              } catch (err) {
+                console.warn('[pipeline] name-capture (scheduling partner2) failed:', err instanceof Error ? err.message : err)
               }
             }
           }

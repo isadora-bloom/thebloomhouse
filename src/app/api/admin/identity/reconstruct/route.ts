@@ -9,7 +9,7 @@
  *     manual / ops trigger for the reconstruct service; Phase 2 wires
  *     pipeline + cron triggers on top)
  *
- * Auth (mirrors /api/admin/identity/rebuild-names):
+ * Auth (CRON_SECRET ops path + getPlatformAuth coordinator path):
  *   - Authorization: Bearer ${CRON_SECRET} → ops path, weddingId in body
  *   - else getPlatformAuth (coordinator UI), venueId from session,
  *     and we validate the requested wedding belongs to that venue.

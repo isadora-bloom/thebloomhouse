@@ -1,8 +1,19 @@
 /**
- * Bloom House — Name-capture chokepoint (Wave 2A)
+ * Bloom House — Name-capture chokepoint (Wave 2A; Wave 4 Phase 4 fast-path)
+ *
+ * Wave 4 Phase 4 (2026-05-10): this module is now a FAST-PATH BOOTSTRAP
+ * only. The Sonnet judge in `reconstruct.ts` is the source of truth for
+ * canonical couple names — it produces evidence-quoted partner1/partner2
+ * with `is_phantom_partner_relationship` on `couple_identity_profile.profile.names`.
+ * `profile-to-people-sync.ts` then back-writes those names onto people
+ * rows. The chokepoint here keeps people rows in a usable state at
+ * write-time so the live email pipeline + UI don't display empty until
+ * the reconstruction job completes. Heuristic detectors retired in this
+ * file (Phase 4): `detectPhantomPartner`, `inferNameFromHandle`.
  *
  * Anchor docs:
- *   - IDENTITY-CAPTURE-DESIGN.md (full design)
+ *   - bloom-wave4-identity-reconstruction.md (Wave 4 doctrine — retire heuristics)
+ *   - IDENTITY-CAPTURE-DESIGN.md (full design — pre-Wave-4 history)
  *   - IDENTITY-TRUTH-AUDIT.md (Tenant 2 / handles gap)
  *   - bloom-constitution.md (forensic identity reconstruction)
  *
@@ -186,17 +197,13 @@ export interface PickResult {
 //      extracted_identity JSON preserved unescaped tags.
 //
 // Wave 2.5 (commit 35f9430) shipped these guards as the PRIMARY defense.
-// Wave 3 (this commit) replaced the upstream extractor with a structured
-// email-anatomy parser + LLM-driven identity classifier
-// (src/lib/services/extraction/identity-from-email.ts). The LLM has
-// salutation / body / signature / forwarded layout context AND venue-
-// identity context, so it correctly distinguishes addressee from sender,
-// venue echo from prospect, and signoff phrase from name.
-//
-// The reject-list below is now a SAFETY NET, not the primary defense.
-// It catches anything that slips past the LLM (LLM unavailable, malformed
-// JSON, the Wave-3 path bypassed). Keeping it ensures the picker never
-// emits a known-junk value even when the upstream layer fails.
+// Wave 4 Phase 4 (2026-05-10): the per-email Wave-3 LLM extractor
+// (extraction/identity-from-email.ts) was retired alongside the per-couple
+// Sonnet judge in identity/reconstruct.ts taking over canonical name
+// resolution. The reject-list below is now a SAFETY NET on the chokepoint:
+// it stops greeting/HTML/venue-name junk from landing as evidence at
+// write-time, so people rows stay sane until profile-to-people-sync writes
+// the canonical names from couple_identity_profile.
 
 export const REJECTED_NAME_TOKENS: ReadonlySet<string> = new Set([
   // greetings — the most common live-data offender
@@ -535,69 +542,26 @@ export function detectDoubleNameString(value: string): { first1: string; first2:
   return { first1: m[1], first2: m[2], last: m[3] }
 }
 
-/**
- * Phantom partner detector — "Brett & Brett" shape. partner2 has the
- * same first name as partner1 AND no last name AND no own email.
- *
- * Used by the email pipeline before inserting partner2 from an
- * LLM-extracted body sign-off. Almost always means the classifier
- * read "thanks, Brett" and emitted partnerName='Brett' when partner1
- * is already Brett.
- */
-export function detectPhantomPartner(
-  p1: { first: string | null; last: string | null; email: string | null },
-  p2: { first: string | null; last: string | null; email: string | null },
-): boolean {
-  const p1First = (p1.first ?? '').trim().toLowerCase()
-  const p2First = (p2.first ?? '').trim().toLowerCase()
-  if (!p1First || !p2First) return false
-  if (p1First !== p2First) return false
-  // Same first; check if p2 lacks distinguishing data.
-  const p2HasLast = !!(p2.last && p2.last.trim())
-  const p2HasEmail = !!(p2.email && p2.email.trim())
-  if (p2HasLast || p2HasEmail) return false
-  return true
-}
-
-/**
- * Best-effort: extract a (first, last) tuple from a smushed handle
- * like "rosaliehoyle". Heuristic — splits on the boundary where the
- * second half starts with a vowel + consonant pair that looks like a
- * surname stem. Confidence is intentionally low (caller stores at 25).
- *
- * Returns null when no reasonable split exists.
- */
-export function inferNameFromHandle(handle: string): { first: string | null; last: string | null } | null {
-  if (!handle) return null
-  const v = handle.trim().toLowerCase()
-  // Strip platform-prefix punctuation.
-  const stripped = v.replace(/^[@._-]+/, '')
-  if (!stripped) return null
-  // Reject very short handles — no useful split exists.
-  if (stripped.length < 7) return null
-  // Reject handles that are clearly not a personal name (digits, dots).
-  if (!/^[a-z]+$/.test(stripped)) return null
-
-  // Try split positions 4..length-3 and pick the FIRST split where:
-  //   - both parts are >= 3 chars
-  //   - both parts contain at least one vowel
-  // This is a cheap heuristic; accuracy is bounded by the lack of a
-  // name dictionary in the repo. Confidence is correspondingly low.
-  for (let i = 4; i <= stripped.length - 3; i++) {
-    const a = stripped.slice(0, i)
-    const b = stripped.slice(i)
-    if (!/[aeiou]/.test(a)) continue
-    if (!/[aeiou]/.test(b)) continue
-    return { first: titleCase(a), last: titleCase(b) }
-  }
-  return null
-}
+// Wave 4 Phase 4 (2026-05-10): `detectPhantomPartner` retired.
+// The Sonnet judge in reconstruct.ts emits
+// `profile.names.is_phantom_partner_relationship`; profile-to-people-sync
+// tombstones phantom partner2 rows post-reconstruction. The synchronous
+// rule-based detector ("partner2 first === partner1 first AND no last
+// AND no email") is redundant once the LLM judge owns the call.
+//
+// Wave 4 Phase 4: `inferNameFromHandle` (CamelCase username heuristic)
+// retired. Smushed-handle splitting is exactly the kind of guess the
+// reconstruct.ts judge handles with evidence quotes.
 
 /**
  * "rosalie.hoyle@gmail.com" → "Rosalie Hoyle".  Best-effort.
  *
  * Returns null when the local-part shape suggests a handle (no dot,
  * digits, etc).
+ *
+ * Fast-path bootstrap ONLY: used at email-pipeline write-time so the
+ * people row has a sensible first/last before reconstruct.ts runs. The
+ * Wave 4 Sonnet judge is the source of truth for canonical names.
  */
 export function inferNameFromEmail(email: string): { first: string | null; last: string | null } | null {
   if (!email) return null
@@ -614,10 +578,9 @@ export function inferNameFromEmail(email: string): { first: string | null; last:
     if (parts[0].length > 20 || parts[1].length > 20) return null
     return { first: titleCase(parts[0]), last: titleCase(parts[1]) }
   }
-  // Single-token local-part — try the handle splitter for an inference.
-  if (parts.length === 1) {
-    return inferNameFromHandle(parts[0])
-  }
+  // Single-token local-part — no handle splitter (Wave 4 Phase 4 retired
+  // the CamelCase heuristic). Coordinator can label manually; the
+  // reconstruct.ts judge produces canonical names from message bodies.
   return null
 }
 

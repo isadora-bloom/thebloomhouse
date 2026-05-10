@@ -538,7 +538,9 @@ export async function commitNormalisedRows(args: {
       // picker's choice. CRM imports source = csv_import (confidence 65)
       // for generic CSV / HoneyBook, calculator_form (confidence 95) for
       // web-form, form_relay (confidence 60) for tour-scheduler.
-      const { captureNameEvidence, detectPhantomPartner, inferNameFromEmail } = await import(
+      // Wave 4 Phase 4 (2026-05-10): detectPhantomPartner retired —
+      // reconstruct.ts judges phantoms; profile-to-people-sync tombstones.
+      const { captureNameEvidence, inferNameFromEmail } = await import(
         '@/lib/services/identity/name-capture'
       )
       const chokepointSource = chokepointNameSourceOverride
@@ -603,90 +605,65 @@ export async function commitNormalisedRows(args: {
       //      EVERY row → falsely says partner2 already exists, skipping
       //      legitimate inserts. Fix: only fire the dedup query when
       //      partner2_first_name is non-empty.
-      //   2. Phantom partner detector: "Brett & Brett" / "Hannah & Hannah"
-      //      lands here when an LLM read a sender's own first name from
-      //      the body. detectPhantomPartner runs against partner1's
-      //      first/last/email vs partner2's. When phantom, we stamp
-      //      weddings.partner_count=1 and skip the insert entirely.
+      //
+      // Wave 4 Phase 4 (2026-05-10): the synchronous phantom-partner
+      // detector is retired. reconstruct.ts judges phantoms via
+      // is_phantom_partner_relationship and profile-to-people-sync
+      // tombstones the phantom partner2 row after the judge runs.
       const p2HasFirst = !!(row.partner2_first_name && row.partner2_first_name.trim())
       const p2HasLast = !!(row.partner2_last_name && row.partner2_last_name.trim())
       if (p2HasFirst || p2HasLast) {
-        const isPhantom = detectPhantomPartner(
-          {
-            first: row.partner1_first_name ?? null,
-            last: row.partner1_last_name ?? null,
-            email: row.partner1_email ?? null,
-          },
-          {
-            first: row.partner2_first_name ?? null,
-            last: row.partner2_last_name ?? null,
-            email: row.partner2_email ?? null,
-          },
-        )
-        if (isPhantom) {
-          // Stamp partner_count=1 and skip the partner2 insert.
-          try {
-            await supabase
-              .from('weddings')
-              .update({ partner_count: 1 })
-              .eq('id', weddingId)
-          } catch (err) {
-            console.warn('[crm-import] partner_count phantom stamp failed:',
-              err instanceof Error ? err.message : err)
-          }
-        } else {
-          // Real partner2. Run the dedupe ONLY when we have a non-empty
-          // first name to query with — empty-string ilike matches all.
-          let alreadyExists = false
-          if (p2HasFirst) {
-            const { data: existingP2 } = await supabase
-              .from('people')
-              .select('id')
-              .eq('wedding_id', weddingId)
-              .eq('role', 'partner2')
-              .ilike('first_name', row.partner2_first_name as string)
-              .limit(1)
-            alreadyExists = !!(existingP2 && existingP2.length > 0)
-          }
-          if (!alreadyExists) {
-            const { data: p2Row } = await supabase
-              .from('people')
-              .insert({
-                venue_id: venueId,
-                wedding_id: weddingId,
-                role: 'partner2',
-                first_name: row.partner2_first_name ?? null,
-                last_name: row.partner2_last_name ?? null,
+        // Run the dedupe ONLY when we have a non-empty first name to
+        // query with — empty-string ilike matches all.
+        let alreadyExists = false
+        if (p2HasFirst) {
+          const { data: existingP2 } = await supabase
+            .from('people')
+            .select('id')
+            .eq('wedding_id', weddingId)
+            .eq('role', 'partner2')
+            .ilike('first_name', row.partner2_first_name as string)
+            .limit(1)
+          alreadyExists = !!(existingP2 && existingP2.length > 0)
+        }
+        if (!alreadyExists) {
+          const { data: p2Row } = await supabase
+            .from('people')
+            .insert({
+              venue_id: venueId,
+              wedding_id: weddingId,
+              role: 'partner2',
+              first_name: row.partner2_first_name ?? null,
+              last_name: row.partner2_last_name ?? null,
+              email: row.partner2_email ?? null,
+              phone: row.partner2_phone ?? null,
+              confidence_flag: confidenceFlag,
+              crm_source: crmSource,
+            })
+            .select('id')
+            .single()
+          if (p2Row?.id) {
+            try {
+              await captureNameEvidence(supabase, p2Row.id as string, {
+                first: row.partner2_first_name ?? null,
+                last: row.partner2_last_name ?? null,
                 email: row.partner2_email ?? null,
-                phone: row.partner2_phone ?? null,
-                confidence_flag: confidenceFlag,
-                crm_source: crmSource,
+                source: chokepointSource,
               })
-              .select('id')
-              .single()
-            if (p2Row?.id) {
-              try {
-                await captureNameEvidence(supabase, p2Row.id as string, {
-                  first: row.partner2_first_name ?? null,
-                  last: row.partner2_last_name ?? null,
-                  email: row.partner2_email ?? null,
-                  source: chokepointSource,
-                })
-                if (row.partner2_email) {
-                  const fromEmail = inferNameFromEmail(row.partner2_email)
-                  if (fromEmail) {
-                    await captureNameEvidence(supabase, p2Row.id as string, {
-                      first: fromEmail.first,
-                      last: fromEmail.last,
-                      email: row.partner2_email,
-                      source: 'email_handle_parse',
-                    })
-                  }
+              if (row.partner2_email) {
+                const fromEmail = inferNameFromEmail(row.partner2_email)
+                if (fromEmail) {
+                  await captureNameEvidence(supabase, p2Row.id as string, {
+                    first: fromEmail.first,
+                    last: fromEmail.last,
+                    email: row.partner2_email,
+                    source: 'email_handle_parse',
+                  })
                 }
-              } catch (err) {
-                console.warn('[crm-import] name-capture (partner2) failed:',
-                  err instanceof Error ? err.message : err)
               }
+            } catch (err) {
+              console.warn('[crm-import] name-capture (partner2) failed:',
+                err instanceof Error ? err.message : err)
             }
           }
         }
