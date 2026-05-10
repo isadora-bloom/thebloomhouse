@@ -249,6 +249,39 @@ export async function POST(request: NextRequest) {
     rows: parsed.rows,
   })
 
+  // Wave 4 Phase 4c: raw-source persistence + import_runs audit row.
+  // The existing endpoint already does the right adapter dispatch; we
+  // additionally write the raw CSV to the crm-imports bucket and emit
+  // an import_runs row + enqueue identity-reconstruction for every
+  // wedding the import touched. Same end state as the unified
+  // import-router but reached via the explicit adapter-name path.
+  // Errors here are non-fatal — the import itself already committed.
+  let importRunId: string | null = null
+  let reconstructionEnqueuedCount = 0
+  try {
+    const { persistAndEnqueueAfterAdapterCommit } = await import(
+      '@/lib/services/import-router/route-and-process-after-adapter'
+    )
+    const persistResult = await persistAndEnqueueAfterAdapterCommit({
+      supabase,
+      venueId: auth.venueId,
+      ingestedBy: auth.userId,
+      sourcePath: 'crm-import-onboarding',
+      adapterName: adapter.name,
+      csvText: body.csv ?? null,
+      jsonText: body.json ?? null,
+      filename: deriveFilenameFromBody(adapter.name, body),
+      commitResult,
+    })
+    importRunId = persistResult.importRunId
+    reconstructionEnqueuedCount = persistResult.reconstructionEnqueuedCount
+  } catch (err) {
+    console.warn(
+      '[crm-import] persistAndEnqueueAfterAdapterCommit failed (non-fatal):',
+      err instanceof Error ? err.message : err,
+    )
+  }
+
   return NextResponse.json({
     ok: commitResult.ok,
     adapter: adapter.name,
@@ -258,7 +291,15 @@ export async function POST(request: NextRequest) {
     lost_deals_inserted: commitResult.lostDealsInserted,
     errors: commitResult.errors,
     warnings: parsed.warnings,
+    import_run_id: importRunId,
+    reconstruction_enqueued_count: reconstructionEnqueuedCount,
   }, { status: commitResult.ok ? 200 : 500 })
+}
+
+function deriveFilenameFromBody(adapterName: string, body: RequestBody): string {
+  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+  const ext = body.json ? 'json' : 'csv'
+  return `${adapterName}-${ts}.${ext}`
 }
 
 export async function GET() {

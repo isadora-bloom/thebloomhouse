@@ -251,6 +251,15 @@ export interface CommitResult {
   toursInserted: number
   lostDealsInserted: number
   errors: string[]
+  /** Wave 4 Phase 4c: list of wedding ids that this commit touched
+   *  (both freshly-inserted weddings AND existing weddings that were
+   *  resolved-and-attached via the canonical resolver). The unified
+   *  import-router uses this to enqueue identity-reconstruction for
+   *  every couple the import produced or modified — so a HoneyBook
+   *  backfill of 71 couples enqueues 71 reconstructions, not 0.
+   *  Optional for back-compat; the existing /onboarding/crm-import
+   *  endpoint ignores it. */
+  touchedWeddingIds?: string[]
 }
 
 /** Optional config the adapter may consume — only generic_csv currently
@@ -360,6 +369,7 @@ export async function commitNormalisedRows(args: {
     toursInserted: 0,
     lostDealsInserted: 0,
     errors: [],
+    touchedWeddingIds: [],
   }
 
   for (const row of rows) {
@@ -384,6 +394,21 @@ export async function commitNormalisedRows(args: {
     // match so the summary still tells the truth.
     let insertedWeddingId: string | null = null
     let rowAborted = false
+    // Wave 4 Phase 4c: track whether THIS row's wedding id is in the
+    // touchedWeddingIds list so the outer catch can unrecord on rollback.
+    // Declared outside the try block so the catch can reach it.
+    let weddingIdRecorded = false
+    const recordTouched = (id: string): void => {
+      if (weddingIdRecorded) return
+      result.touchedWeddingIds = result.touchedWeddingIds ?? []
+      result.touchedWeddingIds.push(id)
+      weddingIdRecorded = true
+    }
+    const unrecordTouched = (id: string): void => {
+      if (!weddingIdRecorded) return
+      result.touchedWeddingIds = (result.touchedWeddingIds ?? []).filter((x) => x !== id)
+      weddingIdRecorded = false
+    }
     const rollbackRow = async (reason: string): Promise<void> => {
       if (!insertedWeddingId) return
       try {
@@ -510,6 +535,10 @@ export async function commitNormalisedRows(args: {
         }
         insertedWeddingId = weddingId
         // Don't bump weddingsInserted — we attached to an existing one.
+        // Wave 4 Phase 4c: still record the touched wedding so the
+        // import-router enqueues a reconstruction (the import added new
+        // signals to an existing couple's record).
+        recordTouched(weddingId)
       } else {
         const { data: wedding, error: wedErr } = await supabase
           .from('weddings')
@@ -524,6 +553,7 @@ export async function commitNormalisedRows(args: {
         result.weddingsInserted += 1
         weddingId = wedding.id as string
         insertedWeddingId = weddingId
+        recordTouched(weddingId)
       }
 
       // people: insert primary partner if we have any name/email AND the
@@ -712,6 +742,7 @@ export async function commitNormalisedRows(args: {
           result.ok = false
           await rollbackRow('interactions insert failed')
           result.weddingsInserted = Math.max(0, result.weddingsInserted - 1)
+          unrecordTouched(weddingId)
           insertedWeddingId = null
           rowAborted = true
         } else {
@@ -749,6 +780,7 @@ export async function commitNormalisedRows(args: {
             0,
             result.interactionsInserted - (row.interactions?.length ?? 0),
           )
+          unrecordTouched(weddingId)
           insertedWeddingId = null
           rowAborted = true
         } else {
@@ -787,6 +819,7 @@ export async function commitNormalisedRows(args: {
             0,
             result.toursInserted - (row.tours?.length ?? 0),
           )
+          unrecordTouched(weddingId)
           insertedWeddingId = null
           rowAborted = true
         } else {
@@ -812,6 +845,7 @@ export async function commitNormalisedRows(args: {
           0,
           result.toursInserted - (row.tours?.length ?? 0),
         )
+        unrecordTouched(insertedWeddingId)
         insertedWeddingId = null
       }
     }

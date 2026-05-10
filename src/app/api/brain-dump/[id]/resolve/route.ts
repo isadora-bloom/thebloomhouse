@@ -98,14 +98,45 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!file) {
       return NextResponse.json({ error: 'Stored CSV could not be read' }, { status: 500 })
     }
-    const text = await file.text()
-    const rows = parseCsvRows(text)
-    const headerRow = rows[0] ?? []
-    const dataRows = rows.slice(1)
-    const detection = detectCsvShape(headerRow)
-    const summary = await runCsvImport({
-      supabase, venueId: auth.venueId, detection, headerRow, dataRows,
+
+    // Wave 4 Phase 4c: route the confirmed CSV through the unified
+    // import-router so adapter shapes (honeybook / aisleplanner /
+    // dubsado / tour_scheduler / web_form / web_form_packages) hit
+    // their actual provider adapter instead of falling through to
+    // platform-signals. Generic shapes (leads / reviews / etc) keep
+    // working — the router delegates them back to runCsvImport.
+    // The router also persists raw bytes to crm-imports + writes an
+    // import_runs audit row + enqueues identity-reconstruction for
+    // every wedding the import touches.
+    const fileName = (pr as { filename?: unknown }).filename
+    const safeFileName =
+      typeof fileName === 'string' && fileName.trim().length > 0
+        ? fileName
+        : storagePath.split('/').pop() ?? 'brain-dump.csv'
+    const buffer = Buffer.from(await file.arrayBuffer())
+    const { routeAndProcessUpload } = await import(
+      '@/lib/services/import-router/route-and-process'
+    )
+    const result = await routeAndProcessUpload({
+      venueId: auth.venueId,
+      supabase,
+      fileBuffer: buffer,
+      filename: safeFileName,
+      mimeType: 'text/csv',
+      sourcePath: 'brain-dump',
+      ingestedBy: auth.userId,
     })
+    const summary = {
+      inserted: result.rowsInserted,
+      updated: result.rowsUpdated,
+      skipped: result.rowsSkipped,
+      errors: result.errors,
+      importRunId: result.importRunId,
+      detectedShape: result.detectedShape,
+      adapterUsed: result.adapterUsed,
+      reconstructionEnqueuedCount: result.reconstructionEnqueuedCount,
+      skipReasons: result.skipReasons,
+    }
     await supabase.from('brain_dump_entries').update({
       parse_status: 'confirmed',
       clarification_answer: body.answer?.trim() ?? null,
