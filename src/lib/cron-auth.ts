@@ -57,6 +57,10 @@ export const DESTRUCTIVE_JOBS: ReadonlySet<string> = new Set([
   // significant LLM cost. Add the destructive gate so non-Vercel-cron
   // callers must carry the secondary header.
   'identity_judge_sweep',
+  // Wave 5A (2026-05-09). Per-couple intel derive sweep. Same Sonnet
+  // cost class as identity_judge_sweep — drains couple_intel_jobs and
+  // refreshes drift. Same destructive treatment.
+  'couple_intel_sweep',
 ])
 
 export type CronAuthResult =

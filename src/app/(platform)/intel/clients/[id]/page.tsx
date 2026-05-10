@@ -63,6 +63,7 @@ import { AutoContextPanel } from '@/components/intel/auto-context-panel'
 import { NameEvidencePanel } from '@/components/intel/NameEvidencePanel'
 import { RelationshipsPanel } from '@/components/intel/RelationshipsPanel'
 import { ReconstructedIdentityPanel } from '@/components/intel/ReconstructedIdentityPanel'
+import { CoupleIntelPanel } from '@/components/intel/CoupleIntelPanel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1006,6 +1007,15 @@ export default function ClientProfilePage() {
           flags. Single fetch via /api/insights/lead/[id]; each
           generator's cache fast-paths repeat reads. */}
       <LeadInsightsPanel weddingId={weddingId} />
+
+      {/* Wave 5A: per-couple derivative intel — persona, predicted close
+          probability, recommended next action, coordinator brief,
+          sensitivity flags, stale-signal alerts. Reads from couple_intel
+          (Sonnet synthesizer derived from the Wave 4 forensic profile).
+          Mounted ABOVE ReconstructedIdentityPanel because intel is the
+          ACTION layer (what to do); profile is the EVIDENCE layer (who
+          they are). Coordinators read action first, evidence second. */}
+      <CoupleIntelPanel weddingId={weddingId} />
 
       {/* Wave 4 Phase 3: forensic identity record (couple_identity_profile).
           Reads from the Sonnet-judged profile (no LLM call on read). When

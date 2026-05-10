@@ -714,6 +714,31 @@ export async function reconstructCoupleIdentity(
     console.warn(`[reconstruct] profile→people sync threw: ${message}`)
   }
 
+  // Wave 5A: enqueue per-couple intel derive whenever the underlying
+  // forensic profile changes. Fire-and-forget — the enqueue helper is
+  // always-safe and never throws, but we still wrap defensively because
+  // the reconstruction itself has already succeeded by this point and
+  // any failure here must NOT propagate up. 24h dedupe at the enqueue
+  // layer collapses bursts.
+  try {
+    const { enqueueCoupleIntel } = await import('@/lib/services/intel/enqueue-couple-intel')
+    const enqueueResult = await enqueueCoupleIntel({
+      weddingId,
+      venueId,
+      triggerSignal: 'profile_updated',
+      supabase,
+    })
+    if (enqueueResult.skipped) {
+      console.log(
+        `[reconstruct] couple-intel enqueue skipped: ${enqueueResult.reason}`,
+        { weddingId },
+      )
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.warn(`[reconstruct] couple-intel enqueue threw: ${message}`)
+  }
+
   return {
     profile,
     costCents: newCallCostCents,

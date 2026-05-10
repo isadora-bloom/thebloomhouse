@@ -255,6 +255,13 @@ const VALID_JOBS = [
   // dispatcher to stay within Vercel Pro's 40-cron limit; standalone
   // route at /api/cron/identity-judge-sweep also exists for ops curls.
   'identity_judge_sweep',
+  // Wave 5A (2026-05-09). Per-couple intel derive worker. Drains
+  // couple_intel_jobs (profile_updated / manual_bulk / drift_refresh).
+  // Per-tick budget 50 jobs, time-boxed at 280s. Drift enqueue layer
+  // adds up to 5 weddings whose last_derived_at is older than 7 days.
+  // Routed through the dispatcher to stay under the 40-cron Vercel Pro
+  // ceiling.
+  'couple_intel_sweep',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -639,6 +646,15 @@ async function runJob(job: JobName): Promise<unknown> {
       // into the same shared runIdentityJudgeSweep service.
       const { runIdentityJudgeSweep } = await import('@/lib/services/identity/judge-sweep')
       return runIdentityJudgeSweep()
+    }
+
+    case 'couple_intel_sweep': {
+      // Wave 5A. Drains couple_intel_jobs (profile_updated / manual_bulk
+      // / drift_refresh) + enqueues 7d-stale drift candidates. Up to 50
+      // derives per tick, time-boxed at 280s. Per-couple cost ~$0.02
+      // (Sonnet, ~3000 max output tokens).
+      const { runCoupleIntelSweep } = await import('@/lib/services/intel/couple-intel-sweep')
+      return runCoupleIntelSweep()
     }
   }
 }
