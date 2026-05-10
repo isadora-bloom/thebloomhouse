@@ -307,6 +307,23 @@ const VALID_JOBS = [
   // signals. 3 venues per tick, weekly. Writes to marketing_recommendations.
   // Refuses when n<10. Never auto-executes.
   'marketing_recommendation_sweep',
+  // Wave 7C (2026-05-10). Hypothesis validation — designs + runs +
+  // interprets statistical tests on Wave 7A discoveries. 3 validations
+  // per tick, 7d drift refresh on in-progress validations.
+  'hypothesis_validation_sweep',
+  // Wave 6D (2026-05-10). Spend loop flag detector — auto-flags
+  // underperforming/overperforming/CAC-exceeds-LTV/persona-drift/
+  // channel-anomaly conditions. AUTO-FLAG NEVER AUTO-EXECUTE.
+  // 5 venues per tick, daily.
+  'spend_loop_flag_sweep',
+  // Wave 6D (2026-05-10). Weekly marketing digest builder. 3 venues
+  // per tick. Sonnet narrates the week's flags + recommendations +
+  // metric changes + concluded A/B tests + validated discoveries.
+  'marketing_digest_sweep',
+  // Wave 8 (2026-05-10). External signals health sweep — checks all
+  // 8 signal sources per venue + auto-derives missing location fields
+  // from address. Daily.
+  'external_signals_health_sweep',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -766,6 +783,34 @@ async function runJob(job: JobName): Promise<unknown> {
       // Refuses when n<10. Never auto-executes.
       const { runMarketingRecommendationSweep } = await import('@/lib/services/marketing-spend/recommendations/sweep')
       return runMarketingRecommendationSweep()
+    }
+
+    case 'hypothesis_validation_sweep': {
+      // Wave 7C. Validates Wave 7A discoveries via Sonnet test
+      // designer + executor + interpreter. 3 validations per tick.
+      const { runValidationSweep } = await import('@/lib/services/intel/validation/sweep')
+      return runValidationSweep()
+    }
+
+    case 'spend_loop_flag_sweep': {
+      // Wave 6D. Auto-flags spend conditions (CAC>LTV, underperforming,
+      // overperforming, persona drift, channel anomaly). 5 venues/tick.
+      const { runSpendLoopFlagSweep } = await import('@/lib/services/marketing-spend/loop/flag-sweep')
+      return runSpendLoopFlagSweep()
+    }
+
+    case 'marketing_digest_sweep': {
+      // Wave 6D. Weekly digest builder. 3 venues per tick. Sonnet
+      // narrates flags + recommendations + week-over-week metrics.
+      const { runMarketingDigestSweep } = await import('@/lib/services/marketing-spend/loop/digest-sweep')
+      return runMarketingDigestSweep()
+    }
+
+    case 'external_signals_health_sweep': {
+      // Wave 8. Health-check + auto-derive for all 8 external signal
+      // sources per venue. Daily.
+      const { runExternalSignalsHealthSweep } = await import('@/lib/services/external-signals-config/sweep')
+      return runExternalSignalsHealthSweep({})
     }
   }
 }
