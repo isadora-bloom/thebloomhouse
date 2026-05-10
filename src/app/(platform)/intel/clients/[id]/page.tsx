@@ -62,6 +62,7 @@ import { HeatHistoryPanel } from '@/components/agent/heat-history-panel'
 import { AutoContextPanel } from '@/components/intel/auto-context-panel'
 import { NameEvidencePanel } from '@/components/intel/NameEvidencePanel'
 import { RelationshipsPanel } from '@/components/intel/RelationshipsPanel'
+import { ReconstructedIdentityPanel } from '@/components/intel/ReconstructedIdentityPanel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1005,6 +1006,14 @@ export default function ClientProfilePage() {
           flags. Single fetch via /api/insights/lead/[id]; each
           generator's cache fast-paths repeat reads. */}
       <LeadInsightsPanel weddingId={weddingId} />
+
+      {/* Wave 4 Phase 3: forensic identity record (couple_identity_profile).
+          Reads from the Sonnet-judged profile (no LLM call on read). When
+          the profile row doesn't exist yet, the panel surfaces a
+          "Reconstruct now" button that POSTs to
+          /api/admin/identity/reconstruct. Sensitive emotional themes are
+          gated behind venue_config.feature_flags.reveal_sensitive_themes. */}
+      <ReconstructedIdentityPanel weddingId={weddingId} />
 
       {/* Main Layout: 2/3 + 1/3 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

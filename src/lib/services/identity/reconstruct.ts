@@ -681,6 +681,39 @@ export async function reconstructCoupleIdentity(
     throw new Error(`reconstruct: upsert failed: ${upsertErr.message}`)
   }
 
+  // Wave 4 Phase 3: project the forensic profile back onto the legacy
+  // people / weddings rows so legacy readers (couple-name pickers,
+  // inbox row labels, dashboards) read names that match the LLM-judged
+  // truth. This is a courtesy for legacy readers; the profile is the
+  // source of truth and never depends on the legacy projection. Sync
+  // failures log + continue — they must not propagate up into the
+  // reconstruction call (the upsert already succeeded).
+  try {
+    // Lazy import to avoid a circular dependency: profile-to-people-sync
+    // imports getStoredCoupleIdentityProfile from this module.
+    const { syncProfileToPeople } = await import('./profile-to-people-sync')
+    const syncResult = await syncProfileToPeople(weddingId, {
+      supabase,
+      profile: {
+        weddingId,
+        venueId,
+        profile,
+        evidenceSummary: summary,
+        lastReconstructedAt: upsertRow.last_reconstructed_at,
+        lastSignalAt,
+        reconstructionCount: newCount,
+        promptVersion: IDENTITY_RECONSTRUCTION_PROMPT_VERSION,
+        costCents: cumulativeCostCents,
+      },
+    })
+    if (!syncResult.ok) {
+      console.warn(`[reconstruct] profile→people sync skipped: ${syncResult.reason}`)
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.warn(`[reconstruct] profile→people sync threw: ${message}`)
+  }
+
   return {
     profile,
     costCents: newCallCostCents,

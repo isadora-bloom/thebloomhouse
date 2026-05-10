@@ -40,6 +40,7 @@ import {
   ChevronDown,
   ChevronUp,
   History,
+  Sparkles,
 } from 'lucide-react'
 
 type Decision = 'accepted' | 'rejected' | 'deferred' | null
@@ -78,6 +79,27 @@ interface ProposalsResponse {
   error?: string
 }
 
+interface ProfileHandleClaim {
+  platform: string
+  handle: string
+  evidence_quote: string
+}
+
+interface ProfileHandleRow {
+  weddingId: string
+  lastReconstructedAt: string
+  handles: ProfileHandleClaim[]
+  partner1Name: string | null
+  partner2Name: string | null
+}
+
+interface ProfileHandlesResponse {
+  ok: boolean
+  rowsReturned?: number
+  rows?: ProfileHandleRow[]
+  error?: string
+}
+
 function scoreColor(score: number): string {
   if (score >= 80) return 'text-emerald-700 bg-emerald-50 border-emerald-200'
   if (score >= 50) return 'text-amber-700 bg-amber-50 border-amber-200'
@@ -93,11 +115,13 @@ function platformChipColor(platform: string): string {
 export default function HandleMergesPage() {
   const [live, setLive] = useState<Proposal[]>([])
   const [audit, setAudit] = useState<Proposal[]>([])
+  const [profileHandles, setProfileHandles] = useState<ProfileHandleRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
   const [actingOn, setActingOn] = useState<string | null>(null) // handle currently being acted on
   const [showAudit, setShowAudit] = useState(false)
+  const [showProfiles, setShowProfiles] = useState(true)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   const expandedIds = useMemo(() => expanded, [expanded])
@@ -106,15 +130,28 @@ export default function HandleMergesPage() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/admin/identity/handle-merge-proposals', {
-        cache: 'no-store',
-      })
-      const json = (await res.json()) as ProposalsResponse
-      if (!res.ok || !json.ok) {
-        throw new Error(json.error || `HTTP ${res.status}`)
+      const [proposalsRes, profileHandlesRes] = await Promise.all([
+        fetch('/api/admin/identity/handle-merge-proposals', { cache: 'no-store' }),
+        fetch('/api/admin/identity/profile-handles?limit=200', { cache: 'no-store' }),
+      ])
+      const json = (await proposalsRes.json()) as ProposalsResponse
+      if (!proposalsRes.ok || !json.ok) {
+        throw new Error(json.error || `HTTP ${proposalsRes.status}`)
       }
       setLive(json.live ?? [])
       setAudit(json.audit ?? [])
+      // Forensic profile handles: load best-effort. A failure here
+      // doesn't block the queue UI — the legacy handle-merge queue is
+      // the load-bearing surface; the profile handles are
+      // supplementary view of the LLM-judged convergences.
+      try {
+        const handlesJson = (await profileHandlesRes.json()) as ProfileHandlesResponse
+        if (profileHandlesRes.ok && handlesJson.ok) {
+          setProfileHandles(handlesJson.rows ?? [])
+        }
+      } catch {
+        /* best-effort */
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load')
     } finally {
@@ -373,6 +410,63 @@ export default function HandleMergesPage() {
               )
             })}
           </ul>
+        )}
+      </section>
+
+      <section>
+        <button
+          onClick={() => setShowProfiles((v) => !v)}
+          className="flex items-center gap-2 text-sm text-sage-700 hover:text-sage-900 mb-3"
+        >
+          <Sparkles className="w-4 h-4" />
+          {showProfiles ? 'Hide' : 'Show'} forensic handle map
+          <span className="text-sage-500">({profileHandles.length} couples)</span>
+          {showProfiles ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        </button>
+        <p className="text-xs text-sage-500 mb-3 max-w-2xl">
+          Wave 4 forensic identity reconstruction — cross-platform handles
+          the Sonnet judge attached to each couple_identity_profile. The
+          live proposals queue above is the actionable workflow; this
+          panel is the read view on the LLM-judged convergences.
+        </p>
+        {showProfiles && (
+          profileHandles.length === 0 ? (
+            <div className="text-sm text-sage-500 italic border border-dashed border-sage-200 rounded-lg p-4 text-center">
+              No reconstructed profiles with cross-platform handles yet.
+            </div>
+          ) : (
+            <ul className="divide-y divide-sage-100 bg-white border border-sage-200 rounded-lg">
+              {profileHandles.map((row) => (
+                <li key={row.weddingId} className="p-3 text-sm">
+                  <div className="flex items-baseline gap-2 flex-wrap mb-1">
+                    <Link
+                      href={`/intel/clients/${row.weddingId}`}
+                      className="font-medium text-sage-900 hover:underline"
+                    >
+                      {[row.partner1Name, row.partner2Name]
+                        .filter(Boolean)
+                        .join(' & ') || row.weddingId.slice(0, 8)}
+                    </Link>
+                    <span className="text-[11px] text-sage-400">
+                      reconstructed {new Date(row.lastReconstructedAt).toLocaleDateString()}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {row.handles.map((h, i) => (
+                      <span
+                        key={`${row.weddingId}-${i}`}
+                        className="inline-flex items-center text-[11px] bg-sage-50 border border-sage-200 px-2 py-0.5 rounded"
+                        title={h.evidence_quote}
+                      >
+                        <span className="font-mono mr-1">{h.platform}:</span>
+                        {h.handle}
+                      </span>
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )
         )}
       </section>
 

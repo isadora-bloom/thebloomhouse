@@ -21,6 +21,8 @@ import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
 import { callAI } from '@/lib/ai/client'
 import { createServiceClient } from '@/lib/supabase/service'
 import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
+import { getStoredCoupleIdentityProfile } from '@/lib/services/identity/reconstruct'
+import { buildCoupleProfileBlock } from '@/lib/services/identity/profile-prompt-block'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1.
  *  v2 (2026-05-09, Wave 1A): when the caller resolves the underlying
@@ -29,8 +31,15 @@ import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-
  *  reply can soften / weight tone for couples whose planning carried
  *  emotional load. Universal-rules SOFT-CONTEXT NOTES POLICY governs
  *  the verbatim-quote rule (sensitive notes are voice-shaping only,
- *  never echoed in a public-facing reply). */
-export const REVIEW_RESPONSE_PROMPT_VERSION = 'review-response.prompt.v2'
+ *  never echoed in a public-facing reply).
+ *  v3 (2026-05-09, Wave 4 Phase 3): in addition to the auto-context
+ *  block, the brain folds the FORENSIC couple_identity_profile into
+ *  the system prompt — emotional truths (sensitive label-only),
+ *  occupations, residence, family dynamics, vendor preferences,
+ *  decision dynamics. Same sensitivity policy: sensitive items are
+ *  voice-shaping only; verbatim sensitive evidence_quote NEVER echoed
+ *  in a public-facing reply. */
+export const REVIEW_RESPONSE_PROMPT_VERSION = 'review-response.prompt.v3'
 
 export interface ReviewForResponse {
   id: string
@@ -173,6 +182,27 @@ export async function generateReviewResponse(
     }
   }
 
+  // Wave 4 Phase 3 (2026-05-09): when the caller resolved a wedding,
+  // also load the FORENSIC couple_identity_profile and fold a richer
+  // COUPLE PROFILE block into the system prompt. Same sensitivity
+  // policy as auto-context: sensitive emotional truths are voice-
+  // shaping only; sensitive evidence_quote NEVER appears in a public
+  // reply. Best-effort load — failure leaves block null and the
+  // brain still drafts from auto-context + review_language alone.
+  let coupleProfileBlock: string | null = null
+  if (options.weddingId) {
+    try {
+      const stored = await getStoredCoupleIdentityProfile(options.weddingId, {
+        supabase,
+      })
+      coupleProfileBlock = buildCoupleProfileBlock(stored?.profile ?? null, {
+        surface: 'coordinator',
+      })
+    } catch {
+      // Forensic profile is enrichment, not a gate.
+    }
+  }
+
   // Optional learning block — banned/approved phrases from voice
   // preferences. Mirrors generateClientDraft so the same voice
   // discipline applies.
@@ -203,11 +233,13 @@ export async function generateReviewResponse(
 
   // The COUPLE'S NOTES block sits between the task prompt and the
   // learning block so the model reads (1) what the task is, (2) what
-  // it knows about THIS couple, (3) the venue's voice corrections.
-  // Empty block is null — skip the section entirely so we don't pollute
-  // the prompt with an empty header.
+  // it knows about THIS couple (auto-context), (3) the forensic
+  // record (Wave 4 Phase 3), (4) the venue's voice corrections.
+  // Empty blocks elide entirely so we don't pollute the prompt with
+  // empty headers.
   const coupleNotesSection = coupleNotesBlock ? `\n\n${coupleNotesBlock}` : ''
-  const systemPrompt = `${UNIVERSAL_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${coupleNotesSection}${learningBlock}`
+  const coupleProfileSection = coupleProfileBlock ? `\n\n${coupleProfileBlock}` : ''
+  const systemPrompt = `${UNIVERSAL_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${coupleNotesSection}${coupleProfileSection}${learningBlock}`
 
   const result = await callAI({
     systemPrompt,

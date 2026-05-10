@@ -2883,6 +2883,256 @@ async function detectEmotionalThemes(
 }
 
 // ---------------------------------------------------------------------------
+// Detector 16 (Wave 4 Phase 3): Emotional themes from forensic profiles
+// ---------------------------------------------------------------------------
+//
+// Same shape as detectEmotionalThemes but reads from
+// `couple_identity_profile.profile.emotional_truths` instead of the
+// auto-context theme rollup. The forensic record carries higher-quality
+// signals (LLM-judged + verbatim evidence quotes per claim) so this
+// aggregator is the preferred source going forward; Phase 4 will retire
+// the keyword-driven detectEmotionalThemes loop after a brief A/B
+// window.
+//
+// Runs alongside detectEmotionalThemes during Phase 3 so we can compare
+// outputs before retiring the legacy detector. The venue_config
+// feature_flags.theme_aggregator_source flag drives which detector(s)
+// participate:
+//   - 'profiles' : only this aggregator runs
+//   - 'extraction' : only the legacy detectEmotionalThemes runs
+//   - 'both' (default) : both run; the runner-side title-dedupe collapses
+//     duplicate insights so we don't surface the same theme twice
+//
+// Sensitivity policy mirrors detectEmotionalThemes: sensitive themes
+// COUNT only at the venue level, never name couples, never echo
+// evidence_quote in the framing.
+async function aggregateEmotionalThemesFromProfiles(
+  supabase: SupabaseClient,
+  venueId: string,
+  windowDays: number = 30,
+): Promise<InsightCandidate[]> {
+  const insights: InsightCandidate[] = []
+  try {
+    const sinceIso = daysAgoISO(windowDays)
+    const priorSinceIso = daysAgoISO(windowDays * 2)
+
+    // Pull profiles whose last_signal_at falls inside the active window.
+    // Falling back to last_reconstructed_at when last_signal_at is NULL.
+    const { data: rows, error } = await supabase
+      .from('couple_identity_profile')
+      .select('wedding_id, profile, last_signal_at, last_reconstructed_at')
+      .eq('venue_id', venueId)
+      .gte('last_reconstructed_at', priorSinceIso)
+      .limit(2000)
+    if (error) {
+      console.error(
+        '[intelligence-engine] aggregateEmotionalThemesFromProfiles fetch failed:',
+        error.message,
+      )
+      return []
+    }
+    if (!rows || rows.length === 0) return []
+
+    type ProfileRow = {
+      wedding_id: string
+      profile: {
+        emotional_truths: Array<{
+          theme: string
+          evidence_quote: string
+          confidence_0_100: number
+          sensitive: boolean
+        }>
+      } | null
+      last_signal_at: string | null
+      last_reconstructed_at: string | null
+    }
+
+    interface ThemeBucket {
+      noteCount: number
+      weddingIds: Set<string>
+      sensitiveSeen: boolean
+      safeExemplar: string | null
+    }
+    const active = new Map<string, ThemeBucket>()
+    const prior = new Map<string, ThemeBucket>()
+
+    for (const r of rows as ProfileRow[]) {
+      const profile = r.profile
+      if (!profile || !Array.isArray(profile.emotional_truths)) continue
+      const stamp = r.last_signal_at ?? r.last_reconstructed_at
+      if (!stamp) continue
+      const stampMs = Date.parse(stamp)
+      if (!Number.isFinite(stampMs)) continue
+      const sinceMs = Date.parse(sinceIso)
+      const priorSinceMs = Date.parse(priorSinceIso)
+      const inActive = stampMs >= sinceMs
+      const inPrior = stampMs >= priorSinceMs && stampMs < sinceMs
+      if (!inActive && !inPrior) continue
+      const target = inActive ? active : prior
+      for (const t of profile.emotional_truths) {
+        if (!t || typeof t.theme !== 'string') continue
+        const key = t.theme.trim().toLowerCase()
+        if (!key) continue
+        let bucket = target.get(key)
+        if (!bucket) {
+          bucket = {
+            noteCount: 0,
+            weddingIds: new Set(),
+            sensitiveSeen: false,
+            safeExemplar: null,
+          }
+          target.set(key, bucket)
+        }
+        bucket.noteCount += 1
+        bucket.weddingIds.add(r.wedding_id)
+        if (t.sensitive) bucket.sensitiveSeen = true
+        else if (!bucket.safeExemplar && typeof t.evidence_quote === 'string') {
+          bucket.safeExemplar = t.evidence_quote
+        }
+      }
+    }
+
+    for (const [theme, bucket] of active.entries()) {
+      const meaningful = bucket.noteCount >= 4 || bucket.weddingIds.size >= 3
+      if (!meaningful) continue
+      const priorBucket = prior.get(theme)
+      const priorCount = priorBucket?.noteCount ?? 0
+      const trendDelta =
+        priorCount === 0
+          ? bucket.noteCount > 0
+            ? 100
+            : 0
+          : ((bucket.noteCount - priorCount) / priorCount) * 100
+      const isFresh = priorCount === 0 && bucket.noteCount >= 3
+      const trending = trendDelta >= 50 || isFresh
+      if (!trending) continue
+
+      const themeLabel = theme.replace(/_/g, ' ')
+      const trendPart = isFresh
+        ? 'fresh signal vs last month'
+        : trendDelta > 0
+          ? `up ${trendDelta.toFixed(0)}% vs last month`
+          : 'flat vs last month'
+      const titleTemplate =
+        `${bucket.weddingIds.size} couple${bucket.weddingIds.size === 1 ? '' : 's'} reconstructed ` +
+        `${themeLabel} this month, ${trendPart}`
+      const bodyTemplate =
+        `${bucket.noteCount} forensic emotional-truth observation${bucket.noteCount === 1 ? '' : 's'} ` +
+        `landed on ${themeLabel} from ${bucket.weddingIds.size} ` +
+        `distinct couple${bucket.weddingIds.size === 1 ? '' : 's'} in the last ${windowDays} days. ` +
+        (bucket.sensitiveSeen
+          ? 'This is a sensitive category — review the lead profiles individually rather than acting on the aggregate.'
+          : 'A meaningful uptick the venue may want to weave into its positioning.')
+
+      const framingParts = [
+        `${bucket.weddingIds.size} couples have ${themeLabel} as a forensic ` +
+          `emotional truth in their reconstructed identity profile, across ` +
+          `${bucket.noteCount} observation${bucket.noteCount === 1 ? '' : 's'} ` +
+          `over the last ${windowDays} days.`,
+        `Trend vs the prior ${windowDays} days: ${trendDelta.toFixed(0)} percent change.`,
+      ]
+      if (bucket.sensitiveSeen) {
+        framingParts.push(
+          'This category is SENSITIVE. Report counts only. Do NOT name any couple. Do NOT quote any exemplar.',
+        )
+      } else if (bucket.safeExemplar) {
+        framingParts.push(
+          `One representative observation: "${bucket.safeExemplar.slice(0, 140)}".`,
+        )
+      }
+
+      const numbers: Array<number | string> = [
+        bucket.noteCount,
+        bucket.weddingIds.size,
+        Math.abs(Math.round(trendDelta)),
+        windowDays,
+        `${windowDays} days`,
+        `${windowDays}-day`,
+      ]
+
+      insights.push({
+        insight_type: 'emotional_theme',
+        category: 'emotional',
+        title: titleTemplate,
+        body: bodyTemplate,
+        action: bucket.sensitiveSeen
+          ? 'Review the lead profiles individually. Consider quiet outreach via Sage where appropriate. Do not surface this theme in any outbound copy.'
+          : `Consider how the venue's marketing copy, vendor mix, or onboarding content reflects ${themeLabel}.`,
+        priority: bucket.sensitiveSeen
+          ? 'low'
+          : bucket.weddingIds.size >= 5
+            ? 'medium'
+            : 'low',
+        confidence: confidenceFromN(bucket.noteCount, 4, 12),
+        data_points: {
+          category: theme,
+          note_count: bucket.noteCount,
+          wedding_count: bucket.weddingIds.size,
+          trend_delta_pct: trendDelta,
+          contains_sensitive: bucket.sensitiveSeen,
+          window_days: windowDays,
+          source: 'couple_identity_profile',
+        },
+        compared_to: `prior_${windowDays}d`,
+        expires_at: expiresInDays(14),
+        narrator_facts: {
+          family: 'emotional_theme_pulse',
+          framing: framingParts.join(' '),
+          numbers,
+        },
+      })
+    }
+    return insights
+  } catch (err) {
+    console.error(
+      '[intelligence-engine] aggregateEmotionalThemesFromProfiles failed:',
+      err,
+    )
+    return []
+  }
+}
+
+// Wrapper around aggregateEmotionalThemesFromProfiles so the runner
+// can include it in the detector array with the same signature
+// (supabase, venueId) -> Promise<InsightCandidate[]>.
+async function detectEmotionalThemesFromProfiles(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<InsightCandidate[]> {
+  return aggregateEmotionalThemesFromProfiles(supabase, venueId, 30)
+}
+
+// Public re-export so callers can drive the aggregator directly when
+// running ad-hoc audits.
+export { aggregateEmotionalThemesFromProfiles }
+
+// ---------------------------------------------------------------------------
+// Read the venue's theme-aggregator-source flag to decide which detector(s)
+// participate this run. Defaults to 'both' — keeps the legacy detector
+// firing alongside the new one during Phase 3 so we can A/B before Phase 4
+// retires the keyword loop.
+// ---------------------------------------------------------------------------
+async function loadThemeAggregatorSource(
+  supabase: SupabaseClient,
+  venueId: string,
+): Promise<'profiles' | 'extraction' | 'both'> {
+  try {
+    const { data } = await supabase
+      .from('venue_config')
+      .select('feature_flags')
+      .eq('venue_id', venueId)
+      .maybeSingle()
+    const flags = ((data as { feature_flags?: Record<string, unknown> } | null)
+      ?.feature_flags ?? {}) as Record<string, unknown>
+    const v = flags.theme_aggregator_source
+    if (v === 'profiles' || v === 'extraction' || v === 'both') return v
+  } catch {
+    // Best-effort. Fall through to default.
+  }
+  return 'both'
+}
+
+// ---------------------------------------------------------------------------
 // Analysis Runner
 // ---------------------------------------------------------------------------
 
@@ -2896,7 +3146,14 @@ async function detectEmotionalThemes(
 export async function runIntelligenceAnalysis(venueId: string): Promise<number> {
   const supabase = createServiceClient()
 
-  const detectors = [
+  // Wave 4 Phase 3: theme aggregator source is venue-flag-controlled so
+  // we can A/B between the legacy keyword detector and the forensic-
+  // profile aggregator before Phase 4 retires the keyword loop.
+  const themeSource = await loadThemeAggregatorSource(supabase, venueId)
+
+  const detectors: Array<
+    (s: SupabaseClient, v: string) => Promise<InsightCandidate[]>
+  > = [
     detectResponseTimeConversion,
     detectDayOfWeekPatterns,
     detectSourceQuality,
@@ -2912,9 +3169,15 @@ export async function runIntelligenceAnalysis(venueId: string): Promise<number> 
     detectReviewPrediction,
     detectVendorPerformance,
     detectTimelineAdherence,
-    // --- Emotional theme detector (Wave 1C, 2026-05-09) ---
-    detectEmotionalThemes,
   ]
+  if (themeSource === 'extraction' || themeSource === 'both') {
+    // --- Emotional theme detector (Wave 1C, 2026-05-09) — keyword-driven
+    detectors.push(detectEmotionalThemes)
+  }
+  if (themeSource === 'profiles' || themeSource === 'both') {
+    // --- Emotional theme aggregator (Wave 4 Phase 3, 2026-05-09) — forensic
+    detectors.push(detectEmotionalThemesFromProfiles)
+  }
 
   const candidates: InsightCandidate[] = []
   for (const detector of detectors) {

@@ -21,6 +21,43 @@ Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 - **MINOR** — wording / instruction refinement that holds the
   contract. Bumps still get a changelog row.
 
+## 2026-05-09 (Wave 4 Phase 3 — read-surface migration to couple_identity_profile)
+
+Phase 3 of the Wave 4 forensic identity reconstruction roll-out. Phase 1
+shipped the schema + Sonnet judge service (`reconstruct.ts`); Phase 2
+wired the bulk endpoint, cron sweep, and signal-driven enqueue. Phase 3
+migrates every "AI / Sage / intel" surface that today re-extracts
+identity from raw bodies to instead READ from `couple_identity_profile`.
+Phase 4 (next) retires the duplicate writers — heuristic detectors run
+in parallel during Phase 3 so the new readers can be A/B'd before any
+deletion.
+
+Sensitivity policy across all surfaces: emotional truths flagged
+`sensitive=true` are voice-shaping only. The verbatim `evidence_quote`
+on a sensitive truth is NEVER emitted into a coordinator-facing or
+external-facing prompt. Coordinator surfaces see theme labels (so the
+model can tune tone); external surfaces see counts only. This is the
+same policy that governs the universal-rules SOFT-CONTEXT NOTES
+POLICY for `wedding_auto_context`.
+
+| Module | Old | New | Reason |
+|--------|-----|-----|--------|
+| client-brain (`generateClientDraft` + `generateOnboardingEmail`) | v1.2 | v1.3 | Both reply + onboarding paths now load `couple_identity_profile` and fold a COUPLE PROFILE block (emotional truths, occupations, residence, family dynamics, vendor preferences, decision dynamics, cultural signals) into the system prompt. Sensitive emotional truths surface as theme labels only — verbatim evidence_quote suppressed per the policy above. Best-effort load: a missing profile leaves the brain on the existing context only. |
+| review-response | v2 | v3 | When the caller resolves a wedding, the brain ALSO loads the forensic `couple_identity_profile` alongside the auto-context `wedding_auto_context` block. Public reply tone now reflects the full forensic record (occupations / family / decision-dynamics) without echoing sensitive content. |
+| risk-flags | v2.1 | v2.2 | Soft-context block now PREFERS the forensic profile over the auto-context loader. A new helper `buildRiskNotesBlockFromProfile` synthesises the legacy "## COUPLE'S NOTES" header from `profile.emotional_truths` + `profile.family_dynamics` + `profile.decision_dynamics` so the downstream sentiment + narration prompts that already consume the header line keep working. Falls back to the auto-context loader when no profile row exists. Numbers-guard unchanged: narration only references risk_score + flag counts. |
+| cultural-moments-llm-propose | v2 | v3 | The proposer now folds an aggregated venue cohort block (`buildVenueCohortBlock`) into the task instructions. Non-sensitive emotional themes contribute their labels + counts; sensitive themes contribute a count-only line with no theme labels and no quotes. The proposer becomes "what cultural moment matches the cohort's actual emotional landscape" rather than "what's in season." |
+
+Non-prompt changes shipped in the same wave (no prompt version bump,
+documented here for the same audit trail):
+
+| Surface | Files | Reason |
+|---------|-------|--------|
+| `ReconstructedIdentityPanel` | `components/intel/ReconstructedIdentityPanel.tsx`, `app/(platform)/intel/clients/[id]/page.tsx` | Lead-detail surface for the forensic record. Reads via existing `GET /api/admin/identity/reconstruct?weddingId=…` (no LLM call). Sensitive emotional themes gated behind `venue_config.feature_flags.reveal_sensitive_themes` (default false). Empty state surfaces a "Reconstruct now" button; footer surfaces a "Rebuild" button (force=true). |
+| `syncProfileToPeople` | `lib/services/identity/profile-to-people-sync.ts`, `lib/services/identity/reconstruct.ts` | After a successful reconstruction upsert, project the forensic record onto the legacy `people` / `weddings` rows so legacy readers (couple-name pickers, inbox row labels, dashboards) read names that match the LLM-judged truth. High/medium-quality names update `people.first_name` + `last_name` + `name_evidence`; phantom-partner relationship soft-tombstones partner2 (Constitution: never hard-delete) + stamps `weddings.partner_count = 1`; unknown-quality marks partner1 with the `(Unknown)` marker + a refusal-derived evidence row. Idempotent. Failures log + continue (non-fatal). |
+| `aggregateEmotionalThemesFromProfiles` | `lib/services/intel/intelligence-engine.ts` | New venue-level aggregator that reads `couple_identity_profile.emotional_truths` instead of the keyword-driven auto-context theme rollup. Runs alongside the legacy `detectEmotionalThemes` during Phase 3, gated by `venue_config.feature_flags.theme_aggregator_source` (default `both`). Sensitive themes report COUNT only at the venue level — never name couples, never echo evidence_quote. |
+| `GET /api/admin/identity/profile-handles` | `app/api/admin/identity/profile-handles/route.ts`, `app/(platform)/admin/identity/handle-merges/page.tsx` | Admin endpoint surfacing `profile.handles` per wedding for the venue. Handle-merges UI now shows the forensic handle map alongside the existing handle-merge-decisions queue. |
+| `GET /api/agent/venue-config/feature-flags` | `app/api/agent/venue-config/feature-flags/route.ts` | Tiny endpoint returning `venue_config.feature_flags` for the caller's venue. Used by the ReconstructedIdentityPanel to gate sensitive-theme reveal. |
+
 ## 2026-05-09 (Wave 3 — LLM-driven identity extraction at the email layer)
 
 Deep fix at the extractor layer. Wave 2.5 (commit 35f9430) shipped reject-list

@@ -29,8 +29,14 @@ import { selectPhrase } from '@/lib/ai/phrase-selector'
  *  brains share one formatter. The "do NOT quote verbatim" inline
  *  instruction was removed — universal-rules SOFT-CONTEXT NOTES POLICY
  *  now carries the rule for every brain that emits the COUPLE'S NOTES
- *  block. */
-export const BRAIN_PROMPT_VERSION = 'client-brain.prompt.v1.2'
+ *  block.
+ *  v1.3 (2026-05-09, Wave 4 Phase 3): client-brain folds the forensic
+ *  couple_identity_profile into the system prompt. Adds a COUPLE
+ *  PROFILE block carrying emotional_truths (sensitive items voice-
+ *  shaping only — verbatim evidence_quote NEVER echoed in the draft),
+ *  occupations, residence, family_dynamics, vendor_preferences, and
+ *  decision_dynamics so Sage drafts feel known. */
+export const BRAIN_PROMPT_VERSION = 'client-brain.prompt.v1.3'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
 import { CLIENT_RULES, getClientTaskPrompt } from '@/config/prompts/task-prompts-client'
@@ -40,6 +46,8 @@ import { getApprovedPhrases } from '@/lib/services/intel/review-language'
 import { getLearningContext, getVoicePreferences } from '@/lib/services/learning'
 import { VOICE_TRAINING_MIN_SAMPLES } from '@/lib/services/brain/inquiry'
 import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
+import { getStoredCoupleIdentityProfile } from '@/lib/services/identity/reconstruct'
+import { buildCoupleProfileBlock } from '@/lib/services/identity/profile-prompt-block'
 import { logEvent } from '@/lib/observability/logger'
 
 // ---------------------------------------------------------------------------
@@ -494,8 +502,26 @@ export async function generateClientDraft(
     // Learning context is enrichment, not critical
   }
 
-  // Assemble the full system prompt (Layer 1 + Client Rules + Layer 2 + Layer 3 + learning)
-  const systemPrompt = `${UNIVERSAL_RULES}\n\n${CLIENT_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${learningBlock}`
+  // Wave 4 Phase 3: load the forensic couple_identity_profile and
+  // fold a COUPLE PROFILE block into the system prompt. Best-effort:
+  // any failure leaves coupleProfileBlock null and the brain still
+  // drafts a competent reply from the existing context. Sensitive
+  // emotional truths are voice-shaping only; the formatter omits
+  // verbatim sensitive evidence_quote.
+  let coupleProfileBlock: string | null = null
+  try {
+    const stored = await getStoredCoupleIdentityProfile(weddingId)
+    coupleProfileBlock = buildCoupleProfileBlock(stored?.profile ?? null, {
+      surface: 'coordinator',
+    })
+  } catch {
+    // Forensic profile is enrichment, not a gate. Failure must not
+    // block draft generation.
+  }
+
+  // Assemble the full system prompt (Layer 1 + Client Rules + Layer 2 + Layer 3 + couple profile + learning)
+  const profileSection = coupleProfileBlock ? `\n\n${coupleProfileBlock}` : ''
+  const systemPrompt = `${UNIVERSAL_RULES}\n\n${CLIENT_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${profileSection}${learningBlock}`
 
   const result = await callAI({
     systemPrompt,
@@ -688,7 +714,24 @@ export async function generateOnboardingEmail(
     // Learning context is enrichment, not critical
   }
 
-  const systemPrompt = `${UNIVERSAL_RULES}\n\n${CLIENT_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${learningBlock}`
+  // Wave 4 Phase 3: same forensic-profile fold as the reply path. The
+  // onboarding email lands the moment a couple books, so the profile
+  // is at its richest — every reconstructed signal up to booking
+  // shapes the warmth of the welcome.
+  let onboardingProfileBlock: string | null = null
+  try {
+    const stored = await getStoredCoupleIdentityProfile(weddingId)
+    onboardingProfileBlock = buildCoupleProfileBlock(stored?.profile ?? null, {
+      surface: 'coordinator',
+    })
+  } catch {
+    // Forensic profile is enrichment, not a gate.
+  }
+
+  const onboardingProfileSection = onboardingProfileBlock
+    ? `\n\n${onboardingProfileBlock}`
+    : ''
+  const systemPrompt = `${UNIVERSAL_RULES}\n\n${CLIENT_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${onboardingProfileSection}${learningBlock}`
 
   const result = await callAI({
     systemPrompt,

@@ -46,11 +46,20 @@ import {
   proposeFromAutoDetection,
   type CulturalMomentCategory,
 } from '@/lib/services/external-context/cultural-moments'
+import { buildVenueCohortBlock } from '@/lib/services/identity/profile-prompt-block'
+import type { CoupleIdentityProfile } from '@/config/prompts/identity-reconstruction'
 
 // 2026-05-09 LLM-CALL-INVENTORY personality drift #3: bumped to v2.0
 // when migrated to the canonical coordinator-prompt assembler.
+//
+// 2026-05-09 Wave 4 Phase 3: bumped to v3. The proposer now folds the
+// venue's aggregated couple_identity_profile emotional themes (non-
+// sensitive only — sensitive themes are voice-shaping count-only at
+// the venue level, never named to an external proposer). The LLM
+// becomes "what cultural moment matches the cohort's actual emotional
+// landscape" rather than "what's in season."
 export const CULTURAL_MOMENTS_LLM_PROPOSE_VERSION =
-  'cultural-moments-llm-propose.v2'
+  'cultural-moments-llm-propose.v3'
 
 const DAY_MS = 86_400_000
 
@@ -269,6 +278,42 @@ export async function autoProposeCulturalMomentsLlm(
       ? `\n\nALREADY-PROPOSED (do not duplicate; propose only if you have NEW evidence):\n${recentTitles.map((t) => `- ${t}`).join('\n')}`
       : ''
 
+  // Wave 4 Phase 3 (2026-05-09): aggregate the venue's recent forensic
+  // emotional themes (non-sensitive labels only — sensitive themes are
+  // voice-shaping count-only at the venue level, never named to an
+  // external proposer). The proposer now answers "what cultural
+  // moment matches the cohort's actual emotional landscape?" rather
+  // than "what's in season." Best-effort: failure leaves cohortBlock
+  // null and the proposer behaves as before.
+  let cohortBlock: string | null = null
+  try {
+    const { data: profileRows } = await supabase
+      .from('couple_identity_profile')
+      .select('profile, last_signal_at, last_reconstructed_at')
+      .eq('venue_id', venueId)
+      .order('last_reconstructed_at', { ascending: false })
+      .limit(150)
+    if (profileRows && profileRows.length > 0) {
+      const sinceMs = Date.now() - 90 * DAY_MS
+      const profiles: CoupleIdentityProfile[] = []
+      for (const r of profileRows as Array<{
+        profile: CoupleIdentityProfile | null
+        last_signal_at: string | null
+        last_reconstructed_at: string | null
+      }>) {
+        if (!r.profile) continue
+        const stamp = r.last_signal_at ?? r.last_reconstructed_at
+        if (!stamp) continue
+        const t = Date.parse(stamp)
+        if (!Number.isFinite(t) || t < sinceMs) continue
+        profiles.push(r.profile)
+      }
+      cohortBlock = buildVenueCohortBlock(profiles)
+    }
+  } catch {
+    // Non-fatal — proposer still runs without the cohort context.
+  }
+
   const todayIso = new Date().toISOString().slice(0, 10)
   const userPrompt = `Today's date: ${todayIso}.
 Venue state: ${venueState.toUpperCase()} (${venueState.toLowerCase()}).
@@ -276,10 +321,13 @@ Allowed categories: ${CATEGORY_LIST.join(', ')}.
 
 Propose 0-3 cultural moments active or imminent in the last 30 days for a wedding venue in ${venueState.toUpperCase()}. Apply all five criteria from the system prompt strictly. ${recentBlock}`
 
+  const taskInstructionsWithCohort = cohortBlock
+    ? `${TASK_INSTRUCTIONS}\n\n${cohortBlock}\n\nWhen proposing, weight your selection toward moments that PLAUSIBLY connect to the cohort's emotional landscape above. The cohort context is for selection bias only; do not echo theme names directly in your proposal titles or rationales.`
+    : TASK_INSTRUCTIONS
   const { systemPrompt, promptVersion } = await buildCoordinatorPrompt({
     venueId,
     surface: 'cultural_moments_propose',
-    taskInstructions: TASK_INSTRUCTIONS,
+    taskInstructions: taskInstructionsWithCohort,
   })
   let response: LlmProposalResponse
   try {

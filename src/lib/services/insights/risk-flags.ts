@@ -28,6 +28,7 @@ import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
 import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
+import { getStoredCoupleIdentityProfile } from '@/lib/services/identity/reconstruct'
 import { confidenceFor, buildCacheKey } from './confidence'
 import { lookupCachedInsight, persistInsight } from './persist'
 import type { ClassicalEvidence, InsightNarration } from './types'
@@ -46,7 +47,16 @@ import type { ClassicalEvidence, InsightNarration } from './types'
 // now reads "negative tone" through the lens of the couple's known
 // life context (e.g. brevity from a grieving couple is not a comparison-
 // shopping signal). Cache invalidation is intentional.
-export const RISK_FLAGS_PROMPT_VERSION = 'risk-flags.prompt.v2.1'
+//
+// 2026-05-09 Wave 4 Phase 3: bumped to v2.2. Forensic
+// couple_identity_profile is the preferred read source for the soft-
+// context block; auto-context is now the fallback. The profile carries
+// emotional_truths + family_dynamics + decision_dynamics with sensitivity
+// labels, so the risk computation reads richer signals than the
+// keyword-driven auto-context loader. The numbers-guard remains: the
+// narration still only references risk_score + flag counts, never
+// invents figures.
+export const RISK_FLAGS_PROMPT_VERSION = 'risk-flags.prompt.v2.2'
 
 /**
  * Strip likely PII (emails / phone numbers) from a free-text friction
@@ -92,6 +102,50 @@ export interface RiskFlag {
   severity: 1 | 2 | 3
   /** Plain-text evidence the coordinator sees in the expanded view. */
   evidence: string
+}
+
+/**
+ * Wave 4 Phase 3: synthesise the legacy "## COUPLE'S NOTES" block
+ * from a forensic couple_identity_profile so risk-flag prompts that
+ * already consume that header line keep working without a downstream
+ * change.
+ *
+ * Sensitivity policy mirrors the universal-rules SOFT-CONTEXT NOTES
+ * POLICY: sensitive emotional truths surface as theme labels (so the
+ * model can tune tone) but their verbatim evidence_quote is suppressed.
+ * Returns null when the profile has no expressible content.
+ */
+function buildRiskNotesBlockFromProfile(profile: {
+  emotional_truths: Array<{ theme: string; evidence_quote: string; sensitive: boolean }>
+  family_dynamics: Array<{ relationship: string; signal: string }>
+  decision_dynamics: { who_decides: string | null; who_questions: string | null; who_negotiates: string | null } | null
+}): string | null {
+  const lines: string[] = []
+  const sensitiveLabels: string[] = []
+
+  for (const t of profile.emotional_truths) {
+    if (t.sensitive) {
+      sensitiveLabels.push(t.theme)
+      continue
+    }
+    lines.push(`- ${t.theme}: ${t.evidence_quote.slice(0, 200)}`)
+  }
+  if (sensitiveLabels.length > 0) {
+    lines.push(
+      `- SENSITIVE THEMES (voice-shaping only — do not quote): ${sensitiveLabels.join(', ')}`,
+    )
+  }
+  for (const f of profile.family_dynamics.slice(0, 6)) {
+    lines.push(`- family: ${f.relationship} (${f.signal})`)
+  }
+  const dd = profile.decision_dynamics
+  if (dd) {
+    if (dd.who_decides) lines.push(`- decides: ${dd.who_decides}`)
+    if (dd.who_questions) lines.push(`- questions: ${dd.who_questions}`)
+    if (dd.who_negotiates) lines.push(`- negotiates: ${dd.who_negotiates}`)
+  }
+  if (lines.length === 0) return null
+  return `## COUPLE'S NOTES\n${lines.join('\n')}`
 }
 
 const FLAG_LABEL: Record<RiskFlagCode, string> = {
@@ -430,12 +484,31 @@ export async function generateRiskFlags(
   // limit=8 matches the narrator-side budget (vs the 12-default brain
   // reply path). Best-effort: the loader never throws (returns
   // brainBlock=null on any error); this try/catch is defense-in-depth.
+  //
+  // Wave 4 Phase 3 (2026-05-09). Forensic couple_identity_profile is
+  // now the preferred soft-context source. When a profile row exists
+  // we synthesise a richer block from emotional_truths +
+  // family_dynamics + decision_dynamics; when it doesn't we fall
+  // back to the auto-context loader exactly as Wave 1B shipped. Both
+  // shapes use the same "## COUPLE'S NOTES" header so the downstream
+  // sentiment + narration prompts don't need to know which source
+  // produced the block.
   let coupleNotesBlock: string | null = null
   try {
-    const auto = await loadAutoContextForWedding(supabase, weddingId, { limit: 8 })
-    coupleNotesBlock = auto.brainBlock
+    const stored = await getStoredCoupleIdentityProfile(weddingId, { supabase })
+    if (stored?.profile) {
+      coupleNotesBlock = buildRiskNotesBlockFromProfile(stored.profile)
+    }
   } catch (err) {
-    console.warn('[risk-flags] auto-context load failed:', redactError(err))
+    console.warn('[risk-flags] forensic profile load failed:', redactError(err))
+  }
+  if (!coupleNotesBlock) {
+    try {
+      const auto = await loadAutoContextForWedding(supabase, weddingId, { limit: 8 })
+      coupleNotesBlock = auto.brainBlock
+    } catch (err) {
+      console.warn('[risk-flags] auto-context load failed:', redactError(err))
+    }
   }
 
   // Sentiment overlay (LLM). Adds a flag if negative. Skipped when
