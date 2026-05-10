@@ -173,13 +173,26 @@ export function detectCsvShape(headers: readonly string[]): ShapeDetection {
     ]
     const hbWeak = [
       /^(project\s*status|status|lead\s*status)$/,
-      /^(total|total\s*project\s*cost|project\s*value|total\s*invoiced)$/,
-      /^(source|lead\s*source|how\s*did\s*you\s*hear)$/,
-      /^(inquiry\s*date|created\s*date|created|date\s*created)$/,
+      // Newer HoneyBook exports use "Total Booked Value" / "Total Paid" /
+      // "Total Invoiced" instead of the older bare "Total" column.
+      /^(total|total\s*project\s*cost|project\s*value|total\s*invoiced|total\s*booked\s*value|total\s*paid)$/,
+      // Newer exports use "Project Source" instead of bare "Source".
+      /^(source|project\s*source|lead\s*source|how\s*did\s*you\s*hear)$/,
+      // Newer exports use "Project Creation Date" instead of "Inquiry Date".
+      /^(inquiry\s*date|created\s*date|created|date\s*created|project\s*creation\s*date)$/,
       /^(booking\s*date|booked\s*date|date\s*booked|contract\s*signed\s*date)$/,
       /^(client\s*name|primary\s*client(\s*name)?)$/,
       /^(client\s*phone|phone|primary\s*phone)$/,
       /^tags$/,
+      // Newer HoneyBook reports split client into "First Name" + "Last Name"
+      // (without the "Client" prefix that Dubsado uses). Each counts as a
+      // weak HB signal; the disambiguation against Dubsado above gates on
+      // the literal "Client First Name" / "Client Last Name" pattern.
+      /^first\s*name$/,
+      /^last\s*name$/,
+      // Newer-export-only columns that signal HoneyBook financial reporting.
+      /^(tax|gratuity|refunded\s*amount|company)$/,
+      /^(project\s*type)$/,
     ]
     const strong = countMatches(norms, hbStrong)
     const weak = countMatches(norms, hbWeak)
