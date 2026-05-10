@@ -650,8 +650,43 @@ async function writeAttributionEvents(args: {
     })
 
   if (rows.length === 0) return { flagged_conflict: false }
-  const { error: insErr } = await supabase.from('attribution_events').insert(rows)
+  const { data: insertedAttribution, error: insErr } = await supabase
+    .from('attribution_events')
+    .insert(rows)
+    .select('id, venue_id')
   if (insErr) return { flagged_conflict: false, error: `attribution insert: ${insErr.message}` }
+
+  // Wave 7B (mig 264). Fire-and-forget channel-role classifier enqueue.
+  // Every newly-written attribution_event needs a forensic role decision
+  // (acquisition / validation / conversion / mixed). The 24h dedupe in
+  // the enqueue helper is per-event so a cluster of inserts in one
+  // resolver pass produces one job per event without double-spending.
+  // Errors here NEVER propagate — the parent insert already succeeded.
+  if (insertedAttribution && insertedAttribution.length > 0) {
+    try {
+      const { enqueueRoleClassification } = await import(
+        '@/lib/services/attribution-roles/enqueue'
+      )
+      // Fire all enqueues in parallel. The enqueue helper itself is
+      // always-safe (returns skipped:true on any error), so awaiting
+      // them here cannot throw.
+      await Promise.all(
+        (insertedAttribution as Array<{ id: string; venue_id: string }>).map((row) =>
+          enqueueRoleClassification({
+            attributionEventId: row.id,
+            venueId: row.venue_id,
+            triggerSignal: 'event_inserted',
+            supabase,
+          }),
+        ),
+      )
+    } catch (err) {
+      console.warn(
+        '[candidate-resolver] Wave 7B role-classification enqueue threw',
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
 
   const { error: updErr } = await supabase
     .from('candidate_identities')

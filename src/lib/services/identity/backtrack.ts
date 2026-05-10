@@ -544,8 +544,35 @@ async function autoLinkCandidate(args: {
     })
 
   if (rowsToInsert.length > 0) {
-    const { error: insErr } = await supabase.from('attribution_events').insert(rowsToInsert)
+    const { data: insertedAttribution, error: insErr } = await supabase
+      .from('attribution_events')
+      .insert(rowsToInsert)
+      .select('id, venue_id')
     if (insErr) return { ok: false, error: `attribution insert ${candidate.id}: ${insErr.message}` }
+
+    // Wave 7B (mig 264). Fire-and-forget role-classifier enqueue.
+    if (insertedAttribution && insertedAttribution.length > 0) {
+      try {
+        const { enqueueRoleClassification } = await import(
+          '@/lib/services/attribution-roles/enqueue'
+        )
+        await Promise.all(
+          (insertedAttribution as Array<{ id: string; venue_id: string }>).map((row) =>
+            enqueueRoleClassification({
+              attributionEventId: row.id,
+              venueId: row.venue_id,
+              triggerSignal: 'event_inserted',
+              supabase,
+            }),
+          ),
+        )
+      } catch (err) {
+        console.warn(
+          '[backtrack] Wave 7B role-classification enqueue threw',
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
   }
 
   // Mark candidate resolved.
@@ -1079,8 +1106,35 @@ export async function applyBacktrackLink(
       }
     })
   if (insertRows.length > 0) {
-    const { error: insErr } = await supabase.from('attribution_events').insert(insertRows)
+    const { data: insertedAttribution, error: insErr } = await supabase
+      .from('attribution_events')
+      .insert(insertRows)
+      .select('id, venue_id')
     if (insErr) return { ok: false, error: `attribution insert: ${insErr.message}` }
+
+    // Wave 7B (mig 264). Fire-and-forget role-classifier enqueue.
+    if (insertedAttribution && insertedAttribution.length > 0) {
+      try {
+        const { enqueueRoleClassification } = await import(
+          '@/lib/services/attribution-roles/enqueue'
+        )
+        await Promise.all(
+          (insertedAttribution as Array<{ id: string; venue_id: string }>).map((row) =>
+            enqueueRoleClassification({
+              attributionEventId: row.id,
+              venueId: row.venue_id,
+              triggerSignal: 'event_inserted',
+              supabase,
+            }),
+          ),
+        )
+      } catch (err) {
+        console.warn(
+          '[backtrack] Wave 7B role-classification enqueue threw',
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
   }
 
   const { error: updErr } = await supabase
