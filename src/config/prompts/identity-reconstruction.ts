@@ -37,7 +37,7 @@
 // api_costs.prompt_version so a regression audit can correlate cost +
 // quality + prompt revision.
 export const IDENTITY_RECONSTRUCTION_PROMPT_VERSION =
-  'identity-reconstruction.prompt.v1'
+  'identity-reconstruction.prompt.v2'
 
 // ---------------------------------------------------------------------------
 // Public types — mirror the wire JSON the prompt asks for.
@@ -75,7 +75,7 @@ export interface OccupationClaim {
 export interface ResidenceClaim {
   city: string | null
   state: string | null
-  evidence_quote: string
+  evidence_quote: string | null
 }
 
 export interface FamilyDynamicClaim {
@@ -327,6 +327,19 @@ everywhere, so accuracy matters more than completeness.
    - 0-24:   slug / handle / inferred from a fragment.
    Anything below 25 should usually be a refusal instead.
 
+8. **Null discipline.** Use \`null\` for unknown fields, NOT \`[]\`,
+   \`{}\`, or empty strings. Specifically:
+   - Whole \`residence\` block when no place evidence: \`"residence": null\`
+     (NOT \`"residence": []\`, NOT \`{ city: null, state: null, evidence_quote: null }\`).
+   - When partner1 has no name evidence (form-bleed case where
+     "Whole Weekend" or "One Day" landed in the name field): emit
+     \`"partner1": { "first": null, "last": null, "confidence_0_100": 0,
+     "evidence_quote": null }\` and add a refusal. Do NOT collapse
+     partner1 to null — keep the structured refusal so the audit trail
+     is explicit.
+   - When partner2 has no real evidence (solo couple, or phantom):
+     \`"partner2": null\` AND \`is_phantom_partner_relationship: true\`.
+
 ## OUTPUT SCHEMA
 
 Return ONLY this JSON object — no prose preamble, no markdown fences,
@@ -362,7 +375,7 @@ no comments:
   "residence": {
     "city": string | null,
     "state": string | null,
-    "evidence_quote": string
+    "evidence_quote": string | null
   } | null,
   "family_dynamics": [
     {
@@ -649,12 +662,24 @@ function validateNameClaim(value: unknown, path: string): NameClaim | null | str
   const quote = value.evidence_quote
   if (!isStringOrNull(first)) return `${path}.first must be string|null`
   if (!isStringOrNull(last)) return `${path}.last must be string|null`
-  if (!isNumber(conf)) return `${path}.confidence_0_100 must be number`
   if (!isStringOrNull(quote)) return `${path}.evidence_quote must be string|null`
+  // Forensic refusal pattern: when first AND last are both null, the model
+  // is signalling "no name evidence" and confidence may legitimately be
+  // null. Coerce to 0 (the floor of the "no signal" range). When at least
+  // one name field is populated, confidence MUST be a number.
+  const allNullName = first === null && last === null
+  let confNum: number
+  if (isNumber(conf)) {
+    confNum = Math.max(0, Math.min(100, Math.round(conf)))
+  } else if (allNullName && (conf === null || conf === undefined)) {
+    confNum = 0
+  } else {
+    return `${path}.confidence_0_100 must be number (or null when first AND last are both null)`
+  }
   return {
     first: first ?? null,
     last: last ?? null,
-    confidence_0_100: Math.max(0, Math.min(100, Math.round(conf))),
+    confidence_0_100: confNum,
     evidence_quote: quote ?? null,
   }
 }
@@ -721,15 +746,23 @@ export function validateCoupleIdentityProfile(raw: unknown): ValidationResult {
     occupations.push({ partner_role: role, occupation: o.occupation, evidence_quote: o.evidence_quote })
   }
 
-  // residence
+  // residence — accept object|null. Empty arrays from the model get
+  // coerced to null (the "no residence found" signal). When city AND
+  // state are both null, the whole block collapses to null too —
+  // residence with no place isn't residence.
   let residence: ResidenceClaim | null = null
-  if (raw.residence !== null && raw.residence !== undefined) {
-    if (!isObject(raw.residence)) return { ok: false, error: 'residence must be object|null' }
-    const r = raw.residence
+  const residenceRaw = isArray(raw.residence) && raw.residence.length === 0 ? null : raw.residence
+  if (residenceRaw !== null && residenceRaw !== undefined) {
+    if (!isObject(residenceRaw)) return { ok: false, error: 'residence must be object|null' }
+    const r = residenceRaw
     if (!isStringOrNull(r.city)) return { ok: false, error: 'residence.city must be string|null' }
     if (!isStringOrNull(r.state)) return { ok: false, error: 'residence.state must be string|null' }
-    if (!isString(r.evidence_quote)) return { ok: false, error: 'residence.evidence_quote must be string' }
-    residence = { city: r.city ?? null, state: r.state ?? null, evidence_quote: r.evidence_quote }
+    if (!isStringOrNull(r.evidence_quote)) return { ok: false, error: 'residence.evidence_quote must be string|null' }
+    if (r.city === null && r.state === null) {
+      residence = null
+    } else {
+      residence = { city: r.city ?? null, state: r.state ?? null, evidence_quote: r.evidence_quote ?? null }
+    }
   }
 
   // family_dynamics

@@ -613,7 +613,7 @@ export async function reconstructCoupleIdentity(
     contentTier: 2,
     promptVersion: IDENTITY_RECONSTRUCTION_PROMPT_VERSION,
     venueId,
-    maxTokens: 4000,
+    maxTokens: 6000,
     temperature: 0.2,
     correlationId,
   })
