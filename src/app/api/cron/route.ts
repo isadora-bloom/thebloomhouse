@@ -292,6 +292,21 @@ const VALID_JOBS = [
   // conversion%, ROI per (channel, persona, time-window) cell.
   // n_too_small suppression at n<10 enforced at write time.
   'persona_channel_rollup_sweep',
+  // Wave 7A (2026-05-10). Pattern discovery engine — Sonnet hypothesis
+  // hunter for unknown-unknowns. Free-form output (LLM invents the
+  // category). 3 venues per tick, weekly drift refresh. Writes to
+  // intel_discoveries.
+  'discovery_engine_sweep',
+  // Wave 5D (2026-05-10). Per-venue thesis synthesizer + cross-venue
+  // overlap detector. Generates the venue's archetype + over-indexed
+  // personas + voice principles + service demand gaps. 5 venues per
+  // tick. Auto-fires when reconstructed couples cross 25/50/75/100.
+  'venue_thesis_sweep',
+  // Wave 6C (2026-05-10). Marketing reallocation recommendations
+  // analyst. Reads persona_channel_rollups + cohort intel + external
+  // signals. 3 venues per tick, weekly. Writes to marketing_recommendations.
+  // Refuses when n<10. Never auto-executes.
+  'marketing_recommendation_sweep',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -728,6 +743,29 @@ async function runJob(job: JobName): Promise<unknown> {
       // CAC/conversion/ROI per (channel, persona, window) cell.
       const { runPersonaChannelRollupSweep } = await import('@/lib/services/intel/persona-channel-rollup/sweep')
       return runPersonaChannelRollupSweep()
+    }
+
+    case 'discovery_engine_sweep': {
+      // Wave 7A. Pattern discovery engine — Sonnet hypothesis hunter.
+      // 3 venues per tick, weekly drift refresh. Writes free-form
+      // hypothesis_category discoveries to intel_discoveries.
+      const { runDiscoverySweep } = await import('@/lib/services/intel/discovery/sweep')
+      return runDiscoverySweep()
+    }
+
+    case 'venue_thesis_sweep': {
+      // Wave 5D. Venue thesis synthesizer + cross-venue overlap. 5
+      // venues per tick, weekly. Auto-fires at reconstruction milestones.
+      const { runVenueThesisSweep } = await import('@/lib/services/intel/onboarding/sweep')
+      return runVenueThesisSweep()
+    }
+
+    case 'marketing_recommendation_sweep': {
+      // Wave 6C. Marketing reallocation recommendations analyst.
+      // 3 venues per tick, weekly after persona_channel_rollup_sweep.
+      // Refuses when n<10. Never auto-executes.
+      const { runMarketingRecommendationSweep } = await import('@/lib/services/marketing-spend/recommendations/sweep')
+      return runMarketingRecommendationSweep()
     }
   }
 }

@@ -72,6 +72,12 @@ export const DESTRUCTIVE_JOBS: ReadonlySet<string> = new Set([
   'external_match_sweep',
   // Wave 6B (2026-05-10). Persona × channel × revenue rollup recompute.
   'persona_channel_rollup_sweep',
+  // Wave 7A (2026-05-10). Pattern discovery engine — Sonnet hypothesis hunter.
+  'discovery_engine_sweep',
+  // Wave 5D (2026-05-10). Venue thesis + cross-venue overlap.
+  'venue_thesis_sweep',
+  // Wave 6C (2026-05-10). Marketing reallocation recommendations analyst.
+  'marketing_recommendation_sweep',
 ])
 
 export type CronAuthResult =
