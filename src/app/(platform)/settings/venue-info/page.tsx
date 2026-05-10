@@ -18,7 +18,16 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useScope } from '@/lib/hooks/use-scope'
-import { Save, MapPin, Loader2, Check } from 'lucide-react'
+import {
+  Save,
+  MapPin,
+  Loader2,
+  Check,
+  Wand2,
+  AlertTriangle,
+  CheckCircle2,
+  Activity,
+} from 'lucide-react'
 
 interface VenueLocation {
   address_line1: string | null
@@ -31,6 +40,13 @@ interface VenueLocation {
   entry_instructions: string | null
   day_of_contact_name: string | null
   day_of_contact_phone: string | null
+  // Wave 8 — external-signal config derived from address
+  google_trends_metro: string | null
+  noaa_station_id: string | null
+  census_fips: string | null
+  metro_msa_code: string | null
+  dc_region_proxy: boolean | null
+  location_derived_at: string | null
 }
 
 interface OwnerPresence {
@@ -53,6 +69,19 @@ const EMPTY: VenueLocation = {
   entry_instructions: '',
   day_of_contact_name: '',
   day_of_contact_phone: '',
+  google_trends_metro: null,
+  noaa_station_id: null,
+  census_fips: null,
+  metro_msa_code: null,
+  dc_region_proxy: null,
+  location_derived_at: null,
+}
+
+interface DerivePreview {
+  field: string
+  current: unknown
+  proposed: unknown
+  willWrite: boolean
 }
 
 const EMPTY_OWNER: OwnerPresence = {
@@ -69,6 +98,11 @@ export default function VenueInfoSettingsPage() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Wave 8 — auto-derive state
+  const [derivePreviewing, setDerivePreviewing] = useState(false)
+  const [deriveApplying, setDeriveApplying] = useState(false)
+  const [derivePreview, setDerivePreview] = useState<DerivePreview[] | null>(null)
+  const [deriveErrors, setDeriveErrors] = useState<string[]>([])
 
   useEffect(() => {
     if (!venueId) return
@@ -78,7 +112,7 @@ export default function VenueInfoSettingsPage() {
         supabase
           .from('venues')
           .select(
-            'address_line1, city, state, zip, latitude, longitude, parking_instructions, entry_instructions, day_of_contact_name, day_of_contact_phone',
+            'address_line1, city, state, zip, latitude, longitude, parking_instructions, entry_instructions, day_of_contact_name, day_of_contact_phone, google_trends_metro, noaa_station_id, census_fips, metro_msa_code, dc_region_proxy, location_derived_at',
           )
           .eq('id', venueId)
           .maybeSingle(),
@@ -121,6 +155,14 @@ export default function VenueInfoSettingsPage() {
       entry_instructions: data.entry_instructions || null,
       day_of_contact_name: data.day_of_contact_name || null,
       day_of_contact_phone: data.day_of_contact_phone || null,
+      // Wave 8 — derived fields are saved alongside address. Operator
+      // overrides on these are preserved (only the auto-derive endpoint
+      // fills nulls; manual save writes whatever's in the form).
+      google_trends_metro: data.google_trends_metro || null,
+      noaa_station_id: data.noaa_station_id || null,
+      census_fips: data.census_fips || null,
+      metro_msa_code: data.metro_msa_code || null,
+      dc_region_proxy: data.dc_region_proxy,
     }
     const configPayload = {
       owner_note_to_couples: owner.owner_note_to_couples || null,
@@ -149,6 +191,88 @@ export default function VenueInfoSettingsPage() {
 
   function set<K extends keyof VenueLocation>(key: K, value: VenueLocation[K]) {
     setData((prev) => ({ ...prev, [key]: value }))
+  }
+
+  // ---------- Wave 8 — auto-derive handlers ----------
+  async function handlePreviewDerive() {
+    if (!venueId) return
+    setDerivePreviewing(true)
+    setDerivePreview(null)
+    setDeriveErrors([])
+    try {
+      const resp = await fetch(`/api/admin/venue/location/preview?venueId=${venueId}`)
+      const json = (await resp.json()) as {
+        ok?: boolean
+        error?: string
+        diffs?: DerivePreview[]
+        preview?: { errors?: string[] }
+      }
+      if (!resp.ok || !json.ok) {
+        setError(json.error ?? `Preview failed (HTTP ${resp.status})`)
+        return
+      }
+      setDerivePreview(json.diffs ?? [])
+      setDeriveErrors(json.preview?.errors ?? [])
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(`Preview error: ${msg}`)
+    } finally {
+      setDerivePreviewing(false)
+    }
+  }
+
+  async function handleApplyDerive() {
+    if (!venueId) return
+    setDeriveApplying(true)
+    try {
+      const resp = await fetch('/api/admin/venue/location/auto-derive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ venueId, forceOverwrite: false }),
+      })
+      const json = (await resp.json()) as {
+        ok?: boolean
+        error?: string
+        derivation?: {
+          google_trends_metro: string | null
+          noaa_station_id: string | null
+          census_fips: string | null
+          metro_msa_code: string | null
+          dc_region_proxy: boolean | null
+          latitude: number | null
+          longitude: number | null
+          errors: string[]
+        }
+        fieldsWritten?: string[]
+      }
+      if (!resp.ok || !json.ok) {
+        setError(json.error ?? `Auto-derive failed (HTTP ${resp.status})`)
+        return
+      }
+      // Refresh the form with what we just wrote.
+      if (json.derivation) {
+        setData((prev) => ({
+          ...prev,
+          google_trends_metro: prev.google_trends_metro ?? json.derivation!.google_trends_metro,
+          noaa_station_id: prev.noaa_station_id ?? json.derivation!.noaa_station_id,
+          census_fips: prev.census_fips ?? json.derivation!.census_fips,
+          metro_msa_code: prev.metro_msa_code ?? json.derivation!.metro_msa_code,
+          dc_region_proxy: prev.dc_region_proxy ?? json.derivation!.dc_region_proxy,
+          latitude: prev.latitude ?? json.derivation!.latitude,
+          longitude: prev.longitude ?? json.derivation!.longitude,
+          location_derived_at: new Date().toISOString(),
+        }))
+        setDeriveErrors(json.derivation.errors)
+      }
+      setDerivePreview(null)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(`Apply error: ${msg}`)
+    } finally {
+      setDeriveApplying(false)
+    }
   }
 
   if (scopeLevel !== 'venue') {
@@ -244,6 +368,190 @@ export default function VenueInfoSettingsPage() {
             Lat/lng improve the map pin on phones with weaker geocoding.
             Optional.
           </p>
+        </div>
+      </section>
+
+      {/* ---------- Wave 8 — external signal codes (auto-derived) ---------- */}
+      <section className="mb-8 rounded-xl border border-sage-100 bg-white p-6">
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <Activity className="w-4 h-4 text-sage-700" />
+            <h2 className="font-medium text-sage-900">External signal codes</h2>
+          </div>
+          <a
+            href="/intel/external-signals"
+            className="text-xs text-sage-600 hover:text-sage-900 underline"
+          >
+            View signal health →
+          </a>
+        </div>
+        <p className="text-xs text-sage-500 leading-relaxed mb-4">
+          These codes are derived from your address above and gate the
+          external-data feeds (Google Trends, NOAA weather, Census, BLS).
+          Click <em>Auto-derive from address</em> to fill them in. You can
+          override any individual value if you have a more accurate code.
+        </p>
+
+        <div className="flex items-center gap-2 mb-4">
+          <button
+            type="button"
+            onClick={handlePreviewDerive}
+            disabled={derivePreviewing || deriveApplying}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-sage-700 text-white text-sm font-medium hover:bg-sage-800 disabled:opacity-60"
+          >
+            {derivePreviewing ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Wand2 className="w-4 h-4" />
+            )}
+            {derivePreviewing ? 'Deriving…' : 'Auto-derive from address'}
+          </button>
+          {data.location_derived_at && (
+            <span className="text-xs text-sage-500">
+              last derived {new Date(data.location_derived_at).toLocaleString()}
+            </span>
+          )}
+        </div>
+
+        {derivePreview && (
+          <div className="mb-4 rounded-lg border border-sage-200 bg-sage-50/50 p-4">
+            <h3 className="text-sm font-medium text-sage-900 mb-2">
+              Preview — what will change
+            </h3>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-sage-500 text-left">
+                  <th className="pb-2 pr-3 font-medium">Field</th>
+                  <th className="pb-2 pr-3 font-medium">Current</th>
+                  <th className="pb-2 pr-3 font-medium">Proposed</th>
+                  <th className="pb-2 font-medium">Will write?</th>
+                </tr>
+              </thead>
+              <tbody>
+                {derivePreview.map((d) => (
+                  <tr key={d.field} className="border-t border-sage-100">
+                    <td className="py-1.5 pr-3 font-mono text-sage-700">{d.field}</td>
+                    <td className="py-1.5 pr-3 text-sage-600">
+                      {d.current == null ? <em className="text-sage-400">empty</em> : String(d.current)}
+                    </td>
+                    <td className="py-1.5 pr-3 text-sage-900">
+                      {d.proposed == null ? <em className="text-sage-400">no match</em> : String(d.proposed)}
+                    </td>
+                    <td className="py-1.5">
+                      {d.willWrite ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-700">
+                          <CheckCircle2 className="w-3 h-3" /> yes
+                        </span>
+                      ) : (
+                        <span className="text-sage-400">no</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="flex items-center gap-2 mt-3">
+              <button
+                type="button"
+                onClick={handleApplyDerive}
+                disabled={deriveApplying}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-700 text-white text-xs font-medium hover:bg-emerald-800 disabled:opacity-60"
+              >
+                {deriveApplying ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Check className="w-3 h-3" />
+                )}
+                Apply
+              </button>
+              <button
+                type="button"
+                onClick={() => setDerivePreview(null)}
+                disabled={deriveApplying}
+                className="px-3 py-1.5 rounded-lg border border-sage-200 text-xs text-sage-700 hover:bg-sage-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {deriveErrors.length > 0 && (
+          <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs">
+            <div className="flex items-center gap-1 text-amber-800 font-medium mb-1">
+              <AlertTriangle className="w-3 h-3" />
+              Derivation notes
+            </div>
+            <ul className="text-amber-700 space-y-0.5 list-disc list-inside">
+              {deriveErrors.map((e, i) => (
+                <li key={i}>{e}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-1">
+              Google Trends metro <span className="text-sage-400">(SerpAPI code)</span>
+            </label>
+            <input
+              className={inputCls}
+              placeholder="e.g. US-VA-584 or US-VA"
+              value={data.google_trends_metro ?? ''}
+              onChange={(e) => set('google_trends_metro', e.target.value || null)}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-1">
+              NOAA station ID
+            </label>
+            <input
+              className={inputCls}
+              placeholder="e.g. USW00093738"
+              value={data.noaa_station_id ?? ''}
+              onChange={(e) => set('noaa_station_id', e.target.value || null)}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-1">
+              Census FIPS <span className="text-sage-400">(county)</span>
+            </label>
+            <input
+              className={inputCls}
+              placeholder="e.g. 51047"
+              value={data.census_fips ?? ''}
+              onChange={(e) => set('census_fips', e.target.value || null)}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-1">
+              Metro MSA code <span className="text-sage-400">(BLS)</span>
+            </label>
+            <input
+              className={inputCls}
+              placeholder="e.g. 47900"
+              value={data.metro_msa_code ?? ''}
+              onChange={(e) => set('metro_msa_code', e.target.value || null)}
+            />
+          </div>
+          <div className="md:col-span-2 flex items-center gap-2 pt-1">
+            <input
+              id="dc-region-proxy"
+              type="checkbox"
+              checked={data.dc_region_proxy === true}
+              onChange={(e) => set('dc_region_proxy', e.target.checked)}
+              className="rounded border-sage-300"
+            />
+            <label htmlFor="dc-region-proxy" className="text-xs text-sage-700">
+              DC-region proxy
+              <span className="text-sage-400">
+                {' '}
+                (auto-set by state ∈ {`{VA, DC, MD, WV}`} OR within 100mi of the
+                Capitol)
+              </span>
+            </label>
+          </div>
         </div>
       </section>
 
