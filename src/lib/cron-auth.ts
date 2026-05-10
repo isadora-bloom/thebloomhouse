@@ -51,6 +51,12 @@ export const DESTRUCTIVE_JOBS: ReadonlySet<string> = new Set([
   'follow_up_sequences',
   // Voice DNA mutates per-venue voice anchors
   'voice_dna_refresh',
+  // Wave 4 Phase 2 (2026-05-09). Identity-judge sweep spends Sonnet budget
+  // per couple. Conservative classification: a leaked CRON_SECRET being
+  // used to fire-and-forget thousands of curl invocations could rack up
+  // significant LLM cost. Add the destructive gate so non-Vercel-cron
+  // callers must carry the secondary header.
+  'identity_judge_sweep',
 ])
 
 export type CronAuthResult =

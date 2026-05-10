@@ -246,6 +246,15 @@ const VALID_JOBS = [
   // the next tick is a no-op until either suppression expires or the
   // coordinator uploads (which collapses the gap).
   'source_freshness',
+  // Wave 4 Phase 2 (2026-05-09). Identity-reconstruction queue worker.
+  // Drains identity_reconstruction_jobs (signal-driven enqueues from
+  // pipeline / calendly / contracts + manual_bulk + drift_refresh).
+  // Per-tick budget 50 jobs, time-boxed at 280s. Drift enqueue layer
+  // adds up to 5 weddings whose last_reconstructed_at is older than
+  // 7 days for processing on the next tick. Routed through the
+  // dispatcher to stay within Vercel Pro's 40-cron limit; standalone
+  // route at /api/cron/identity-judge-sweep also exists for ops curls.
+  'identity_judge_sweep',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -622,6 +631,15 @@ async function runJob(job: JobName): Promise<unknown> {
       // both read the same FreshnessReport[] so coordinator state is
       // single-sourced.
       return runSourceFreshnessSweep()
+
+    case 'identity_judge_sweep': {
+      // Wave 4 Phase 2. Drains identity_reconstruction_jobs and enqueues
+      // weekly drift refresh. Up to 50 jobs per tick, time-boxed at
+      // 280s. Standalone route at /api/cron/identity-judge-sweep calls
+      // into the same shared runIdentityJudgeSweep service.
+      const { runIdentityJudgeSweep } = await import('@/lib/services/identity/judge-sweep')
+      return runIdentityJudgeSweep()
+    }
   }
 }
 

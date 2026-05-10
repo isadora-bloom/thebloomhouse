@@ -3562,6 +3562,38 @@ export async function processIncomingEmail(
     }
   }
 
+  // Wave 4 Phase 2 — signal-driven identity reconstruction enqueue.
+  // After every successful pipeline tick that resolved a wedding_id,
+  // enqueue a reconstruction job (24h dedupe per wedding lives inside
+  // the helper). The cron sweep at /api/cron?job=identity_judge_sweep
+  // drains the queue. trigger_signal=calculator_submit when the form-
+  // relay parser identified a calculator submission, otherwise
+  // new_email — gives the operability dashboards a per-signal
+  // breakdown of "what kicks the most rebuilds".
+  //
+  // Fire-and-forget contract: enqueueIdentityReconstruction never
+  // throws; we still wrap in try/catch as belt-and-suspenders so any
+  // future regression cannot fail the email-pipeline response.
+  if (weddingId) {
+    try {
+      const triggerSignal =
+        formLead?.source === 'venue_calculator' ? 'calculator_submit' : 'new_email'
+      const { enqueueIdentityReconstruction } = await import(
+        '@/lib/services/identity/enqueue-reconstruction'
+      )
+      await enqueueIdentityReconstruction({
+        weddingId,
+        venueId,
+        triggerSignal,
+      })
+    } catch (err) {
+      console.warn(
+        '[pipeline] identity-reconstruction enqueue failed (non-fatal):',
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+
   return {
     interactionId,
     draftId,

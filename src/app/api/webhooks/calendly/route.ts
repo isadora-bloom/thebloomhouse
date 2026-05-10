@@ -227,6 +227,27 @@ export async function POST(request: NextRequest) {
       console.log(`[webhook/calendly] Tracked tour_booked for consultant ${weddingRow.assigned_to}`)
     }
 
+    // Wave 4 Phase 2 — signal-driven identity reconstruction enqueue.
+    // A new Calendly booking is fresh signal (the inviteeName +
+    // scheduled_event time + Calendly URI all feed the next
+    // reconstruction). 24h dedupe lives inside the helper. Fire-and-
+    // forget — never fail the webhook response if enqueue fails.
+    try {
+      const { enqueueIdentityReconstruction } = await import(
+        '@/lib/services/identity/enqueue-reconstruction'
+      )
+      await enqueueIdentityReconstruction({
+        weddingId,
+        venueId,
+        triggerSignal: 'calendar_invite',
+      })
+    } catch (err) {
+      console.warn(
+        '[webhook/calendly] identity-reconstruction enqueue failed (non-fatal):',
+        err instanceof Error ? err.message : err,
+      )
+    }
+
     return NextResponse.json({ received: true, engagementRecorded: true })
   } catch (err) {
     console.error('[webhook/calendly] Error processing webhook:', err)

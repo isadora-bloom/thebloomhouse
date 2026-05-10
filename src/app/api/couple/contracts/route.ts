@@ -410,6 +410,28 @@ Return 5-15 items. Be specific and factual.`,
     .eq('id', contractId)
     .eq('venue_id', auth.venueId)
 
+  // Wave 4 Phase 2 — signal-driven identity reconstruction enqueue.
+  // Contract analysis just landed extracted_text on the row, which is
+  // strong identity signal (vendor names, partner names, wedding date,
+  // payment dynamics). 24h dedupe lives in the enqueue helper.
+  // Fire-and-forget — never fail the analysis response if enqueue
+  // fails.
+  try {
+    const { enqueueIdentityReconstruction } = await import(
+      '@/lib/services/identity/enqueue-reconstruction'
+    )
+    await enqueueIdentityReconstruction({
+      weddingId: auth.weddingId,
+      venueId: auth.venueId,
+      triggerSignal: 'contract_event',
+    })
+  } catch (err) {
+    console.warn(
+      '[contracts/analyze] identity-reconstruction enqueue failed (non-fatal):',
+      err instanceof Error ? err.message : err,
+    )
+  }
+
   // -----------------------------------------------------------------------
   // Step 6: Insert planning notes
   // -----------------------------------------------------------------------
