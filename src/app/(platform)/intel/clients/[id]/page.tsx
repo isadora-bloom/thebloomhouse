@@ -986,15 +986,26 @@ export default function ClientProfilePage() {
             </div>
           </div>
 
-          {/* Tracking ID */}
-          <button
-            onClick={copyTrackingId}
-            className="flex items-center gap-2 px-3 py-1.5 bg-sage-50 border border-sage-200 rounded-lg text-xs font-mono text-sage-600 hover:bg-sage-100 transition-colors shrink-0"
-            title="Copy lifecycle tracking ID"
-          >
-            {copiedId ? <CheckCircle className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-            {weddingId.slice(0, 8)}...
-          </button>
+          {/* Right rail: view full timeline + tracking ID */}
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Wave 12: View full timeline (cross-stage unified signal stream). */}
+            <button
+              onClick={() => router.push(`/intel/clients/${weddingId}/timeline`)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-sage-50 border border-sage-200 rounded-lg text-xs font-medium text-sage-700 hover:bg-sage-100 transition-colors"
+              title="Open the chronological cross-stage timeline (every signal we have for this couple)"
+            >
+              <History className="w-3.5 h-3.5" />
+              View full timeline
+            </button>
+            <button
+              onClick={copyTrackingId}
+              className="flex items-center gap-2 px-3 py-1.5 bg-sage-50 border border-sage-200 rounded-lg text-xs font-mono text-sage-600 hover:bg-sage-100 transition-colors"
+              title="Copy lifecycle tracking ID"
+            >
+              {copiedId ? <CheckCircle className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+              {weddingId.slice(0, 8)}...
+            </button>
+          </div>
         </div>
       </div>
 
