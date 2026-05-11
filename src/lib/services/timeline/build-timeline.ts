@@ -50,6 +50,15 @@
 // ---------------------------------------------------------------------------
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import {
+  matchReviewToCouple,
+  type PartnerNamePair,
+} from '../identity/review-match'
+import {
+  loadEvidenceOverrides,
+  isEvidenceDismissed,
+  type EvidenceOverridesIndex,
+} from '../identity/evidence-overrides'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -184,6 +193,13 @@ export async function buildCoupleTimeline(
   // ------- Scope row (no per-source error tolerance — we need this) -------
   const scope = await readScope(supabase, weddingId)
 
+  // Wave 15 — load evidence_overrides for this wedding so the merged
+  // event stream drops any evidence the operator dismissed.
+  const overrides: EvidenceOverridesIndex = await loadEvidenceOverrides(
+    supabase,
+    weddingId,
+  )
+
   // ------- Aggregate every source in parallel -------
   const [
     interactionEvents,
@@ -261,7 +277,17 @@ export async function buildCoupleTimeline(
     ...intelMatchEvents,
     ...discoveryEvents,
     ...recommendationEvents,
-  ]
+  ].filter((e) => {
+    // Wave 15 — drop any event whose underlying source row was dismissed
+    // via evidence_overrides. The payload_ref points to the source row;
+    // the override index is keyed on the same (table, id) pair.
+    if (!e.payload_ref) return true
+    return !isEvidenceDismissed(
+      overrides,
+      e.payload_ref.table,
+      e.payload_ref.id,
+    )
+  })
 
   // Sort ASC by timestamp. Defensive on parse failure (drop bad rows
   // at the end of the array rather than crash).
@@ -723,55 +749,93 @@ async function readReviewEvents(
   since: string | null,
   until: string | null,
 ): Promise<TimelineEvent[]> {
-  // reviews is venue-scoped (no wedding_id column on legacy schema).
-  // Strategy: fetch the couple's display name via people, then match
-  // reviews where reviewer_name LIKE either partner's first/last name.
-  // Bounded — at most `cap` rows. If reviewer_name is null in a row, it
-  // does not match.
+  // Wave 15 precision: reviews is venue-scoped (no wedding_id FK on
+  // legacy rows; mig 281 added an optional column but most rows are
+  // still NULL). Old behaviour: any surname-token containment match
+  // would attach unrelated reviews to the couple. Replacement: load
+  // partner first+last names, fetch the loose-match candidate pool,
+  // then apply the SAME strict matcher (first-name + temporal guard)
+  // used by reconstruct.ts. Drops reviews that pre-date the inquiry.
+  //
+  // NEW: also surfaces reviews.wedding_id linked rows directly (operator
+  // resolutions via /admin/identity/review-match-queue write that FK).
   if (!venueId) return []
 
-  let names: string[] = []
+  // Fetch partner anchors + wedding temporal anchor.
+  const partners: PartnerNamePair[] = []
+  let weddingAnchor: { inquiry_date: string | null; wedding_date: string | null } = {
+    inquiry_date: null,
+    wedding_date: null,
+  }
   try {
-    const { data: peopleRows } = await supabase
-      .from('people')
-      .select('first_name, last_name')
-      .eq('wedding_id', weddingId)
-    const set = new Set<string>()
+    const [{ data: peopleRows }, { data: weddingRow }] = await Promise.all([
+      supabase
+        .from('people')
+        .select('role, first_name, last_name')
+        .eq('wedding_id', weddingId)
+        .is('merged_into_id', null),
+      supabase
+        .from('weddings')
+        .select('inquiry_date, wedding_date')
+        .eq('id', weddingId)
+        .maybeSingle(),
+    ])
     for (const p of (peopleRows as Array<{
+      role: string | null
       first_name: string | null
       last_name: string | null
     }> | null) ?? []) {
-      const fn = p.first_name?.trim()
-      const ln = p.last_name?.trim()
-      if (fn) set.add(fn)
-      if (ln) set.add(ln)
-      if (fn && ln) set.add(`${fn} ${ln}`)
+      partners.push({
+        role: p.role,
+        first_name: p.first_name,
+        last_name: p.last_name,
+      })
     }
-    names = Array.from(set).filter((n) => n.length >= 3)
+    if (weddingRow) {
+      weddingAnchor = {
+        inquiry_date: (weddingRow as { inquiry_date: string | null }).inquiry_date,
+        wedding_date: (weddingRow as { wedding_date: string | null }).wedding_date,
+      }
+    }
   } catch {
     return []
   }
-  if (names.length === 0) return []
+  if (partners.length === 0) return []
 
-  // Build an .or() expression matching reviewer_name with ilike on each
-  // name token. Cap at first 10 distinct tokens to keep the OR sane.
-  const orExpr = names
+  // Build pre-filter tokens. .or() ilike expression with first + last
+  // names. Cap at 10 tokens.
+  const tokens = new Set<string>()
+  for (const p of partners) {
+    if (p.first_name && p.first_name.trim().length >= 3) {
+      tokens.add(p.first_name.trim())
+    }
+    if (p.last_name && p.last_name.trim().length >= 3) {
+      tokens.add(p.last_name.trim())
+    }
+  }
+  if (tokens.size === 0) return []
+
+  const orExpr = Array.from(tokens)
     .slice(0, 10)
     .map((n) => `reviewer_name.ilike.%${escapeIlike(n)}%`)
     .join(',')
+
+  // Also include any review where wedding_id IS this wedding (operator
+  // resolution, mig 281). Combined via two parallel queries.
   let q = supabase
     .from('reviews')
-    .select('id, source, reviewer_name, rating, title, body, review_date, response_date')
+    .select('id, source, reviewer_name, rating, title, body, review_date, response_date, wedding_id')
     .eq('venue_id', venueId)
     .or(orExpr)
     .order('review_date', { ascending: false })
-    .limit(cap)
+    .limit(Math.max(cap, 50) * 2) // overfetch — strict filter narrows
   if (since) q = q.gte('review_date', since.slice(0, 10))
   if (until) q = q.lte('review_date', until.slice(0, 10))
+
   const { data, error } = await q
   if (error || !data) return []
 
-  return (data as Array<{
+  type ReviewRowShape = {
     id: string
     source: string | null
     reviewer_name: string | null
@@ -780,23 +844,44 @@ async function readReviewEvents(
     body: string | null
     review_date: string | null
     response_date: string | null
-  }>)
-    .filter((r) => !!r.review_date)
-    .map((r) => {
-      const anchor = new Date(r.review_date as string).toISOString()
-      const sourceLabel = r.source ?? 'unknown'
-      const stars = typeof r.rating === 'number' ? `${r.rating}★` : '?★'
-      return {
-        id: `review:${r.id}`,
-        timestamp: anchor,
-        kind: 'review' as const,
-        title: `${stars} review on ${sourceLabel} by ${r.reviewer_name ?? '(anonymous)'}`,
-        summary: (r.title ?? r.body ?? '').slice(0, 220) || '(no body)',
-        actor: 'couple',
-        payload_ref: { table: 'reviews', id: r.id },
-        icon_hint: 'star',
-      }
-    })
+    wedding_id: string | null
+  }
+
+  const rows = (data as ReviewRowShape[]).filter((r) => !!r.review_date)
+
+  // Strict matcher — apply per row. Reviews with wedding_id === this
+  // wedding bypass the strict matcher (operator already explicitly
+  // attached them).
+  const kept: ReviewRowShape[] = []
+  for (const r of rows) {
+    if (kept.length >= cap) break
+    if (r.wedding_id && r.wedding_id === weddingId) {
+      kept.push(r)
+      continue
+    }
+    const v = matchReviewToCouple(
+      { id: r.id, reviewer_name: r.reviewer_name, review_date: r.review_date },
+      partners,
+      weddingAnchor,
+    )
+    if (v.matched) kept.push(r)
+  }
+
+  return kept.map((r) => {
+    const anchor = new Date(r.review_date as string).toISOString()
+    const sourceLabel = r.source ?? 'unknown'
+    const stars = typeof r.rating === 'number' ? `${r.rating}★` : '?★'
+    return {
+      id: `review:${r.id}`,
+      timestamp: anchor,
+      kind: 'review' as const,
+      title: `${stars} review on ${sourceLabel} by ${r.reviewer_name ?? '(anonymous)'}`,
+      summary: (r.title ?? r.body ?? '').slice(0, 220) || '(no body)',
+      actor: 'couple',
+      payload_ref: { table: 'reviews', id: r.id },
+      icon_hint: 'star',
+    }
+  })
 }
 
 async function readAttributionEvents(

@@ -55,6 +55,17 @@ import {
   type PaymentEvidence,
   type HandleEvidence,
 } from '@/config/prompts/identity-reconstruction'
+import {
+  filterReviewsForCouple,
+  deferAmbiguousReview,
+  matchReviewToCouple,
+  type PartnerNamePair,
+} from './review-match'
+import {
+  loadEvidenceOverrides,
+  isEvidenceDismissed,
+  type EvidenceOverridesIndex,
+} from './evidence-overrides'
 
 // Re-export so callers don't have to import from two places.
 export {
@@ -75,6 +86,19 @@ export interface EvidenceSummary {
   contracts_count: number
   tangentials_count: number
   payments_count: number
+  /** Wave 15 — number of discovery_sources rows captured for this
+   *  wedding ("How did you hear about us?" answers). When > 0, the
+   *  most recent answer is surfaced via discovery_source_recent. */
+  discovery_sources_count?: number
+  /** Wave 15 — most recent discovery source (verbatim + canonical).
+   *  Surfaced on ReconstructedIdentityPanel evidence row. */
+  discovery_source_recent?: {
+    canonical: string
+    answer: string
+    captured_at: string
+  } | null
+  /** Wave 15 — number of active evidence_overrides for this wedding. */
+  evidence_overrides_count?: number
 }
 
 export interface ReconstructResult {
@@ -272,39 +296,160 @@ async function loadReviewsForCouple(
   supabase: SupabaseClient,
   venueId: string,
   people: PersonRow[],
+  wedding: WeddingRow,
 ): Promise<ReviewRow[]> {
-  // Reviews are venue-scoped (no wedding_id FK). Loose match by
-  // reviewer_name containing one of the partner first or last names.
-  const candidates = new Set<string>()
-  for (const p of people) {
-    if (p.first_name && p.first_name.length >= 3) candidates.add(p.first_name.toLowerCase())
-    if (p.last_name && p.last_name.length >= 3) candidates.add(p.last_name.toLowerCase())
+  // Wave 15 precision filter: reviews are venue-scoped (no wedding_id
+  // FK on legacy schema). Replace the old loose surname-substring match
+  // with a strict first-name + temporal guard (see review-match.ts).
+  //
+  // Steps:
+  //   1. Pre-filter by ANY surname token containing one of the partner
+  //      first names. This is still loose — we let lots of candidates
+  //      through and then the strict matcher in matchReviewToCouple()
+  //      decides.
+  //   2. Apply the strict matcher: first-name + temporal alignment.
+  //   3. Reviews older than inquiry_date are dropped AND surfaced to
+  //      review_match_review_queue as 'pre_inquiry_review' so an
+  //      operator can audit (constitution: never silently discard
+  //      potentially-relevant evidence).
+  //
+  // The strict matcher's verbose name guarantees: a review from
+  // "Lauren and Thomas S" on Dec 30 will NOT attach to a Sophie Thomas
+  // wedding that inquired May 8 — neither the first-name nor the
+  // temporal rule passes.
+
+  const partners: PartnerNamePair[] = people.map((p) => ({
+    role: p.role,
+    first_name: p.first_name,
+    last_name: p.last_name,
+  }))
+
+  // No name evidence at all → can't match anything. Skip the DB roundtrip.
+  if (
+    partners.every((p) => !p.first_name && !p.last_name)
+  ) {
+    return []
   }
-  if (candidates.size === 0) return []
+
+  // Build a loose pre-filter set (first names + last names, lower-case,
+  // length >= 3 to avoid "an"/"of" false positives).
+  const preFilterTokens = new Set<string>()
+  for (const p of partners) {
+    if (p.first_name && p.first_name.length >= 3) {
+      preFilterTokens.add(p.first_name.toLowerCase())
+    }
+    if (p.last_name && p.last_name.length >= 3) {
+      preFilterTokens.add(p.last_name.toLowerCase())
+    }
+  }
+  if (preFilterTokens.size === 0) return []
+
   const { data, error } = await supabase
     .from('reviews')
     .select('id, reviewer_name, source, rating, body, review_date')
     .eq('venue_id', venueId)
     .order('review_date', { ascending: false })
-    .limit(100) // pre-filter cap; downstream filter narrows
+    .limit(200) // pre-filter cap; strict matcher narrows
   if (error) {
     console.warn('[reconstruct] loadReviewsForCouple failed:', error.message)
     return []
   }
-  const filtered: ReviewRow[] = []
-  for (const r of ((data ?? []) as ReviewRow[])) {
-    if (filtered.length >= MAX_REVIEW_FETCHED) break
+
+  // Loose pre-filter — drop reviews that don't have ANY token overlap.
+  // (Saves CPU on the strict matcher for venues with thousands of reviews.)
+  const looseCandidates: ReviewRow[] = []
+  for (const r of (data ?? []) as ReviewRow[]) {
     const name = (r.reviewer_name ?? '').toLowerCase()
     if (!name) continue
-    let hit = false
-    for (const c of candidates) {
-      if (name.includes(c)) {
-        hit = true
+    for (const t of preFilterTokens) {
+      if (name.includes(t)) {
+        looseCandidates.push(r)
         break
       }
     }
-    if (hit) filtered.push(r)
   }
+
+  // Strict matcher.
+  const wedAnchor = {
+    inquiry_date: wedding.inquiry_date,
+    wedding_date: wedding.wedding_date,
+  }
+  const filterResult = filterReviewsForCouple({
+    reviews: looseCandidates.map((r) => ({
+      id: r.id,
+      reviewer_name: r.reviewer_name,
+      review_date: r.review_date,
+    })),
+    partners,
+    wedding: wedAnchor,
+  })
+
+  // Re-attach the full row shape (filterReviewsForCouple operates on
+  // MatchableReview, which only carries id/reviewer_name/review_date).
+  const reviewById = new Map(looseCandidates.map((r) => [r.id, r]))
+  const filtered: ReviewRow[] = []
+  for (const kept of filterResult.kept) {
+    if (filtered.length >= MAX_REVIEW_FETCHED) break
+    const full = reviewById.get(kept.id)
+    if (full) filtered.push(full)
+  }
+
+  // Defer-to-queue: any review that PASSED the first-name match but
+  // FAILED the temporal guard (i.e. was dropped with reason
+  // 'pre_inquiry_temporal' or 'too_old_post_event') is recorded for
+  // operator review. We do NOT defer plain no_first_name_match drops —
+  // those are signal noise from the loose pre-filter.
+  for (const d of filterResult.dropped) {
+    if (
+      d.reason === 'pre_inquiry_temporal' ||
+      d.reason === 'too_old_post_event'
+    ) {
+      // Re-check first-name match: if it passed, then we have a real
+      // temporal-conflict review the operator should audit.
+      const full = reviewById.get(d.review.id)
+      if (!full) continue
+      const v = matchReviewToCouple(
+        { id: full.id, reviewer_name: full.reviewer_name, review_date: full.review_date },
+        partners,
+        wedAnchor,
+      )
+      // v is matched=false; we already know that. We want to know if a
+      // hypothetical relaxation of the temporal guard WOULD have matched —
+      // i.e. did the first-name match succeed? Re-run matchByFirstName
+      // semantics by checking the verdict reason ordering — pre-inquiry
+      // / too-old reasons only fire AFTER the first-name match succeeds
+      // in matchReviewToCouple's flow. So if reason is pre_inquiry_temporal
+      // OR too_old_post_event we know the name matched.
+      void v
+      const partner1 = partners.find((p) => p.role === 'partner1') ?? partners[0]
+      const partner2 = partners.find((p) => p.role === 'partner2') ?? partners[1]
+      const fmtPartner = (p: PartnerNamePair | undefined): string | null =>
+        p
+          ? [p.first_name, p.last_name].filter(Boolean).join(' ').trim() || null
+          : null
+      try {
+        await deferAmbiguousReview({
+          supabase,
+          venueId,
+          reviewId: full.id,
+          candidates: [
+            {
+              wedding_id: wedding.id,
+              partner1_name: fmtPartner(partner1),
+              partner2_name: fmtPartner(partner2),
+              inquiry_date: wedding.inquiry_date,
+              wedding_date: wedding.wedding_date,
+              match_reason: 'temporal_pre_inquiry',
+            },
+          ],
+          deferReason: 'pre_inquiry_review',
+        })
+      } catch {
+        // best-effort
+      }
+    }
+  }
+
   return filtered
 }
 
@@ -435,6 +580,43 @@ function deriveHandleEvidence(tangentials: TangentialRow[]): HandleEvidence[] {
 }
 
 // ---------------------------------------------------------------------------
+// Wave 15 — discovery_sources loader
+// ---------------------------------------------------------------------------
+// Captured "How did you hear about us?" answers from Calendly Q&A,
+// intake forms, etc. Counts go into evidence_summary; the most recent
+// answer is surfaced on the panel as a single evidence row.
+
+interface DiscoverySourceRow {
+  id: string
+  canonical_source: string
+  answer_text: string
+  captured_at: string
+}
+
+async function loadDiscoverySources(
+  supabase: SupabaseClient,
+  weddingId: string,
+): Promise<DiscoverySourceRow[]> {
+  try {
+    const { data, error } = await supabase
+      .from('discovery_sources')
+      .select('id, canonical_source, answer_text, captured_at')
+      .eq('wedding_id', weddingId)
+      .order('captured_at', { ascending: false })
+      .limit(10)
+    if (error) {
+      console.warn('[reconstruct] loadDiscoverySources failed:', error.message)
+      return []
+    }
+    return (data ?? []) as DiscoverySourceRow[]
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn('[reconstruct] loadDiscoverySources threw:', msg)
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Build the ReconstructionEvidence object.
 // ---------------------------------------------------------------------------
 
@@ -453,20 +635,49 @@ async function buildEvidence(
   }
   const venueId = wedding.venue_id
 
-  const [people, interactions, contracts, tangentials, venueRow] = await Promise.all([
+  // Wave 15: load evidence_overrides FIRST so we can filter every
+  // downstream evidence loader's output. Operator override > inferred
+  // state. The index is a per-(table, id) map — O(1) per check.
+  const overrides: EvidenceOverridesIndex = await loadEvidenceOverrides(
+    supabase,
+    weddingId,
+  )
+
+  const [people, rawInteractions, rawContracts, rawTangentials, venueRow, discoverySources] = await Promise.all([
     loadPeople(supabase, weddingId),
     loadInteractions(supabase, weddingId),
     loadContracts(supabase, weddingId),
     loadTangentials(supabase, weddingId, venueId),
     supabase.from('venues').select('name').eq('id', venueId).maybeSingle(),
+    loadDiscoverySources(supabase, weddingId),
   ])
-  // Reviews depend on people being loaded first (loose name match).
-  const reviews = await loadReviewsForCouple(supabase, venueId, people)
+
+  // Apply override filters to each source.
+  const interactions = rawInteractions.filter(
+    (i) => !isEvidenceDismissed(overrides, 'interactions', i.id),
+  )
+  const contracts = rawContracts.filter(
+    (c) => !isEvidenceDismissed(overrides, 'contracts', c.id),
+  )
+  const tangentials = rawTangentials.filter(
+    (t) => !isEvidenceDismissed(overrides, 'tangential_signals', t.id),
+  )
+
+  // Reviews use the Wave 15 precision matcher (first-name + temporal
+  // guard) ALSO filtered by evidence_overrides.
+  const rawReviews = await loadReviewsForCouple(supabase, venueId, people, wedding)
+  const reviews = rawReviews.filter(
+    (r) => !isEvidenceDismissed(overrides, 'reviews', r.id),
+  )
 
   const honeybook = deriveHoneyBookEvidence(wedding, people)
   const calendars = deriveCalendarEvidence(interactions)
   const calculators = deriveCalculatorEvidence(interactions)
   const handles = deriveHandleEvidence(tangentials)
+  void discoverySources // Wave 15 — surfaced via evidence_summary; the
+                         // prompt schema is sealed so we do NOT thread it
+                         // into ReconstructionEvidence (would require a
+                         // prompt rev). Counts only.
 
   // Map interactions to InteractionEvidence with canonicalised
   // direction values + bounded body.
@@ -554,6 +765,16 @@ async function buildEvidence(
     contracts_count: contractEvidence.length,
     tangentials_count: tangentials.length,
     payments_count: payments.length,
+    discovery_sources_count: discoverySources.length,
+    discovery_source_recent:
+      discoverySources.length > 0
+        ? {
+            canonical: discoverySources[0].canonical_source,
+            answer: discoverySources[0].answer_text,
+            captured_at: discoverySources[0].captured_at,
+          }
+        : null,
+    evidence_overrides_count: overrides.rows.length,
   }
 
   return { evidence, summary, lastSignalAt, venueId }

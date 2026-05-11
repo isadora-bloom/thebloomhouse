@@ -54,6 +54,10 @@ import {
   ChevronDown,
   ChevronUp,
   Quote,
+  Star,
+  Compass,
+  X,
+  ShieldOff,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -147,6 +151,34 @@ interface EvidenceSummary {
   contracts_count: number
   tangentials_count: number
   payments_count: number
+  discovery_sources_count?: number
+  discovery_source_recent?: {
+    canonical: string
+    answer: string
+    captured_at: string
+  } | null
+  evidence_overrides_count?: number
+}
+
+interface EvidenceSourceRow {
+  /** Source row id (uuid). */
+  id: string
+  /** 'reviews' / 'interactions' / 'contracts' / 'tangential_signals' / 'discovery_sources' */
+  table: string
+  evidenceKind:
+    | 'review'
+    | 'interaction'
+    | 'calendar'
+    | 'contract'
+    | 'payment'
+    | 'handle'
+    | 'tangential_signal'
+    | 'attribution_event'
+    | 'tour'
+    | 'profile_field'
+  label: string
+  detail: string | null
+  timestamp: string | null
 }
 
 interface ProfileResponse {
@@ -245,10 +277,16 @@ export function ReconstructedIdentityPanel({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [rebuilding, setRebuilding] = useState(false)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [revealSensitive, setRevealSensitive] = useState(false)
   const [venueRevealFlag, setVenueRevealFlag] = useState(false)
   const [showNames, setShowNames] = useState(true)
   const [unlockOpen, setUnlockOpen] = useState(false)
+
+  // Wave 15 — evidence-source rows that the operator can dismiss.
+  const [evidenceSources, setEvidenceSources] = useState<EvidenceSourceRow[]>([])
+  const [dismissing, setDismissing] = useState<Set<string>>(new Set())
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
 
   const fetchProfile = useCallback(async () => {
     try {
@@ -276,6 +314,31 @@ export function ReconstructedIdentityPanel({
     }
   }, [weddingId])
 
+  const fetchEvidenceSources = useCallback(async () => {
+    // Wave 15 — pull the dismissable evidence-source rows. Lightweight
+    // index for the panel: latest 10 reviews + latest discovery_source.
+    try {
+      const res = await fetch(
+        `/api/admin/identity/evidence/sources?weddingId=${encodeURIComponent(weddingId)}`,
+        { cache: 'no-store' },
+      )
+      if (!res.ok) return
+      const body = (await res.json()) as {
+        ok: boolean
+        sources?: EvidenceSourceRow[]
+        dismissedIds?: string[]
+      }
+      if (body.ok && Array.isArray(body.sources)) {
+        setEvidenceSources(body.sources)
+      }
+      if (body.ok && Array.isArray(body.dismissedIds)) {
+        setDismissedIds(new Set(body.dismissedIds))
+      }
+    } catch {
+      // Best-effort. The panel still renders without the evidence section.
+    }
+  }, [weddingId])
+
   const fetchVenueFlags = useCallback(async () => {
     try {
       // Pull venue_config feature_flags via a tiny server endpoint that
@@ -295,10 +358,52 @@ export function ReconstructedIdentityPanel({
 
   useEffect(() => {
     setLoading(true)
-    Promise.all([fetchProfile(), fetchVenueFlags()]).finally(() =>
-      setLoading(false),
-    )
-  }, [fetchProfile, fetchVenueFlags])
+    Promise.all([
+      fetchProfile(),
+      fetchVenueFlags(),
+      fetchEvidenceSources(),
+    ]).finally(() => setLoading(false))
+  }, [fetchProfile, fetchVenueFlags, fetchEvidenceSources])
+
+  async function dismissEvidence(row: EvidenceSourceRow, reason: string | null) {
+    setDismissing((s) => {
+      const next = new Set(s)
+      next.add(row.id)
+      return next
+    })
+    try {
+      const res = await fetch('/api/admin/identity/evidence/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          weddingId,
+          evidenceKind: row.evidenceKind,
+          evidenceRef: { table: row.table, id: row.id },
+          overrideAction: 'dismiss',
+          reason,
+        }),
+      })
+      const body = (await res.json()) as { ok: boolean; error?: string }
+      if (!res.ok || !body.ok) {
+        setError(body.error || `dismiss HTTP ${res.status}`)
+        return
+      }
+      setDismissedIds((s) => {
+        const next = new Set(s)
+        next.add(row.id)
+        return next
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown error'
+      setError(msg)
+    } finally {
+      setDismissing((s) => {
+        const next = new Set(s)
+        next.delete(row.id)
+        return next
+      })
+    }
+  }
 
   async function rebuild(force: boolean) {
     setRebuilding(true)
@@ -720,6 +825,131 @@ export function ReconstructedIdentityPanel({
             </div>
           </Section>
         )}
+
+      {/* Wave 15 — Discovery source (Calendly Q&A capture) */}
+      {evidenceSummary?.discovery_source_recent && (
+        <Section
+          icon={<Compass className="w-3.5 h-3.5" />}
+          title="Discovery source"
+        >
+          <div className="text-sm">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-medium text-sage-900 capitalize">
+                {evidenceSummary.discovery_source_recent.canonical.replace(
+                  /_/g,
+                  ' ',
+                )}
+              </span>
+              <span className="text-[10px] text-sage-500">
+                captured{' '}
+                {relativeTime(evidenceSummary.discovery_source_recent.captured_at)}
+              </span>
+            </div>
+            <div className="mt-1 text-xs text-sage-600 italic">
+              &ldquo;{evidenceSummary.discovery_source_recent.answer}&rdquo;
+            </div>
+            {evidenceSummary.discovery_sources_count &&
+              evidenceSummary.discovery_sources_count > 1 && (
+                <div className="mt-1 text-[10px] text-sage-400">
+                  +{evidenceSummary.discovery_sources_count - 1} earlier captures
+                </div>
+              )}
+          </div>
+        </Section>
+      )}
+
+      {/* Wave 15 — Evidence sources (dismissable rows) */}
+      {evidenceSources.length > 0 && (
+        <Section
+          icon={<ShieldOff className="w-3.5 h-3.5" />}
+          title="Evidence sources"
+        >
+          <div className="text-[10px] text-sage-500 mb-1">
+            Click dismiss to exclude a row from the next reconstruction.
+            Dismissed evidence stays as audit history and can be restored
+            from /admin/identity/wedding/{weddingId}/overrides.
+          </div>
+          <div className="space-y-2">
+            {evidenceSources.map((row) => {
+              const isDismissed = dismissedIds.has(row.id)
+              const isBusy = dismissing.has(row.id)
+              return (
+                <div
+                  key={`${row.table}:${row.id}`}
+                  className={cn(
+                    'flex items-start gap-2 rounded-md border px-2 py-1.5',
+                    isDismissed
+                      ? 'border-sage-200 bg-sage-50/60 opacity-60'
+                      : 'border-sage-100 bg-sage-50/30',
+                  )}
+                >
+                  <div className="flex-shrink-0 mt-0.5">
+                    {row.evidenceKind === 'review' ? (
+                      <Star className="w-3 h-3 text-sage-500" />
+                    ) : row.evidenceKind === 'tangential_signal' ? (
+                      <Hash className="w-3 h-3 text-sage-500" />
+                    ) : (
+                      <Sparkles className="w-3 h-3 text-sage-500" />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-sage-900 flex items-center gap-2 flex-wrap">
+                      <span className="font-medium">{row.label}</span>
+                      <span className="text-[10px] text-sage-400 uppercase">
+                        {row.evidenceKind}
+                      </span>
+                      {isDismissed && (
+                        <span className="text-[10px] text-rose-600 bg-rose-50 border border-rose-100 px-1 rounded">
+                          dismissed
+                        </span>
+                      )}
+                    </div>
+                    {row.detail && (
+                      <div className="text-[11px] text-sage-600 italic truncate">
+                        {row.detail}
+                      </div>
+                    )}
+                  </div>
+                  {!isDismissed && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        dismissEvidence(
+                          row,
+                          'Operator marked as not this couple',
+                        )
+                      }
+                      disabled={isBusy}
+                      className="flex-shrink-0 text-[10px] text-rose-600 hover:text-rose-700 disabled:opacity-50 inline-flex items-center gap-1"
+                      title="Dismiss this evidence — excluded from next reconstruction"
+                    >
+                      {isBusy ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <X className="w-3 h-3" />
+                      )}
+                      dismiss
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          {typeof evidenceSummary?.evidence_overrides_count === 'number' &&
+            evidenceSummary.evidence_overrides_count > 0 && (
+              <div className="mt-2 text-[10px] text-sage-500">
+                {evidenceSummary.evidence_overrides_count} active override
+                {evidenceSummary.evidence_overrides_count === 1 ? '' : 's'}{' '}
+                <a
+                  href={`/admin/identity/wedding/${weddingId}/overrides`}
+                  className="underline hover:no-underline"
+                >
+                  manage
+                </a>
+              </div>
+            )}
+        </Section>
+      )}
 
       {/* Footer */}
       <div className="px-6 py-3 border-t border-border bg-sage-50/30 flex items-center gap-3 text-[11px] text-sage-500">

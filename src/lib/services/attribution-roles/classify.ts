@@ -761,15 +761,24 @@ export async function classifyAndPersistAttributionEvent(
   const sb = options.supabase ?? createServiceClient()
   const result = await classifyAttributionEvent(input, { ...options, supabase: sb })
 
+  // Wave 22: stamp prompt_version_classified_under so the reclassify
+  // sweep can find rows that ran under bias-suspect v1 prompts. Only
+  // set when an LLM judge actually fired; forensic-rule-only paths
+  // leave the column NULL.
+  const updatePayload: Record<string, unknown> = {
+    role: result.role,
+    role_confidence_0_100: result.role_confidence_0_100,
+    role_classified_at: new Date().toISOString(),
+    role_reasoning: result.reasoning.slice(0, 4000),
+    role_evidence: result.evidence,
+  }
+  if (result.prompt_version) {
+    updatePayload.prompt_version_classified_under = result.prompt_version
+  }
+
   const { error } = await sb
     .from('attribution_events')
-    .update({
-      role: result.role,
-      role_confidence_0_100: result.role_confidence_0_100,
-      role_classified_at: new Date().toISOString(),
-      role_reasoning: result.reasoning.slice(0, 4000),
-      role_evidence: result.evidence,
-    })
+    .update(updatePayload)
     .eq('id', input.attributionEventId)
   if (error) {
     throw new Error(

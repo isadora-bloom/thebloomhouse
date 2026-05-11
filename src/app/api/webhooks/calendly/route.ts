@@ -3,6 +3,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { recordEngagementEvent } from '@/lib/services/heat-mapping'
 import { trackCoordinatorAction } from '@/lib/services/intel/consultant-tracking'
 import { createHmac, timingSafeEqual } from 'crypto'
+import {
+  captureDiscoverySource,
+  extractDiscoveryAnswerFromCalendly,
+  extractReferrerNameFromCalendly,
+} from '@/lib/services/discovery-source/capture'
 
 // ---------------------------------------------------------------------------
 // Calendly webhook handler
@@ -225,6 +230,39 @@ export async function POST(request: NextRequest) {
     if (weddingRow?.assigned_to) {
       await trackCoordinatorAction(venueId, weddingRow.assigned_to as string, 'tour_booked')
       console.log(`[webhook/calendly] Tracked tour_booked for consultant ${weddingRow.assigned_to}`)
+    }
+
+    // Wave 15 — discovery-source capture from Calendly Q&A.
+    // Calendly's questions_and_answers carries the operator's custom
+    // questions; we extract "How did you hear about us?" + map to a
+    // canonical source, write to discovery_sources, and fan out an
+    // attribution_events row so the answer surfaces in ROI rollups +
+    // on the reconstructed identity panel.
+    // Idempotent on (venue, person, capture_source, capture_ref) so a
+    // retried webhook never double-writes.
+    try {
+      const discoveryAnswer = extractDiscoveryAnswerFromCalendly(payload)
+      if (discoveryAnswer) {
+        const referrerName = extractReferrerNameFromCalendly(payload)
+        const captureResult = await captureDiscoverySource({
+          venueId,
+          weddingId,
+          personId: person?.id ?? null,
+          captureSource: 'calendly',
+          questionText: discoveryAnswer.questionText,
+          answerText: discoveryAnswer.answerText,
+          captureRef: (payload.uri as string) ?? null,
+          referrerName,
+          supabase,
+        })
+        console.log(
+          `[webhook/calendly] Discovery source captured: ` +
+            `"${discoveryAnswer.answerText}" → ${captureResult.canonical} ` +
+            `(rule=${captureResult.ruleMatched}, inserted=${captureResult.inserted})`,
+        )
+      }
+    } catch (discoveryErr) {
+      console.error('[webhook/calendly] Discovery-source capture failed:', discoveryErr)
     }
 
     // Wave 4 Phase 2 — signal-driven identity reconstruction enqueue.
