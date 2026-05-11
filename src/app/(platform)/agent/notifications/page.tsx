@@ -89,15 +89,15 @@ function notificationHref(notif: RecentNotification): string | null {
     case 'tour_booked':
     case 'tour_scheduled':
     case 'tour_completed':
-      return w ? `/intel/leads/${w}` : '/intel/leads'
+      return w ? `/intel/clients/${w}` : '/intel/clients'
     case 'escalation':
     case 'escalation_required':
     case 'contract_signing_detected':
     case 'booking_confirmation_prompt':
     case 'brain_dump_grant_fired':
-      return w ? `/intel/leads/${w}` : null
+      return w ? `/intel/clients/${w}` : null
     default:
-      return w ? `/intel/leads/${w}` : null
+      return w ? `/intel/clients/${w}` : null
   }
 }
 

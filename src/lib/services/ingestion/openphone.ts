@@ -452,46 +452,120 @@ export async function syncMessages(
     (alreadyProcessed ?? []).map((r) => r.openphone_message_id as string)
   )
 
+  // 2026-05-11 Quo API rewrite. The legacy /messages?phoneNumberId=X&since=Y
+  // pattern was deprecated. Quo now requires:
+  //   - participants[] (the OTHER side of the conversation) on /messages + /calls
+  //   - listing conversations first via /conversations to enumerate participants
+  //   - createdAfter (since is deprecated)
+  //
+  // Strategy: list every conversation on every venue phone, then for each
+  // conversation fetch messages + calls scoped to that participant. This
+  // catches both known clients AND unknown numbers (the rixey-portal
+  // pattern only iterates known phones; Bloom needs both).
   for (const phone of phoneNumbers) {
     const phoneNumberId = phone.id
 
-    // ---- SMS messages -----------------------------------------------------
-    // 2026-05-11: Quo API now requires `participants` (array) — the venue's
-    // own phone number IS a participant in every message we want, so we
-    // pass it. Returns all messages on that line (since the window's start).
-    let messages: Array<Record<string, unknown>> = []
+    // List conversations on this venue line.
+    let conversations: Array<Record<string, unknown>> = []
     try {
-      const payload = await openPhoneFetch(conn.api_key, '/messages', {
-        phoneNumberId,
-        participants: [phone.phoneNumber],
-        since: sinceIso,
-        maxResults: '100',
-      })
-      messages = unwrapList<Record<string, unknown>>(payload)
+      // Paginate. maxResults is required and capped at 100.
+      let pageToken: string | null = null
+      do {
+        const params: Record<string, string | string[] | undefined> = {
+          phoneNumbers: [phone.phoneNumber],
+          updatedAfter: sinceIso,
+          maxResults: '100',
+        }
+        if (pageToken) params.pageToken = pageToken
+        const payload: unknown = await openPhoneFetch(conn.api_key, '/conversations', params)
+        const page = unwrapList<Record<string, unknown>>(payload)
+        conversations.push(...page)
+        pageToken =
+          (payload as { nextPageToken?: string | null } | null)?.nextPageToken ?? null
+      } while (pageToken)
     } catch (err) {
       result.errors.push(
-        `messages(${phone.phoneNumber}): ${err instanceof Error ? err.message : String(err)}`
+        `conversations(${phone.phoneNumber}): ${err instanceof Error ? err.message : String(err)}`,
       )
+      continue
     }
 
-    for (const m of messages) {
-      const row = ingestRowsFromMessage(m)
-      if (!row) continue
-      const wrote = await persistRow(venueId, conn, row, processedIds)
-      if (wrote) {
-        result.inserted++
-        result.byChannel.sms++
-      } else {
-        result.skipped++
+    // For each conversation, pull messages + calls for its participant(s).
+    for (const conv of conversations) {
+      const participants = (conv.participants as string[] | undefined) ?? []
+      // De-dup + filter empty.
+      const otherParties = Array.from(new Set(participants.filter((p) => !!p && p !== phone.phoneNumber)))
+      if (otherParties.length === 0) continue
+
+      // ---- SMS messages -------------------------------------------------
+      let messages: Array<Record<string, unknown>> = []
+      try {
+        const payload = await openPhoneFetch(conn.api_key, '/messages', {
+          phoneNumberId,
+          participants: otherParties,
+          createdAfter: sinceIso,
+          maxResults: '100',
+        })
+        messages = unwrapList<Record<string, unknown>>(payload)
+      } catch (err) {
+        result.errors.push(
+          `messages(${phone.phoneNumber} -> ${otherParties.join(',')}): ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
+
+      for (const m of messages) {
+        const row = ingestRowsFromMessage(m)
+        if (!row) continue
+        const wrote = await persistRow(venueId, conn, row, processedIds)
+        if (wrote) {
+          result.inserted++
+          result.byChannel.sms++
+        } else {
+          result.skipped++
+        }
+      }
+
+      // ---- Calls (with optional transcript / summary) -------------------
+      let callRows: Array<Record<string, unknown>> = []
+      try {
+        const payload = await openPhoneFetch(conn.api_key, '/calls', {
+          phoneNumberId,
+          participants: otherParties,
+          createdAfter: sinceIso,
+          maxResults: '50',
+        })
+        callRows = unwrapList<Record<string, unknown>>(payload)
+      } catch (err) {
+        const e = err as Error & { code?: number }
+        if (e.code !== 404) {
+          result.errors.push(
+            `calls(${phone.phoneNumber} -> ${otherParties.join(',')}): ${e.message ?? String(err)}`,
+          )
+        }
+      }
+
+      for (const c of callRows) {
+        const row = ingestRowsFromCallSummary(c)
+        if (!row) continue
+        const wrote = await persistRow(venueId, conn, row, processedIds)
+        if (wrote) {
+          result.inserted++
+          result.byChannel.call_summary++
+        } else {
+          result.skipped++
+        }
       }
     }
 
-    // ---- Voicemails -------------------------------------------------------
+    // ---- Voicemails ---------------------------------------------------
+    // The /voicemails endpoint is still phone-line-scoped (per the Quo
+    // docs); it doesn't take participants. Keep the legacy call shape
+    // but switch the parameter name.
     let voicemails: Array<Record<string, unknown>> = []
     try {
       const payload = await openPhoneFetch(conn.api_key, '/voicemails', {
         phoneNumberId,
-        since: sinceIso,
+        createdAfter: sinceIso,
         maxResults: '50',
       })
       voicemails = unwrapList<Record<string, unknown>>(payload)
@@ -499,7 +573,7 @@ export async function syncMessages(
       const e = err as Error & { code?: number }
       if (e.code !== 404) {
         result.errors.push(
-          `voicemails(${phone.phoneNumber}): ${e.message ?? String(err)}`
+          `voicemails(${phone.phoneNumber}): ${e.message ?? String(err)}`,
         )
       }
     }
@@ -511,53 +585,6 @@ export async function syncMessages(
       if (wrote) {
         result.inserted++
         result.byChannel.voicemail++
-      } else {
-        result.skipped++
-      }
-    }
-
-    // ---- Call summaries ---------------------------------------------------
-    // Try /call-summaries first (some workspaces don't have it), then
-    // fall back to /calls and pull whatever transcript / summary the
-    // payload carries.
-    let callRows: Array<Record<string, unknown>> = []
-    try {
-      const payload = await openPhoneFetch(conn.api_key, '/call-summaries', {
-        phoneNumberId,
-        since: sinceIso,
-        maxResults: '50',
-      })
-      callRows = unwrapList<Record<string, unknown>>(payload)
-    } catch (err) {
-      const e = err as Error & { code?: number }
-      if (e.code === 404) {
-        try {
-          const payload = await openPhoneFetch(conn.api_key, '/calls', {
-            phoneNumberId,
-            participants: [phone.phoneNumber],
-            since: sinceIso,
-            maxResults: '50',
-          })
-          callRows = unwrapList<Record<string, unknown>>(payload)
-        } catch (callErr) {
-          result.errors.push(
-            `calls(${phone.phoneNumber}): ${callErr instanceof Error ? callErr.message : String(callErr)}`
-          )
-        }
-      } else {
-        result.errors.push(
-          `call-summaries(${phone.phoneNumber}): ${e.message ?? String(err)}`
-        )
-      }
-    }
-
-    for (const c of callRows) {
-      const row = ingestRowsFromCallSummary(c)
-      if (!row) continue
-      const wrote = await persistRow(venueId, conn, row, processedIds)
-      if (wrote) {
-        result.inserted++
-        result.byChannel.call_summary++
       } else {
         result.skipped++
       }
@@ -619,12 +646,56 @@ async function persistRow(
   }
   processedIds.add(row.openphone_message_id)
 
-  // 2) Identity link — only against existing people for this venue.
-  // Inbound calls come from the client; outbound go to the client. We
-  // match on whichever side is the *external* number.
+  // 2) Identity link. Inbound calls/SMS come from the client; outbound
+  // go to the client. Match on whichever side is the *external* number.
+  // 2026-05-11: extended to use the canonical identity resolver as a
+  // fallback. Previously this only found pre-existing people via the
+  // contacts table — unknown numbers landed as orphan interactions
+  // (person_id=null), so "an SMS from someone we'd never emailed"
+  // never linked to a wedding. The resolver creates a fresh person +
+  // wedding when no existing identity matches, mirroring the email
+  // pipeline's resolveIdentity behavior.
   const externalNumber =
     row.direction === 'inbound' ? row.from_number : row.to_number
-  const personId = await findPersonIdByPhone(venueId, externalNumber)
+  let personId = await findPersonIdByPhone(venueId, externalNumber)
+  let weddingId: string | null = null
+
+  if (!personId && externalNumber) {
+    try {
+      const { resolveIdentity } = await import('@/lib/services/identity/resolver')
+      const resolved = await resolveIdentity(
+        venueId,
+        {
+          email: null,
+          phone: externalNumber,
+          fullName: null,
+          weddingDate: null,
+          partner1Name: null,
+          partner2Name: null,
+        },
+        {
+          sourceLabel: `openphone:${row.channel}`,
+          supabase,
+          inquirySignalAt: row.occurred_at ?? undefined,
+        },
+      )
+      personId = resolved.personId
+      weddingId = resolved.weddingId
+    } catch (err) {
+      console.warn('[openphone] resolveIdentity failed (non-fatal):', err)
+    }
+  }
+
+  if (!weddingId && personId) {
+    // Hydrate wedding_id from the matched person so the interaction
+    // gets linked.
+    const { data: personRow } = await supabase
+      .from('people')
+      .select('wedding_id')
+      .eq('id', personId)
+      .maybeSingle()
+    weddingId = (personRow?.wedding_id as string | null) ?? null
+  }
 
   // 3) Inbox-visible interaction
   const interactionType = channelToInteractionType(row.channel)
@@ -639,6 +710,7 @@ async function persistRow(
   const interactionPayload: Record<string, unknown> = {
     venue_id: venueId,
     person_id: personId,
+    wedding_id: weddingId,
     type: interactionType,
     direction: row.direction,
     subject,
@@ -654,6 +726,12 @@ async function persistRow(
     // they discovered the venue through.
     // signal-class-justified: phone-channel signals are touchpoint
     signal_class: 'touchpoint',
+    // Wave 28 (mig 294): phone/voice channels surface in /agent/audio-inbox.
+    surface: 'voice_capture',
+    // Wave 27 (mig 293): inbound from external phone = couple voice;
+    // outbound from venue line = operator. The Haiku author classifier
+    // re-checks bodies later but this is a safe synchronous default.
+    author_class: row.direction === 'inbound' ? 'couple' : 'operator',
   }
 
   const { error: interErr } = await supabase
