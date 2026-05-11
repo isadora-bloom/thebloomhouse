@@ -21,7 +21,9 @@ import {
   ArrowRight,
   X,
   TrendingUp,
+  Wand2,
 } from 'lucide-react'
+import { VoiceDNAPanel } from '@/components/agent/VoiceDNAPanel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -301,6 +303,12 @@ export default function EmailLearningPage() {
 
   // File upload
   const [fileUploading, setFileUploading] = useState(false)
+
+  // Wave 20 — top-level tab toggle. Existing "Train manually" surface
+  // stays as the default tab; Voice DNA auto-derive is a sibling tab
+  // alongside it (per Wave 20 spec — extend learning page with ONLY
+  // a new tab; don't modify the existing tabs' content).
+  const [activeTab, setActiveTab] = useState<'train' | 'voice-dna'>('train')
 
   // ---------- Load data ----------
   const loadData = useCallback(async () => {
@@ -590,6 +598,48 @@ export default function EmailLearningPage() {
           and {aiName} will pick up your style.
         </p>
       </div>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Wave 20 — Tab nav: existing "Train manually" + new "Voice DNA"   */}
+      {/* ---------------------------------------------------------------- */}
+      <div className="border-b border-border">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setActiveTab('train')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'train'
+                ? 'border-sage-500 text-sage-900'
+                : 'border-transparent text-sage-500 hover:text-sage-700'
+            }`}
+          >
+            Train manually
+          </button>
+          <button
+            onClick={() => setActiveTab('voice-dna')}
+            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'voice-dna'
+                ? 'border-purple-500 text-sage-900'
+                : 'border-transparent text-sage-500 hover:text-sage-700'
+            }`}
+          >
+            <Wand2 className="w-3.5 h-3.5" />
+            Voice DNA (auto-derive)
+          </button>
+        </div>
+      </div>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Voice DNA tab body                                               */}
+      {/* ---------------------------------------------------------------- */}
+      {activeTab === 'voice-dna' && (
+        <VoiceDNAPanel venueId={VENUE_ID} />
+      )}
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Train-manually tab body wraps the existing surface verbatim.     */}
+      {/* Wave 20 added the tab nav above; everything below is unchanged.  */}
+      {/* ---------------------------------------------------------------- */}
+      {activeTab === 'train' && (<>
 
       {/* ---------------------------------------------------------------- */}
       {/* Error banner                                                     */}
@@ -1256,6 +1306,9 @@ export default function EmailLearningPage() {
           onClose={() => setPreviewSample(null)}
         />
       )}
+
+      </>)}
+      {/* End of Wave 20 train-manually tab body wrapper. */}
     </div>
   )
 }
