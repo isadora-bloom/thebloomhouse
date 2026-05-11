@@ -122,17 +122,27 @@ export default function IdentityAdminPage() {
             the pointer to the canonical row.
           </p>
         </div>
-        {/* Wave 2D — full coordinator UI for handle convergence proposals.
-            Links to /admin/identity/handle-merges (mig 259 + accept/reject/defer
-            endpoints). */}
-        <Link
-          href="/admin/identity/handle-merges"
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-sage-300 bg-warm-white text-sm text-sage-700 hover:bg-sage-50 whitespace-nowrap"
-          title="Cross-platform handle convergence proposals — accept, reject, or defer"
-        >
-          <Network className="w-4 h-4" />
-          Handle merge proposals
-        </Link>
+        {/* Wave 10 — person-keyed identity decision UX. ONE decision per
+            real person, not N per handle. The legacy handle-merges page
+            stays linked below for power-user inspection. */}
+        <div className="flex items-center gap-2">
+          <Link
+            href="/admin/identity/decisions"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-sage-300 bg-sage-50 text-sm text-sage-700 hover:bg-sage-100 whitespace-nowrap"
+            title="Person-keyed identity decisions — one card per real person"
+          >
+            <Users className="w-4 h-4" />
+            Identity decisions
+          </Link>
+          <Link
+            href="/admin/identity/handle-merges"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-sage-300 bg-warm-white text-sm text-sage-700 hover:bg-sage-50 whitespace-nowrap"
+            title="Cross-platform handle convergence proposals — raw per-handle queue (legacy)"
+          >
+            <Network className="w-4 h-4" />
+            Raw handle proposals
+          </Link>
+        </div>
       </header>
 
       {error && (
