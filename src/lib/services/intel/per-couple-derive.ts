@@ -424,6 +424,27 @@ export async function deriveCoupleIntel(
     console.warn('[deriveCoupleIntel] persona_overlay enqueue failed (non-fatal):', err instanceof Error ? err.message : err)
   }
 
+  // Wave 18 calibration recording hook (2026-05-11). Snapshot the
+  // prediction so analyze.ts can later compute Brier / reliability /
+  // drift once the lifecycle reaches a terminal state. Fire-and-
+  // forget — never fail the derive on this.
+  try {
+    const { recordPrediction } = await import('@/lib/services/calibration/record-prediction')
+    await recordPrediction({
+      weddingId,
+      kind: 'close_probability_pct',
+      value: intel.predicted_close_probability.pct_0_100,
+      confidence: intel.predicted_close_probability.confidence_0_100,
+      source: 'wave_5a_couple_intel',
+      promptVersion: COUPLE_INTEL_DERIVE_PROMPT_VERSION,
+      costCents: newCallCostCents,
+      venueId,
+      supabase,
+    })
+  } catch (err) {
+    console.warn('[deriveCoupleIntel] calibration recordPrediction failed (non-fatal):', err instanceof Error ? err.message : err)
+  }
+
   return {
     intel,
     costCents: newCallCostCents,

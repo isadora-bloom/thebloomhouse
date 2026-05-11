@@ -302,6 +302,9 @@ export const MODE_INTEL: ModeConfig = {
       items: [
         { label: 'Ask Anything', href: '/intel/nlq', icon: MessageSquareText, badge: 'AI' },
         { label: 'Health Score', href: '/intel/health', icon: Activity },
+        // Wave 18 — prediction calibration loop. Measures Wave 5A's
+        // close-probability against actual booked / lost outcomes.
+        { label: 'Prediction Calibration', href: '/intel/calibration', icon: Gauge },
       ],
     },
   ],
