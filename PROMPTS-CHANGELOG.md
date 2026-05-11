@@ -11,6 +11,107 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-05-11 (Wave 22 — bias remediation, Wave 21 audit fix-up)
+
+Wave 21 audited every prompt in `src/config/prompts/` against the
+`feedback_measure_dont_assume.md` doctrine and produced
+`PROMPT-BIAS-AUDIT.md`. Three CRITICAL findings: the Wave 7A discovery
+engine, the Wave 7B channel-role classifier, and the Wave 16 inquiry-
+intent judge all pre-imposed direction on the verdict the classifier
+was meant to discover. Six WARNING findings cited the same persona-label
+anchoring cascade across four prompts. Wave 22 patches all nine.
+
+Cross-cutting change: a new shape-only `PERSONA_STYLE_GUIDE` constant
+(`src/config/prompts/persona-style-guide.ts`) replaces the 5-8
+example-label list that previously lived inline in four prompts. The
+list anchored the model toward the same names ("Heritage-Forward
+Planner", "Cost-Conscious Pragmatist", etc.) regardless of the venue's
+actual cohort. The new constant carries the shape rules (2-4 words,
+discovered not pre-defined, venue-context language) with zero specific
+examples.
+
+| Prompt | Old | New | Reason |
+|--------|-----|-----|--------|
+| `discovery-engine` (Wave 7A) | v1 | v2 | Critical (PROMPT-BIAS-AUDIT.md #6). Stripped the 10 named hypothesis category list (`channel_role_distortion`, `vendor_referral_unobserved`, etc.) and the worked example narrating "Knot LOOKS like acquisition but is ACTUALLY validation". Replaced with neutral "what would a smart analyst notice that the operator wouldn't think to ask about?" framing. Direction emerges from the data, not from the prompt. |
+| `channel-role-classifier` (Wave 7B) | v1 | v2 | Critical (PROMPT-BIAS-AUDIT.md #4). Stripped "lean validation when same-platform signal is absent" / "burden of proof shifts" / "Knot tends to be validation" sentences. Replaced with symmetric evidence weighting: "Classify based on evidence. When evidence is ambiguous, return role:null with a refusal." Same-platform pre-inquiry presence is evidence for acquisition; other-platform pre-inquiry presence (in the absence of same-platform) is evidence for validation; absence of both is evidence of nothing — refuse. **Existing rows classified under v1 are flagged via migration 288** (`attribution_events.prompt_version_classified_under`); operator-triggered re-classification at POST `/api/admin/attribution/reclassify-v1`. |
+| `inquiry-intent-judge` (Wave 16) | — | CLAIM_TODO | Critical (PROMPT-BIAS-AUDIT.md #18). The same direction-loaded language ("Tip the scale toward broadcast when post-inquiry engagement is zero; tip toward targeted when post-inquiry engagement is present") is present in the Wave 16 prompt, but Wave 16 has not landed in master as of Wave 22 (working-tree file, untracked). Wave 22 LEAVES the Wave 16 file untouched per the merge-safety rules. A CLAIM_TODO comment in `src/lib/services/attribution-roles/reclassify-v1-sweep.ts` documents the bump + sweep wiring the reconciliation stream needs to do when Wave 16 lands. |
+| `couple-intel-derive` (Wave 5A) | v1 | v2 | Warning (PROMPT-BIAS-AUDIT.md #2). Stripped the 8 persona-label example list. Imports `PERSONA_STYLE_GUIDE`. Persona is still discovered from data; the cascade source is removed. |
+| `cohort-rollup` (Wave 5B) | v1 | v2 | Warning (PROMPT-BIAS-AUDIT.md #3). Stripped specific cohort-content examples ("couples mentioning grief who got a custom response within 4hrs", "couples with Korean-tea-ceremony interest") + specific timing-pattern examples. Replaced with shape-only placeholders. Imports `PERSONA_STYLE_GUIDE`. |
+| `venue-thesis` (Wave 5D) | v1 | v2 | Warning (PROMPT-BIAS-AUDIT.md #7). Stripped 5 archetype example labels + 2 conversion_signature worked examples. Imports `PERSONA_STYLE_GUIDE`. |
+| `alumni-cohort` (Wave 14) | v1 | v2 | Warning (PROMPT-BIAS-AUDIT.md #14). Stripped 6 archetype example labels. Imports `PERSONA_STYLE_GUIDE`. |
+| `marketing-recommendations` (Wave 6C) | v1 | v2 | Warning (PROMPT-BIAS-AUDIT.md #8). Stripped the worked Knot-to-Instagram OUTPUT example ($800/mo, $180 vs $90 CAC, Heritage-Forward narrative). Replaced with shape-only placeholders. Output schema unchanged. |
+| `marketing-digest` (Wave 6D) | v1 | v2 | Warning (PROMPT-BIAS-AUDIT.md #10). Same Knot-narrative worked example, replaced with abstract placeholders. |
+
+New file: `src/config/prompts/persona-style-guide.ts` — shape-only style
+guide imported by the four persona-producing prompts above. No specific
+examples on purpose (the previous example lists were the bug).
+
+Non-prompt changes shipped in the same wave:
+
+| Surface | Files | Reason |
+|---------|-------|--------|
+| `attribution_events.prompt_version_classified_under` | `supabase/migrations/288_attribution_prompt_version.sql` | New nullable text column tracking which prompt version the LLM judge ran under. Backfilled from existing `role_evidence.llm_judge.prompt_version` + `intent_class_signals.llm_judge.prompt_version` jsonb. Partial index on bias-suspect v1 rows. |
+| `classifyAndPersistAttributionEvent` (Wave 7B) | `src/lib/services/attribution-roles/classify.ts` | Stamps `prompt_version_classified_under` when the LLM judge fires. |
+| `classifyAndPersistInquiryIntent` (Wave 16) | `src/lib/services/attribution-roles/intent-classifier.ts` | Stamps `prompt_version_classified_under` when the intent judge fires, only if the column is currently null (don't overwrite the role-judge stamp). |
+| `reclassifyV1AttributionsSweep` | `src/lib/services/attribution-roles/reclassify-v1-sweep.ts` | Operator-triggered sweep that re-runs the channel-role + intent classifiers on v1-classified rows. Reports v1 vs v2 verdict shift per row + per-distribution. NOT registered as a cron — operator-only. |
+| `POST /api/admin/attribution/reclassify-v1` | `src/app/api/admin/attribution/reclassify-v1/route.ts` | Operator-facing endpoint. Standard platform-auth + CRON_SECRET path (the latter reserved for explicit ops scripts; not wired into vercel.json crons). Body: `{ limit?, dryRun? }`. |
+
+Re-test on Wave 22 (operator audit):
+After patching channel-role-classifier v1 → v2, re-classify the most
+recent 20 Rixey theknot attribution_events that were classified under
+v1 and compare the verdict distribution. The Wave 21 audit cited "18-
+19% reclassify as validation under v1" as the Rixey number; the v2
+sample lets the operator confirm whether the bias was load-bearing or
+not. Reported on the operator UI via `/api/admin/attribution/reclassify-v1`.
+The number will be reported back in memory/bloom-may10-wave4-8-shipped.md
+once the operator triggers the sweep against live data.
+
+## 2026-05-11 (Wave 19 — knowledge-gap remediation: capture-once persist-forever)
+
+Wave 19 closes the loop on Sage's hedges. The existing knowledge_gaps
+table recorded WHEN Sage encountered a question it couldn't answer,
+but had no structured path back into the brain — captured resolutions
+sat in a sibling KB row with no guarantee the next draft would read
+them. Wave 19 introduces:
+
+- **knowledge_captures** (mig 286) — operator-authored answers stored
+  canonically per venue, tagged for relevance scoring, optionally
+  time-bounded via `applies_until`. Operator authority: confidence
+  defaults to 100 because the operator IS the source of truth.
+- **knowledge-gap-detector prompt** (Haiku) — post-draft pass that
+  identifies the implicit questions Sage hedged on. Cost ~$0.003 per
+  draft check. Each detected hedge becomes a `knowledge_gaps` row.
+- **Fold-in into client-brain** — before prompt assembly, the brain
+  loads active in-window captures for the venue, scores by tag overlap
+  with the inbound message, and surfaces them as `## VENUE KNOWLEDGE
+  (operator-authored — authoritative; use these before hedging)`.
+
+| Module | Old | New | Reason |
+|--------|-----|-----|--------|
+| client-brain (`generateClientDraft` + `generateOnboardingEmail`) | v1.3 | v1.4 | Folds operator-authored knowledge_captures into the system prompt as `## VENUE KNOWLEDGE` (capture-once persist-forever). Tag-overlap scoring against inferred context tags from the inbound, falls back to recency. Post-draft fire-and-forget hook triggers the knowledge-gap-detector to extract any hedges into knowledge_gaps for the coordinator. |
+| knowledge-gap-detector (new) | — | v1 | Haiku-tier detector that reads (inbound + draft) and lists the implicit questions Sage hedged on. Output: JSON `{ gaps: [{question, category, hedge_excerpt}], reasoning }`. Bounded category schema (pricing / availability / logistics / policy / vendor / ceremony / catering / inclusions / other). |
+
+Doctrine: every entry in `knowledge_captures` is the operator's
+authoritative answer. The LLM detector NEVER answers gaps — it only
+spots hedges so the operator can answer once and Sage stops hedging
+forever. Per bloom-constitution.md operator-authority rule and
+memory/feedback_deep_fix_vs_bandaid.md Pattern 8 (detect-without-fix
+is operator burden).
+
+Non-prompt changes shipped in the same wave:
+- migration 286 augments `knowledge_gaps` with `captured_at`,
+  `captured_id`, `dismissed_at`, `dismissed_reason` (additive only —
+  existing writers unaffected).
+- new service barrel `src/lib/services/knowledge-gaps/` with
+  `detectKnowledgeGapsFromDraft`, `captureKnowledge`,
+  `dismissKnowledgeGap`, `buildVenueKnowledgeBlock`.
+- new admin endpoints under `/api/admin/knowledge-gaps/` (capture /
+  list / detect / [id]/dismiss / captures / captures/[id]).
+- `/agent/knowledge-gaps` page rewritten: three tabs (Open / Captured
+  / Knowledge library / Dismissed) + bulk-import paste-FAQ flow.
+- TODO cron `knowledge_gap_sweep` (not yet registered per Wave 19
+  merge-safety; deferred to the cron reconciliation stream).
+
 ## Versioning rule
 
 `<module-name>.prompt.v<MAJOR>.<MINOR>`

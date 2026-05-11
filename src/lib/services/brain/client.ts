@@ -35,8 +35,15 @@ import { selectPhrase } from '@/lib/ai/phrase-selector'
  *  PROFILE block carrying emotional_truths (sensitive items voice-
  *  shaping only — verbatim evidence_quote NEVER echoed in the draft),
  *  occupations, residence, family_dynamics, vendor_preferences, and
- *  decision_dynamics so Sage drafts feel known. */
-export const BRAIN_PROMPT_VERSION = 'client-brain.prompt.v1.3'
+ *  decision_dynamics so Sage drafts feel known.
+ *  v1.4 (2026-05-11, Wave 19): client-brain folds operator-authored
+ *  knowledge_captures into the system prompt as a "## VENUE KNOWLEDGE"
+ *  block. Captures are authoritative (operator authority — never
+ *  overridden by LLM). Tag-overlap scoring against an inferred
+ *  context-tag set, fall back to recency. Post-draft, fire-and-forget
+ *  detect-from-draft pass extracts any hedges into knowledge_gaps so
+ *  the operator can answer once and persist forever. */
+export const BRAIN_PROMPT_VERSION = 'client-brain.prompt.v1.4'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
 import { CLIENT_RULES, getClientTaskPrompt } from '@/config/prompts/task-prompts-client'
@@ -49,6 +56,12 @@ import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-
 import { getStoredCoupleIdentityProfile } from '@/lib/services/identity/reconstruct'
 import { buildCoupleProfileBlock } from '@/lib/services/identity/profile-prompt-block'
 import { logEvent } from '@/lib/observability/logger'
+// Wave 19 knowledge-capture fold-in
+import {
+  buildVenueKnowledgeBlock,
+  inferContextTags,
+  detectKnowledgeGapsFromDraft,
+} from '@/lib/services/knowledge-gaps'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -519,9 +532,24 @@ export async function generateClientDraft(
     // block draft generation.
   }
 
-  // Assemble the full system prompt (Layer 1 + Client Rules + Layer 2 + Layer 3 + couple profile + learning)
+  // Wave 19 knowledge-capture fold-in: load operator-authored captures
+  // for the venue, scored by tag-overlap with the inbound message.
+  // Operator authority — these answers are authoritative; Sage uses
+  // them before hedging. Best-effort: any failure leaves the block
+  // empty and the brain drafts from the existing context.
+  let knowledgeBlock = ''
+  try {
+    const tagText = `${message.subject ?? ''} ${(message.body ?? '').slice(0, 600)}`
+    const contextTags = inferContextTags(tagText)
+    const fold = await buildVenueKnowledgeBlock({ venueId, contextTags })
+    if (fold.block) knowledgeBlock = `\n\n${fold.block}`
+  } catch {
+    // Fold-in is enrichment, not a gate.
+  }
+
+  // Assemble the full system prompt (Layer 1 + Client Rules + Layer 2 + Layer 3 + couple profile + venue knowledge + learning)
   const profileSection = coupleProfileBlock ? `\n\n${coupleProfileBlock}` : ''
-  const systemPrompt = `${UNIVERSAL_RULES}\n\n${CLIENT_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${profileSection}${learningBlock}`
+  const systemPrompt = `${UNIVERSAL_RULES}\n\n${CLIENT_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${profileSection}${knowledgeBlock}${learningBlock}`
 
   const result = await callAI({
     systemPrompt,
@@ -560,6 +588,24 @@ export async function generateClientDraft(
       })
     }
   }
+
+  // Wave 19 knowledge-capture fold-in: fire-and-forget post-draft pass.
+  // Runs a Haiku detector over the draft + inbound; any hedges become
+  // knowledge_gaps rows so the operator can answer once and persist
+  // forever. Never blocks the draft response.
+  const aiName = (personalityData.config as { ai_name?: string | null }).ai_name ?? 'Sage'
+  detectKnowledgeGapsFromDraft({
+    venueId,
+    weddingId,
+    aiName,
+    inboundSubject: message.subject ?? null,
+    inboundBody: message.body ?? '',
+    draftBody: result.text,
+    correlationId,
+  }).catch(() => {
+    // Detector errors are swallowed inside the service; this catch is
+    // belt-and-suspenders in case the promise itself rejects.
+  })
 
   // Confidence for client responses is generally high (we know who they are)
   let confidence = 80
