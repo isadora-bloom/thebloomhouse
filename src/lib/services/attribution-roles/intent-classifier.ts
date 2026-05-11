@@ -86,7 +86,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI } from '@/lib/ai/client'
-import { detectKnotTemplateSignal } from './knot-template-detector'
+import {
+  detectListingBroadcast,
+  inferPlatformFromInteraction,
+  type ListingPlatform,
+} from './listing-platform-detector'
 import {
   buildInquiryIntentSystemPrompt,
   buildInquiryIntentUserPrompt,
@@ -100,17 +104,50 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Platforms whose inquiries we classify on the intent dimension.
- *  Only broadcast-capable platforms (the "Inquire to similar venues"
- *  pattern is specific to Knot + WeddingWire today). Other platforms
- *  default to 'unknown' which is the inert state — they neither claim
- *  broadcast nor targeted. */
+ *
+ *  Wave 23 expanded this set beyond Knot+WW to every listing platform
+ *  with a "submit inquiry to similar venues" feature: HCTG, Brides.com,
+ *  Zola Wedding, Junebug Weddings, Carats & Cake, Style Me Pretty. The
+ *  detector loads patterns per-platform via the
+ *  listing_platform_patterns table (mig 289) — Knot patterns NEVER
+ *  evaluate against a non-Knot inquiry. Other (non-listing) platforms
+ *  default to 'unknown' which is the inert state.
+ *
+ *  This set is the GATE — a permissive recogniser of any spelling we
+ *  might see in attribution_events.source_platform. The canonicalisation
+ *  to ListingPlatform happens inside inferPlatformFromInteraction. */
 const BROADCAST_CAPABLE_PLATFORMS = new Set([
+  // Knot family
   'the_knot',
   'theknot',
   'theknot.com',
+  // WeddingWire family
   'weddingwire',
   'wedding_wire',
   'weddingwire.com',
+  // HereComesTheGuide
+  'hctg',
+  'herecomestheguide',
+  'herecomestheguide.com',
+  // Brides.com
+  'brides',
+  'brides_com',
+  'brides.com',
+  // Zola Wedding
+  'zola',
+  'zola.com',
+  // Junebug Weddings
+  'junebug',
+  'junebug_weddings',
+  'junebugweddings.com',
+  // Carats & Cake
+  'carats_cake',
+  'caratsandcake',
+  'caratsandcake.com',
+  // Style Me Pretty
+  'style_me_pretty',
+  'stylemepretty',
+  'stylemepretty.com',
 ])
 
 /** Window for post-inquiry engagement signal counting. */
@@ -137,6 +174,12 @@ export interface IntentSignals {
   postInquiryTourCount: number
   timingClusterDetected: boolean | null
   timingClusterVenues: string[]
+  /** Wave 23. Canonical platform the detector ran against — either
+   *  derived from source_platform or inferred from the inquiry's
+   *  from_email domain. null on early-exit paths that skipped the
+   *  detector (no_wedding_link / no_inquiry_interaction /
+   *  gate_skipped_non_broadcast_platform). */
+  platform: ListingPlatform | null
   forensic_path:
     | 'gate_skipped_non_broadcast_platform'
     | 'no_wedding_link'
@@ -516,12 +559,21 @@ export async function classifyInquiryIntent(
     return buildSkipResult('gate_skipped_non_broadcast_platform', 'attribution_event reverted')
   }
 
-  // Gate 1 — broadcast-capable platform.
-  if (!options.forceNonBroadcastPlatforms && !isBroadcastPlatform(event.source_platform)) {
+  // Gate 1 — broadcast-capable platform. Wave 23: when source_platform
+  // is missing or non-canonical, we defer the platform decision until
+  // after we've loaded the inquiry interaction so we can fall back to
+  // inferring from from_email (e.g. attribution_events row imported
+  // from a legacy table with NULL source_platform but the underlying
+  // inbound is clearly from herecomestheguide.com).
+  const sourcePlatformRecognised = isBroadcastPlatform(event.source_platform)
+  if (!options.forceNonBroadcastPlatforms && !sourcePlatformRecognised && event.source_platform) {
+    // Explicit non-listing platform (web_form, calendly, etc.) — skip
+    // immediately. Only the missing/null case is allowed through to
+    // domain-inference below.
     return {
       intentClass: 'unknown',
       confidence_0_100: 100,
-      reasoning: `source_platform '${event.source_platform ?? '(none)'}' is not broadcast-capable; intent dimension does not apply`,
+      reasoning: `source_platform '${event.source_platform}' is not broadcast-capable; intent dimension does not apply`,
       signals: emptySignals('gate_skipped_non_broadcast_platform'),
       cost_cents: 0,
       prompt_version: null,
@@ -559,16 +611,51 @@ export async function classifyInquiryIntent(
     }
   }
 
+  // Wave 23 — resolve canonical platform AFTER loading the inquiry so
+  // we can fall back to from_email domain inference when source_platform
+  // is missing or generic. Order: explicit source_platform → from_email
+  // domain → 'unknown'. When unknown AND not forced, skip; when forced,
+  // fall back to 'other' so coordinator-curated platform='other'
+  // patterns can still fire.
+  const inferred = inferPlatformFromInteraction(
+    { from_email: inquiryInteraction.from_email },
+    event.source_platform,
+  )
+  let platform: ListingPlatform
+  if (inferred === 'unknown') {
+    if (options.forceNonBroadcastPlatforms) {
+      platform = 'other'
+    } else {
+      return {
+        intentClass: 'unknown',
+        confidence_0_100: 100,
+        reasoning:
+          `source_platform '${event.source_platform ?? '(none)'}' is not a recognised listing platform ` +
+          `and from_email '${inquiryInteraction.from_email ?? '(none)'}' did not infer one — intent dimension does not apply`,
+        signals: emptySignals('gate_skipped_non_broadcast_platform'),
+        cost_cents: 0,
+        prompt_version: null,
+      }
+    }
+  } else {
+    platform = inferred
+  }
+
   // Load venue for context (name → personalisation deficit).
   const venue = await loadVenue(sb, event.venue_id)
 
-  // Template detection
-  const detection = await detectKnotTemplateSignal({
+  // Template detection — Wave 23 dispatches to the platform-agnostic
+  // detector with the inferred platform. Knot patterns evaluate only
+  // against Knot inquiries; HCTG patterns evaluate only against HCTG
+  // inquiries; etc.
+  const detection = await detectListingBroadcast({
     venueId: event.venue_id,
+    platform,
     interaction: {
       body: inquiryInteraction.full_body,
       body_preview: inquiryInteraction.body_preview,
       subject: inquiryInteraction.subject,
+      from_email: inquiryInteraction.from_email,
       venueName: venue?.name ?? null,
     },
     supabase: sb,
@@ -606,6 +693,7 @@ export async function classifyInquiryIntent(
     postInquiryTourCount: engagement.tourCount,
     timingClusterDetected: cluster.clusterDetected,
     timingClusterVenues: cluster.venueIds,
+    platform,
     forensic_path: 'low_template_targeted',
     llmJudgeFired: false,
     llm_judge: null,
@@ -622,7 +710,7 @@ export async function classifyInquiryIntent(
         confidence_0_100: detection.templateScore >= 80 ? 92 : 80,
         reasoning:
           `templateScore=${detection.templateScore} (>= ${BROADCAST_HARD_THRESHOLD}) ` +
-          `with no post-inquiry engagement in 14 days — Knot/WW broadcast distribution, couple did not actively choose.`,
+          `with no post-inquiry engagement in 14 days — ${platform} broadcast distribution, couple did not actively choose.`,
         signals: { ...baseSignals, forensic_path: 'broadcast_no_engagement' },
         cost_cents: 0,
         prompt_version: null,
@@ -852,6 +940,10 @@ function emptySignals(path: IntentSignals['forensic_path']): IntentSignals {
     postInquiryTourCount: 0,
     timingClusterDetected: null,
     timingClusterVenues: [],
+    // Wave 23. Early-exit paths skipped the detector and have no
+    // platform attribution — left null so consumers can distinguish
+    // these from successful detector runs where platform is always set.
+    platform: null,
     forensic_path: path,
     llmJudgeFired: false,
     llm_judge: null,
