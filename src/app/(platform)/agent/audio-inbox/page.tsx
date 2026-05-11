@@ -293,23 +293,88 @@ export default function AudioInboxPage() {
   const toggleExpanded = (key: string): void =>
     setExpanded((prev) => ({ ...prev, [key]: !prev[key] }))
 
+  // Re-match action. Operator-triggered counterpart to the hourly
+  // sms_rematch cron — runs the LLM name + event-context matcher
+  // against every unlinked SMS row on this venue and updates rows in
+  // place. Refreshes the page data on completion.
+  const [rematching, setRematching] = useState(false)
+  const [rematchSummary, setRematchSummary] = useState<{
+    scanned: number
+    matched: number
+    updated: number
+  } | null>(null)
+  async function handleRematch() {
+    if (!venueId) return
+    setRematching(true)
+    setRematchSummary(null)
+    try {
+      const res = await fetch('/api/admin/sms/rematch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const data = (await res.json()) as {
+        ok: boolean
+        scanned?: number
+        matched?: number
+        updated?: number
+        error?: string
+      }
+      if (!res.ok || !data.ok) {
+        setError(data.error ?? 'Re-match failed.')
+        return
+      }
+      setRematchSummary({
+        scanned: data.scanned ?? 0,
+        matched: data.matched ?? 0,
+        updated: data.updated ?? 0,
+      })
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Network error.')
+    } finally {
+      setRematching(false)
+    }
+  }
+
+  // Unmatched-thread count drives the prominence of the Re-match button.
+  const unmatchedThreadCount = voiceThreads.filter((t) => !t.weddingId).length
+
   const showOrphans = activeTab === 'all' || activeTab === 'omi'
   const showVoiceList = activeTab === 'all' || activeTab === 'sms' || activeTab === 'zoom'
 
   return (
     <div className="max-w-5xl space-y-6">
-      <header className="flex items-center gap-3">
-        <Inbox className="w-6 h-6 text-sage-600" />
-        <div>
-          <h1 className="text-2xl font-serif text-sage-900">Audio Inbox</h1>
-          <p className="text-sm text-sage-600 mt-1">
-            Voice + SMS signals from your audio-capture providers. Omi
-            transcripts that couldn&apos;t be auto-matched to a tour need
-            attach or dismiss; SMS and Zoom transcripts land here for
-            triage so {aiName} can learn from them.
-          </p>
+      <header className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          <Inbox className="w-6 h-6 text-sage-600 flex-shrink-0" />
+          <div>
+            <h1 className="text-2xl font-serif text-sage-900">Audio Inbox</h1>
+            <p className="text-sm text-sage-600 mt-1">
+              Voice + SMS signals from your audio-capture providers. Omi
+              transcripts that couldn&apos;t be auto-matched to a tour need
+              attach or dismiss; SMS and Zoom transcripts land here for
+              triage so {aiName} can learn from them.
+            </p>
+          </div>
         </div>
+        {unmatchedThreadCount > 0 && (
+          <button
+            type="button"
+            onClick={handleRematch}
+            disabled={rematching}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-sage-300 bg-warm-white text-sage-800 hover:bg-sage-50 transition-colors text-sm disabled:opacity-50"
+          >
+            {rematching ? 'Matching…' : `Re-match ${unmatchedThreadCount} unmatched`}
+          </button>
+        )}
       </header>
+      {rematchSummary && (
+        <div className="rounded-md bg-sage-50 border border-sage-200 px-4 py-2 text-sm text-sage-800">
+          Scanned {rematchSummary.scanned} · matched {rematchSummary.matched} · linked{' '}
+          {rematchSummary.updated}.
+        </div>
+      )}
 
       {/* Tab strip — Wave 29 */}
       <div className="flex flex-wrap gap-1 border border-border rounded-lg p-1 bg-warm-white w-fit">

@@ -101,6 +101,7 @@ const VALID_JOBS = [
   'backtrace_scan',
   'zoom_poll',
   'openphone_poll',
+  'sms_rematch',
   'phase_b_sweep',
   // T5-Rixey-CCC (2026-05-02). Candidate-resolver backtrack — when
   // weddings become known-email, retroactively scan unresolved storefront
@@ -528,6 +529,19 @@ async function runJob(job: JobName): Promise<unknown> {
       // interactions. The service already iterates active connections
       // and catches per-venue failures so we just call it.
       return syncOpenPhoneAllVenues()
+
+    case 'sms_rematch':
+      // 2026-05-11: SMS name + event-context matcher (sms-name-match.ts)
+      // re-runs over unlinked SMS interactions every venue. Catches the
+      // common case where a couple inquired by email then later texts
+      // from a new phone — the body says "Hi, this is Sarah" or
+      // references their tour time, and we link the SMS to the existing
+      // wedding. Idempotent: once linked, the row is skipped on every
+      // subsequent sweep. Hourly cadence is plenty.
+      const { rematchSmsAllVenues } = await import(
+        '@/lib/services/ingestion/sms-rematch-sweep'
+      )
+      return rematchSmsAllVenues()
 
     case 'backtrace_scan':
       // Daily re-scan of source-backtrace candidates per venue. The
