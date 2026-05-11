@@ -273,21 +273,35 @@ async function findPersonIdByPhone(
   if (!normalized) return null
 
   const supabase = createServiceClient()
-  // Pull all phone contacts joined to people in this venue and normalize
-  // server-side. This is small (a venue has dozens to low thousands of
-  // people max) so we don't need a SQL function for it.
-  const { data, error } = await supabase
+
+  // Tier 1: contacts table (the canonical multi-channel address store).
+  const { data: contactRows } = await supabase
     .from('contacts')
     .select('value, person_id, people!inner(id, venue_id)')
     .eq('type', 'phone')
     .eq('people.venue_id', venueId)
-  if (error || !data) return null
 
-  for (const row of data as Array<{ value: string; person_id: string }>) {
-    if (normalizePhone(row.value) === normalized) {
-      return row.person_id
-    }
+  for (const row of (contactRows ?? []) as Array<{ value: string; person_id: string }>) {
+    if (normalizePhone(row.value) === normalized) return row.person_id
   }
+
+  // Tier 2: people.phone (denormalised cache). The Calendly webhook +
+  // CRM importers write phone here directly via resolveIdentity; if the
+  // contacts row didn't get written for some reason, this catches the
+  // match anyway. Indirectly covers the "tours have a phone" case —
+  // tour booking through Calendly writes the phone to people.phone for
+  // the matched/created person, so any subsequent SMS from that number
+  // resolves here.
+  const { data: peopleRows } = await supabase
+    .from('people')
+    .select('id, phone')
+    .eq('venue_id', venueId)
+    .not('phone', 'is', null)
+
+  for (const row of (peopleRows ?? []) as Array<{ id: string; phone: string | null }>) {
+    if (row.phone && normalizePhone(row.phone) === normalized) return row.id
+  }
+
   return null
 }
 
@@ -332,8 +346,38 @@ function pickOccurredAt(raw: Record<string, unknown>): string | null {
 }
 
 function pickDirection(raw: Record<string, unknown>): 'inbound' | 'outbound' {
-  const d = (raw.direction as string) || (raw.type as string) || 'inbound'
-  return d === 'outbound' || d === 'sent' ? 'outbound' : 'inbound'
+  // Quo (formerly OpenPhone) returns direction as 'incoming' | 'outgoing'.
+  // Legacy callers used 'inbound' | 'outbound' | 'sent'. Accept all
+  // variants so a future API rename doesn't silently flip every message
+  // to the wrong direction (which is exactly what bit Rixey on 2026-05-11:
+  // every outbound SMS got tagged inbound, the venue's own phone became
+  // the externalNumber, and the resolver minted a synthetic wedding for
+  // "couple with phone = venue line").
+  const d = ((raw.direction as string) || (raw.type as string) || 'inbound').toLowerCase()
+  if (d === 'outbound' || d === 'outgoing' || d === 'sent') return 'outbound'
+  return 'inbound'
+}
+
+/**
+ * Normalise a Quo phone-number field. The API has shipped both plain
+ * strings ("+15551234567") and object-wrapped ({ phoneNumber:
+ * "+15551234567" }) shapes depending on endpoint + workspace tier.
+ * Returns the bare E.164 string or null.
+ */
+function pickPhone(raw: unknown): string | null {
+  if (!raw) return null
+  if (typeof raw === 'string') return raw.trim() || null
+  if (typeof raw === 'object') {
+    const obj = raw as { phoneNumber?: unknown; number?: unknown }
+    const candidate = (obj.phoneNumber as string) ?? (obj.number as string) ?? null
+    return candidate && typeof candidate === 'string' ? candidate.trim() || null : null
+  }
+  return null
+}
+
+function pickFirstPhone(raw: unknown): string | null {
+  if (Array.isArray(raw) && raw.length > 0) return pickPhone(raw[0])
+  return pickPhone(raw)
 }
 
 function pickBody(raw: Record<string, unknown>, fallback?: string): string {
@@ -359,10 +403,8 @@ function ingestRowsFromMessage(raw: Record<string, unknown>): IngestRow | null {
     channel: 'sms',
     openphone_message_id: id,
     direction: pickDirection(raw),
-    from_number: (raw.from as string | null) ?? null,
-    to_number: Array.isArray(raw.to)
-      ? ((raw.to as string[])[0] ?? null)
-      : ((raw.to as string | null) ?? null),
+    from_number: pickPhone(raw.from),
+    to_number: pickFirstPhone(raw.to),
     body_text: pickBody(raw).slice(0, 5000),
     occurred_at: pickOccurredAt(raw),
   }
@@ -378,8 +420,8 @@ function ingestRowsFromVoicemail(raw: Record<string, unknown>): IngestRow | null
     channel: 'voicemail',
     openphone_message_id: `vm_${id}`,
     direction: 'inbound',
-    from_number: (raw.from as string | null) ?? null,
-    to_number: (raw.to as string | null) ?? null,
+    from_number: pickPhone(raw.from),
+    to_number: pickFirstPhone(raw.to),
     body_text: transcript ? `[Voicemail] ${transcript}`.slice(0, 5000) : '[Voicemail]',
     occurred_at: pickOccurredAt(raw),
   }
@@ -411,10 +453,8 @@ function ingestRowsFromCallSummary(raw: Record<string, unknown>): IngestRow | nu
     channel: 'call_summary',
     openphone_message_id: `call_${callId}`,
     direction: pickDirection(raw),
-    from_number: (raw.from as string | null) ?? null,
-    to_number: Array.isArray(raw.to)
-      ? ((raw.to as string[])[0] ?? null)
-      : ((raw.to as string | null) ?? null),
+    from_number: pickPhone(raw.from),
+    to_number: pickFirstPhone(raw.to),
     body_text: bodyText,
     occurred_at: pickOccurredAt(raw),
   }
@@ -744,25 +784,25 @@ async function persistRow(
   }
   processedIds.add(row.openphone_message_id)
 
-  // 2) Identity link — three-tier match chain for SMS / voicemail / call:
+  // 2) Identity link. The external party is `from_number` on inbound,
+  // `to_number` on outbound. Three-tier match chain:
   //   (a) Phone match against `contacts(type='phone')` — most reliable.
-  //   (b) LLM name extraction from the body, matched against existing
-  //       people.first_name (last 6 months, this venue). Catches the
-  //       common case: a couple inquires by email then texts from a new
-  //       phone with "Hi, this is Sarah".
+  //   (b) LLM name + event-context extraction from the body, matched
+  //       against existing people. Runs on BOTH directions: inbound
+  //       carries self-identification ("Hi, this is Sarah"); outbound
+  //       carries addressee identification ("Hi Sarah, your tour is..."),
+  //       and the prompt extracts whichever name the body surfaces.
   //   (c) Identity resolver create-fresh — phone-only signal mints a
-  //       new person + wedding. Last resort when no name surfaced and
-  //       no phone match existed.
+  //       new person + wedding. INBOUND ONLY: an unknown couple texting
+  //       the venue is a new prospect. Outbound to an unknown number is
+  //       just as likely a vendor, friend, or wrong number; we leave
+  //       the interaction unmatched and let the operator decide.
   const externalNumber =
     row.direction === 'inbound' ? row.from_number : row.to_number
   let personId = await findPersonIdByPhone(venueId, externalNumber)
   let weddingId: string | null = null
 
-  // Gate (b): only meaningful for inbound SMS — outbound rows are the
-  // venue texting the couple, and the body won't carry the couple's
-  // self-identification. SMS body shape varies enough that we run the
-  // LLM only when phone match misses.
-  if (!personId && row.direction === 'inbound' && row.channel === 'sms' && row.body_text) {
+  if (!personId && row.channel === 'sms' && row.body_text) {
     try {
       const { tryMatchSmsByName } = await import('./sms-name-match')
       const nameMatch = await tryMatchSmsByName({
@@ -775,7 +815,7 @@ async function persistRow(
         personId = nameMatch.personId
         weddingId = nameMatch.weddingId
         console.log(
-          `[openphone] linked SMS to existing person by name: ${nameMatch.matchedName} (conf ${nameMatch.confidence})`,
+          `[openphone] linked ${row.direction} SMS to existing person by name: ${nameMatch.matchedName} (conf ${nameMatch.confidence})`,
         )
       }
     } catch (err) {
@@ -783,7 +823,11 @@ async function persistRow(
     }
   }
 
-  if (!personId && externalNumber) {
+  // Resolver create-fresh: INBOUND only. Outbound to an unknown number
+  // is more likely a vendor/friend/wrong-number than a fresh prospect;
+  // creating a wedding for them pollutes the lead list. Surface as
+  // unmatched and let the operator attach if it really is a couple.
+  if (!personId && externalNumber && row.direction === 'inbound') {
     try {
       const { resolveIdentity } = await import('@/lib/services/identity/resolver')
       const resolved = await resolveIdentity(
