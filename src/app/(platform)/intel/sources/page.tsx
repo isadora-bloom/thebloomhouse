@@ -1774,6 +1774,16 @@ export default function SourceAttributionPage() {
         <p className="text-sage-600">
           Compare lead sources head-to-head — which channels bring the most inquiries, the highest quality leads, and the best conversion rates. Allocate your marketing budget based on real data.
         </p>
+        <p className="text-xs text-sage-700 mt-2">
+          Looking for forensic Discovery / Validation / Broadcast splits with Real CAC and a Wedding MBA presentation export?{' '}
+          <a
+            href="/intel/channels"
+            className="underline underline-offset-2 hover:text-sage-900 font-medium"
+          >
+            Open the Channel Intelligence Hub
+          </a>{' '}
+          (Wave 25 supersedes this UX).
+        </p>
         {scope.level === 'company' && (
           <p className="text-xs text-sage-500 mt-2">
             Showing across all venues — {scope.companyName}

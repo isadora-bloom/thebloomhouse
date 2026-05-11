@@ -238,6 +238,17 @@ export function MarketingRoiDashboard() {
             persona overlay is a lie. Cells with fewer than 10 leads are
             grayed out.
           </p>
+          <p className="mt-2 text-xs text-stone-500">
+            Looking for forensic Discovery / Validation / Broadcast splits or the
+            Wedding MBA presentation export? See the{' '}
+            <a
+              href="/intel/channels"
+              className="text-sage-700 hover:text-sage-900 underline underline-offset-2"
+            >
+              Channel Intelligence Hub
+            </a>{' '}
+            (Wave 25).
+          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
