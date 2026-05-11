@@ -64,6 +64,7 @@ import { NameEvidencePanel } from '@/components/intel/NameEvidencePanel'
 import { RelationshipsPanel } from '@/components/intel/RelationshipsPanel'
 import { ReconstructedIdentityPanel } from '@/components/intel/ReconstructedIdentityPanel'
 import { CoupleIntelPanel } from '@/components/intel/CoupleIntelPanel'
+import { TourPrepBriefPanel } from '@/components/intel/TourPrepBriefPanel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1026,6 +1027,11 @@ export default function ClientProfilePage() {
           Mounted ABOVE ReconstructedIdentityPanel because intel is the
           ACTION layer (what to do); profile is the EVIDENCE layer (who
           they are). Coordinators read action first, evidence second. */}
+      {/* Wave 13: tour-prep brief surfaces above the intel panel when an
+          upcoming tour exists on this wedding. Hides itself entirely when
+          there's no tour scheduled, so the page stays clean for couples
+          past their tour or who haven't booked one. */}
+      <TourPrepBriefPanel weddingId={weddingId} />
       <CoupleIntelPanel weddingId={weddingId} />
 
       {/* Wave 4 Phase 3: forensic identity record (couple_identity_profile).

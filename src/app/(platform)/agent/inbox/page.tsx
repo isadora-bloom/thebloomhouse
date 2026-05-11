@@ -905,15 +905,35 @@ function ThreadView({
             {interaction.subject || '(No subject)'}
           </h2>
           {interaction.client_code && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded bg-sage-50 border border-sage-200 text-xs font-mono font-semibold text-sage-600">
-              {formatBloomNumber(interaction.client_code, interaction.code_extension ?? null)}
-            </span>
+            interaction.wedding_id ? (
+              <Link
+                href={`/intel/clients/${interaction.wedding_id}`}
+                className="inline-flex items-center px-2 py-0.5 rounded bg-sage-50 border border-sage-200 text-xs font-mono font-semibold text-sage-600 hover:bg-sage-100 hover:text-sage-800 hover:border-sage-400 transition-colors"
+                title="Open client profile"
+              >
+                {formatBloomNumber(interaction.client_code, interaction.code_extension ?? null)}
+              </Link>
+            ) : (
+              <span className="inline-flex items-center px-2 py-0.5 rounded bg-sage-50 border border-sage-200 text-xs font-mono font-semibold text-sage-600">
+                {formatBloomNumber(interaction.client_code, interaction.code_extension ?? null)}
+              </span>
+            )
           )}
         </div>
         <div className="flex items-center gap-3 mt-1 text-sm text-sage-500">
           <span className="flex items-center gap-1">
             <Mail className="w-3.5 h-3.5" />
-            {interaction.person_name || interaction.person_email || 'No contact on record'}
+            {interaction.wedding_id && (interaction.person_name || interaction.person_email) ? (
+              <Link
+                href={`/intel/clients/${interaction.wedding_id}`}
+                className="text-sage-600 hover:text-sage-900 hover:underline transition-colors"
+                title="Open client profile"
+              >
+                {interaction.person_name || interaction.person_email}
+              </Link>
+            ) : (
+              interaction.person_name || interaction.person_email || 'No contact on record'
+            )}
           </span>
           <span className="flex items-center gap-1">
             <Clock className="w-3.5 h-3.5" />

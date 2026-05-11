@@ -324,6 +324,16 @@ const VALID_JOBS = [
   // 8 signal sources per venue + auto-derives missing location fields
   // from address. Daily.
   'external_signals_health_sweep',
+  // Wave 13 (2026-05-11). TODO(reconciliation-stream): register
+  // 'tour_prep_brief_sweep' + 'review_solicit_sweep' here once the
+  // reconciliation stream wires them. Handlers live at
+  // src/lib/services/tour/prep-brief-sweep.ts and
+  // src/lib/services/reviews/solicit-sweep.ts respectively. Wave 13
+  // does NOT add the entries to keep vercel.json under the 40-cron
+  // Pro limit until the reconciliation stream batches related
+  // additions together. Stage-trigger fan-out (tour_scheduled,
+  // tour_completed, post_event in stage-triggers.ts) handles the
+  // real-time path; the sweeps are belt-and-suspenders + backfill.
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]

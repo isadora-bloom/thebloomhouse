@@ -51,6 +51,13 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { enqueueIdentityReconstruction } from '@/lib/services/identity/enqueue-reconstruction'
+// Wave 13 trigger wiring (2026-05-11). The fan-out targets for
+// tour_scheduled / tour_completed / post_event live in Wave 13 service
+// modules. Stage-triggers reads enqueue helpers from there; the
+// migration 281 queues are the substrate.
+import { enqueueTourPrepBrief } from '@/lib/services/tour/prep-brief'
+import { enqueuePostTourSage } from '@/lib/services/tour/post-tour-sage'
+import { enqueueReviewSolicit } from '@/lib/services/reviews/solicit'
 import type { LifecycleStage } from './state-machine'
 
 export interface FireStageTriggersArgs {
@@ -87,20 +94,33 @@ export async function fireStageTriggers(
           triggerSignal: 'lifecycle_tour_scheduled',
         }),
       )
-      fired.push({
-        name: 'tour_prep_brief',
-        ok: true,
-        detail: 'TODO: wired by Wave 13 (tour-prep queue)',
-      })
+      // Wave 13 trigger wiring (2026-05-11). Enqueue the tour-prep brief
+      // for the most-recent upcoming tour on this wedding. Daily sweep
+      // catches any tours the trigger misses (e.g. Calendly fires after
+      // the lifecycle transition).
+      fired.push(
+        await safeTourPrepEnqueue({
+          supabase,
+          weddingId,
+          venueId,
+          triggerSignal: 'lifecycle_tour_scheduled',
+        }),
+      )
       break
     }
 
     case 'tour_completed': {
-      fired.push({
-        name: 'post_tour_sage_followup',
-        ok: true,
-        detail: 'TODO: wired by Wave 13 (post-tour follow-up queue)',
-      })
+      // Wave 13 trigger wiring (2026-05-11). Enqueue the post-tour Sage
+      // follow-up for the most-recent completed tour. Draft lands in
+      // `drafts` table for coordinator review (NEVER auto-sent).
+      fired.push(
+        await safePostTourSageEnqueue({
+          supabase,
+          weddingId,
+          venueId,
+          triggerSignal: 'lifecycle_tour_completed',
+        }),
+      )
       break
     }
 
@@ -142,16 +162,22 @@ export async function fireStageTriggers(
     }
 
     case 'post_event': {
-      fired.push({
-        name: 'review_solicitation',
-        ok: true,
-        detail:
-          'TODO: existing post_event_feedback_check cron handles the live ' +
-          'soliciting; Wave 13 will formalize a dedicated queue. ' +
-          'TODO(wave 9): wire stage transitions from email pipeline so ' +
-          'a freshly-set post_event triggers this in real time, not just ' +
-          'via the daily sweep.',
-      })
+      // Wave 13 trigger wiring (2026-05-11). post_event_feedback_check
+      // cron continues to fire coordinator notifications at T+3d; Wave
+      // 13 adds the formal review-solicitation pipeline as a sibling.
+      // The enqueue helper carries its own 30d request-window dedupe
+      // so re-firing on subsequent transitions is safe.
+      // TODO(wave 9): wire stage transitions from email pipeline so a
+      // freshly-set post_event triggers this in real time, not just
+      // via the daily sweep.
+      fired.push(
+        await safeReviewSolicitEnqueue({
+          supabase,
+          weddingId,
+          venueId,
+          triggerSignal: 'lifecycle_post_event',
+        }),
+      )
       break
     }
 
@@ -228,6 +254,142 @@ async function safeIdentityEnqueue(
       ok: false,
       detail:
         'threw: ' + (err instanceof Error ? err.message : String(err)),
+    }
+  }
+}
+
+// Wave 13 trigger wiring (2026-05-11). Lookup-then-enqueue for tour-
+// prep brief — the stage-transition carries the wedding_id but not a
+// tour_id, so we resolve the most-recent upcoming tour here. Safe by
+// design: a missing tour returns ok:true with detail='skipped:no_tour'.
+async function safeTourPrepEnqueue(
+  args: SafeEnqueueArgs,
+): Promise<FiredTrigger> {
+  try {
+    const nowIso = new Date().toISOString()
+    const { data: tours } = await args.supabase
+      .from('tours')
+      .select('id, scheduled_at, outcome')
+      .eq('wedding_id', args.weddingId)
+      .gte('scheduled_at', nowIso)
+      .order('scheduled_at', { ascending: true })
+      .limit(1)
+    if (!tours || tours.length === 0) {
+      return {
+        name: 'tour_prep_brief',
+        ok: true,
+        detail: 'skipped: no upcoming tour found',
+      }
+    }
+    const tourId = (tours[0] as { id: string }).id
+    const result = await enqueueTourPrepBrief({
+      tourId,
+      weddingId: args.weddingId,
+      venueId: args.venueId,
+      triggerSignal: args.triggerSignal,
+      supabase: args.supabase,
+    })
+    if (result.skipped) {
+      return {
+        name: 'tour_prep_brief',
+        ok: true,
+        detail: 'skipped: ' + (result.reason ?? 'unknown'),
+      }
+    }
+    return {
+      name: 'tour_prep_brief',
+      ok: true,
+      detail: 'enqueued: ' + (result.jobId ?? ''),
+    }
+  } catch (err) {
+    return {
+      name: 'tour_prep_brief',
+      ok: false,
+      detail: 'threw: ' + (err instanceof Error ? err.message : String(err)),
+    }
+  }
+}
+
+// Wave 13 trigger wiring (2026-05-11). Resolves the most-recent
+// completed/no_show/cancelled tour and enqueues a Sage follow-up.
+async function safePostTourSageEnqueue(
+  args: SafeEnqueueArgs,
+): Promise<FiredTrigger> {
+  try {
+    const { data: tours } = await args.supabase
+      .from('tours')
+      .select('id, outcome, scheduled_at')
+      .eq('wedding_id', args.weddingId)
+      .in('outcome', ['completed', 'no_show', 'cancelled'])
+      .order('scheduled_at', { ascending: false })
+      .limit(1)
+    if (!tours || tours.length === 0) {
+      return {
+        name: 'post_tour_sage_followup',
+        ok: true,
+        detail: 'skipped: no classified past tour found',
+      }
+    }
+    const tourId = (tours[0] as { id: string }).id
+    const result = await enqueuePostTourSage({
+      tourId,
+      weddingId: args.weddingId,
+      venueId: args.venueId,
+      triggerSignal: args.triggerSignal,
+      supabase: args.supabase,
+    })
+    if (result.skipped) {
+      return {
+        name: 'post_tour_sage_followup',
+        ok: true,
+        detail: 'skipped: ' + (result.reason ?? 'unknown'),
+      }
+    }
+    return {
+      name: 'post_tour_sage_followup',
+      ok: true,
+      detail: 'enqueued: ' + (result.jobId ?? ''),
+    }
+  } catch (err) {
+    return {
+      name: 'post_tour_sage_followup',
+      ok: false,
+      detail: 'threw: ' + (err instanceof Error ? err.message : String(err)),
+    }
+  }
+}
+
+// Wave 13 trigger wiring (2026-05-11). Enqueues review solicitation
+// for a wedding that just transitioned into post_event. The enqueue
+// helper carries the 30d request-window dedupe so re-firing on
+// subsequent transitions is safe.
+async function safeReviewSolicitEnqueue(
+  args: SafeEnqueueArgs,
+): Promise<FiredTrigger> {
+  try {
+    const result = await enqueueReviewSolicit({
+      weddingId: args.weddingId,
+      venueId: args.venueId,
+      triggerSignal: args.triggerSignal,
+      supabase: args.supabase,
+    })
+    if (result.skipped) {
+      return {
+        name: 'review_solicitation',
+        ok: true,
+        detail: 'skipped: ' + (result.reason ?? 'unknown'),
+      }
+    }
+    return {
+      name: 'review_solicitation',
+      ok: true,
+      detail: 'enqueued: ' + (result.jobId ?? ''),
+    }
+  } catch (err) {
+    return {
+      name: 'review_solicitation',
+      ok: false,
+      detail: 'threw: ' + (err instanceof Error ? err.message : String(err)),
     }
   }
 }
