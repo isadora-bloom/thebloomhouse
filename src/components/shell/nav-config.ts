@@ -387,6 +387,7 @@ export const MODE_SAGE: ModeConfig = {
         { label: 'AI Personality', href: '/settings/personality', icon: Sparkles, daily: true },
         { label: 'Voice Games', href: '/settings/voice', icon: Mic },
         { label: 'Teach Voice', href: '/agent/learning', icon: GraduationCap },
+        { label: 'Recent Learnings', href: '/agent/learning/recent-edits', icon: BookOpen },
         { label: 'Always / Never Rules', href: '/agent/rules', icon: ScrollText },
         { label: 'Brain Dump Log', href: '/settings/brain-dump-log', icon: ScrollText },
       ],

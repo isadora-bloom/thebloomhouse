@@ -19,6 +19,7 @@ import {
 import { SoloPill, useBatchPartnerCounts } from '@/components/intel/solo-pill'
 import { PriorTouchesChip } from '@/components/agent/PriorTouchesChip'
 import { GmailConnectionStatus } from '@/components/agent/gmail-connection-status'
+import { HyperlinkedBody } from '@/components/agent/HyperlinkedBody'
 import { formatBloomNumber } from '@/lib/bloom-number/format'
 import {
   Mail,
@@ -1071,13 +1072,14 @@ function InlineDraftApproval({
             </span>
           )}
         </div>
-        <p
+        {/* Wave 26: hyperlink rendering so URLs are clickable in
+            preview, matching what the recipient will see. */}
+        <HyperlinkedBody
+          body={draft.draft_body}
           className={`text-xs text-sage-700 whitespace-pre-wrap leading-relaxed mb-2 ${
             expanded ? '' : 'line-clamp-4'
           }`}
-        >
-          {draft.draft_body}
-        </p>
+        />
         {draft.draft_body && draft.draft_body.length > 200 && (
           <button
             onClick={(e) => {

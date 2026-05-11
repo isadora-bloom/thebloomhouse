@@ -5,6 +5,8 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { DraftContextPanel } from '@/components/agent/DraftContextPanel'
+import { HyperlinkedBody } from '@/components/agent/HyperlinkedBody'
+import { LearningToast } from '@/components/agent/LearningToast'
 import { htmlToText } from '@/lib/utils/html-text'
 import {
   FileCheck,
@@ -17,6 +19,7 @@ import {
   X,
   AlertTriangle,
   Clock,
+  Mail,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -332,6 +335,7 @@ function DraftCard({
   onApproveAndSend,
   onEdit,
   onReject,
+  onSend,
   isProcessing,
   showVenueChip,
 }: {
@@ -340,6 +344,7 @@ function DraftCard({
   onApproveAndSend: (id: string) => void
   onEdit: (draft: Draft) => void
   onReject: (draft: Draft) => void
+  onSend: (draft: Draft) => void
   isProcessing: boolean
   showVenueChip: boolean
 }) {
@@ -347,6 +352,7 @@ function DraftCard({
   const brain = brainBadge(draft.brain_used)
   const status = statusBadge(draft.status)
   const isPending = draft.status === 'pending'
+  const isApproved = draft.status === 'approved'
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -381,11 +387,14 @@ function DraftCard({
         </div>
       )}
 
-      {/* Draft body */}
+      {/* Draft body. Wave 26: URLs / www. / bare emails render as
+          clickable <a> tags so the operator sees what the recipient
+          will see. */}
       <div className="bg-warm-white border border-border rounded-lg p-4 mb-4">
-        <p className={`text-sm text-sage-700 whitespace-pre-wrap leading-relaxed ${expanded ? '' : 'line-clamp-6'}`}>
-          {draft.draft_body}
-        </p>
+        <HyperlinkedBody
+          body={draft.draft_body}
+          className={`text-sm text-sage-700 whitespace-pre-wrap leading-relaxed ${expanded ? '' : 'line-clamp-6'}`}
+        />
         {draft.draft_body && draft.draft_body.length > 300 && (
           <button
             onClick={() => setExpanded(!expanded)}
@@ -491,6 +500,124 @@ function DraftCard({
           </button>
         </div>
       )}
+
+      {/* Wave 26: explicit Send button on Approved tab drafts. Approve
+          + send are decoupled by doctrine (Auto-FLAG-never-AUTO-EXECUTE):
+          approve writes the audit, send is a separate operator decision
+          with a confirm modal. */}
+      {isApproved && (
+        <div className="flex items-center gap-2 pt-2 border-t border-border flex-wrap">
+          <button
+            onClick={() => onSend(draft)}
+            disabled={isProcessing}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Send this approved draft via your venue's Gmail."
+          >
+            <Send className="w-4 h-4" />
+            Send now
+          </button>
+          <span className="text-xs text-sage-500 inline-flex items-center gap-1">
+            <Mail className="w-3 h-3" />
+            via your venue's Gmail
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Send Confirmation Modal (Wave 26 - explicit operator decision)
+// ---------------------------------------------------------------------------
+
+function SendConfirmModal({
+  draft,
+  onClose,
+  onConfirm,
+}: {
+  draft: Draft
+  onClose: () => void
+  onConfirm: () => Promise<void>
+}) {
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleConfirm = async () => {
+    setSending(true)
+    setError(null)
+    try {
+      await onConfirm()
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Send failed')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="absolute inset-0 bg-black/40" />
+      <div className="relative bg-surface rounded-2xl shadow-2xl w-full max-w-lg border border-border">
+        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-border">
+          <div className="flex items-center gap-2">
+            <Send className="w-5 h-5 text-emerald-500" />
+            <h2 className="font-heading text-lg font-semibold text-sage-900">
+              Send this email?
+            </h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-sage-400 hover:text-sage-600 hover:bg-sage-50 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-6 py-4 space-y-3">
+          <div className="bg-warm-white rounded-lg border border-border px-3 py-2 text-sm">
+            <p>
+              <span className="font-medium text-sage-700">To:</span>{' '}
+              <span className="text-sage-900">{draft.to_email || '(unknown recipient)'}</span>
+            </p>
+            <p>
+              <span className="font-medium text-sage-700">Subject:</span>{' '}
+              <span className="text-sage-900">{draft.subject || '(no subject)'}</span>
+            </p>
+          </div>
+          <p className="text-xs text-sage-500">
+            Send goes out from your venue's connected Gmail. This action is irreversible.
+          </p>
+          {error && (
+            <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+              {error}
+            </p>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-border flex items-center justify-end gap-2">
+          <button
+            onClick={onClose}
+            disabled={sending}
+            className="px-4 py-2 text-sm font-medium text-sage-700 border border-sage-300 rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirm}
+            disabled={sending}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50"
+          >
+            <Send className="w-4 h-4" />
+            {sending ? 'Sending...' : 'Send now'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -509,6 +636,9 @@ export default function ApprovalQueuePage() {
   const [processingId, setProcessingId] = useState<string | null>(null)
   const [editingDraft, setEditingDraft] = useState<Draft | null>(null)
   const [rejectingDraft, setRejectingDraft] = useState<Draft | null>(null)
+  // Wave 26: explicit-send modal + post-edit learning toast.
+  const [sendingDraft, setSendingDraft] = useState<Draft | null>(null)
+  const [learningToastDraftId, setLearningToastDraftId] = useState<string | null>(null)
 
   const supabase = createClient()
 
@@ -639,79 +769,95 @@ export default function ApprovalQueuePage() {
   }
 
   // ---- Approve + send immediately ----
+  // Wave 26: route through the server endpoints so the scope guard +
+  // demo block + status state machine apply on the send side. Approve
+  // still goes through the POST /api/agent/drafts to keep the audit
+  // path consistent.
   const handleApproveAndSend = async (id: string) => {
     setProcessingId(id)
     try {
-      const draftRow = drafts.find((d) => d.id === id)
-      const { error: updateError } = await supabase
-        .from('drafts')
-        .update({
-          status: 'approved',
-          approved_at: new Date().toISOString(),
-        })
-        .eq('id', id)
-
-      if (updateError) throw updateError
-
-      await supabase.from('draft_feedback').insert({
-        venue_id: draftRow?.venue_id,
-        draft_id: id,
-        action: 'approved',
+      const approveRes = await fetch('/api/agent/drafts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draftId: id, action: 'approve' }),
       })
+      if (!approveRes.ok) {
+        const j = await approveRes.json().catch(() => ({} as { error?: string }))
+        throw new Error(j.error || `HTTP ${approveRes.status}`)
+      }
 
-      // Send the email via the API (triggers gmail.sendEmail)
       try {
-        await fetch('/api/agent/drafts', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ draftId: id }),
-        })
+        const sendRes = await fetch(`/api/agent/drafts/${id}/send`, { method: 'POST' })
+        if (!sendRes.ok) {
+          const j = await sendRes.json().catch(() => ({} as { error?: string }))
+          console.warn('Approve succeeded but send failed:', j.error)
+          setError(`Approved, but send failed: ${j.error || `HTTP ${sendRes.status}`}`)
+        }
       } catch (sendErr) {
-        // Email send failure shouldn't block UI — draft is approved regardless
+        // Email send failure shouldn't block UI - draft is approved regardless.
         console.warn('Email send attempted but may have failed:', sendErr)
       }
 
       setDrafts((prev) => prev.filter((d) => d.id !== id))
     } catch (err) {
       console.error('Failed to approve & send draft:', err)
-      setError('Failed to approve & send draft')
+      setError(err instanceof Error ? err.message : 'Failed to approve & send draft')
     } finally {
       setProcessingId(null)
     }
   }
 
   // ---- Edit & Approve ----
+  // Wave 26: route through the server endpoint so the diff analyzer
+  // fires (Haiku call → draft_edit_insights + voice_preferences /
+  // knowledge_captures). The inline supabase update path is gone
+  // because it would have bypassed the analyzer (and the operator
+  // would never see the learning toast).
   const handleEditApprove = async (id: string, editedBody: string) => {
     setProcessingId(id)
     try {
-      const original = drafts.find((d) => d.id === id)
-
-      const { error: updateError } = await supabase
-        .from('drafts')
-        .update({
-          draft_body: editedBody,
-          status: 'approved',
-          approved_at: new Date().toISOString(),
-        })
-        .eq('id', id)
-
-      if (updateError) throw updateError
-
-      // Log feedback with edits
-      await supabase.from('draft_feedback').insert({
-        venue_id: original?.venue_id,
-        draft_id: id,
-        action: 'edited',
-        original_body: original?.draft_body,
-        edited_body: editedBody,
+      const res = await fetch('/api/agent/drafts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draftId: id, action: 'edit_approve', editedBody }),
       })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({} as { error?: string }))
+        throw new Error(j.error || `HTTP ${res.status}`)
+      }
 
-      // No send — user can Approve & Send from the Approved tab if they
-      // want to dispatch the edited version.
+      // Show the learning toast - it polls /insights and renders what
+      // landed where. If the analyzer skipped (trivial edit / LLM
+      // failure), the toast closes itself.
+      setLearningToastDraftId(id)
+
+      // No send - user can hit "Send now" from the Approved tab once
+      // they've reviewed the learnings.
       setDrafts((prev) => prev.filter((d) => d.id !== id))
     } catch (err) {
       console.error('Failed to edit/approve draft:', err)
-      setError('Failed to save draft')
+      setError(err instanceof Error ? err.message : 'Failed to save draft')
+      throw err
+    } finally {
+      setProcessingId(null)
+    }
+  }
+
+  // ---- Send approved draft (Wave 26: explicit operator action) ----
+  const handleSend = async (id: string) => {
+    setProcessingId(id)
+    try {
+      const res = await fetch(`/api/agent/drafts/${id}/send`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({} as { error?: string }))
+        throw new Error(j.error || `HTTP ${res.status}`)
+      }
+      // Approved-tab draft just flipped to sent - drop it from view.
+      setDrafts((prev) => prev.filter((d) => d.id !== id))
+    } catch (err) {
+      console.error('Failed to send draft:', err)
       throw err
     } finally {
       setProcessingId(null)
@@ -939,6 +1085,7 @@ export default function ApprovalQueuePage() {
               onApproveAndSend={handleApproveAndSend}
               onEdit={setEditingDraft}
               onReject={setRejectingDraft}
+              onSend={setSendingDraft}
               isProcessing={processingId === draft.id}
               showVenueChip={showVenueChip}
             />
@@ -962,6 +1109,25 @@ export default function ApprovalQueuePage() {
           onReject={async (reason) => {
             await handleReject(rejectingDraft.id, reason)
           }}
+        />
+      )}
+
+      {/* Wave 26: Send confirmation modal (explicit operator action). */}
+      {sendingDraft && (
+        <SendConfirmModal
+          draft={sendingDraft}
+          onClose={() => setSendingDraft(null)}
+          onConfirm={async () => {
+            await handleSend(sendingDraft.id)
+          }}
+        />
+      )}
+
+      {/* Wave 26: Learning toast after edit-and-approve. */}
+      {learningToastDraftId && (
+        <LearningToast
+          draftId={learningToastDraftId}
+          onClose={() => setLearningToastDraftId(null)}
         />
       )}
     </div>

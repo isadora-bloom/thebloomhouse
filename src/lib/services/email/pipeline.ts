@@ -3259,6 +3259,10 @@ export async function processIncomingEmail(
         to_email: fromEmail,
         subject: draftSubject,
         draft_body: draftBody,
+        // Wave 26 (mig 292): preserve the LLM's first-pass output so a
+        // subsequent operator edit can be diffed against it. Stamped
+        // only on the initial INSERT; never overwritten downstream.
+        original_sage_body: draftBody,
         status: 'pending',
         context_type: contextType,
         brain_used: brainUsed,
@@ -3930,10 +3934,14 @@ export async function editAndApproveDraft(
 ): Promise<void> {
   const supabase = createServiceClient()
 
-  // Fetch the draft (need original body for feedback)
+  // Fetch the draft (need original body for feedback + analyzer baseline).
+  // Wave 26: read original_sage_body so the diff analyzer compares
+  // against Sage's first output, not whatever draft_body currently holds
+  // (which might already include earlier operator edits in legacy
+  // pre-Wave-26 flows).
   const { data: draft, error: fetchError } = await supabase
     .from('drafts')
-    .select('id, venue_id, draft_body, subject, context_type')
+    .select('id, venue_id, draft_body, original_sage_body, subject, context_type, interaction_id')
     .eq('id', draftId)
     .single()
 
@@ -3942,6 +3950,12 @@ export async function editAndApproveDraft(
   }
 
   const originalBody = draft.draft_body as string
+  // For the Wave 26 analyzer baseline, prefer the preserved
+  // original_sage_body. Legacy rows without it fall back to the
+  // current draft_body (which means: nothing to learn yet; the
+  // analyzer will skip).
+  const sageBaseline =
+    (draft.original_sage_body as string | null | undefined) ?? originalBody
 
   // Update draft body and mark as approved
   await supabase
@@ -3985,6 +3999,31 @@ export async function editAndApproveDraft(
       const approved = new Date(draftRow.approved_at as string).getTime()
       const minutes = (approved - created) / (1000 * 60)
       trackResponseTime(draft.venue_id as string, userId, minutes).catch(console.error)
+    }
+  }
+
+  // Wave 26 — fire the diff analyzer. Best-effort: never block the
+  // approve flow on LLM failure. Insights land in draft_edit_insights
+  // and (when appropriate) voice_preferences / knowledge_captures. The
+  // operator-facing toast reads from draft_edit_insights via the
+  // /api/agent/drafts/[id]/insights endpoint.
+  if (sageBaseline && sageBaseline !== editedBody && draft.venue_id) {
+    try {
+      const { analyzeAndPersistDraftEdit } = await import(
+        '@/lib/services/draft-learning/analyze-edit'
+      )
+      await analyzeAndPersistDraftEdit({
+        draftId,
+        venueId: draft.venue_id as string,
+        originalSageBody: sageBaseline,
+        editedBody,
+        inboundSubject: (draft.subject as string) ?? null,
+      })
+    } catch (err) {
+      console.warn(
+        '[pipeline] Wave 26 analyzer failed (continuing approve flow):',
+        err instanceof Error ? err.message : err,
+      )
     }
   }
 }

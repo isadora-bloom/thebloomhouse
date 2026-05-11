@@ -1163,13 +1163,41 @@ function enforceAttachmentSizeCap(attachments: EmailAttachment[]): EmailAttachme
   return sorted.map((x) => x.a)
 }
 
+/** Wave 26: build a multipart/alternative body block (text + html) as
+ *  the body sub-tree of a wider MIME envelope. Returns the raw block
+ *  lines (no headers - the caller decides whether this block is the
+ *  whole body or one part of a multipart/mixed envelope).
+ *
+ *  Used when the operator-approved draft contains hyperlinks the
+ *  recipient's mail client should render as clickable <a> tags.
+ */
+function buildAlternativeBlock(plain: string, html: string): { lines: string[]; boundary: string } {
+  const boundary = 'bha_' + Math.random().toString(16).slice(2) + Date.now().toString(16)
+  const lines: string[] = []
+  lines.push(`--${boundary}`)
+  lines.push('Content-Type: text/plain; charset="UTF-8"')
+  lines.push('Content-Transfer-Encoding: 7bit')
+  lines.push('')
+  lines.push(plain)
+  lines.push(`--${boundary}`)
+  lines.push('Content-Type: text/html; charset="UTF-8"')
+  lines.push('Content-Transfer-Encoding: 7bit')
+  lines.push('')
+  lines.push(html)
+  lines.push(`--${boundary}--`)
+  return { lines, boundary }
+}
+
 /**
  * Build a multipart/mixed MIME message with an HTML-or-text body part
  * plus one application/octet-stream-ish part per attachment. Returns the
  * full RFC 2822 envelope as a string ready to be base64url-encoded for
  * Gmail's `raw` send field.
  *
- * Body is sent as text/plain to match the previous single-part behavior.
+ * Wave 26: when `htmlBody` is supplied, the body part is a nested
+ * multipart/alternative carrying both plain + html. Otherwise the
+ * legacy single text/plain part is used.
+ *
  * Boundary is a random hex string — colons / dots / non-ascii avoided so
  * Gmail's strict parser doesn't reject it.
  */
@@ -1177,6 +1205,7 @@ function buildMultipartMime(
   headers: string[],
   body: string,
   attachments: EmailAttachment[],
+  htmlBody?: string,
 ): string {
   const boundary = 'bh_' + Math.random().toString(16).slice(2) + Date.now().toString(16)
 
@@ -1193,12 +1222,19 @@ function buildMultipartMime(
   lines.push(...headerCopy)
   lines.push('') // blank line ends headers
 
-  // Body part
+  // Body part (Wave 26: nested multipart/alternative when html is supplied).
   lines.push(`--${boundary}`)
-  lines.push('Content-Type: text/plain; charset="UTF-8"')
-  lines.push('Content-Transfer-Encoding: 7bit')
-  lines.push('')
-  lines.push(body)
+  if (htmlBody) {
+    const alt = buildAlternativeBlock(body, htmlBody)
+    lines.push(`Content-Type: multipart/alternative; boundary="${alt.boundary}"`)
+    lines.push('')
+    lines.push(...alt.lines)
+  } else {
+    lines.push('Content-Type: text/plain; charset="UTF-8"')
+    lines.push('Content-Transfer-Encoding: 7bit')
+    lines.push('')
+    lines.push(body)
+  }
 
   // Attachment parts
   for (const att of attachments) {
@@ -1243,8 +1279,17 @@ export async function sendEmail(
     const profileResponse = await gmail.users.getProfile({ userId: 'me' })
     const fromEmail = profileResponse.data.emailAddress ?? ''
 
-    // Build RFC 2822 MIME headers (single-part default; replaced when
-    // attachments are present).
+    // Build RFC 2822 MIME headers. Wave 26: if the body has linkable
+    // text (URLs, www., bare emails) we emit a multipart/alternative
+    // envelope so the recipient's mail client renders <a> tags. The
+    // text/plain part is preserved verbatim for clients that don't
+    // render HTML. Detection is local so a body with no links keeps
+    // the legacy single-part text/plain envelope.
+    const { plainTextToEmailHtml, detectLinks } = await import(
+      '@/lib/services/draft-learning/plain-to-html'
+    )
+    const hasLinks = detectLinks(body).length > 0
+    const htmlBody = hasLinks ? plainTextToEmailHtml(body) : null
     const messageHeaders = [
       `From: ${fromEmail}`,
       `To: ${to}`,
@@ -1287,7 +1332,33 @@ export async function sendEmail(
       : []
 
     if (safeAttachments.length > 0) {
-      rawMessage = buildMultipartMime(messageHeaders, body, safeAttachments)
+      // Wave 26: pass htmlBody so the attachments envelope wraps a
+      // multipart/alternative body when there are links.
+      rawMessage = buildMultipartMime(messageHeaders, body, safeAttachments, htmlBody ?? undefined)
+    } else if (htmlBody) {
+      // Wave 26: bare multipart/alternative (no attachments).
+      const altBoundary = 'bha_' + Math.random().toString(16).slice(2) + Date.now().toString(16)
+      const headersWithType = messageHeaders.filter(
+        (h) => !h.toLowerCase().startsWith('content-type:'),
+      )
+      headersWithType.push(
+        `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
+      )
+      const parts: string[] = []
+      parts.push(...headersWithType)
+      parts.push('') // header/body separator
+      parts.push(`--${altBoundary}`)
+      parts.push('Content-Type: text/plain; charset="UTF-8"')
+      parts.push('Content-Transfer-Encoding: 7bit')
+      parts.push('')
+      parts.push(body)
+      parts.push(`--${altBoundary}`)
+      parts.push('Content-Type: text/html; charset="UTF-8"')
+      parts.push('Content-Transfer-Encoding: 7bit')
+      parts.push('')
+      parts.push(htmlBody)
+      parts.push(`--${altBoundary}--`)
+      rawMessage = parts.join('\r\n')
     } else {
       // Single-part. Blank line separates headers from body.
       rawMessage = [...messageHeaders, '', body].join('\r\n')
