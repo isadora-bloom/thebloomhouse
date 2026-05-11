@@ -391,7 +391,22 @@ function ingestRowsFromCallSummary(raw: Record<string, unknown>): IngestRow | nu
   const callId = (raw.callId as string) || (raw.id as string) || ''
   if (!callId) return null
   const summary = pickBody(raw)
-  if (!summary) return null
+  // 2026-05-11: in modern Quo (formerly OpenPhone), summary + transcript
+  // are NOT inlined on the /calls list endpoint — they live on the
+  // separate /v1/calls/{id}/summary and /v1/calls/{id}/transcriptions
+  // endpoints. The caller of this function fetches those and stuffs
+  // the text onto raw.transcript / raw.summary before calling us, so
+  // pickBody picks it up. When neither is present we still record the
+  // call as an interaction (zero-body placeholder) so the lead's
+  // timeline shows "Call · 4 min" even without transcript text.
+  const placeholder = (() => {
+    const direction = pickDirection(raw)
+    const dur = (raw.duration as number | null) ?? (raw.durationSeconds as number | null) ?? null
+    const mins = dur != null ? Math.round(dur / 60) : null
+    const verb = direction === 'inbound' ? 'Inbound call' : 'Outbound call'
+    return mins != null ? `${verb} · ${mins} min · (no transcript)` : `${verb} · (no transcript)`
+  })()
+  const bodyText = summary ? `[Call] ${summary}`.slice(0, 5000) : placeholder
   return {
     channel: 'call_summary',
     openphone_message_id: `call_${callId}`,
@@ -400,9 +415,86 @@ function ingestRowsFromCallSummary(raw: Record<string, unknown>): IngestRow | nu
     to_number: Array.isArray(raw.to)
       ? ((raw.to as string[])[0] ?? null)
       : ((raw.to as string | null) ?? null),
-    body_text: `[Call summary] ${summary}`.slice(0, 5000),
+    body_text: bodyText,
     occurred_at: pickOccurredAt(raw),
   }
+}
+
+/**
+ * Fetch the per-call summary + transcription from Quo and merge onto the
+ * raw call object so ingestRowsFromCallSummary can read them via pickBody.
+ *
+ * Quo's `/calls` list endpoint only returns metadata; summaries +
+ * transcriptions live on dedicated endpoints. We try summary first
+ * (cheap, AI-condensed) then transcription (verbose, full text). When
+ * both fail (e.g. call wasn't recorded, or the workspace doesn't have
+ * AI summaries enabled), the call still lands as a placeholder
+ * interaction so the lead's timeline reflects the call happened.
+ *
+ * Both endpoints 404 on calls without transcripts — that's expected
+ * and quiet.
+ */
+async function hydrateCallTranscript(
+  apiKey: string,
+  rawCall: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const callId = (rawCall.id as string) || (rawCall.callId as string) || ''
+  if (!callId) return rawCall
+
+  const hydrated: Record<string, unknown> = { ...rawCall }
+
+  // Summary first — short, free, AI-generated.
+  try {
+    const summaryPayload = await openPhoneFetch(apiKey, `/calls/${callId}/summary`)
+    const sObj = summaryPayload as { data?: Record<string, unknown> } | Record<string, unknown> | null
+    const data = (sObj as { data?: Record<string, unknown> })?.data ?? sObj
+    if (data && typeof data === 'object') {
+      const summaryText = (data as Record<string, unknown>).summary
+      if (typeof summaryText === 'string' && summaryText.trim()) {
+        hydrated.summary = summaryText
+      }
+    }
+  } catch (err) {
+    const e = err as Error & { code?: number }
+    if (e.code !== 404) {
+      // Log but don't throw — the placeholder will still land.
+      console.warn(`[openphone] /calls/${callId}/summary failed:`, e.message)
+    }
+  }
+
+  // Transcription — full text. Quo's transcript shape carries an array
+  // of dialogue segments; join the speaker-tagged text into a single
+  // body so the operator can read it without leaving the inbox.
+  try {
+    const transcriptPayload = await openPhoneFetch(apiKey, `/calls/${callId}/transcriptions`)
+    const tObj = transcriptPayload as { data?: Record<string, unknown> } | Record<string, unknown> | null
+    const data = (tObj as { data?: Record<string, unknown> })?.data ?? tObj
+    if (data && typeof data === 'object') {
+      const segments = (data as Record<string, unknown>).dialogue
+      if (Array.isArray(segments)) {
+        const lines = segments
+          .map((seg: unknown) => {
+            const s = seg as { identifier?: string; userId?: string; content?: string }
+            const speaker = s.identifier || s.userId || 'Speaker'
+            const text = s.content?.trim()
+            return text ? `${speaker}: ${text}` : null
+          })
+          .filter((line): line is string => line !== null)
+        if (lines.length > 0) hydrated.transcript = lines.join('\n')
+      }
+      const plain = (data as Record<string, unknown>).transcript
+      if (!hydrated.transcript && typeof plain === 'string' && plain.trim()) {
+        hydrated.transcript = plain
+      }
+    }
+  } catch (err) {
+    const e = err as Error & { code?: number }
+    if (e.code !== 404) {
+      console.warn(`[openphone] /calls/${callId}/transcriptions failed:`, e.message)
+    }
+  }
+
+  return hydrated
 }
 
 /**
@@ -545,7 +637,13 @@ export async function syncMessages(
       }
 
       for (const c of callRows) {
-        const row = ingestRowsFromCallSummary(c)
+        // 2026-05-11: hydrate summary + transcript via the per-call
+        // endpoints (not inline on /calls in modern Quo). hydrateCallTranscript
+        // never throws — silent 404s + warnings on other errors. The
+        // call still records as a placeholder interaction if no
+        // transcript exists, so the lead timeline shows the call.
+        const hydrated = await hydrateCallTranscript(conn.api_key, c)
+        const row = ingestRowsFromCallSummary(hydrated)
         if (!row) continue
         const wrote = await persistRow(venueId, conn, row, processedIds)
         if (wrote) {
@@ -646,19 +744,44 @@ async function persistRow(
   }
   processedIds.add(row.openphone_message_id)
 
-  // 2) Identity link. Inbound calls/SMS come from the client; outbound
-  // go to the client. Match on whichever side is the *external* number.
-  // 2026-05-11: extended to use the canonical identity resolver as a
-  // fallback. Previously this only found pre-existing people via the
-  // contacts table — unknown numbers landed as orphan interactions
-  // (person_id=null), so "an SMS from someone we'd never emailed"
-  // never linked to a wedding. The resolver creates a fresh person +
-  // wedding when no existing identity matches, mirroring the email
-  // pipeline's resolveIdentity behavior.
+  // 2) Identity link — three-tier match chain for SMS / voicemail / call:
+  //   (a) Phone match against `contacts(type='phone')` — most reliable.
+  //   (b) LLM name extraction from the body, matched against existing
+  //       people.first_name (last 6 months, this venue). Catches the
+  //       common case: a couple inquires by email then texts from a new
+  //       phone with "Hi, this is Sarah".
+  //   (c) Identity resolver create-fresh — phone-only signal mints a
+  //       new person + wedding. Last resort when no name surfaced and
+  //       no phone match existed.
   const externalNumber =
     row.direction === 'inbound' ? row.from_number : row.to_number
   let personId = await findPersonIdByPhone(venueId, externalNumber)
   let weddingId: string | null = null
+
+  // Gate (b): only meaningful for inbound SMS — outbound rows are the
+  // venue texting the couple, and the body won't carry the couple's
+  // self-identification. SMS body shape varies enough that we run the
+  // LLM only when phone match misses.
+  if (!personId && row.direction === 'inbound' && row.channel === 'sms' && row.body_text) {
+    try {
+      const { tryMatchSmsByName } = await import('./sms-name-match')
+      const nameMatch = await tryMatchSmsByName({
+        supabase,
+        venueId,
+        body: row.body_text,
+        fromPhone: externalNumber,
+      })
+      if (nameMatch) {
+        personId = nameMatch.personId
+        weddingId = nameMatch.weddingId
+        console.log(
+          `[openphone] linked SMS to existing person by name: ${nameMatch.matchedName} (conf ${nameMatch.confidence})`,
+        )
+      }
+    } catch (err) {
+      console.warn('[openphone] sms-name-match failed (non-fatal):', err)
+    }
+  }
 
   if (!personId && externalNumber) {
     try {

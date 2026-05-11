@@ -63,8 +63,27 @@ interface VoiceInteraction {
   body_preview: string | null
   full_body: string | null
   from_name: string | null
+  /** SMS rows store the phone number here (the from_email column doubles
+   *  as the canonical sender identifier per migration 063). Used to
+   *  group messages from the same phone into a single thread. */
+  from_email: string | null
   timestamp: string
   extracted_identity: Record<string, unknown> | null
+}
+
+interface VoiceThread {
+  /** Composite key: wedding_id when matched, else the phone/from address. */
+  key: string
+  /** True when these messages are linked to a wedding; drives the View
+   *  Lead button vs Unmatched badge. */
+  weddingId: string | null
+  /** Display label: couple name (when we can derive it from from_name on
+   *  any message) or the phone number for unmatched threads. */
+  label: string
+  /** Phone number / from-address for the thread; surfaced in the header. */
+  fromAddress: string | null
+  provider: 'sms' | 'zoom' | 'omi' | 'other'
+  messages: VoiceInteraction[]
 }
 
 type VoiceTab = 'all' | 'omi' | 'sms' | 'zoom'
@@ -132,7 +151,7 @@ export default function AudioInboxPage() {
         supabase
           .from('interactions')
           .select(
-            'id, venue_id, wedding_id, type, direction, subject, body_preview, full_body, from_name, timestamp, extracted_identity',
+            'id, venue_id, wedding_id, type, direction, subject, body_preview, full_body, from_name, from_email, timestamp, extracted_identity',
           )
           .eq('venue_id', venueId)
           .eq('surface', 'voice_capture')
@@ -222,6 +241,57 @@ export default function AudioInboxPage() {
       return p === activeTab
     })
   }, [voiceRows, activeTab])
+
+  // 2026-05-11: collapse messages from the same phone (or same wedding)
+  // into one thread card. Sort by latest activity. Each thread carries
+  // every message inline so the operator can expand it without leaving
+  // the page; click View Lead to jump to the full timeline.
+  const voiceThreads = useMemo<VoiceThread[]>(() => {
+    const source =
+      activeTab === 'all'
+        ? voiceRows.filter((r) => {
+            const p = providerForInteraction(r)
+            return p === 'sms' || p === 'zoom'
+          })
+        : filteredVoiceRows
+    const buckets = new Map<string, VoiceInteraction[]>()
+    for (const row of source) {
+      const key = row.wedding_id ?? row.from_email ?? `unmatched:${row.id}`
+      const existing = buckets.get(key)
+      if (existing) existing.push(row)
+      else buckets.set(key, [row])
+    }
+    const threads: VoiceThread[] = []
+    for (const [key, messages] of buckets.entries()) {
+      // Newest first within a thread so the card preview shows the
+      // most recent message.
+      messages.sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
+      const first = messages[0]
+      const fromAddress =
+        messages.find((m) => m.from_email)?.from_email ?? null
+      const inferredName =
+        messages.find((m) => m.from_name && m.from_name.trim())?.from_name ??
+        null
+      const label = inferredName || fromAddress || 'Unmatched contact'
+      threads.push({
+        key,
+        weddingId: first.wedding_id,
+        label,
+        fromAddress,
+        provider: providerForInteraction(first),
+        messages,
+      })
+    }
+    // Newest activity wins at the top.
+    threads.sort(
+      (a, b) => (a.messages[0].timestamp < b.messages[0].timestamp ? 1 : -1),
+    )
+    return threads
+  }, [voiceRows, activeTab, filteredVoiceRows])
+
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const toggleExpanded = (key: string): void =>
+    setExpanded((prev) => ({ ...prev, [key]: !prev[key] }))
 
   const showOrphans = activeTab === 'all' || activeTab === 'omi'
   const showVoiceList = activeTab === 'all' || activeTab === 'sms' || activeTab === 'zoom'
@@ -389,52 +459,52 @@ export default function AudioInboxPage() {
                   SMS &amp; Zoom transcripts
                 </h2>
               )}
-              {(activeTab === 'all'
-                ? voiceRows.filter((r) => {
-                    const p = providerForInteraction(r)
-                    return p === 'sms' || p === 'zoom'
-                  })
-                : filteredVoiceRows
-              ).length === 0 && activeTab !== 'all' && (
+              {voiceThreads.length === 0 && activeTab !== 'all' && (
                 <div className="text-sm text-sage-500 border border-dashed border-border rounded-lg px-4 py-10 text-center">
                   No {activeTab === 'sms' ? 'SMS' : 'Zoom'} signals yet. Configure the channel under Settings -&gt; Multi-channel.
                 </div>
               )}
-              {(activeTab === 'all'
-                ? voiceRows.filter((r) => {
-                    const p = providerForInteraction(r)
-                    return p === 'sms' || p === 'zoom'
-                  })
-                : filteredVoiceRows
-              ).map((row) => {
-                const provider = providerForInteraction(row)
-                const preview = (row.body_preview || row.full_body || '').slice(0, 200)
-                const Icon = provider === 'sms' ? MessageSquare : provider === 'zoom' ? Video : Mic
+              {voiceThreads.map((thread) => {
+                const Icon =
+                  thread.provider === 'sms'
+                    ? MessageSquare
+                    : thread.provider === 'zoom'
+                      ? Video
+                      : Mic
+                const latest = thread.messages[0]
+                const preview = (latest.body_preview || latest.full_body || '')
+                  .slice(0, 200)
+                const isOpen = !!expanded[thread.key]
+                const messageCount = thread.messages.length
                 return (
                   <div
-                    key={row.id}
+                    key={thread.key}
                     className="border border-border rounded-lg bg-warm-white p-4 space-y-2"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-sage-600">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <Icon className="w-4 h-4 text-sage-500" />
                         <span className="font-medium uppercase tracking-wide text-[10px] text-sage-700">
-                          {provider}
+                          {thread.provider}
                         </span>
                         <span>·</span>
-                        <span>{new Date(row.timestamp).toLocaleString()}</span>
-                        <span>·</span>
-                        <span>{row.direction}</span>
-                        {row.from_name && (
+                        <span className="font-medium text-sage-900">{thread.label}</span>
+                        {thread.fromAddress && thread.fromAddress !== thread.label && (
                           <>
                             <span>·</span>
-                            <span>{row.from_name}</span>
+                            <span className="text-sage-500">{thread.fromAddress}</span>
                           </>
                         )}
+                        <span>·</span>
+                        <span>
+                          {messageCount} {messageCount === 1 ? 'message' : 'messages'}
+                        </span>
+                        <span>·</span>
+                        <span>{new Date(latest.timestamp).toLocaleString()}</span>
                       </div>
-                      {row.wedding_id ? (
+                      {thread.weddingId ? (
                         <a
-                          href={`/agent/leads/${row.wedding_id}`}
+                          href={`/intel/clients/${thread.weddingId}`}
                           className="text-sage-700 hover:underline text-xs"
                         >
                           View lead
@@ -443,15 +513,54 @@ export default function AudioInboxPage() {
                         <span className="italic text-sage-500 text-xs">Unmatched</span>
                       )}
                     </div>
-                    {row.subject && (
-                      <p className="text-sm text-sage-900 font-medium">{row.subject}</p>
+                    {!isOpen ? (
+                      <>
+                        <p className="text-sm text-sage-800 leading-relaxed whitespace-pre-wrap">
+                          {preview.trim() || (
+                            <span className="italic text-sage-500">Empty body</span>
+                          )}
+                          {(latest.full_body || '').length > 200 && (
+                            <span className="text-sage-400">...</span>
+                          )}
+                        </p>
+                        {messageCount > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => toggleExpanded(thread.key)}
+                            className="text-xs text-sage-600 hover:text-sage-800 hover:underline"
+                          >
+                            Show all {messageCount} messages
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <div className="space-y-3 pt-2">
+                        {thread.messages.map((msg) => (
+                          <div
+                            key={msg.id}
+                            className={`rounded-md px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap ${
+                              msg.direction === 'inbound'
+                                ? 'bg-sage-50 text-sage-900'
+                                : 'bg-stone-50 text-stone-800'
+                            }`}
+                          >
+                            <div className="text-[10px] uppercase tracking-wide text-sage-500 mb-1">
+                              {msg.direction === 'inbound' ? 'In' : 'Out'} · {new Date(msg.timestamp).toLocaleString()}
+                            </div>
+                            {msg.full_body || msg.body_preview || (
+                              <span className="italic text-sage-400">Empty body</span>
+                            )}
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => toggleExpanded(thread.key)}
+                          className="text-xs text-sage-600 hover:text-sage-800 hover:underline"
+                        >
+                          Collapse
+                        </button>
+                      </div>
                     )}
-                    <p className="text-sm text-sage-800 leading-relaxed whitespace-pre-wrap">
-                      {preview.trim() || <span className="italic text-sage-500">Empty body</span>}
-                      {(row.full_body || '').length > 200 && (
-                        <span className="text-sage-400">...</span>
-                      )}
-                    </p>
                   </div>
                 )
               })}
