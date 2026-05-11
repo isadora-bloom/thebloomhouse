@@ -3,22 +3,39 @@
 /**
  * Wave 7B — channel-role audit page (admin viewer).
  *
+ * EXTENDED by Wave 16 (2026-05-11) with the orthogonal intent
+ * dimension:
+ *   - Per-channel intent column (targeted / broadcast / validation /
+ *     unknown counts)
+ *   - "The Knot broadcast reveal" headline card showing
+ *     broadcast-share + conversion-rate-by-intent (the gold: targeted
+ *     converts at X%, broadcast at Y%)
+ *   - Filter pill row: All / Targeted only / Broadcast only / Unknown
+ *     only (filters the per-channel split rows by which intent is
+ *     non-zero in the row)
+ *   - Reclassify-intent button alongside the reclassify-roles button
+ *
  * Anchor docs:
  *   - bloom-constitution.md
  *   - bloom-wave4-5-6-master-plan.md (Wave 7B)
+ *   - bloom-may9-llm-vs-template.md (Wave 16)
  *
- * Read-only coordinator surface that surfaces the role-summary aggregate
- * for the current venue. The headline reveal: "X% of theknot.com leads
- * are validation, not acquisition." Per-channel role split + classifier
- * coverage stats + manual reclassify trigger.
- *
- * Wave 7D will replace this with a richer discovery dashboard. This is
- * the minimal "the data is real, here's the split" view.
+ * Wave 7D will replace this with a richer discovery dashboard. This
+ * is the minimal "the data is real, here's the split" view for both
+ * the role AND intent forensic dimensions.
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, AlertCircle, ArrowRight, Compass, RefreshCw } from 'lucide-react'
+import {
+  Activity,
+  AlertCircle,
+  ArrowRight,
+  Compass,
+  Megaphone,
+  RefreshCw,
+} from 'lucide-react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { IntentClassChip, type IntentClass } from '@/components/intel/IntentClassChip'
 
 interface PerChannelRoleCounts {
   channel: string
@@ -43,17 +60,51 @@ interface RoleSummary {
   error?: string
 }
 
-function pct(x: number | null): string {
-  if (x === null || !Number.isFinite(x)) return '—'
+interface IntentConversionByIntent {
+  targeted: number | null
+  broadcast: number | null
+  validation: number | null
+  unknown: number | null
+}
+
+interface PerChannelIntentCounts {
+  channel: string
+  total: number
+  targeted: number
+  broadcast: number
+  validation: number
+  unknown: number
+  broadcast_share_0_1: number | null
+  conversion_by_intent: IntentConversionByIntent
+}
+
+interface IntentSummary {
+  ok: boolean
+  venueId: string
+  totalEvents: number
+  byIntent: Record<IntentClass, number>
+  byChannel: PerChannelIntentCounts[]
+  unclassifiedCount: number
+  latestClassifiedAt: string | null
+  error?: string
+}
+
+type IntentFilter = 'all' | 'targeted' | 'broadcast' | 'unknown'
+
+function pct(x: number | null | undefined): string {
+  if (x === null || x === undefined || !Number.isFinite(x)) return '—'
   return `${Math.round(x * 100)}%`
 }
 
 export default function AttributionRolesPage() {
   const venueId = useVenueId()
   const [summary, setSummary] = useState<RoleSummary | null>(null)
+  const [intentSummary, setIntentSummary] = useState<IntentSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [reclassifying, setReclassifying] = useState(false)
+  const [reclassifyingIntent, setReclassifyingIntent] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [intentFilter, setIntentFilter] = useState<IntentFilter>('all')
 
   const totalClassified = useMemo(() => {
     if (!summary) return 0
@@ -62,21 +113,64 @@ export default function AttributionRolesPage() {
 
   const knotChannel = useMemo(() => {
     if (!summary) return null
-    return summary.byChannel.find((c) => c.channel === 'the_knot' || c.channel === 'theknot')
+    return summary.byChannel.find(
+      (c) => c.channel === 'the_knot' || c.channel === 'theknot' || c.channel === 'theknot.com',
+    )
   }, [summary])
+
+  const knotIntent = useMemo(() => {
+    if (!intentSummary) return null
+    return intentSummary.byChannel.find(
+      (c) => c.channel === 'the_knot' || c.channel === 'theknot' || c.channel === 'theknot.com',
+    )
+  }, [intentSummary])
+
+  /** Map channel -> intent counts for the per-channel table extension. */
+  const intentByChannel = useMemo(() => {
+    const map = new Map<string, PerChannelIntentCounts>()
+    if (intentSummary) {
+      for (const c of intentSummary.byChannel) map.set(c.channel, c)
+    }
+    return map
+  }, [intentSummary])
+
+  /** Apply the filter to the role-summary channel rows. */
+  const filteredChannels = useMemo(() => {
+    if (!summary) return []
+    if (intentFilter === 'all') return summary.byChannel
+    return summary.byChannel.filter((row) => {
+      const ic = intentByChannel.get(row.channel)
+      if (!ic) return intentFilter === 'unknown'
+      if (intentFilter === 'targeted') return ic.targeted > 0
+      if (intentFilter === 'broadcast') return ic.broadcast > 0
+      if (intentFilter === 'unknown') return ic.unknown > 0
+      return true
+    })
+  }, [summary, intentByChannel, intentFilter])
 
   async function load() {
     if (!venueId) return
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/admin/attribution/role-summary?venueId=${venueId}`)
-      const json = (await res.json()) as RoleSummary
-      if (!res.ok || !json.ok) {
-        setError(json.error ?? `HTTP ${res.status}`)
+      // Wave 7B role summary + Wave 16 intent summary in parallel.
+      const [roleRes, intentRes] = await Promise.all([
+        fetch(`/api/admin/attribution/role-summary?venueId=${venueId}`),
+        fetch(`/api/admin/attribution/intent/summary?venueId=${venueId}`),
+      ])
+      const roleJson = (await roleRes.json()) as RoleSummary
+      const intentJson = (await intentRes.json()) as IntentSummary
+      if (!roleRes.ok || !roleJson.ok) {
+        setError(roleJson.error ?? `HTTP ${roleRes.status}`)
         return
       }
-      setSummary(json)
+      setSummary(roleJson)
+      if (intentRes.ok && intentJson.ok) {
+        setIntentSummary(intentJson)
+      } else {
+        // Intent summary failure shouldn't gate role view.
+        console.warn('intent summary failed:', intentJson.error)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -106,6 +200,28 @@ export default function AttributionRolesPage() {
     }
   }
 
+  async function reclassifyIntent(force: boolean) {
+    if (!venueId) return
+    setReclassifyingIntent(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/admin/attribution/intent/reclassify', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'sync', limit: 50, force, venueId }),
+      })
+      const json = await res.json()
+      if (!res.ok || !json.ok) {
+        setError(json.error ?? `HTTP ${res.status}`)
+      }
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setReclassifyingIntent(false)
+    }
+  }
+
   useEffect(() => {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -115,25 +231,37 @@ export default function AttributionRolesPage() {
     <div className="p-8 max-w-7xl mx-auto">
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-serif text-stone-900 mb-2">Channel-Role Audit</h1>
+          <h1 className="text-3xl font-serif text-stone-900 mb-2">Channel-Role &amp; Intent Audit</h1>
           <p className="text-stone-600 max-w-3xl">
-            Forensic re-attribution. Each touchpoint classified as{' '}
-            <span className="font-semibold text-emerald-700">acquisition</span> (sourced the
-            couple), <span className="font-semibold text-amber-700">validation</span> (couple
-            discovered venue elsewhere; used this channel as intake), or{' '}
-            <span className="font-semibold text-sky-700">conversion</span> (closing-step event).
-            The headline question: of your &ldquo;Knot leads&rdquo;, how many were actually
-            sourced by Knot?
+            Two orthogonal forensic dimensions. <span className="font-semibold">Role</span>{' '}
+            answers &ldquo;did this channel actually source the couple?&rdquo; (
+            <span className="text-emerald-700 font-semibold">acquisition</span> /{' '}
+            <span className="text-amber-700 font-semibold">validation</span> /{' '}
+            <span className="text-sky-700 font-semibold">conversion</span>).{' '}
+            <span className="font-semibold">Intent</span> answers &ldquo;did the couple actively
+            choose us, or did the platform&apos;s algorithm push us into a multi-venue blast?&rdquo;
+            (<span className="text-emerald-700 font-semibold">targeted</span> /{' '}
+            <span className="text-orange-700 font-semibold">broadcast</span>).
           </p>
         </div>
-        <button
-          onClick={() => reclassify(false)}
-          disabled={reclassifying || !venueId}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-sage-600 text-white rounded-md hover:bg-sage-700 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <RefreshCw className={`w-4 h-4 ${reclassifying ? 'animate-spin' : ''}`} />
-          {reclassifying ? 'Classifying…' : 'Reclassify (50)'}
-        </button>
+        <div className="flex flex-col gap-2">
+          <button
+            onClick={() => reclassify(false)}
+            disabled={reclassifying || !venueId}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-sage-600 text-white rounded-md hover:bg-sage-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={`w-4 h-4 ${reclassifying ? 'animate-spin' : ''}`} />
+            {reclassifying ? 'Classifying roles…' : 'Reclassify roles (50)'}
+          </button>
+          <button
+            onClick={() => reclassifyIntent(false)}
+            disabled={reclassifyingIntent || !venueId}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Megaphone className={`w-4 h-4 ${reclassifyingIntent ? 'animate-pulse' : ''}`} />
+            {reclassifyingIntent ? 'Classifying intent…' : 'Reclassify intent (50)'}
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -147,30 +275,76 @@ export default function AttributionRolesPage() {
       )}
 
       {loading && !summary && (
-        <div className="text-stone-500">Loading role summary…</div>
+        <div className="text-stone-500">Loading role + intent summary…</div>
       )}
 
       {summary && (
         <>
-          {/* The headline: validation share for Knot. */}
+          {/* Wave 7B headline: validation share for Knot. */}
           {knotChannel && (
             <div className="mb-6 p-6 bg-amber-50 border border-amber-200 rounded-lg">
               <div className="flex items-center gap-2 mb-2 text-amber-900">
                 <Compass className="w-5 h-5" />
-                <span className="font-serif text-lg">The Knot reveal</span>
+                <span className="font-serif text-lg">The Knot role reveal</span>
               </div>
               <div className="text-3xl font-serif text-stone-900 mb-1">
                 {pct(knotChannel.validation_share_0_1)} of{' '}
                 <span className="font-mono text-2xl">the_knot</span> attributions are{' '}
-                <span className="text-amber-700 font-semibold">validation</span>, not
-                acquisition.
+                <span className="text-amber-700 font-semibold">validation</span>, not acquisition.
               </div>
               <div className="text-sm text-stone-700">
                 {knotChannel.validation} of {knotChannel.acquisition + knotChannel.validation}{' '}
                 Knot touchpoints (excluding conversions and unclassified) were classified as
                 couples who discovered the venue elsewhere and used Knot as the intake form.
-                Spend strategy: every dollar redirected from Knot acquisition to the channel
-                that actually sourced these couples ought to outperform.
+              </div>
+            </div>
+          )}
+
+          {/* Wave 16 headline: broadcast share + conversion-by-intent for Knot. */}
+          {knotIntent && (knotIntent.targeted > 0 || knotIntent.broadcast > 0) && (
+            <div className="mb-6 p-6 bg-orange-50 border border-orange-200 rounded-lg">
+              <div className="flex items-center gap-2 mb-2 text-orange-900">
+                <Megaphone className="w-5 h-5" />
+                <span className="font-serif text-lg">The Knot broadcast reveal</span>
+              </div>
+              <div className="text-3xl font-serif text-stone-900 mb-1">
+                {pct(knotIntent.broadcast_share_0_1)} of <span className="font-mono text-2xl">the_knot</span>{' '}
+                inquiries are{' '}
+                <span className="text-orange-700 font-semibold">broadcast</span>{' '}
+                (auto-distributed), not <span className="text-emerald-700 font-semibold">targeted</span>.
+              </div>
+              <div className="text-sm text-stone-700 mb-3">
+                {knotIntent.broadcast} of {knotIntent.targeted + knotIntent.broadcast}{' '}
+                classified Knot inquiries matched the &ldquo;Inquire to similar venues&rdquo;
+                broadcast template AND showed zero post-inquiry engagement — the couple did
+                not actively pick us; Knot&apos;s ranker bcc&apos;d us into a multi-venue blast.
+              </div>
+              <div className="grid grid-cols-3 gap-3 mt-4 text-sm">
+                <div className="bg-white border border-emerald-200 rounded p-3">
+                  <div className="text-emerald-700 font-semibold">Targeted</div>
+                  <div className="text-2xl font-serif text-stone-900">
+                    {pct(knotIntent.conversion_by_intent.targeted)}
+                  </div>
+                  <div className="text-xs text-stone-500">conversion to booked</div>
+                </div>
+                <div className="bg-white border border-orange-200 rounded p-3">
+                  <div className="text-orange-700 font-semibold">Broadcast</div>
+                  <div className="text-2xl font-serif text-stone-900">
+                    {pct(knotIntent.conversion_by_intent.broadcast)}
+                  </div>
+                  <div className="text-xs text-stone-500">conversion to booked</div>
+                </div>
+                <div className="bg-white border border-stone-200 rounded p-3">
+                  <div className="text-stone-700 font-semibold">Unknown</div>
+                  <div className="text-2xl font-serif text-stone-900">
+                    {pct(knotIntent.conversion_by_intent.unknown)}
+                  </div>
+                  <div className="text-xs text-stone-500">not yet classified</div>
+                </div>
+              </div>
+              <div className="text-xs text-stone-500 mt-3">
+                Spend strategy: broadcast inquiries should NOT carry full Knot-CAC weight. They
+                are closer to paid impressions than inbound leads.
               </div>
             </div>
           )}
@@ -178,27 +352,59 @@ export default function AttributionRolesPage() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
             <RoleCard label="Total events" value={summary.totalEvents} tone="neutral" />
             <RoleCard
-              label="Classified"
+              label="Classified (role)"
               value={totalClassified}
               hint={`${pct(summary.totalEvents > 0 ? totalClassified / summary.totalEvents : null)} coverage`}
               tone="neutral"
             />
-            <RoleCard
-              label="Acquisition"
-              value={summary.byRole.acquisition ?? 0}
-              tone="emerald"
-            />
-            <RoleCard
-              label="Validation"
-              value={summary.byRole.validation ?? 0}
-              tone="amber"
-            />
-            <RoleCard
-              label="Conversion"
-              value={summary.byRole.conversion ?? 0}
-              tone="sky"
-            />
-            <RoleCard label="Unknown" value={summary.byRole.unknown ?? 0} tone="stone" />
+            <RoleCard label="Acquisition" value={summary.byRole.acquisition ?? 0} tone="emerald" />
+            <RoleCard label="Validation" value={summary.byRole.validation ?? 0} tone="amber" />
+            <RoleCard label="Conversion" value={summary.byRole.conversion ?? 0} tone="sky" />
+            <RoleCard label="Unknown (role)" value={summary.byRole.unknown ?? 0} tone="stone" />
+          </div>
+
+          {/* Intent dimension counts */}
+          {intentSummary && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+              <RoleCard
+                label="Targeted (intent)"
+                value={intentSummary.byIntent.targeted ?? 0}
+                tone="emerald"
+              />
+              <RoleCard
+                label="Broadcast (intent)"
+                value={intentSummary.byIntent.broadcast ?? 0}
+                tone="orange"
+              />
+              <RoleCard
+                label="Validation (intent)"
+                value={intentSummary.byIntent.validation ?? 0}
+                tone="amber"
+              />
+              <RoleCard
+                label="Unknown (intent)"
+                value={intentSummary.byIntent.unknown ?? 0}
+                tone="stone"
+              />
+            </div>
+          )}
+
+          {/* Filter pill row */}
+          <div className="mb-3 flex items-center gap-2 text-sm">
+            <span className="text-stone-500">Filter by intent:</span>
+            {(['all', 'targeted', 'broadcast', 'unknown'] as IntentFilter[]).map((f) => (
+              <button
+                key={f}
+                onClick={() => setIntentFilter(f)}
+                className={`px-3 py-1 rounded-full border ${
+                  intentFilter === f
+                    ? 'bg-stone-900 text-white border-stone-900'
+                    : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-50'
+                }`}
+              >
+                {f}
+              </button>
+            ))}
           </div>
 
           {/* Per-channel breakdown */}
@@ -206,7 +412,7 @@ export default function AttributionRolesPage() {
             <div className="px-4 py-3 border-b border-stone-200 bg-stone-50">
               <div className="flex items-center gap-2">
                 <Activity className="w-4 h-4 text-stone-600" />
-                <span className="font-medium text-stone-900">Per-channel role split</span>
+                <span className="font-medium text-stone-900">Per-channel split (role + intent)</span>
               </div>
             </div>
             <table className="w-full text-sm">
@@ -220,43 +426,95 @@ export default function AttributionRolesPage() {
                   <th className="px-4 py-2 text-right">Mixed</th>
                   <th className="px-4 py-2 text-right">Unclassified</th>
                   <th className="px-4 py-2 text-right">% validation*</th>
+                  <th className="px-4 py-2 text-left">Intent split</th>
+                  <th className="px-4 py-2 text-right">% broadcast*</th>
                 </tr>
               </thead>
               <tbody>
-                {summary.byChannel.length === 0 ? (
+                {filteredChannels.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-6 text-center text-stone-500">
-                      No attribution events yet.
+                    <td colSpan={10} className="px-4 py-6 text-center text-stone-500">
+                      No matching channels.
                     </td>
                   </tr>
                 ) : (
-                  summary.byChannel.map((row) => (
-                    <tr key={row.channel} className="border-t border-stone-100">
-                      <td className="px-4 py-2 font-mono text-stone-800">{row.channel}</td>
-                      <td className="px-4 py-2 text-right">{row.total}</td>
-                      <td className="px-4 py-2 text-right text-emerald-800">{row.acquisition}</td>
-                      <td className="px-4 py-2 text-right text-amber-800">{row.validation}</td>
-                      <td className="px-4 py-2 text-right text-sky-800">{row.conversion}</td>
-                      <td className="px-4 py-2 text-right text-stone-600">{row.mixed}</td>
-                      <td className="px-4 py-2 text-right text-stone-500">{row.unknown}</td>
-                      <td className="px-4 py-2 text-right font-mono">
-                        {pct(row.validation_share_0_1)}
-                      </td>
-                    </tr>
-                  ))
+                  filteredChannels.map((row) => {
+                    const ic = intentByChannel.get(row.channel)
+                    return (
+                      <tr key={row.channel} className="border-t border-stone-100">
+                        <td className="px-4 py-2 font-mono text-stone-800">{row.channel}</td>
+                        <td className="px-4 py-2 text-right">{row.total}</td>
+                        <td className="px-4 py-2 text-right text-emerald-800">
+                          {row.acquisition}
+                        </td>
+                        <td className="px-4 py-2 text-right text-amber-800">{row.validation}</td>
+                        <td className="px-4 py-2 text-right text-sky-800">{row.conversion}</td>
+                        <td className="px-4 py-2 text-right text-stone-600">{row.mixed}</td>
+                        <td className="px-4 py-2 text-right text-stone-500">{row.unknown}</td>
+                        <td className="px-4 py-2 text-right font-mono">
+                          {pct(row.validation_share_0_1)}
+                        </td>
+                        <td className="px-4 py-2 text-left">
+                          {ic ? (
+                            <div className="flex flex-wrap gap-1">
+                              {ic.targeted > 0 && (
+                                <IntentClassChip
+                                  intentClass="targeted"
+                                  title={`${ic.targeted} targeted`}
+                                />
+                              )}
+                              {ic.broadcast > 0 && (
+                                <IntentClassChip
+                                  intentClass="broadcast"
+                                  templateScore={null}
+                                  title={`${ic.broadcast} broadcast`}
+                                />
+                              )}
+                              {ic.validation > 0 && (
+                                <IntentClassChip
+                                  intentClass="validation"
+                                  title={`${ic.validation} validation`}
+                                />
+                              )}
+                              {ic.unknown > 0 && (
+                                <IntentClassChip
+                                  intentClass="unknown"
+                                  title={`${ic.unknown} unknown`}
+                                />
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-stone-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-right font-mono text-orange-700">
+                          {ic ? pct(ic.broadcast_share_0_1) : '—'}
+                        </td>
+                      </tr>
+                    )
+                  })
                 )}
               </tbody>
             </table>
             <div className="px-4 py-2 text-xs text-stone-500 border-t border-stone-100 bg-stone-50">
-              *% validation = validation / (acquisition + validation). Conversion and unknown
-              excluded from the denominator. <ArrowRight className="inline w-3 h-3" /> The
-              higher this number, the more this channel is intake-not-acquisition.
+              *% validation = validation / (acquisition + validation); *% broadcast =
+              broadcast / (targeted + broadcast). Higher = channel is more intake-not-
+              acquisition (role) or more platform-pushed-not-couple-chosen (intent).{' '}
+              <ArrowRight className="inline w-3 h-3" /> The two dimensions are orthogonal:
+              a row can be high on both, neither, or one but not the other.
             </div>
           </div>
 
           <div className="mt-6 text-xs text-stone-500">
-            Latest classified: {summary.latestClassifiedAt ?? '(never)'} ·{' '}
-            {summary.unclassifiedCount} of {summary.totalEvents} events still unclassified.
+            Role latest: {summary.latestClassifiedAt ?? '(never)'} ·{' '}
+            {summary.unclassifiedCount} of {summary.totalEvents} unclassified.
+            {intentSummary && (
+              <>
+                {' '}
+                · Intent latest: {intentSummary.latestClassifiedAt ?? '(never)'} ·{' '}
+                {intentSummary.unclassifiedCount} of {intentSummary.totalEvents} unclassified.
+              </>
+            )}
           </div>
         </>
       )}
@@ -268,7 +526,7 @@ interface RoleCardProps {
   label: string
   value: number
   hint?: string
-  tone: 'neutral' | 'emerald' | 'amber' | 'sky' | 'stone'
+  tone: 'neutral' | 'emerald' | 'amber' | 'sky' | 'stone' | 'orange'
 }
 
 function RoleCard({ label, value, hint, tone }: RoleCardProps) {
@@ -278,6 +536,7 @@ function RoleCard({ label, value, hint, tone }: RoleCardProps) {
     amber: 'bg-amber-50 border-amber-200 text-amber-900',
     sky: 'bg-sky-50 border-sky-200 text-sky-900',
     stone: 'bg-stone-50 border-stone-200 text-stone-700',
+    orange: 'bg-orange-50 border-orange-200 text-orange-900',
   }
   return (
     <div className={`p-3 border rounded-md ${toneClasses[tone]}`}>
