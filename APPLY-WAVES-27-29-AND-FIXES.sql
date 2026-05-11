@@ -1,20 +1,3 @@
--- ===========================================================================
--- APPLY-WAVES-27-29-AND-FIXES.sql  (regenerated 2026-05-11, third pass)
--- ===========================================================================
--- Schema fixes from prior apply attempts (all corrected in-place):
---   • Mig 293: dropped join on drafts.sent_interaction_id (no such column).
---   • Mig 295: venue_members → user_profiles (correct scoping pattern).
---   • Mig 296: profiles + venue_members → user_profiles with real role
---     enum values (super_admin / org_admin / venue_manager).
---   • Mig 298: coerces existing non-conforming category values to 'other'
---     BEFORE adding CHECK (existing rows had values outside the enum).
---   • Mig 301: contacts uses `type` + `value`, not contact_type /
---     contact_value.
---
--- Every statement is idempotent. Safe to re-run after a partial apply.
--- ===========================================================================
-
-
 -- ---------------------------------------------------------------------------
 -- 293_interactions_author_class.sql  (Wave 27)
 -- ---------------------------------------------------------------------------
@@ -555,94 +538,80 @@ NOTIFY pgrst, 'reload schema';
 -- where available. This migration backfills historical rows so
 -- existing leads can be replied to.
 --
--- Strategy: find each person whose canonical email is unroutable, look
--- up the matching wedding's most recent inbound interaction with a
--- routable from_email, and promote that address. Original unroutable
--- value preserved in people.extracted_identity for audit.
+-- 2026-05-11 design rewrite: TEMP tables don't persist between separate
+-- SQL-editor statements (each runs in its own session). The two UPDATE
+-- statements below each rebuild the same per-person mapping inline as
+-- a CTE so nothing depends on session-scoped state.
 --
--- All operations are idempotent: re-running is a no-op because the WHERE
--- clause filters rows whose email is still unroutable.
+-- All operations are idempotent: re-running on already-promoted rows
+-- is a no-op because the WHERE clauses filter to rows whose canonical
+-- email is still unroutable.
 -- ---------------------------------------------------------------------------
 
--- Reusable: predicate for "is this email unroutable for send".
--- Mirrors the TS `isUnsendableAddress` helper. Coverage:
---   - RFC 2606 reserved TLDs (.invalid / .test / .example / .localhost)
---   - RFC 2606 reserved second-level (example.com / .net / .org)
---   - No-reply / system-only local parts
--- We use the predicate inline (no PL/pgSQL function) so the migration
--- stays statement-level idempotent per the exec_sql RPC contract.
-
--- Reusable: predicate for "is this a per-prospect routable relay".
--- Mirrors the TS `isPerProspectRelay` helper.
-
--- Step 1: build a temp mapping table.
--- For each person whose canonical email is unroutable, find a routable
--- replacement from the most recent inbound interaction on the same
--- wedding. Routable = either a personal email (not in any platform's
--- relay domain) or a per-prospect relay shape.
-CREATE TEMP TABLE IF NOT EXISTS _unroutable_addr_backfill_map AS
-SELECT DISTINCT ON (p.id)
-  p.id              AS person_id,
-  p.venue_id,
-  p.wedding_id,
-  p.email           AS unroutable_email,
-  i.from_email      AS routable_email
-FROM people p
-JOIN interactions i
-  ON i.wedding_id = p.wedding_id
- AND i.venue_id = p.venue_id
- AND i.direction = 'inbound'
- -- Candidate routable addresses: per-prospect relay shapes OR addresses
- -- that don't match any unsendable predicate. Excludes shared-relay
- -- forms (leads@*, messages@*) by negative match on no-reply locals
- -- + by the parser-level skip that already prevents new shared-relay
- -- leads. For historical rows we accept the broadest "not unsendable"
- -- test below.
- AND i.from_email IS NOT NULL
- AND i.from_email !~* '\.(invalid|test|example|localhost)$'
- AND i.from_email !~* '@(example\.com|example\.net|example\.org)$'
- AND lower(split_part(i.from_email, '@', 1)) NOT IN (
-   'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'do_not_reply',
-   'mailer-daemon', 'mailerdaemon', 'postmaster',
-   'bounce', 'bounces', 'unsubscribe'
- )
- AND i.from_email ~* '@'
-WHERE
-  -- person's canonical email is unsendable in any of the ways we care about
-  (
-    p.email ~* '\.(invalid|test|example|localhost)$'
-    OR p.email ~* '@(example\.com|example\.net|example\.org)$'
-    OR lower(split_part(p.email, '@', 1)) IN (
-      'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'do_not_reply',
-      'mailer-daemon', 'mailerdaemon', 'postmaster',
-      'bounce', 'bounces', 'unsubscribe'
-    )
-  )
-ORDER BY p.id, i.timestamp DESC;
-
--- Step 2: promote the routable email to people.email. Preserve the
--- unroutable original in extracted_identity for audit lineage.
+-- Step 1: promote the routable email to people.email. CTE builds the
+-- (person_id -> routable_from_email) map inline from the most recent
+-- inbound interaction on the same wedding whose from_email passes the
+-- "not unsendable" filter (real TLD + not a no-reply local part).
 UPDATE people p
-SET
-  email = m.routable_email,
-  extracted_identity =
-    COALESCE(p.extracted_identity, '{}'::jsonb)
-    || jsonb_build_object(
-      'historical_unroutable_email', m.unroutable_email,
-      'address_backfill_at', NOW()::text
+SET email = m.routable_email
+FROM (
+  SELECT DISTINCT ON (p2.id)
+    p2.id              AS person_id,
+    i.from_email       AS routable_email
+  FROM people p2
+  JOIN interactions i
+    ON i.wedding_id = p2.wedding_id
+   AND i.venue_id = p2.venue_id
+   AND i.direction = 'inbound'
+   AND i.from_email IS NOT NULL
+   AND i.from_email ~* '@'
+   AND i.from_email !~* '\.(invalid|test|example|localhost)$'
+   AND i.from_email !~* '@(example\.com|example\.net|example\.org)$'
+   AND lower(split_part(i.from_email, '@', 1)) NOT IN (
+     'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'do_not_reply',
+     'mailer-daemon', 'mailerdaemon', 'postmaster',
+     'bounce', 'bounces', 'unsubscribe'
+   )
+  WHERE
+    p2.email IS NOT NULL
+    AND (
+      p2.email ~* '\.(invalid|test|example|localhost)$'
+      OR p2.email ~* '@(example\.com|example\.net|example\.org)$'
+      OR lower(split_part(p2.email, '@', 1)) IN (
+        'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'do_not_reply',
+        'mailer-daemon', 'mailerdaemon', 'postmaster',
+        'bounce', 'bounces', 'unsubscribe'
+      )
     )
-FROM _unroutable_addr_backfill_map m
+  ORDER BY p2.id, i.timestamp DESC
+) m
 WHERE p.id = m.person_id;
 
--- Step 3: same for contacts. The contacts table is the canonical
--- multi-channel address store; people.email is a denormalised cache.
--- Both need to flip for the send paths to find the right address.
--- contacts table uses columns `type` + `value` (per 001_shared_tables),
--- not contact_type / contact_value. Fixed 2026-05-11 after live-customer
--- apply attempt surfaced the column-name miss.
+-- Step 2: same promotion for contacts. Same inline CTE shape so the
+-- two UPDATEs are independent / can run in any order / each is safe to
+-- re-run on its own.
 UPDATE contacts c
 SET value = m.routable_email
-FROM _unroutable_addr_backfill_map m
+FROM (
+  SELECT DISTINCT ON (p2.id)
+    p2.id              AS person_id,
+    i.from_email       AS routable_email
+  FROM people p2
+  JOIN interactions i
+    ON i.wedding_id = p2.wedding_id
+   AND i.venue_id = p2.venue_id
+   AND i.direction = 'inbound'
+   AND i.from_email IS NOT NULL
+   AND i.from_email ~* '@'
+   AND i.from_email !~* '\.(invalid|test|example|localhost)$'
+   AND i.from_email !~* '@(example\.com|example\.net|example\.org)$'
+   AND lower(split_part(i.from_email, '@', 1)) NOT IN (
+     'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'do_not_reply',
+     'mailer-daemon', 'mailerdaemon', 'postmaster',
+     'bounce', 'bounces', 'unsubscribe'
+   )
+  ORDER BY p2.id, i.timestamp DESC
+) m
 WHERE c.person_id = m.person_id
   AND c.type = 'email'
   AND (
@@ -654,18 +623,6 @@ WHERE c.person_id = m.person_id
       'bounce', 'bounces', 'unsubscribe'
     )
   );
-
--- Step 4: emit a row count summary so the apply script surfaces
--- "N rows backfilled" without a separate query round-trip.
-DO $$
-DECLARE
-  n INTEGER;
-BEGIN
-  SELECT COUNT(*) INTO n FROM _unroutable_addr_backfill_map;
-  RAISE NOTICE 'Unroutable address backfill: % person row(s) promoted', n;
-END $$;
-
-DROP TABLE IF EXISTS _unroutable_addr_backfill_map;
 
 NOTIFY pgrst, 'reload schema';
 -- ---------------------------------------------------------------------------
@@ -713,5 +670,108 @@ ALTER TABLE knowledge_base
 
 COMMENT ON COLUMN knowledge_base.source IS
   'Provenance tag for the KB entry. manual = coordinator typed in /portal/kb. auto-learned = Sage queue resolution. csv = data-import bulk. brain_dump_confirmed = brain-dump propose-and-confirm flow (2026-05-11). content_suggester = Sonnet pull-from-website (Stream 6).';
+
+NOTIFY pgrst, 'reload schema';
+-- ---------------------------------------------------------------------------
+-- 303_weddings_ai_opted_out.sql  (live-customer fix 2026-05-11)
+-- ---------------------------------------------------------------------------
+-- The escalation classifier (mig 300) detects "I want a human" requests
+-- on individual inbound emails and skips drafting for THAT email. But the
+-- flag is per-interaction, not per-couple — so the next email from the
+-- same couple gets re-evaluated from scratch, and if it doesn't contain
+-- explicit escalation phrases, drafting resumes.
+--
+-- Real-customer manifestation: Kristiana replied "HUMAN REQUESTED" to
+-- Sage's first email. Sage correctly skipped drafting that reply. Then
+-- she sent another email a few minutes later asking a normal question.
+-- Sage drafted to her again, because the new email didn't repeat the
+-- magic words.
+--
+-- Fix: opt-out is sticky at the WEDDING level. Once any inbound on a
+-- wedding fires escalation, the couple is opted out of AI drafting
+-- entirely until the operator clears the flag.
+--
+-- The flag is operator-clearable from /agent/leads/[id] and from
+-- /agent/drafts when a draft is suppressed. Couple changing their mind
+-- ("actually go ahead and use the AI assistant") is a real case.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE weddings
+  ADD COLUMN IF NOT EXISTS ai_opted_out BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE weddings
+  ADD COLUMN IF NOT EXISTS ai_opted_out_at TIMESTAMPTZ;
+
+ALTER TABLE weddings
+  ADD COLUMN IF NOT EXISTS ai_opted_out_reason TEXT;
+
+-- Index for the pipeline pre-flight: every inbound on a known wedding
+-- runs a venue + wedding_id lookup with this filter before drafting.
+CREATE INDEX IF NOT EXISTS idx_weddings_ai_opted_out
+  ON weddings (venue_id, ai_opted_out)
+  WHERE ai_opted_out = true;
+
+COMMENT ON COLUMN weddings.ai_opted_out IS
+  '2026-05-11: sticky flag set when an inbound on this wedding fires escalation_requested. Pipeline never drafts for an opted-out wedding regardless of the inbound content. Operator clears from /agent/leads/[id] when the couple changes their mind.';
+
+-- Backfill: any wedding that has ever had an interaction with
+-- escalation_requested=true gets the flag set retroactively. Catches
+-- Kristiana + any other historical case where drafting kept happening
+-- after escalation.
+--
+-- Defensive: only run when migration 300 has applied (escalation_requested
+-- column exists on interactions). If 300 hasn't run yet, the backfill
+-- skips silently — the operator can re-run this migration after 300
+-- to pick up any historical rows.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'interactions'
+      AND column_name = 'escalation_requested'
+  )
+  AND EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'interactions'
+      AND column_name = 'escalation_decided_at'
+  ) THEN
+    EXECUTE $sql$
+      UPDATE weddings w
+      SET
+        ai_opted_out = true,
+        ai_opted_out_at = COALESCE(w.ai_opted_out_at, sub.first_request_at),
+        ai_opted_out_reason = COALESCE(w.ai_opted_out_reason, 'historical_escalation_backfill')
+      FROM (
+        SELECT
+          wedding_id,
+          MIN(escalation_decided_at) AS first_request_at
+        FROM interactions
+        WHERE escalation_requested = true
+          AND wedding_id IS NOT NULL
+        GROUP BY wedding_id
+      ) sub
+      WHERE w.id = sub.wedding_id
+        AND w.ai_opted_out = false;
+    $sql$;
+  ELSE
+    RAISE NOTICE 'Migration 300 columns not present yet — skipping escalation backfill. Re-run 303 after 300 applies to pick up historical rows.';
+  END IF;
+END $$;
+
+-- Cancel any pending or approved-not-yet-sent drafts on the just-flagged
+-- weddings. A draft already queued at the moment of escalation should
+-- never go out.
+UPDATE drafts
+SET
+  status = 'rejected',
+  feedback_notes = COALESCE(feedback_notes, '') ||
+    CASE WHEN feedback_notes IS NULL OR feedback_notes = ''
+      THEN 'auto-rejected: couple opted out of AI drafting (mig 303 backfill)'
+      ELSE E'\nauto-rejected: couple opted out of AI drafting (mig 303 backfill)'
+    END
+WHERE wedding_id IN (SELECT id FROM weddings WHERE ai_opted_out = true)
+  AND status IN ('pending', 'approved', 'auto_send_pending');
 
 NOTIFY pgrst, 'reload schema';
