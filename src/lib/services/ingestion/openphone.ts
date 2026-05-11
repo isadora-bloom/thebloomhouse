@@ -81,12 +81,22 @@ function normalizePhone(phone: string | null | undefined): string | null {
 async function openPhoneFetch(
   apiKey: string,
   path: string,
-  params?: Record<string, string | undefined>
+  params?: Record<string, string | string[] | undefined>
 ): Promise<unknown> {
+  // 2026-05-11: support array params. Quo (formerly OpenPhone) now requires
+  // `participants` (array) on /messages and /calls. The legacy single-value
+  // signature stays back-compat — string values still get one key/value.
   const qs = new URLSearchParams()
   if (params) {
     for (const [k, v] of Object.entries(params)) {
-      if (v != null && v !== '') qs.set(k, v)
+      if (v == null) continue
+      if (Array.isArray(v)) {
+        for (const item of v) {
+          if (item != null && item !== '') qs.append(k, item)
+        }
+      } else if (v !== '') {
+        qs.set(k, v)
+      }
     }
   }
   const url = `${OPENPHONE_API_BASE}${path}${qs.toString() ? `?${qs.toString()}` : ''}`
@@ -446,10 +456,14 @@ export async function syncMessages(
     const phoneNumberId = phone.id
 
     // ---- SMS messages -----------------------------------------------------
+    // 2026-05-11: Quo API now requires `participants` (array) — the venue's
+    // own phone number IS a participant in every message we want, so we
+    // pass it. Returns all messages on that line (since the window's start).
     let messages: Array<Record<string, unknown>> = []
     try {
       const payload = await openPhoneFetch(conn.api_key, '/messages', {
         phoneNumberId,
+        participants: [phone.phoneNumber],
         since: sinceIso,
         maxResults: '100',
       })
@@ -520,6 +534,7 @@ export async function syncMessages(
         try {
           const payload = await openPhoneFetch(conn.api_key, '/calls', {
             phoneNumberId,
+            participants: [phone.phoneNumber],
             since: sinceIso,
             maxResults: '50',
           })

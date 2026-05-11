@@ -65,6 +65,7 @@ import { RelationshipsPanel } from '@/components/intel/RelationshipsPanel'
 import { ReconstructedIdentityPanel } from '@/components/intel/ReconstructedIdentityPanel'
 import { CoupleIntelPanel } from '@/components/intel/CoupleIntelPanel'
 import { TourPrepBriefPanel } from '@/components/intel/TourPrepBriefPanel'
+import { AiOptOutBanner } from '@/components/intel/AiOptOutBanner'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -101,6 +102,10 @@ interface WeddingDetail {
   code_extension: string | null
   created_at: string
   updated_at: string
+  // Mig 303 (2026-05-11) sticky AI opt-out per couple.
+  ai_opted_out?: boolean | null
+  ai_opted_out_at?: string | null
+  ai_opted_out_reason?: string | null
 }
 
 interface PersonRow {
@@ -952,6 +957,28 @@ export default function ClientProfilePage() {
         >
           <ArrowLeft className="w-4 h-4" /> Back
         </button>
+
+        {wedding.ai_opted_out && (
+          <div className="mb-4">
+            <AiOptOutBanner
+              weddingId={weddingId}
+              optedOutAt={wedding.ai_opted_out_at ?? null}
+              reason={wedding.ai_opted_out_reason ?? null}
+              onResumed={() =>
+                setWedding((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        ai_opted_out: false,
+                        ai_opted_out_at: null,
+                        ai_opted_out_reason: null,
+                      }
+                    : prev,
+                )
+              }
+            />
+          </div>
+        )}
 
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div>

@@ -1217,6 +1217,13 @@ export async function processIncomingEmail(
   // skip draft — we never want Sage to reply to a Calendly confirmation.
   // escalationRequested also forces skipDraft — a couple who asked for
   // a real person doesn't get an autonomous reply anyway.
+  //
+  // Mig 303 (2026-05-11): the per-couple `weddings.ai_opted_out` flag
+  // and the per-thread "operator-handling-thread" gate live in the
+  // helper at draft-skip-gates.ts and are checked AFTER the interaction
+  // insert (we need weddingId to be resolved first). The skipDraft
+  // computation below covers the per-email reasons; gate results are
+  // applied later in the flow as `gateSkipDraft`.
   const skipDraft =
     opts?.skipDraft === true ||
     filterHit?.action === 'no_draft' ||
@@ -3233,12 +3240,78 @@ export async function processIncomingEmail(
   // wedding are already persisted (intel layer still sees it); we just skip
   // handing off to the brains so Sage doesn't reply.
   if (skipDraft) {
+    // Mig 303 (2026-05-11): when this email fired escalation_requested
+    // AND the inbound is tied to a wedding, promote the per-email
+    // signal into a sticky per-couple opt-out. The next inbound from
+    // this couple gets gated regardless of its content. Also cancels
+    // any pending drafts.
+    if (escalationRequested && weddingId) {
+      try {
+        const { markWeddingAiOptedOut } = await import('./draft-skip-gates')
+        const result = await markWeddingAiOptedOut({
+          supabase,
+          weddingId,
+          reason: escalationReason
+            ? `escalation:${escalationReason}`
+            : 'escalation_detected',
+        })
+        log.info('pipeline.ai_opted_out_set', {
+          event_type: 'escalation.couple_opt_out',
+          outcome: 'ok',
+          data: {
+            weddingId,
+            updated: result.updated,
+            draftsCancelled: result.draftsCancelled,
+            reason: escalationReason,
+          },
+        })
+      } catch (err) {
+        console.warn('[pipeline] mark ai_opted_out failed (non-fatal):', err)
+      }
+    }
     return {
       interactionId,
       draftId: null,
       classification: emailClassification,
       autoSent: false,
     }
+  }
+
+  // Mig 303 (2026-05-11): pre-brain skip gates — sticky per-couple
+  // ai_opted_out + per-thread operator-handling check. Runs AFTER the
+  // interaction is persisted (so the intel layer still sees the inbound)
+  // but BEFORE the brain is dispatched (so we don't burn tokens on a
+  // draft we'd reject anyway). Gate decisions are logged + can surface
+  // on the lead detail page.
+  try {
+    const { evaluateDraftSkipGates } = await import('./draft-skip-gates')
+    const gateDecision = await evaluateDraftSkipGates({
+      supabase,
+      venueId,
+      weddingId,
+      gmailThreadId: email.threadId ?? null,
+    })
+    if (gateDecision.skip) {
+      log.info('pipeline.draft_skip_gate', {
+        event_type: 'draft.skip_gate',
+        outcome: 'ok',
+        data: {
+          weddingId,
+          threadId: email.threadId,
+          reason: gateDecision.reason,
+          message: gateDecision.message,
+          triggeringOutboundAt: gateDecision.triggeringOutboundAt,
+        },
+      })
+      return {
+        interactionId,
+        draftId: null,
+        classification: emailClassification,
+        autoSent: false,
+      }
+    }
+  } catch (err) {
+    console.warn('[pipeline] draft skip-gate evaluation failed (non-fatal):', err)
   }
 
   // ---------------------------------------------------------------------

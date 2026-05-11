@@ -499,14 +499,12 @@ export const MODE_SAGE: ModeConfig = {
     },
     {
       title: 'Connections',
-      subtitle: 'Gmail, Omi, integrations',
+      subtitle: 'Email, phone, video, calendar, audio, CRM',
       venueOnly: true,
       items: [
-        { label: 'Gmail', href: '/settings/gmail', icon: Mail },
-        { label: 'Audio Capture', href: '/settings/audio-capture', icon: Inbox },
-        // Wave 29: SMS (Twilio) + Zoom transcript ingestion per-venue config.
-        { label: 'Multi-channel', href: '/settings/multi-channel', icon: MessageSquareText },
-        { label: 'OpenPhone (SMS)', href: '/settings/openphone', icon: Phone },
+        // Stream 8: single hub replaces the per-provider rail entries.
+        // Each provider's deep-config lives one click away.
+        { label: 'Integrations', href: '/settings/integrations', icon: Link2 },
       ],
     },
   ],
