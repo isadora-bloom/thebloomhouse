@@ -324,16 +324,32 @@ const VALID_JOBS = [
   // 8 signal sources per venue + auto-derives missing location fields
   // from address. Daily.
   'external_signals_health_sweep',
-  // Wave 13 (2026-05-11). TODO(reconciliation-stream): register
-  // 'tour_prep_brief_sweep' + 'review_solicit_sweep' here once the
-  // reconciliation stream wires them. Handlers live at
-  // src/lib/services/tour/prep-brief-sweep.ts and
-  // src/lib/services/reviews/solicit-sweep.ts respectively. Wave 13
-  // does NOT add the entries to keep vercel.json under the 40-cron
-  // Pro limit until the reconciliation stream batches related
-  // additions together. Stage-trigger fan-out (tour_scheduled,
-  // tour_completed, post_event in stage-triggers.ts) handles the
-  // real-time path; the sweeps are belt-and-suspenders + backfill.
+  // Wave 9 (2026-05-10). Data-integrity remediation sweep. Iterates
+  // venues + applies idempotent fixes for each invariant
+  // (wedding_has_people / direction_from_venue_own / inquiry_date_drift /
+  // touchpoint_source_consistency). Defaults to dry_run unless venue
+  // opts in via feature_flags.integrity_auto_remediate. 3 venues/tick.
+  'integrity_remediation_sweep',
+  // Wave 11 (2026-05-10). Lifecycle state machine sweep. Iterates
+  // active (non-terminal) weddings + applies computeLifecycleStage.
+  // 50 weddings/tick. Soft-judge queue processed in same call.
+  'lifecycle_sweep',
+  // Wave 13 (2026-05-11). Tour-prep brief generator. Finds tours
+  // scheduled in next 24-48h without a brief, enqueues + processes.
+  // 20 tours/tick. Daily cadence.
+  'tour_prep_brief_sweep',
+  // Wave 13 (2026-05-11). Review solicitation sweep. Couples in
+  // post_event stage 7+ days past event without a solicitation get
+  // queued. Drafts go to coordinator review (never auto-sent).
+  // Daily.
+  'review_solicit_sweep',
+  // Wave 14 (2026-05-10). Referral extractor sibling-of-reconstruction.
+  // Drains referral_extraction_jobs + 30d drift refresh. 10 weddings/tick.
+  'referral_extraction_sweep',
+  // Wave 14 (2026-05-10). Alumni cohort generator. Reads booked
+  // couples + couple_intel + outcomes; Sonnet aggregates archetypes
+  // (LLM-invented labels, not enum). 3 venues/tick. Weekly.
+  'alumni_cohort_sweep',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -821,6 +837,50 @@ async function runJob(job: JobName): Promise<unknown> {
       // sources per venue. Daily.
       const { runExternalSignalsHealthSweep } = await import('@/lib/services/external-signals-config/sweep')
       return runExternalSignalsHealthSweep({})
+    }
+
+    case 'integrity_remediation_sweep': {
+      // Wave 9. Iterates venues + applies idempotent remediation for
+      // each data-integrity invariant. Dry-run by default; per-venue
+      // opt-in via feature_flags.integrity_auto_remediate. 3 venues/tick.
+      const { runIntegrityRemediationSweep } = await import('@/lib/services/data-integrity/remediation/sweep')
+      return runIntegrityRemediationSweep()
+    }
+
+    case 'lifecycle_sweep': {
+      // Wave 11. Iterates active weddings + applies state-machine
+      // transitions. 50 weddings/tick + soft-judge queue processed in
+      // same call.
+      const { runLifecycleSweep } = await import('@/lib/services/lifecycle/sweep')
+      return runLifecycleSweep()
+    }
+
+    case 'tour_prep_brief_sweep': {
+      // Wave 13. Generates briefs for tours scheduled in next 24-48h
+      // that don't yet have one. 20 tours/tick. Daily.
+      const { runTourPrepBriefSweep } = await import('@/lib/services/tour/prep-brief-sweep')
+      return runTourPrepBriefSweep()
+    }
+
+    case 'review_solicit_sweep': {
+      // Wave 13. Couples in post_event stage 7+ days past event get
+      // review solicitations drafted (never auto-sent). Daily.
+      const { runReviewSolicitSweep } = await import('@/lib/services/reviews/solicit-sweep')
+      return runReviewSolicitSweep()
+    }
+
+    case 'referral_extraction_sweep': {
+      // Wave 14. Sibling-of-reconstruction referral extractor.
+      // Drains referral_extraction_jobs + 30d drift. 10 weddings/tick.
+      const { runReferralSweep } = await import('@/lib/services/intel/referrals/sweep')
+      return runReferralSweep()
+    }
+
+    case 'alumni_cohort_sweep': {
+      // Wave 14. Sonnet aggregates booked couples + outcomes into
+      // archetypes (LLM-invented labels). 3 venues/tick. Weekly.
+      const { runAlumniSweep } = await import('@/lib/services/intel/alumni/sweep')
+      return runAlumniSweep()
     }
   }
 }

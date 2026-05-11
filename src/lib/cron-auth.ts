@@ -86,6 +86,18 @@ export const DESTRUCTIVE_JOBS: ReadonlySet<string> = new Set([
   'marketing_digest_sweep',
   // Wave 8 (2026-05-10). External signals health-check + auto-derive sweep.
   'external_signals_health_sweep',
+  // Wave 9 (2026-05-10). Data-integrity remediation sweep.
+  'integrity_remediation_sweep',
+  // Wave 11 (2026-05-10). Lifecycle state machine sweep.
+  'lifecycle_sweep',
+  // Wave 13 (2026-05-11). Tour-prep brief generator (Sonnet write).
+  'tour_prep_brief_sweep',
+  // Wave 13 (2026-05-11). Review solicitation sweep (drafts queued, never auto-sent).
+  'review_solicit_sweep',
+  // Wave 14 (2026-05-10). Referral extractor sibling-of-reconstruction.
+  'referral_extraction_sweep',
+  // Wave 14 (2026-05-10). Alumni cohort generator (Sonnet aggregator).
+  'alumni_cohort_sweep',
 ])
 
 export type CronAuthResult =
