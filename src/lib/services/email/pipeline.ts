@@ -1334,12 +1334,40 @@ export async function processIncomingEmail(
     return 'unclassified'
   })()
 
+  // Wave 9 root-cause guard (2026-05-10): before writing direction='inbound',
+  // double-check that the FINAL persisted from_email isn't one of the venue's
+  // own sending addresses. The Step 1b self-loop guard above only inspects
+  // rawFromEmail; if a downstream rewrite (extractedPrimaryEmail fallback,
+  // forwarded original sender, etc.) leaves fromEmail as a venue-own
+  // address, the original guard misses it and we write a misclassified
+  // inbound. The data-integrity invariant direction_from_venue_own catches
+  // these post-hoc; this guard prevents new writes from accumulating.
+  // Anchor: bloom-data-integrity-sweep.md (the original Apr-30 sweep had
+  // 48 of these on Rixey; Wave 9 closes the residual hole at the write
+  // site so the remediation surface in src/lib/services/data-integrity/
+  // remediation/direction-from-venue-own.ts only ever has to clean up
+  // pre-existing rows, never new ones).
+  const wave9InboundFromOwn = ownEmails.has((fromEmail ?? '').toLowerCase().trim())
+  if (wave9InboundFromOwn) {
+    log.warn('pipeline.wave9_inbound_from_own', {
+      event_type: 'email_pipeline.direction_correction',
+      outcome: 'ok',
+      data: {
+        messageId: email.messageId,
+        threadId: email.threadId,
+        fromEmail,
+        rawFromEmail,
+        reason: 'final_fromEmail_in_ownEmails',
+        action: 'flipped_to_outbound',
+      },
+    })
+  }
   const interactionPayload: Record<string, unknown> = {
     venue_id: venueId,
     wedding_id: weddingId,
     person_id: personId,
     type: 'email',
-    direction: 'inbound',
+    direction: wave9InboundFromOwn ? 'outbound' : 'inbound',
     subject: email.subject,
     body_preview: email.body.slice(0, 300),
     full_body: email.body,
@@ -1354,9 +1382,12 @@ export async function processIncomingEmail(
     // linkage scripts read interactions.extracted_identity rather
     // than re-parsing.
     extracted_identity: extractedIdentity,
-    // T5-Rixey-BBB: see inboundSignalClass derivation above.
-    // signal-class-justified: derived from from-domain + extracted_identity
-    signal_class: inboundSignalClass,
+    // T5-Rixey-BBB: see inboundSignalClass derivation above. When the
+    // Wave 9 guard flips direction to outbound, the signal_class for
+    // signal-inference purposes is no longer meaningful (we're not a
+    // lead signal); pin to 'unclassified' to match the Step 1b
+    // self-loop outbound payload.
+    signal_class: wave9InboundFromOwn ? 'unclassified' : inboundSignalClass,
   }
   if (email.connectionId) {
     interactionPayload.gmail_connection_id = email.connectionId

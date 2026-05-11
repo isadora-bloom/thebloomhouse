@@ -95,6 +95,20 @@ export interface ResolverOptions {
    *  one. Pre-pass when callers already hold one to avoid an extra
    *  factory roundtrip. */
   supabase?: SupabaseClient
+  /**
+   * Wave 9 root-cause fix (2026-05-10): the upstream signal's actual
+   * timestamp (email Date header, CSV row inquiry_date, brain-dump
+   * note created_at). When set, createWedding pins inquiry_date to
+   * this value instead of wall-clock NOW(). When omitted, falls back
+   * to NOW() with a console.warn — the inquiry_date_drift invariant
+   * will then catch any drift on the next sweep.
+   *
+   * Why: bloom-data-integrity-sweep.md's inquiry_date_drift invariant
+   * keeps flagging weddings minted from this codepath. The Wave 9
+   * remediation realigns historical drift; this option closes the
+   * write-site so new weddings never drift in the first place.
+   */
+  inquirySignalAt?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -640,6 +654,7 @@ async function createWedding(
   signals: IdentitySignals,
   sourceLabel: string | null,
   previousWeddingId: string | null = null,
+  inquirySignalAt: string | null = null,
 ): Promise<string | null> {
   // source_provenance is CHECK-constrained; we pin it to the new
   // 'identity_resolver' value (migration 247) and stash the human-readable
@@ -649,10 +664,27 @@ async function createWedding(
   // Wave 2C: previousWeddingId set when this wedding is a
   // re-engagement-after-loss for a person whose only existing wedding
   // is terminal. The FK was added in migration 257.
+  //
+  // Wave 9 (2026-05-10): inquirySignalAt is the upstream signal's actual
+  // timestamp (email Date header, CSV row inquiry_date, brain-dump note
+  // captured_at). When omitted, the inquiry_date falls back to NOW() —
+  // which is the band-aid pattern bloom-data-integrity-sweep.md flagged.
+  // The remediation in src/lib/services/data-integrity/remediation/
+  // inquiry-date-drift.ts will re-align drift after the fact, but
+  // every caller threading a real signal timestamp here is one fewer
+  // remediation row.
+  if (!inquirySignalAt) {
+    console.warn(
+      `[identity/resolver] createWedding called without inquirySignalAt ` +
+        `(sourceLabel=${sourceLabel ?? 'unknown'}); falling back to NOW() — ` +
+        `inquiry_date_drift may flag this row on next sweep.`,
+    )
+  }
+  const inquiryDateValue = inquirySignalAt ?? new Date().toISOString()
   const insert: Record<string, unknown> = {
     venue_id: venueId,
     status: 'inquiry',
-    inquiry_date: new Date().toISOString(),
+    inquiry_date: inquiryDateValue,
     wedding_date: signals.weddingDate ?? null,
     heat_score: 0,
     temperature_tier: 'cool',
@@ -879,6 +911,7 @@ export async function resolveIdentity(
       signals,
       sourceLabel ? `${sourceLabel}:re-engagement` : 're-engagement',
       mostRecentTerminalWedding.id,
+      options.inquirySignalAt ?? null,
     )
     if (!newWeddingId) {
       throw new Error('identity/resolver: createWedding (re-engagement) failed; cannot proceed')
@@ -913,7 +946,14 @@ export async function resolveIdentity(
     }
   } else {
     // Branch C — fresh person, fresh wedding.
-    const newWeddingId = await createWedding(supabase, venueId, signals, sourceLabel)
+    const newWeddingId = await createWedding(
+      supabase,
+      venueId,
+      signals,
+      sourceLabel,
+      null,
+      options.inquirySignalAt ?? null,
+    )
     if (!newWeddingId) {
       throw new Error('identity/resolver: createWedding failed; cannot proceed')
     }

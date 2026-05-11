@@ -25,6 +25,37 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { recordEngagementEventsBatch } from '@/lib/services/heat-mapping'
 import { venueOwnEmails } from '@/lib/services/email/pipeline'
 
+/**
+ * Wave 9 — derive the canonical touchpoint source from an interaction's
+ * from_email domain. Mirrors the known-domain map in data-integrity.ts
+ * checkSourceConsistency so detector + writer stay in sync.
+ *
+ * Returns null when the email is missing or carries no platform-domain
+ * signal (e.g. plain gmail.com / outlook.com), letting the caller fall
+ * back to the wedding's legacy first-touch source as a courtesy.
+ */
+const WAVE9_KNOWN_SOURCE_DOMAINS: Record<string, string> = {
+  '@calendly.com': 'calendly',
+  '@calendlymail.com': 'calendly',
+  '@acuityscheduling.com': 'acuity',
+  '@honeybook.com': 'honeybook',
+  '@dubsado.com': 'dubsado',
+  '@theknot.com': 'the_knot',
+  '@knotemail.com': 'the_knot',
+  '@weddingwire.com': 'wedding_wire',
+  '@herecomestheguide.com': 'here_comes_the_guide',
+  '@zola.com': 'zola',
+}
+
+function deriveSourceFromEmail(fromEmail: string | null | undefined): string | null {
+  if (!fromEmail) return null
+  const lower = fromEmail.toLowerCase()
+  for (const [domain, src] of Object.entries(WAVE9_KNOWN_SOURCE_DOMAINS)) {
+    if (lower.includes(domain)) return src
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Pattern sets (source of truth)
 // ---------------------------------------------------------------------------
@@ -547,25 +578,46 @@ export async function applySignalInference(
   // Direction: inbound. signal-inference fires from inbound classifier
   // output (sustained engagement on couple replies, etc.) — every
   // event here is observation of a couple-side action.
+  //
+  // Wave 9 root-cause fix (2026-05-10): build an interaction-id→
+  // from_email lookup from the in-scope inbound + outbound arrays so
+  // each touchpoint's source can be derived from the LINKED
+  // INTERACTION's actual channel, not the wedding's legacy first-touch
+  // source. The touchpoint_source_consistency invariant flags drift
+  // when these disagree; this closes the write-site.
+  const interactionById = new Map<string, { from_email: string | null }>()
+  for (const i of ints as Array<{ id: string; from_email: string | null }>) {
+    interactionById.set(i.id, { from_email: i.from_email })
+  }
   if (events.length > 0) {
     await recordEngagementEventsBatch(venueId, weddingId, events, 'inbound')
-    // Mirror to wedding_touchpoints. The source is the wedding's first-
-    // touch source (this email arrived via the same channel that brought
-    // the inquiry — Knot relay, direct email, etc.). engagementToTouchType
-    // skips heat-internal signals (specificity, sustained engagement)
+    // Mirror to wedding_touchpoints. engagementToTouchType skips
+    // heat-internal signals (specificity, sustained engagement)
     // automatically; only attribution-relevant funnel events land here.
     try {
       const { recordTouchpointsForEngagementEvents } = await import('@/lib/services/attribution/touchpoints')
-      const inferredSource = (wedding as { source?: string | null }).source ?? null
+      const legacyFallbackSource = (wedding as { source?: string | null }).source ?? null
       await recordTouchpointsForEngagementEvents(
         venueId,
         weddingId,
-        events.map((e) => ({
-          eventType: e.eventType,
-          source: inferredSource,
-          occurredAt: e.occurredAt,
-          metadata: e.metadata,
-        }))
+        events.map((e) => {
+          const interactionId = typeof e.metadata?.interaction_id === 'string'
+            ? e.metadata.interaction_id
+            : null
+          const linkedFromEmail = interactionId
+            ? interactionById.get(interactionId)?.from_email ?? null
+            : null
+          const derivedSource = deriveSourceFromEmail(linkedFromEmail)
+          return {
+            eventType: e.eventType,
+            // Prefer derived channel from the linked interaction; fall
+            // back to wedding.source only when the interaction is
+            // missing or carries no platform domain signal.
+            source: derivedSource ?? legacyFallbackSource,
+            occurredAt: e.occurredAt,
+            metadata: e.metadata,
+          }
+        })
       )
     } catch (err) {
       console.warn('[signal-inference] touchpoint mirror failed:', err)
@@ -575,12 +627,22 @@ export async function applySignalInference(
     await sb.from('weddings').update({ status: targetStatus }).eq('id', weddingId)
     // Status-change touchpoint — proposal_sent / contract_signed can be
     // inferred from text patterns even when no scheduling event fires.
-    // Source = wedding's first-touch source (the inquiry channel).
+    // Wave 9: derive from the latest event's linked interaction when
+    // possible (proposal pattern fires from a specific outbound), fall
+    // back to wedding.source.
     try {
       const { recordStatusChangeTouchpoint } = await import('@/lib/services/attribution/touchpoints')
-      const inferredSource = (wedding as { source?: string | null }).source ?? null
+      const legacyFallbackSource = (wedding as { source?: string | null }).source ?? null
+      const latestEvent = events.length > 0 ? events[events.length - 1] : null
+      const latestInteractionId = latestEvent && typeof latestEvent.metadata?.interaction_id === 'string'
+        ? latestEvent.metadata.interaction_id
+        : null
+      const latestFromEmail = latestInteractionId
+        ? interactionById.get(latestInteractionId)?.from_email ?? null
+        : null
+      const derivedSource = deriveSourceFromEmail(latestFromEmail)
       await recordStatusChangeTouchpoint(venueId, weddingId, targetStatus, {
-        source: inferredSource,
+        source: derivedSource ?? legacyFallbackSource,
         medium: 'signal_inference',
       })
     } catch (err) {

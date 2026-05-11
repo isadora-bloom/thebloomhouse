@@ -502,7 +502,15 @@ export async function commitNormalisedRows(args: {
               partner1Name: [row.partner1_first_name, row.partner1_last_name].filter(Boolean).join(' ') || null,
               partner2Name: [row.partner2_first_name, row.partner2_last_name].filter(Boolean).join(' ') || null,
             },
-            { sourceLabel: `crm_import:${crmSource}`, supabase }
+            {
+              sourceLabel: `crm_import:${crmSource}`,
+              supabase,
+              // Wave 9 root-cause: pass the CSV row's inquiry_date down to
+              // the resolver so a wedding minted by Branch C (fresh person
+              // + fresh wedding) doesn't drift to NOW() and trip
+              // inquiry_date_drift on the next sweep.
+              inquirySignalAt: row.inquiry_date ?? undefined,
+            },
           )
           resolvedWeddingId = resolved.weddingId
           resolvedPartner1Id = resolved.personId
