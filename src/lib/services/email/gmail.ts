@@ -1271,6 +1271,23 @@ export async function sendEmail(
   connectionId?: string,
   attachments?: EmailAttachment[],
 ): Promise<string | null> {
+  // 2026-05-11 live-customer fix: universal send-time refusal. Covers:
+  //   - RFC-2606 reserved TLDs (.invalid / .test / .example / .localhost)
+  //   - RFC-reserved second-level domains (example.com / .net / .org)
+  //   - no-reply / system-only local parts (noreply, postmaster,
+  //     mailer-daemon, bounces, unsubscribe, do-not-reply, …)
+  //   - malformed / empty addresses
+  // Refusing at the chokepoint means every caller (manual /agent/send,
+  // /agent/reply, autonomous-sender, follow-up sequences, daily digest)
+  // gets the same protection without each having to remember to check.
+  // The triggering bug was a WW synthetic placeholder bouncing, but the
+  // class is broader — see `isUnsendableAddress` JSDoc for full coverage.
+  const { isUnsendableAddress } = await import('@/lib/services/identity/body-extract')
+  if (isUnsendableAddress(to)) {
+    console.warn(`[gmail] Refusing to send to unsendable address: ${to}`)
+    return null
+  }
+
   const gmail = await getGmailClient(venueId, connectionId)
   if (!gmail) return null
 

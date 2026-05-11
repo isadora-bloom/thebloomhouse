@@ -85,6 +85,10 @@ export interface ClientDraftOptions {
   receivedAtAddress?: string
   /** Correlation id from upstream caller (T1-G). */
   correlationId?: string
+  /** Wave 27: id of the inbound interaction that triggered this draft.
+   *  Threaded into the knowledge-gap detector so platform_system / sage
+   *  authored inbounds skip detection silently. */
+  interactionId?: string | null
 }
 
 export interface OnboardingEmailOptions {
@@ -367,7 +371,7 @@ async function loadWeddingContext(weddingId: string): Promise<string> {
 export async function generateClientDraft(
   options: ClientDraftOptions
 ): Promise<DraftResult> {
-  const { venueId, contactEmail, weddingId, message, taskType, receivedAtAddress, correlationId } = options
+  const { venueId, contactEmail, weddingId, message, taskType, receivedAtAddress, correlationId, interactionId } = options
 
   // Load personality (Layer 1 + 2)
   const personalityData = await loadPersonalityDataCached(venueId)
@@ -602,6 +606,7 @@ export async function generateClientDraft(
     inboundBody: message.body ?? '',
     draftBody: result.text,
     correlationId,
+    interactionId: interactionId ?? null,
   }).catch(() => {
     // Detector errors are swallowed inside the service; this catch is
     // belt-and-suspenders in case the promise itself rejects.

@@ -27,16 +27,25 @@
  * under prior copy don't get a second footer appended on the next reply.
  */
 
+// v1-v3 markers were rendered as visible text in the email body — a couple
+// caught the `[sage-ai-disclosure-v3]` string and was understandably put off.
+// v4 switches to a zero-width Unicode sequence (ZWSP + ZWNJ + ZWSP + ZWNJ
+// + ZWJ). Gmail, Apple Mail, Outlook all preserve these characters in
+// plain text + HTML and none renders them — the marker stays invisible
+// while keeping the idempotency contract.
 export const AI_DISCLOSURE_MARKER_V1 = '[sage-ai-disclosure-v1]'
 export const AI_DISCLOSURE_MARKER_V2 = '[sage-ai-disclosure-v2]'
 export const AI_DISCLOSURE_MARKER_V3 = '[sage-ai-disclosure-v3]'
+export const AI_DISCLOSURE_MARKER_V4 = '​‌​‌‍'
 
 // Versioned markers let us upgrade the footer copy without double-appending
-// to threads that already carry an older marker.
+// to threads that already carry an older marker. v1-v3 stay in the lookup
+// for legacy threads; new sends always use v4.
 const ALL_MARKERS = [
   AI_DISCLOSURE_MARKER_V1,
   AI_DISCLOSURE_MARKER_V2,
   AI_DISCLOSURE_MARKER_V3,
+  AI_DISCLOSURE_MARKER_V4,
 ]
 
 export interface DisclosureContext {
@@ -64,6 +73,12 @@ export interface DisclosureContext {
    *  inside appendAIDisclosure) so retries on auto_send_pending don't
    *  stack signatures. */
   emailSignature?: string | null
+  /** Migration 299 (2026-05-11): operator-authored short phrase that
+   *  reads warm + accountable instead of clinical. E.g. "Based on
+   *  Isadora's thinking. She double-checks the important details before
+   *  anything goes out." When null / empty, falls back to a safe
+   *  generic line so unconfigured venues still ship a valid footer. */
+  reviewerIntro?: string | null
 }
 
 function buildFooter(ctx: DisclosureContext): string {
@@ -80,18 +95,28 @@ function buildFooter(ctx: DisclosureContext): string {
     ? `${trimmedName}, ${venue}'s ${safeRole}`
     : `${venue}'s ${safeRole}`
 
+  // Operator-authored review line. Warm + accountable. Falls back to a
+  // generic line so unconfigured venues still ship a valid footer.
+  const reviewerLine = (ctx.reviewerIntro?.trim() ||
+    `Reviewed by the ${venue} team before anything important goes out.`)
+
   const escalation = ctx.escalationEmail?.trim()
-  // Stream EEEE: never ship a broken `mailto:` link. If no address
-  // resolves, drop the second sentence rather than shipping
-  // "or email  directly".
+  // 2026-05-11: dropped the "Reply with HUMAN REQUESTED in the subject"
+  // instruction — couples reading it felt forced into a robot-talk
+  // protocol and one of them snapped back. The pipeline's escalation
+  // detector now catches "talk to a person", "is this a bot", "speak
+  // to someone" etc. semantically, so the visible footer can stay warm.
   const escalationLine = escalation
-    ? `\n\nNeed a human? Reply with "HUMAN REQUESTED" in the subject, or email ${escalation} directly.`
+    ? `\n\nWant to talk to a real person? Just ask, or email ${escalation}.`
     : ''
 
+  // Migration 300 (2026-05-11): disclosure-version idempotency moved off
+  // the body to interactions.disclosure_version. The body no longer
+  // carries a visible marker; callers persist the returned version via
+  // appendAIDisclosureWithVersion().
   return `
 ––
-${signoff}${escalationLine}
-${AI_DISCLOSURE_MARKER_V3}`.trimEnd()
+${signoff}. ${reviewerLine}${escalationLine}`.trimEnd()
 }
 
 /** Append the venue's free-text email signature to a body if one is set.
@@ -110,21 +135,99 @@ function appendEmailSignature(body: string, signature: string | null | undefined
   return `${trimmed}\n\n${sig}`
 }
 
-/** Append the AI disclosure footer to an email body. Idempotent across
- *  v1 / v2 / v3 markers so migration and retries don't double-disclose.
+/** Append the AI disclosure footer to an email body. Idempotent two ways:
+ *    (a) legacy: a v1/v2/v3 marker is still in the body (older drafts
+ *        composed before migration 300 had the marker inlined). We skip.
+ *    (b) modern (preferred): the caller passes previousDisclosureVersion
+ *        from interactions.disclosure_version. If set, we skip and return
+ *        the body unchanged.
  *
- *  Order of operations (migration 214):
+ *  Order of operations:
  *    1. body
  *    2. coordinator email_signature (skipped when empty)
  *    3. AI disclosure footer
  *  The signature sits BETWEEN the body and the disclosure so the legal
  *  footer is always the last block — couples scanning for the "AI"
- *  disclosure don't have to read past a long custom signature. */
+ *  disclosure don't have to read past a long custom signature.
+ *
+ *  Migration 300: the visible-text marker is REMOVED from the footer.
+ *  Idempotency now lives on interactions.disclosure_version. Callers
+ *  should prefer appendAIDisclosureWithVersion (returns both body and
+ *  version stamp to persist). This function stays for back-compat. */
 export function appendAIDisclosure(body: string, ctx: DisclosureContext = {}): string {
-  if (ALL_MARKERS.some((m) => body.includes(m))) return body
-  const withSignature = appendEmailSignature(body, ctx.emailSignature)
+  // 2026-05-11: also sanitize first-person physical-presence claims (see
+  // universal-rules PHYSICAL PRESENCE BOUNDARY). Same guard the modern
+  // appendAIDisclosureWithVersion runs — back-compat callers benefit too.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+  const { scrubPhysicalPresenceClaims } = require('./physical-presence-guard') as
+    typeof import('./physical-presence-guard')
+  const sanitized = scrubPhysicalPresenceClaims(body).body
+
+  // Legacy bodies that carry an in-body marker — leave them alone after
+  // sanitisation (idempotent).
+  if (ALL_MARKERS.some((m) => sanitized.includes(m))) return sanitized
+  const withSignature = appendEmailSignature(sanitized, ctx.emailSignature)
   const trimmed = withSignature.trimEnd()
   return `${trimmed}\n\n${buildFooter(ctx)}\n`
+}
+
+/** Modern version-aware entry point. Caller passes the row's current
+ *  disclosure_version (NULL = never disclosed). When already disclosed,
+ *  body is returned unchanged with the same version. When not yet
+ *  disclosed, body gets the footer appended and the new version is
+ *  returned for the caller to persist on interactions.disclosure_version
+ *  + drafts.disclosure_version.
+ *
+ *  This is the new chokepoint: every outbound send site must call this
+ *  and persist the returned version. Pre-300 sites that call the legacy
+ *  appendAIDisclosure still work — they just never set disclosure_version
+ *  on the row. The data-integrity invariant `disclosure_version_set`
+ *  (migration 300 follow-up) catches outbound rows missing the stamp.
+ *
+ *  2026-05-11: also runs the physical-presence guard. The PHYSICAL
+ *  PRESENCE BOUNDARY rule in universal-rules.ts forbids first-person
+ *  singular + physical verbs ("I'll show you around"). The rule is the
+ *  primary protection; this sanitizer is belt-and-suspenders so any
+ *  drafts that slip through still get rewritten before send. Caller
+ *  can read `physicalPresenceViolations` to surface a review banner
+ *  on /agent/drafts.
+ */
+export function appendAIDisclosureWithVersion(
+  body: string,
+  ctx: DisclosureContext = {},
+  previousDisclosureVersion: string | null = null,
+): {
+  body: string
+  disclosureVersion: 'v4'
+  physicalPresenceViolations: ReturnType<typeof scrubPhysicalPresenceClaims>['violations']
+} {
+  // Sanitize first-person physical-presence claims BEFORE any other
+  // processing so the rewrites land in stored full_body, not just the
+  // sent message.
+  // Lazy require to avoid module-load cycle — disclosure + presence guard
+  // are independent concerns, kept that way.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+  const { scrubPhysicalPresenceClaims } = require('./physical-presence-guard') as
+    typeof import('./physical-presence-guard')
+  const scrubbed = scrubPhysicalPresenceClaims(body)
+  const sanitizedBody = scrubbed.body
+  const physicalPresenceViolations = scrubbed.violations
+
+  // Modern idempotency: row already stamped → don't re-append.
+  if (previousDisclosureVersion) {
+    return { body: sanitizedBody, disclosureVersion: 'v4', physicalPresenceViolations }
+  }
+  // Legacy in-body marker (pre-mig-300 row in an existing thread) → also skip.
+  if (ALL_MARKERS.some((m) => sanitizedBody.includes(m))) {
+    return { body: sanitizedBody, disclosureVersion: 'v4', physicalPresenceViolations }
+  }
+  const withSignature = appendEmailSignature(sanitizedBody, ctx.emailSignature)
+  const trimmed = withSignature.trimEnd()
+  return {
+    body: `${trimmed}\n\n${buildFooter(ctx)}\n`,
+    disclosureVersion: 'v4',
+    physicalPresenceViolations,
+  }
 }
 
 /** One-shot helper for outbound send sites. Looks up the venue's Sage
@@ -153,7 +256,7 @@ export async function fetchDisclosureContext(venueId: string): Promise<Disclosur
     const [{ data: cfg }, { data: venue }, { data: venueCfg }] = await Promise.all([
       supabase
         .from('venue_ai_config')
-        .select('ai_name, ai_role, escalation_email, email_signature')
+        .select('ai_name, ai_role, escalation_email, email_signature, reviewer_intro')
         .eq('venue_id', venueId)
         .maybeSingle(),
       supabase.from('venues').select('name, owner_email').eq('id', venueId).maybeSingle(),
@@ -175,6 +278,7 @@ export async function fetchDisclosureContext(venueId: string): Promise<Disclosur
       venueName: (venue?.name as string | undefined) ?? null,
       escalationEmail,
       emailSignature: (cfg?.email_signature as string | undefined) ?? null,
+      reviewerIntro: (cfg?.reviewer_intro as string | undefined) ?? null,
     }
   } catch {
     return {}

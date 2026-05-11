@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/email/gmail'
 import { createServiceClient } from '@/lib/supabase/service'
-import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
+import { appendAIDisclosureWithVersion, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
 import { updateThreadLifecycleFolder } from '@/lib/services/inbox/lifecycle'
+import { isUnsendableAddress } from '@/lib/services/identity/body-extract'
 
 // ---------------------------------------------------------------------------
 // POST — Reply to an existing email thread
@@ -28,10 +29,13 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
-    // Look up the original interaction to get thread info and recipient
+    // Look up the original interaction to get thread info and recipient.
+    // Migration 300: also fetch the inbound's from_email (best routable
+    // address when people.email is a synthetic placeholder), plus any
+    // existing thread-level disclosure_version so we don't re-append.
     const { data: interaction, error: fetchErr } = await supabase
       .from('interactions')
-      .select('id, subject, gmail_thread_id, person_id, venue_id, people!interactions_person_id_fkey(email)')
+      .select('id, subject, gmail_thread_id, person_id, venue_id, from_email, people!interactions_person_id_fkey(email)')
       .eq('id', interactionId)
       .eq('venue_id', auth.venueId)
       .maybeSingle()
@@ -40,8 +44,30 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Interaction not found' }, { status: 404 })
     }
 
-    const recipientEmail = (interaction as any).people?.email
-    if (!recipientEmail) {
+    // 2026-05-11 live-customer fix: prefer the inbound's from_email when
+    // people.email is unsendable (synthetic placeholder, no-reply local
+    // part, reserved TLD). The form-relay-parsers fix anchors NEW leads
+    // on the per-prospect relay where available; historical rows still
+    // carry the unroutable email. The thread's actual from_email is
+    // usually the routable one.
+    const peopleEmail = (interaction as any).people?.email as string | undefined
+    const fromEmail = (interaction.from_email as string | null) ?? undefined
+    let recipientEmail: string | undefined
+    if (peopleEmail && !isUnsendableAddress(peopleEmail)) {
+      recipientEmail = peopleEmail
+    } else if (fromEmail && !isUnsendableAddress(fromEmail)) {
+      recipientEmail = fromEmail
+    } else if (peopleEmail) {
+      // Both unsendable. Surface the operator-friendly error rather
+      // than ship a guaranteed bounce.
+      return NextResponse.json(
+        {
+          error: 'needs_real_address',
+          message: 'This thread has no routable email address yet — open the inbound and use the listing platform reply link, or wait for the couple to send a follow-up before replying.',
+        },
+        { status: 422 },
+      )
+    } else {
       return NextResponse.json({ error: 'No recipient email found for this thread' }, { status: 400 })
     }
 
@@ -49,10 +75,27 @@ export async function POST(request: NextRequest) {
       ? interaction.subject
       : `Re: ${interaction.subject || '(No subject)'}`
 
-    // Enforce AI disclosure — idempotent, so safe if the body already
-    // contains the marker (e.g. from a quoted prior thread).
+    // Migration 300: idempotency for the disclosure footer lives on
+    // interactions.disclosure_version now (not in body). Look up the
+    // thread's most recent outbound to see whether a footer was already
+    // shipped on this thread.
+    let previousDisclosureVersion: string | null = null
+    if (interaction.gmail_thread_id) {
+      const { data: prior } = await supabase
+        .from('interactions')
+        .select('disclosure_version')
+        .eq('venue_id', auth.venueId)
+        .eq('gmail_thread_id', interaction.gmail_thread_id)
+        .eq('direction', 'outbound')
+        .not('disclosure_version', 'is', null)
+        .order('timestamp', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      previousDisclosureVersion = (prior?.disclosure_version as string | null) ?? null
+    }
     const disclosureCtx = await fetchDisclosureContext(auth.venueId)
-    const bodyWithDisclosure = appendAIDisclosure(body, disclosureCtx)
+    const { body: bodyWithDisclosure, disclosureVersion } =
+      appendAIDisclosureWithVersion(body, disclosureCtx, previousDisclosureVersion)
 
     const sentMessageId = await sendEmail(
       auth.venueId,
@@ -90,6 +133,9 @@ export async function POST(request: NextRequest) {
       gmail_message_id: sentMessageId,
       timestamp: new Date().toISOString(),
       signal_class: 'unclassified',
+      // Migration 300: persist the disclosure version on the row so the
+      // next reply on this thread short-circuits the footer re-append.
+      disclosure_version: disclosureVersion,
     })
 
     // Inbox lifecycle folder (mig 242). A coordinator reply on a thread

@@ -53,13 +53,13 @@ export const SAMPLE_INQUIRIES: SampleInquiry[] = [
     subject: 'Pricing question',
     body: 'Hello, how much is the venue rental for a Saturday in October? We have about 120 guests.',
     source: 'wedding_wire',
-    draft: `Hello! Thanks so much for reaching out.\n\nOctober is one of our most popular months — the foliage is absolutely stunning. For a Saturday in October with 120 guests, our venue rental is $9,500. This includes exclusive use of the property from 10am through midnight, the ceremony garden, reception hall, bridal suite, and our dedicated setup team.\n\nI'd recommend booking a tour soon, as October dates tend to go quickly! We have a few Saturdays still open for 2027.\n\nLet me know if you'd like to come see the space!\n\nBest,\nSage`,
+    draft: `Hello! Thanks so much for reaching out.\n\nOctober is one of our most popular months — the foliage is absolutely stunning. For a Saturday in October with 120 guests, our venue rental is $9,500. This includes exclusive use of the property from 10am through midnight, the ceremony garden, reception hall, bridal suite, and our dedicated setup team.\n\nWe'd recommend booking a tour soon, as October dates tend to go quickly! We have a few Saturdays still open for 2027.\n\nLet me know if you'd like to come see the space!\n\nBest,\nSage`,
   },
   {
     subject: 'Availability check',
     body: 'Do you have June 14, 2027 available? We are looking for outdoor ceremony and indoor reception.',
     source: 'google',
-    draft: `Hi! Great news — June 14, 2027 is currently available!\n\nAnd you're in luck — our property is perfectly set up for exactly what you're describing. Our outdoor ceremony garden seats up to 250 with mountain views, and the indoor reception hall has floor-to-ceiling windows so you still get that outdoor feeling.\n\nI'd love to show you both spaces in person. Would a weekend tour work for you?\n\nLooking forward to connecting!\n\nWarmly,\nSage`,
+    draft: `Hi! Great news — June 14, 2027 is currently available!\n\nAnd you're in luck — our property is perfectly set up for exactly what you're describing. Our outdoor ceremony garden seats up to 250 with mountain views, and the indoor reception hall has floor-to-ceiling windows so you still get that outdoor feeling.\n\nThe team would love to show you both spaces in person. Would a weekend tour work for you?\n\nLooking forward to connecting!\n\nWarmly,\nSage`,
   },
   {
     subject: 'Can we bring our dog?',
@@ -83,7 +83,7 @@ export const SAMPLE_INQUIRIES: SampleInquiry[] = [
     subject: 'Tour request',
     body: 'We would love to see the property! When are tours available? We are free most weekends.',
     source: 'the_knot',
-    draft: `We'd love to show you around! Tours are available Saturdays and Sundays by appointment — we like to give each couple our full attention so you can really take your time exploring.\n\nWe typically have slots at 10am, 12pm, and 2pm. The whole visit takes about 45 minutes to an hour, and you're welcome to bring family or friends along.\n\nWhat weekend works best for you? I'll get you on the calendar right away!\n\nLooking forward to meeting you,\nSage`,
+    draft: `The team would love to show you around! Tours are available Saturdays and Sundays by appointment — we like to give each couple our full attention so you can really take your time exploring.\n\nWe typically have slots at 10am, 12pm, and 2pm. The whole visit takes about 45 minutes to an hour, and you're welcome to bring family or friends along.\n\nWhat weekend works best for you? I'll get you on the calendar right away!\n\nLooking forward to hosting you,\nSage`,
   },
   {
     subject: 'Comparing venues',
@@ -95,7 +95,7 @@ export const SAMPLE_INQUIRIES: SampleInquiry[] = [
     subject: 'Large wedding question',
     body: 'We are planning a big celebration - 250+ guests. Can your venue handle that? What are the options for a large group?',
     source: 'wedding_wire',
-    draft: `What a celebration that's going to be! We love big, joyful weddings.\n\nOur property can accommodate up to 300 guests with a combined indoor/outdoor layout. For groups over 200, most couples use both the reception hall and our covered pavilion, which creates a wonderful flow between spaces.\n\nFor the ceremony, our main garden site seats 300 comfortably with room to spare.\n\nA few things to note for larger groups: we recommend tent rental for the cocktail hour area, and we have a preferred list of caterers experienced with 250+ person events.\n\nI'd love to walk you through the layout in person — would you be available for a tour soon?\n\nWarmly,\nSage`,
+    draft: `What a celebration that's going to be! We love big, joyful weddings.\n\nOur property can accommodate up to 300 guests with a combined indoor/outdoor layout. For groups over 200, most couples use both the reception hall and our covered pavilion, which creates a wonderful flow between spaces.\n\nFor the ceremony, our main garden site seats 300 comfortably with room to spare.\n\nA few things to note for larger groups: we recommend tent rental for the cocktail hour area, and we have a preferred list of caterers experienced with 250+ person events.\n\nThe team would love to walk you through the layout in person — would you be available for a tour soon?\n\nWarmly,\nSage`,
   },
   {
     subject: 'Budget concerns',

@@ -24,7 +24,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useAiName } from '@/lib/hooks/use-ai-name'
-import { ArrowLeft, Sparkles, Plus, Trash2, Loader2, Save } from 'lucide-react'
+import { ArrowLeft, Sparkles, Plus, Trash2, Loader2, Save, Wand2, X, Check } from 'lucide-react'
 
 type Season = 'spring' | 'summer' | 'fall' | 'winter'
 
@@ -34,6 +34,23 @@ interface SeasonalRow {
   imagery: string
   phrases: string[]
 }
+
+interface SeasonalImageryProposal {
+  imagery: string | null
+  evidence_excerpt: string
+}
+
+interface SeasonalPhraseProposal {
+  phrase: string
+  evidence_excerpt: string
+}
+
+interface SeasonalSeasonProposal {
+  imagery: SeasonalImageryProposal | null
+  phrases: SeasonalPhraseProposal[]
+}
+
+type SeasonalProposals = Record<Season, SeasonalSeasonProposal>
 
 const SEASONS: Array<{ key: Season; label: string; emoji: string; hint: string }> = [
   { key: 'spring', label: 'Spring', emoji: '🌸', hint: 'March–May. Soft blooms, awakening, longer light.' },
@@ -49,6 +66,13 @@ export default function SeasonalContentPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<Season | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // Content-suggester state. One button at the top kicks off the
+  // Sonnet pass; suggestions render inline within each season's card.
+  // Never auto-saves — operator clicks Save per season after review.
+  const [suggesting, setSuggesting] = useState(false)
+  const [suggestError, setSuggestError] = useState<string | null>(null)
+  const [proposals, setProposals] = useState<SeasonalProposals | null>(null)
 
   function emptyRows(): Record<Season, SeasonalRow> {
     return {
@@ -157,6 +181,91 @@ export default function SeasonalContentPage() {
     }))
   }
 
+  async function handleSuggest() {
+    if (!venueId) return
+    setSuggesting(true)
+    setSuggestError(null)
+    setProposals(null)
+    try {
+      const res = await fetch('/api/admin/content-suggest/seasonal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ venueId }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setSuggestError(data?.error ?? 'Could not pull suggestions.')
+        return
+      }
+      const incoming = (data?.suggestions ?? {}) as Partial<SeasonalProposals>
+      const next: SeasonalProposals = {
+        spring: incoming.spring ?? { imagery: null, phrases: [] },
+        summer: incoming.summer ?? { imagery: null, phrases: [] },
+        fall: incoming.fall ?? { imagery: null, phrases: [] },
+        winter: incoming.winter ?? { imagery: null, phrases: [] },
+      }
+      setProposals(next)
+    } catch (err) {
+      setSuggestError(err instanceof Error ? err.message : 'Network error.')
+    } finally {
+      setSuggesting(false)
+    }
+  }
+
+  function acceptImagery(season: Season) {
+    const proposal = proposals?.[season].imagery
+    if (!proposal?.imagery) return
+    const value = proposal.imagery
+    setRows((prev) => ({
+      ...prev,
+      [season]: { ...prev[season], imagery: value },
+    }))
+    // Clear the imagery proposal once accepted.
+    setProposals((prev) =>
+      prev ? { ...prev, [season]: { ...prev[season], imagery: null } } : prev,
+    )
+  }
+
+  function skipImagery(season: Season) {
+    setProposals((prev) =>
+      prev ? { ...prev, [season]: { ...prev[season], imagery: null } } : prev,
+    )
+  }
+
+  function acceptPhrase(season: Season, phrase: string) {
+    setRows((prev) => ({
+      ...prev,
+      [season]: { ...prev[season], phrases: [...prev[season].phrases, phrase] },
+    }))
+    setProposals((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        [season]: {
+          ...prev[season],
+          phrases: prev[season].phrases.filter((p) => p.phrase !== phrase),
+        },
+      }
+    })
+  }
+
+  function skipPhrase(season: Season, phrase: string) {
+    setProposals((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        [season]: {
+          ...prev[season],
+          phrases: prev[season].phrases.filter((p) => p.phrase !== phrase),
+        },
+      }
+    })
+  }
+
+  function dismissProposals() {
+    setProposals(null)
+  }
+
   if (loading) {
     return (
       <div className="p-6 flex items-center gap-2 text-sm text-sage-600">
@@ -191,10 +300,47 @@ export default function SeasonalContentPage() {
         </div>
       )}
 
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={handleSuggest}
+          disabled={suggesting}
+          className="inline-flex items-center gap-1.5 px-3 py-2 text-sm text-sage-800 bg-warm-white border border-sage-300 rounded-lg hover:bg-sage-50 disabled:opacity-50"
+          title="Read your venue website and propose imagery + phrases for every season"
+        >
+          {suggesting ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Wand2 className="w-4 h-4 text-sage-700" />
+          )}
+          {suggesting ? 'Reading your website…' : 'Pull suggestions for all seasons'}
+        </button>
+        {proposals && (
+          <button
+            type="button"
+            onClick={dismissProposals}
+            className="inline-flex items-center gap-1 text-xs text-sage-500 hover:text-sage-800"
+          >
+            <X className="w-3.5 h-3.5" /> Dismiss all suggestions
+          </button>
+        )}
+        {suggestError && (
+          <span className="text-sm text-rose-600">{suggestError}</span>
+        )}
+        {proposals && !suggestError && (
+          <span className="text-xs text-sage-500">
+            Suggestions appear inside each season below. Accept what fits, then Save the season.
+          </span>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {SEASONS.map(({ key, label, emoji, hint }) => {
           const row = rows[key]
           const isSaving = saving === key
+          const proposal = proposals?.[key]
+          const hasImageryProposal = !!proposal?.imagery?.imagery
+          const phraseProposals = proposal?.phrases ?? []
           return (
             <div key={key} className="bg-surface border border-border rounded-xl p-5 space-y-3">
               <div>
@@ -204,6 +350,73 @@ export default function SeasonalContentPage() {
                 </h2>
                 <p className="text-xs text-sage-500 mt-0.5">{hint}</p>
               </div>
+
+              {proposal && (hasImageryProposal || phraseProposals.length > 0) && (
+                <div className="bg-sage-50/60 border border-sage-200 rounded-lg p-3 space-y-2.5">
+                  <p className="text-xs font-medium text-sage-700 inline-flex items-center gap-1">
+                    <Sparkles className="w-3.5 h-3.5 text-sage-600" /> Suggestions from your website
+                  </p>
+                  {hasImageryProposal && proposal.imagery && (
+                    <div className="bg-white border border-sage-200 rounded p-2 space-y-1">
+                      <p className="text-[11px] uppercase tracking-wide text-sage-500">Imagery</p>
+                      <p className="text-sm text-sage-900">{proposal.imagery.imagery}</p>
+                      {proposal.imagery.evidence_excerpt && (
+                        <p className="text-[11px] italic text-sage-500">
+                          From the site: &ldquo;{proposal.imagery.evidence_excerpt}&rdquo;
+                        </p>
+                      )}
+                      <div className="flex items-center gap-1.5 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => acceptImagery(key)}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium text-sage-800 bg-sage-100 hover:bg-sage-200 rounded"
+                        >
+                          <Check className="w-3 h-3" /> Use this
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => skipImagery(key)}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] text-sage-500 hover:text-sage-800 hover:bg-sage-50 rounded"
+                        >
+                          <X className="w-3 h-3" /> Skip
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {phraseProposals.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-[11px] uppercase tracking-wide text-sage-500">Phrases</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {phraseProposals.map((p, i) => (
+                          <div
+                            key={i}
+                            className="inline-flex items-center gap-1 bg-white border border-sage-200 rounded-full px-2 py-1 text-xs text-sage-800"
+                            title={p.evidence_excerpt ? `From the site: "${p.evidence_excerpt}"` : undefined}
+                          >
+                            <span className="max-w-[24rem] truncate">{p.phrase}</span>
+                            <button
+                              type="button"
+                              onClick={() => acceptPhrase(key, p.phrase)}
+                              className="p-0.5 text-sage-700 hover:text-sage-900 hover:bg-sage-100 rounded-full"
+                              title="Add this phrase"
+                            >
+                              <Check className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => skipPhrase(key, p.phrase)}
+                              className="p-0.5 text-sage-500 hover:text-sage-800 hover:bg-sage-50 rounded-full"
+                              title="Skip"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-sage-700">Imagery</label>

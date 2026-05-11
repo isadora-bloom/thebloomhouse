@@ -658,7 +658,8 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     // Coordinator absences — active or upcoming.
     supabase
       .from('coordinator_absences')
-      .select('start_at, end_at, reason, handoff_notes, assigned_consultant_id, user_profiles:assigned_consultant_id(full_name)')
+      // 2026-05-11: user_profiles has first_name + last_name, NOT full_name.
+      .select('start_at, end_at, reason, handoff_notes, assigned_consultant_id, user_profiles:assigned_consultant_id(first_name, last_name)')
       .eq('venue_id', venueId)
       .is('deleted_at', null)
       .gte('end_at', new Date(NOW_MS).toISOString())
@@ -987,22 +988,26 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     .slice(0, 30)
 
   // Coordinator absences.
+  type CoordAbsenceProfile = { first_name: string | null; last_name: string | null }
   type CoordAbsenceRaw = {
     start_at: string
     end_at: string
     reason: string
     handoff_notes: string | null
-    user_profiles: { full_name: string } | { full_name: string }[] | null
+    user_profiles: CoordAbsenceProfile | CoordAbsenceProfile[] | null
   }
   const coordinatorAbsences: CoordinatorAbsenceRow[] = (
     (coordinatorAbsencesResult.data ?? []) as CoordAbsenceRaw[]
   ).map((r) => {
     const profile = Array.isArray(r.user_profiles) ? r.user_profiles[0] : r.user_profiles
+    const first = profile?.first_name?.trim() ?? ''
+    const last = profile?.last_name?.trim() ?? ''
+    const combined = [first, last].filter(Boolean).join(' ')
     return {
       start_date: (r.start_at ?? '').split('T')[0],
       end_date: (r.end_at ?? '').split('T')[0],
       reason: r.reason ?? '',
-      coordinator_name: profile?.full_name ?? null,
+      coordinator_name: combined || null,
     }
   })
 

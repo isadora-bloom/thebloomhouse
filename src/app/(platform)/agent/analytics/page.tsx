@@ -521,6 +521,18 @@ export default function AgentAnalyticsPage() {
 
   const totalDrafts = draftPerformance.reduce((sum, d) => sum + d.count, 0)
 
+  // Scope label. Show what the operator is actually looking at so a
+  // confused "wait, which venue is this for?" never happens. Mirrors the
+  // resolution order: venue, group, company, then company-wide fallback.
+  const scopeLabel =
+    scope.level === 'venue'
+      ? scope.venueName ?? 'Current venue'
+      : scope.level === 'group'
+        ? scope.groupName ?? 'Current group'
+        : scope.companyName ?? 'All venues'
+  const periodLabel =
+    PERIOD_OPTIONS.find((p) => p.value === period)?.label ?? period
+
   return (
     <div className="space-y-6">
       {/* ---- Header ---- */}
@@ -544,6 +556,16 @@ export default function AgentAnalyticsPage() {
             </option>
           ))}
         </select>
+      </div>
+
+      {/* ---- Scope banner ---- */}
+      <div className="bg-sage-50 border border-sage-200 rounded-lg px-4 py-2.5 flex items-center gap-2 text-sm">
+        <BarChart3 className="w-4 h-4 text-sage-700 shrink-0" />
+        <span className="text-sage-700">
+          Showing: <span className="font-semibold text-sage-900">{scopeLabel}</span>
+          <span className="text-sage-400 mx-2">·</span>
+          <span className="font-semibold text-sage-900">{periodLabel}</span>
+        </span>
       </div>
 
       {/* ---- Error ---- */}

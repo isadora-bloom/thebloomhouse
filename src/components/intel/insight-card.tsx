@@ -33,6 +33,13 @@ export interface InsightRow {
   expires_at: string | null
   created_at: string
   updated_at: string
+  /** F27 — when context_id points at a wedding, the API resolves the
+   *  couple name and ships it on the row so the card can render a
+   *  human label instead of a raw UUID. Null when there's no couple
+   *  context (e.g. macro correlations). */
+  couple_label?: string | null
+  /** F27 — wedding_id this insight is about, for the lead detail link. */
+  context_wedding_id?: string | null
 }
 
 interface InsightCardProps {
@@ -116,9 +123,28 @@ export function InsightCard({ insight, onStatusChange, compact = false }: Insigh
     updateStatus('acted_on', actionNote || undefined)
   }
 
-  // Format data points for display
+  // Format data points for display. F27 — hide raw UUIDs and known
+  // internal id keys; the operator sees a UUID and reads it as
+  // "broken text", not a useful signal. The lead-detail page is the
+  // surface that joins the id back to a couple name.
+  const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  const HIDDEN_DATA_KEYS = new Set([
+    'action_note',
+    'action_taken_by',
+    'wedding_id',
+    'person_id',
+    'venue_id',
+    'interaction_id',
+    'candidate_id',
+    'context_id',
+  ])
   const dataEntries = Object.entries(insight.data_points ?? {}).filter(
-    ([key]) => key !== 'action_note' && key !== 'action_taken_by'
+    ([key, value]) => {
+      if (HIDDEN_DATA_KEYS.has(key)) return false
+      if (typeof value === 'string' && UUID_RE.test(value)) return false
+      return true
+    },
   )
 
   return (
@@ -176,11 +202,19 @@ export function InsightCard({ insight, onStatusChange, compact = false }: Insigh
             )}
           </div>
 
-          {/* Title */}
+          {/* Title — prefix with couple name when the insight is about a
+              specific wedding (F27). Joins happen API-side; this renders
+              "Sarah & Jamie · Decay diagnosed: …" instead of a UUID. */}
           <h3 className={cn(
             'font-medium text-sage-900 leading-snug',
             compact ? 'text-sm' : 'text-sm'
           )}>
+            {insight.couple_label ? (
+              <>
+                <span className="text-sage-700">{insight.couple_label}</span>
+                <span className="text-sage-400 mx-1.5">·</span>
+              </>
+            ) : null}
             {insight.title}
           </h3>
 

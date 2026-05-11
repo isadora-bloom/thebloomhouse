@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { useScope } from '@/lib/hooks/use-scope'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
@@ -53,6 +54,51 @@ interface RecentNotification {
   read: boolean
   created_at: string
   venue_name?: string | null
+  wedding_id?: string | null
+}
+
+// F26 — route every notification to where the operator can act on it.
+// Returns null when there is no sensible target (the card stays inert).
+// Per-type wiring lives in one place so adding a new notification type
+// is a 1-line change instead of scattered conditionals.
+function notificationHref(notif: RecentNotification): string | null {
+  // wedding_id is the most common foreign key; map most types through it.
+  const w = notif.wedding_id ?? null
+  // Body may carry a draft_id for draft-pending or pending-auto-send rows
+  // (the writer JSON-encodes details). Best-effort parse.
+  let draftId: string | null = null
+  if (notif.body) {
+    try {
+      const parsed = JSON.parse(notif.body) as Record<string, unknown>
+      if (typeof parsed.draftId === 'string') draftId = parsed.draftId
+      else if (typeof parsed.draft_id === 'string') draftId = parsed.draft_id as string
+    } catch {
+      // body is plain text, not JSON — fine.
+    }
+  }
+
+  switch (notif.type) {
+    case 'new_inquiry':
+    case 'inquiry_arrived':
+      return w ? `/agent/inbox?wedding=${w}` : '/agent/inbox'
+    case 'draft_pending':
+    case 'auto_send_pending':
+      return draftId
+        ? `/agent/drafts?draft=${draftId}`
+        : '/agent/drafts'
+    case 'tour_booked':
+    case 'tour_scheduled':
+    case 'tour_completed':
+      return w ? `/intel/leads/${w}` : '/intel/leads'
+    case 'escalation':
+    case 'escalation_required':
+    case 'contract_signing_detected':
+    case 'booking_confirmation_prompt':
+    case 'brain_dump_grant_fired':
+      return w ? `/intel/leads/${w}` : null
+    default:
+      return w ? `/intel/leads/${w}` : null
+  }
 }
 
 interface PendingAutoSendDetails {
@@ -210,6 +256,70 @@ function GrantFiredBody({ body }: { body: string }) {
       >
         Manage rule
       </a>
+    </p>
+  )
+}
+
+/**
+ * F29 — render a notification body, gracefully unpacking any JSON
+ * payload into a readable line. Some writers stringify metadata into
+ * `body` (legacy escalation / re-engagement / etc.) and dumping the
+ * raw JSON on the operator surface looks broken. This helper keeps
+ * the human-readable case fast (plain text passes through) and only
+ * pays the parse cost on bodies that start with `{`.
+ */
+function NotificationBody({ body }: { body: string }) {
+  const trimmed = body.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return <p className="text-xs text-sage-500 truncate mt-0.5">{body}</p>
+  }
+  let parsed: Record<string, unknown> | unknown[] | null
+  try {
+    parsed = JSON.parse(trimmed) as Record<string, unknown> | unknown[]
+  } catch {
+    return <p className="text-xs text-sage-500 truncate mt-0.5">{body}</p>
+  }
+  if (Array.isArray(parsed) || !parsed) {
+    return <p className="text-xs text-sage-500 truncate mt-0.5">{body}</p>
+  }
+  // Pull a small set of common fields and format them. Anything not in
+  // the allowlist gets hidden so we don't leak ids / internal blobs.
+  const obj = parsed as Record<string, unknown>
+  const formatVal = (v: unknown): string => {
+    if (typeof v === 'string') return v
+    if (typeof v === 'number') return String(v)
+    if (typeof v === 'boolean') return v ? 'yes' : 'no'
+    return ''
+  }
+  const candidates: Array<{ key: string; label: string }> = [
+    { key: 'reason', label: 'Reason' },
+    { key: 'message', label: 'Message' },
+    { key: 'summary', label: 'Summary' },
+    { key: 'coupleLabel', label: 'Couple' },
+    { key: 'couple_name', label: 'Couple' },
+    { key: 'toName', label: 'To' },
+    { key: 'subject', label: 'Subject' },
+    { key: 'matchedPhrase', label: 'Matched' },
+    { key: 'source', label: 'Source' },
+  ]
+  const lines = candidates
+    .map((c) => {
+      const v = formatVal(obj[c.key])
+      return v ? `${c.label}: ${v}` : null
+    })
+    .filter((s): s is string => s !== null)
+  if (lines.length === 0) {
+    // Nothing safe to render. Show a generic placeholder instead of
+    // dumping the raw JSON.
+    return (
+      <p className="text-xs text-sage-500 mt-0.5 italic">
+        Details available, open to view.
+      </p>
+    )
+  }
+  return (
+    <p className="text-xs text-sage-500 truncate mt-0.5">
+      {lines.join(' · ')}
     </p>
   )
 }
@@ -1119,39 +1229,49 @@ export default function NotificationsPage() {
           </div>
         ) : (
           <div className="bg-surface border border-border rounded-xl shadow-sm overflow-hidden divide-y divide-border">
-            {recentNotifications.map((notif) => (
-              <div
-                key={notif.id}
-                className={`px-5 py-3 flex items-start gap-3 ${
-                  !notif.read ? 'bg-sage-50/50' : ''
-                }`}
-              >
-                {!notif.read && (
-                  <span className="w-2 h-2 rounded-full bg-sage-500 mt-1.5 shrink-0" />
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className={`text-sm ${!notif.read ? 'font-medium text-sage-900' : 'text-sage-700'}`}>
-                      {notif.title}
-                    </p>
-                    {showVenueChip && <VenueChip venueName={notif.venue_name} />}
-                    {notif.type === 'brain_dump_grant_fired' && (
-                      <span className="text-[10px] font-medium uppercase tracking-wider text-sage-700 bg-sage-100 px-1.5 py-0.5 rounded">
-                        Auto-filed via rule
-                      </span>
+            {recentNotifications.map((notif) => {
+              const href = notificationHref(notif)
+              const baseClass = `px-5 py-3 flex items-start gap-3 ${
+                !notif.read ? 'bg-sage-50/50' : ''
+              } ${href ? 'hover:bg-sage-50 cursor-pointer transition-colors' : ''}`
+              const inner = (
+                <>
+                  {!notif.read && (
+                    <span className="w-2 h-2 rounded-full bg-sage-500 mt-1.5 shrink-0" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className={`text-sm ${!notif.read ? 'font-medium text-sage-900' : 'text-sage-700'}`}>
+                        {notif.title}
+                      </p>
+                      {showVenueChip && <VenueChip venueName={notif.venue_name} />}
+                      {notif.type === 'brain_dump_grant_fired' && (
+                        <span className="text-[10px] font-medium uppercase tracking-wider text-sage-700 bg-sage-100 px-1.5 py-0.5 rounded">
+                          Auto-filed via rule
+                        </span>
+                      )}
+                    </div>
+                    {notif.body && (
+                      notif.type === 'brain_dump_grant_fired'
+                        ? <GrantFiredBody body={notif.body} />
+                        : <NotificationBody body={notif.body} />
                     )}
                   </div>
-                  {notif.body && (
-                    notif.type === 'brain_dump_grant_fired'
-                      ? <GrantFiredBody body={notif.body} />
-                      : <p className="text-xs text-sage-500 truncate mt-0.5">{notif.body}</p>
-                  )}
+                  <span className="text-xs text-sage-400 shrink-0 whitespace-nowrap">
+                    {timeAgo(notif.created_at)}
+                  </span>
+                </>
+              )
+              return href ? (
+                <Link key={notif.id} href={href} className={baseClass}>
+                  {inner}
+                </Link>
+              ) : (
+                <div key={notif.id} className={baseClass}>
+                  {inner}
                 </div>
-                <span className="text-xs text-sage-400 shrink-0 whitespace-nowrap">
-                  {timeAgo(notif.created_at)}
-                </span>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>

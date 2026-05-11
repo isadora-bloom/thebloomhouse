@@ -35,6 +35,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { htmlToText } from '@/lib/utils/html-text'
 import type { Cents } from '@/lib/types/monetary'
+import type { Surface } from '@/lib/services/email/surface-classifier'
 
 /** Stable identifier for the per-row crm_source column. Mirrors the
  *  weddings.crm_source CHECK constraint extended by migration 178 to
@@ -205,6 +206,13 @@ export interface NormalisedInteractionRow {
    *  brain-dump CSVs without provenance) — prefer the most specific
    *  class that matches the signal's role in the lead journey. */
   signal_class?: 'source' | 'touchpoint' | 'crm' | 'outcome' | 'unclassified'
+  /** Wave 28 (mig 294): which UI surface this interaction belongs to.
+   *  Per-row override; if absent, falls through to the adapter's
+   *  defaultSurface in commitNormalisedRows. Synthetic CRM provenance
+   *  rows declare 'crm_attribution' here; web-form / Calendly tour
+   *  rows declare 'integration_event'; regular CRM-recorded couple
+   *  conversations stay 'inbox'. */
+  surface?: Surface
 }
 
 export interface NormalisedTourRow {
@@ -356,12 +364,19 @@ export async function commitNormalisedRows(args: {
    *  generic_csv / honeybook / dubsado / aisle_planner; calculator_form
    *  for web_form). */
   chokepointNameSource?: 'csv_import' | 'calculator_form' | 'form_relay'
+  /** Wave 28 (mig 294): default UI surface for any per-row interaction
+   *  that didn't declare its own surface. HoneyBook synthetic
+   *  provenance rows arrive with surface='crm_attribution' set per-row
+   *  (see honeybook.ts) and override this default. Regular CRM-recorded
+   *  conversations stay 'inbox' so they show up in /agent/inbox. */
+  defaultSurface?: Surface
 }): Promise<CommitResult> {
   const { supabase, venueId, rows, crmSource } = args
   const confidenceFlag = args.confidenceFlag ?? 'imported_medium'
   const sourceProvenance = args.sourceProvenance ?? null
   const defaultInteractionSignalClass = args.defaultInteractionSignalClass ?? 'unclassified'
   const chokepointNameSourceOverride = args.chokepointNameSource ?? null
+  const defaultSurface: Surface = args.defaultSurface ?? 'inbox'
   const result: CommitResult = {
     ok: true,
     weddingsInserted: 0,
@@ -739,6 +754,11 @@ export async function commitNormalisedRows(args: {
             // adapter that doesn't justify the lack of a class.
             // signal-class-justified: shared commit helper plumbs the per-adapter default
             signal_class: i.signal_class ?? defaultInteractionSignalClass,
+            // Wave 28 (mig 294): per-row surface override takes precedence
+            // over the adapter default. HoneyBook's synthetic provenance
+            // rows pass 'crm_attribution'; tour-scheduler + web-form pass
+            // 'integration_event' on the row representing the event itself.
+            surface: i.surface ?? defaultSurface,
           }
         })
         const { error: intErr } = await supabase.from('interactions').insert(interactionPayloads)

@@ -101,9 +101,110 @@ export function isRelayAddress(email: string): boolean {
  * form-relay-parsers when the relay platform doesn't expose a real
  * personal email). RFC 2606 reserves `.invalid` so any TLD ending in
  * `.invalid` is by definition non-routable.
+ *
+ * Kept narrow for back-compat with callers (data-integrity invariants,
+ * tests) that explicitly want "is this a Bloom-synthesized placeholder".
+ * For send-side refusal use `isUnsendableAddress` below — broader
+ * coverage of every shape we should never attempt to deliver to.
  */
 export function isSyntheticAddress(email: string): boolean {
   return /\.invalid$/i.test(email.trim())
+}
+
+/**
+ * Universal send-time refusal predicate. Returns true for ANY address
+ * that the platform should never attempt to deliver to. Generalises
+ * the WeddingWire `.invalid` bounce class to every adjacent shape:
+ *
+ *   - RFC-reserved TLDs (`.invalid`, `.test`, `.example`, `.localhost`)
+ *     and the reserved second-level domains (`example.com / .net / .org`).
+ *     These are guaranteed non-routable by spec.
+ *   - "No-reply" local-parts (`noreply@`, `no-reply@`, `donotreply@`,
+ *     `do-not-reply@`, `mailer-daemon@`, `bounce@`, `bounces@`,
+ *     `postmaster@`, `unsubscribe@`). Technically routable but never
+ *     reaches the prospect — sending here is always wrong.
+ *   - Malformed / empty addresses.
+ *   - Any address Bloom previously synthesized (`*.bloom-relay.invalid`
+ *     and any future synthetic shape we mint).
+ *
+ * The chokepoint in `lib/services/email/gmail.ts sendEmail` calls this
+ * before any Gmail API request. /agent/send + /agent/reply +
+ * pipeline.ts auto-send + follow-up-sequences also call it so the
+ * operator gets a structured `needs_real_address` error rather than a
+ * silent bounce.
+ *
+ * The check is intentionally permissive — when in doubt allow the send
+ * (real bounces are rare and Gmail surfaces them; false refusals block
+ * legitimate sends). The rules below all match unambiguously bad shapes.
+ */
+export function isUnsendableAddress(email: string | null | undefined): boolean {
+  if (!email) return true
+  const trimmed = email.trim()
+  if (!trimmed) return true
+  if (!trimmed.includes('@')) return true
+
+  const lower = trimmed.toLowerCase()
+
+  // RFC 2606 reserved TLDs.
+  if (/\.(invalid|test|example|localhost)$/i.test(lower)) return true
+
+  // RFC 2606 reserved second-level domains.
+  if (/@(example\.com|example\.net|example\.org)$/i.test(lower)) return true
+
+  // No-reply / system-only local parts. Word-boundary anchored to the
+  // local part so a real prospect named `noreplyfan@gmail.com` (improbable
+  // but conceivable) doesn't false-positive.
+  const localPart = lower.split('@')[0]
+  if (
+    localPart === 'noreply' ||
+    localPart === 'no-reply' ||
+    localPart === 'donotreply' ||
+    localPart === 'do-not-reply' ||
+    localPart === 'do_not_reply' ||
+    localPart === 'mailer-daemon' ||
+    localPart === 'mailerdaemon' ||
+    localPart === 'postmaster' ||
+    localPart === 'bounce' ||
+    localPart === 'bounces' ||
+    localPart === 'unsubscribe'
+  ) {
+    return true
+  }
+
+  return false
+}
+
+/**
+ * Per-prospect routable relay detector. Used by form-relay-parsers to
+ * decide when fromAddr can serve as the canonical lead identifier
+ * (per-prospect → safe, shared relay → collision risk).
+ *
+ * Patterns recognised:
+ *   - WeddingWire: `user-{token}@reply.weddingwire.com` (also `auth-`)
+ *   - The Knot:    `<prospect>.<slug>@member.theknot.com`
+ *   - Zola:        `connect-{uuid}@zola.com`
+ *
+ * Returns false for shared-relay shapes (`leads@theknot.com`,
+ * `messages@weddingwire.com`, `weddingvendors@zola.com`) — these
+ * collide across prospects and should NOT be used as canonical email.
+ */
+export function isPerProspectRelay(email: string | null | undefined): boolean {
+  if (!email) return false
+  const e = email.trim().toLowerCase()
+  if (!e.includes('@')) return false
+
+  // WeddingWire per-prospect relay.
+  if (/^(?:user|auth)-[a-z0-9]+@reply\.weddingwire\.com$/i.test(e)) return true
+
+  // The Knot per-prospect (the form `firstname.last-or-slug@member.theknot.com`).
+  // Requires at least one dot in the local part — that separates per-prospect
+  // shapes from `leads@theknot.com` and similar shared addresses.
+  if (/^[a-z0-9][a-z0-9._-]*\.[a-z0-9._-]+@member\.theknot\.com$/i.test(e)) return true
+
+  // Zola connect-{uuid} per-prospect.
+  if (/^connect-[a-f0-9-]{6,}@zola\.com$/i.test(e)) return true
+
+  return false
 }
 
 function digitsOnly(phone: string): string {

@@ -634,6 +634,20 @@ export default function VoiceTrainingPage() {
           {/* ============================================================ */}
           {activeGame === 'would_you_send' && currentRound < totalRounds && (
             <div className="space-y-6">
+              {/* Heads-up banner — the inquiry + draft are constructed from
+                  generic wedding facts (random date, generic 120-guest
+                  count, fictional venue). Operators rate the TONE, the
+                  voice, the structure — not whether the facts match the
+                  venue, because they don't. */}
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <strong className="font-semibold">Heads up — rate the voice, not the facts.</strong>
+                {' '}This sample inquiry uses generic wedding details (random
+                dates, generic guest counts, fictional venue specifics) so the
+                point is the tone, structure, warmth and phrasing — not whether
+                the numbers match your venue. Reject if it sounds off; approve
+                if you&apos;d be happy hearing this voice on your behalf.
+              </div>
+
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Original Inquiry */}
                 <div className="bg-sage-50 border border-sage-200 rounded-xl p-6">

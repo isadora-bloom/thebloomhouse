@@ -117,17 +117,36 @@ export async function POST(request: NextRequest) {
 
     const orgName = (org?.name as string) ?? 'The Bloom House'
 
+    // 2026-05-11: pre-existing schema mismatch fixed. user_profiles
+    // (001_shared_tables): id, venue_id, org_id, role, first_name,
+    // last_name, avatar_url, plan_tier. No `full_name`, no `email`
+    // column — email lives on auth.users, the name is first+last. The
+    // previous query selected columns that don't exist and always fell
+    // through to "Your teammate" in the invite email.
     let inviterName = 'Your teammate'
     if (invitedBy) {
       const { data: inviterProfile } = await supabase
         .from('user_profiles')
-        .select('full_name, email')
+        .select('first_name, last_name')
         .eq('id', invitedBy)
         .maybeSingle()
-      inviterName =
-        (inviterProfile?.full_name as string) ||
-        (inviterProfile?.email as string) ||
-        'Your teammate'
+      const first = (inviterProfile?.first_name as string | null)?.trim() ?? ''
+      const last = (inviterProfile?.last_name as string | null)?.trim() ?? ''
+      const combined = [first, last].filter(Boolean).join(' ')
+      if (combined) {
+        inviterName = combined
+      } else {
+        // Last-resort: pull the email from auth.users via the admin API.
+        // Non-fatal if it fails — we still ship the invite with a
+        // friendly default.
+        try {
+          const { data: authUser } = await supabase.auth.admin.getUserById(invitedBy)
+          const email = authUser?.user?.email
+          if (email) inviterName = email
+        } catch {
+          /* fall through to 'Your teammate' */
+        }
+      }
     }
 
     const roleLabelMap: Record<string, string> = {

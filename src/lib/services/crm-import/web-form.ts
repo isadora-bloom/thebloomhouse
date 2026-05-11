@@ -708,6 +708,10 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
       // person identity.
       // signal-class-justified: web-form submissions are touchpoint, not source
       signal_class: 'touchpoint',
+      // Wave 28 (mig 294): the form submission IS the event, not an
+      // email about it. Keep it off /agent/inbox; lead-detail timelines
+      // aggregate every surface.
+      surface: 'integration_event',
     }
 
     // Compose a notes blob for the wedding (intent + free-text + total).

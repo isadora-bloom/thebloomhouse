@@ -1444,6 +1444,14 @@ export default function InboxPage() {
           )
         `)
         .eq('type', 'email')
+        // Wave 28 (mig 294): only couple-facing conversations land here.
+        // CRM-attribution synthetic rows (HoneyBook provenance) +
+        // Calendly/HoneyBook system notifications + voice captures +
+        // integration events (Calendly bookings, web-form submissions)
+        // route to their dedicated surfaces. The lead-detail thread
+        // loader further down aggregates every surface so the full
+        // timeline still shows when an operator opens a thread.
+        .eq('surface', 'inbox')
       if (venueIds && venueIds.length > 0) {
         query = query.in('venue_id', venueIds)
       }
@@ -1770,6 +1778,28 @@ export default function InboxPage() {
       setThreadDraft(null)
       setSigningPrompt(null)
       setThreadLock(null)
+
+      // Optimistically mark this row as read so the badge count drops
+      // immediately. The unread badge derives from in-memory state, so
+      // skipping this would force a fetchInteractions() roundtrip just
+      // for a count refresh. Backend write fires below; both layers
+      // are needed (state for the next render, DB for the next reload).
+      if (!interaction.is_read && interaction.direction !== 'outbound') {
+        setInteractions((prev) =>
+          prev.map((row) =>
+            row.id === interaction.id ? { ...row, is_read: true } : row,
+          ),
+        )
+        // Fire-and-forget; failure leaves the optimistic state in place
+        // and the next sync will reconcile.
+        supabase
+          .from('interactions')
+          .update({ is_read: true })
+          .eq('id', interaction.id)
+          .then(({ error }) => {
+            if (error) console.error('mark-read failed:', error)
+          })
+      }
 
       try {
         const venueIds = await resolveVenueIds()

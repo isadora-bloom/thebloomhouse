@@ -40,6 +40,13 @@ export interface DetectFromDraftInput {
   draftBody: string
   /** Optional correlation id for audit lineage. */
   correlationId?: string
+  /** Wave 27: id of the inbound interaction that triggered the draft.
+   *  When present, detect-from-draft looks up author_class and silently
+   *  skips when the inbound was authored by 'platform_system' (Calendly,
+   *  Knot relay, HoneyBook notifications) or 'sage' (echoed AI reply on
+   *  multi-Gmail venues). Those authors can't produce real coordinator
+   *  knowledge-gaps and would inflate the gap queue. */
+  interactionId?: string | null
 }
 
 export interface DetectFromDraftResult {
@@ -79,10 +86,45 @@ export async function detectKnowledgeGapsFromDraft(
     inboundBody,
     draftBody,
     correlationId,
+    interactionId,
   } = input
 
   if (!venueId) {
     return { gaps: [], reasoning: '', insertedGapIds: [], skipped: true, skipReason: 'no_venue' }
+  }
+
+  if (interactionId) {
+    try {
+      const supabase = createServiceClient()
+      const { data: ix } = await supabase
+        .from('interactions')
+        .select('author_class')
+        .eq('id', interactionId)
+        .maybeSingle()
+      const author = (ix as { author_class?: string | null } | null)?.author_class ?? null
+      if (author === 'platform_system' || author === 'sage') {
+        logEvent({
+          level: 'info',
+          msg: 'knowledge_gap_detector skipped on author_class',
+          venueId,
+          correlationId: correlationId ?? null,
+          actor: 'system',
+          event_type: 'knowledge_gap.detect',
+          outcome: 'ok',
+          data: { interactionId, author_class: author },
+        })
+        return {
+          gaps: [],
+          reasoning: '',
+          insertedGapIds: [],
+          skipped: true,
+          skipReason: `author_class_${author}`,
+        }
+      }
+    } catch {
+      // Author-class lookup is a defensive guard; if it fails, fall
+      // through to the existing detection path rather than skipping.
+    }
   }
   if (!draftBody || draftBody.trim().length < MIN_DRAFT_CHARS) {
     return {

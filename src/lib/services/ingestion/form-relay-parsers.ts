@@ -144,13 +144,26 @@ function parseTheKnot(from: string, body: string): FormRelayLead | null {
   const guestCount = fieldAfter(body, 'Guest count')
   const budget = fieldAfter(body, 'Budget')
 
-  // Prefer the personal email for identity — that's the durable contact.
-  // Fall back to the relay so we still capture a lead even when the
-  // "Personal email:" line is missing (they sometimes redact it until
-  // the first reply).
-  const leadEmail = personalEmail && personalEmail.includes('@')
-    ? personalEmail.toLowerCase()
-    : fromAddr
+  // Prefer the personal email — durable contact. When the personal
+  // line is redacted (Knot sometimes does this until the first reply),
+  // fall back to fromAddr ONLY if it's a per-prospect relay form
+  // (`<prospect>.<slug>@member.theknot.com`). Shared relays like
+  // `leads@theknot.com` would collide across prospects and collapse
+  // them into a single wedding (the bug pattern Rixey hit on
+  // WeddingWire). When fromAddr is shared, refuse the parse — better
+  // to log a warning than to silently merge prospects.
+  let leadEmail: string
+  if (personalEmail && personalEmail.includes('@')) {
+    leadEmail = personalEmail.toLowerCase()
+  } else if (isPerProspectRelay(fromAddr)) {
+    leadEmail = fromAddr
+  } else {
+    console.warn(
+      '[parseTheKnot] no personal email + fromAddr is not per-prospect, skipping to avoid collision. From:',
+      fromAddr,
+    )
+    return null
+  }
 
   return {
     source: 'the_knot',
@@ -224,15 +237,24 @@ function extractWeddingWireName(subject: string, body: string): string | null {
 }
 
 /**
- * Build the synthetic per-prospect email for WW relays. WW doesn't
- * expose a real email per prospect — only the authsolic token.
- * Synthesize a stable, deterministic, NON-ROUTABLE address using
- * `.invalid` (RFC 2606 reserved TLD) so accidental sends fail
- * loud + nothing routes anywhere unintended.
+ * Build the synthetic per-prospect email — LAST-RESORT only. Used
+ * when WeddingWire exposes neither a personal email nor a per-prospect
+ * reply.weddingwire.com relay (rare). RFC 2606 reserves `.invalid`,
+ * so accidental sends fail loud and nothing routes anywhere unintended.
  */
 function syntheticWeddingWireEmail(authsolic: string): string {
   return `authsolic-${authsolic}@weddingwire.bloom-relay.invalid`
 }
+
+/**
+ * 2026-05-11: WeddingWire's per-prospect relay (`user-{token}@reply.
+ * weddingwire.com`) detection lives in the shared
+ * `isPerProspectRelay` helper in `body-extract.ts` alongside the same
+ * pattern for The Knot and Zola. Every listing-platform parser uses
+ * the shared helper so adding a new platform's per-prospect shape
+ * upgrades all parsers in one place.
+ */
+import { isPerProspectRelay } from '@/lib/services/identity/body-extract'
 
 function parseWeddingWire(from: string, body: string, subject: string): FormRelayLead | null {
   const fromAddr = extractEmailAddress(from)
@@ -250,24 +272,24 @@ function parseWeddingWire(from: string, body: string, subject: string): FormRela
   const extractedName = extractWeddingWireName(subject, body)
   const displayName = extractedName ?? extractDisplayName(from)
 
-  // Identity priority for WW:
-  //   1. Real personal email if WW exposed it (rare — only on
-  //      certain prospect-side flows)
-  //   2. Synthetic authsolic-token email (per-prospect, stable
-  //      across that prospect's messages)
-  //   3. Relay address (fallback — collides for all prospects of
-  //      this venue, the conflation pattern we're trying to escape)
+  // Identity priority for WW (2026-05-11 reordered):
+  //   1. Real personal email if WW exposed it (rare — only on certain
+  //      prospect-side flows)
+  //   2. Per-prospect reply.weddingwire.com relay — routable AND unique
+  //      per prospect. This was previously demoted to a synthetic
+  //      placeholder, causing outbound bounces. (Bug discovered live.)
+  //   3. Synthetic authsolic-token .invalid email — last resort when
+  //      WW gave us neither. Non-routable; autonomous sender refuses
+  //      to send to it.
   let leadEmail: string
   if (personalEmail && personalEmail.includes('@')) {
     leadEmail = personalEmail.toLowerCase()
+  } else if (isPerProspectRelay(fromAddr)) {
+    leadEmail = fromAddr.toLowerCase()
   } else if (authsolic) {
     leadEmail = syntheticWeddingWireEmail(authsolic)
   } else {
-    // No authsolic token AND no personal email — without a unique
-    // identifier we can't responsibly create a contact (would
-    // collapse with every other prospect). Refuse to parse and
-    // let the pipeline log a warning.
-    console.warn('[parseWeddingWire] no personal email + no authsolic token, skipping. Subject:', subject?.slice(0, 80))
+    console.warn('[parseWeddingWire] no personal email + no authsolic token + no per-prospect relay, skipping. Subject:', subject?.slice(0, 80))
     return null
   }
 
@@ -308,9 +330,24 @@ function parseHereComesTheGuide(from: string, body: string): FormRelayLead | nul
     fieldAfter(body, 'Estimated guests')
   const budget = fieldAfter(body, 'Budget')
 
-  const leadEmail = personalEmail && personalEmail.includes('@')
-    ? personalEmail.toLowerCase()
-    : fromAddr
+  // Same collision-safety rule as parseTheKnot: prefer personal email,
+  // fall back to fromAddr ONLY when it's per-prospect routable. HCTG's
+  // per-prospect shape isn't yet known in `isPerProspectRelay` — if we
+  // start seeing inbounds with no personal email AND a shared HCTG
+  // sender, the warning logs will surface the pattern and we extend
+  // the detector.
+  let leadEmail: string
+  if (personalEmail && personalEmail.includes('@')) {
+    leadEmail = personalEmail.toLowerCase()
+  } else if (isPerProspectRelay(fromAddr)) {
+    leadEmail = fromAddr
+  } else {
+    console.warn(
+      '[parseHereComesTheGuide] no personal email + fromAddr is not per-prospect, skipping to avoid collision. From:',
+      fromAddr,
+    )
+    return null
+  }
 
   return {
     source: 'here_comes_the_guide',

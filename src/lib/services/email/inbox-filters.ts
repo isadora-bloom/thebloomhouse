@@ -190,9 +190,16 @@ async function learnFiltersForVenue(venueId: string): Promise<number> {
   // interactions consistently produce no draft is a good promotion candidate.
   const since = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString()
 
+  // 2026-05-11: pre-existing schema mismatch fixed. Contacts table
+  // (001_shared_tables): id, person_id, type, value, is_primary. There
+  // is NO `venue_id` column on contacts and NO `contact_type` / `contact_value`
+  // columns either — those names came from a different prior schema
+  // (mig 063 flagged the divergence). The previous code queried columns
+  // that don't exist, which made this whole sender-promotion sweep a
+  // silent no-op. Venue scoping now flows through people.venue_id.
   const { data: rows } = await supabase
     .from('interactions')
-    .select('id, person_id, direction, timestamp, contacts:person_id(contact_value)')
+    .select('id, person_id, direction, timestamp')
     .eq('venue_id', venueId)
     .eq('direction', 'inbound')
     .gte('timestamp', since)
@@ -200,9 +207,8 @@ async function learnFiltersForVenue(venueId: string): Promise<number> {
 
   if (!rows || rows.length === 0) return 0
 
-  // Pull the from addresses via contacts join. contacts table has person_id -> email.
-  // The supabase join above doesn't necessarily work without a foreign-key hint;
-  // fall back to a direct contacts query keyed by the distinct person_ids.
+  // Pull the from addresses via contacts join. contacts.person_id ->
+  // people.id; venue scoping happens on the join.
   const personIds = Array.from(
     new Set(rows.map((r) => (r as { person_id: string | null }).person_id).filter(Boolean) as string[])
   )
@@ -211,15 +217,23 @@ async function learnFiltersForVenue(venueId: string): Promise<number> {
 
   const { data: contactRows } = await supabase
     .from('contacts')
-    .select('person_id, contact_value')
-    .eq('venue_id', venueId)
-    .eq('contact_type', 'email')
+    .select('person_id, value, people:person_id(venue_id)')
+    .eq('type', 'email')
     .in('person_id', personIds)
 
+  // Supabase returns embedded relations as arrays by default (it can't
+  // assume one-to-one without an FK hint). Handle both shapes.
   const emailByPerson = new Map<string, string>()
   for (const c of contactRows ?? []) {
-    const pid = (c as { person_id: string }).person_id
-    const val = (c as { contact_value: string }).contact_value
+    const row = c as unknown as {
+      person_id: string
+      value: string
+      people: { venue_id: string | null } | { venue_id: string | null }[] | null
+    }
+    const person = Array.isArray(row.people) ? row.people[0] : row.people
+    if (person?.venue_id !== venueId) continue
+    const pid = row.person_id
+    const val = row.value
     if (pid && val && !emailByPerson.has(pid)) emailByPerson.set(pid, val.toLowerCase())
   }
 

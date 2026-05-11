@@ -50,6 +50,7 @@ import {
   extractIdentityFromEmail,
   isRelayAddress,
   isSyntheticAddress,
+  isUnsendableAddress,
 } from '@/lib/services/identity/body-extract'
 import { createLogger, logEvent, newCorrelationId } from '@/lib/observability/logger'
 import { normalizeSource } from '@/lib/services/normalize-source'
@@ -58,6 +59,7 @@ import { updateThreadLifecycleFolder } from '@/lib/services/inbox/lifecycle'
 import { detectLifecycleSignal } from '@/lib/services/lifecycle/signal-detector'
 import { applyLifecycleSignal } from '@/lib/services/lifecycle/writer'
 import { isLossSignal, isTerminalStatus, type WeddingStatus as LifecycleWeddingStatus } from '@/lib/services/lifecycle/wedding-lifecycle-engine'
+import { classifySurface } from '@/lib/services/email/surface-classifier'
 
 // ---------------------------------------------------------------------------
 // Stream WWW (migration 205): UTM extraction from extracted_identity
@@ -228,14 +230,44 @@ async function buildAutoAttachments(args: {
 // (no LLM cost), fires an admin_notifications row so the coordinator
 // sees the request immediately, and records an engagement_events row
 // for the forensic trail.
+// Legacy narrow pattern — kept for telemetry differentiation + back-compat.
 export const HUMAN_REQUESTED_SUBJECT_PATTERN = /\bHUMAN[\s_-]+REQUESTED\b/i
 
-/** Pure helper — returns true when a subject contains the escalation
- *  marker. Exported for the verify script and any future external
- *  caller (e.g. Gmail label automation). */
+// 2026-05-11: broadened detection. The footer no longer asks couples to
+// type "HUMAN REQUESTED" as magic words (read adversarial; one couple
+// snapped back with exactly that phrase). The visible escalation copy is
+// now soft ("Just ask, or email <escalation>") and this pattern catches
+// the natural-language version on inbound subject OR body. Matches:
+//   - legacy magic-words form (still works on existing threads)
+//   - "talk / speak / chat to a (real) person / human / someone"
+//   - "is this / are you a bot / AI / real person"
+//   - "stop the bot", "no more AI", "i want a human"
+//   - "real human please", "human please"
+// Word-boundary anchored so quoted phrases ("photos of human-requested
+// locations") don't false-positive.
+export const HUMAN_ESCALATION_PATTERN =
+  /\bHUMAN[\s_-]+REQUESTED\b|\b(?:talk|speak|chat)\s+(?:to\s+)?(?:a\s+)?(?:real\s+)?(?:person|human|someone)\b|\b(?:is|are)\s+(?:you|this)\s+(?:a\s+)?(?:real\s+person|human|bot|an\s+ai|ai)\??\b|\b(?:stop|no\s+more)\s+(?:the\s+)?(?:bot|ai)\b|\b(?:i\s+(?:want|need)|just\s+(?:want|need))\s+(?:a\s+)?(?:real\s+)?(?:human|person)\b|\b(?:real\s+)?human\s+please\b/i
+
+/** Pure helper — returns true when a subject contains the legacy magic-
+ *  words marker. Kept for back-compat callers; new callers should use
+ *  detectHumanEscalation which also accepts a body string and matches
+ *  the broader natural-language pattern. */
 export function detectHumanRequested(subject: string | null | undefined): boolean {
   if (!subject) return false
   return HUMAN_REQUESTED_SUBJECT_PATTERN.test(subject)
+}
+
+/** Broadened detector — checks both subject and body for any natural-
+ *  language escalation request (or the legacy magic-words form). The
+ *  pipeline routes this exactly like detectHumanRequested: persist the
+ *  interaction, skip drafting, fire admin_notifications. */
+export function detectHumanEscalation(
+  subject: string | null | undefined,
+  body?: string | null,
+): boolean {
+  const haystack = `${subject ?? ''}\n${body ?? ''}`
+  if (!haystack.trim()) return false
+  return HUMAN_ESCALATION_PATTERN.test(haystack)
 }
 
 // ---------------------------------------------------------------------------
@@ -1145,15 +1177,46 @@ export async function processIncomingEmail(
   // The detection runs AT THE SUBJECT level — couples explicitly opt
   // OUT of Sage by following the footer instructions, and we honour
   // that request loudly.
-  const humanRequested = detectHumanRequested(email.subject)
+  // Migration 300 (2026-05-11): the visible footer no longer asks
+  // couples to type magic words. Detection now runs in two stages:
+  //   (a) Fast regex on subject (legacy magic-words form). Free, sync.
+  //   (b) Haiku classifier on subject + body. ~$0.0002 per inbound,
+  //       fire-and-forget. Covers natural-language requests like
+  //       "can I talk to someone real?", "is this a bot?", "stop the AI".
+  // Stage (b) runs lazily — only when stage (a) misses, so existing
+  // explicit requests still short-circuit without LLM cost.
+  const humanRequestedFastPath = detectHumanRequested(email.subject)
+  let escalationRequested = humanRequestedFastPath
+  let escalationReason: 'magic_words' | 'haiku_detected' | null = humanRequestedFastPath
+    ? 'magic_words'
+    : null
+  if (!humanRequestedFastPath) {
+    try {
+      const { classifyEscalation } = await import('./escalation-classifier')
+      const result = await classifyEscalation({
+        venueId,
+        aiName: 'Sage',
+        subject: email.subject,
+        body: email.body,
+        correlationId,
+      })
+      escalationRequested = result.escalation_requested
+      escalationReason = result.reason
+    } catch (err) {
+      console.warn('[pipeline] escalation classifier failed (non-fatal):', err)
+    }
+  }
+  // Back-compat: keep the old name in scope so downstream branches that
+  // referenced it don't all need to change.
+  const humanRequested = escalationRequested
 
   // Either filter can trigger no_draft; skipDraft is the union. The
   // onboarding backfill path sets opts.skipDraft so 90-day historical
   // imports classify + score + persist without drafting a reply to
   // every old email. Scheduling-tool emails (Calendly etc.) always
   // skip draft — we never want Sage to reply to a Calendly confirmation.
-  // humanRequested also forces skipDraft so a couple who explicitly
-  // asked for a human doesn't get an autonomous reply anyway.
+  // escalationRequested also forces skipDraft — a couple who asked for
+  // a real person doesn't get an autonomous reply anyway.
   const skipDraft =
     opts?.skipDraft === true ||
     filterHit?.action === 'no_draft' ||
@@ -1388,6 +1451,25 @@ export async function processIncomingEmail(
     // lead signal); pin to 'unclassified' to match the Step 1b
     // self-loop outbound payload.
     signal_class: wave9InboundFromOwn ? 'unclassified' : inboundSignalClass,
+    // Wave 27 (mig 293): author_class. Outbound from venue-own = 'operator'
+    // by default (sage if auto_sent — the draft writer flips this).
+    // Inbound starts 'unknown'; the Haiku classifier in
+    // src/lib/services/email/author-classifier.ts runs post-insert and
+    // updates the row. Backfill cron handles legacy rows.
+    author_class: wave9InboundFromOwn ? 'operator' : 'unknown',
+    // Wave 28 (mig 294): surface. Default 'inbox' for couple conversations.
+    // Pipeline rules below the insert route system_notification by from-
+    // domain (Calendly/HoneyBook/no-reply senders). CRM adapters set
+    // 'crm_attribution' on synthetic rows.
+    surface: 'inbox',
+    // Migration 300 (2026-05-11): persist escalation state on the row so
+    // every downstream consumer (knowledge-gap detector, heat scoring,
+    // classifier health %) can filter uniformly without re-running
+    // detection. escalation_reason is 'magic_words' for fast-path regex
+    // hits, 'haiku_detected' for the Haiku judgment path.
+    escalation_requested: escalationRequested,
+    escalation_reason: escalationRequested ? escalationReason : null,
+    escalation_decided_at: escalationRequested ? new Date().toISOString() : null,
   }
   if (email.connectionId) {
     interactionPayload.gmail_connection_id = email.connectionId
@@ -1410,6 +1492,85 @@ export async function processIncomingEmail(
   }
 
   const interactionId = interaction.id as string
+
+  // Wave 27 (mig 293): post-write author-class upgrade. Inbound rows
+  // landed at author_class='unknown' (outbound is synchronously set in
+  // the payload above). The Haiku classifier promotes to one of
+  // couple/operator/sage/platform_system/vendor so downstream metrics
+  // (knowledge-gap detect, classifier health %, heat scoring, draft
+  // training) can separate real human signals from Calendly/HoneyBook
+  // notification noise.
+  //
+  // Fire-and-forget: classifyAuthor never throws and persists its own
+  // result. Failure here mustn't block the rest of the pipeline. We
+  // skip the outbound path (wave9InboundFromOwn) since those rows are
+  // already 'operator' / 'sage' from the synchronous backfill.
+  if (!wave9InboundFromOwn) {
+    void (async () => {
+      try {
+        const { classifyAuthor } = await import('@/lib/services/email/author-classifier')
+        await classifyAuthor({
+          venueId,
+          interactionId,
+          from_email: fromEmail,
+          from_name: fromName,
+          subject: email.subject,
+          body: email.body,
+          extracted_identity: extractedIdentity,
+          correlationId,
+        })
+      } catch (authorErr) {
+        log.warn('pipeline.author_class_failed', {
+          event_type: 'author_class.classify',
+          outcome: 'fail',
+          data: {
+            interactionId,
+            error: authorErr instanceof Error ? authorErr.message : String(authorErr),
+          },
+        })
+      }
+    })()
+  }
+
+  // Wave 28 (mig 294): post-write surface upgrade. The row landed as
+  // surface='inbox' (default). For inbound emails from known SaaS-tool
+  // senders (Calendly, HoneyBook notifications, no-reply@*, donotreply@*)
+  // we promote to 'system_notification' so /agent/inbox doesn't show
+  // them as couple-facing conversations. Lead-detail timelines aggregate
+  // every surface so the row still shows up where it should.
+  //
+  // Fire-and-forget: the update is best-effort. A failure here must
+  // never block draft generation. Outbound rows (wave9InboundFromOwn)
+  // skip the check entirely — they're our own sends.
+  if (!wave9InboundFromOwn) {
+    const computedSurface = classifySurface({
+      fromEmail,
+      type: 'email',
+      crmSource: null,
+      signalClass: inboundSignalClass,
+    })
+    if (computedSurface !== 'inbox') {
+      void (async () => {
+        try {
+          await supabase
+            .from('interactions')
+            .update({ surface: computedSurface })
+            .eq('id', interactionId)
+        } catch (surfaceErr) {
+          log.warn('pipeline.surface_upgrade_failed', {
+            event_type: 'surface_upgrade',
+            outcome: 'fail',
+            data: {
+              interactionId,
+              fromEmail,
+              attemptedSurface: computedSurface,
+              error: surfaceErr instanceof Error ? surfaceErr.message : String(surfaceErr),
+            },
+          })
+        }
+      })()
+    }
+  }
 
   // Wave 4 Phase 4 (2026-05-10): Wave-3 per-email sender_identity capture
   // retired. The Sonnet judge in identity/reconstruct.ts is the source of
@@ -3221,6 +3382,10 @@ export async function processIncomingEmail(
           // Tell Sage which inbox received the message.
           receivedAtAddress,
           correlationId,
+          // Wave 27: thread the inbound interaction id into the draft
+          // pipeline so the knowledge-gap detector can skip platform_system
+          // / sage authored inbounds.
+          interactionId,
         })
 
         draftBody = clientResult.draft
@@ -3688,17 +3853,30 @@ export async function flushPendingAutoSends(venueId: string): Promise<number> {
           attachments = []
         }
 
-        sentMessageId = await sendEmail(
-          venueId,
-          details.toEmail,
-          details.subject,
-          appendAIDisclosure(draft.draft_body, disclosureCtx),
-          details.threadId,
-          // Use the inbound connection so the reply comes from the
-          // same Gmail account that received the original inquiry.
-          details.connectionId ?? undefined,
-          attachments.length > 0 ? attachments : undefined,
-        )
+        // 2026-05-11: pre-flight synthetic-address gate. Mark draft
+        // `needs_real_address` so the operator sees it on the pending
+        // tab with a "fix the address" banner. Status stays 'pending' —
+        // the auto-send loop won't retry (the flag is checked above), and
+        // the manual /agent/send path will surface the 422 specifically.
+        if (isUnsendableAddress(details.toEmail)) {
+          await supabase
+            .from('drafts')
+            .update({ needs_real_address: true })
+            .eq('id', draft.id)
+          sendError = new Error('needs_real_address')
+        } else {
+          sentMessageId = await sendEmail(
+            venueId,
+            details.toEmail,
+            details.subject,
+            appendAIDisclosure(draft.draft_body, disclosureCtx),
+            details.threadId,
+            // Use the inbound connection so the reply comes from the
+            // same Gmail account that received the original inquiry.
+            details.connectionId ?? undefined,
+            attachments.length > 0 ? attachments : undefined,
+          )
+        }
       } catch (err) {
         sendError = err
       }
@@ -4109,6 +4287,22 @@ export async function sendApprovedDraft(draftId: string): Promise<void> {
       matchErr instanceof Error ? matchErr.message : matchErr,
     )
     attachments = []
+  }
+
+  // 2026-05-11: pre-flight synthetic-address gate. The gmail sendEmail
+  // chokepoint also refuses, but here we can give the operator a more
+  // specific signal: mark the draft `needs_real_address` so it surfaces
+  // on the drafts page as "fix the address" rather than failing silently.
+  if (isUnsendableAddress(draft.to_email as string)) {
+    await supabase
+      .from('drafts')
+      .update({ needs_real_address: true })
+      .eq('id', draftId)
+    console.warn(
+      `[pipeline] Approved draft ${draftId} flagged needs_real_address (to_email=${draft.to_email}). ` +
+        `Skipping send — operator must resolve a routable address before sending.`,
+    )
+    throw new Error(`Draft ${draftId} has an unroutable address; flagged for operator review`)
   }
 
   const sentMessageId = await sendEmail(

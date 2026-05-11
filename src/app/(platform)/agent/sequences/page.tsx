@@ -46,7 +46,16 @@ interface Sequence {
   venue_id: string
   name: string
   description: string | null
-  trigger_type: 'post_tour' | 'ghosted' | 'post_booking' | 'pre_event' | 'custom'
+  trigger_type:
+    | 'post_tour'
+    | 'ghosted'
+    | 'post_booking'
+    | 'pre_event'
+    | 'tour_cancelled'
+    | 'lost_reactivation'
+    | 'no_show'
+    | 'contract_overdue'
+    | 'custom'
   trigger_config: Record<string, unknown>
   is_active: boolean
   created_at: string
@@ -74,6 +83,10 @@ const TRIGGER_TYPES = [
   { value: 'ghosted', label: 'Ghosted', desc: 'No response after outreach', color: 'bg-amber-50 text-amber-700' },
   { value: 'post_booking', label: 'Post-Booking', desc: 'After status changes to booked', color: 'bg-emerald-50 text-emerald-700' },
   { value: 'pre_event', label: 'Pre-Event', desc: 'Before the wedding date', color: 'bg-purple-50 text-purple-700' },
+  { value: 'tour_cancelled', label: 'Tour Cancelled', desc: 'Re-engage after a tour cancellation', color: 'bg-orange-50 text-orange-700' },
+  { value: 'lost_reactivation', label: 'Lost Reactivation', desc: 'Reach out to leads marked lost N days ago', color: 'bg-rose-50 text-rose-700' },
+  { value: 'no_show', label: 'No Show', desc: "After a scheduled tour didn't happen and wasn't cancelled", color: 'bg-yellow-50 text-yellow-700' },
+  { value: 'contract_overdue', label: 'Contract Overdue', desc: 'Proposal sent but contract not signed', color: 'bg-red-50 text-red-700' },
   { value: 'custom', label: 'Custom', desc: 'Custom trigger condition', color: 'bg-sage-50 text-sage-600' },
 ] as const
 
@@ -84,7 +97,8 @@ const ACTION_TYPES = [
 ] as const
 
 function getTriggerMeta(trigger: string) {
-  return TRIGGER_TYPES.find((t) => t.value === trigger) ?? TRIGGER_TYPES[4]
+  const custom = TRIGGER_TYPES.find((t) => t.value === 'custom') ?? TRIGGER_TYPES[0]
+  return TRIGGER_TYPES.find((t) => t.value === trigger) ?? custom
 }
 
 function getActionMeta(action: string) {

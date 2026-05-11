@@ -130,6 +130,7 @@ export async function POST(req: NextRequest) {
     inboundSubject,
     inboundBody,
     draftBody: draftRow.draft_body,
+    interactionId: draftRow.interaction_id,
   })
 
   return NextResponse.json({

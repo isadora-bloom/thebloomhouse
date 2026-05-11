@@ -677,3 +677,394 @@ function fallback(
     soft_judge_candidate: false,
   }
 }
+
+// ---------------------------------------------------------------------------
+// F12 — Sequence-trigger detection helpers
+// ---------------------------------------------------------------------------
+//
+// These helpers are READ-ONLY against the DB and return a structured
+// signal that the sequence runner uses to decide which weddings the
+// new trigger types (no_show / contract_overdue) should fire on.
+// They are deliberately additive — they do NOT mutate state or write
+// transitions; computeLifecycleStage above already owns that path.
+//
+// Default windows are conservative and operator-configurable via the
+// sequences.trigger_config JSONB (the runner passes them in).
+//
+// no_show:
+//   Fires when a scheduled tour's (scheduled_at + assumedDurationMinutes)
+//   has elapsed AND the tour's outcome is still 'pending' (null is
+//   treated as pending). Default assumed duration: 120 minutes — schemas
+//   don't carry a per-tour duration today (see SEQUENCES-EXT-SUMMARY).
+//
+// contract_overdue:
+//   Fires when the wedding is in status='proposal_sent' AND the
+//   proposal was sent more than `daysAfter` days ago. Source for
+//   "proposal sent at": the most recent wedding_lifecycle_events row
+//   with status_to='proposal_sent', falling back to weddings.updated_at
+//   when no event row exists (legacy data pre-mig-246).
+// ---------------------------------------------------------------------------
+
+export interface DetectNoShowArgs {
+  weddingId: string
+  supabase: SupabaseClient
+  /** Tour duration assumed when computing whether the slot has elapsed.
+   *  No per-tour duration column exists today, so we default to 120
+   *  minutes. Operators can override per-sequence via trigger_config. */
+  assumedDurationMinutes?: number
+  /** Optional override of "now" for testing / replay. */
+  now?: Date
+}
+
+export interface DetectNoShowResult {
+  detected: boolean
+  tour_id?: string
+  scheduled_at?: string
+  minutes_since_end?: number
+  reason: string
+}
+
+/**
+ * detectNoShow(weddingId)
+ *
+ * Returns { detected: true } when this wedding has a scheduled tour
+ * whose (scheduled_at + assumedDurationMinutes) is in the past AND
+ * whose outcome is still 'pending' / null. Otherwise detected: false
+ * with a reason string explaining why.
+ *
+ * Pure read. Never throws.
+ */
+export async function detectNoShow(
+  args: DetectNoShowArgs,
+): Promise<DetectNoShowResult> {
+  const { supabase, weddingId } = args
+  const now = args.now ?? new Date()
+  const nowMs = now.getTime()
+  const assumedDurationMinutes = args.assumedDurationMinutes ?? 120
+
+  let tours: TourRow[] = []
+  try {
+    tours = await fetchTours(supabase, weddingId)
+  } catch {
+    return { detected: false, reason: 'tour fetch threw' }
+  }
+
+  if (tours.length === 0) {
+    return { detected: false, reason: 'no tours' }
+  }
+
+  // Find a tour whose scheduled_at + duration is in the past AND whose
+  // outcome is still pending. Many leads have multiple tours; the most
+  // recent past-due-pending one is the signal.
+  for (const t of tours) {
+    const ms = parseTs(t.scheduled_at)
+    if (ms === null) continue
+    const endMs = ms + assumedDurationMinutes * 60 * 1000
+    if (endMs >= nowMs) continue
+    if (t.outcome !== null && t.outcome !== 'pending') continue
+
+    return {
+      detected: true,
+      tour_id: t.id,
+      scheduled_at: t.scheduled_at ?? undefined,
+      minutes_since_end: Math.round((nowMs - endMs) / (60 * 1000)),
+      reason:
+        'tour past scheduled end with outcome=' +
+        (t.outcome === null ? 'null' : t.outcome),
+    }
+  }
+
+  return {
+    detected: false,
+    reason: 'no past-due pending tour found',
+  }
+}
+
+export interface DetectContractOverdueArgs {
+  weddingId: string
+  supabase: SupabaseClient
+  /** Days after proposal_sent_at after which we consider the proposal
+   *  overdue. Default 14. Operator-overridable via trigger_config. */
+  daysAfter?: number
+  /** Optional override of "now" for testing / replay. */
+  now?: Date
+}
+
+export interface DetectContractOverdueResult {
+  detected: boolean
+  proposal_sent_at?: string
+  days_since_proposal?: number
+  source: 'lifecycle_event' | 'wedding_updated_at' | 'none'
+  reason: string
+}
+
+/**
+ * detectContractOverdue(weddingId)
+ *
+ * Returns { detected: true } when the wedding is currently in
+ * status='proposal_sent' and the proposal was sent more than
+ * daysAfter (default 14) days ago. Source for the "sent at"
+ * timestamp:
+ *
+ *   1. wedding_lifecycle_events row with status_to='proposal_sent'
+ *      (canonical, added in migration 246).
+ *   2. Fallback: weddings.updated_at while status='proposal_sent'
+ *      (legacy data pre-246 has no lifecycle event row).
+ *
+ * Pure read. Never throws.
+ */
+export async function detectContractOverdue(
+  args: DetectContractOverdueArgs,
+): Promise<DetectContractOverdueResult> {
+  const { supabase, weddingId } = args
+  const now = args.now ?? new Date()
+  const nowMs = now.getTime()
+  const daysAfter = args.daysAfter ?? 14
+
+  let wedding: {
+    status: string | null
+    updated_at: string | null
+  } | null = null
+  try {
+    const { data, error } = await supabase
+      .from('weddings')
+      .select('status, updated_at')
+      .eq('id', weddingId)
+      .maybeSingle()
+    if (error || !data) {
+      return { detected: false, source: 'none', reason: 'wedding fetch failed' }
+    }
+    wedding = data as { status: string | null; updated_at: string | null }
+  } catch {
+    return { detected: false, source: 'none', reason: 'wedding fetch threw' }
+  }
+
+  if (wedding.status !== 'proposal_sent') {
+    return {
+      detected: false,
+      source: 'none',
+      reason: 'status is ' + (wedding.status ?? 'null') + ', not proposal_sent',
+    }
+  }
+
+  // Prefer the lifecycle-event timestamp; fall back to weddings.updated_at.
+  let sentAtIso: string | null = null
+  let source: DetectContractOverdueResult['source'] = 'none'
+  try {
+    const { data: evt } = await supabase
+      .from('wedding_lifecycle_events')
+      .select('created_at')
+      .eq('wedding_id', weddingId)
+      .eq('status_to', 'proposal_sent')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (evt?.created_at) {
+      sentAtIso = evt.created_at as string
+      source = 'lifecycle_event'
+    }
+  } catch {
+    // table may not exist in test envs — fall through
+  }
+
+  if (!sentAtIso && wedding.updated_at) {
+    sentAtIso = wedding.updated_at
+    source = 'wedding_updated_at'
+  }
+
+  if (!sentAtIso) {
+    return {
+      detected: false,
+      source: 'none',
+      reason: 'no proposal_sent timestamp available',
+    }
+  }
+
+  const sentMs = parseTs(sentAtIso)
+  if (sentMs === null) {
+    return {
+      detected: false,
+      source,
+      reason: 'unparseable proposal_sent timestamp',
+    }
+  }
+
+  const daysSince = (nowMs - sentMs) / DAY_MS
+  if (daysSince < daysAfter) {
+    return {
+      detected: false,
+      proposal_sent_at: sentAtIso,
+      days_since_proposal: round1(daysSince),
+      source,
+      reason:
+        'proposal sent ' +
+        round1(daysSince) +
+        'd ago, threshold is ' +
+        daysAfter +
+        'd',
+    }
+  }
+
+  return {
+    detected: true,
+    proposal_sent_at: sentAtIso,
+    days_since_proposal: round1(daysSince),
+    source,
+    reason: 'proposal_sent for ' + round1(daysSince) + 'd (>= ' + daysAfter + 'd)',
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Wave 29 — multi-channel inbox hooks (SMS / Zoom)
+// ---------------------------------------------------------------------------
+//
+// SMS + Zoom signals plug into the same lifecycle plumbing that email
+// already drives. We do NOT compute a transition inline — we record the
+// evidence (wedding_lifecycle_events row) and bump the cheap denormalised
+// columns (first_response_at, tour outcome) so the next
+// computeLifecycleStage call picks up the new state on its own.
+//
+// Doctrine: keep these EVIDENCE-RECORDING, not state-mutating. The
+// wave-11 state machine recomputes stage from evidence (interactions +
+// tours + reviews + status); we just make sure our evidence is fresh.
+//
+// Both functions are best-effort + never throw. Webhook handlers wrap
+// the call in fire-and-forget so a missing migration / RLS hiccup
+// doesn't take down the route.
+// ---------------------------------------------------------------------------
+
+export interface SmsLifecycleSignalInput {
+  supabase: SupabaseClient
+  venueId: string
+  weddingId: string
+  direction: 'inbound' | 'outbound'
+  body: string
+}
+
+/**
+ * Wave 29: an SMS landed for a wedding. Inbound SMS from the couple is
+ * equivalent to an inbound email reply for lifecycle purposes — it
+ * advances first_touch -> nurture and bumps the lifecycle "last signal"
+ * timestamp that feeds soft-judge stuck detection.
+ *
+ * We deliberately do NOT call the state machine inline. The next sweep
+ * (or any computeLifecycleStage call) reads the new interactions row +
+ * the bumped first_response_at and recomputes. This keeps the hook
+ * minimal and avoids re-implementing a parallel transition pipeline.
+ */
+export async function recordSmsLifecycleSignal(
+  input: SmsLifecycleSignalInput,
+): Promise<void> {
+  const { supabase, venueId, weddingId, direction, body } = input
+  if (!weddingId || !venueId) return
+
+  try {
+    // Bump first_response_at when null AND this is inbound from the
+    // couple. The state machine's first_touch / nurture classifier
+    // reads this column; keeping it fresh prevents SMS-first leads from
+    // getting stuck in pre_touch.
+    if (direction === 'inbound') {
+      const { data: wedding } = await supabase
+        .from('weddings')
+        .select('id, first_response_at')
+        .eq('id', weddingId)
+        .maybeSingle()
+      if (wedding && !wedding.first_response_at) {
+        await supabase
+          .from('weddings')
+          .update({ first_response_at: new Date().toISOString() })
+          .eq('id', weddingId)
+          .is('first_response_at', null)
+      }
+    }
+
+    // Append a lifecycle-event row for the forensic trail. Best-effort:
+    // wedding_lifecycle_events may not exist on this checkout, in which
+    // case PostgREST returns 404 and we swallow it (interactions remains
+    // the canonical source of truth).
+    await supabase.from('wedding_lifecycle_events').insert({
+      wedding_id: weddingId,
+      venue_id: venueId,
+      kind: 'sms_received',
+      direction,
+      evidence: { source: 'twilio', body_preview: body.slice(0, 200) },
+      occurred_at: new Date().toISOString(),
+    })
+  } catch (err) {
+    console.warn(
+      '[lifecycle/state-machine] recordSmsLifecycleSignal best-effort failed:',
+      err instanceof Error ? err.message : err,
+    )
+  }
+}
+
+export interface ZoomLifecycleSignalInput {
+  supabase: SupabaseClient
+  venueId: string
+  weddingId: string
+  /** Meeting start_time from the Zoom payload (ISO string). */
+  meetingStartTime: string | null
+}
+
+/**
+ * Wave 29: a Zoom transcript landed for a wedding. Treated as a
+ * tour-completion-class signal — the meeting itself happened, so any
+ * matching tour row should have its outcome stamped 'completed' (if
+ * still 'pending') and the wedding picks up tour_completed stage on
+ * the next computeLifecycleStage recompute.
+ *
+ * We touch tours ONLY when there's exactly one pending tour in the
+ * meeting window for this wedding — ambiguous cases (multiple tours
+ * within window) are left for coordinator review.
+ */
+export async function recordZoomLifecycleSignal(
+  input: ZoomLifecycleSignalInput,
+): Promise<void> {
+  const { supabase, venueId, weddingId, meetingStartTime } = input
+  if (!weddingId || !venueId || !meetingStartTime) return
+  const startMs = Date.parse(meetingStartTime)
+  if (!Number.isFinite(startMs)) return
+
+  try {
+    // Look for a pending tour for this wedding within +/- 2h of the
+    // meeting. If exactly one matches, mark it completed.
+    const lo = new Date(startMs - 2 * 60 * 60 * 1000).toISOString()
+    const hi = new Date(startMs + 2 * 60 * 60 * 1000).toISOString()
+    const { data: tours } = await supabase
+      .from('tours')
+      .select('id, outcome, scheduled_at')
+      .eq('venue_id', venueId)
+      .eq('wedding_id', weddingId)
+      .gte('scheduled_at', lo)
+      .lte('scheduled_at', hi)
+      .limit(5)
+    const pendings = (tours ?? []).filter(
+      (t) => t.outcome === null || t.outcome === 'pending',
+    )
+    if (pendings.length === 1) {
+      await supabase
+        .from('tours')
+        .update({ outcome: 'completed' })
+        .eq('id', pendings[0].id as string)
+        .in('outcome', ['pending'])
+    }
+
+    await supabase.from('wedding_lifecycle_events').insert({
+      wedding_id: weddingId,
+      venue_id: venueId,
+      kind: 'zoom_meeting_transcript_received',
+      direction: 'inbound',
+      evidence: {
+        source: 'zoom',
+        meeting_start_time: meetingStartTime,
+        pending_tours_matched: pendings.length,
+      },
+      occurred_at: new Date().toISOString(),
+    })
+  } catch (err) {
+    console.warn(
+      '[lifecycle/state-machine] recordZoomLifecycleSignal best-effort failed:',
+      err instanceof Error ? err.message : err,
+    )
+  }
+}

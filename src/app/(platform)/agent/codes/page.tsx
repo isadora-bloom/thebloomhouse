@@ -374,14 +374,26 @@ export default function ClientCodesPage() {
     }
   }
 
-  // ---- Filtering ----
+  // ---- Filtering + sort ----
+  // Server already orders by code asc, but it sorts byte-wise so
+  // mixed-case codes (RM-100 vs rm-099) appear out of order. localeCompare
+  // with numeric:true gives the operator natural-order ("RM-9" before
+  // "RM-10") and case-insensitive collation.
   const filteredCodes = useMemo(() => {
-    if (!searchQuery.trim()) return codes
-    const q = searchQuery.toLowerCase()
-    return codes.filter(
-      (c) =>
-        c.code.toLowerCase().includes(q) ||
-        coupleName(c.partner1_name, c.partner2_name).toLowerCase().includes(q)
+    const base = !searchQuery.trim()
+      ? codes
+      : codes.filter((c) => {
+          const q = searchQuery.toLowerCase()
+          return (
+            c.code.toLowerCase().includes(q) ||
+            coupleName(c.partner1_name, c.partner2_name).toLowerCase().includes(q)
+          )
+        })
+    return [...base].sort((a, b) =>
+      a.code.localeCompare(b.code, undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      }),
     )
   }, [codes, searchQuery])
 

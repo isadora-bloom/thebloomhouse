@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { sendEmail } from '@/lib/services/email/gmail'
 import { createServiceClient } from '@/lib/supabase/service'
-import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
+import { appendAIDisclosureWithVersion, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
 import { updateThreadLifecycleFolder } from '@/lib/services/inbox/lifecycle'
+import { isUnsendableAddress } from '@/lib/services/identity/body-extract'
 
 // ---------------------------------------------------------------------------
 // POST — Compose and send a new email
@@ -26,11 +27,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing email body' }, { status: 400 })
     }
 
-    // Enforce AI disclosure on every outbound Sage message. Context carries
-    // the per-venue Sage name / role / venue name so the footer is
-    // personalised. See src/lib/services/ai-disclosure.ts.
+    // 2026-05-11 live-customer fix: refuse any unsendable address.
+    // Covers .invalid placeholders, .test/.example/.localhost, no-reply
+    // local parts, and malformed values. See isUnsendableAddress JSDoc
+    // for the full class.
+    if (isUnsendableAddress(to)) {
+      return NextResponse.json(
+        {
+          error: 'needs_real_address',
+          message: 'This lead has no routable email address yet — find a real address on their listing platform profile or wait for a follow-up reply before sending.',
+        },
+        { status: 422 },
+      )
+    }
+
+    // Enforce AI disclosure on every outbound Sage message. Migration 300:
+    // the disclosure footer no longer carries a visible marker — idempotency
+    // moved to interactions.disclosure_version. Manual coordinator sends
+    // always stamp 'v4' on the interaction we insert below.
     const disclosureCtx = await fetchDisclosureContext(auth.venueId)
-    const bodyWithDisclosure = appendAIDisclosure(body, disclosureCtx)
+    const { body: bodyWithDisclosure, disclosureVersion } =
+      appendAIDisclosureWithVersion(body, disclosureCtx, null)
 
     const sentMessageId = await sendEmail(
       auth.venueId,
@@ -65,6 +82,9 @@ export async function POST(request: NextRequest) {
         gmail_message_id: sentMessageId,
         timestamp: new Date().toISOString(),
         signal_class: 'unclassified',
+        // Migration 300: persist the disclosure version stamp so future
+        // appendAIDisclosureWithVersion calls on this thread skip re-append.
+        disclosure_version: disclosureVersion,
       })
       .select('id, gmail_thread_id')
       .single()

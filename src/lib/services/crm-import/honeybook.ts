@@ -480,6 +480,11 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
         // class (HoneyBook is the CRM holding the record).
         // signal-class-justified: per-row override based on Q7-equivalent recognition
         signal_class: recognisedHearSource ? 'source' : 'crm',
+        // Wave 28 (mig 294): this row is a synthetic provenance marker
+        // (body starts with "provider:honeybook"), not a real couple-
+        // facing email. Keep it off /agent/inbox; it appears on the
+        // lead-detail timeline via the surface-agnostic thread loader.
+        surface: 'crm_attribution',
       })
     }
 

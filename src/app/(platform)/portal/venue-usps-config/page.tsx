@@ -17,13 +17,19 @@ import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useAiName } from '@/lib/hooks/use-ai-name'
-import { Sparkles, Save, Plus, Trash2, Loader2 } from 'lucide-react'
+import { Sparkles, Save, Plus, Trash2, Loader2, Wand2, X, Check, Pencil } from 'lucide-react'
 
 interface USP {
   id: string | null
   usp_text: string
   sort_order: number
   is_active: boolean
+}
+
+interface USPSuggestion {
+  usp_text: string
+  evidence_excerpt: string
+  confidence: number
 }
 
 export default function VenueUSPsConfigPage() {
@@ -35,6 +41,15 @@ export default function VenueUSPsConfigPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+
+  // Content-suggester state. The operator clicks "Pull suggestions from
+  // your website" → POST to /api/admin/content-suggest/usps → the LLM
+  // returns proposed USPs. Each one renders with Accept / Edit / Skip.
+  // Suggestions are NEVER auto-saved; they become draft rows that the
+  // operator then commits with the regular Save button.
+  const [suggesting, setSuggesting] = useState(false)
+  const [suggestions, setSuggestions] = useState<USPSuggestion[] | null>(null)
+  const [suggestError, setSuggestError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!venueId) return
@@ -86,6 +101,68 @@ export default function VenueUSPsConfigPage() {
 
   function updateRow(index: number, patch: Partial<USP>) {
     setUsps((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)))
+  }
+
+  async function handleSuggest() {
+    if (!venueId) return
+    setSuggesting(true)
+    setSuggestError(null)
+    setSuggestions(null)
+    try {
+      const res = await fetch('/api/admin/content-suggest/usps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ venueId }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setSuggestError(data?.error ?? 'Could not pull suggestions.')
+        return
+      }
+      const list = (data?.suggestions ?? []) as USPSuggestion[]
+      setSuggestions(list)
+    } catch (err) {
+      setSuggestError(err instanceof Error ? err.message : 'Network error.')
+    } finally {
+      setSuggesting(false)
+    }
+  }
+
+  function acceptSuggestion(suggestion: USPSuggestion) {
+    setUsps((prev) => [
+      ...prev,
+      {
+        id: null,
+        usp_text: suggestion.usp_text,
+        sort_order: prev.length,
+        is_active: true,
+      },
+    ])
+    setSuggestions((prev) => prev?.filter((s) => s !== suggestion) ?? null)
+  }
+
+  function editSuggestion(suggestion: USPSuggestion) {
+    // Drop the suggestion into the editable rows so the operator can
+    // tweak the wording before saving. The focus stays on the new row.
+    acceptSuggestion(suggestion)
+  }
+
+  function skipSuggestion(suggestion: USPSuggestion) {
+    setSuggestions((prev) => prev?.filter((s) => s !== suggestion) ?? null)
+  }
+
+  function acceptAllSuggestions() {
+    if (!suggestions) return
+    setUsps((prev) => {
+      const additions = suggestions.map((s, i) => ({
+        id: null as string | null,
+        usp_text: s.usp_text,
+        sort_order: prev.length + i,
+        is_active: true,
+      }))
+      return [...prev, ...additions]
+    })
+    setSuggestions(null)
   }
 
   async function handleSave() {
@@ -153,6 +230,111 @@ export default function VenueUSPsConfigPage() {
           place; the order here is the order {aiName} cycles through.
         </p>
       </div>
+
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <button
+          type="button"
+          onClick={handleSuggest}
+          disabled={suggesting || loading}
+          className="inline-flex items-center gap-1.5 px-3 py-2 text-sm text-sage-800 bg-warm-white border border-sage-300 rounded-lg hover:bg-sage-50 disabled:opacity-50"
+          title="Read your venue website and propose USPs"
+        >
+          {suggesting ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Wand2 className="w-4 h-4 text-sage-700" />
+          )}
+          {suggesting ? 'Reading your website…' : 'Pull suggestions from your website'}
+        </button>
+        {suggestError && (
+          <span className="text-sm text-rose-600">{suggestError}</span>
+        )}
+      </div>
+
+      {suggestions && (
+        <div className="bg-sage-50/60 border border-sage-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-medium text-sage-900 flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-sage-600" /> Suggestions from your website
+              </h2>
+              <p className="text-xs text-sage-600 mt-0.5">
+                Each suggestion shows the line on your site it came from.
+                Accept adds it as a draft row below; Save USPs to commit.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {suggestions.length > 0 && (
+                <button
+                  type="button"
+                  onClick={acceptAllSuggestions}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-sage-800 bg-white border border-sage-300 rounded hover:bg-sage-100"
+                >
+                  <Check className="w-3.5 h-3.5" /> Accept all
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSuggestions(null)}
+                className="p-1.5 text-sage-500 hover:text-sage-800 hover:bg-white rounded"
+                title="Dismiss suggestions"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          {suggestions.length === 0 ? (
+            <p className="text-sm text-sage-600 italic">
+              No new venue-specific USPs found. Your site may be generic, or
+              everything specific is already in your list.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {suggestions.map((s, i) => (
+                <li
+                  key={i}
+                  className="bg-white border border-sage-200 rounded-lg p-3 space-y-1.5"
+                >
+                  <p className="text-sm text-sage-900">{s.usp_text}</p>
+                  {s.evidence_excerpt && (
+                    <p className="text-xs italic text-sage-500">
+                      From the site: &ldquo;{s.evidence_excerpt}&rdquo;
+                    </p>
+                  )}
+                  <div className="flex items-center gap-1.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => acceptSuggestion(s)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-sage-800 bg-sage-100 hover:bg-sage-200 rounded"
+                    >
+                      <Check className="w-3.5 h-3.5" /> Accept
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => editSuggestion(s)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-sage-700 bg-white border border-sage-200 hover:bg-sage-50 rounded"
+                    >
+                      <Pencil className="w-3.5 h-3.5" /> Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => skipSuggestion(s)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs text-sage-500 hover:text-sage-800 hover:bg-sage-50 rounded"
+                    >
+                      <X className="w-3.5 h-3.5" /> Skip
+                    </button>
+                    {typeof s.confidence === 'number' && (
+                      <span className="ml-auto text-[10px] uppercase tracking-wide text-sage-400">
+                        confidence {Math.round(s.confidence * 100)}%
+                      </span>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <p className="text-sm text-sage-500 italic">Loading…</p>

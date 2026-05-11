@@ -119,10 +119,12 @@ function ResolveModal({
   errorLog,
   onClose,
   onResolve,
+  isAdmin,
 }: {
   errorLog: ErrorLog
   onClose: () => void
   onResolve: (errorId: string, notes: string) => Promise<void>
+  isAdmin: boolean
 }) {
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
@@ -157,7 +159,9 @@ function ResolveModal({
             </label>
             <div className="text-sm text-sage-600 bg-sage-50 rounded-lg p-3">
               <p className="font-medium text-sage-800 mb-1">{errorLog.error_type}</p>
-              <p className="text-sage-600">{errorLog.message}</p>
+              <p className="text-sage-600 whitespace-pre-wrap">
+                {isAdmin ? errorLog.message : redactErrorMessage(errorLog.message)}
+              </p>
             </div>
           </div>
 
@@ -201,6 +205,34 @@ function ResolveModal({
 // Main Page
 // ---------------------------------------------------------------------------
 
+/**
+ * F31 — message redaction.
+ *
+ * error_logs.message often carries raw stack frames and absolute paths
+ * (e.g. "TypeError at /var/task/node_modules/..."). Surfaced verbatim
+ * to a non-admin operator that's confusing (looks like a "broken
+ * server") and leaks repo structure. The page already runs under RLS,
+ * but the rendering layer redacts further when the viewer isn't an
+ * admin: collapse stack lines, strip absolute paths, cap length.
+ *
+ * Admins (super_admin / org_admin / owner / admin) see the full
+ * message untouched so they can actually debug.
+ */
+function redactErrorMessage(raw: string): string {
+  if (!raw) return raw
+  // Strip Windows + POSIX absolute paths to a basename suffix so an
+  // operator sees "in pipeline.ts" not "C:\Users\…\src\lib\services\…"
+  let out = raw.replace(/[A-Za-z]:\\[^\s)]+/g, (p) => {
+    const segs = p.split(/[\\/]/)
+    return `…/${segs[segs.length - 1] ?? p}`
+  })
+  out = out.replace(/\/(?:[^/\s)]+\/){2,}([^/\s)]+)/g, '…/$1')
+  // Collapse multi-line stacks to a single line with a marker.
+  out = out.replace(/\n\s*at [\s\S]+/m, ' (stack hidden)')
+  if (out.length > 240) out = out.slice(0, 237) + '…'
+  return out
+}
+
 export default function ErrorsPage() {
   const VENUE_ID = useVenueId()
   const [errors, setErrors] = useState<ErrorLog[]>([])
@@ -210,8 +242,32 @@ export default function ErrorsPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [resolvingError, setResolvingError] = useState<ErrorLog | null>(null)
   const [dailyCounts, setDailyCounts] = useState<DailyErrorCount[]>([])
+  // F31 — admin role check controls whether full stacks render.
+  const [isAdmin, setIsAdmin] = useState(false)
 
   const supabase = createClient()
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const { data } = await supabase
+        .from('user_profiles')
+        .select('role')
+        .eq('id', user.id)
+        .maybeSingle()
+      if (cancelled) return
+      const role = (data?.role as string | null) ?? null
+      setIsAdmin(
+        role === 'super_admin' ||
+          role === 'org_admin' ||
+          role === 'owner' ||
+          role === 'admin',
+      )
+    })()
+    return () => { cancelled = true }
+  }, [supabase])
 
   // ---- Fetch errors ----
   const fetchErrors = useCallback(async () => {
@@ -565,7 +621,7 @@ export default function ErrorsPage() {
                       </td>
                       <td className="px-4 py-3 max-w-md">
                         <p className="text-sm text-sage-900 truncate">
-                          {err.message}
+                          {isAdmin ? err.message : redactErrorMessage(err.message)}
                         </p>
                         {err.resolve_notes && (
                           <p className="text-xs text-sage-500 truncate mt-0.5">
@@ -610,6 +666,7 @@ export default function ErrorsPage() {
           errorLog={resolvingError}
           onClose={() => setResolvingError(null)}
           onResolve={handleResolve}
+          isAdmin={isAdmin}
         />
       )}
     </div>

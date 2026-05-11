@@ -127,19 +127,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ received: true })
     }
 
-    // Look up the contact by email to find the venue and wedding
+    // Look up the contact by email to find the venue and wedding.
+    // Contacts schema (001_shared_tables): id, person_id, type, value,
+    // is_primary. There is NO venue_id column on contacts — venue scope
+    // comes through the join on people.venue_id. Pre-fix this query
+    // used columns that don't exist (contact_type / contact_value /
+    // contacts.venue_id) and returned no rows for every Calendly
+    // webhook — tour bookings silently failed attribution. (Mig 063
+    // flagged the contact_type/contact_value mistake; the fix never
+    // landed at the call sites.) Fixed 2026-05-11.
     const { data: contact } = await supabase
       .from('contacts')
       .select(`
-        venue_id,
         person_id,
         people:person_id (
           id,
+          venue_id,
           wedding_id
         )
       `)
-      .eq('contact_type', 'email')
-      .ilike('contact_value', inviteeEmail)
+      .eq('type', 'email')
+      .ilike('value', inviteeEmail)
       .limit(1)
       .single()
 
@@ -150,9 +158,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ received: true })
     }
 
-    const venueId = contact.venue_id as string
-    const person = contact.people as unknown as { id: string; wedding_id: string | null } | null
+    const person = contact.people as unknown as {
+      id: string
+      venue_id: string | null
+      wedding_id: string | null
+    } | null
+    const venueId = person?.venue_id as string | undefined
     const weddingId = person?.wedding_id
+
+    if (!venueId) {
+      console.log(
+        `[webhook/calendly] Contact ${inviteeEmail} has no linked venue — skipping engagement event`
+      )
+      return NextResponse.json({ received: true })
+    }
 
     if (!weddingId) {
       console.log(

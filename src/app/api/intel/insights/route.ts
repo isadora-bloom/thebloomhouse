@@ -5,6 +5,10 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 import { createLogger, newCorrelationId } from '@/lib/observability/logger'
 import { redactError } from '@/lib/observability/redact'
+import {
+  buildCoupleFullNames,
+  pickCanonicalPeople,
+} from '@/lib/utils/couple-name'
 
 // ---------------------------------------------------------------------------
 // GET — Fetch intelligence insights for the current venue
@@ -92,6 +96,55 @@ export async function GET(req: NextRequest) {
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   })
 
+  // F27 — couple-name enrichment. Insights whose context_id is a wedding
+  // (decay_re_engagement / heat_narration / negotiation_state / etc.)
+  // render as raw UUIDs without this join. One query per page; the result
+  // is mapped onto the rows under `couple_label` + `context_wedding_id`
+  // so the InsightCard can render "Sarah & Jamie · Decay diagnosed…".
+  const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  const candidateWeddingIds = Array.from(
+    new Set(
+      sorted
+        .map((r) => (typeof r.context_id === 'string' ? r.context_id : null))
+        .filter((s): s is string => !!s && UUID_RE.test(s)),
+    ),
+  )
+  const coupleLabelByWeddingId = new Map<string, string>()
+  const validWeddingIds = new Set<string>()
+  if (candidateWeddingIds.length > 0) {
+    const { data: weddingRows } = await supabase
+      .from('weddings')
+      .select('id, venue_id, people ( first_name, last_name, role )')
+      .in('id', candidateWeddingIds)
+      .in('venue_id', venueIds)
+    type W = {
+      id: string
+      people: { first_name: string | null; last_name: string | null; role: string | null }[]
+    }
+    for (const row of (weddingRows ?? []) as W[]) {
+      validWeddingIds.add(row.id)
+      // Prefer partner roles for the headline; pickCanonicalPeople handles
+      // the abbreviated-vs-full-name preference so "Jen B" loses to
+      // "Jennifer Biaksangi" for the same human.
+      const partners = (row.people ?? []).filter(
+        (p) => p.role === 'partner1' || p.role === 'partner2',
+      )
+      const source = partners.length > 0 ? partners : row.people ?? []
+      const label = buildCoupleFullNames(pickCanonicalPeople(source))
+      if (label) coupleLabelByWeddingId.set(row.id, label)
+    }
+  }
+  const enriched = sorted.map((row) => {
+    const ctx = typeof row.context_id === 'string' ? row.context_id : null
+    const isWedding = ctx ? validWeddingIds.has(ctx) : false
+    return {
+      ...row,
+      couple_label: ctx && isWedding ? coupleLabelByWeddingId.get(ctx) ?? null : null,
+      context_wedding_id: ctx && isWedding ? ctx : null,
+    }
+  })
+
   // Also fetch counts for the stats bar
   const [newCount, actedCount, dismissedCount] = await Promise.all([
     supabase
@@ -122,7 +175,7 @@ export async function GET(req: NextRequest) {
   })
 
   return NextResponse.json({
-    insights: sorted,
+    insights: enriched,
     total: count ?? 0,
     stats: {
       new_count: newCount.count ?? 0,

@@ -823,6 +823,10 @@ function calendlyRowsToNormalised(
         body,
         extracted_identity: rowExtractedIdentity,
         signal_class: recognisedFromQ7 ? 'source' : 'touchpoint',
+        // Wave 28 (mig 294): the Calendly row IS the booking event, not
+        // an email about it. Keep it off /agent/inbox; lead-detail
+        // timelines aggregate every surface.
+        surface: 'integration_event',
       })
 
       if (overrideBucket === 'tour') {

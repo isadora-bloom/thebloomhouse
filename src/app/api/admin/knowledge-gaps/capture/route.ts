@@ -34,11 +34,17 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { captureKnowledge } from '@/lib/services/knowledge-gaps'
+import {
+  KNOWLEDGE_GAP_CATEGORIES,
+  type KnowledgeGapCategory,
+} from '@/lib/services/knowledge-gaps/categories'
 
 interface PostBody {
   knowledgeGapId?: string
   question?: string
   answer?: string
+  /** Category — required for new captures so we never write 'other' by default. */
+  category?: string
   tags?: unknown
   appliesUntil?: string
   sourceKind?: string
@@ -53,6 +59,11 @@ const ALLOWED_SOURCE_KINDS = new Set([
   'venue_doc',
 ])
 
+// Mig 298 added a CHECK constraint on knowledge_gaps.category with this
+// enum. ALLOWED_CATEGORIES mirrors it so a bad value 400s here instead
+// of surfacing as a postgres CHECK violation downstream.
+const ALLOWED_CATEGORIES = new Set<string>(KNOWLEDGE_GAP_CATEGORIES)
+
 export async function POST(req: NextRequest) {
   let body: PostBody = {}
   try {
@@ -65,6 +76,26 @@ export async function POST(req: NextRequest) {
   const answer = typeof body.answer === 'string' ? body.answer.trim() : ''
   if (!question) return badRequest('question required')
   if (!answer) return badRequest('answer required')
+
+  // Category is required for new captures. Re-capturing against an
+  // existing gap inherits the gap's category, so allow null only when
+  // knowledgeGapId is set — the service layer reads it from the gap row.
+  const rawCategory = typeof body.category === 'string' ? body.category.trim() : ''
+  const hasGap = typeof body.knowledgeGapId === 'string' && body.knowledgeGapId.length > 0
+  if (!rawCategory && !hasGap) {
+    return badRequest(
+      `category required (one of ${[...ALLOWED_CATEGORIES].join(', ')})`,
+    )
+  }
+  if (rawCategory && !ALLOWED_CATEGORIES.has(rawCategory)) {
+    return badRequest(
+      `category must be one of ${[...ALLOWED_CATEGORIES].join(', ')}`,
+    )
+  }
+  // Hold a typed reference for downstream use (currently unused by the
+  // service; reserved for the next iteration when capture-route can
+  // create knowledge_gaps rows directly).
+  void (rawCategory as KnowledgeGapCategory)
 
   const sourceKind =
     typeof body.sourceKind === 'string' && ALLOWED_SOURCE_KINDS.has(body.sourceKind)

@@ -71,6 +71,7 @@ interface NullRow {
   from_name: string | null
   timestamp: string
   gmail_message_id: string | null
+  author_class: string | null
 }
 
 interface VenueCostRow {
@@ -171,10 +172,30 @@ export default function ClassificationHealthPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
+  // Role gate for cost panels. Mig 296 hardened api_costs RLS to
+  // super_admin OR venue owner/admin only — this client-side check
+  // mirrors that so non-admin roles see a placeholder instead of empty
+  // tables. RLS is the real enforcement; the UI gate is just clarity.
+  const [userRole, setUserRole] = useState<string | null>(null)
+  const canSeeCosts =
+    userRole === 'super_admin' ||
+    userRole === 'org_admin' ||
+    userRole === 'owner' ||
+    userRole === 'admin'
+  const canRunSweep = canSeeCosts
+  const [sweepRunning, setSweepRunning] = useState(false)
+  const [sweepResult, setSweepResult] = useState<string | null>(null)
+
   // Overview band
   const [todayInbounds, setTodayInbounds] = useState(0)
   const [todayClassifierRuns, setTodayClassifierRuns] = useState(0)
   const [todayUnclassified, setTodayUnclassified] = useState(0)
+  // Wave 27 — share of the trailing-7d null bucket whose author_class is
+  // 'platform_system' (Calendly / HoneyBook notifications / Knot relay /
+  // OOO). Those rows correctly never make it to the inquiry classifier;
+  // surfacing the share lets the operator see whether the null count is
+  // a real backlog or explained-away platform noise.
+  const [unclassifiedPlatformSystemPct, setUnclassifiedPlatformSystemPct] = useState(0)
   const [ytdClassifierSpend, setYtdClassifierSpend] = useState(0)
 
   // Charts / tables
@@ -183,6 +204,54 @@ export default function ClassificationHealthPage() {
   const [nullRows, setNullRows] = useState<NullRow[]>([])
   const [venueCosts, setVenueCosts] = useState<VenueCostRow[]>([])
   const [monthlyRunRate, setMonthlyRunRate] = useState(0)
+
+  // Load current user's role once. user_profiles is the source of
+  // truth (resolve-platform-scope reads from there too).
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const { data } = await supabase
+        .from('user_profiles')
+        .select('role')
+        .eq('id', user.id)
+        .maybeSingle()
+      if (cancelled) return
+      setUserRole((data?.role as string | null) ?? null)
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  const runSweep = async () => {
+    if (sweepRunning) return
+    setSweepRunning(true)
+    setSweepResult(null)
+    try {
+      const res = await fetch('/api/agent/reprocess-orphans', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ venueId: scope.venueId ?? null }),
+      })
+      if (!res.ok) throw new Error(`Sweep failed (${res.status})`)
+      const data = await res.json().catch(() => ({}))
+      const processed =
+        (data?.processed as number | undefined) ??
+        (data?.count as number | undefined) ??
+        null
+      setSweepResult(
+        processed !== null
+          ? `Sweep complete. ${processed} reprocessed.`
+          : 'Sweep complete.',
+      )
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setSweepResult(`Sweep failed: ${msg}`)
+    } finally {
+      setSweepRunning(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -210,9 +279,14 @@ export default function ClassificationHealthPage() {
         tomorrow.setUTCDate(today0.getUTCDate() + 1)
 
         // ---- Inbounds (last 14d, scoped to venue if set) ----
+        // Wave 27: author_class joins the select so the "null bucket" math
+        // can subtract platform_system rows (Calendly/HoneyBook/Knot relay
+        // / OOO autoresponders) that are correctly never classified by the
+        // inquiry classifier. The 18% baseline null rate was inflated by
+        // those — they're not a backlog.
         let inboundQuery = supabase
           .from('interactions')
-          .select('id, timestamp, subject, from_email, from_name, gmail_message_id, venue_id')
+          .select('id, timestamp, subject, from_email, from_name, gmail_message_id, venue_id, author_class')
           .eq('direction', 'inbound')
           .eq('type', 'email')
           .gte('timestamp', since14d.toISOString())
@@ -230,6 +304,7 @@ export default function ClassificationHealthPage() {
           from_name: string | null
           gmail_message_id: string | null
           venue_id: string
+          author_class: string | null
         }>
 
         // ---- Classifier api_cost rows (last 14d) ----
@@ -343,13 +418,30 @@ export default function ClassificationHealthPage() {
         }))
 
         // ---- Build distribution (last 7 days) ----
+        // Wave 27: platform_system inbounds (Calendly / HoneyBook /
+        // Knot relay / autoresponders) are correctly NOT classified by
+        // the inquiry classifier — they fall outside its scope. Excluding
+        // them from the null bucket gives a true backlog count instead
+        // of an inflated one. We also tally how many were excluded so a
+        // sub-stat can show the share.
         const since7Iso = since7d.toISOString()
         const counts = new Map<string, number>()
         for (const k of CLASSIFICATION_KEYS) counts.set(k, 0)
         counts.set('__null', 0)
+        let nullPlatformSystemCount7d = 0
+        let nullTotalRaw7d = 0
         for (const i of inbounds) {
           if (i.timestamp < since7Iso) continue
           const c = classByInt.get(i.id) ?? null
+          if (c === null) {
+            nullTotalRaw7d += 1
+            if (i.author_class === 'platform_system') {
+              nullPlatformSystemCount7d += 1
+              // Excluded from the null bucket — it's not a classifier
+              // backlog, it's a non-classifiable signal source.
+              continue
+            }
+          }
           const bucket =
             c && (CLASSIFICATION_KEYS as readonly string[]).includes(c)
               ? c
@@ -361,11 +453,21 @@ export default function ClassificationHealthPage() {
         const distRows: DistributionRow[] = Array.from(counts.entries())
           .map(([classification, count]) => ({ classification, count }))
           .sort((a, b) => b.count - a.count)
+        const platformSystemPct =
+          nullTotalRaw7d > 0
+            ? Math.round((nullPlatformSystemCount7d / nullTotalRaw7d) * 100)
+            : 0
 
         // ---- Null list (last 7 days, scope-respecting) ----
+        // Wave 27: exclude platform_system rows from the inspection list
+        // too. Coordinators looking at "things to investigate" should not
+        // be staring at Calendly notifications.
         const nulls: NullRow[] = inbounds
           .filter(
-            (i) => i.timestamp >= since7Iso && classByInt.get(i.id) == null,
+            (i) =>
+              i.timestamp >= since7Iso &&
+              classByInt.get(i.id) == null &&
+              i.author_class !== 'platform_system',
           )
           .slice(0, 50)
           .map((i) => ({
@@ -375,6 +477,7 @@ export default function ClassificationHealthPage() {
             from_name: i.from_name,
             timestamp: i.timestamp,
             gmail_message_id: i.gmail_message_id,
+            author_class: i.author_class,
           }))
 
         // ---- Today buckets ----
@@ -387,14 +490,19 @@ export default function ClassificationHealthPage() {
         const todayRuns = cost14d.filter(
           (r) => r.created_at >= todayIso && r.created_at < tomorrowIso,
         ).length
+        // Wave 27: same exclusion on the today metric — platform_system
+        // null rows are not unclassified, they're not-applicable.
         const todayNullCount = todayInb.filter(
-          (i) => classByInt.get(i.id) == null,
+          (i) =>
+            classByInt.get(i.id) == null &&
+            i.author_class !== 'platform_system',
         ).length
 
         if (cancelled) return
         setTodayInbounds(todayInbCount)
         setTodayClassifierRuns(todayRuns)
         setTodayUnclassified(todayNullCount)
+        setUnclassifiedPlatformSystemPct(platformSystemPct)
         setYtdClassifierSpend(ytdSum)
         setDaily(dailyRows)
         setDistribution(distRows)
@@ -511,18 +619,35 @@ export default function ClassificationHealthPage() {
           <div className="text-xs text-sage-500 mt-1">
             inbounds with no extraction record
           </div>
+          {unclassifiedPlatformSystemPct > 0 ? (
+            <div className="text-xs text-sage-500 mt-1">
+              Of those, {unclassifiedPlatformSystemPct}% were platform_system
+              (not classifiable, correctly skipped)
+            </div>
+          ) : null}
         </div>
-        <div className="bg-surface border border-border rounded-xl p-4">
-          <div className="text-xs uppercase tracking-wider text-sage-500">
-            YTD classifier spend
+        {canSeeCosts ? (
+          <div className="bg-surface border border-border rounded-xl p-4">
+            <div className="text-xs uppercase tracking-wider text-sage-500">
+              YTD classifier spend
+            </div>
+            <div className="text-2xl font-semibold text-sage-900 mt-1">
+              {fmtUSD(ytdClassifierSpend)}
+            </div>
+            <div className="text-xs text-sage-500 mt-1">
+              email_classification, year-to-date
+            </div>
           </div>
-          <div className="text-2xl font-semibold text-sage-900 mt-1">
-            {fmtUSD(ytdClassifierSpend)}
+        ) : (
+          <div className="bg-sage-50 border border-sage-200 rounded-xl p-4">
+            <div className="text-xs uppercase tracking-wider text-sage-500">
+              YTD classifier spend
+            </div>
+            <div className="text-sm text-sage-600 mt-2">
+              Cost details require admin role.
+            </div>
           </div>
-          <div className="text-xs text-sage-500 mt-1">
-            email_classification, year-to-date
-          </div>
-        </div>
+        )}
         <div className="sm:col-span-2 lg:col-span-4">
           <div
             className={`flex items-center gap-2 text-sm rounded-lg px-3 py-2 ${
@@ -639,15 +764,35 @@ export default function ClassificationHealthPage() {
 
       {/* ---------- 4. Null-classification list ---------- */}
       <section className="bg-surface border border-border rounded-xl p-5 space-y-3">
-        <h2 className="text-base font-semibold text-sage-800 flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 text-rose-600" />
-          Inbounds with no classification (last 7 days)
-        </h2>
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-base font-semibold text-sage-800 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-600" />
+            Inbounds awaiting classification (last 7 days)
+          </h2>
+          {canRunSweep && nullRows.length > 0 && (
+            <button
+              type="button"
+              onClick={runSweep}
+              disabled={sweepRunning}
+              className="text-xs px-3 py-1.5 rounded-lg bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
+            >
+              {sweepRunning ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : null}
+              {sweepRunning ? 'Running…' : 'Run sweep now'}
+            </button>
+          )}
+        </div>
         <p className="text-xs text-sage-500">
-          These rows hit the inbox but never produced an
-          intelligence_extractions row. Click through to the inbox to
-          inspect — usually the pipeline errored mid-processing.
+          These will be processed on the next classifier sweep. Click
+          through to the inbox to inspect a single row, or run the sweep
+          now to reprocess immediately.
         </p>
+        {sweepResult && (
+          <p className="text-xs text-sage-700 bg-sage-50 border border-sage-200 rounded px-3 py-2">
+            {sweepResult}
+          </p>
+        )}
         {nullRows.length === 0 ? (
           <p className="text-sm text-emerald-700">
             All inbounds in the last 7 days have a classification record.
@@ -682,6 +827,17 @@ export default function ClassificationHealthPage() {
       </section>
 
       {/* ---------- 5. Per-venue cost roll-up ---------- */}
+      {!canSeeCosts ? (
+        <section className="bg-sage-50 border border-sage-200 rounded-xl p-5">
+          <h2 className="text-base font-semibold text-sage-800 flex items-center gap-2 mb-1">
+            <DollarSign className="w-4 h-4 text-teal-600" />
+            Classifier spend by venue
+          </h2>
+          <p className="text-sm text-sage-600">
+            Cost details require admin role.
+          </p>
+        </section>
+      ) : (
       <section className="bg-surface border border-border rounded-xl p-5 space-y-3">
         <h2 className="text-base font-semibold text-sage-800 flex items-center gap-2">
           <DollarSign className="w-4 h-4 text-teal-600" />
@@ -746,6 +902,7 @@ export default function ClassificationHealthPage() {
           </div>
         )}
       </section>
+      )}
     </div>
   )
 }

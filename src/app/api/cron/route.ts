@@ -350,6 +350,22 @@ const VALID_JOBS = [
   // couples + couple_intel + outcomes; Sonnet aggregates archetypes
   // (LLM-invented labels, not enum). 3 venues/tick. Weekly.
   'alumni_cohort_sweep',
+  // F22 (2026-05-11). Knowledge-gap category backfill. Mig 298 reset
+  // NULL → 'other' for ~447 legacy rows + added NOT NULL + CHECK.
+  // This sweep re-categorizes 'other' rows with Haiku so the operator
+  // review surface stops being a catch-all bucket. 50 rows/tick,
+  // fire-and-forget on per-row errors.
+  'knowledge_gap_category_backfill',
+  // Wave 27 (2026-05-11). Author-class backfill. Drains the mig-293
+  // pending index — inbound interactions whose author_class is still
+  // 'unknown'. Outbound rows were synchronously backfilled by migration
+  // 293 (operator / sage via drafts.auto_sent linkage); this cron only
+  // touches inbound. Per-venue batched at 50 calls in parallel; capped
+  // at 500 rows per venue per tick. Idempotent. NOT registered in
+  // vercel.json (we're at the 40-cron Pro cap); operator triggers via
+  // curl until a shared maintenance cron picks it up. Cost
+  // ~$0.0003/email; full Rixey ~12k-row backfill is ~$3.60.
+  'author_class_backfill',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -881,6 +897,25 @@ async function runJob(job: JobName): Promise<unknown> {
       // archetypes (LLM-invented labels). 3 venues/tick. Weekly.
       const { runAlumniSweep } = await import('@/lib/services/intel/alumni/sweep')
       return runAlumniSweep()
+    }
+
+    case 'knowledge_gap_category_backfill': {
+      // F22 (2026-05-11). Haiku re-categorizer for legacy 'other' rows.
+      // 50 rows/tick; fire-and-forget per row.
+      const { runKnowledgeGapCategoryBackfill } = await import(
+        '@/lib/services/knowledge-gaps/category-backfill'
+      )
+      return runKnowledgeGapCategoryBackfill()
+    }
+
+    case 'author_class_backfill': {
+      // Wave 27. Drains mig-293 'unknown' inbound rows. Per-venue, 50
+      // calls in parallel, capped at 500 rows/venue/tick. Cost
+      // ~$0.0003/row. Idempotent.
+      const { runAuthorClassBackfill } = await import(
+        '@/lib/services/email/author-class-backfill'
+      )
+      return runAuthorClassBackfill()
     }
   }
 }

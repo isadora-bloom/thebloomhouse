@@ -504,6 +504,8 @@ export const MODE_SAGE: ModeConfig = {
       items: [
         { label: 'Gmail', href: '/settings/gmail', icon: Mail },
         { label: 'Audio Capture', href: '/settings/audio-capture', icon: Inbox },
+        // Wave 29: SMS (Twilio) + Zoom transcript ingestion per-venue config.
+        { label: 'Multi-channel', href: '/settings/multi-channel', icon: MessageSquareText },
         { label: 'OpenPhone (SMS)', href: '/settings/openphone', icon: Phone },
       ],
     },

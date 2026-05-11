@@ -165,8 +165,8 @@ export const PHRASE_LIBRARY: PhraseLibrary = {
       "I'm happy to connect when your schedule allows.",
     ],
     enthusiastic: [
-      "We'd absolutely love to show you around!",
-      "Can't wait to meet you in person!",
+      "The team would absolutely love to show you around!",
+      "We can't wait to host you at the venue!",
       'So excited to hopefully connect soon!',
     ],
   },
@@ -243,7 +243,7 @@ export const PHRASE_LIBRARY: PhraseLibrary = {
     enthusiastic: [
       "You HAVE to see it in person - it's incredible!",
       "Seriously, come visit! You're going to love it.",
-      "I can't wait to show you around!",
+      "The team can't wait to show you around!",
     ],
   },
 

@@ -37,6 +37,11 @@ interface AIConfig {
   signature_greeting: string | null
   signature_closer: string | null
   signature_expressions: string[]
+  // Email signature footer fields — also read by the content-suggester
+  // ("Pull suggestions from your website" on /portal/venue-usps-config
+  // and /settings/seasonal-content) and by the AI-disclosure footer.
+  signature_website: string | null
+  reviewer_intro: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +235,11 @@ export default function PersonalityPage() {
         signature_greeting: config.signature_greeting,
         signature_closer: config.signature_closer,
         signature_expressions: config.signature_expressions,
+        // 2026-05-11: surfaced on this page so the content-suggester
+        // ("Pull suggestions from your website") has a URL to read +
+        // the email footer has the operator's warm review-by line.
+        signature_website: config.signature_website,
+        reviewer_intro: config.reviewer_intro,
         updated_at: new Date().toISOString(),
       })
       .eq('id', config.id)
@@ -698,6 +708,32 @@ ${name}`
               className={inputClasses}
             />
             <p className="text-xs text-sage-500 mt-1">How the AI signs off every email.</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-sage-700 mb-1">Venue website</label>
+            <input
+              type="url"
+              value={config.signature_website ?? ''}
+              onChange={(e) => update('signature_website', e.target.value || null)}
+              placeholder="https://yourvenue.com"
+              className={inputClasses}
+            />
+            <p className="text-xs text-sage-500 mt-1">
+              Used in the email footer and read by &quot;Pull suggestions from your website&quot; on the USPs and Seasonal Content pages.
+            </p>
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-sage-700 mb-1">Review-by line</label>
+            <textarea
+              value={config.reviewer_intro ?? ''}
+              onChange={(e) => update('reviewer_intro', e.target.value || null)}
+              placeholder="Based on Isadora's thinking — she double-checks the important details before they go out."
+              rows={2}
+              className={inputClasses}
+            />
+            <p className="text-xs text-sage-500 mt-1">
+              Warms up the footer. Shown right under the AI sign-off. Leave blank to use the safe default (&quot;Reviewed by the team before anything important goes out.&quot;)
+            </p>
           </div>
         </div>
 
