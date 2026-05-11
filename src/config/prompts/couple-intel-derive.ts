@@ -23,20 +23,32 @@
  * Persona discipline
  * ------------------
  * The persona label is DISCOVERED from data, not picked from an enum.
- * Examples that might emerge: "Heritage-Forward Planner",
- * "Cost-Conscious Pragmatist", "Grief-Mediating Bride",
- * "Family-Diplomat", "Deadline-Driven Booker". If labels drift wildly
- * across couples, Wave 5B will cluster them post-hoc — this prompt
- * just stores what the model produced.
+ * If labels drift wildly across couples, Wave 5B will cluster them
+ * post-hoc — this prompt just stores what the model produced.
+ *
+ * Wave 22 (2026-05-11) bias remediation
+ * -------------------------------------
+ * v1 of this prompt enumerated 8 persona-label examples in the system
+ * prompt. Wave 21 audit (PROMPT-BIAS-AUDIT.md) found those examples
+ * were anchoring the model — the same labels cascaded across Wave 5B
+ * cohort-rollup, Wave 5D venue-thesis, and Wave 14 alumni-cohort
+ * because each prompt independently primed the same names. v2 replaces
+ * the example list with a shape-only PERSONA_STYLE_GUIDE constant
+ * shared across all four persona-producing prompts. Output schema is
+ * unchanged.
  */
 
 import type { CoupleIdentityProfile } from '@/config/prompts/identity-reconstruction'
+import { PERSONA_STYLE_GUIDE } from '@/config/prompts/persona-style-guide'
 
 // Bumping this constant forces every consumer to either accept the new
 // prompt's output or version-pin. Threaded into api_costs.prompt_version
 // so a regression audit can correlate cost + quality + revision.
+//
+// v1 → v2 (Wave 22, 2026-05-11): strip example persona-label list; import
+// shape-only PERSONA_STYLE_GUIDE. Bias remediation per PROMPT-BIAS-AUDIT.md.
 export const COUPLE_INTEL_DERIVE_PROMPT_VERSION =
-  'couple-intel-derive.prompt.v1'
+  'couple-intel-derive.prompt.v2'
 
 // ---------------------------------------------------------------------------
 // Public types — mirror the wire JSON the prompt asks for.
@@ -168,21 +180,15 @@ action and inbox triage:
    surfaces in coordinator UIs that may render to operators who do
    NOT have that flag enabled. Voice-shape only.
 
-2. **Persona is discovered, not picked from an enum.** Invent a short
-   2-4-word label that captures what makes THIS couple distinct.
-   Examples that might emerge from real data:
-     - "Heritage-Forward Planner"
-     - "Cost-Conscious Pragmatist"
-     - "Grief-Mediating Bride"
-     - "Family-Diplomat"
-     - "Deadline-Driven Booker"
-     - "Vendor-Curious Explorer"
-     - "Cultural-Fusion Couple"
-     - "Pandemic-Postponed Replanner"
-   Do NOT force the label into one of the examples — let it emerge
-   from the data. If two couples share the same archetype the labels
-   should converge naturally; if they diverge that's a Wave 5B
-   clustering problem, not yours.
+2. **Persona is discovered, not picked from an enum.** Invent a label
+   that captures what makes THIS couple distinct. Follow the style
+   guide below; no candidate labels are listed on purpose.
+
+${PERSONA_STYLE_GUIDE}
+
+   If two couples share the same archetype the labels should converge
+   naturally from the data; if they diverge that's a Wave 5B clustering
+   problem, not yours.
 
 3. **Predicted close probability is an integer 0-100.** Ground it in
    specific signals from the evidence. key_signals is 2-5 specific,

@@ -36,15 +36,30 @@
  * ------------------
  * The cohort surfaces personas that Wave 5A already discovered. We do
  * NOT pre-define a persona list. The aggregator MAY consolidate
- * obvious near-duplicates ("Heritage-Forward Planner" + "Heritage-
- * Forward Couple"), but should not invent labels that didn't appear
- * in the underlying couple_intel rows.
+ * obvious near-duplicates (same archetype, slightly different phrasing
+ * across couples), but should not invent labels that didn't appear in
+ * the underlying couple_intel rows.
+ *
+ * Wave 22 (2026-05-11) bias remediation
+ * -------------------------------------
+ * v1 ship listed specific cohort-content examples in the
+ * conversion_correlations rules ("couples mentioning grief who got a
+ * custom response within 4hrs", "couples with Korean-tea-ceremony
+ * interest") which observably anchored the model toward those exact
+ * intersections. v2 replaces them with shape-only examples plus the
+ * shared PERSONA_STYLE_GUIDE constant. Output schema is unchanged.
  */
+
+import { PERSONA_STYLE_GUIDE } from '@/config/prompts/persona-style-guide'
 
 // Bumping this constant forces every consumer to either accept the new
 // prompt's output or version-pin. Threaded into api_costs.prompt_version
 // so a regression audit can correlate cost + quality + revision.
-export const COHORT_ROLLUP_PROMPT_VERSION = 'cohort-rollup.prompt.v1'
+//
+// v1 → v2 (Wave 22, 2026-05-11): replace cohort-content examples with
+// shape-only placeholders; import PERSONA_STYLE_GUIDE. Per
+// PROMPT-BIAS-AUDIT.md finding #3.
+export const COHORT_ROLLUP_PROMPT_VERSION = 'cohort-rollup.prompt.v2'
 
 // ---------------------------------------------------------------------------
 // Public types — mirror the wire JSON the prompt asks for.
@@ -241,17 +256,21 @@ shape without leaking specifics.
 3. **Persona labels are reused, not invented.** voice_calibration
    personas should match labels that Wave 5A already discovered (the
    user prompt lists the persona distribution). You MAY consolidate
-   obvious near-duplicates ("Heritage-Forward Planner" + "Heritage-
-   Forward Couple" → "Heritage-Forward Planner") but do not invent
-   personas that no couple in this cohort carries. If a single persona
-   has fewer than 3 couples, prefer to omit it from voice_calibration
-   rather than fabricate language guidance.
+   obvious near-duplicates (same archetype, slightly different phrasing)
+   into a single canonical label, but do not invent personas that no
+   couple in this cohort carries. If a single persona has fewer than 3
+   couples, prefer to omit it from voice_calibration rather than
+   fabricate language guidance. When you do produce a persona label,
+   follow the style guide:
+
+${PERSONA_STYLE_GUIDE}
 
 4. **Conversion correlations need n + lift + confidence.**
-   - signal: a specific cohort attribute or behaviour ("couples
-     mentioning grief who got a custom response within 4hrs", "couples
-     with Korean-tea-ceremony interest", "couples who toured within
-     14d of inquiry").
+   - signal: a specific cohort attribute or behaviour, e.g.
+     <emotional-theme> + <response-time-bucket>, <cultural-signal>
+     interest, <commitment-action> within <window-days>d of inquiry.
+     Surface whatever intersections the cohort data actually shows —
+     do not hunt for any particular shape.
    - outcome: 'books' (correlated with closing), 'drops' (correlated
      with going cold), 'slow' (correlated with longer cycle).
    - lift_pct: percentage difference vs the venue baseline. Positive
@@ -278,10 +297,9 @@ shape without leaking specifics.
 6. **Timing patterns.** Cohort-level timing observations: best inquiry
    day, best response window, persona-specific lead times, when stale
    threads are recoverable. Each carries an actionable_recommendation.
-   Examples:
-     - pattern: "Inquiries on Sunday evenings convert at 1.4x baseline"
-     - pattern: "Cost-Conscious Pragmatists silent for 14d are
-       re-engageable with bar-package walkthrough; 4 of 7 reopened"
+   Shape: <time-bucket> <observed lift / drag> vs baseline; <persona>
+   silent for <window>d are <re-engageable / cold>. Surface whatever
+   patterns the data shows; do not telegraph any particular result.
 
 7. **Voice calibration is per-persona.**
    - language_that_lands: 2-5 short phrases / patterns this persona

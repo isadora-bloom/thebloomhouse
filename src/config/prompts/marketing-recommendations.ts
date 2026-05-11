@@ -36,13 +36,27 @@
  * recommendations yet — need more data".
  *
  * Output: ONLY the JSON object. No prose preamble, no markdown fences.
+ *
+ * Wave 22 (2026-05-11) bias remediation
+ * -------------------------------------
+ * v1 ship's OUTPUT example was a fully-worked Knot-to-Instagram
+ * reallocation for Heritage-Forward including specific dollar figures
+ * ($800/mo, $180 vs $90 CAC). Wave 21 audit (PROMPT-BIAS-AUDIT.md
+ * finding #8) found the model was echoing this specific narrative
+ * shape on dev data regardless of the venue's actual rollup. v2
+ * replaces the worked example with shape-only placeholders. Output
+ * schema is unchanged.
  */
 
 // Bumping this constant forces every consumer to either accept the new
 // prompt's output or version-pin. Threaded into api_costs.prompt_version
 // so a regression audit can correlate cost + quality + revision.
+//
+// v1 → v2 (Wave 22, 2026-05-11): strip Knot-to-Instagram worked
+// example; replace with shape-only placeholders. Per
+// PROMPT-BIAS-AUDIT.md finding #8.
 export const MARKETING_RECOMMENDATIONS_PROMPT_VERSION =
-  'marketing-recommendations.prompt.v1'
+  'marketing-recommendations.prompt.v2'
 
 // ---------------------------------------------------------------------------
 // Public types — mirror the wire JSON the prompt asks for.
@@ -171,7 +185,7 @@ ANONYMISATION DISCIPLINE
 - You will not be given any per-couple PII. If you would normally cite a couple, cite the rollup cell instead ("Knot × Heritage-Forward, n=14, CAC=$180").
 
 HARD RULES
-1. Each recommendation MUST cite SPECIFIC numbers from the rollup. NOT "Knot is expensive" but "Knot × Heritage-Forward CAC=$180 vs Instagram × Heritage-Forward CAC=$90 (over the same 90d window, n_knot=14, n_instagram=22)".
+1. Each recommendation MUST cite SPECIFIC numbers from the rollup. Shape: "<source_channel> × <persona> CAC=$<x> vs <other_channel> × <persona> CAC=$<y> (over the same <N>d window, n_source=<a>, n_other=<b>)". Use the venue's actual numbers; do not echo numbers from this prompt's example.
 2. Counterfactual is mandatory: explicitly state what happens if we DON'T reallocate (status quo cost, lost upside).
 3. Payback timeline is mandatory: how long until projected impact starts to materialise + when cumulative payback breaks even.
 4. n_too_small_warning=true when EITHER the source cell OR the target cell underlying your recommendation has < 10 weddings (sum of inquiries_count + booked_count < 10). When you set this flag, your confidence MUST be < 70.
@@ -204,46 +218,46 @@ CONFIDENCE GUIDANCE
 - 20-39: weak signal — lean toward 'investigate' action_type.
 - 0-19: refuse instead of recommending.
 
-OUTPUT — JSON only, exactly this shape:
+OUTPUT — JSON only, exactly this shape (placeholders, NOT a worked example to mimic):
 {
   "recommendations": [
     {
-      "recommendation_title": "Move 30% of Knot spend to Instagram for Heritage-Forward",
-      "recommendation_text": "Knot × Heritage-Forward (n=14) shows CAC=$180 and 8% conversion. Instagram × Heritage-Forward (n=22) shows CAC=$90 and 22% conversion in the same 90-day window. Reallocating $800/mo of Knot spend to Instagram is projected to add 2-3 bookings/mo at the same total spend, ~+$14k/yr at the venue's current avg booking value.",
-      "action_type": "reallocate",
-      "source_channel": "theknot_fee",
-      "target_channel": "meta_ads",
-      "target_persona": "Heritage-Forward",
-      "estimated_monthly_dollar_impact_cents": 1166000,
-      "confidence_0_100": 78,
+      "recommendation_title": "<title — based on the venue's actual rollup>",
+      "recommendation_text": "<text citing real cell numbers from the venue's rollup, with the venue's actual channels / personas / CACs / window>",
+      "action_type": "reallocate" | "pause" | "scale" | "investigate" | "other",
+      "source_channel": "<channel_slug or null>",
+      "target_channel": "<channel_slug or null>",
+      "target_persona": "<persona_label or null>",
+      "estimated_monthly_dollar_impact_cents": <signed integer in cents>,
+      "confidence_0_100": <integer 0-100>,
       "reasoning_chain": {
         "evidence_signals": [
-          "Knot × Heritage-Forward: CAC=$180 conversion=8% (n=14)",
-          "Instagram × Heritage-Forward: CAC=$90 conversion=22% (n=22)"
+          "<channel × persona: CAC=$<x> conversion=<y>% (n=<z>)>",
+          "<other channel × persona: CAC=$<x> conversion=<y>% (n=<z>)>"
         ],
-        "assumed_baseline": "Knot currently absorbs $2,600/mo at $180 CAC; that's 14 bookings/qtr. Instagram absorbs $1,800/mo at $90 CAC; that's 22 bookings/qtr.",
-        "projected_outcome": "Shifting $800/mo from Knot to Instagram trades ~1.5 expensive bookings for ~3 cheaper ones. Net +1.5 bookings/mo at the venue's $9,300 avg.",
-        "counterfactual": "If we don't reallocate, the Heritage-Forward inquiries from Knot continue to underperform; we leave the Instagram leverage on the table.",
-        "payback_months": 2,
-        "key_risks": [
-          "Instagram CAC may drift up if spend doubles",
-          "Knot validation effect — some Instagram leads may visit Knot before booking; pulling Knot entirely could quietly drag conversions"
-        ]
+        "assumed_baseline": "<what today looks like for the affected segment>",
+        "projected_outcome": "<what changes after the action>",
+        "counterfactual": "<what happens if no action is taken>",
+        "payback_months": <number>,
+        "key_risks": ["<falsifier 1>", "<falsifier 2>"]
       },
-      "n_too_small_warning": false
+      "n_too_small_warning": <boolean>
     }
   ],
   "refusals": [
-    { "field": "tiktok_ads", "reason": "Only 3 weddings attributed in 90d — refuse recommendation; n_too_small" }
+    { "field": "<channel_or_segment>", "reason": "<why this rec was not produced>" }
   ]
 }
+
+The example above is SHAPE ONLY. Do not echo any channel name, persona label, or number from the placeholders — fill them with the venue's actual rollup data, or refuse.
 
 DO NOT:
 - Echo persona labels or channel names outside the structured fields above.
 - Invent persona labels that did not appear in personaDistribution.
 - Speculate about specific couples — you have no per-couple data.
 - Recommend auto-execution. Always frame as "flag for coordinator decision".
-- Produce a recommendation without a counterfactual + payback_months.`
+- Produce a recommendation without a counterfactual + payback_months.
+- Reach for any particular reallocation direction unless the venue's data unambiguously supports it. The direction is a measurement, not an assumption.`
 }
 
 export function buildMarketingRecommendationsUserPrompt(

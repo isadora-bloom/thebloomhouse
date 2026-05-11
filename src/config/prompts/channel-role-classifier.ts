@@ -27,14 +27,34 @@
  *
  * Output: ONLY the JSON object. The caller wraps callAI; this prompt
  * reinforces.
+ *
+ * Wave 22 (2026-05-11) bias remediation
+ * -------------------------------------
+ * v1 ship contained "lean validation when same-platform signal is
+ * absent" / "burden of proof shifts" / "Knot tends to be validation"
+ * language — pre-imposing direction on the verdict the classifier is
+ * meant to discover. Wave 21 audit (PROMPT-BIAS-AUDIT.md finding #4,
+ * critical) called this the canonical doctrine anti-pattern. v2
+ * replaces the direction-loaded sentences with symmetric evidence
+ * weighting. Output schema is unchanged.
+ *
+ * Existing attribution_events.role rows classified under v1 are
+ * suspect — migration 288 adds prompt_version_classified_under to
+ * track which rows need re-classification, and POST
+ * /api/admin/attribution/reclassify-v1 is the operator-triggered
+ * re-run. We do NOT auto-reclassify (operator decides).
  */
 
 // Bumping this version forces every read surface to either accept the
 // new prompt's output or version-pin. Threaded into
 // api_costs.prompt_version so cost / quality / latency can be
 // correlated to a specific revision.
+//
+// v1 → v2 (Wave 22, 2026-05-11): strip "lean validation" / "burden of
+// proof shifts" sentences; restate as symmetric evidence weighting.
+// Per PROMPT-BIAS-AUDIT.md finding #4 (critical).
 export const CHANNEL_ROLE_CLASSIFIER_PROMPT_VERSION =
-  'channel-role-classifier.prompt.v1'
+  'channel-role-classifier.prompt.v2'
 
 // ---------------------------------------------------------------------------
 // Public types — wire shape the prompt asks for.
@@ -116,13 +136,9 @@ Your job is to classify the role of one attribution_event touchpoint.
 2. **validation** — The couple discovered the venue elsewhere and used
    this touchpoint as a confirmation/intake form. Evidence: NO same-
    platform pre-inquiry engagement, BUT pre-inquiry signals exist on
-   OTHER platforms (Instagram view three weeks before, organic Google
-   referrer, vendor website hit). The couple already knew the venue
-   and used this channel as the path of least resistance.
-   The Knot / WeddingWire / HoneyBook patterns frequently end up here:
-   the couple finds the venue on Instagram or via a planner, then uses
-   the directory's "Request Info" button because that's the form that's
-   in front of them when they're ready to inquire.
+   OTHER platforms (an organic referrer hit, a social view, a vendor
+   website hit, etc.). The couple already knew the venue and used this
+   channel as the path of least resistance.
 
 3. **conversion** — This touchpoint is itself the closing-step event:
    the inquiry-form submission that opened the wedding, a tour booking,
@@ -141,28 +157,34 @@ You receive:
 
 The forensic rule already deferred to you because it found the case
 ambiguous. Common ambiguities you'll see:
-   - One Knot view 28 days pre-inquiry + three Instagram views in the
-     final week. Which channel acquired? Lean validation on Knot —
-     the Instagram chain is fresher and denser.
-   - No same-platform signal but a wedding_source_legacy of 'theknot' +
-     no other-platform signals either. Is this a real Knot acquisition
-     with no engagement event recorded, or a validation channel where
-     the acquisition event was simply not captured? Lean validation when
-     the same-platform signal is absent — the absence is evidence.
+   - One same-platform view 28 days pre-inquiry + several other-platform
+     views in the final week. Both chains are real signals — weigh them
+     against each other based on density, recency, and the wedding's
+     stated source.
+   - No same-platform signal AND no other-platform signals either. The
+     evidence is genuinely thin: it might be a real acquisition with no
+     engagement event captured, or a validation channel where the
+     acquisition event was simply not tracked. Neither verdict is
+     supported by data — prefer to refuse rather than guess.
    - A touch_type of 'inquiry' or 'contract_signed': always conversion,
      never an acquisition channel.
 
 ## CORE RULES
 
-1. **Pre-inquiry signal absence is evidence.** When a touchpoint claims
-   acquisition but no pre-inquiry signal exists on the same platform,
-   the burden of proof shifts: the touchpoint is more likely validation
-   unless there's positive evidence otherwise.
+1. **Classify based on evidence, not on platform priors.** When
+   evidence is ambiguous or absent, return role:null with a refusal
+   string. Do NOT default toward one verdict on the basis of which
+   platform the touchpoint is on; do NOT shift "burden of proof" in
+   either direction. Same-platform pre-inquiry presence is evidence
+   for acquisition. Other-platform pre-inquiry presence (in the
+   absence of same-platform presence) is evidence for validation.
+   Absence of BOTH is evidence of nothing — refuse.
 
 2. **Recency wins.** A signal in the final 7 days before inquiry weighs
    more than a signal 25 days before. Couples decide on a venue close
    to the inquiry; the dense pre-inquiry signal cluster is the real
-   acquisition trail.
+   acquisition trail. Apply this symmetrically to both same-platform
+   and other-platform signals.
 
 3. **Touch_type IN ('inquiry', 'tour_booked', 'tour_conducted',
    'contract_signed', 'calendly_booked', 'proposal_sent') always =>
@@ -226,7 +248,7 @@ export function buildUserPrompt(evidence: TouchpointEventEvidence): string {
 
   lines.push('## Same-platform pre-inquiry signals (within 30 days before inquiry)')
   if (evidence.same_platform_pre_inquiry_signals.length === 0) {
-    lines.push('(none — this is significant evidence; absence may indicate validation)')
+    lines.push('(none)')
   } else {
     for (const s of evidence.same_platform_pre_inquiry_signals) {
       lines.push(`- ${s.occurred_at} | ${s.platform} | ${s.description}`)

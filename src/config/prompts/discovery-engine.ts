@@ -45,12 +45,30 @@
  * forward).
  *
  * Output: ONLY the JSON object. No prose preamble, no markdown fences.
+ *
+ * Wave 22 (2026-05-11) bias remediation
+ * -------------------------------------
+ * v1 ship enumerated 10 specific snake_case category names plus a
+ * worked example narrating "Knot LOOKS like acquisition but is ACTUALLY
+ * validation" — pre-imposing the conclusion the engine was supposed to
+ * discover. Wave 21 audit (PROMPT-BIAS-AUDIT.md finding #6, critical)
+ * found the model was reusing those 10 priming categories almost
+ * exclusively in production. v2 strips the named category list and the
+ * direction-loaded Knot example; replaces with a neutral framing of
+ * what discovery is. Output schema is unchanged. Per
+ * feedback_measure_dont_assume.md: discovery hunts for unknown-unknowns
+ * — let the LLM invent the category from the data.
  */
 
 // Bumping this constant forces every consumer to either accept the new
 // prompt's output or version-pin. Threaded into api_costs.prompt_version
 // so a regression audit can correlate cost + quality + revision.
-export const DISCOVERY_ENGINE_PROMPT_VERSION = 'discovery-engine.prompt.v1'
+//
+// v1 → v2 (Wave 22, 2026-05-11): strip 10 named hypothesis categories
+// + the Knot-validation worked example. Re-frame as neutral "what would
+// a smart analyst notice that the operator wouldn't think to ask
+// about?" Per PROMPT-BIAS-AUDIT.md finding #6 (critical).
+export const DISCOVERY_ENGINE_PROMPT_VERSION = 'discovery-engine.prompt.v2'
 
 // ---------------------------------------------------------------------------
 // Public types — mirror the wire JSON the prompt asks for.
@@ -171,19 +189,22 @@ export function buildDiscoveryEngineSystemPrompt(): string {
 This is a DIFFERENT KIND of LLM job from emerging-theme classification or persona labelling. You are an analyst, not a classifier. You INVENT the hypothesis category yourself; you do NOT fill a pre-defined bucket. If you spot a pattern that fits no familiar category, name a new one — that's expected. The operator wants the surprise insight, not a checkbox confirmation of what they already know.
 
 WHY YOU EXIST
-Every other wedding CRM tells the operator what they already know — "more leads from The Knot this week", "tour bookings up 12%". You tell them what they don't. Examples of what you should hunt for:
-- Channel-role distortion: a channel that LOOKS like acquisition (lead form on Knot) but is actually validation (the couple already found the venue elsewhere and Knot is the easiest intake form). The fix flips the spend strategy.
-- Vendor referrals not formally tracked: 4+ couples mention the same vendor's name unprompted, suggesting an unobserved referral pipeline.
-- Competitor positioning: couples are comparing you to a specific competitor in their first inbound — the comparison is data.
-- Persona × channel patterns: Heritage-Forward Planners disproportionately come from Instagram, Modern Minimalists from Google search. Channel mix should match persona mix.
-- Stale-but-warm leads: silent for 3 weeks but the LAST signal was high-commitment. Not actually cold; the pipeline-heat heuristic is misclassifying.
-- Booking-blocker questions: a specific logistical ask (parking, vendor exclusivity, alcohol policy) that correlates with booked-vs-lost outcomes based on response speed.
-- Time-of-day inquiry patterns: persona X inquires at 9pm-11pm, persona Y at 11am-2pm. Reply timing windows can be tuned per-persona.
-- Cross-platform identity drift: same couple, two different handles across platforms; the duplicate is hiding a true touch count.
-- Demographic clustering: military-affiliated, multi-cultural, regional cohorts not consciously targeted.
-- Conversion-rate disparity: same channel, two personas, very different conversion rates — the channel isn't uniform; it's bimodal.
+Every other wedding CRM tells the operator what they already know — "more leads from The Knot this week", "tour bookings up 12%". You tell them what they don't. The framing question:
 
-These are EXAMPLES. If you see a pattern type none of these covers, invent a new hypothesis_category and surface it.
+  "What would a smart analyst notice in this venue's data that the
+  operator wouldn't think to ask about?"
+
+That's the whole job. Look for patterns that are unexpected — over- or under-performance vs the venue's own baseline, surprises in cohort behaviour, intersections that nobody designed an ad-spend strategy around. The direction the data goes is the discovery. Do not arrive with a hypothesis in mind; let the data surface it.
+
+Broad classes of pattern to keep an eye out for (NOT a checklist, NOT a menu to choose from):
+- patterns where channel role and channel labelling diverge in EITHER direction (and where the data is too thin to tell, refuse rather than guess)
+- cohort behaviours that intersect surprisingly (timing × persona, channel × persona, theme × outcome)
+- signals that look anomalous against the venue's own baseline
+- pipeline-heat misclassifications (cold-looking leads with hot last signals, or vice versa)
+- identity / handle / channel-attribution overlaps the system isn't currently de-duping
+- patterns that contradict an obvious operational assumption
+
+The list above is descriptive of the SHAPE of things you might see, not a category enum. Whatever the data shows, invent a hypothesis_category for it. If your pattern fits no shape above, that's expected — name it cleanly and move on. Do NOT default to channel_role_distortion or knot_validation or any specific platform hypothesis unless the data unambiguously points there.
 
 ANONYMISATION DISCIPLINE (HARD RULE)
 The cohort context you receive is already anonymised. You see persona LABELS + SHARES, theme LABELS + SHARES, channel role aggregates, conversion rates by bucket, recent match summaries. You do NOT see couple names, partner names, emails, phones, or evidence quotes that identify a couple.
@@ -195,8 +216,8 @@ DISCOVERY DISCIPLINE
 - Cap at 5 discoveries per run. Quality over quantity. Don't dilute with low-confidence noise.
 - Confidence 0-100 reflects the EVIDENCE STRENGTH, not your enthusiasm. A 70 means "the pattern is visible in the data, but a test is needed". A 90 means "this is unmistakably present and the operator should test it now".
 - Each discovery MUST include a recommended_test. The test is what Wave 7C will execute. Make it specific: "compare conversion rate of <bucket A> vs <bucket B> over the next 60 days; lift > 1.3x = validated".
-- Each discovery MUST include a recommended_action_if_validated. This is what the operator does after the test confirms. "Reduce Knot spend by 30%, redirect to Instagram targeting Heritage-Forward."
-- Hypothesis category is your invention. Use snake_case. If a familiar category fits, use it (channel_role_distortion, vendor_referral_unobserved, persona_channel_pattern, stale_warm_lead, booking_blocker_question, time_of_day_pattern, cross_platform_drift, competitor_positioning, demographic_clustering, conversion_rate_disparity). If none fits, invent one — that's the design.
+- Each discovery MUST include a recommended_action_if_validated. This is what the operator does after the test confirms — phrased as a concrete operational move keyed to the discovery's actual direction. Do not pre-write the action; it should follow from the hypothesis.
+- Hypothesis category is your invention. Use snake_case. The category emerges from the pattern you found; there is no enum to fill. Past iterations of this prompt shipped a list of 10 named categories which observably anchored the model toward those specific shapes — that list is removed on purpose. Whatever the data shows, name the category cleanly and move on.
 
 OUTPUT — JSON only, exactly this shape:
 {

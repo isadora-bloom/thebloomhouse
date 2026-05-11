@@ -32,12 +32,25 @@
  * NO point does it list "Maya & Tom" or "the Williams wedding".
  *
  * Cost target: ~$0.10-$0.20 per venue refresh (one Sonnet call).
+ *
+ * Wave 22 (2026-05-11) bias remediation
+ * -------------------------------------
+ * v1 ship listed 6 archetype example labels in the system prompt.
+ * Wave 21 audit (PROMPT-BIAS-AUDIT.md finding #14) found those examples
+ * cascaded across Wave 5A/5B/5D and 14, anchoring the model on the same
+ * names. v2 imports the shape-only PERSONA_STYLE_GUIDE constant. Output
+ * schema is unchanged.
  */
+
+import { PERSONA_STYLE_GUIDE } from '@/config/prompts/persona-style-guide'
 
 // Bumping this constant forces every consumer to either accept the new
 // prompt's output or version-pin. Threaded into api_costs.prompt_version
 // so a regression audit can correlate cost + quality + revision.
-export const ALUMNI_COHORT_PROMPT_VERSION = 'alumni-cohort.prompt.v1'
+//
+// v1 → v2 (Wave 22, 2026-05-11): strip archetype example list; import
+// PERSONA_STYLE_GUIDE. Per PROMPT-BIAS-AUDIT.md finding #14.
+export const ALUMNI_COHORT_PROMPT_VERSION = 'alumni-cohort.prompt.v2'
 
 // ---------------------------------------------------------------------------
 // Public types — mirror the wire JSON the prompt asks for.
@@ -145,16 +158,12 @@ principles, and outcome shape.
    embodied it.
 
 2. **Archetype labels are DISCOVERED, not picked from an enum.** Let
-   the data shape the labels. Examples that might emerge from real
-   booking data:
-     - "Heritage-Forward Planner Cohort"
-     - "Cost-Conscious Pragmatist Cohort"
-     - "Multi-Generational Booker Cohort"
-     - "Quick-Decision Career Couple Cohort"
-     - "Cultural-Fusion Wedding Cohort"
-     - "Long-Engagement Family-Driven Cohort"
-   If your archetypes don't fit any of those, invent new ones that
-   capture the data you actually see.
+   the data shape the labels. Follow the style guide; no candidate
+   labels are listed on purpose. (Archetype labels at THIS venue should
+   reflect THIS venue's data — labels you produce here may differ from
+   labels another venue's cohort would produce, and that's correct.)
+
+${PERSONA_STYLE_GUIDE}
 
 3. **Number of archetypes scales with the data.**
    - <5 booked couples → 1-2 archetypes max (insufficient signal for

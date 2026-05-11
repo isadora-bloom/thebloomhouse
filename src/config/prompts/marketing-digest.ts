@@ -28,11 +28,23 @@
  * signal yet" instead.
  *
  * Output: ONLY the JSON object. No prose preamble, no markdown fences.
+ *
+ * Wave 22 (2026-05-11) bias remediation
+ * -------------------------------------
+ * v1 ship's OUTPUT example echoed the Knot-CAC + Heritage-Forward
+ * narrative from marketing-recommendations.ts (finding #8). Wave 21
+ * audit (PROMPT-BIAS-AUDIT.md finding #10) found the narrator reaching
+ * for this specific shape even when the venue's data pointed elsewhere.
+ * v2 replaces the worked example with abstract placeholders. Output
+ * schema is unchanged.
  */
 
 // Bumping this constant forces consumers to either accept the new
 // prompt's output or version-pin. Threaded into api_costs.prompt_version.
-export const MARKETING_DIGEST_PROMPT_VERSION = 'marketing-digest.prompt.v1'
+//
+// v1 → v2 (Wave 22, 2026-05-11): replace worked Knot example with
+// abstract placeholders. Per PROMPT-BIAS-AUDIT.md finding #10.
+export const MARKETING_DIGEST_PROMPT_VERSION = 'marketing-digest.prompt.v2'
 
 // ---------------------------------------------------------------------------
 // Public types — mirror the wire JSON the prompt asks for.
@@ -161,7 +173,7 @@ ANONYMISATION DISCIPLINE
 - You see persona LABELS + channel NAMES + aggregate numbers. Treat them as labels, not as people.
 
 HARD RULES
-1. headline: < 80 characters. Lead with the most operator-relevant signal of the week. Examples: "Knot CAC anomaly + Heritage-Forward scaling opportunity", "Steady week — Instagram persona drift continues", "Critical: 2 channels exceed CAC/LTV threshold".
+1. headline: < 80 characters. Lead with the most operator-relevant signal of the week. Shape: "<top-flag-or-rec subject>: <what happened>". The headline reads off the actual evidence — do not echo any example phrase.
 2. this_week_in_3_sentences: exactly 2-3 sentences (not 1, not 4+). Frame the week. Cite specific numbers where available. End with the most important coordinator action.
 3. top_flags: re-emit (not invent) the supplied flag titles + severities + recommended_action — up to 3, ordered critical → warning → info, then by duration_days desc.
 4. top_recommendations: re-emit the supplied recommendation titles + projected_impact_cents — up to 3, ordered by impact desc.
@@ -175,33 +187,35 @@ Refuse the digest when the evidence is too thin to narrate honestly:
 - Zero flags AND zero recommendations AND no WoW deltas → refusal: "No digest-worthy signal this week — operator may want to verify spend ingestion + rollup recompute".
 - Otherwise produce a digest, even when only one signal is present (lean on what you have).
 
-OUTPUT — JSON only, exactly this shape:
+OUTPUT — JSON only, exactly this shape (placeholders, NOT a worked example to mimic):
 {
-  "headline": "Knot CAC anomaly + Heritage-Forward scaling opportunity",
-  "this_week_in_3_sentences": "Knot CAC jumped 2.1× week-over-week to $187 — anomaly confirmed but not yet sustained, investigate auction pricing before pulling spend. Heritage-Forward × Instagram is up to 22% conversion (n=24), the strongest cell in the matrix and a clear scale candidate. Two CAC>LTV flags carried over from last week — coordinator should confirm or dismiss before they age past 14 days.",
+  "headline": "<top_flag_or_rec subject>: <what happened>",
+  "this_week_in_3_sentences": "<sentence 1 grounded in the venue's actual evidence>. <sentence 2 covering the second-most-important signal>. <sentence 3 closing with the coordinator action>.",
   "top_flags": [
-    {"title": "theknot_fee × Heritage-Forward: CAC exceeds LTV threshold", "severity": "critical", "recommended_action": "Consider pausing or restructuring …"},
-    {"title": "theknot_fee: CAC anomaly — week-over-week 2.1×", "severity": "warning", "recommended_action": "Investigate the knot this week …"}
+    {"title": "<flag title from evidence>", "severity": "<info|warning|critical>", "recommended_action": "<action string or null>"}
   ],
   "top_recommendations": [
-    {"title": "Move 30% of Knot spend to Instagram for Heritage-Forward", "projected_impact_cents": 1166000}
+    {"title": "<recommendation title from evidence>", "projected_impact_cents": <integer or null>}
   ],
-  "week_over_week": {"cac_change_pct": 47.5, "conversion_change_pct": -3.2, "roi_change_pct": -18.4},
+  "week_over_week": {"cac_change_pct": <number or null>, "conversion_change_pct": <number or null>, "roi_change_pct": <number or null>},
   "ab_tests_concluded": [
-    {"name": "Knot listing copy: Heritage-Forward emphasis", "winner": "variant_b", "lift_pct": 34.0}
+    {"name": "<test name>", "winner": "variant_a"|"variant_b"|"inconclusive", "lift_pct": <number or null>}
   ],
   "validated_discoveries": [
-    {"title": "Knot acts as validation, not acquisition for 30% of leads", "summary": "Discovered May 7; validated against re-run pipeline. Re-attribute to Instagram first-touch."}
+    {"title": "<discovery title>", "summary": "<one-line summary>"}
   ],
-  "refusal": null
+  "refusal": <string or null>
 }
+
+The example above is SHAPE ONLY. Do not echo any channel name, persona label, recommendation text, or number from the placeholders — fill them with the venue's actual evidence block, or set refusal.
 
 DO NOT:
 - Invent new flags or recommendations not present in the evidence.
 - Use generic phrases ("things are moving in the right direction"). Cite specific numbers from the evidence.
 - Speculate about specific couples — you have no per-couple data.
 - Recommend auto-execution. Frame anything as "coordinator should review" / "operator may want to".
-- Produce a digest with refusal=null AND empty top_flags AND empty top_recommendations AND null week_over_week — refuse honestly when there's nothing to narrate.`
+- Produce a digest with refusal=null AND empty top_flags AND empty top_recommendations AND null week_over_week — refuse honestly when there's nothing to narrate.
+- Reach for any particular reallocation direction or anomaly framing unless the venue's evidence block supports it.`
 }
 
 export function buildMarketingDigestUserPrompt(

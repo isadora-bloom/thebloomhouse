@@ -25,12 +25,18 @@
  * Persona / archetype discipline
  * ------------------------------
  * The venue_archetype label is INVENTED by the LLM, NOT chosen from an
- * enum. Examples that might emerge: "Heritage-Forward Family Estate",
- * "Cost-Conscious Outdoor Venue", "Cultural-Celebration Specialist",
- * "Multi-Generational Garden Wedding". The over_indexed_personas come
- * from the Wave 5A persona_label distribution we pass in — the model
- * may use those labels but should not invent personas not present in
- * the cohort.
+ * enum. The over_indexed_personas come from the Wave 5A persona_label
+ * distribution we pass in — the model may use those labels but should
+ * not invent personas not present in the cohort.
+ *
+ * Wave 22 (2026-05-11) bias remediation
+ * -------------------------------------
+ * v1 ship listed 5 archetype example labels in the system prompt; Wave
+ * 21 audit (PROMPT-BIAS-AUDIT.md) found those examples cascaded across
+ * couple-intel-derive, cohort-rollup, and alumni-cohort, anchoring the
+ * model on the same names independent of the venue's actual data. v2
+ * replaces the example list with the shape-only PERSONA_STYLE_GUIDE
+ * constant. Output schema is unchanged.
  *
  * Privacy
  * -------
@@ -40,19 +46,24 @@
  * couple-level rows. No partner names. No evidence_quote strings.
  */
 
+import { PERSONA_STYLE_GUIDE } from '@/config/prompts/persona-style-guide'
+
 // Bumping this constant forces every consumer to either accept the new
 // prompt's output or version-pin. Threaded into api_costs.prompt_version
 // so a regression audit can correlate cost + quality + revision.
-export const VENUE_THESIS_PROMPT_VERSION = 'venue-thesis.prompt.v1'
+//
+// v1 → v2 (Wave 22, 2026-05-11): strip archetype example list; import
+// PERSONA_STYLE_GUIDE. Per PROMPT-BIAS-AUDIT.md finding #7.
+export const VENUE_THESIS_PROMPT_VERSION = 'venue-thesis.prompt.v2'
 
 // ---------------------------------------------------------------------------
 // Public types — mirror the wire JSON the prompt asks for.
 // ---------------------------------------------------------------------------
 
 export interface VenueArchetype {
-  /** LLM-invented label, NOT an enum. Examples: "Heritage-Forward Family
-   *  Estate", "Cost-Conscious Outdoor Venue", "Cultural-Celebration
-   *  Specialist". */
+  /** LLM-invented label, NOT an enum. Shape only: 2-6 words, evocative,
+   *  grounded in the venue's data. See PERSONA_STYLE_GUIDE for the rules.
+   *  No example labels here on purpose (Wave 22 bias remediation). */
   label: string
   description: string
   /** A 1-3 sentence prose summary of the data shape that produced the
@@ -247,11 +258,11 @@ already told them what they over-index on.
 
 2. **The venue_archetype label is invented, not chosen.** There is no
    pre-defined enum. Read the data and synthesise a label that captures
-   the venue's strategic identity. Examples that might emerge: "Heritage-
-   Forward Family Estate", "Cost-Conscious Outdoor Venue", "Cultural-
-   Celebration Specialist", "Multi-Generational Garden Wedding",
-   "Destination-Adjacent Boutique". The label should be 2-6 words,
-   evocative, and grounded in the data shape.
+   the venue's strategic identity. The label is 2-6 words, evocative,
+   and grounded in the data shape. Follow the style guide; no candidate
+   labels are listed on purpose.
+
+${PERSONA_STYLE_GUIDE}
 
 3. **over_indexed_personas should reuse Wave 5A labels.** The user
    prompt lists the persona distribution discovered by Wave 5A. Pick
@@ -267,11 +278,10 @@ already told them what they over-index on.
 5. **conversion_signature is what makes their bookings.** From Wave
    5B's conversion_correlations + persona_channel_rollups + close-prob
    distribution, extract 3-5 signals that correlate with booking. Each
-   carries a lift_pct vs baseline + an evidence sentence. Examples:
-   - "Tour booked within 7d of inquiry" / lift_pct=80 / "21 of 38
-     booked couples toured within 7 days vs 6 of 47 lost couples"
-   - "Heritage-Forward persona via vendor referral" / lift_pct=120 /
-     "12 of 14 vendor-referral inquiries with this persona booked"
+   carries a lift_pct vs baseline + an evidence sentence. Shape:
+   <observed-signal> / lift_pct=<number> / <"N of M booked couples
+   exhibited this vs P of Q lost couples">. Surface whatever signals
+   the data shows — do not telegraph any particular direction.
 
 6. **voice_thesis aggregates Wave 5B's voice_calibration.** Pull
    tone_descriptors from the cohort's emerging emotional themes (e.g.

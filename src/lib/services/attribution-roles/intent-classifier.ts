@@ -801,14 +801,35 @@ export async function classifyAndPersistInquiryIntent(
   const sb = options.supabase ?? createServiceClient()
   const result = await classifyInquiryIntent(input, { ...options, supabase: sb })
 
+  // Wave 22: stamp prompt_version_classified_under when the intent
+  // judge fired so the reclassify sweep can find rows that ran under
+  // bias-suspect v1 prompts. We don't overwrite an existing
+  // prompt_version_classified_under written by Wave 7B's
+  // classifyAndPersistAttributionEvent (the role-judge stamp takes
+  // precedence per the audit framing). Only stamp when the column
+  // is currently null.
+  const updatePayload: Record<string, unknown> = {
+    intent_class: result.intentClass,
+    intent_class_confidence_0_100: result.confidence_0_100,
+    intent_classified_at: new Date().toISOString(),
+    intent_class_signals: result.signals,
+  }
+  if (result.prompt_version) {
+    const { data: existing } = await sb
+      .from('attribution_events')
+      .select('prompt_version_classified_under')
+      .eq('id', input.attributionEventId)
+      .maybeSingle()
+    const existingVersion = (existing as { prompt_version_classified_under: string | null } | null)
+      ?.prompt_version_classified_under
+    if (!existingVersion) {
+      updatePayload.prompt_version_classified_under = result.prompt_version
+    }
+  }
+
   const { error } = await sb
     .from('attribution_events')
-    .update({
-      intent_class: result.intentClass,
-      intent_class_confidence_0_100: result.confidence_0_100,
-      intent_classified_at: new Date().toISOString(),
-      intent_class_signals: result.signals,
-    })
+    .update(updatePayload)
     .eq('id', input.attributionEventId)
   if (error) {
     throw new Error(

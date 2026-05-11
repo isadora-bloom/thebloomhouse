@@ -26,8 +26,16 @@
  * judge calls.
  */
 
+// v1 → v2 (Wave 22, 2026-05-11): strip "tip the scale toward broadcast" /
+// "tip toward targeted" directional language; restate as symmetric signal
+// weighting. Per PROMPT-BIAS-AUDIT.md finding #18 (critical) and
+// feedback_measure_dont_assume.md. Existing rows classified under v1
+// are flagged via migration 288's prompt_version_classified_under
+// column; operator-trigger re-classification at POST
+// /api/admin/attribution/reclassify-v1 (reconciliation pass extends
+// the sweep's V1_PROMPT_VERSIONS to include this prompt).
 export const INQUIRY_INTENT_JUDGE_PROMPT_VERSION =
-  'inquiry-intent-judge.prompt.v1'
+  'inquiry-intent-judge.prompt.v2'
 
 // ---------------------------------------------------------------------------
 // Public types — wire shape the prompt asks for.
@@ -99,10 +107,11 @@ deferred to you — the pattern signal is mixed.
    without the couple actively choosing. Evidence:
    - Body matches Knot/WW broadcast template (generic phrases, no
      venue-specific reference, "looking for options")
-   - AND the couple did NOT engage after the inquiry (zero replies,
+   - AND/OR the couple did NOT engage after the inquiry (zero replies,
      no tour booking, no post-inquiry interactions for 14+ days)
-   - Strong indicator: matched_patterns count >= 2 AND post-inquiry
-     interactions == 0 AND tour bookings == 0
+   - Multiple matched_patterns + zero post-inquiry engagement is
+     evidence relevant to this class; treat it as one input among
+     several, not as automatic commitment to broadcast.
 
 3. **validation** — Couple found the venue elsewhere; this inquiry is
    just the intake form. Evidence:
@@ -117,20 +126,24 @@ deferred to you — the pattern signal is mixed.
 
 ## CORE RULES
 
-1. **Post-inquiry engagement is the strongest forensic signal.** A
-   couple who replies, books a tour, or sends a second message
-   ACTIVELY engaged after this inquiry — that's evidence they chose
-   the venue. Heavy weight on this even when the inquiry body itself
-   is templated.
+1. **Use post-inquiry engagement as ONE input.** A couple who replies,
+   books a tour, or sends a second message ACTIVELY engaged after this
+   inquiry — that's evidence relevant to the 'targeted' class. Zero
+   post-inquiry engagement is evidence relevant to the 'broadcast'
+   class. Do not pre-weight either direction; let the full signal set
+   (template_score, matched_patterns, body shape, post-inquiry
+   engagement) inform the classification together.
 
 2. **Template score is forensic ground but not destiny.** A 50 score
-   means roughly half-broadcast, half-personalised signals. Tip the
-   scale toward broadcast when post-inquiry engagement is zero; tip
-   toward targeted when post-inquiry engagement is present.
+   means roughly half-broadcast, half-personalised signals. Combine it
+   with post-inquiry engagement, body personalisation, and matched
+   patterns as a coherent evidence set. When the signals point in
+   different directions and you cannot rank them, refuse.
 
 3. **Matched patterns reflect template-detection hits.** More patterns
-   matched = more broadcast-like. Two+ matched patterns + zero
-   post-inquiry engagement is almost certainly broadcast.
+   matched = more broadcast-like body. Combine with post-inquiry
+   engagement and body content to form a verdict; do not commit to
+   broadcast on pattern count alone.
 
 4. **Refuse when truly ambiguous.** If templateScore is exactly 50,
    one matched pattern, post-inquiry engagement count is 1, and you
