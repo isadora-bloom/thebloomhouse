@@ -190,6 +190,24 @@ export async function POST(request: NextRequest) {
       confidence_flag: 'imported_high',
     })
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    // Cascade Pattern 2 (migration 307): flag drafts created before the
+    // new effective_date as pricing-stale. Fire-and-forget.
+    void (async () => {
+      try {
+        const { triggerPricingCascade } = await import(
+          '@/lib/services/cascades/on-pricing-change'
+        )
+        await triggerPricingCascade({
+          venueId: auth.venueId,
+          effectiveDate: new Date(effective_date).toISOString(),
+          supabase,
+        })
+      } catch (err) {
+        console.warn('[pricing-history] cascade non-fatal:', err)
+      }
+    })()
+
     return NextResponse.json({ ok: true, inserted: 1 })
   }
 
@@ -229,6 +247,29 @@ export async function POST(request: NextRequest) {
     }))
     const { error } = await supabase.from('pricing_history').insert(payloads)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    // Cascade Pattern 2 (migration 307): flag stale drafts. Fire from
+    // the EARLIEST effective_date in the batch so any draft predating
+    // ANY new pricing change gets flagged.
+    const earliest = payloads.reduce(
+      (min, p) => (p.changed_at < min ? p.changed_at : min),
+      payloads[0].changed_at,
+    )
+    void (async () => {
+      try {
+        const { triggerPricingCascade } = await import(
+          '@/lib/services/cascades/on-pricing-change'
+        )
+        await triggerPricingCascade({
+          venueId: auth.venueId,
+          effectiveDate: earliest,
+          supabase,
+        })
+      } catch (err) {
+        console.warn('[pricing-history] cascade non-fatal:', err)
+      }
+    })()
+
     return NextResponse.json({ ok: true, inserted: payloads.length })
   }
 

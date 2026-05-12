@@ -175,6 +175,9 @@ export async function recordSpend(
 /**
  * Bulk variant: walk a batch and insert each row idempotently. Returns
  * counts so connectors can report progress.
+ *
+ * Fires the spend-import cascade ONCE after the batch (not per row) so
+ * the flag-detector + snapshot invalidation run at most once per call.
  */
 export async function recordSpendBatch(
   rows: RecordSpendInput[],
@@ -199,5 +202,31 @@ export async function recordSpendBatch(
     if (r.inserted) result.inserted += 1
     else result.duplicates += 1
   }
+
+  // Cascade Pattern 2: fire once per batch, scoped per venue. If the
+  // batch spans multiple venues we fire one cascade per venue.
+  if (result.inserted > 0) {
+    const venueIds = Array.from(
+      new Set(rows.map((r) => r.venueId).filter(Boolean)),
+    )
+    for (const venueId of venueIds) {
+      void (async () => {
+        try {
+          const { triggerSpendImportCascade } = await import(
+            '@/lib/services/cascades/on-spend-import'
+          )
+          const supabase = rows[0].supabase ?? createServiceClient()
+          await triggerSpendImportCascade({
+            venueId,
+            supabase,
+            reason: 'record_spend_batch',
+          })
+        } catch (err) {
+          console.warn('[marketing-spend/ingest] cascade non-fatal:', err)
+        }
+      })()
+    }
+  }
+
   return result
 }

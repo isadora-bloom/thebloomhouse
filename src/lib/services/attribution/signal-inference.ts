@@ -625,6 +625,28 @@ export async function applySignalInference(
   }
   if (targetStatus && targetStatus !== currentStatus) {
     await sb.from('weddings').update({ status: targetStatus }).eq('id', weddingId)
+
+    // Cascade Pattern 2 (migration 307): lost-mark cascade. Trigger 307
+    // handles draft cancellation Postgres-side; this fires the JS-side
+    // heat recompute + lifecycle event row. Fire-and-forget.
+    if (targetStatus === 'lost' && currentStatus !== 'lost') {
+      void (async () => {
+        try {
+          const { triggerLostMarkCascade } = await import(
+            '@/lib/services/cascades/on-lost-mark'
+          )
+          await triggerLostMarkCascade({
+            venueId,
+            weddingId,
+            supabase: sb,
+            reason: 'pipeline_signal',
+          })
+        } catch (err) {
+          console.warn('[signal-inference] lost-mark cascade non-fatal:', err)
+        }
+      })()
+    }
+
     // Status-change touchpoint — proposal_sent / contract_signed can be
     // inferred from text patterns even when no scheduling event fires.
     // Wave 9: derive from the latest event's linked interaction when

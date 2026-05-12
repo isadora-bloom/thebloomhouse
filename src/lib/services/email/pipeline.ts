@@ -1953,6 +1953,25 @@ export async function processIncomingEmail(
     if (newWedding) {
       weddingId = newWedding.id as string
 
+      // Cascade Pattern 2 (migration 307): synchronous pre-zero identity
+      // match. Without this, anonymous storefront signals (Knot CSV, IG
+      // screenshots) wait for the daily cron before binding to the new
+      // wedding. Fire-and-forget; the cascade is idempotent.
+      void (async () => {
+        try {
+          const { triggerNewInquiryCascade } = await import(
+            '@/lib/services/cascades/on-new-inquiry'
+          )
+          await triggerNewInquiryCascade({
+            venueId,
+            weddingId: newWedding.id as string,
+            supabase,
+          })
+        } catch (err) {
+          console.warn('[pipeline] new-inquiry cascade non-fatal:', err)
+        }
+      })()
+
       // Link person to wedding
       if (personId) {
         await supabase
