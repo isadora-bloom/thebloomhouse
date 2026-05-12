@@ -1695,7 +1695,9 @@ export default function SourceAttributionPage() {
     const months = Array.from(monthMap.keys()).sort()
     return months.map((month) => {
       const row: Record<string, unknown> = {
-        month: new Date(month).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+        // timeZone: 'UTC' — marketing_spend.month is a DATE column; parses as
+        // UTC midnight, local-tz can shift month label. Sophie trace 2026-05-12.
+        month: new Date(month).toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' }),
       }
       for (const source of allSources) {
         row[source] = monthMap.get(month)?.[source] ?? 0

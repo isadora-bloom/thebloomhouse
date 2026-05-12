@@ -595,6 +595,13 @@ export async function POST(request: NextRequest) {
   // parking, her number is..."). Run the same chain that runs on emails
   // and stash the result so the AI parser + resolver can lean on it.
   // Fire-and-forget — never blocks the brain-dump response.
+  //
+  // F8 (2026-05-12): extended to also dispatch resolveIdentity on each
+  // email/phone signal so an operator note that mentions a couple by
+  // email gets bound back to the couple's person row. The resolved
+  // person/wedding ids land in parse_result.body_extract_resolutions
+  // so the brain-dump confirm flow can short-circuit identity
+  // re-resolution.
   void (async () => {
     try {
       const { extractIdentityFromEmail } = await import(
@@ -608,15 +615,99 @@ export async function POST(request: NextRequest) {
         extracted.emails.length > 0 ||
         extracted.phones.length > 0 ||
         extracted.names.length > 0
-      if (hasSignal) {
-        await supabase
-          .from('brain_dump_entries')
-          .update({
-            parse_result: { body_extract_identity: extracted },
-          })
-          .eq('id', entry.id)
-          .is('parse_result', null)
+      if (!hasSignal) return
+
+      // Post-extract dispatch: try to bind each email/phone to a person
+      // row via the canonical resolver. Best-effort; resolver failures
+      // never block the brain-dump persist or the parse_result stash.
+      const resolutions: Array<{
+        signal_kind: 'email' | 'phone'
+        signal_value: string
+        person_id: string
+        wedding_id: string
+        matched_by: string
+        is_new_person: boolean
+        is_new_wedding: boolean
+      }> = []
+      try {
+        const { resolveIdentity } = await import(
+          '@/lib/services/identity/resolver'
+        )
+        const { logEvent } = await import('@/lib/observability/logger')
+        const signals: Array<{ kind: 'email' | 'phone'; value: string }> = []
+        for (const e of extracted.emails) signals.push({ kind: 'email', value: e })
+        for (const p of extracted.phones) signals.push({ kind: 'phone', value: p })
+        for (const s of signals) {
+          try {
+            const resolved = await resolveIdentity(
+              auth.venueId,
+              {
+                email: s.kind === 'email' ? s.value : null,
+                phone: s.kind === 'phone' ? s.value : null,
+                fullName: null,
+                weddingDate: null,
+                partner1Name: null,
+                partner2Name: null,
+              },
+              {
+                sourceLabel: 'brain_dump_body_extract',
+                supabase,
+              },
+            )
+            if (resolved.personId && resolved.weddingId) {
+              resolutions.push({
+                signal_kind: s.kind,
+                signal_value: s.value,
+                person_id: resolved.personId,
+                wedding_id: resolved.weddingId,
+                matched_by: resolved.matchedBy,
+                is_new_person: resolved.isNew.person,
+                is_new_wedding: resolved.isNew.wedding,
+              })
+              logEvent({
+                level: 'info',
+                msg: 'brain-dump.body-extract.resolved',
+                event_type: 'identity.body_extract.dispatch',
+                outcome: 'ok',
+                venueId: auth.venueId,
+                actor: `user:${auth.userId}`,
+                data: {
+                  entry_id: entry.id,
+                  signal_kind: s.kind,
+                  matched_by: resolved.matchedBy,
+                  resolved_person_id: resolved.personId,
+                  resolved_wedding_id: resolved.weddingId,
+                  is_new_person: resolved.isNew.person,
+                  is_new_wedding: resolved.isNew.wedding,
+                },
+              })
+            }
+          } catch (innerErr) {
+            console.warn(
+              '[brain-dump] body-extract resolveIdentity failed (non-fatal):',
+              innerErr instanceof Error ? innerErr.message : innerErr,
+            )
+          }
+        }
+      } catch (resolverImportErr) {
+        console.warn(
+          '[brain-dump] resolver import failed (non-fatal):',
+          resolverImportErr instanceof Error ? resolverImportErr.message : resolverImportErr,
+        )
       }
+
+      await supabase
+        .from('brain_dump_entries')
+        .update({
+          parse_result: {
+            body_extract_identity: extracted,
+            ...(resolutions.length > 0
+              ? { body_extract_resolutions: resolutions }
+              : {}),
+          },
+        })
+        .eq('id', entry.id)
+        .is('parse_result', null)
     } catch (err) {
       console.warn('[brain-dump] body-extract non-fatal:', err)
     }

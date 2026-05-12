@@ -691,6 +691,104 @@ export async function syncMeetings(
         // Don't bump errors — dedup already happened, transcript is stored.
       }
 
+      // F8 (2026-05-12): post-extract identity dispatch. Transcripts
+      // often surface emails/phones the platform never had ("yeah email
+      // me at sarah@gmail.com"). Hand each non-venue signal to the
+      // canonical resolver so the transcript binds back to a person
+      // row. Fire-and-forget — never blocks the Zoom sync. If the
+      // resolver returns a wedding that disagrees with the Zoom
+      // meeting's matched wedding, log a warning so a coordinator can
+      // adjudicate; we don't auto-merge.
+      const insertedInteractionId = (insertedInteraction?.id as string | undefined) ?? null
+      const zoomEmails = zoomExtractedIdentity.emails ?? []
+      const zoomPhones = zoomExtractedIdentity.phones ?? []
+      if (zoomEmails.length > 0 || zoomPhones.length > 0) {
+        void (async () => {
+          try {
+            const { logEvent } = await import('@/lib/observability/logger')
+            const { resolveIdentity } = await import('@/lib/services/identity/resolver')
+            const signals: Array<{ kind: 'email' | 'phone'; value: string }> = []
+            for (const e of zoomEmails) {
+              signals.push({ kind: 'email', value: e })
+            }
+            for (const p of zoomPhones) {
+              signals.push({ kind: 'phone', value: p })
+            }
+            for (const s of signals) {
+              try {
+                const resolved = await resolveIdentity(
+                  venueId,
+                  {
+                    email: s.kind === 'email' ? s.value : null,
+                    phone: s.kind === 'phone' ? s.value : null,
+                    fullName: null,
+                    weddingDate: null,
+                    partner1Name: null,
+                    partner2Name: null,
+                  },
+                  {
+                    sourceLabel: 'zoom_transcript_body_extract',
+                    supabase,
+                    inquirySignalAt: meeting.startTime || undefined,
+                  },
+                )
+                if (
+                  matchedWeddingId &&
+                  resolved.weddingId &&
+                  resolved.weddingId !== matchedWeddingId &&
+                  resolved.matchedBy !== 'created_new'
+                ) {
+                  logEvent({
+                    level: 'warn',
+                    msg: 'zoom.body-extract.wedding-mismatch',
+                    event_type: 'identity.body_extract.dispatch',
+                    outcome: 'skip',
+                    venueId,
+                    actor: 'zoom_sync',
+                    data: {
+                      zoom_meeting_id: meeting.meetingId,
+                      meeting_wedding_id: matchedWeddingId,
+                      resolved_wedding_id: resolved.weddingId,
+                      resolved_person_id: resolved.personId,
+                      matched_by: resolved.matchedBy,
+                      signal_kind: s.kind,
+                      interaction_id: insertedInteractionId,
+                    },
+                  })
+                } else {
+                  logEvent({
+                    level: 'info',
+                    msg: 'zoom.body-extract.resolved',
+                    event_type: 'identity.body_extract.dispatch',
+                    outcome: 'ok',
+                    venueId,
+                    actor: 'zoom_sync',
+                    data: {
+                      zoom_meeting_id: meeting.meetingId,
+                      resolved_wedding_id: resolved.weddingId,
+                      resolved_person_id: resolved.personId,
+                      matched_by: resolved.matchedBy,
+                      signal_kind: s.kind,
+                      interaction_id: insertedInteractionId,
+                    },
+                  })
+                }
+              } catch (innerErr) {
+                console.warn(
+                  '[zoom] body-extract resolveIdentity failed (non-fatal):',
+                  innerErr instanceof Error ? innerErr.message : innerErr,
+                )
+              }
+            }
+          } catch (err) {
+            console.warn(
+              '[zoom] body-extract dispatch threw (non-fatal):',
+              err instanceof Error ? err.message : err,
+            )
+          }
+        })()
+      }
+
       // Wave 28 voice-heat wiring (2026-05-12). Fire a heat event when a
       // Zoom meeting completed AND we matched it to a wedding. Meetings
       // that didn't match (or that had no transcript) don't fire — the

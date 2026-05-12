@@ -924,6 +924,95 @@ async function commitWebForm(args: {
     }
   }
 
+  // F8 (2026-05-12): post-extract identity dispatch for the notes
+  // free-text body-extract. commitNormalisedRows already runs
+  // resolveIdentity for partner1_email + partner1_phone, but a couple
+  // may drop a secondary email / partner's phone into the "questions"
+  // textarea — the structured form fields miss those. Walk each row's
+  // interaction.extracted_identity.body_extract_from_notes and call
+  // resolveIdentity on every email/phone found. Fire-and-forget; the
+  // form's own creation path already minted the wedding for the
+  // primary contact.
+  void (async () => {
+    try {
+      const { resolveIdentity } = await import('@/lib/services/identity/resolver')
+      const { logEvent } = await import('@/lib/observability/logger')
+      for (const r of rows) {
+        const interaction = (r.interactions?.[0] as
+          | { extracted_identity?: Record<string, unknown> }
+          | undefined)
+        const ei = interaction?.extracted_identity ?? null
+        if (!ei) continue
+        const noted = (ei.body_extract_from_notes ?? null) as
+          | { emails?: string[]; phones?: string[] }
+          | null
+        if (!noted) continue
+        const emails = noted.emails ?? []
+        const phones = noted.phones ?? []
+        const primaryEmail = (r.partner1_email ?? '').toLowerCase()
+        const primaryPhone = r.partner1_phone ?? ''
+        const signals: Array<{ kind: 'email' | 'phone'; value: string }> = []
+        for (const e of emails) {
+          if (!e) continue
+          if (e.toLowerCase() === primaryEmail) continue
+          signals.push({ kind: 'email', value: e })
+        }
+        for (const p of phones) {
+          if (!p) continue
+          if (p === primaryPhone) continue
+          signals.push({ kind: 'phone', value: p })
+        }
+        for (const s of signals) {
+          try {
+            const resolved = await resolveIdentity(
+              venueId,
+              {
+                email: s.kind === 'email' ? s.value : null,
+                phone: s.kind === 'phone' ? s.value : null,
+                fullName: null,
+                weddingDate: null,
+                partner1Name: null,
+                partner2Name: null,
+              },
+              {
+                sourceLabel: 'web_form_notes_body_extract',
+                supabase,
+                inquirySignalAt: r.inquiry_date ?? undefined,
+              },
+            )
+            logEvent({
+              level: 'info',
+              msg: 'web-form.notes.body-extract.resolved',
+              event_type: 'identity.body_extract.dispatch',
+              outcome: 'ok',
+              venueId,
+              actor: 'crm_import:web_form',
+              data: {
+                source_id: r.source_id ?? null,
+                signal_kind: s.kind,
+                matched_by: resolved.matchedBy,
+                resolved_person_id: resolved.personId,
+                resolved_wedding_id: resolved.weddingId,
+                is_new_person: resolved.isNew.person,
+                is_new_wedding: resolved.isNew.wedding,
+              },
+            })
+          } catch (innerErr) {
+            console.warn(
+              '[web-form] notes body-extract resolveIdentity failed (non-fatal):',
+              innerErr instanceof Error ? innerErr.message : innerErr,
+            )
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(
+        '[web-form] notes body-extract dispatch threw (non-fatal):',
+        err instanceof Error ? err.message : err,
+      )
+    }
+  })()
+
   return baseResult
 }
 

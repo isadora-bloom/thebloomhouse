@@ -10,6 +10,7 @@ import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { normalizeSource } from '@/lib/services/normalize-source'
 // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
 import { mintWedding } from '@/lib/services/identity/mint-wedding'
+import { captureNameEvidence } from '@/lib/services/identity/name-capture'
 
 export const maxDuration = 300
 
@@ -88,23 +89,28 @@ export async function POST() {
     if (!contact.personId) continue
     if (contact.isNew) createdPeople++
 
-    // Patch the person's name if we extracted one and theirs is empty.
+    // Patch the person's name if we extracted one. Route through the
+    // chokepoint so the picker dual-writes the legacy columns and the
+    // evidence chain stays consistent. Form-relay leadName comes out of
+    // a structured relay parser (Knot / WeddingWire / etc.) so it maps
+    // to the form_relay source category. The picker decides whether to
+    // overwrite based on shape + confidence — no need to gate on the
+    // current first_name/last_name nulls here, the chokepoint won't
+    // downgrade a stronger existing claim.
     if (lead.leadName) {
-      const { data: personRow } = await supabase
-        .from('people')
-        .select('first_name, last_name')
-        .eq('id', contact.personId)
-        .maybeSingle()
-      const p = personRow as { first_name?: string | null; last_name?: string | null } | null
-      if (p && !p.first_name && !p.last_name) {
-        const [first, ...rest] = lead.leadName.trim().split(/\s+/)
-        const last = rest.join(' ') || null
-        if (first) {
-          await supabase
-            .from('people')
-            .update({ first_name: first, last_name: last })
-            .eq('id', contact.personId)
-        }
+      try {
+        await captureNameEvidence(supabase, contact.personId, {
+          full: lead.leadName,
+          email: lead.leadEmail ?? null,
+          source: 'form_relay',
+        })
+      } catch (err) {
+        console.warn(
+          '[reprocess-form-relays] captureNameEvidence failed for person',
+          contact.personId,
+          ':',
+          err instanceof Error ? err.message : err,
+        )
       }
     }
 

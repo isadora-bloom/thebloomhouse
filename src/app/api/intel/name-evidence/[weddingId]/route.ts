@@ -34,6 +34,7 @@ import {
   badRequest,
 } from '@/lib/api/auth-helpers'
 import { logEvent } from '@/lib/observability/logger'
+import { captureNameEvidence } from '@/lib/services/identity/name-capture'
 
 interface NameEvidenceEntry {
   source?: string
@@ -225,34 +226,63 @@ export async function POST(
   const existing: NameEvidenceEntry[] = Array.isArray(person.name_evidence)
     ? (person.name_evidence as NameEvidenceEntry[])
     : []
-  const newEntry: NameEvidenceEntry = {
-    source: 'manual_override',
-    value: { first: first || null, last: last || null },
-    confidence: 100,
-    captured_at: new Date().toISOString(),
-    interaction_id: null,
-    pinned: true,
-  }
-  const nextEvidence = [...existing, newEntry]
 
-  // Phase 2 picker isn't built yet; for the manual-override path we ARE
-  // the picker. Coordinator's typed name wins, confidence stamps to 100,
-  // source = 'manual_override'. This is intentional even after the
-  // picker ships — manual override is law per the design doc §4b.
+  // Route through the chokepoint. `manual_override` is the highest
+  // confidence source in the ladder (100), so the picker is guaranteed
+  // to project these values onto first_name/last_name/name_confidence
+  // and stamp the evidence row with shape='real_name' (or 'first_only'
+  // / 'first_initial' depending on token shape — which is what we want;
+  // a one-token override should never be picked as a last name). Per
+  // design doc §4b manual override is law — and the chokepoint's picker
+  // implements that law by preferring the highest-confidence evidence.
+  const captureResult = await captureNameEvidence(supabase, body.personId, {
+    first: first || null,
+    last: last || null,
+    source: 'manual_override',
+  })
+
+  // Follow-up: stamp `name_picked_source` and pin the freshly appended
+  // evidence row. These columns are outside the chokepoint's contract
+  // (picker doesn't write them) but are part of the manual-override
+  // UI contract — the panel surfaces the override source label and
+  // sorts pinned evidence to the top.
+  const reread = await supabase
+    .from('people')
+    .select('name_evidence')
+    .eq('id', body.personId)
+    .maybeSingle()
+  const updatedEvidence = Array.isArray(reread.data?.name_evidence)
+    ? (reread.data!.name_evidence as NameEvidenceEntry[])
+    : []
+  // Find the just-added manual_override row at confidence 100 and pin it.
+  // We pin the LAST matching row so re-overrides update the pin to the
+  // most recent decision.
+  let pinnedIdx = -1
+  for (let i = updatedEvidence.length - 1; i >= 0; i--) {
+    const e = updatedEvidence[i]
+    if (e?.source === 'manual_override' && (e?.confidence ?? 0) === 100) {
+      pinnedIdx = i
+      break
+    }
+  }
+  const pinnedEvidence = pinnedIdx >= 0
+    ? updatedEvidence.map((e, i) => (i === pinnedIdx ? { ...e, pinned: true } : e))
+    : updatedEvidence
+  const followUp: Record<string, unknown> = {
+    name_picked_source: 'manual_override',
+  }
+  if (pinnedIdx >= 0) followUp.name_evidence = pinnedEvidence
   const { error: updErr } = await supabase
     .from('people')
-    .update({
-      name_evidence: nextEvidence,
-      first_name: first || null,
-      last_name: last || null,
-      name_confidence: 100,
-      name_picked_source: 'manual_override',
-    })
+    .update(followUp)
     .eq('id', body.personId)
 
   if (updErr) {
     return NextResponse.json({ error: updErr.message }, { status: 500 })
   }
+  // captureResult is informational only — the picker dual-write already
+  // landed via the chokepoint above.
+  void captureResult
 
   // Telemetry — analytics chain uses this to measure how much manual
   // cleanup the system requires per venue.

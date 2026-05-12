@@ -1696,7 +1696,9 @@ async function detectPortalEngagementQuality(
         .filter(Boolean)
         .join(' & ') || 'Unknown couple'
 
-      const dateStr = weddingDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+      // timeZone: 'UTC' — wedding_date is a DATE column; parses as UTC
+      // midnight, local-tz shifts day back in ET. Sophie trace 2026-05-12.
+      const dateStr = weddingDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
       const avgPct = Math.round((avgFinalisations / TOTAL_SECTIONS) * 100)
 
       // Generate insight if readiness is low and wedding is close
@@ -1895,7 +1897,9 @@ async function detectGuestExperienceRisks(
       const wid = wedding.id as string
       const weddingDate = new Date(wedding.wedding_date as string)
       const daysToGo = Math.ceil((weddingDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-      const dateStr = weddingDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
+      // timeZone: 'UTC' — wedding_date is a DATE column; parses as UTC
+      // midnight, local-tz shifts day back in ET. Sophie trace 2026-05-12.
+      const dateStr = weddingDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' })
       const coupleName = [wedding.partner1_name, wedding.partner2_name]
         .filter(Boolean)
         .join(' & ') || 'the couple'

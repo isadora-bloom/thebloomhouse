@@ -145,10 +145,13 @@ function PublicChecklistInner() {
           {weddingDate && (
             <p className="text-sm text-gray-500">
               <Calendar className="w-4 h-4 inline mr-1" />
+              {/* timeZone: 'UTC' — date column parses as UTC midnight; local-tz
+                  shifts day back in ET. Sophie trace 2026-05-12. */}
               {new Date(weddingDate).toLocaleDateString('en-US', {
                 month: 'long',
                 day: 'numeric',
                 year: 'numeric',
+                timeZone: 'UTC',
               })}
             </p>
           )}
@@ -215,9 +218,12 @@ function PublicChecklistInner() {
                             >
                               {isOverdue && <AlertTriangle className="w-3 h-3" />}
                               <Calendar className="w-3 h-3" />
+                              {/* timeZone: 'UTC' — date column parses as UTC midnight;
+                                  local-tz shifts day back in ET. Sophie trace 2026-05-12. */}
                               {new Date(item.due_date).toLocaleDateString('en-US', {
                                 month: 'short',
                                 day: 'numeric',
+                                timeZone: 'UTC',
                               })}
                             </p>
                           )}

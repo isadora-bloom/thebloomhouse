@@ -526,10 +526,13 @@ async function buildEventPrepAlerts(
     const daysUntil = Math.ceil(
       (weddingDate.getTime() - Date.now()) / 86_400_000
     )
+    // timeZone: 'UTC' — wedding_date is a DATE column; parses as UTC
+    // midnight, local-tz shifts day back in ET. Sophie trace 2026-05-12.
     const dateLabel = weddingDate.toLocaleDateString('en-US', {
       weekday: 'short',
       month: 'short',
       day: 'numeric',
+      timeZone: 'UTC',
     })
 
     // Check for incomplete checklist items
@@ -784,8 +787,10 @@ export async function generateWeeklyDigest(
   )
 
   // Format the week title
+  // timeZone: 'UTC' — wsStart is YYYY-MM-DD (date-only); parses as UTC
+  // midnight, local-tz shifts day back in ET. Sophie trace 2026-05-12.
   const weekStartDate = new Date(wsStart)
-  const title = `Week of ${weekStartDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`
+  const title = `Week of ${weekStartDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}`
 
   const digest: WeeklyDigest = {
     venue_id: venueId,

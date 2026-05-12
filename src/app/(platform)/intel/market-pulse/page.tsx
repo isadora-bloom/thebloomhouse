@@ -1721,9 +1721,12 @@ function ConsumerConfidenceChart({
   }
 
   const chartData = data.map((d) => ({
+    // timeZone: 'UTC' — observation_date is a DATE column on fred_indicators;
+    // parses as UTC midnight, local-tz can shift month label. Sophie trace 2026-05-12.
     date: new Date(d.date).toLocaleDateString('en-US', {
       month: 'short',
       year: '2-digit',
+      timeZone: 'UTC',
     }),
     value: d.value,
   }))

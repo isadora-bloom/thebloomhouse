@@ -379,7 +379,9 @@ export default function QuickAddPage() {
                 .map((p) => `${p.first_name} ${p.last_name || ''}`.trim())
                 .join(' & ')
               const date = w.wedding_date
-                ? new Date(w.wedding_date).toLocaleDateString()
+                // timeZone: 'UTC' — date column parses as UTC midnight; local-tz
+                // shifts day back in ET. Sophie trace 2026-05-12.
+                ? new Date(w.wedding_date).toLocaleDateString(undefined, { timeZone: 'UTC' })
                 : 'No date'
               return { id: w.id, label: names ? `${names} -- ${date}` : date }
             })

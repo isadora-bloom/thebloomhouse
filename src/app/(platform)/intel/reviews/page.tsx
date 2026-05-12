@@ -493,10 +493,13 @@ function SourceReviewCard({
           <span className="text-sm font-medium text-sage-800">{review.reviewer_name}</span>
         )}
         <span className="text-xs text-sage-500 ml-auto">
+          {/* timeZone: 'UTC' — review_date is a DATE column; parses as UTC
+              midnight, local-tz shifts day back in ET. Sophie trace 2026-05-12. */}
           {new Date(review.review_date).toLocaleDateString('en-US', {
             year: 'numeric',
             month: 'short',
             day: 'numeric',
+            timeZone: 'UTC',
           })}
         </span>
         {showVenue && <VenueChip venueName={review.venues?.name} />}

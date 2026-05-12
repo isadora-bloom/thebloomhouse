@@ -178,10 +178,13 @@ export default function FinalReviewPage() {
     : null
 
   const formattedWeddingDate = wedding?.wedding_date
+    // timeZone: 'UTC' — date column parses as UTC midnight; local-tz
+    // shifts day back in ET. Sophie trace 2026-05-12.
     ? new Date(wedding.wedding_date).toLocaleDateString('en-US', {
         month: 'long',
         day: 'numeric',
         year: 'numeric',
+        timeZone: 'UTC',
       })
     : null
 

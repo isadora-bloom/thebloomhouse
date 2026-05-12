@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+import { captureNameEvidence } from '@/lib/services/identity/name-capture'
 
 // ---------------------------------------------------------------------------
 // POST /api/agent/backfill-unknown-couples
@@ -79,19 +80,26 @@ export async function POST() {
       continue
     }
 
-    const [first, ...rest] = senderName.split(/\s+/)
-    const last = rest.join(' ') || null
-    if (!first) {
-      noSender++
-      continue
+    // Route through the chokepoint so the picker dual-writes the
+    // legacy columns AND the evidence chain stays consistent. The
+    // senderName came out of the LLM classifier
+    // (intelligence_extractions.metadata.extractedData.senderName), so
+    // it's a body self-reference — treated as Wave-3 body-extraction
+    // strength evidence.
+    try {
+      const result = await captureNameEvidence(supabase, p.id as string, {
+        full: senderName,
+        source: 'email_identity_extract_body',
+      })
+      if (result.recorded) patched++
+    } catch (err) {
+      console.warn(
+        '[backfill-unknown-couples] captureNameEvidence failed for person',
+        p.id,
+        ':',
+        err instanceof Error ? err.message : err,
+      )
     }
-
-    const { error: updErr } = await supabase
-      .from('people')
-      .update({ first_name: first, last_name: last })
-      .eq('id', p.id as string)
-
-    if (!updErr) patched++
   }
 
   return NextResponse.json({

@@ -101,8 +101,10 @@ export default function VendorPortalPage() {
         <div className="text-center mb-8">
           <p className="text-sm text-gray-500 mb-1">Vendor Portal</p>
           <h1 className="text-2xl font-serif text-gray-900">{vendor.vendor_name || vendor.vendor_type}</h1>
+          {/* timeZone: 'UTC' on wedding_date — date column parses as UTC midnight;
+              local-tz shifts day back in ET. Sophie trace 2026-05-12. */}
           {vendor.couple_names && (
-            <p className="text-gray-500 mt-1">{vendor.couple_names}{vendor.wedding_date ? ` — ${new Date(vendor.wedding_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}` : ''}</p>
+            <p className="text-gray-500 mt-1">{vendor.couple_names}{vendor.wedding_date ? ` — ${new Date(vendor.wedding_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}` : ''}</p>
           )}
         </div>
 
