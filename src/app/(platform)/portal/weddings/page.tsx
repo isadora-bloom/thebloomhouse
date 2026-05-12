@@ -142,10 +142,14 @@ function daysUntil(dateStr: string | null): number | null {
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return 'TBD'
-  return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
+  // timeZone: 'UTC' — wedding_date is a DATE column; parse it as UTC and
+  // render in UTC so the displayed day matches the stored day across
+  // every timezone.
+  return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+    timeZone: 'UTC',
   })
 }
 

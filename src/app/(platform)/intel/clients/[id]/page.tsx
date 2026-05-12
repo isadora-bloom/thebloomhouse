@@ -282,10 +282,16 @@ function fmt$(v: number): string {
 
 function fmtDate(d: string | null): string {
   if (!d) return '--'
+  // timeZone: 'UTC' is load-bearing for date-only columns (wedding_date,
+  // inquiry_date when cast to date, etc). Without it JavaScript parses
+  // 'YYYY-MM-DD' as UTC midnight then renders in local time — for Eastern
+  // Time that shifts the displayed day back by one (2026-05-01 → "Apr 30").
+  // Discovered tracing Sophie Thomas RM-1040 May-2026.
   return new Date(d).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+    timeZone: 'UTC',
   })
 }
 
@@ -303,7 +309,7 @@ function fmtDateWithPrecision(
   const month = dt.getUTCMonth()
   if (precision === 'year') return String(year)
   if (precision === 'month') {
-    return dt.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    return dt.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
   }
   // Season: map month back to label. We store month 3=Spring, 6=Summer,
   // 9=Fall, 0=Winter per the fuzzy parser.

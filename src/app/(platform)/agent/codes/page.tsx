@@ -62,10 +62,13 @@ function coupleName(p1: string | null | undefined, p2: string | null | undefined
 
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '---'
+  // timeZone: 'UTC' — date-only columns parse as UTC midnight; local-tz
+  // render shifts displayed day back in ET.
   return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+    timeZone: 'UTC',
   })
 }
 

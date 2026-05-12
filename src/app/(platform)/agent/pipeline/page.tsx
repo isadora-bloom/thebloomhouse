@@ -143,10 +143,14 @@ function daysInStage(updatedAt: string): number {
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '---'
+  // timeZone: 'UTC' — wedding_date is a date column without timezone;
+  // local-tz rendering shifts the displayed day back in ET. Same fix as
+  // intel/clients/[id]/page.tsx fmtDate.
   return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+    timeZone: 'UTC',
   })
 }
 
