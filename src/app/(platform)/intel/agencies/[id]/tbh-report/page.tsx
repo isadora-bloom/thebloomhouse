@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useState, use as usePromise } from 'react'
 import Link from 'next/link'
+import { PaperGrain } from '@/components/brand-icons/paper-grain'
 import {
   ArrowLeft,
   Loader2,
@@ -319,7 +320,8 @@ export default function TbhReportPage({
       </div>
 
       {/* Report page */}
-      <div className="tbh-page mx-auto my-6 max-w-4xl bg-white p-10 shadow-sm">
+      <div className="tbh-page relative mx-auto my-6 max-w-4xl bg-white p-10 shadow-sm overflow-hidden">
+        <PaperGrain opacity={0.05} />
         {loading ? (
           <div className="flex h-64 items-center justify-center text-sm text-[var(--bh-muted)]">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading…

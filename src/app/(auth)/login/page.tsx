@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { clearDemoCookiesClientSide } from '@/lib/demo-cookies'
+import { PaperGrain } from '@/components/brand-icons/paper-grain'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -40,8 +41,9 @@ export default function LoginPage() {
 
   return (
     <div className="w-full max-w-sm">
-      <div className="bg-surface rounded-xl shadow-sm border border-border p-8">
-        <div className="text-center mb-8">
+      <div className="relative bg-surface rounded-xl shadow-sm border border-border p-8 overflow-hidden">
+        <PaperGrain opacity={0.04} />
+        <div className="relative text-center mb-8">
           <img
             src="/brand/lockup-vertical-black.png"
             alt="The Bloom House"

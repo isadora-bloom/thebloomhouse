@@ -15,6 +15,12 @@
 
 import type { ComponentType } from 'react'
 import {
+  AgentMark,
+  WeddingsMark,
+  IntelMark,
+  SageMark,
+} from '@/components/brand-icons'
+import {
   // Agent
   Mail, FileCheck, Kanban, Flame, Workflow, BarChart3,
   HelpCircle, UsersRound, ListOrdered, Inbox, Newspaper, Activity, Brain,
@@ -100,7 +106,7 @@ export const MODE_AGENT: ModeConfig = {
   mode: 'agent',
   label: 'Agent',
   description: 'Email drafting, inquiry funnel, and follow-up cadence.',
-  icon: Mail,
+  icon: AgentMark,
   matchPrefixes: ['/agent'],
   defaultHref: '/agent/inbox',
   sections: [
@@ -170,7 +176,7 @@ export const MODE_WEDDINGS: ModeConfig = {
   mode: 'weddings',
   label: 'Weddings',
   description: 'Day-to-day work with booked couples — calendar, messages, planning.',
-  icon: Heart,
+  icon: WeddingsMark,
   matchPrefixes: [
     '/portal/weddings',
     '/portal/messages',
@@ -225,7 +231,7 @@ export const MODE_INTEL: ModeConfig = {
   mode: 'intel',
   label: 'Intel',
   description: 'Demand signals, ROI, reviews, and what your market is doing.',
-  icon: LayoutDashboard,
+  icon: IntelMark,
   matchPrefixes: ['/intel'],
   defaultHref: '/intel/dashboard',
   sections: [
@@ -335,7 +341,7 @@ export const MODE_SAGE: ModeConfig = {
   mode: 'sage',
   label: "Sage's Brain",
   description: 'Configure Sage — identity, voice, knowledge, and venue rules.',
-  icon: Sparkles,
+  icon: SageMark,
   matchPrefixes: [
     '/settings',
     '/agent/learning',
