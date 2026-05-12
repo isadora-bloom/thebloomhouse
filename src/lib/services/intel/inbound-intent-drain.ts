@@ -49,6 +49,7 @@ interface PendingRow {
   type: string | null
   full_body: string | null
   subject: string | null
+  from_email: string | null
 }
 
 function channelFromType(t: string | null): 'email' | 'sms' | 'call' | 'voicemail' | 'meeting' | 'brain_dump' | 'web_form' | 'other' {
@@ -80,7 +81,7 @@ export async function runInboundIntentDrain(): Promise<InboundIntentDrainResult>
 
   const { data, error } = await supabase
     .from('interactions')
-    .select('id, venue_id, type, full_body, subject')
+    .select('id, venue_id, type, full_body, subject, from_email')
     .is('intent_classified_at', null)
     .eq('direction', 'inbound')
     .lt('created_at', bufferCutoff)
@@ -116,6 +117,7 @@ export async function runInboundIntentDrain(): Promise<InboundIntentDrainResult>
           subject: row.subject,
           venueId: row.venue_id,
           channel: channelFromType(row.type),
+          fromEmail: row.from_email,
           supabase,
         }),
       ),

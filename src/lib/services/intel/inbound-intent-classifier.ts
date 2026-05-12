@@ -88,6 +88,9 @@ export interface ClassifyIntentInput {
   /** Channel hint helps the classifier interpret the body shape (e.g. SMS
    *  bodies are casual / fragmented; email bodies have signatures). */
   channel: 'email' | 'sms' | 'call' | 'voicemail' | 'meeting' | 'brain_dump' | 'web_form' | 'other'
+  /** From address (email channel only). Drives the deterministic
+   *  short-circuit for form-relay / scheduling-tool senders. */
+  fromEmail?: string | null
   supabase?: SupabaseClient
   correlationId?: string | null
 }
@@ -96,6 +99,97 @@ const FALLBACK: IntentVerdict = {
   intent_class: 'unknown',
   referenced_couple_name: null,
   note: null,
+}
+
+/**
+ * 2026-05-12 — deterministic short-circuit.
+ *
+ * The LLM classifier over-trusts BODY vocabulary when the inbound's
+ * CHANNEL already tells us the intent. Two live misclassifications
+ * caught the same day this shipped:
+ *
+ *   - Keeley Tate (Knot inquiry) → labeled `client_logistics`.
+ *     Why: Knot intake form's "Interested Services" line listed
+ *     "Tables and chairs, Linens, Lighting, Sound equipment..." which
+ *     Haiku matched against the client_logistics vocabulary list.
+ *   - Hassan Abidi (Calendly tour booking) → labeled `vendor_outreach`.
+ *     Why: Calendly notification body says "We have an amazing tour
+ *     planned for you" — Haiku read that as a vendor pitching the
+ *     venue.
+ *
+ * Form-relay parsers (Knot / WeddingWire / HCTG / Zola) and scheduling-
+ * event parsers (Calendly / Acuity) ALREADY know deterministically
+ * that the inbound is inquiry-stage. We shouldn't be paying Haiku to
+ * answer a question we already answered upstream. This helper detects
+ * those channels from the from_email + body markers and returns the
+ * canonical intent without an LLM call.
+ *
+ * Returns null when no deterministic match — caller falls through to
+ * the LLM path.
+ */
+function inferDeterministicIntent(
+  fromEmail: string | null | undefined,
+  body: string,
+  subject: string,
+): IntentVerdict | null {
+  const from = (fromEmail ?? '').toLowerCase()
+  const bodyText = body.toLowerCase()
+  const subj = subject.toLowerCase()
+
+  // Form-relay senders. The parsers in form-relay-parsers.ts already
+  // fired and classified the row as new_inquiry upstream; the LLM has
+  // nothing to add and frequently gets it wrong on the form's
+  // "Interested Services" list.
+  const FORM_RELAY_DOMAINS = [
+    '@theknot.com', '@knotemail.com', '@member.theknot.com',
+    '@weddingwire.com', '@mail.weddingwire.com', '@authsolic.com',
+    '@theknotww.com', '@herecomestheguide.com', '@zola.com',
+  ]
+  if (FORM_RELAY_DOMAINS.some((d) => from.includes(d))) {
+    return {
+      intent_class: 'new_inquiry',
+      referenced_couple_name: null,
+      note: 'deterministic: form-relay channel (Knot/WW/HCTG/Zola).',
+    }
+  }
+
+  // Form-relay body markers (catch the case where the from address was
+  // rewritten / forwarded but the wrapper text is still recognisable).
+  const FORM_RELAY_BODY_MARKERS = [
+    'new lead for', 'the knot pro network',
+    'weddingpro inbox', 'authsolic',
+    'view more info:', 'new calculator submission',
+  ]
+  if (FORM_RELAY_BODY_MARKERS.some((m) => bodyText.includes(m))) {
+    return {
+      intent_class: 'new_inquiry',
+      referenced_couple_name: null,
+      note: 'deterministic: form-relay body markers.',
+    }
+  }
+
+  // Scheduling-tool notifications (Calendly + Acuity invitee
+  // confirmations). The invitee is by definition the couple booking
+  // a tour — that's inquiry-stage, not vendor or client_logistics.
+  const SCHEDULING_DOMAINS = [
+    '@calendly.com', '@calendlymail.com', '@acuityscheduling.com',
+  ]
+  const SCHEDULING_BODY_MARKERS = [
+    'a new event has been scheduled', 'invitee:', 'invitee email:',
+    'event type:', 'rixey manor venue tour', // generic enough; safe across venues since Calendly always names the event type
+  ]
+  if (
+    SCHEDULING_DOMAINS.some((d) => from.includes(d)) ||
+    SCHEDULING_BODY_MARKERS.some((m) => bodyText.includes(m) || subj.includes(m))
+  ) {
+    return {
+      intent_class: 'new_inquiry',
+      referenced_couple_name: null,
+      note: 'deterministic: scheduling-tool invitee confirmation (Calendly/Acuity).',
+    }
+  }
+
+  return null
 }
 
 const SYSTEM_PROMPT = `You are a forensic classifier reading one inbound communication to a wedding venue. Your job is to identify WHAT the inbound is — not who it's from or how to respond.
@@ -259,6 +353,61 @@ export async function classifyInboundIntent(
   const subject = (input.subject ?? '').slice(0, 500)
   const body = (input.body ?? '').slice(0, 6000)
   if (!body.trim() && !subject.trim()) return FALLBACK
+
+  // Deterministic short-circuit BEFORE the LLM. Form-relay senders and
+  // Calendly/Acuity invitee confirmations are inquiry-stage by channel
+  // definition; the LLM has nothing to add and frequently misreads the
+  // body vocabulary (Knot's "Interested Services" list → client_logistics;
+  // Calendly's "amazing tour planned" → vendor_outreach). Scoped to the
+  // email channel — phone/meeting/sms bodies don't carry these signals.
+  if (channel === 'email') {
+    const det = inferDeterministicIntent(input.fromEmail ?? null, body, subject)
+    if (det) {
+      try {
+        await supabase
+          .from('interactions')
+          .update({
+            intent_class: det.intent_class,
+            intent_referenced_couple_name: det.referenced_couple_name,
+            intent_classifier_note: det.note,
+            intent_classified_at: new Date().toISOString(),
+          })
+          .eq('id', interactionId)
+          .is('intent_classified_at', null)
+      } catch (err) {
+        logEvent({
+          level: 'warn',
+          msg: 'inbound_intent persist (deterministic) failed',
+          venueId,
+          correlationId: correlationId ?? null,
+          actor: 'system',
+          event_type: 'inbound_intent.classify',
+          outcome: 'fail',
+          data: {
+            interactionId,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        })
+        return det
+      }
+      logEvent({
+        level: 'info',
+        msg: 'inbound_intent classified (deterministic)',
+        venueId,
+        correlationId: correlationId ?? null,
+        actor: 'system',
+        event_type: 'inbound_intent.classify',
+        outcome: 'ok',
+        data: {
+          interactionId,
+          channel,
+          intent_class: det.intent_class,
+          note: det.note,
+        },
+      })
+      return det
+    }
+  }
 
   const userPrompt = `CHANNEL: ${channel}\nSUBJECT: ${subject || '(none)'}\n\nBODY:\n${body || '(empty)'}`
 

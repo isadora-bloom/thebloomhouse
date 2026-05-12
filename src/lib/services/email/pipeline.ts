@@ -1634,6 +1634,7 @@ export async function processIncomingEmail(
           subject: email.subject,
           venueId,
           channel: 'email',
+          fromEmail: rawFromEmail,
           supabase,
           correlationId,
         })
