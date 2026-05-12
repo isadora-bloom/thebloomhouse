@@ -1601,6 +1601,29 @@ export async function processIncomingEmail(
         console.warn('[pipeline] haiku-classify non-fatal:', err)
       }
     })()
+
+    // Inbound-intent classifier (mig 327, Anja Putman / RM-1152 trace).
+    // Decides whether THIS inbound is a new_inquiry / client_logistics /
+    // family_member_proxy / vendor_communication / etc. Downstream
+    // consumers (heat scoring, Sage drafts, sequence triggers) read
+    // intent_class instead of assuming every inbound is a fresh prospect.
+    // Fire-and-forget; cron drain catches misses.
+    void (async () => {
+      try {
+        const mod = await import('@/lib/services/intel/inbound-intent-classifier')
+        await mod.classifyInboundIntent({
+          interactionId,
+          body: email.body,
+          subject: email.subject,
+          venueId,
+          channel: 'email',
+          supabase,
+          correlationId,
+        })
+      } catch (err) {
+        console.warn('[pipeline] intent-classify non-fatal:', err)
+      }
+    })()
   }
 
   // Wave 4 Phase 4 (2026-05-10): Wave-3 per-email sender_identity capture
