@@ -890,6 +890,30 @@ export async function POST(request: NextRequest) {
         resolved_at: new Date().toISOString(),
       }).eq('id', entry.id)
 
+      // 2026-05-12: fire the venue-wide identity cascade. The scraper
+      // import just landed new candidate_identities + tangential_signals
+      // (Knot anonymous views, IG handles, Pinterest pins, etc). Every
+      // existing wedding at this venue could potentially match one of
+      // these new signals on first_name / last_initial / inquiry-window.
+      // Fire-and-forget so the operator's confirm response isn't
+      // slowed — the cascade takes seconds to minutes depending on how
+      // many weddings + candidates are in play. Daily cron is the
+      // safety net.
+      void (async () => {
+        try {
+          const { runIdentityCascadeForVenue } = await import(
+            '@/lib/services/identity/cascade-on-enrichment'
+          )
+          await runIdentityCascadeForVenue(
+            auth.venueId,
+            supabase,
+            `scraper_json_imported:${parsed?.source ?? 'unknown'}`,
+          )
+        } catch (err) {
+          console.warn('[brain-dump] post-scraper cascade failed (non-fatal):', err)
+        }
+      })()
+
       {
         const next = nextHrefFor({ intent: 'scraper_json_imported' })
         return NextResponse.json({

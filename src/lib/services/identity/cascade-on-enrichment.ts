@@ -197,3 +197,155 @@ export async function triggerIdentityCascade(
 
   return result
 }
+
+// ---------------------------------------------------------------------------
+// Venue-wide + all-venues sweeps
+// ---------------------------------------------------------------------------
+//
+// The per-wedding trigger above fires when a SPECIFIC wedding gets new
+// identity signals. The reverse case is equally important: a new
+// ANONYMOUS signal arrives (operator confirms a Knot CSV upload, an
+// Instagram screenshot, a Pinterest scrape) and we need to re-evaluate
+// every wedding against it.
+//
+// Knot + Instagram don't expose APIs — both ingest via operator-driven
+// brain-dump CSV / screenshot uploads. So the trigger model is:
+//   - When operator confirms a brain-dump that produces new candidate
+//     signals → fire venue-wide cascade
+//   - Plus a daily safety-net cron over every venue
+//
+// The sweep is bounded to weddings with activity in the last 365 days
+// to keep per-tick cost predictable. Closed-and-completed weddings
+// older than that don't get re-evaluated (their attribution is settled).
+
+interface VenueCascadeResult {
+  venueId: string
+  weddingsScanned: number
+  totalAutoLinked: number
+  totalQueued: number
+  totalResolved: number
+  totalDeferred: number
+  totalErrors: number
+}
+
+interface AllVenuesCascadeResult {
+  venuesProcessed: number
+  totalWeddingsScanned: number
+  totalAutoLinked: number
+  totalQueued: number
+  totalResolved: number
+  totalDeferred: number
+  totalErrors: number
+  perVenue: VenueCascadeResult[]
+}
+
+/**
+ * Run the cascade for every active wedding on a venue. Used by the
+ * daily cron and as the synchronous follow-up to a brain-dump confirm
+ * that brings in new anonymous candidate signals.
+ *
+ * Idempotent — the underlying backtrack / resolver / first-touch
+ * services all check their own watermarks + already-resolved state.
+ */
+export async function runIdentityCascadeForVenue(
+  venueId: string,
+  supabase: SupabaseClient,
+  reason: string,
+): Promise<VenueCascadeResult> {
+  const since = new Date(Date.now() - 365 * 86_400_000).toISOString()
+  const result: VenueCascadeResult = {
+    venueId,
+    weddingsScanned: 0,
+    totalAutoLinked: 0,
+    totalQueued: 0,
+    totalResolved: 0,
+    totalDeferred: 0,
+    totalErrors: 0,
+  }
+
+  const { data: weddings, error } = await supabase
+    .from('weddings')
+    .select('id')
+    .eq('venue_id', venueId)
+    .not('status', 'in', '(lost,cancelled,completed)')
+    .gte('updated_at', since)
+    .order('updated_at', { ascending: false })
+    .limit(1000)
+
+  if (error) {
+    console.warn(`[cascade-sweep] venue ${venueId} query failed:`, error.message)
+    return result
+  }
+
+  for (const w of (weddings ?? []) as Array<{ id: string }>) {
+    result.weddingsScanned++
+    const r = await triggerIdentityCascade({
+      venueId,
+      weddingId: w.id,
+      supabase,
+      reason,
+    })
+    result.totalAutoLinked += r.backtrackAutoLinked
+    result.totalQueued += r.backtrackQueued
+    result.totalResolved += r.candidatesResolved
+    result.totalDeferred += r.candidatesDeferred
+    result.totalErrors += r.errors.length
+  }
+
+  return result
+}
+
+/**
+ * Cron entry — iterate every venue, fire the cascade sweep. Returns
+ * per-venue + grand totals so the cron route surfaces a useful summary.
+ *
+ * Cron cadence: daily is plenty. Brain-dump confirms trigger
+ * runIdentityCascadeForVenue synchronously, so most newly-uploaded
+ * Knot/IG/Pinterest data binds within seconds — the cron is the
+ * safety net for the missed-fire cases (cron of a CSV upload that
+ * pre-dated the cascade wiring, operator confirmed something offline,
+ * etc).
+ */
+export async function runIdentityCascadeAllVenues(
+  supabase: SupabaseClient,
+): Promise<AllVenuesCascadeResult> {
+  const out: AllVenuesCascadeResult = {
+    venuesProcessed: 0,
+    totalWeddingsScanned: 0,
+    totalAutoLinked: 0,
+    totalQueued: 0,
+    totalResolved: 0,
+    totalDeferred: 0,
+    totalErrors: 0,
+    perVenue: [],
+  }
+
+  // Only iterate non-demo venues with at least one wedding row that
+  // updated in the lookback window. Filtering on weddings.updated_at
+  // rather than venue activity keeps demo / empty / dormant venues
+  // out of the per-tick cost.
+  const since = new Date(Date.now() - 365 * 86_400_000).toISOString()
+  const { data: venueRows } = await supabase
+    .from('weddings')
+    .select('venue_id')
+    .gte('updated_at', since)
+    .limit(5000)
+
+  const venueIds = Array.from(
+    new Set(((venueRows ?? []) as Array<{ venue_id: string }>).map((v) => v.venue_id)),
+  )
+
+  for (const venueId of venueIds) {
+    const r = await runIdentityCascadeForVenue(venueId, supabase, 'cron_daily_sweep')
+    out.venuesProcessed++
+    out.totalWeddingsScanned += r.weddingsScanned
+    out.totalAutoLinked += r.totalAutoLinked
+    out.totalQueued += r.totalQueued
+    out.totalResolved += r.totalResolved
+    out.totalDeferred += r.totalDeferred
+    out.totalErrors += r.totalErrors
+    out.perVenue.push(r)
+  }
+
+  return out
+}

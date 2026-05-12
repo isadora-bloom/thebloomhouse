@@ -99,6 +99,7 @@ const VALID_JOBS = [
   'transcript_voice_mining',
   'correlation_analysis',
   'backtrace_scan',
+  'identity_cascade_sweep',
   'zoom_poll',
   'openphone_poll',
   'sms_rematch',
@@ -556,6 +557,31 @@ async function runJob(job: JobName): Promise<unknown> {
       // venue at a time; coordinator marks read and the next batch
       // creates a fresh one).
       return scanBacktraceAllVenues()
+
+    case 'identity_cascade_sweep': {
+      // 2026-05-12: daily venue-wide identity-cascade sweep. The
+      // per-wedding cascade (cascade-on-enrichment.ts) fires
+      // synchronously when a specific wedding gets new identity
+      // signals (SMS body-email match, name-evidence override, brain-
+      // dump enrichment). But the inverse case — a NEW anonymous
+      // signal arrives (operator confirms a Knot CSV upload, IG
+      // screenshot ingest, Pinterest scrape) — needs to re-evaluate
+      // every wedding against it. The brain-dump-confirm path fires
+      // a synchronous venue-wide sweep when scraper_json lands; this
+      // cron is the safety net for missed fires (signals uploaded
+      // before the cascade wiring, operator confirmed something
+      // offline, etc).
+      //
+      // Bounded: only weddings updated in the last 365 days, active
+      // status only (no lost / cancelled / completed). The underlying
+      // backtrack / resolver / first-touch services are idempotent so
+      // re-running on a fully-resolved wedding is a no-op.
+      const { runIdentityCascadeAllVenues } = await import(
+        '@/lib/services/identity/cascade-on-enrichment'
+      )
+      const supabase = createServiceClient()
+      return runIdentityCascadeAllVenues(supabase)
+    }
 
     case 'phase_b_sweep':
       // Phase B safety sweep (PB.8 — 2026-04-28). Daily catch-up that
