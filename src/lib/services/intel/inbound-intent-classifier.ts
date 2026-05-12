@@ -339,6 +339,53 @@ export async function classifyInboundIntent(
     return verdict
   }
 
+  // Family-member-proxy + vendor-communication resolver (checkpoint 6).
+  // The classifier extracted a referenced couple name (e.g. "Kajlie"
+  // from "Kajlie's mom"). Look up the venue's recent weddings by fuzzy
+  // partner1/partner2 first-name match. If a confident match exists,
+  // reattach this interaction to that wedding via mintWedding's merge
+  // path so the conversation lands on the booked couple's row.
+  //
+  // Fire-and-forget. If no match is found, the interaction stays on
+  // its own wedding (or the orphan path) and a coordinator can
+  // manually re-link via the lead-detail panel.
+  if (
+    verdict.referenced_couple_name &&
+    (verdict.intent_class === 'family_member_proxy' ||
+      verdict.intent_class === 'vendor_communication')
+  ) {
+    void (async () => {
+      try {
+        const { resolveReferencedCouple } = await import(
+          './referenced-couple-resolver'
+        )
+        await resolveReferencedCouple({
+          supabase,
+          venueId,
+          interactionId,
+          referencedName: verdict.referenced_couple_name as string,
+          intentClass: verdict.intent_class,
+          correlationId,
+        })
+      } catch (err) {
+        logEvent({
+          level: 'warn',
+          msg: 'referenced_couple_resolve failed',
+          venueId,
+          correlationId: correlationId ?? null,
+          actor: 'system',
+          event_type: 'inbound_intent.resolve_referenced',
+          outcome: 'fail',
+          data: {
+            interactionId,
+            referenced: verdict.referenced_couple_name,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        })
+      }
+    })()
+  }
+
   // Heat suppression: when intent is in the non-couple set, zero the
   // points on this interaction's engagement_events. The heat-as-view
   // (mig 316) sums points * decay; setting points=0 makes the row
