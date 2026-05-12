@@ -419,6 +419,18 @@ const VALID_JOBS = [
   // /api/cron?job=identity_binder until a shared maintenance cron
   // picks it up.
   'identity_binder',
+  // 2026-05-12 (mig 319). Cohort damping cache refresh. Walks active
+  // venues, enumerates discrete cohort signatures present in each
+  // venue's recent weddings, and UPSERTs one cache row per (venue,
+  // signature) so the wedding_heat view (mig 316/319) can apply
+  // cohort damping at read time. Reconciles the lead-detail Cool
+  // badge with the heat-narration prose (pre-319 the two paths could
+  // disagree because damping ran only in TS). Daily cadence is fine;
+  // the data updates slowly (a venue's bucket distribution shifts
+  // over months, not hours). NOT registered in vercel.json (Pro at
+  // 40-cron cap); operator can curl /api/cron?job=cohort_damping_refresh
+  // until a shared maintenance cron picks it up.
+  'cohort_damping_refresh',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -1094,6 +1106,19 @@ async function runJob(job: JobName): Promise<unknown> {
         '@/lib/services/identity/binder-cron'
       )
       return runIdentityBinder(createServiceClient())
+    }
+
+    case 'cohort_damping_refresh': {
+      // 2026-05-12 (mig 319). Walks active venues, enumerates discrete
+      // cohort signatures present in each venue's recent weddings,
+      // UPSERTs one cache row per (venue, signature) so wedding_heat
+      // (mig 316/319) applies the same damping multiplier at read time
+      // that the heat-narration insight used to compute in TS. Daily
+      // cadence; idempotent.
+      const { refreshCohortDampingCache } = await import(
+        '@/lib/services/intel/cohort-damping-refresh'
+      )
+      return refreshCohortDampingCache(createServiceClient())
     }
   }
 }

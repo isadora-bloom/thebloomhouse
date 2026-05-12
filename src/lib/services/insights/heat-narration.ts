@@ -28,7 +28,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAI, CLAUDE_MODEL } from '@/lib/ai/client'
 import { gateForBrainCall } from '@/lib/services/cost-ceiling'
 import { redactError } from '@/lib/observability/redact'
-import { getCohortBookingRate, applyCohortDamping } from '@/lib/services/heat-mapping'
 import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
 import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
 import { confidenceFor, buildCacheKey } from './confidence'
@@ -212,8 +211,11 @@ async function loadClassicalHeatEvidence(
   weddingId: string,
 ): Promise<{ payload: ClassicalHeatPayload; allowedNumbers: Array<number | string> } | null> {
   // Migration 316: heat_score / temperature_tier moved to wedding_heat
-  // view. Fetch the wedding (for inquiry_date) and the heat row in
-  // parallel.
+  // view. Migration 319: the view now also exposes raw_score +
+  // cohort_booking_rate / cohort_size / cohort_booked / cohort_multiplier
+  // so this code path no longer re-derives them with the per-read TS
+  // cohort match. Fetch the wedding (for inquiry_date) and the heat
+  // row in parallel.
   const [weddingRes, heatRes] = await Promise.all([
     supabase
       .from('weddings')
@@ -223,16 +225,30 @@ async function loadClassicalHeatEvidence(
       .maybeSingle(),
     supabase
       .from('wedding_heat')
-      .select('heat_score, temperature_tier')
+      .select(
+        'heat_score, temperature_tier, raw_score, cohort_booking_rate, ' +
+          'cohort_size, cohort_booked, cohort_multiplier',
+      )
       .eq('wedding_id', weddingId)
       .eq('venue_id', venueId)
       .maybeSingle(),
   ])
+  const heatRow = heatRes.data as
+    | {
+        heat_score: number | null
+        temperature_tier: string | null
+        raw_score: number | null
+        cohort_booking_rate: number | null
+        cohort_size: number | null
+        cohort_booked: number | null
+        cohort_multiplier: number | null
+      }
+    | null
   const wedding = weddingRes.data
     ? {
         ...(weddingRes.data as { id: string; inquiry_date: string | null }),
-        heat_score: (heatRes.data?.heat_score as number | null) ?? 0,
-        temperature_tier: (heatRes.data?.temperature_tier as string | null) ?? 'cool',
+        heat_score: heatRow?.heat_score ?? 0,
+        temperature_tier: heatRow?.temperature_tier ?? 'cool',
       }
     : null
   if (!wedding) return null
@@ -270,33 +286,20 @@ async function loadClassicalHeatEvidence(
   const oldest = list[list.length - 1]?.occurred_at ?? null
   const trajectory = await trajectoryPromise
 
-  // T5-Rixey-FFF: also surface the raw vs damped heat split so the
-  // narration can acknowledge cohort damping when it fired. We
-  // recompute the damping decision here rather than reading it from
-  // a stored column because heat_score on the wedding row is
-  // already the post-damping value (recalculateHeatScore writes the
-  // damped score). Re-running getCohortBookingRate is cheap (one
-  // SELECT against weddings) and keeps the narration in lockstep
-  // with whatever the heat scorer last computed. If the cohort
-  // shifted between recompute and narration, the narration reflects
-  // the LATEST cohort — that is the right tradeoff (small drift is
-  // fine; calling out a stale cohort would be worse).
+  // Migration 319: cohort damping is now precomputed in
+  // cohort_damping_cache and JOINed into wedding_heat. The view exposes
+  // raw_score (pre-damping), cohort_multiplier (the factor applied to
+  // raw to produce heat_score), and the cohort population details
+  // (booking_rate / cohort_size / cohort_booked). This eliminates the
+  // pre-319 disagreement where the lead-detail badge read the un-damped
+  // view value while the narration computed damping in TS and got a
+  // different number. The view is now canonical.
   const heatScore = (wedding.heat_score as number) ?? 0
-  let cohort: { rate: number; nTotal: number; nBooked: number } | null = null
-  try {
-    cohort = await getCohortBookingRate(supabase, venueId, weddingId)
-  } catch {
-    cohort = null
-  }
-  // Reverse-engineer the raw score from the damping multiplier so the
-  // narration has both numbers to reference. This is exact when the
-  // damping multiplier is 0.5 / 0.7 / 1.0; if a future damping config
-  // adds finer-grained multipliers we may want to store the raw score
-  // explicitly instead.
-  const damping = applyCohortDamping(0, cohort)  // probe for multiplier
-  const rawHeatScore = damping.multiplier > 0
-    ? Math.round(heatScore / damping.multiplier)
-    : heatScore
+  const cohortMultiplier = heatRow?.cohort_multiplier ?? 1.0
+  const rawHeatScore = heatRow?.raw_score ?? heatScore
+  const cohortRate = heatRow?.cohort_booking_rate ?? null
+  const cohortSize = heatRow?.cohort_size ?? null
+  const cohortBooked = heatRow?.cohort_booked ?? null
 
   const payload: ClassicalHeatPayload = {
     weddingId,
@@ -309,10 +312,10 @@ async function loadClassicalHeatEvidence(
     newest_event_at: newest,
     oldest_event_at: oldest,
     raw_heat_score: rawHeatScore,
-    cohort_multiplier: damping.multiplier,
-    cohort_rate: cohort?.rate ?? null,
-    cohort_n_total: cohort?.nTotal ?? null,
-    cohort_n_booked: cohort?.nBooked ?? null,
+    cohort_multiplier: cohortMultiplier,
+    cohort_rate: cohortRate,
+    cohort_n_total: cohortSize,
+    cohort_n_booked: cohortBooked,
   }
 
   // Numbers the narration is allowed to reference: the score, the
