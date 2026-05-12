@@ -869,11 +869,17 @@ export default function ClientProfilePage() {
 
   const coupleName = useMemo(() => {
     if (canonicalPartners.length === 0) return 'Unknown Client'
-    // dedupePeopleByName routes through pickCanonicalPeople, so the
-    // headline gets the longest / least-abbreviated first name per
-    // logical-person bucket. Belt-and-suspenders against the
-    // alias-merge cron not having run for this wedding yet.
-    return dedupePeopleByName(canonicalPartners).map((p) => p.first_name).join(' & ')
+    const deduped = dedupePeopleByName(canonicalPartners)
+    // Bug 3 of Sophie trace: when only ONE partner row exists, render
+    // full "FirstName LastName" so the header isn't a bare first name.
+    // When two partners exist, keep the "First1 & First2" couple
+    // shorthand — readers know the surname from the lead detail panels.
+    if (deduped.length === 1) {
+      const p = deduped[0]
+      const last = p.last_name?.trim()
+      return last ? `${p.first_name} ${last}` : p.first_name
+    }
+    return deduped.map((p) => p.first_name).join(' & ')
   }, [canonicalPartners])
 
   const primaryEmail = useMemo(
