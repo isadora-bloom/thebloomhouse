@@ -88,6 +88,13 @@ const SOURCE_LABEL_OVERRIDES: Record<string, string> = {
   reddit: 'Reddit',
   tiktok: 'TikTok',
 
+  // AI search / chatbots (Wave 15 discovery canonical: ai_tool)
+  ai_tool: 'AI tool',
+  chatgpt: 'ChatGPT',
+  claude: 'Claude',
+  perplexity: 'Perplexity',
+  gemini: 'Gemini',
+
   // Word-of-mouth / direct
   direct: 'Direct',
   referral: 'Referral',
