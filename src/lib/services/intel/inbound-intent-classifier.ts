@@ -38,6 +38,28 @@ export type IntentClass =
   | 'coordinator_internal'
   | 'unknown'
 
+/**
+ * Intents that should NEVER fire heat for a wedding. The Anja class
+ * (logistics / vendor / spam / auto-reply / internal) accidentally
+ * generated heat=99 on RM-1152 because every inbound got the default
+ * +8 sms_received treatment. When the classifier verdicts one of these,
+ * we retroactively zero the engagement_events points on this
+ * interaction so the heat-view recompute reflects reality.
+ *
+ * client_emotional + family_member_proxy DO fire heat — they're real
+ * post-booking signals that belong on the wedding's heat trajectory.
+ * (Family-member-proxy gets resolved to the booked couple's wedding
+ * via checkpoint 6, so the heat lands on the right row.)
+ */
+const NON_COUPLE_INTENTS: ReadonlySet<IntentClass> = new Set<IntentClass>([
+  'client_logistics',
+  'vendor_communication',
+  'vendor_outreach',
+  'spam_outreach',
+  'auto_reply',
+  'coordinator_internal',
+])
+
 const VALID_INTENT_CLASSES: ReadonlySet<IntentClass> = new Set([
   'new_inquiry',
   'inquiry_followup',
@@ -315,6 +337,63 @@ export async function classifyInboundIntent(
       },
     })
     return verdict
+  }
+
+  // Heat suppression: when intent is in the non-couple set, zero the
+  // points on this interaction's engagement_events. The heat-as-view
+  // (mig 316) sums points * decay; setting points=0 makes the row
+  // invisible to the trajectory without losing the audit history.
+  //
+  // Fire-and-forget — failure here doesn't unwind the classification.
+  // The cron drain (when it lands) can re-attempt suppression on rows
+  // that missed.
+  if (NON_COUPLE_INTENTS.has(verdict.intent_class)) {
+    void (async () => {
+      try {
+        const { error: suppErr } = await supabase
+          .from('engagement_events')
+          .update({ points: 0 })
+          .filter('metadata->>interaction_id', 'eq', interactionId)
+          .neq('points', 0)
+        if (suppErr) {
+          logEvent({
+            level: 'warn',
+            msg: 'inbound_intent suppress failed',
+            venueId,
+            correlationId: correlationId ?? null,
+            actor: 'system',
+            event_type: 'inbound_intent.suppress',
+            outcome: 'fail',
+            data: { interactionId, error: suppErr.message },
+          })
+        } else {
+          logEvent({
+            level: 'info',
+            msg: 'inbound_intent suppressed heat',
+            venueId,
+            correlationId: correlationId ?? null,
+            actor: 'system',
+            event_type: 'inbound_intent.suppress',
+            outcome: 'ok',
+            data: { interactionId, intent_class: verdict.intent_class },
+          })
+        }
+      } catch (err) {
+        logEvent({
+          level: 'warn',
+          msg: 'inbound_intent suppress threw',
+          venueId,
+          correlationId: correlationId ?? null,
+          actor: 'system',
+          event_type: 'inbound_intent.suppress',
+          outcome: 'fail',
+          data: {
+            interactionId,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        })
+      }
+    })()
   }
 
   logEvent({

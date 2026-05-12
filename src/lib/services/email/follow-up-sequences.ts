@@ -847,6 +847,34 @@ async function emitExtendedDraft(
     return false
   }
 
+  // Intent-class gate (mig 327, Anja Putman class). If the latest
+  // inbound is logistics / vendor / spam / auto-reply / coordinator-
+  // internal, the wedding is NOT in a state where a "where are you,
+  // come tour" follow-up makes sense. Suppress.
+  const { data: latestIntent } = await supabase
+    .from('interactions')
+    .select('intent_class')
+    .eq('wedding_id', weddingId)
+    .eq('direction', 'inbound')
+    .not('intent_class', 'is', null)
+    .order('timestamp', { ascending: false })
+    .limit(1)
+  const latestIntentClass =
+    (latestIntent && latestIntent.length > 0
+      ? (latestIntent[0].intent_class as string | null)
+      : null) ?? null
+  const NON_INQUIRY_INTENTS = new Set([
+    'client_logistics',
+    'vendor_communication',
+    'vendor_outreach',
+    'spam_outreach',
+    'auto_reply',
+    'coordinator_internal',
+  ])
+  if (latestIntentClass && NON_INQUIRY_INTENTS.has(latestIntentClass)) {
+    return false
+  }
+
   // Active-engagement skip (mirrors generateFollowUps).
   const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString()
   const [recentMessages, recentChecklist] = await Promise.all([
