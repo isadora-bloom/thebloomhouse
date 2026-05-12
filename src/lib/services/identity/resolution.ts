@@ -374,8 +374,16 @@ function buildLabel(person: PersonRow): string {
 /**
  * Primary entry point: given a candidate, return every possible match in
  * the venue's people pool with confidence tier + signals.
+ *
+ * Naming note (2026-05-12): renamed from `resolveIdentity` to
+ * `findIdentityMatches`. The old name collided with the WRITER at
+ * `identity/resolver.ts:resolveIdentity` — same verb, opposite contract
+ * (this one is pure read, the other one mints rows). The collision was
+ * the canonical foot-gun documented in IDENTITY-RESOLUTION-AUDIT-2026-05-12.md
+ * F4. The deprecated alias below stays for one round so callers can
+ * migrate in their own time; it will be removed in mig 320.
  */
-export async function resolveIdentity(
+export async function findIdentityMatches(
   supabase: SupabaseClient,
   candidate: IdentityCandidate
 ): Promise<IdentityMatch[]> {
@@ -392,6 +400,13 @@ export async function resolveIdentity(
   matches.sort((a, b) => tierOrder[a.tier] - tierOrder[b.tier] || b.confidence - a.confidence)
   return matches
 }
+
+/**
+ * @deprecated use findIdentityMatches; will be removed in mig 320.
+ * Kept as a one-round bridge so existing call sites compile while the
+ * import-rename sweep lands incrementally.
+ */
+export const resolveIdentity = findIdentityMatches
 
 /**
  * Convert a people row into the candidate shape for downstream matching.

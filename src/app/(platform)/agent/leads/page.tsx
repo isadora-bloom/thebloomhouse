@@ -439,6 +439,8 @@ export default function LeadsPage() {
         venueIds = (orgVenues ?? []).map((v) => v.id as string)
       }
 
+      // Migration 316: heat_score / temperature_tier moved to wedding_heat
+      // view. Fetch weddings + heat in parallel, join + sort in memory.
       let query = supabase
         .from('weddings')
         .select(`
@@ -446,8 +448,6 @@ export default function LeadsPage() {
           venue_id,
           status,
           source,
-          heat_score,
-          temperature_tier,
           inquiry_date,
           wedding_date,
           guest_count_estimate,
@@ -464,15 +464,41 @@ export default function LeadsPage() {
       // never triggered recalculateHeatScore sat at 0 indefinitely, so
       // whole swathes of active leads were invisible. Fixed upstream in
       // email-pipeline (the initial_inquiry insert now runs through
-      // recordEngagementEventsBatch which recalculates). Showing zeros
-      // honestly means a coordinator sees "this lead hasn't engaged yet"
-      // instead of "this lead doesn't exist".
+      // recordEngagementEventsBatch). Migration 316 makes this structurally
+      // impossible: heat is a view, derived live. Showing zeros honestly
+      // means a coordinator sees "this lead hasn't engaged yet" instead of
+      // "this lead doesn't exist".
       if (venueIds && venueIds.length > 0) {
         query = query.in('venue_id', venueIds)
       }
-      const { data, error: fetchError } = await query.order('heat_score', { ascending: false })
+      let heatQuery = supabase.from('wedding_heat').select('wedding_id, heat_score, temperature_tier')
+      if (venueIds && venueIds.length > 0) {
+        heatQuery = heatQuery.in('venue_id', venueIds)
+      }
+      const [{ data: rawData, error: fetchError }, { data: heatRows }] = await Promise.all([
+        query,
+        heatQuery,
+      ])
 
       if (fetchError) throw fetchError
+
+      const heatByWedding = new Map<string, { heat_score: number; temperature_tier: string }>()
+      for (const h of heatRows ?? []) {
+        heatByWedding.set(h.wedding_id as string, {
+          heat_score: (h.heat_score as number) ?? 0,
+          temperature_tier: (h.temperature_tier as string) ?? 'cool',
+        })
+      }
+      const data = (rawData ?? [])
+        .map((row: any) => {
+          const heat = heatByWedding.get(row.id as string)
+          return {
+            ...row,
+            heat_score: heat?.heat_score ?? 0,
+            temperature_tier: heat?.temperature_tier ?? 'cool',
+          }
+        })
+        .sort((a: any, b: any) => (b.heat_score ?? 0) - (a.heat_score ?? 0))
 
       // T5-Rixey-UU Bug F: Last Activity = MAX(interactions.timestamp)
       // per wedding, NOT weddings.updated_at. The latter gets bumped by

@@ -36,7 +36,7 @@ import {
   timeAwareTourKind,
   type SchedulingEvent,
 } from '@/lib/services/ingestion/scheduling-tool-parsers'
-import { resolveIdentity } from '@/lib/services/identity/resolution'
+import { findIdentityMatches } from '@/lib/services/identity/resolution'
 import { recordKnowledgeGaps } from '@/lib/services/intel/knowledge-gaps'
 import { applySignalInference } from '@/lib/services/attribution/signal-inference'
 import { createNotification } from '@/lib/services/admin-notifications'
@@ -1958,8 +1958,9 @@ export async function processIncomingEmail(
         // create so the trigger watch list and capacity-aware narration
         // stay in sync from row birth.
         estimated_guests: parsedEstimatedGuests,
-        heat_score: 0,
-        temperature_tier: 'cool',
+        // Migration 316: heat_score / temperature_tier are no longer
+        // stored columns. Heat is derived by the wedding_heat view from
+        // engagement_events at read time.
         // Stream WWW: UTM from extracted_identity. utm_first_seen_at
         // anchors to inquiry_date so the "earliest UTM signal" stamp
         // tracks the email arrival, not wall-clock NOW (which would
@@ -2670,7 +2671,7 @@ export async function processIncomingEmail(
     const partnerParts = (extras?.partnerName ?? '').trim().split(/\s+/)
     const inviteeParts = (schedulingEvent.inviteeName ?? '').trim().split(/\s+/)
     try {
-      const matches = await resolveIdentity(supabase, {
+      const matches = await findIdentityMatches(supabase, {
         venueId,
         email: schedulingEvent.inviteeEmail,
         firstName: inviteeParts[0] || null,
@@ -2752,8 +2753,8 @@ export async function processIncomingEmail(
           source: schedulingEvent.source,
           inquiry_date: inquiryDateForSchedulingEvent,
           tour_date: parseEventTime(schedulingEvent.eventDatetime),
-          heat_score: 0,
-          temperature_tier: 'cool',
+          // Migration 316: heat_score / temperature_tier dropped, heat is
+          // derived by the wedding_heat view.
         })
         .select('id')
         .single()

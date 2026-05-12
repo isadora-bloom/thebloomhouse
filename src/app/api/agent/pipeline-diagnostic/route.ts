@@ -126,12 +126,35 @@ export async function GET() {
     .limit(5)
 
   // ---- Wedding sample (10) ----
-  const { data: weddingSample } = await supabase
-    .from('weddings')
-    .select('id, status, source, inquiry_date, wedding_date, heat_score, temperature_tier')
-    .eq('venue_id', venueId)
-    .order('inquiry_date', { ascending: false, nullsFirst: false })
-    .limit(10)
+  // Migration 316: heat_score / temperature_tier moved to wedding_heat view.
+  // Fetch in parallel then join for the diagnostic payload.
+  const [weddingSampleRes, weddingSampleHeatRes] = await Promise.all([
+    supabase
+      .from('weddings')
+      .select('id, status, source, inquiry_date, wedding_date')
+      .eq('venue_id', venueId)
+      .order('inquiry_date', { ascending: false, nullsFirst: false })
+      .limit(10),
+    supabase
+      .from('wedding_heat')
+      .select('wedding_id, heat_score, temperature_tier')
+      .eq('venue_id', venueId),
+  ])
+  const heatByWedding = new Map<string, { heat_score: number; temperature_tier: string }>()
+  for (const h of weddingSampleHeatRes.data ?? []) {
+    heatByWedding.set(h.wedding_id as string, {
+      heat_score: h.heat_score as number,
+      temperature_tier: h.temperature_tier as string,
+    })
+  }
+  const weddingSample = (weddingSampleRes.data ?? []).map((w) => {
+    const heat = heatByWedding.get(w.id as string)
+    return {
+      ...w,
+      heat_score: heat?.heat_score ?? 0,
+      temperature_tier: heat?.temperature_tier ?? 'cool',
+    }
+  })
 
   return NextResponse.json({
     venueId,

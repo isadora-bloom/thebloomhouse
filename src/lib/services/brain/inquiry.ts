@@ -23,6 +23,7 @@ import {
   type PersonalityData,
 } from '@/lib/ai/personality-builder'
 import { resolveSageIdentity, renderOpenerConstraints } from '@/lib/services/brain/sage-identity'
+import { pickSource, type EvidenceEntry } from '@/lib/services/identity/pick-from-evidence'
 
 /**
  * Prompt revision identifier — bump when the system prompt or task
@@ -992,9 +993,26 @@ export async function generateFollowUp(
   // has observed since the last email.
   const { data: wedding } = await supabase
     .from('weddings')
-    .select('wedding_date, wedding_date_locked_by_operator, guest_count_estimate, source, status, sage_context_notes, has_toured_in_person, lost_locked_by_operator')
+    .select('wedding_date, wedding_date_locked_by_operator, guest_count_estimate, source, source_evidence, source_locked_by_operator, status, sage_context_notes, has_toured_in_person, lost_locked_by_operator')
     .eq('id', weddingId)
     .single()
+
+  // Pattern: evidence-projection picker (mig 317). Read source via the
+  // picker so operator-locked overrides are respected and ambiguous
+  // signals don't expose the wrong canonical source to Sage's prompt
+  // even if the scalar weddings.source column lags behind. Falls back to
+  // the scalar when no evidence exists yet (pre-mig-317 rows during the
+  // backfill window) or when the column read shape is unexpected.
+  const pickedSource: string | null = wedding
+    ? pickSource(
+        (wedding as { source_evidence?: EvidenceEntry<string | null>[] | null })
+          .source_evidence ?? null,
+        (wedding as { source_locked_by_operator?: boolean | null })
+          .source_locked_by_operator
+          ? ((wedding as { source?: string | null }).source ?? null)
+          : null,
+      ) ?? ((wedding as { source?: string | null }).source ?? null)
+    : null
 
   // Get the last interaction for context
   const { data: lastInteraction } = await supabase
@@ -1036,7 +1054,7 @@ export async function generateFollowUp(
       contextBlock += `\n- Wedding date: ${wedding.wedding_date}${lockSuffix}`
     }
     if (wedding.guest_count_estimate) contextBlock += `\n- Guest count: ${wedding.guest_count_estimate}`
-    if (wedding.source) contextBlock += `\n- Source: ${wedding.source}`
+    if (pickedSource) contextBlock += `\n- Source: ${pickedSource}`
 
     // Sticky-state Pattern 1 (migration 306).
     if (wedding.has_toured_in_person) {

@@ -18,7 +18,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveIdentity, personToCandidate } from '@/lib/services/identity/resolution'
+import { findIdentityMatches, personToCandidate } from '@/lib/services/identity/resolution'
 import { mergePeople } from '@/lib/services/identity/merge-people'
 
 export interface EnqueueResult {
@@ -63,7 +63,7 @@ export async function enqueueIdentityMatches(args: {
     wedding_date: weddingDate,
   })
 
-  const matches = await resolveIdentity(supabase, candidate)
+  const matches = await findIdentityMatches(supabase, candidate)
 
   // 2. High-tier: auto-merge new into existing. Keep the OLDER person as
   // the survivor (more history attached, safer defaults).

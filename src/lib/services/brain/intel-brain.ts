@@ -523,9 +523,12 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
 
     // Recent weddings — bumped 30d → 365d per T5-θ.2 spec so Sage can
     // reason about cohorts and trends across a full season.
+    // Migration 316: heat_score / temperature_tier moved to the
+    // wedding_heat view. The map-join happens below in the Promise.all
+    // unpack (see recentWeddings assignment).
     supabase
       .from('weddings')
-      .select('id, status, source, wedding_date, guest_count_estimate, booking_value, inquiry_date, booked_at, lost_at, lost_reason, heat_score, temperature_tier')
+      .select('id, status, source, wedding_date, guest_count_estimate, booking_value, inquiry_date, booked_at, lost_at, lost_reason')
       .eq('venue_id', venueId)
       .gte('updated_at', oneYearAgoDate)
       .order('updated_at', { ascending: false })
@@ -1226,9 +1229,40 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     })
     .filter((x): x is CorrelationNarrationRow => x !== null)
 
+  // Migration 316: enrich recent weddings with heat from wedding_heat
+  // view since the heat_score / temperature_tier columns were dropped.
+  // We do this synchronously here rather than as a parallel result to
+  // keep the broader Promise.all unchanged; one extra round trip is
+  // negligible against the 30+ already in flight.
+  const recentWeddingIds = (weddingsResult.data ?? []).map((w) => w.id as string)
+  let weddingHeatMap = new Map<string, { heat_score: number; temperature_tier: string }>()
+  if (recentWeddingIds.length > 0) {
+    const { data: heatRows } = await supabase
+      .from('wedding_heat')
+      .select('wedding_id, heat_score, temperature_tier')
+      .in('wedding_id', recentWeddingIds)
+    weddingHeatMap = new Map(
+      (heatRows ?? []).map((h) => [
+        h.wedding_id as string,
+        {
+          heat_score: (h.heat_score as number) ?? 0,
+          temperature_tier: (h.temperature_tier as string) ?? 'cool',
+        },
+      ]),
+    )
+  }
+  const recentWeddingsWithHeat: WeddingSummary[] = (weddingsResult.data ?? []).map((w) => {
+    const heat = weddingHeatMap.get(w.id as string)
+    return {
+      ...(w as object),
+      heat_score: heat?.heat_score ?? 0,
+      temperature_tier: heat?.temperature_tier ?? 'cool',
+    } as WeddingSummary
+  })
+
   return {
     venueName: (venueResult.data?.name as string) ?? 'Unknown Venue',
-    recentWeddings: (weddingsResult.data ?? []) as WeddingSummary[],
+    recentWeddings: recentWeddingsWithHeat,
     pipelineCounts,
     sourceAttribution: (attributionResult.data ?? []) as SourceAttributionRow[],
     trendDeviations: (trendsResult.data ?? []) as TrendDeviationRow[],

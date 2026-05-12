@@ -397,6 +397,18 @@ const VALID_JOBS = [
   // operator can curl /api/cron?job=orphan_engagement_rebind until a
   // shared maintenance cron picks it up.
   'orphan_engagement_rebind',
+  // 2026-05-12 IDENTITY-RESOLUTION-AUDIT F1/F2/F3. Deferred identity
+  // binder. Pulls unbound inbound interactions whose extracted_identity
+  // has actionable signal (email or phone) and either binds them
+  // (tier=high), enqueues for coordinator review (tier=medium), or
+  // mints a fresh wedding (no match + primary email/phone). Companion
+  // to mintWedding — closes the synchronous-resolver-throw bug class
+  // and the "extracted-only identity never binds" gap that the
+  // pipeline's inline match chain can't catch. NOT registered in
+  // vercel.json (Pro at 40-cron cap); operator can curl
+  // /api/cron?job=identity_binder until a shared maintenance cron
+  // picks it up.
+  'identity_binder',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -1027,6 +1039,18 @@ async function runJob(job: JobName): Promise<unknown> {
         '@/lib/services/sms/orphan-rebind'
       )
       return rebindOrphanEngagementEvents(createServiceClient())
+    }
+
+    case 'identity_binder': {
+      // 2026-05-12 IDENTITY-RESOLUTION-AUDIT. Drains unbound inbound
+      // interactions with extracted_identity, routes each to bind /
+      // defer / mint, and fires the cascade per newly-bound wedding.
+      // 100 rows/tick. Dynamic import keeps the binder out of the
+      // cold-path bundle for ticks that hit other jobs.
+      const { runIdentityBinder } = await import(
+        '@/lib/services/identity/binder-cron'
+      )
+      return runIdentityBinder(createServiceClient())
     }
   }
 }

@@ -211,12 +211,30 @@ async function loadClassicalHeatEvidence(
   venueId: string,
   weddingId: string,
 ): Promise<{ payload: ClassicalHeatPayload; allowedNumbers: Array<number | string> } | null> {
-  const { data: wedding } = await supabase
-    .from('weddings')
-    .select('id, heat_score, temperature_tier, inquiry_date')
-    .eq('id', weddingId)
-    .eq('venue_id', venueId)
-    .maybeSingle()
+  // Migration 316: heat_score / temperature_tier moved to wedding_heat
+  // view. Fetch the wedding (for inquiry_date) and the heat row in
+  // parallel.
+  const [weddingRes, heatRes] = await Promise.all([
+    supabase
+      .from('weddings')
+      .select('id, inquiry_date')
+      .eq('id', weddingId)
+      .eq('venue_id', venueId)
+      .maybeSingle(),
+    supabase
+      .from('wedding_heat')
+      .select('heat_score, temperature_tier')
+      .eq('wedding_id', weddingId)
+      .eq('venue_id', venueId)
+      .maybeSingle(),
+  ])
+  const wedding = weddingRes.data
+    ? {
+        ...(weddingRes.data as { id: string; inquiry_date: string | null }),
+        heat_score: (heatRes.data?.heat_score as number | null) ?? 0,
+        temperature_tier: (heatRes.data?.temperature_tier as string | null) ?? 'cool',
+      }
+    : null
   if (!wedding) return null
 
   const inquiryDateDay = wedding.inquiry_date

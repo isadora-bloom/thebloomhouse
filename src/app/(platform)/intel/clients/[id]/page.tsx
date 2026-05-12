@@ -779,8 +779,24 @@ export default function ClientProfilePage() {
 
       if (weddingRes.error) throw weddingRes.error
 
+      // Migration 316: heat_score / temperature_tier moved to wedding_heat
+      // view. We pull them in this follow-up read so the WeddingDetail
+      // object keeps the same shape the rest of this component expects
+      // (HeatBadge tier + score, the progress bar at line ~1510, etc).
+      const { data: heatRow } = await supabase
+        .from('wedding_heat')
+        .select('heat_score, temperature_tier')
+        .eq('wedding_id', weddingId)
+        .eq('venue_id', VENUE_ID)
+        .maybeSingle()
+      const weddingWithHeat = {
+        ...(weddingRes.data as Record<string, unknown>),
+        heat_score: (heatRow?.heat_score as number | null | undefined) ?? 0,
+        temperature_tier: (heatRow?.temperature_tier as string | null | undefined) ?? 'cool',
+      } as WeddingDetail
+
       const fetchedDrafts = (draftsRes.data ?? []) as DraftRow[]
-      setWedding(weddingRes.data as WeddingDetail)
+      setWedding(weddingWithHeat)
       setPeople((peopleRes.data ?? []) as PersonRow[])
       setInteractions((intRes.data ?? []) as InteractionRow[])
       setEvents((eventsRes.data ?? []) as EngagementEventRow[])

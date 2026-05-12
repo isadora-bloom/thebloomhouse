@@ -165,8 +165,8 @@ export async function POST(req: Request) {
         wedding_date: parsedEventDate,
         wedding_date_precision: parsedEventDateObj?.precision ?? null,
         guest_count_estimate: parsedGuestCount,
-        heat_score: 0,
-        temperature_tier: 'cool',
+        // Migration 316: heat_score / temperature_tier dropped, heat is
+        // derived by the wedding_heat view.
       })
       .select('id')
       .single()

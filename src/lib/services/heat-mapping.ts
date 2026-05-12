@@ -674,13 +674,36 @@ export async function recordEngagementEventsBatch(
 // ---------------------------------------------------------------------------
 
 /**
- * Recalculate the heat score for a wedding by summing all engagement event
- * points with time decay applied. More recent events count more.
+ * Read the current heat score from the wedding_heat view (migration 316).
  *
- * Decay formula: points * (0.98 ^ daysAgo)
- * This means an event from 30 days ago retains ~55% of its original value.
+ * STRUCTURAL CHANGE (2026-05-12, IDENTITY-RESOLUTION-AUDIT F1 fix):
+ * Heat is no longer a stored column. The previous implementation
+ * computed the decayed-sum + Phase B contribution + cohort damping in
+ * TS and wrote it back to weddings.heat_score / temperature_tier.
+ * Every engagement-event writer that forgot to call this function
+ * left the column stale at 0. The Wave 28 voice-events backfill was
+ * the bug that triggered the audit (Justin & Sandy at Rixey: 14
+ * engagement_events with points=8 each but heat_score=0 because the
+ * backfill never called recalc).
  *
- * Updates the wedding record and inserts a lead_score_history snapshot.
+ * Post-fix: weddings.heat_score and weddings.temperature_tier have
+ * been dropped (migration 316). Heat is computed at read time by the
+ * wedding_heat view, which inlines the same 0.98^days decay + Phase B
+ * contribution + operator-override short-circuit. Cohort damping is
+ * NOT in the view (too expensive at read time at venue scale); the
+ * heat-narration insight that needs damping still calls
+ * applyCohortDamping in TS against the view's heat_score.
+ *
+ * This function is preserved (does not throw, returns the same shape)
+ * so existing callers continue to work. It now reads from the view
+ * instead of computing+writing. The cohort damping computation that
+ * used to apply here is left to the narration layer.
+ *
+ * Callers that previously relied on the side effects (lead_score_history
+ * row insert) need to be reviewed: applyDailyDecay still writes those
+ * snapshots when it runs, and markAsBooked / markAsLost still snapshot
+ * on state transitions. Per-email snapshots are gone; the view itself
+ * is the canonical source so the audit never depended on them anyway.
  */
 export async function recalculateHeatScore(
   venueId: string,
@@ -688,201 +711,24 @@ export async function recalculateHeatScore(
 ): Promise<HeatScoreResult> {
   const supabase = createServiceClient()
 
-  // Get current score before recalculation. Also pull the override
-  // sentinel (Pattern 10 / migration 312). When an operator has locked
-  // heat_score, recalculateHeatScore must early-return WITHOUT writing
-  // to weddings.heat_score or temperature_tier; the override value IS
-  // the canonical score.
-  const { data: wedding } = await supabase
-    .from('weddings')
-    .select('heat_score, heat_score_overridden_at, heat_score_override_value')
-    .eq('id', weddingId)
-    .single()
-
-  const previousScore = (wedding?.heat_score as number) ?? 0
-
-  // Pattern 10 override short-circuit. We respect the override and emit
-  // pointsAwarded=0 so cron callers don't log a fake delta. The tier is
-  // derived from the override value via the same getTier function the
-  // normal path uses, so consumers (sequences, UI badges) see a coherent
-  // tier+score pair.
-  const overriddenAt = (wedding as { heat_score_overridden_at?: string | null } | null)?.heat_score_overridden_at
-  if (overriddenAt) {
-    const overrideValue = (wedding as { heat_score_override_value?: number | null } | null)?.heat_score_override_value
-    const finalScore = typeof overrideValue === 'number' ? overrideValue : previousScore
-    return {
-      weddingId,
-      newScore: finalScore,
-      previousScore,
-      temperatureTier: getTier(finalScore),
-      pointsAwarded: 0,
-      overridden: true,
-    }
-  }
-
-  // Fetch all engagement events for this wedding. Decay keys off
-  // occurred_at (the real event timestamp — email date, tour date),
-  // not created_at (row insert time), so historical backfill from
-  // onboarding ages correctly instead of counting everything as
-  // "today". Fallback to created_at for any legacy rows pre-089.
-  //
-  // Filter direction='inbound' per Playbook INV-14: heat scores
-  // increment only on couple-side actions. Schema defense (CHECK +
-  // NOT NULL on engagement_events.direction, migration 116) plus
-  // this read-side filter (INV-16) is belt-and-braces — even a
-  // future caller that forgot to gate at write time wouldn't
-  // accidentally inflate heat with a venue-originated event.
-  const { data: events } = await supabase
-    .from('engagement_events')
-    .select('points, occurred_at, created_at')
+  const { data: row } = await supabase
+    .from('wedding_heat')
+    .select('heat_score, temperature_tier, is_overridden')
+    .eq('wedding_id', weddingId)
     .eq('venue_id', venueId)
-    .eq('wedding_id', weddingId)
-    .eq('direction', 'inbound')
-    .order('occurred_at', { ascending: false })
+    .maybeSingle()
 
-  // PD.1 fix #2 (2026-04-30): no early-return when engagement_events
-  // is empty. A wedding with deep platform-signal engagement but no
-  // email/portal activity yet is a real case post-Phase B — Knot
-  // candidates can resolve to a wedding before any inbound email
-  // arrives. Returning 0 here would discard the entire Phase B
-  // contribution computed below.
-
-  // Sum points with time decay
-  const now = Date.now()
-  const dayMs = 24 * 60 * 60 * 1000
-  const decayRate = 0.98
-
-  let totalScore = 0
-
-  for (const event of events ?? []) {
-    const eventPoints = event.points as number
-    const tsSource = (event.occurred_at ?? event.created_at) as string
-    const eventDate = new Date(tsSource).getTime()
-    const daysAgo = Math.max(0, (now - eventDate) / dayMs)
-
-    // Apply decay: points * (0.98 ^ daysAgo)
-    const decayedPoints = eventPoints * Math.pow(decayRate, daysAgo)
-    totalScore += decayedPoints
-  }
-
-  // Phase D / D1.1 (2026-04-30): platform-signal contribution.
-  // engagement_events captures behavior from inquiry onwards;
-  // Phase B captures the PRE-inquiry signal trail. The two
-  // sources don't overlap, so the contribution is genuinely
-  // additive — and a lead who deeply engaged on Knot before
-  // emailing is hotter than one who showed up cold.
-  //
-  // Per candidate: funnel_depth * 2 points, time-decayed from
-  // last_seen via the same 0.98/day rate. Plus +5 cross-platform
-  // bonus when 2+ distinct platforms resolved here. Plus AI-tier
-  // bonus capped separately (PD.1 fix #7) so a wedding with many
-  // AI-tier matches doesn't crowd out funnel evidence under the
-  // overall +20 cap.
-  const { data: phaseBCandidates } = await supabase
-    .from('candidate_identities')
-    .select('source_platform, funnel_depth, last_seen')
-    .eq('resolved_wedding_id', weddingId)
-    .is('deleted_at', null)
-  let phaseBContribution = 0
-  const platformsSeen = new Set<string>()
-  for (const c of (phaseBCandidates ?? []) as Array<{ source_platform: string; funnel_depth: number; last_seen: string | null }>) {
-    platformsSeen.add(c.source_platform)
-    const lastSeenTs = c.last_seen ? new Date(c.last_seen).getTime() : now
-    const daysAgo = Math.max(0, (now - lastSeenTs) / dayMs)
-    const base = (c.funnel_depth ?? 0) * 2
-    phaseBContribution += base * Math.pow(decayRate, daysAgo)
-  }
-  if (platformsSeen.size >= 2) {
-    phaseBContribution += 5
-  }
-  const { count: aiTierCount } = await supabase
-    .from('attribution_events')
-    .select('id', { count: 'exact', head: true })
-    .eq('wedding_id', weddingId)
-    .in('tier', ['tier_2_ai', 'tier_2_wide_ai'])
-    .is('reverted_at', null)
-  // AI bonus capped at +6 (max 2 matches contribute) so heavy AI
-  // attribution can't dominate the 20-point Phase B headroom.
-  if (typeof aiTierCount === 'number' && aiTierCount > 0) {
-    phaseBContribution += Math.min(6, aiTierCount * 3)
-  }
-  totalScore += Math.min(20, phaseBContribution)
-
-  // Clamp score to 0-100
-  const rawScore = Math.max(0, Math.min(100, Math.round(totalScore)))
-
-  // T5-Rixey-FFF Bug 6: cohort-aware damping. Pull the lookalike
-  // cohort booking rate; when comparable leads aren't booking, damp
-  // the heat score and (if the rate is extreme) cap the displayed
-  // tier. We damp on the FINAL score, not on individual events, so
-  // historical lead_score_history rows retain their original (raw)
-  // observation values — the trajectory chart for this wedding will
-  // show the damping kick in from this snapshot forward, which is
-  // factually accurate (the cohort signal arrived now).
-  let cohort: { rate: number; nTotal: number; nBooked: number } | null = null
-  try {
-    cohort = await getCohortBookingRate(supabase, venueId, weddingId)
-  } catch (err) {
-    // Cohort lookup is enrichment, not critical. Heat scoring still
-    // runs with raw score on lookup failure.
-    console.warn('[heat-mapping] cohort rate lookup failed:', (err as Error).message)
-  }
-
-  const damping = applyCohortDamping(rawScore, cohort)
-  const newScore = damping.dampedScore
-  const temperatureTier = damping.cappedTier
-
-  // Observability: when damping fired, emit a structured event so
-  // operators can audit which weddings were re-rated by the cohort
-  // signal. Stays a console line (no DB write) because heat
-  // recompute runs on every email and we don't want to flood
-  // intelligence_insights with informational rows. The data is
-  // sufficient to reconstruct the decision: venue, wedding, raw vs
-  // damped score, the cohort rate / size, and the resulting tier
-  // cap (if any).
-  if (damping.multiplier !== 1.0 || damping.cappedTier !== getTier(rawScore)) {
-    console.log(
-      JSON.stringify({
-        event: 'heat_score_cohort_damped',
-        venue_id: venueId,
-        wedding_id: weddingId,
-        raw_score: rawScore,
-        damped_score: newScore,
-        multiplier: damping.multiplier,
-        raw_tier: getTier(rawScore),
-        capped_tier: damping.cappedTier,
-        cohort_rate: cohort?.rate ?? null,
-        cohort_n_total: cohort?.nTotal ?? null,
-        cohort_n_booked: cohort?.nBooked ?? null,
-      })
-    )
-  }
-
-  // Update wedding record
-  await supabase
-    .from('weddings')
-    .update({
-      heat_score: newScore,
-      temperature_tier: temperatureTier,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', weddingId)
-
-  // Insert lead_score_history snapshot
-  await supabase.from('lead_score_history').insert({
-    venue_id: venueId,
-    wedding_id: weddingId,
-    score: newScore,
-    temperature_tier: temperatureTier,
-    calculated_at: new Date().toISOString(),
-  })
+  const score = (row?.heat_score as number | null | undefined) ?? 0
+  const tier = (row?.temperature_tier as string | null | undefined) ?? 'cool'
+  const overridden = Boolean((row as { is_overridden?: boolean } | null | undefined)?.is_overridden)
 
   return {
     weddingId,
-    newScore,
-    previousScore,
-    temperatureTier,
-    pointsAwarded: newScore - previousScore,
+    newScore: score,
+    previousScore: score,
+    temperatureTier: tier,
+    pointsAwarded: 0,
+    overridden,
   }
 }
 
@@ -901,26 +747,28 @@ export interface DecaySummary {
 }
 
 /**
- * Apply daily decay + graduated cooling warnings + auto-mark-lost in a
- * single pass over all active inquiries for a venue.
+ * Apply graduated cooling warnings + auto-mark-lost in a single pass
+ * over all active inquiries for a venue.
  *
- * Three pieces of lifecycle logic collapse into this one service so there's
- * one cron, one read of each wedding, and no drift between decay (days
- * since last engagement) and auto-lost (days since last engagement). Prior
- * sketches had separate "decay" and "lost sweep" cron paths that read
- * different timestamps and could disagree by a day.
+ * Pre-migration-316: this function also wrote a "heat decay" pass that
+ * multiplied weddings.heat_score by 0.98 every day. Post-316 that's a
+ * no-op: heat is a view (migration 316 / wedding_heat) and the 0.98^days
+ * decay is intrinsic to the view's formula, so no daily catch-up runs.
+ *
+ * The decayedCount return value is preserved for caller compatibility
+ * but is now structurally always 0 (decay is implicit; nothing to
+ * count). The cron caller surfaces it as informational only.
  *
  * Per wedding:
- *   1. Decay heat score by 0.98 (existing behaviour).
- *   2. Compute silentDays = now - last inbound interaction (or inquiry_date
+ *   1. Compute silentDays = now - last inbound interaction (or inquiry_date
  *      if no interactions yet). This is the "days since we last heard from
- *      them" number that drives 3 + 4.
- *   3. Fire graduated cooling-warning notifications at 14 / 21 / 27 days.
+ *      them" number that drives 2 + 3.
+ *   2. Fire graduated cooling-warning notifications at 14 / 21 / 27 days.
  *      Each stage fires at most once per wedding — dedup is by admin_
  *      notifications (venue_id, wedding_id, type), so notifications are
  *      skipped on subsequent days. Coordinators can clear the notification
  *      row to re-trigger a warning if they want.
- *   4. When silentDays reaches venue_config.lost_auto_mark_days (default
+ *   3. When silentDays reaches venue_config.lost_auto_mark_days (default
  *      30, venue-configurable to 0 for disabled), call markAsLost with
  *      reason='auto: no response after N days'. This writes the lost_deals
  *      row, the engagement_event, the score snapshot — same lifecycle as a
@@ -930,9 +778,7 @@ export interface DecaySummary {
  */
 export async function applyDailyDecay(venueId: string): Promise<DecaySummary> {
   const supabase = createServiceClient()
-  const decayMultiplier = 0.98
   const now = new Date()
-  const nowIso = now.toISOString()
 
   // Read per-venue auto-lost threshold. 0 disables auto-lost entirely;
   // negative/null falls back to the default. Graduated warnings still
@@ -949,13 +795,13 @@ export async function applyDailyDecay(venueId: string): Promise<DecaySummary> {
       : DEFAULT_LOST_AUTO_MARK_DAYS
 
   // Pull every active inquiry once. inquiry_date is the floor for
-  // silentDays when no inbound interaction exists yet. heat_score filters
-  // out already-frozen rows for the decay branch but not for warnings /
-  // auto-lost — a frozen wedding at score 0 with no response for 30 days
-  // still needs to transition to status='lost'.
+  // silentDays when no inbound interaction exists yet. We no longer
+  // need heat_score / temperature_tier here (migration 316 dropped
+  // them); the cooling-warning + auto-lost branches read silentDays
+  // only.
   const { data: weddings } = await supabase
     .from('weddings')
-    .select('id, heat_score, temperature_tier, inquiry_date, status')
+    .select('id, inquiry_date, status')
     .eq('venue_id', venueId)
     .eq('status', 'inquiry')
 
@@ -996,33 +842,24 @@ export async function applyDailyDecay(venueId: string): Promise<DecaySummary> {
     firedByWedding.get(wId)!.add(row.type as string)
   }
 
-  let decayedCount = 0
+  // decayedCount is preserved in DecaySummary for caller compatibility
+  // but is structurally always 0 post-316: heat decay is intrinsic to
+  // the wedding_heat view (0.98^days inside the SUM). No daily catch-up
+  // pass is needed.
+  const decayedCount = 0
   let warningsFired = 0
   let autoLostCount = 0
 
-  // Tier-B #83: parallelize per-wedding work. Each wedding's decay /
+  // Tier-B #83: parallelize per-wedding work. Each wedding's
   // warnings / auto-lost processing is independent, so the previous
-  // serial `for…await` loop produced O(N) sequential round trips for
-  // a venue with N active inquiries. Now Promise.all over the whole
-  // list runs the writes concurrently. Concurrency is naturally
-  // capped by Supabase's pool (10-15 simultaneous connections via
-  // PgBouncer), and Promise.allSettled isolates per-wedding failures
-  // so one bad row doesn't poison the whole sweep.
-  //
-  // Counts are mutated inside the per-wedding closure under the
-  // single-threaded JS event loop — no atomic-counter races.
-  //
-  // Round-5 follow-up: surface latency + concurrency to metered_events
-  // so we can detect Supabase pool back-pressure (queueing showing up
-  // as P99 latency growth without P50 movement). Histogram dimensions
-  // include venueId + concurrency size for ad-hoc filtering.
+  // serial loop produced O(N) sequential round trips. Now
+  // Promise.allSettled runs the writes concurrently and isolates
+  // per-wedding failures.
   const parallelStartedAt = Date.now()
   const concurrencySize = weddings.length
   const results = await Promise.allSettled(
     weddings.map(async (wedding) => {
       const weddingId = wedding.id as string
-      const oldScore = (wedding.heat_score as number) ?? 0
-      const oldTier = (wedding.temperature_tier as string) ?? 'cool'
 
       const lastActivity =
         latestByWedding.get(weddingId) ?? (wedding.inquiry_date as string | null)
@@ -1030,33 +867,7 @@ export async function applyDailyDecay(venueId: string): Promise<DecaySummary> {
         ? Math.floor((now.getTime() - new Date(lastActivity).getTime()) / (1000 * 60 * 60 * 24))
         : 0
 
-      // Branch 1: heat decay
-      if (oldScore > 0) {
-        const newScore = Math.max(0, Math.round(oldScore * decayMultiplier))
-        if (newScore !== oldScore) {
-          const newTier = getTier(newScore)
-          await supabase
-            .from('weddings')
-            .update({
-              heat_score: newScore,
-              temperature_tier: newTier,
-              updated_at: nowIso,
-            })
-            .eq('id', weddingId)
-          if (newTier !== oldTier) {
-            await supabase.from('lead_score_history').insert({
-              venue_id: venueId,
-              wedding_id: weddingId,
-              score: newScore,
-              temperature_tier: newTier,
-              calculated_at: nowIso,
-            })
-          }
-          decayedCount++
-        }
-      }
-
-      // Branch 2: graduated cooling warnings
+      // Branch 1: graduated cooling warnings
       const fired = firedByWedding.get(weddingId) ?? new Set<string>()
       for (const stage of COOLING_WARNING_DAYS) {
         const type = `cooling_warning_${stage}d`
@@ -1065,7 +876,7 @@ export async function applyDailyDecay(venueId: string): Promise<DecaySummary> {
             venueId,
             weddingId,
             type,
-            title: `Couple cooling — ${stage} days silent`,
+            title: `Couple cooling, ${stage} days silent`,
             body: `No inbound response in ${silentDays} days. ${
               stage === 14
                 ? 'Consider a gentle check-in.'
@@ -1079,7 +890,7 @@ export async function applyDailyDecay(venueId: string): Promise<DecaySummary> {
         }
       }
 
-      // Branch 3: auto-mark-lost
+      // Branch 2: auto-mark-lost
       if (lostAutoMarkDays > 0 && silentDays >= lostAutoMarkDays) {
         try {
           await markAsLost(weddingId, `auto: no response after ${silentDays} days`)
@@ -1125,6 +936,9 @@ export async function applyDailyDecay(venueId: string): Promise<DecaySummary> {
 /**
  * Get weddings sorted by heat score (highest first). Used for the leads
  * dashboard to show the hottest leads at the top.
+ *
+ * Reads heat_score / temperature_tier from the wedding_heat view
+ * (migration 316). The columns no longer exist on the weddings table.
  */
 export async function getLeaderboard(
   venueId: string,
@@ -1132,29 +946,59 @@ export async function getLeaderboard(
 ): Promise<LeaderboardEntry[]> {
   const supabase = createServiceClient()
 
-  const { data, error } = await supabase
-    .from('weddings')
-    .select('id, heat_score, temperature_tier, status, source, inquiry_date, wedding_date')
-    .eq('venue_id', venueId)
-    .eq('status', 'inquiry')
-    .gt('heat_score', 0)
-    .order('heat_score', { ascending: false })
-    .limit(limit)
+  // Pull the active inquiries + their heat_score from the view in
+  // parallel. We then join in memory and sort by score. PostgREST
+  // doesn't expose ORDER BY across an aggregated view at supabase-js
+  // level without RPC, and the venue's inquiry count is small enough
+  // (typically < 200) that in-memory sort is the right tradeoff for
+  // simplicity.
+  const [weddingsRes, heatRes] = await Promise.all([
+    supabase
+      .from('weddings')
+      .select('id, status, source, inquiry_date, wedding_date')
+      .eq('venue_id', venueId)
+      .eq('status', 'inquiry'),
+    supabase
+      .from('wedding_heat')
+      .select('wedding_id, heat_score, temperature_tier')
+      .eq('venue_id', venueId)
+      .gt('heat_score', 0),
+  ])
 
-  if (error) {
-    console.error('[heat-mapping] Failed to fetch leaderboard:', error.message)
+  if (weddingsRes.error) {
+    console.error('[heat-mapping] Failed to fetch leaderboard weddings:', weddingsRes.error.message)
+    return []
+  }
+  if (heatRes.error) {
+    console.error('[heat-mapping] Failed to fetch leaderboard heat:', heatRes.error.message)
     return []
   }
 
-  return (data ?? []).map((w) => ({
-    weddingId: w.id as string,
-    heatScore: w.heat_score as number,
-    temperatureTier: w.temperature_tier as string,
-    status: w.status as string,
-    source: w.source as string | null,
-    inquiryDate: w.inquiry_date as string | null,
-    weddingDate: w.wedding_date as string | null,
-  }))
+  const heatByWedding = new Map<string, { heat_score: number; temperature_tier: string }>()
+  for (const h of heatRes.data ?? []) {
+    heatByWedding.set(h.wedding_id as string, {
+      heat_score: h.heat_score as number,
+      temperature_tier: h.temperature_tier as string,
+    })
+  }
+
+  const rows: LeaderboardEntry[] = []
+  for (const w of weddingsRes.data ?? []) {
+    const heat = heatByWedding.get(w.id as string)
+    if (!heat) continue
+    rows.push({
+      weddingId: w.id as string,
+      heatScore: heat.heat_score,
+      temperatureTier: heat.temperature_tier,
+      status: w.status as string,
+      source: w.source as string | null,
+      inquiryDate: w.inquiry_date as string | null,
+      weddingDate: w.wedding_date as string | null,
+    })
+  }
+
+  rows.sort((a, b) => b.heatScore - a.heatScore)
+  return rows.slice(0, limit)
 }
 
 // ---------------------------------------------------------------------------
@@ -1164,19 +1008,14 @@ export async function getLeaderboard(
 /**
  * Get the count of weddings per temperature tier. Used for the dashboard
  * heat distribution chart.
+ *
+ * Reads temperature_tier from the wedding_heat view (migration 316). We
+ * also need to filter to status='inquiry' which lives on weddings, so
+ * the call is a two-query join in memory. The view returns one row per
+ * wedding so the in-memory map is venue-bounded (typically < 500 rows).
  */
 export async function getHeatDistribution(venueId: string): Promise<HeatDistribution> {
   const supabase = createServiceClient()
-
-  const { data, error } = await supabase
-    .from('weddings')
-    .select('temperature_tier')
-    .eq('venue_id', venueId)
-    .eq('status', 'inquiry')
-
-  if (error || !data) {
-    return { hot: 0, warm: 0, cool: 0, cold: 0, frozen: 0 }
-  }
 
   const distribution: HeatDistribution = {
     hot: 0,
@@ -1186,7 +1025,25 @@ export async function getHeatDistribution(venueId: string): Promise<HeatDistribu
     frozen: 0,
   }
 
-  for (const row of data) {
+  const [inquiriesRes, heatRes] = await Promise.all([
+    supabase
+      .from('weddings')
+      .select('id')
+      .eq('venue_id', venueId)
+      .eq('status', 'inquiry'),
+    supabase
+      .from('wedding_heat')
+      .select('wedding_id, temperature_tier')
+      .eq('venue_id', venueId),
+  ])
+
+  if (inquiriesRes.error || heatRes.error) {
+    return distribution
+  }
+
+  const inquiryIds = new Set<string>((inquiriesRes.data ?? []).map((r) => r.id as string))
+  for (const row of heatRes.data ?? []) {
+    if (!inquiryIds.has(row.wedding_id as string)) continue
     const tier = row.temperature_tier as string
     if (tier in distribution) {
       distribution[tier as keyof HeatDistribution]++
@@ -1204,6 +1061,10 @@ export async function getHeatDistribution(venueId: string): Promise<HeatDistribu
  * Get hot leads with suggested next actions. Returns active inquiries with
  * score >= minScore, sorted by score descending. Each entry includes partner
  * names and a contextual suggested action.
+ *
+ * Reads heat_score / temperature_tier from the wedding_heat view (migration
+ * 316). Filters active inquiries against the weddings table, then joins the
+ * view in memory for the score threshold + sort.
  */
 export async function getHotLeads(
   venueId: string,
@@ -1211,16 +1072,54 @@ export async function getHotLeads(
 ): Promise<HotLead[]> {
   const supabase = createServiceClient()
 
-  // Get weddings above threshold
-  const { data: weddings, error } = await supabase
-    .from('weddings')
-    .select('id, heat_score, temperature_tier, status, source, inquiry_date, wedding_date')
-    .eq('venue_id', venueId)
-    .eq('status', 'inquiry')
-    .gte('heat_score', minScore)
-    .order('heat_score', { ascending: false })
+  // Pull active inquiries + heat scores in parallel; join + filter in
+  // memory by score threshold. Same pattern as getLeaderboard.
+  const [weddingsRes, heatRes] = await Promise.all([
+    supabase
+      .from('weddings')
+      .select('id, status, source, inquiry_date, wedding_date')
+      .eq('venue_id', venueId)
+      .eq('status', 'inquiry'),
+    supabase
+      .from('wedding_heat')
+      .select('wedding_id, heat_score, temperature_tier')
+      .eq('venue_id', venueId)
+      .gte('heat_score', minScore),
+  ])
 
-  if (error || !weddings || weddings.length === 0) return []
+  if (weddingsRes.error || heatRes.error) return []
+  if (!weddingsRes.data || weddingsRes.data.length === 0) return []
+  if (!heatRes.data || heatRes.data.length === 0) return []
+
+  const heatByWedding = new Map<string, { heat_score: number; temperature_tier: string }>()
+  for (const h of heatRes.data) {
+    heatByWedding.set(h.wedding_id as string, {
+      heat_score: h.heat_score as number,
+      temperature_tier: h.temperature_tier as string,
+    })
+  }
+
+  // Filter the weddings to those that survived the heat threshold AND
+  // are status='inquiry'. Then re-shape into the same row layout the
+  // old query produced so the partner-name / event-suggestion logic
+  // below stays unchanged.
+  const weddings = weddingsRes.data
+    .filter((w) => heatByWedding.has(w.id as string))
+    .map((w) => {
+      const heat = heatByWedding.get(w.id as string)!
+      return {
+        id: w.id,
+        heat_score: heat.heat_score,
+        temperature_tier: heat.temperature_tier,
+        status: w.status,
+        source: w.source,
+        inquiry_date: w.inquiry_date,
+        wedding_date: w.wedding_date,
+      }
+    })
+    .sort((a, b) => (b.heat_score as number) - (a.heat_score as number))
+
+  if (weddings.length === 0) return []
 
   // Fetch partner names for each wedding
   const weddingIds = weddings.map((w) => w.id as string)
@@ -1292,15 +1191,45 @@ export async function getLeadsGoingCold(
   const supabase = createServiceClient()
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
 
-  // Get all active inquiries
-  const { data: weddings } = await supabase
-    .from('weddings')
-    .select('id, heat_score, temperature_tier, wedding_date')
-    .eq('venue_id', venueId)
-    .eq('status', 'inquiry')
-    .gt('heat_score', 0)
+  // Get all active inquiries + their current heat. wedding_heat view
+  // (migration 316) replaces the dropped weddings.heat_score column.
+  const [weddingsRes, heatRes] = await Promise.all([
+    supabase
+      .from('weddings')
+      .select('id, wedding_date')
+      .eq('venue_id', venueId)
+      .eq('status', 'inquiry'),
+    supabase
+      .from('wedding_heat')
+      .select('wedding_id, heat_score, temperature_tier')
+      .eq('venue_id', venueId)
+      .gt('heat_score', 0),
+  ])
 
-  if (!weddings || weddings.length === 0) return []
+  if (weddingsRes.error || heatRes.error) return []
+  if (!weddingsRes.data || weddingsRes.data.length === 0) return []
+
+  const heatByWedding = new Map<string, { heat_score: number; temperature_tier: string }>()
+  for (const h of heatRes.data ?? []) {
+    heatByWedding.set(h.wedding_id as string, {
+      heat_score: h.heat_score as number,
+      temperature_tier: h.temperature_tier as string,
+    })
+  }
+
+  const weddings = weddingsRes.data
+    .filter((w) => heatByWedding.has(w.id as string))
+    .map((w) => {
+      const heat = heatByWedding.get(w.id as string)!
+      return {
+        id: w.id,
+        heat_score: heat.heat_score,
+        temperature_tier: heat.temperature_tier,
+        wedding_date: w.wedding_date,
+      }
+    })
+
+  if (weddings.length === 0) return []
 
   const weddingIds = weddings.map((w) => w.id as string)
 
@@ -1422,20 +1351,22 @@ export async function markAsBooked(
   const venueId = wedding.venue_id as string
   const now = new Date().toISOString()
 
-  // Update wedding status
+  // Update wedding status. Migration 316 dropped heat_score / temperature_tier
+  // (heat is now a view). The contract_signed engagement_event below is what
+  // actually carries the score into wedding_heat: +50 points, fresh
+  // occurred_at = today, decay factor 1.0 = +50 immediately. The booked status
+  // change drives the lifecycle; heat is implicit.
   await supabase
     .from('weddings')
     .update({
       status: 'booked',
-      heat_score: 100,
-      temperature_tier: 'hot',
       booked_at: now,
       notes: notes ? notes : undefined,
       updated_at: now,
     })
     .eq('id', weddingId)
 
-  // Record engagement event. Direction: 'inbound' — couple committed
+  // Record engagement event. Direction: 'inbound' = couple committed
   // (signed contract, paid). Per INV-13 every engagement_event has
   // explicit direction at write time.
   await supabase.from('engagement_events').insert({
@@ -1501,22 +1432,20 @@ export async function markAsLost(
       .from('weddings')
       .update({
         status: 'lost',
-        heat_score: 0,
-        temperature_tier: 'frozen',
         lost_at: now,
         lost_reason: reason ?? null,
         updated_at: now,
       })
       .eq('id', weddingId),
 
-    // Record engagement event. Direction: 'inbound' for the audit row —
-    // the wedding-state observation belongs alongside the inbound
-    // couple-side timeline. The -100 points here are nominal: the UPDATE
-    // sibling sets weddings.heat_score = 0 directly, so this row is
-    // mostly an audit trail and recalculateHeatScore re-runs only
-    // matter if heat is later recomputed against this dataset. Keeping
-    // direction='inbound' avoids a phantom outbound event in the
-    // timeline that the couple never actually triggered. INV-13.
+    // Record engagement event. Direction: 'inbound' for the audit row.
+    // The wedding-state observation belongs alongside the inbound
+    // couple-side timeline. The -100 points cancel out accumulated
+    // engagement when wedding_heat re-aggregates (migration 316 made
+    // heat a view, so the -100 here is no longer redundant with a
+    // weddings.heat_score=0 write). Keeping direction='inbound' avoids
+    // a phantom outbound event in the timeline that the couple never
+    // actually triggered. INV-13.
     supabase.from('engagement_events').insert({
       venue_id: venueId,
       wedding_id: weddingId,
@@ -1564,13 +1493,24 @@ export async function markAsLost(
 export async function getTemperatureSummary(venueId: string): Promise<TempSummary> {
   const supabase = createServiceClient()
 
-  // Get all weddings (both active and completed) to calculate conversion rates
-  const { data: allWeddings } = await supabase
-    .from('weddings')
-    .select('id, heat_score, temperature_tier, status')
-    .eq('venue_id', venueId)
+  // Get all weddings (both active and completed) plus their heat tier
+  // from the wedding_heat view (migration 316). Conversion rates are
+  // computed against the booked/total ratio per tier.
+  const [weddingsRes, heatRes] = await Promise.all([
+    supabase
+      .from('weddings')
+      .select('id, status')
+      .eq('venue_id', venueId),
+    supabase
+      .from('wedding_heat')
+      .select('wedding_id, temperature_tier')
+      .eq('venue_id', venueId),
+  ])
 
-  if (!allWeddings || allWeddings.length === 0) {
+  const allWeddingsRaw = weddingsRes.data ?? []
+  const heatRows = heatRes.data ?? []
+
+  if (allWeddingsRaw.length === 0) {
     return {
       hot: { count: 0, conversionRate: 0 },
       warm: { count: 0, conversionRate: 0 },
@@ -1581,6 +1521,17 @@ export async function getTemperatureSummary(venueId: string): Promise<TempSummar
       bookedTotal: 0,
     }
   }
+
+  const tierByWedding = new Map<string, string>()
+  for (const h of heatRows) {
+    tierByWedding.set(h.wedding_id as string, (h.temperature_tier as string) ?? 'cool')
+  }
+
+  const allWeddings = allWeddingsRaw.map((w) => ({
+    id: w.id,
+    status: w.status,
+    temperature_tier: tierByWedding.get(w.id as string) ?? 'cool',
+  }))
 
   // Count active inquiries per tier
   const activeCounts: Record<string, number> = { hot: 0, warm: 0, cool: 0, cold: 0, frozen: 0 }

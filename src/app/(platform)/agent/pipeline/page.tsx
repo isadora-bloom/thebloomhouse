@@ -413,7 +413,9 @@ export default function PipelinePage() {
         venueIds = (orgVenues ?? []).map((v) => v.id as string)
       }
 
-      // Fetch all non-completed/cancelled weddings with people
+      // Fetch all non-completed/cancelled weddings with people.
+      // Migration 316: heat_score / temperature_tier moved to wedding_heat
+      // view. Fetch weddings + heat in parallel, join + sort in memory.
       let query = supabase
         .from('weddings')
         .select(`
@@ -423,8 +425,6 @@ export default function PipelinePage() {
           source,
           wedding_date,
           guest_count_estimate,
-          heat_score,
-          temperature_tier,
           inquiry_date,
           updated_at,
           code_extension,
@@ -444,9 +444,34 @@ export default function PipelinePage() {
       if (venueIds && venueIds.length > 0) {
         query = query.in('venue_id', venueIds)
       }
-      const { data: weddingsData, error: fetchError } = await query.order('heat_score', { ascending: false })
+      let heatQuery = supabase.from('wedding_heat').select('wedding_id, heat_score, temperature_tier')
+      if (venueIds && venueIds.length > 0) {
+        heatQuery = heatQuery.in('venue_id', venueIds)
+      }
+      const [{ data: rawWeddingsData, error: fetchError }, { data: heatRows }] = await Promise.all([
+        query,
+        heatQuery,
+      ])
 
       if (fetchError) throw fetchError
+
+      const heatByWedding = new Map<string, { heat_score: number; temperature_tier: string }>()
+      for (const h of heatRows ?? []) {
+        heatByWedding.set(h.wedding_id as string, {
+          heat_score: (h.heat_score as number) ?? 0,
+          temperature_tier: (h.temperature_tier as string) ?? 'cool',
+        })
+      }
+      const weddingsData = (rawWeddingsData ?? [])
+        .map((row: any) => {
+          const heat = heatByWedding.get(row.id as string)
+          return {
+            ...row,
+            heat_score: heat?.heat_score ?? 0,
+            temperature_tier: heat?.temperature_tier ?? 'cool',
+          }
+        })
+        .sort((a: any, b: any) => (b.heat_score ?? 0) - (a.heat_score ?? 0))
 
       // Map weddings with partner names
       const weddings: PipelineWedding[] = (weddingsData ?? []).map(

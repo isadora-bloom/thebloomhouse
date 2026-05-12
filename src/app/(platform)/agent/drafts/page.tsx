@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { useScope } from '@/lib/hooks/use-scope'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
@@ -20,6 +21,7 @@ import {
   AlertTriangle,
   Clock,
   Mail,
+  ArrowUpRight,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -375,9 +377,29 @@ function DraftCard({
             {draft.subject || '(No subject)'}
           </p>
         </div>
-        <span className="text-xs text-sage-400 shrink-0">
-          {timeAgo(draft.created_at)}
-        </span>
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <span className="text-xs text-sage-400">
+            {timeAgo(draft.created_at)}
+          </span>
+          {/* Wave 27 UX: give the operator a one-click jump to the lead's
+              full context (history, status, heat) without leaving the
+              queue and searching manually. Orphan drafts (no wedding_id)
+              render a muted "no linked lead" label instead. */}
+          {draft.wedding_id ? (
+            <Link
+              href={`/intel/clients/${draft.wedding_id}`}
+              className="inline-flex items-center gap-1 text-xs font-medium text-sage-600 hover:text-sage-900 hover:underline underline-offset-2"
+              title="Open this lead's full profile in Intel"
+            >
+              View lead
+              <ArrowUpRight className="w-3 h-3" />
+            </Link>
+          ) : (
+            <span className="text-xs italic text-sage-400" title="This draft is not linked to a lead">
+              (no linked lead)
+            </span>
+          )}
+        </div>
       </div>
 
       {/* External signal context (what Sage/AI considered) */}

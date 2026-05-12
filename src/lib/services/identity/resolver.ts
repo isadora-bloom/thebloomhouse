@@ -686,8 +686,8 @@ async function createWedding(
     status: 'inquiry',
     inquiry_date: inquiryDateValue,
     wedding_date: signals.weddingDate ?? null,
-    heat_score: 0,
-    temperature_tier: 'cool',
+    // Migration 316: heat_score / temperature_tier dropped, heat is
+    // derived by the wedding_heat view.
     source_provenance: 'identity_resolver',
     notes: sourceLabel
       ? (previousWeddingId

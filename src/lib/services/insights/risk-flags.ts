@@ -178,13 +178,26 @@ async function classicalRiskPass(
   venueId: string,
   weddingId: string,
 ): Promise<ClassicalRiskPayload | null> {
-  const { data: wedding } = await supabase
-    .from('weddings')
-    .select('id, status, wedding_date, inquiry_date, friction_tags, heat_score, lost_at')
-    .eq('id', weddingId)
-    .eq('venue_id', venueId)
-    .maybeSingle()
-  if (!wedding) return null
+  // Migration 316: heat_score moved to wedding_heat view; fetch in parallel.
+  const [weddingRes, heatRes] = await Promise.all([
+    supabase
+      .from('weddings')
+      .select('id, status, wedding_date, inquiry_date, friction_tags, lost_at')
+      .eq('id', weddingId)
+      .eq('venue_id', venueId)
+      .maybeSingle(),
+    supabase
+      .from('wedding_heat')
+      .select('heat_score')
+      .eq('wedding_id', weddingId)
+      .eq('venue_id', venueId)
+      .maybeSingle(),
+  ])
+  if (!weddingRes.data) return null
+  const wedding: Record<string, unknown> = {
+    ...(weddingRes.data as Record<string, unknown>),
+    heat_score: (heatRes.data?.heat_score as number | null) ?? 0,
+  }
 
   const status = (wedding.status as string) ?? 'inquiry'
   // Skip terminal weddings — risk doesn't apply post-completion.

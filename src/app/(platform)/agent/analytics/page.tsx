@@ -353,12 +353,12 @@ export default function AgentAnalyticsPage() {
       setAutoSentCount(auto)
       setManualCount(manual)
 
-      // 3. Temperature distribution
+      // 3. Temperature distribution.
+      // Migration 316: temperature_tier moved to wedding_heat view.
       const { data: heatData } = await supabase
-        .from('weddings')
+        .from('wedding_heat')
         .select('temperature_tier')
         .in('venue_id', venueIds)
-        .not('temperature_tier', 'is', null)
 
       const tierMap: Record<string, number> = {}
       for (const h of heatData ?? []) {

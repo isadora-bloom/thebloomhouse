@@ -11,7 +11,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveIdentity } from '@/lib/services/identity/resolution'
+import { findIdentityMatches } from '@/lib/services/identity/resolution'
 
 export interface IdentityCandidate {
   name?: string
@@ -102,7 +102,7 @@ export async function importIdentityCandidates(args: {
 
     // Try to match against an existing person now (not later). If we hit
     // high, we still write the signal but link it as confirmed_match.
-    const matches = await resolveIdentity(supabase, {
+    const matches = await findIdentityMatches(supabase, {
       venueId,
       firstName: first || null,
       lastName: last || null,

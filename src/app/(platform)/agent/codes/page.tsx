@@ -225,6 +225,10 @@ export default function ClientCodesPage() {
         venueIds = (orgVenues ?? []).map((v) => v.id as string)
       }
 
+      // Migration 316: heat_score moved to wedding_heat view. We can't
+      // join the view through PostgREST embedded selects from client_codes,
+      // so we fetch the heat rows in a second query keyed by wedding_id
+      // and join in memory.
       let query = supabase
         .from('client_codes')
         .select(`
@@ -237,7 +241,6 @@ export default function ClientCodesPage() {
           weddings!client_codes_wedding_id_fkey (
             wedding_date,
             status,
-            heat_score,
             code_extension,
             people!people_wedding_id_fkey ( role, first_name, last_name )
           )
@@ -249,6 +252,27 @@ export default function ClientCodesPage() {
 
       if (fetchError) throw fetchError
 
+      const linkedWeddingIds = Array.from(
+        new Set(
+          (data ?? [])
+            .map((r: any) => r.wedding_id as string | null)
+            .filter((v): v is string => Boolean(v)),
+        ),
+      )
+      let heatByWedding = new Map<string, { heat_score: number }>()
+      if (linkedWeddingIds.length > 0) {
+        const { data: heatRows } = await supabase
+          .from('wedding_heat')
+          .select('wedding_id, heat_score')
+          .in('wedding_id', linkedWeddingIds)
+        heatByWedding = new Map(
+          (heatRows ?? []).map((h) => [
+            h.wedding_id as string,
+            { heat_score: (h.heat_score as number) ?? 0 },
+          ]),
+        )
+      }
+
       const mapped: ClientCode[] = (data ?? []).map((row: any) => {
         const wedding = row.weddings
         const people = wedding?.people ?? []
@@ -256,6 +280,7 @@ export default function ClientCodesPage() {
         const p2 = people.find((p: any) => p.role === 'partner2')
         const venueRel = row.venues as { name?: string } | { name?: string }[] | null | undefined
         const venueName = Array.isArray(venueRel) ? venueRel[0]?.name ?? null : venueRel?.name ?? null
+        const heat = heatByWedding.get(row.wedding_id as string)
 
         return {
           id: row.id,
@@ -267,7 +292,7 @@ export default function ClientCodesPage() {
           partner2_name: p2 ? personFullName(p2) : undefined,
           wedding_date: wedding?.wedding_date,
           wedding_status: wedding?.status,
-          heat_score: wedding?.heat_score,
+          heat_score: heat?.heat_score ?? 0,
           code_extension: (wedding?.code_extension as string | null | undefined) ?? null,
           venue_name: venueName,
         }
@@ -331,19 +356,27 @@ export default function ClientCodesPage() {
         return
       }
 
-      const { data: weddingData } = await supabase
-        .from('weddings')
-        .select(`
-          id,
-          wedding_date,
-          status,
-          heat_score,
-          guest_count_estimate,
-          source,
-          people!people_wedding_id_fkey ( role, first_name, last_name )
-        `)
-        .eq('id', codeData.wedding_id)
-        .single()
+      // Migration 316: heat_score moved to wedding_heat view; fetch in
+      // parallel with the wedding row.
+      const [{ data: weddingData }, { data: heatRow }] = await Promise.all([
+        supabase
+          .from('weddings')
+          .select(`
+            id,
+            wedding_date,
+            status,
+            guest_count_estimate,
+            source,
+            people!people_wedding_id_fkey ( role, first_name, last_name )
+          `)
+          .eq('id', codeData.wedding_id)
+          .single(),
+        supabase
+          .from('wedding_heat')
+          .select('heat_score')
+          .eq('wedding_id', codeData.wedding_id)
+          .maybeSingle(),
+      ])
 
       if (weddingData) {
         const people = (weddingData as any).people ?? []
@@ -360,7 +393,7 @@ export default function ClientCodesPage() {
             : null,
           wedding_date: weddingData.wedding_date,
           status: weddingData.status,
-          heat_score: weddingData.heat_score ?? 0,
+          heat_score: (heatRow?.heat_score as number | null | undefined) ?? 0,
           guest_count_estimate: weddingData.guest_count_estimate,
           source: weddingData.source,
         })
