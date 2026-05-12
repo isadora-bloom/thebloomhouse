@@ -66,6 +66,7 @@ interface PersonRow {
 interface WeddingRow {
   id: string
   inquiry_date: string | null
+  event_code: string | null
 }
 
 const PG_TRGM_THRESHOLD = 0.5
@@ -220,7 +221,7 @@ export async function matchEngagementsForCapture(
   if (matchedWeddingIds.size > 0) {
     const { data: wedData, error: wErr } = await supabase
       .from('weddings')
-      .select('id, inquiry_date')
+      .select('id, inquiry_date, event_code')
       .in('id', Array.from(matchedWeddingIds))
     if (wErr) {
       throw new Error(`load weddings: ${wErr.message}`)
@@ -248,13 +249,22 @@ export async function matchEngagementsForCapture(
       new Date(engagementAt).getTime() < new Date(inquiryDate).getTime()
     if (isPreInquiry) surfacedPreInquiry += 1
 
-    if (samples.length < 5) {
+    if (samples.length < 50) {
+      // Fallback chain: name → email → wedding event_code → "Unknown".
+      // Many Rixey rows still carry form-bleed first/last that the
+      // repair-form-bleed-names script will eventually NULL out;
+      // email + event_code are stable fallbacks the coordinator can
+      // still recognise.
       const coupleName = person
         ? [person.first_name, person.last_name].filter(Boolean).join(' ') || null
         : null
+      const fallback =
+        coupleName
+        ?? (person?.email ? person.email : null)
+        ?? (wedding?.event_code ? `Wedding ${wedding.event_code}` : null)
       samples.push({
         handle: row.handle,
-        couple_name: coupleName,
+        couple_name: fallback,
         wedding_id: person?.wedding_id ?? null,
         is_pre_inquiry: isPreInquiry,
         engagement_at: engagementAt,
