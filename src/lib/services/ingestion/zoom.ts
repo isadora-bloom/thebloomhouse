@@ -26,6 +26,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { recordEngagementEvent } from '@/lib/services/heat-mapping'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -570,20 +571,54 @@ export async function syncMeetings(
       // T5-Rixey-BBB: Zoom meetings are touchpoint signals — the lead
       // showed up to a virtual tour AFTER discovering the venue.
       // signal-class-justified: zoom meetings are touchpoint
-      const { error: iError } = await supabase.from('interactions').insert({
-        venue_id: venueId,
-        wedding_id: matchedWeddingId,
-        type: 'meeting',
-        direction: 'inbound',
-        subject,
-        body_preview: bodyPreview,
-        full_body: transcriptText.slice(0, 50000),
-        timestamp: meeting.startTime || new Date().toISOString(),
-        signal_class: 'touchpoint',
-      })
+      const { data: insertedInteraction, error: iError } = await supabase
+        .from('interactions')
+        .insert({
+          venue_id: venueId,
+          wedding_id: matchedWeddingId,
+          type: 'meeting',
+          direction: 'inbound',
+          subject,
+          body_preview: bodyPreview,
+          full_body: transcriptText.slice(0, 50000),
+          timestamp: meeting.startTime || new Date().toISOString(),
+          signal_class: 'touchpoint',
+        })
+        .select('id')
+        .maybeSingle()
       if (iError) {
         console.error('[zoom] interactions insert failed:', iError.message)
         // Don't bump errors — dedup already happened, transcript is stored.
+      }
+
+      // Wave 28 voice-heat wiring (2026-05-12). Fire a heat event when a
+      // Zoom meeting completed AND we matched it to a wedding. Meetings
+      // that didn't match (or that had no transcript) don't fire — the
+      // first because we have no wedding to attach to, the second
+      // because we already `continue`d earlier in the no-transcript
+      // branch and never reach this block. Fire-and-forget: heat-write
+      // failure never blocks the meeting sync.
+      if (matchedWeddingId) {
+        void recordEngagementEvent(
+          venueId,
+          matchedWeddingId,
+          'zoom_meeting_completed',
+          'inbound',
+          {
+            source: 'zoom',
+            zoom_meeting_id: meeting.meetingId,
+            zoom_meeting_uuid: meeting.uuid,
+            topic: meeting.topic || null,
+            duration_minutes: meeting.durationMinutes || null,
+            interaction_id: (insertedInteraction?.id as string | undefined) ?? null,
+          },
+          meeting.startTime || undefined,
+        ).catch((err) => {
+          console.warn(
+            `[zoom] heat fire failed (${meeting.meetingId}):`,
+            err instanceof Error ? err.message : String(err),
+          )
+        })
       }
     } catch (err) {
       console.error('[zoom] sync row insert threw:', err)

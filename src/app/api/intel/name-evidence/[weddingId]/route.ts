@@ -270,5 +270,34 @@ export async function POST(
     },
   })
 
+  // Fire the identity-discovery cascade in the background. A
+  // coordinator-confirmed name is the strongest possible identity
+  // binding — anonymous storefront signals (Knot proxy "User <hex>",
+  // IG "@justinandsandy_wedding") that match this first_name +
+  // last_initial in the engagement window now have evidence to bind.
+  // Fire-and-forget: the override write already succeeded, the
+  // cascade is pure follow-up. Never block the operator's UI.
+  void (async () => {
+    try {
+      const { triggerIdentityCascade } = await import(
+        '@/lib/services/identity/cascade-on-enrichment'
+      )
+      // Use the same service client the override write ran on. Auth
+      // is already validated above so this can run with full
+      // service-role scope.
+      await triggerIdentityCascade({
+        venueId: auth.venueId as string,
+        weddingId,
+        supabase,
+        reason: 'name_evidence_override',
+      })
+    } catch (err) {
+      console.warn(
+        '[name-evidence] cascade fire-and-forget threw:',
+        err instanceof Error ? err.message : err,
+      )
+    }
+  })()
+
   return NextResponse.json({ ok: true })
 }

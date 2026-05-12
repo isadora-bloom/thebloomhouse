@@ -31,6 +31,7 @@ import {
   inferNameFromEmail,
   parseJointEmailHandle,
 } from '../src/lib/services/identity/name-capture'
+import { triggerIdentityCascade } from '../src/lib/services/identity/cascade-on-enrichment'
 
 const LOOKBACK_DAYS = 180
 const BODY_EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi
@@ -166,6 +167,7 @@ async function enrichVenue(venueId: string): Promise<void> {
   let weddings = 0
   let updatedPeople = 0
   let createdPartners = 0
+  const enrichedWeddings: string[] = []
 
   for (const [weddingId, emailSet] of byWedding.entries()) {
     const emails = [...emailSet]
@@ -219,6 +221,7 @@ async function enrichVenue(venueId: string): Promise<void> {
     weddings++
 
     // Build the partner1 update — only fill NULL fields.
+    let partner1Changed = false
     if (partner1) {
       const updates: Record<string, string> = {}
       if (!partner1.email && chosen.email) updates.email = chosen.email
@@ -230,10 +233,13 @@ async function enrichVenue(venueId: string): Promise<void> {
         )
         if (!dryRun) {
           const { error } = await sb.from('people').update(updates).eq('id', partner1.id)
-          if (!error) updatedPeople++
-          else console.warn(`    update failed: ${error.message}`)
+          if (!error) {
+            updatedPeople++
+            partner1Changed = true
+          } else console.warn(`    update failed: ${error.message}`)
         } else {
           updatedPeople++
+          partner1Changed = true
         }
       }
     } else if (!dryRun && (chosen.email || chosen.partner1)) {
@@ -245,11 +251,15 @@ async function enrichVenue(venueId: string): Promise<void> {
         last_name: chosen.last,
         email: chosen.email,
       })
-      if (!error) updatedPeople++
+      if (!error) {
+        updatedPeople++
+        partner1Changed = true
+      }
     }
 
     // Partner2 — only create when joint handle yielded a second name AND
     // no partner2 already exists. Never overwrite.
+    let partner2Changed = false
     if (chosen.partner2 && !partner2) {
       console.log(
         `  ✓ wedding ${weddingId} create partner2 ← ${chosen.partner2}`,
@@ -261,15 +271,59 @@ async function enrichVenue(venueId: string): Promise<void> {
           role: 'partner2',
           first_name: chosen.partner2,
         })
-        if (!error) createdPartners++
+        if (!error) {
+          createdPartners++
+          partner2Changed = true
+        }
       } else {
         createdPartners++
+        partner2Changed = true
+      }
+    }
+
+    if ((partner1Changed || partner2Changed) && !dryRun) {
+      enrichedWeddings.push(weddingId)
+    }
+  }
+
+  // Fire the identity-discovery cascade for every wedding we just
+  // enriched. The new email + names give backtrack and the candidate
+  // resolver fresh fingerprints to match anonymous Knot / IG /
+  // Pinterest / WW storefront signals against. Fire-and-forget per
+  // wedding so a single broken cascade doesn't stop the loop.
+  let cascadeFired = 0
+  let cascadeBacktrackHits = 0
+  let cascadeCandidatesResolved = 0
+  let cascadeErrors = 0
+  if (!dryRun && enrichedWeddings.length > 0) {
+    for (const weddingId of enrichedWeddings) {
+      try {
+        const out = await triggerIdentityCascade({
+          venueId,
+          weddingId,
+          supabase: sb,
+          reason: 'enrich_from_body_emails',
+        })
+        cascadeFired++
+        cascadeBacktrackHits += out.backtrackHits
+        cascadeCandidatesResolved += out.candidatesResolved
+        cascadeErrors += out.errors.length
+        if (out.backtrackHits > 0 || out.candidatesResolved > 0) {
+          console.log(
+            `  → cascade ${weddingId}: backtrack=${out.backtrackHits} resolved=${out.candidatesResolved} errors=${out.errors.length}`,
+          )
+        }
+      } catch (err) {
+        console.warn(
+          `  ! cascade failed for ${weddingId}: ${err instanceof Error ? err.message : String(err)}`,
+        )
+        cascadeErrors++
       }
     }
   }
 
   console.log(
-    `[${venueId}] weddings=${weddings} people_updated=${updatedPeople} partner2_created=${createdPartners}${dryRun ? ' (dry-run)' : ''}`,
+    `[${venueId}] weddings=${weddings} people_updated=${updatedPeople} partner2_created=${createdPartners} cascade_fired=${cascadeFired} cascade_backtrack_hits=${cascadeBacktrackHits} cascade_candidates_resolved=${cascadeCandidatesResolved} cascade_errors=${cascadeErrors}${dryRun ? ' (dry-run)' : ''}`,
   )
 }
 

@@ -103,6 +103,35 @@ async function tryMatchByBodyEmail(
         },
       )
 
+      // Fire the identity-discovery cascade in the background. Whether
+      // the resolver attached us to an existing wedding or minted a
+      // fresh one, the new email + first names are fresh fingerprints
+      // that backtrack + candidate-resolver can use to bind anonymous
+      // Knot / IG / Pinterest / WeddingWire storefront signals to this
+      // wedding. Fire-and-forget — never block the SMS persist on it.
+      if (resolved.weddingId) {
+        const weddingId = resolved.weddingId
+        void (async () => {
+          try {
+            const { triggerIdentityCascade } = await import(
+              '@/lib/services/identity/cascade-on-enrichment'
+            )
+            await triggerIdentityCascade({
+              venueId,
+              weddingId,
+              supabase,
+              reason: `sms_body_email_${resolved.matchedBy}`,
+              correlationId: correlationId ?? null,
+            })
+          } catch (err) {
+            console.warn(
+              '[sms-name-match] cascade fire-and-forget threw:',
+              err instanceof Error ? err.message : err,
+            )
+          }
+        })()
+      }
+
       return {
         personId: resolved.personId,
         weddingId: resolved.weddingId,

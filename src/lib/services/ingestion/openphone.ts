@@ -24,6 +24,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
+import { recordEngagementEvent } from '@/lib/services/heat-mapping'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -952,9 +953,11 @@ async function persistRow(
     author_class: row.direction === 'inbound' ? 'couple' : 'operator',
   }
 
-  const { error: interErr } = await supabase
+  const { data: insertedInteraction, error: interErr } = await supabase
     .from('interactions')
     .insert(interactionPayload)
+    .select('id')
+    .maybeSingle()
   if (interErr) {
     console.error(
       `[openphone] interactions insert failed (${row.openphone_message_id}):`,
@@ -964,7 +967,85 @@ async function persistRow(
     // source of truth and a manual reprocess is cheap.
   }
 
+  // Wave 28 voice-heat wiring (2026-05-12). Fire an engagement_event so
+  // SMS / call / voicemail signals actually bump heat scores. Email-side
+  // pipeline already fires events through processIncomingEmail; voice
+  // channels were missed and that left every SMS-heavy lead at heat_score
+  // = 0 (Justin & Sandy at Rixey with 27+ SMS sat at 0 until this fix).
+  //
+  // Inbound channel → event-type mapping:
+  //   sms          → 'sms_received'
+  //   call         → 'call_inbound' or 'call_inbound_with_transcript'
+  //                  if a real transcript landed in the body
+  //   voicemail    → 'voicemail_received'
+  // Outbound channels fire 'sms_sent' / 'call_outbound' which score 0
+  // or low — venue-side activity, kept for audit symmetry but the
+  // read-side direction='inbound' filter in recalculateHeatScore means
+  // they never inflate heat anyway.
+  //
+  // Fire-and-forget: a heat-write failure never blocks the SMS persist.
+  // recordEngagementEvent only fires when wedding_id is set; orphan
+  // signals don't count toward heat.
+  if (weddingId) {
+    const eventType = pickVoiceEventType(row)
+    if (eventType) {
+      const interactionId = (insertedInteraction?.id as string | undefined) ?? null
+      void recordEngagementEvent(
+        venueId,
+        weddingId,
+        eventType,
+        row.direction,
+        {
+          source: 'openphone',
+          channel: row.channel,
+          openphone_message_id: row.openphone_message_id,
+          interaction_id: interactionId,
+        },
+        row.occurred_at ?? undefined,
+      ).catch((err) => {
+        console.warn(
+          `[openphone] heat fire failed (${row.openphone_message_id}, ${eventType}):`,
+          err instanceof Error ? err.message : String(err),
+        )
+      })
+    }
+  }
+
   return true
+}
+
+/**
+ * Map an ingested voice/SMS row to the heat-mapping event_type that
+ * matches its channel + direction. Returns null when there's nothing
+ * to fire (unrecognised channel — defensive only, the channel type
+ * union already constrains the input).
+ *
+ * Direction is honoured: inbound rows produce couple-side event types
+ * (sms_received / call_inbound / voicemail_received); outbound rows
+ * produce venue-side types (sms_sent / call_outbound). The read-side
+ * filter in recalculateHeatScore drops outbound rows from the sum, so
+ * the venue-side types are purely audit. Voicemails are always
+ * inbound by construction (you don't leave yourself a voicemail).
+ *
+ * Call rows escalate to call_inbound_with_transcript when the body
+ * carries real transcript text (the hydrator merged summary or
+ * transcription). The placeholder "Inbound call · 4 min · (no
+ * transcript)" string starts with "Inbound call" or "Outbound call" —
+ * the [Call] prefix is the marker that real text landed.
+ */
+function pickVoiceEventType(row: IngestRow): string | null {
+  if (row.channel === 'sms') {
+    return row.direction === 'inbound' ? 'sms_received' : 'sms_sent'
+  }
+  if (row.channel === 'voicemail') {
+    return 'voicemail_received'
+  }
+  if (row.channel === 'call_summary') {
+    if (row.direction === 'outbound') return 'call_outbound'
+    const hasTranscript = row.body_text.startsWith('[Call]')
+    return hasTranscript ? 'call_inbound_with_transcript' : 'call_inbound'
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------

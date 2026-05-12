@@ -62,6 +62,21 @@ const DEFAULT_POINTS: Record<string, number> = {
   call_answered: 10,
   call_missed: 0,
   voicemail_left: 3,
+  // Voice / SMS engagement signals (per-channel). Inbound = couple-side
+  // engagement that should bump heat. Outbound = venue-side activity and
+  // scores 0 (or low for legacy call_outbound above). Wave 28 wires these
+  // through openphone.ts persistRow + zoom.ts syncMeetings.
+  //
+  // Direction filter at read time (recalculateHeatScore reads
+  // direction='inbound' only) is the load-bearing guard — the per-channel
+  // point values listed here are the design intent if a future caller
+  // ever fires an outbound row with one of these types.
+  sms_received: 8,                    // Inbound SMS — significant engagement, more than passive page view
+  sms_sent: 0,                        // Outbound SMS — venue activity, doesn't bump couple heat
+  call_inbound: 12,                   // Couple called us — strong engagement
+  call_inbound_with_transcript: 18,   // Connected call with transcript text — even stronger (real conversation)
+  voicemail_received: 5,              // Voicemail FROM couple — moderate signal
+  zoom_meeting_completed: 25,         // Meeting actually happened — closer to tour_completed
   contract_sent: 30,
   contract_viewed: 10,
   contract_signed: 50,
