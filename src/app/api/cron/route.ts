@@ -389,6 +389,10 @@ const VALID_JOBS = [
   // 50 rows / tick, concurrency=5, 5-min buffer so freshly-inserted rows
   // get a chance via the fire-and-forget path first.
   'inbound_haiku_drain',
+  // Mig 327 (2026-05-12, Anja Putman / RM-1152 trace). Drains inbound
+  // rows where intent_classified_at IS NULL. Same shape as
+  // inbound_haiku_drain — 50 rows / tick, concurrency=5, 5-min buffer.
+  'inbound_intent_drain',
   // Wave 6E follow-up (2026-05-12). Agency-tracker maintenance jobs.
   // Each has a standalone /api/cron/{name}/route.ts for ad-hoc curl;
   // the Vercel cron schedule fires through here so the cron-runs
@@ -1096,6 +1100,16 @@ async function runJob(job: JobName): Promise<unknown> {
         '@/lib/services/intel/inbound-haiku-drain'
       )
       return runInboundHaikuDrain()
+    }
+
+    case 'inbound_intent_drain': {
+      // Mig 327 / Anja Putman trace. Drains pending inbound rows whose
+      // intent_classified_at IS NULL. Mirrors haiku-drain shape: 50
+      // rows/tick, concurrency=5, 5-min buffer, idempotent.
+      const { runInboundIntentDrain } = await import(
+        '@/lib/services/intel/inbound-intent-drain'
+      )
+      return runInboundIntentDrain()
     }
 
     case 'orphan_engagement_rebind': {
