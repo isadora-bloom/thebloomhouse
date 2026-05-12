@@ -1064,6 +1064,23 @@ export async function processIncomingEmail(
   // onto the new lead. Use the parsed name or nothing.
   const fromName = formLead?.leadName ?? schedulingEvent?.inviteeName ?? (formLead || schedulingEvent || isForwardedEmail ? null : rawFromName)
 
+  // 2026-05-12 — Zack Hunter / WW trace:
+  // For form-relay leads the `leadEmail` is the identity key (may be a
+  // synthetic .invalid placeholder when the platform exposed neither a
+  // personal email nor a per-prospect relay — WW's shared-relay path).
+  // The ROUTABLE reply target is the platform relay itself
+  // (`messages@weddingwire.com`, `*@member.theknot.com`) carried on
+  // `formLead.replyToEmail`. Without this, drafts get stamped with the
+  // .invalid placeholder and rot in pending forever (autonomous sender
+  // refuses .invalid; humans see "Replying to authsolic-…invalid" in the
+  // inbox). Threading still works because Gmail uses In-Reply-To headers
+  // off the original message id.
+  const replyTargetEmail =
+    formLead?.replyToEmail ??
+    schedulingEvent?.inviteeEmail ??
+    forwardedOriginalSender ??
+    fromEmail
+
   // Step 1a.6: Content-based auto-ignore and machine-mail detection.
   // Runs only when no form-relay or scheduling-event fired — these
   // legitimately contain "view in browser" / List-Unsubscribe headers
@@ -2957,6 +2974,31 @@ export async function processIncomingEmail(
     }
   }
 
+  // 2026-05-12 — Zack Hunter trace: same hygiene for form-relay parsed
+  // names. findOrCreateContact only captures evidence on the INSERT
+  // branch; when canonical resolver returns an existing person row the
+  // parsed leadName silently dropped on the floor. So the first WW
+  // inbound for a prospect created a row with first_name=email-local-
+  // part placeholder (`authsolic-XXX`), and every subsequent inbound
+  // carrying the real "Zack Hunter" subject left the placeholder in
+  // place forever. Routing through the chokepoint here re-promotes the
+  // placeholder to the real name on the next inbound. The picker's
+  // confidence rules guard against weaker signals overwriting stronger
+  // ones, so this is safe to fire even when the existing row already
+  // has a high-confidence name (calculator / contract).
+  if (formLead?.leadName && personId) {
+    try {
+      const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+      await captureNameEvidence(supabase, personId, {
+        full: formLead.leadName.trim(),
+        email: formLead.leadEmail ?? null,
+        source: 'gmail_from_name',
+      })
+    } catch (err) {
+      console.warn('[pipeline] name-capture (form-relay leadName hygiene) failed:', err instanceof Error ? err.message : err)
+    }
+  }
+
   if (schedulingEvent && weddingId && !suppressBecauseCancelled) {
     try {
       const eventType = eventKindToEngagementType(schedulingEvent.kind)
@@ -3573,6 +3615,32 @@ export async function processIncomingEmail(
     : email.subject
 
   if (draftBody) {
+    // 2026-05-12 — refuse to mint a draft when the reply target is
+    // unsendable. Before this guard, WW shared-relay inbounds (no
+    // personal email + no per-prospect relay) generated drafts to
+    // `authsolic-…@weddingwire.bloom-relay.invalid` that sat in pending
+    // forever — autonomous sender refused `.invalid` at send time, but
+    // the inbox UI still surfaced "Replying to authsolic-…invalid" on
+    // every visit (Zack Hunter, May 12). Better to skip the draft and
+    // surface a coordinator nudge to reply via the platform dashboard.
+    if (isUnsendableAddress(replyTargetEmail)) {
+      log.info('pipeline.draft_skipped_unsendable_target', {
+        event_type: 'draft_gate',
+        outcome: 'skip',
+        data: {
+          interactionId,
+          weddingId,
+          replyTargetEmail,
+          source: detectedSource,
+        },
+      })
+      return {
+        interactionId,
+        draftId: null,
+        classification: emailClassification,
+        autoSent: false,
+      }
+    }
     const contextType = brainUsed === 'client' ? 'client' : 'inquiry'
 
     const promptVersionUsed =
@@ -3583,7 +3651,7 @@ export async function processIncomingEmail(
         venue_id: venueId,
         wedding_id: weddingId,
         interaction_id: interactionId,
-        to_email: fromEmail,
+        to_email: replyTargetEmail,
         subject: draftSubject,
         draft_body: draftBody,
         // Wave 26 (mig 292): preserve the LLM's first-pass output so a
