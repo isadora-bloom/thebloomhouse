@@ -382,7 +382,12 @@ function ReportBody({ report }: { report: TbhReport }) {
                 : 'Shareable working-view'}
             </div>
           </div>
-          <div className="text-right">
+          <div className="text-right flex flex-col items-end">
+            <img
+              src="/brand/icon-bold-sage.png"
+              alt=""
+              className="h-10 w-auto mb-1"
+            />
             <div className="text-[10px] uppercase tracking-[0.2em] text-[var(--bh-muted)]">
               The Bloom House
             </div>

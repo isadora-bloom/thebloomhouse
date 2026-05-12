@@ -43,9 +43,9 @@ export default function LoginPage() {
       <div className="bg-surface rounded-xl shadow-sm border border-border p-8">
         <div className="text-center mb-8">
           <img
-            src="/brand/wordmark-black.png"
+            src="/brand/lockup-vertical-black.png"
             alt="The Bloom House"
-            className="h-12 w-auto mx-auto mb-4"
+            className="h-32 w-auto mx-auto mb-4"
           />
           <p className="text-sm text-muted">
             Sign in to your venue dashboard

@@ -105,7 +105,9 @@ async function main() {
   const sources = {
     wordmark: await ensureSourceExists('1.png'), // horizontal lockup
     vertical: await ensureSourceExists('2.png'), // vertical w/ URL
-    icon: await ensureSourceExists('3.png'), // icon only
+    icon: await ensureSourceExists('3.png'), // icon only (medium stroke)
+    iconThin: await ensureSourceExists('4.png'), // icon only — thin stroke
+    iconBold: await ensureSourceExists('5.png'), // icon only — bold stroke
   }
 
   const results = []
@@ -153,6 +155,54 @@ async function main() {
     )
   }
 
+  // 2b. Icon stroke-weight variants. The thin version reads elegantly
+  //     at large sizes (hero, splash); the bold version holds up at
+  //     32-pixel favicon sizes where thin lines disappear. Default
+  //     `icon-*.png` from source 3 sits in the middle and remains the
+  //     base name. Sized smaller (256px) — they're contextual.
+  for (const [variantSuffix, src] of [
+    ['thin', sources.iconThin],
+    ['bold', sources.iconBold],
+  ]) {
+    for (const colorName of Object.keys(COLORS)) {
+      const recolored = await recolor(src, COLORS[colorName])
+      results.push(
+        await writePng(
+          recolored,
+          `${REPOS.bloomHouse}/icon-${variantSuffix}-${colorName}.png`,
+          { maxWidth: 256 },
+        ),
+      )
+      results.push(
+        await writePng(
+          recolored,
+          `${REPOS.website}/icon-${variantSuffix}-${colorName}.png`,
+          { maxWidth: 256 },
+        ),
+      )
+    }
+  }
+
+  // 2c. Favicons. The bold black icon at 256px is what the browser
+  //     downscales; bold strokes survive the downsample to 32×32 better
+  //     than the medium stroke does. Replaces /favicon.png at the root
+  //     of both repos.
+  {
+    const faviconSource = await recolor(sources.iconBold, COLORS.black)
+    results.push(
+      await writePng(faviconSource, `C:/Users/Ismar/bloom-house/public/favicon.png`, {
+        maxWidth: 256,
+      }),
+    )
+    results.push(
+      await writePng(
+        faviconSource,
+        `C:/Users/Ismar/thebloomhouse-website/public/favicon.png`,
+        { maxWidth: 256 },
+      ),
+    )
+  }
+
   // 3. Vertical lockup (icon + wordmark + URL). New variant. Useful for
   //    TBH Report covers, login splash, marketing-site hero. Skip the
   //    'white' variant for the website (light bg only there).
@@ -172,6 +222,51 @@ async function main() {
         { maxWidth: 800 },
       ),
     )
+  }
+
+  // 4. OG image — 1200×630 with the sage vertical lockup centered on
+  //    warm-white. Used as the social-card preview when the website
+  //    is shared on Twitter/LinkedIn/iMessage. Pure composite, no
+  //    extra text overlay needed (the lockup already includes the
+  //    URL + tagline).
+  {
+    const sageVerticalRecolored = await recolor(
+      sources.vertical,
+      COLORS.sage,
+    )
+    // Convert raw → PNG buffer for compositing.
+    const sageVerticalPng = await sharp(sageVerticalRecolored.buffer, {
+      raw: {
+        width: sageVerticalRecolored.width,
+        height: sageVerticalRecolored.height,
+        channels: 4,
+      },
+    })
+      .resize({ height: 500, fit: 'inside' })
+      .png()
+      .toBuffer()
+
+    const ogImage = await sharp({
+      create: {
+        width: 1200,
+        height: 630,
+        channels: 4,
+        background: { r: 0xfd, g: 0xfa, b: 0xf6, alpha: 1 }, // warm-white
+      },
+    })
+      .composite([{ input: sageVerticalPng, gravity: 'center' }])
+      .png({ compressionLevel: 9 })
+      .toBuffer()
+
+    for (const dest of [
+      `${REPOS.bloomHouse}/og-image.png`,
+      `${REPOS.website}/og-image.png`,
+    ]) {
+      await fs.mkdir(dirname(dest), { recursive: true })
+      await fs.writeFile(dest, ogImage)
+      const stat = await fs.stat(dest)
+      results.push({ path: dest, bytes: stat.size })
+    }
   }
 
   // Summary
