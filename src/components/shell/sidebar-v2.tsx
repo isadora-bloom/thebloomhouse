@@ -170,10 +170,17 @@ export function SidebarV2({ scopeLevel }: SidebarV2Props) {
   return (
     <aside className="hidden lg:flex fixed top-0 left-0 h-screen w-64 flex-col border-r border-border bg-warm-white overflow-y-auto z-20">
       <div className="px-5 py-4 border-b border-border">
-        <Link href="/" className="font-heading text-lg font-bold text-sage-900">
-          Bloom
+        <Link href="/" className="flex items-center gap-2 text-sage-900">
+          <img
+            src="/brand/icon-bold-sage.png"
+            alt=""
+            className="h-8 w-auto flex-shrink-0"
+          />
+          <span className="font-heading text-base font-semibold leading-tight">
+            The Bloom House
+          </span>
         </Link>
-        <p className="text-[11px] text-sage-600 mt-0.5">{brandedLabel(mode.description, aiName)}</p>
+        <p className="text-[11px] text-sage-600 mt-1">{brandedLabel(mode.description, aiName)}</p>
       </div>
 
       {/* Essential / All toggle. Sits below the brand block; persists
