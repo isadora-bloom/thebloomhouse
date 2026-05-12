@@ -700,6 +700,35 @@ export async function syncMeetings(
       // meeting's matched wedding, log a warning so a coordinator can
       // adjudicate; we don't auto-merge.
       const insertedInteractionId = (insertedInteraction?.id as string | undefined) ?? null
+
+      // Inbound-intent classifier (mig 327). Zoom transcripts are
+      // recorded venue ↔ couple calls; the intent column tells
+      // downstream consumers whether this is a planning call (client_*),
+      // a fresh discovery call (new_inquiry), or vendor coordination on
+      // a booked wedding. Fire-and-forget. interaction_id required.
+      if (insertedInteractionId) {
+        void (async () => {
+          try {
+            const { classifyInboundIntent } = await import(
+              '@/lib/services/intel/inbound-intent-classifier'
+            )
+            await classifyInboundIntent({
+              interactionId: insertedInteractionId,
+              body: transcriptForExtract,
+              subject,
+              venueId,
+              channel: 'meeting',
+              supabase,
+            })
+          } catch (err) {
+            console.warn(
+              '[zoom] intent-classify failed:',
+              err instanceof Error ? err.message : String(err),
+            )
+          }
+        })()
+      }
+
       const zoomEmails = zoomExtractedIdentity.emails ?? []
       const zoomPhones = zoomExtractedIdentity.phones ?? []
       if (zoomEmails.length > 0 || zoomPhones.length > 0) {
