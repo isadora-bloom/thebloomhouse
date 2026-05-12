@@ -33,7 +33,7 @@ import {
   type SchedulingEvent,
 } from '../src/lib/services/ingestion/scheduling-tool-parsers'
 import { recordEngagementEventsBatch, recalculateHeatScore } from '../src/lib/services/heat-mapping'
-import { resolveIdentity } from '../src/lib/services/identity/resolution'
+import { findIdentityMatches } from '../src/lib/services/identity/resolution'
 
 const env = Object.fromEntries(
   readFileSync('.env.local', 'utf8')
@@ -267,7 +267,7 @@ async function runVenue(venueId: string) {
       const partnerParts = (extras?.partnerName ?? '').trim().split(/\s+/)
       const inviteeParts = (event.inviteeName ?? '').trim().split(/\s+/)
       try {
-        const matches = await resolveIdentity(sb as any, {
+        const matches = await findIdentityMatches(sb as any, {
           venueId,
           email: event.inviteeEmail,
           firstName: inviteeParts[0] || null,

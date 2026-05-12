@@ -527,63 +527,77 @@ function NewBookingModal({
     setSaving(true)
 
     try {
-      const supabase = createClient()
-
-      // 1. Generate event code (3 letter venue prefix + 3 digits)
+      // Generate event code (3 letter venue prefix + 3 digits).
+      // The /api/portal/mint-wedding endpoint retries on a unique-index
+      // collision so we don't need a client-side retry loop anymore.
       const prefix = (venueSlug || 'BLM').slice(0, 3).toUpperCase()
       const code = `${prefix}-${Math.floor(100 + Math.random() * 900)}`
 
-      // 2. Create wedding record
-      const { data: wedding, error: weddingErr } = await supabase
-        .from('weddings')
-        .insert({
-          venue_id: venueId,
-          status: 'booked',
-          wedding_date: form.weddingDate || null,
-          guest_count_estimate: form.guestCount ? parseInt(form.guestCount) : null,
+      // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
+      // POST to the server endpoint instead of the browser-side direct
+      // INSERT. The endpoint routes through the canonical chokepoint so
+      // an existing-couple entry deduplicates via the resolver.
+      const mintRes = await fetch('/api/portal/mint-wedding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          venueId,
+          partner1: {
+            firstName: form.partner1FirstName.trim(),
+            lastName: form.partner1LastName.trim(),
+            email: form.partner1Email.trim(),
+            phone: form.partner1Phone.trim() || null,
+          },
+          partner2: form.partner2FirstName.trim()
+            ? {
+                firstName: form.partner2FirstName.trim(),
+                lastName: form.partner2LastName.trim(),
+                email: form.partner2Email.trim() || null,
+                phone: form.partner2Phone.trim() || null,
+              }
+            : null,
+          weddingDate: form.weddingDate || null,
+          guestCount: form.guestCount ? parseInt(form.guestCount) : null,
           source: form.source ? normalizeSource(form.source) : null,
           // T5-Rixey-RR fix #5: branded types make the unit conversion explicit
           // (previously: T5-Rixey-NN bug #8 fixed the silent dollars-as-cents bug).
-          booking_value: form.estimatedValue
+          estimatedValue: form.estimatedValue
             ? dollarsToCents(asDollars(parseFloat(form.estimatedValue)))
             : null,
           notes: form.notes || null,
-          event_code: code,
-          couple_invited_at: form.sendInvite ? new Date().toISOString() : null,
-        })
-        .select()
-        .single()
+          status: 'booked',
+          eventCode: code,
+        }),
+      })
+      if (!mintRes.ok) {
+        let body: { error?: string } = {}
+        try { body = await mintRes.json() } catch { /* noop */ }
+        throw new Error(body?.error || `mint-wedding failed (${mintRes.status})`)
+      }
+      const mintJson = (await mintRes.json()) as {
+        weddingId: string
+        eventCode: string | null
+      }
+      const finalCode = mintJson.eventCode ?? code
 
-      if (weddingErr) {
-        // If event code collision, try once more with different code
-        if (weddingErr.message?.includes('unique') || weddingErr.message?.includes('duplicate')) {
-          const retryCode = `${prefix}-${Math.floor(100 + Math.random() * 900)}`
-          const { data: retryWedding, error: retryErr } = await supabase
-            .from('weddings')
-            .insert({
-              venue_id: venueId,
-              status: 'booked',
-              wedding_date: form.weddingDate || null,
-              guest_count_estimate: form.guestCount ? parseInt(form.guestCount) : null,
-              source: form.source ? normalizeSource(form.source) : null,
-              // T5-Rixey-RR fix #5: branded types make the unit conversion explicit.
-              booking_value: form.estimatedValue
-                ? dollarsToCents(asDollars(parseFloat(form.estimatedValue)))
-                : null,
-              notes: form.notes || null,
-              event_code: retryCode,
-              couple_invited_at: form.sendInvite ? new Date().toISOString() : null,
-            })
-            .select()
-            .single()
-          if (retryErr) throw retryErr
-          // Use the retry wedding below
-          await createPeopleAndInvite(supabase, retryWedding, retryCode)
-        } else {
-          throw weddingErr
-        }
-      } else {
-        await createPeopleAndInvite(supabase, wedding, code)
+      // Couple-invite is unchanged — same /api/portal/invite-couple
+      // endpoint as before. Now stamped through the server flow so
+      // couple_invited_at is set inside the endpoint.
+      if (form.sendInvite && form.partner1Email.trim()) {
+        await fetch('/api/portal/invite-couple', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            weddingId: mintJson.weddingId,
+            venueId,
+            email: form.partner1Email.trim(),
+            partnerEmail: form.partner2Email.trim() || null,
+            eventCode: finalCode,
+            coupleName: form.partner2FirstName.trim()
+              ? `${form.partner1FirstName.trim()} & ${form.partner2FirstName.trim()}`
+              : form.partner1FirstName.trim(),
+          }),
+        })
       }
 
       // Track booking_closed in consultant_metrics
@@ -602,57 +616,6 @@ function NewBookingModal({
       setError(err?.message || 'Failed to create booking. Please try again.')
     } finally {
       setSaving(false)
-    }
-  }
-
-  async function createPeopleAndInvite(
-    supabase: ReturnType<typeof createClient>,
-    wedding: any,
-    code: string,
-  ) {
-    // 3. Create people records
-    const peopleToInsert = [
-      {
-        venue_id: venueId,
-        wedding_id: wedding.id,
-        role: 'partner1',
-        first_name: form.partner1FirstName.trim(),
-        last_name: form.partner1LastName.trim(),
-        email: form.partner1Email.trim() || null,
-        phone: form.partner1Phone.trim() || null,
-      },
-    ]
-
-    if (form.partner2FirstName.trim()) {
-      peopleToInsert.push({
-        venue_id: venueId,
-        wedding_id: wedding.id,
-        role: 'partner2',
-        first_name: form.partner2FirstName.trim(),
-        last_name: form.partner2LastName.trim(),
-        email: form.partner2Email.trim() || null,
-        phone: form.partner2Phone.trim() || null,
-      })
-    }
-
-    await supabase.from('people').insert(peopleToInsert)
-
-    // 4. Send invitation email if checked
-    if (form.sendInvite && form.partner1Email.trim()) {
-      await fetch('/api/portal/invite-couple', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          weddingId: wedding.id,
-          venueId,
-          email: form.partner1Email.trim(),
-          partnerEmail: form.partner2Email.trim() || null,
-          eventCode: code,
-          coupleName: form.partner2FirstName.trim()
-            ? `${form.partner1FirstName.trim()} & ${form.partner2FirstName.trim()}`
-            : form.partner1FirstName.trim(),
-        }),
-      })
     }
   }
 

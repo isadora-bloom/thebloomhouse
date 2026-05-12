@@ -108,6 +108,16 @@ const VALID_JOBS = [
   'zoom_poll',
   'openphone_poll',
   'sms_rematch',
+  // Pattern 9 W2 (mig 318). Voice-channel sequences. Mirrors the email
+  // follow_up_sequences runner but at 15-min cadence (SMS expects faster
+  // turnaround than email). Drains channel='sms' rows from
+  // follow_up_sequences with trigger types sms_no_reply / sms_tour_reminder
+  // / sms_post_tour. Lands Haiku-drafted SMS into pending_sms_drafts for
+  // coordinator review until the P6 routable send path ships. Not
+  // registered in vercel.json (Pro at 40-cron cap); piggybacks on
+  // openphone_poll handler below. Operator can curl
+  // /api/cron?job=sms_sequences for manual runs.
+  'sms_sequences',
   'phase_b_sweep',
   // T5-Rixey-CCC (2026-05-02). Candidate-resolver backtrack — when
   // weddings become known-email, retroactively scan unresolved storefront
@@ -582,13 +592,35 @@ async function runJob(job: JobName): Promise<unknown> {
       // processed_zoom_meetings, so re-running is idempotent.
       return pollZoomAllVenues()
 
-    case 'openphone_poll':
+    case 'openphone_poll': {
       // Every-15-minutes OpenPhone (Quo) sync. Pulls SMS, voicemails,
       // and call summaries for each active connection and dedups
       // through processed_sms_messages before mirroring into
       // interactions. The service already iterates active connections
       // and catches per-venue failures so we just call it.
-      return syncOpenPhoneAllVenues()
+      //
+      // Pattern 9 W2 piggyback (mig 318): also run the SMS sequence
+      // runner on the same 15-min tick. SMS sequences and openphone
+      // ingest are naturally paired. fresh SMS rows from the poll plus
+      // the time-based no-reply / tour-reminder / post-tour triggers all
+      // want the same cadence, and the Vercel Pro 40-cron cap forbids a
+      // standalone sms_sequences entry today. The standalone case
+      // 'sms_sequences' below is still callable via curl for manual runs.
+      const pollResult = await syncOpenPhoneAllVenues()
+      let smsSequenceResult: Record<string, number> = {}
+      try {
+        const { processAllVenueSmsSequences } = await import(
+          '@/lib/services/sms/sequences'
+        )
+        smsSequenceResult = await processAllVenueSmsSequences()
+      } catch (err) {
+        console.error(
+          '[cron:openphone_poll] sms sequences run failed (non-fatal):',
+          err instanceof Error ? err.message : String(err),
+        )
+      }
+      return { openphone: pollResult, sms_sequences: smsSequenceResult }
+    }
 
     case 'sms_rematch':
       // 2026-05-11: SMS name + event-context matcher (sms-name-match.ts)
@@ -602,6 +634,17 @@ async function runJob(job: JobName): Promise<unknown> {
         '@/lib/services/ingestion/sms-rematch-sweep'
       )
       return rematchSmsAllVenues()
+
+    case 'sms_sequences': {
+      // Pattern 9 W2 (mig 318). Standalone entry point for the SMS
+      // sequence runner. Normally piggybacks on openphone_poll above;
+      // this case lets operators curl /api/cron?job=sms_sequences for
+      // manual runs (debugging, post-deployment smoke tests).
+      const { processAllVenueSmsSequences } = await import(
+        '@/lib/services/sms/sequences'
+      )
+      return processAllVenueSmsSequences()
+    }
 
     case 'backtrace_scan':
       // Daily re-scan of source-backtrace candidates per venue. The

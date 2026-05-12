@@ -12,6 +12,8 @@ import { createServiceClient } from '@/lib/supabase/service'
 import type { DataType, ColumnMapping } from './data-detection'
 import { normalizeSource } from './normalize-source'
 import { type Cents, asDollars, dollarsToCents } from '@/lib/types/monetary'
+// Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
+import { mintWedding } from '@/lib/services/identity/mint-wedding'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -938,37 +940,55 @@ export async function importHistoricalWeddings(
       else if (['cancelled', 'canceled'].includes(rawStatus)) status = 'cancelled'
       else if (['lost'].includes(rawStatus)) status = 'lost'
 
-      const { data: wedding, error: weddingErr } = await supabase
-        .from('weddings')
-        .insert({
-          venue_id: venueId,
-          status,
-          wedding_date: weddingDate,
-          guest_count_estimate: guestCount,
-          booking_value: bookingValue,
-          source: row.source ? normalizeSource(row.source) : null,
-          notes: row.notes || null,
+      // Mint a wedding via the canonical chokepoint. Historical-import
+      // rows lack email/phone, so the resolver lands on the name+date
+      // fallback (or creates fresh when neither matches). The
+      // status/booking_value/notes columns aren't part of the resolver
+      // surface — we UPDATE those right after.
+      // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
+      const { first: cFirst, last: cLast } = coupleName
+        ? splitName(coupleName)
+        : { first: '', last: '' }
+      const fullForResolver = coupleName
+        ? [cFirst, cLast].filter(Boolean).join(' ') || null
+        : null
+      let weddingId: string
+      try {
+        const minted = await mintWedding({
+          venueId,
+          source: 'csv_import',
+          reason: 'csv_import',
+          supabase,
+          signals: {
+            fullName: fullForResolver,
+            partner1Name: fullForResolver,
+            weddingDate: weddingDate,
+            inquiryDate: null,
+          },
         })
-        .select('id')
-        .single()
-
-      if (weddingErr || !wedding) {
-        errors.push(`Row ${i + 1}: ${weddingErr?.message || 'Failed to create wedding'}`)
+        weddingId = minted.weddingId
+      } catch (err) {
+        errors.push(`Row ${i + 1}: ${err instanceof Error ? err.message : 'mintWedding failed'}`)
         skipped++
         continue
       }
 
-      // Create person record if couple name provided
-      if (coupleName) {
-        const { first, last } = splitName(coupleName)
-        await supabase.from('people').insert({
-          venue_id: venueId,
-          wedding_id: wedding.id,
-          role: 'partner1',
-          first_name: first,
-          last_name: last,
-        })
-      }
+      // Stamp the historical-specific columns the resolver doesn't carry.
+      // For an attached-existing wedding this still overrides — historical
+      // imports are coordinator-confirmed source of truth.
+      const histUpdate: Record<string, unknown> = { status }
+      if (guestCount != null) histUpdate.guest_count_estimate = guestCount
+      if (bookingValue != null) histUpdate.booking_value = bookingValue
+      if (row.source) histUpdate.source = normalizeSource(row.source)
+      if (row.notes) histUpdate.notes = row.notes
+      await supabase
+        .from('weddings')
+        .update(histUpdate)
+        .eq('id', weddingId)
+
+      // The resolver already created a partner1 people row for any new
+      // wedding. Nothing further to do for partner1 here — name capture
+      // ran through the chokepoint during mintWedding.
 
       imported++
     } catch (err) {

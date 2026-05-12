@@ -44,18 +44,17 @@ const CANONICAL = new Set([
 // `mintWedding` in the next sweep. Remove from this list as each one is
 // migrated. Adding NEW entries here without an explicit migration plan
 // defeats the purpose of the guard.
+//
+// 2026-05-12 sweep: 8 sites migrated (brain-dump/imports, data-import,
+// crm-import/index, reprocess-form-relays, reprocess-orphans, the two
+// portal/weddings/page.tsx INSERTs collapsed into one server endpoint,
+// and that new /api/portal/mint-wedding route which is itself a
+// mintWedding caller). The two pipeline.ts INSERTs are the only
+// remaining direct writers, deferred for a separate soak. See
+// docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
 // ---------------------------------------------------------------------------
 const GRANDFATHERED = new Set([
   'src/lib/services/email/pipeline.ts',
-  'src/lib/services/crm-import/index.ts',
-  'src/lib/services/data-import.ts',
-  'src/app/api/agent/reprocess-form-relays/route.ts',
-  'src/app/api/agent/reprocess-orphans/route.ts',
-  'src/lib/services/brain-dump/imports.ts',
-  // Next.js path with parens — the relative path uses forward slashes
-  // on every platform via node:path.relative + manual normalisation
-  // below.
-  'src/app/(platform)/portal/weddings/page.tsx',
 ])
 
 // Walk src/ recursively, collect .ts + .tsx files, regex-match the

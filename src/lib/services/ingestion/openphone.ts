@@ -1056,6 +1056,92 @@ async function persistRow(
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Pattern 9: voice-channel parity hooks (mig 318)
+  // ---------------------------------------------------------------------------
+  // The next three blocks run on every SMS write (lifecycle folder) +
+  // every inbound SMS (escalation classifier + auto-reply). All are
+  // fire-and-forget. None of them can block the persist path.
+  const interactionId = (insertedInteraction?.id as string | undefined) ?? null
+  if (row.channel === 'sms' && externalNumber) {
+    // W3: SMS lifecycle folder. Runs on every direction so a venue-side
+    // outbound moves the thread from awaiting_venue to awaiting_couple
+    // without waiting for the next inbound.
+    void (async () => {
+      try {
+        const { updateSmsThreadLifecycleFolder } = await import(
+          '@/lib/services/sms/lifecycle'
+        )
+        await updateSmsThreadLifecycleFolder({
+          supabase,
+          venueId,
+          phone: externalNumber,
+        })
+      } catch (err) {
+        console.warn(
+          `[openphone] sms lifecycle folder update failed (${row.openphone_message_id}):`,
+          err instanceof Error ? err.message : String(err),
+        )
+      }
+    })()
+
+    if (row.direction === 'inbound' && interactionId && row.body_text) {
+      // W5: SMS escalation classifier. Stamps the row + fires admin
+      // notification when triggered. Runs BEFORE the auto-reply path so
+      // an escalated thread skips auto-reply via the trigger row read.
+      void (async () => {
+        try {
+          const { classifyAndPersistSmsEscalation } = await import(
+            '@/lib/services/sms/escalation-classifier'
+          )
+          await classifyAndPersistSmsEscalation({
+            venueId,
+            interactionId,
+            weddingId,
+            body: row.body_text,
+            fromPhone: externalNumber,
+          })
+        } catch (err) {
+          console.warn(
+            `[openphone] sms escalation classifier failed (${row.openphone_message_id}):`,
+            err instanceof Error ? err.message : String(err),
+          )
+        }
+      })()
+
+      // W1: SMS auto-reply rules. Reads channel='sms' rules from
+      // auto_send_rules; lands drafts in pending_sms_drafts. Operator
+      // hits Send manually until P6 routability ships. Skipped when
+      // escalation has just been requested (gate inside tryGenerateSmsAutoReply
+      // reads the row's sms_escalation_requested_at column).
+      //
+      // Small delay-via-microtask: ensure the escalation classifier above
+      // has a chance to land before auto-reply reads the row. Both are
+      // void IIFEs so timing is not strict; the auto-reply path re-reads
+      // the row anyway so a late-arriving escalation still blocks the
+      // draft on the next inbound. Acceptable for this iteration.
+      void (async () => {
+        try {
+          const { tryGenerateSmsAutoReply } = await import(
+            '@/lib/services/sms/auto-reply'
+          )
+          await tryGenerateSmsAutoReply({
+            venueId,
+            weddingId,
+            personId,
+            triggerInteractionId: interactionId,
+            externalPhone: externalNumber,
+          })
+        } catch (err) {
+          console.warn(
+            `[openphone] sms auto-reply failed (${row.openphone_message_id}):`,
+            err instanceof Error ? err.message : String(err),
+          )
+        }
+      })()
+    }
+  }
+
   return true
 }
 

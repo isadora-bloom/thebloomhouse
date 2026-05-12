@@ -29,6 +29,8 @@ import type { ShapeDetection } from '@/lib/services/brain-dump/csv-shape'
 import { rowToRecord } from '@/lib/services/brain-dump/csv-shape'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { htmlToText } from '@/lib/utils/html-text'
+// Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
+import { mintWedding } from '@/lib/services/identity/mint-wedding'
 
 export interface ImportSummary {
   inserted: number
@@ -151,37 +153,57 @@ export async function importLeads(args: {
       if (!email1) { summary.skipped++; continue }
       if (existingEmails.has(email1)) { summary.skipped++; continue }
 
-      // Create a wedding row (inquiry stage).
+      // Mint a wedding via the canonical chokepoint. The resolver
+      // handles person+wedding atomically and dedups by email-exact
+      // even if the up-front `existingEmails` cache missed (e.g.
+      // tombstoned-then-revived row).
+      // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
       const date = parseDate(r.wedding_date)
       const inquiryDate = parseDate(r.first_contact)
-      const { data: wedding, error: wErr } = await supabase
-        .from('weddings')
-        .insert({
-          venue_id: venueId,
-          status: 'inquiry',
-          source: normalizeSource(r.source ?? 'csv_import'),
-          wedding_date: date?.iso ?? null,
-          wedding_date_precision: date?.precision ?? null,
-          guest_count_estimate: parseGuestCount(r.guests),
-          inquiry_date: inquiryDate?.iso ? `${inquiryDate.iso}T00:00:00Z` : null,
-          notes: r.notes ?? null,
+      const clientFull = r.client_name
+        ? [parseFirstName(r.client_name), parseLastName(r.client_name)].filter(Boolean).join(' ')
+        : null
+      let weddingIdResolved: string
+      try {
+        const minted = await mintWedding({
+          venueId,
+          source: 'brain_dump',
+          reason: 'brain_dump_import',
+          supabase,
+          signals: {
+            email: email1,
+            fullName: clientFull,
+            partner1Name: clientFull,
+            partner2Name: r.partner_name ?? null,
+            weddingDate: date?.iso ?? null,
+            inquiryDate: inquiryDate?.iso ? `${inquiryDate.iso}T00:00:00Z` : null,
+            guestCount: parseGuestCount(r.guests),
+          },
         })
-        .select('id')
-        .single()
-      if (wErr || !wedding) {
-        summary.errors.push(`lead "${email1}": ${wErr?.message ?? 'insert failed'}`)
+        weddingIdResolved = minted.weddingId
+      } catch (err) {
+        summary.errors.push(`lead "${email1}": ${err instanceof Error ? err.message : 'mintWedding failed'}`)
         continue
       }
-
-      // Partner 1 — first name from client_name.
-      await supabase.from('people').insert({
-        venue_id: venueId,
-        wedding_id: wedding.id,
-        role: 'partner1',
-        first_name: parseFirstName(r.client_name),
-        last_name: parseLastName(r.client_name),
-        email: email1,
-      })
+      // Stamp the per-row fields the resolver doesn't carry (source,
+      // date precision, guest_count_estimate, notes). Belt + suspenders:
+      // re-running on an attached existing wedding is idempotent — we
+      // only set null fields downstream by limiting the update to columns
+      // the resolver leaves alone.
+      const inquiryFields: Record<string, unknown> = {
+        source: normalizeSource(r.source ?? 'csv_import'),
+      }
+      if (date?.precision) inquiryFields.wedding_date_precision = date.precision
+      const gc = parseGuestCount(r.guests)
+      if (gc != null) inquiryFields.guest_count_estimate = gc
+      if (r.notes) inquiryFields.notes = r.notes
+      await supabase
+        .from('weddings')
+        .update(inquiryFields)
+        .eq('id', weddingIdResolved)
+      // Pretend we have a tiny wedding handle for the rest of the loop —
+      // keep the variable name `wedding` so downstream code stays the same.
+      const wedding = { id: weddingIdResolved }
       existingEmails.add(email1)
 
       // Partner 2 if provided.

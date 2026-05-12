@@ -8,6 +8,8 @@ import {
 import { venueOwnEmails, findOrCreateContact } from '@/lib/services/email/pipeline'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { normalizeSource } from '@/lib/services/normalize-source'
+// Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
+import { mintWedding } from '@/lib/services/identity/mint-wedding'
 
 export const maxDuration = 300
 
@@ -107,34 +109,51 @@ export async function POST() {
     }
 
     // Ensure the prospect has a wedding row (they are a lead after all).
+    // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
     let weddingId = contact.weddingId
     if (!weddingId) {
       const parsedDate = parseFuzzyDate(lead.eventDate ?? undefined)
       const parsedGuests = parseGuestCount(
         lead.guestCount ? extractFirstNumber(lead.guestCount) : undefined
       )
-      const { data: newWedding } = await supabase
-        .from('weddings')
-        .insert({
-          venue_id: venueId,
-          status: 'inquiry',
-          source: normalizeSource(lead.source),
-          inquiry_date: row.timestamp ?? new Date().toISOString(),
-          wedding_date: parsedDate?.iso ?? null,
-          wedding_date_precision: parsedDate?.precision ?? null,
-          guest_count_estimate: parsedGuests,
-          // Migration 316: heat_score / temperature_tier dropped, heat is
-          // derived by the wedding_heat view.
+      try {
+        const minted = await mintWedding({
+          venueId,
+          source: 'reprocess_form_relays',
+          reason: 'reprocess_form_relay',
+          supabase,
+          signals: {
+            email: lead.leadEmail,
+            fullName: lead.leadName ?? null,
+            partner1Name: lead.leadName ?? null,
+            weddingDate: parsedDate?.iso ?? null,
+            inquiryDate: row.timestamp ?? null,
+            guestCount: parsedGuests ?? null,
+          },
         })
-        .select('id')
-        .single()
-      if (newWedding) {
-        weddingId = newWedding.id as string
-        createdWeddings++
+        weddingId = minted.weddingId
+        if (minted.isNew) createdWeddings++
+        // Stamp the source label + date precision + guest count the
+        // resolver doesn't carry. Only when newly minted; for an
+        // attached-existing wedding we don't relitigate.
+        if (minted.isNew) {
+          const inquiryUpdate: Record<string, unknown> = {
+            source: normalizeSource(lead.source),
+          }
+          if (parsedDate?.precision) inquiryUpdate.wedding_date_precision = parsedDate.precision
+          if (parsedGuests != null) inquiryUpdate.guest_count_estimate = parsedGuests
+          await supabase
+            .from('weddings')
+            .update(inquiryUpdate)
+            .eq('id', weddingId)
+        }
         await supabase
           .from('people')
           .update({ wedding_id: weddingId })
           .eq('id', contact.personId)
+      } catch (mintErr) {
+        console.warn('[reprocess-form-relays] mintWedding failed:',
+          mintErr instanceof Error ? mintErr.message : mintErr)
       }
     }
 

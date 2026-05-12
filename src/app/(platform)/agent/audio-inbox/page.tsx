@@ -69,6 +69,34 @@ interface VoiceInteraction {
   from_email: string | null
   timestamp: string
   extracted_identity: Record<string, unknown> | null
+  /** Pattern 9 W3 (mig 318): SMS lifecycle folder. NULL on non-SMS rows
+   *  or SMS rows that haven't been classified yet. */
+  sms_lifecycle_folder?:
+    | 'new'
+    | 'in_progress'
+    | 'awaiting_couple'
+    | 'awaiting_venue'
+    | 'on_hold'
+    | 'closed'
+    | null
+}
+
+type SmsFolder =
+  | 'all'
+  | 'new'
+  | 'in_progress'
+  | 'awaiting_couple'
+  | 'awaiting_venue'
+  | 'on_hold'
+  | 'closed'
+
+const SMS_FOLDER_LABELS: Record<Exclude<SmsFolder, 'all'>, string> = {
+  new: 'New',
+  in_progress: 'In Progress',
+  awaiting_couple: 'Awaiting Couple',
+  awaiting_venue: 'Awaiting Venue',
+  on_hold: 'On Hold',
+  closed: 'Closed',
 }
 
 interface VoiceThread {
@@ -116,6 +144,9 @@ export default function AudioInboxPage() {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [selection, setSelection] = useState<Record<string, string>>({})
   const [activeTab, setActiveTab] = useState<VoiceTab>('all')
+  // Pattern 9 W3 (mig 318): SMS lifecycle folder filter. Only consulted
+  // when activeTab === 'sms'. Default 'all' shows every folder.
+  const [smsFolder, setSmsFolder] = useState<SmsFolder>('all')
 
   const load = useCallback(async () => {
     if (!venueId) return
@@ -148,10 +179,12 @@ export default function AudioInboxPage() {
           .eq('venue_id', venueId)
           .maybeSingle(),
         // Wave 29: pull voice_capture interactions (SMS / Zoom / non-orphan Omi).
+        // Pattern 9 (mig 318): include sms_lifecycle_folder so the SMS tab
+        // can filter by folder.
         supabase
           .from('interactions')
           .select(
-            'id, venue_id, wedding_id, type, direction, subject, body_preview, full_body, from_name, from_email, timestamp, extracted_identity',
+            'id, venue_id, wedding_id, type, direction, subject, body_preview, full_body, from_name, from_email, timestamp, extracted_identity, sms_lifecycle_folder',
           )
           .eq('venue_id', venueId)
           .eq('surface', 'voice_capture')
@@ -236,11 +269,37 @@ export default function AudioInboxPage() {
 
   const filteredVoiceRows = useMemo(() => {
     if (activeTab === 'all' || activeTab === 'omi') return [] // Omi shows via orphans path
-    return voiceRows.filter((r) => {
+    const tabFiltered = voiceRows.filter((r) => {
       const p = providerForInteraction(r)
       return p === activeTab
     })
-  }, [voiceRows, activeTab])
+    // Pattern 9 W3 (mig 318): SMS-tab folder filter. Other tabs ignore
+    // the folder dropdown.
+    if (activeTab !== 'sms' || smsFolder === 'all') return tabFiltered
+    return tabFiltered.filter((r) => r.sms_lifecycle_folder === smsFolder)
+  }, [voiceRows, activeTab, smsFolder])
+
+  // SMS folder tab counts. drives the badge numbers on the folder strip.
+  const smsFolderCounts = useMemo(() => {
+    const counts: Record<SmsFolder, number> = {
+      all: 0,
+      new: 0,
+      in_progress: 0,
+      awaiting_couple: 0,
+      awaiting_venue: 0,
+      on_hold: 0,
+      closed: 0,
+    }
+    for (const r of voiceRows) {
+      if (providerForInteraction(r) !== 'sms') continue
+      counts.all++
+      const f = r.sms_lifecycle_folder
+      if (f && f in counts) {
+        counts[f as Exclude<SmsFolder, 'all'>]++
+      }
+    }
+    return counts
+  }, [voiceRows])
 
   // 2026-05-11: collapse messages from the same phone (or same wedding)
   // into one thread card. Sort by latest activity. Each thread carries
@@ -413,6 +472,50 @@ export default function AudioInboxPage() {
           )
         })}
       </div>
+
+      {/* SMS lifecycle folder strip (Pattern 9 W3, mig 318). Only shown
+          when the SMS tab is active. Six folders mirror the email lifecycle
+          but at SMS register. */}
+      {activeTab === 'sms' && (
+        <div className="flex flex-wrap gap-1 border border-border rounded-lg p-1 bg-warm-white w-fit">
+          {([
+            { id: 'all', label: 'All' },
+            { id: 'new', label: SMS_FOLDER_LABELS.new },
+            { id: 'in_progress', label: SMS_FOLDER_LABELS.in_progress },
+            { id: 'awaiting_couple', label: SMS_FOLDER_LABELS.awaiting_couple },
+            { id: 'awaiting_venue', label: SMS_FOLDER_LABELS.awaiting_venue },
+            { id: 'on_hold', label: SMS_FOLDER_LABELS.on_hold },
+            { id: 'closed', label: SMS_FOLDER_LABELS.closed },
+          ] as const).map((f) => {
+            const active = smsFolder === f.id
+            const count = smsFolderCounts[f.id]
+            return (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setSmsFolder(f.id)}
+                className={
+                  'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ' +
+                  (active
+                    ? 'bg-sage-600 text-white'
+                    : 'text-sage-700 hover:bg-sage-50')
+                }
+                aria-pressed={active}
+              >
+                {f.label}
+                <span
+                  className={
+                    'ml-1 inline-block min-w-[18px] text-center text-[10px] px-1 py-0.5 rounded ' +
+                    (active ? 'bg-white/20' : 'bg-sage-100 text-sage-700')
+                  }
+                >
+                  {count}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {error && (
         <div className="border border-red-200 bg-red-50 text-red-700 text-sm rounded-lg px-3 py-2">

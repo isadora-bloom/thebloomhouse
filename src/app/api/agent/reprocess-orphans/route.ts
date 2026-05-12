@@ -4,6 +4,8 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { classifyEmail } from '@/lib/services/brain/router'
 import { parseFuzzyDate, parseGuestCount } from '@/lib/services/fuzzy-date'
 import { normalizeSource } from '@/lib/services/normalize-source'
+// Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
+import { mintWedding } from '@/lib/services/identity/mint-wedding'
 
 // ---------------------------------------------------------------------------
 // POST /api/agent/reprocess-orphans
@@ -150,39 +152,68 @@ export async function POST(req: Request) {
       continue
     }
 
-    // 3. Create a weddings row in status='inquiry' and link the person.
+    // 3. Mint a wedding via the canonical chokepoint. The resolver will
+    //    attach to an existing wedding if the person already has one
+    //    (e.g. same email arrived twice in the same orphan sweep).
+    // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
     const detectedSource = normalizeSource(extracted.source ?? 'direct')
     const parsedEventDateObj = parseFuzzyDate(extracted.eventDate)
     const parsedEventDate = parsedEventDateObj?.iso ?? null
     const parsedGuestCount = parseGuestCount(extracted.guestCount)
-    const { data: newWedding, error: weddingError } = await supabase
-      .from('weddings')
-      .insert({
-        venue_id: venueId,
-        status: 'inquiry',
-        source: detectedSource,
-        inquiry_date: (row.timestamp as string) ?? new Date().toISOString(),
-        wedding_date: parsedEventDate,
-        wedding_date_precision: parsedEventDateObj?.precision ?? null,
-        guest_count_estimate: parsedGuestCount,
-        // Migration 316: heat_score / temperature_tier dropped, heat is
-        // derived by the wedding_heat view.
+    // Prefer the classifier's extracted senderName for the resolver's
+    // fullName signal. Falls back to from_name and then email local-part
+    // upstream in the resolver.
+    const resolverFullName =
+      (extracted.senderName as string | null | undefined)?.trim()
+        || (row.from_name as string | null) || null
+    let weddingId: string
+    try {
+      const minted = await mintWedding({
+        venueId,
+        source: 'reprocess_orphans',
+        reason: 'reprocess_orphan',
+        supabase,
+        signals: {
+          email: (row.from_email as string | null) ?? null,
+          fullName: resolverFullName,
+          partner1Name: resolverFullName,
+          partner2Name: (extracted.partnerName as string | null | undefined) ?? null,
+          weddingDate: parsedEventDate,
+          inquiryDate: (row.timestamp as string) ?? null,
+          guestCount: parsedGuestCount ?? null,
+        },
       })
-      .select('id')
-      .single()
-
-    if (weddingError || !newWedding) {
-      console.error(`[reprocess-orphans] wedding create failed for ${row.id}:`, weddingError?.message)
+      weddingId = minted.weddingId
+    } catch (mintErr) {
+      console.error(`[reprocess-orphans] mintWedding failed for ${row.id}:`,
+        mintErr instanceof Error ? mintErr.message : mintErr)
       skipped++
       continue
     }
 
-    const weddingId = newWedding.id as string
+    // Stamp the extra inquiry signal fields the resolver doesn't carry
+    // (source / precision / guest_count_estimate). Only fills nulls so
+    // re-running on an already-attached wedding is idempotent.
+    const inquiryUpdate: Record<string, unknown> = {}
+    if (detectedSource) inquiryUpdate.source = detectedSource
+    if (parsedEventDateObj?.precision) inquiryUpdate.wedding_date_precision = parsedEventDateObj.precision
+    if (parsedGuestCount != null) inquiryUpdate.guest_count_estimate = parsedGuestCount
+    if (Object.keys(inquiryUpdate).length > 0) {
+      await supabase
+        .from('weddings')
+        .update(inquiryUpdate)
+        .eq('id', weddingId)
+    }
 
-    // Link the person to the wedding. Also backfill first/last name when
-    // missing — for Knot/WeddingWire forwards the from_name is the network
-    // ("The Knot"), not the couple, so the people row was created nameless.
-    // The classifier pulled the actual sender out of the body into
+    // Link the original person_id (from the interaction) to the wedding.
+    // mintWedding resolves to a canonical person via the match chain,
+    // which may be a DIFFERENT row than row.person_id when the resolver
+    // matched by email-canonical / phone. Stamp the original row's
+    // wedding_id so the legacy interaction link is intact.
+    // Also backfill first/last name when missing — for Knot/WeddingWire
+    // forwards the from_name is the network ("The Knot"), not the
+    // couple, so the people row was created nameless. The classifier
+    // pulled the actual sender out of the body into
     // extractedData.senderName; use that to give the pipeline kanban a
     // real label instead of "Unknown".
     const personUpdate: Record<string, unknown> = { wedding_id: weddingId }

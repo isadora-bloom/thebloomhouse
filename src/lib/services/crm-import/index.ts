@@ -36,6 +36,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { htmlToText } from '@/lib/utils/html-text'
 import type { Cents } from '@/lib/types/monetary'
 import type { Surface } from '@/lib/services/email/surface-classifier'
+// Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
+import { mintWedding } from '@/lib/services/identity/mint-wedding'
 
 /** Stable identifier for the per-row crm_source column. Mirrors the
  *  weddings.crm_source CHECK constraint extended by migration 178 to
@@ -563,20 +565,56 @@ export async function commitNormalisedRows(args: {
         // signals to an existing couple's record).
         recordTouched(weddingId)
       } else {
-        const { data: wedding, error: wedErr } = await supabase
-          .from('weddings')
-          .insert(weddingPayload)
-          .select('id')
-          .single()
-        if (wedErr || !wedding) {
-          result.errors.push(`weddings insert failed: ${wedErr?.message ?? 'no row returned'}`)
+        // Migrated to mintWedding 2026-05-12. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
+        // The fallback path (no email AND no phone, so resolveIdentity
+        // wasn't called above) still has to mint a wedding shell. Route
+        // it through the chokepoint so name+date dedup, source_provenance,
+        // and cascade fire identically to the resolver-attached path.
+        // After mintWedding returns, UPDATE the wedding with all the
+        // CRM-specific fields (status, booking_value, UTM, etc.) the
+        // resolver doesn't carry.
+        const partner1FullName = [row.partner1_first_name, row.partner1_last_name]
+          .filter(Boolean).join(' ') || null
+        const partner2FullName = [row.partner2_first_name, row.partner2_last_name]
+          .filter(Boolean).join(' ') || null
+        let mintedWeddingId: string
+        try {
+          const minted = await mintWedding({
+            venueId,
+            source: 'crm_import',
+            reason: `crm_import:${crmSource}`,
+            supabase,
+            correlationId: null,
+            signals: {
+              email: row.partner1_email ?? null,
+              phone: row.partner1_phone ?? null,
+              fullName: partner1FullName,
+              partner1Name: partner1FullName,
+              partner2Name: partner2FullName,
+              weddingDate: row.wedding_date ?? null,
+              inquiryDate: row.inquiry_date ?? null,
+              guestCount: row.guest_count_estimate ?? null,
+            },
+          })
+          mintedWeddingId = minted.weddingId
+          if (minted.isNew) result.weddingsInserted += 1
+        } catch (mintErr) {
+          result.errors.push(`mintWedding failed: ${mintErr instanceof Error ? mintErr.message : 'unknown'}`)
           result.ok = false
           continue
         }
-        result.weddingsInserted += 1
-        weddingId = wedding.id as string
+        weddingId = mintedWeddingId
         insertedWeddingId = weddingId
         recordTouched(weddingId)
+        // Stamp the CRM-specific fields the chokepoint doesn't carry.
+        // Strip the resolver-owned columns from the payload (venue_id,
+        // inquiry_date, source_provenance) — the resolver already set
+        // those — but keep status / booking_value / UTM / notes / etc.
+        const crmFields: Record<string, unknown> = { ...weddingPayload }
+        delete crmFields.venue_id
+        delete crmFields.inquiry_date
+        delete crmFields.source_provenance
+        await supabase.from('weddings').update(crmFields).eq('id', weddingId)
       }
 
       // people: insert primary partner if we have any name/email AND the

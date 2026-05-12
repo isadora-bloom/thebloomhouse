@@ -6,6 +6,17 @@ Companion to:
 - `src/lib/services/identity/binder-cron.ts` — the deferred binder.
 - `scripts/check-no-direct-wedding-insert.mjs` — the CI guard.
 
+## Status
+
+2026-05-12 sweep: 8 of 9 grandfathered sites migrated to `mintWedding`.
+The remaining direct-INSERT writer is `email/pipeline.ts` (two call
+sites: fresh inquiry + scheduling-tool reconciliation), deliberately
+deferred to a separate soak because it is the hot path.
+
+The CI guard (`scripts/check-no-direct-wedding-insert.mjs`) now allows
+only `email/pipeline.ts` in its `GRANDFATHERED` set. Any new
+`.from('weddings').insert(` elsewhere fails CI.
+
 ## Goal
 
 Collapse the 8 places that `INSERT INTO weddings` directly into one
@@ -32,7 +43,7 @@ Ordered by migration risk (lowest first). Each row contains the file +
 line, the entry path, current behaviour, target behaviour, and the test
 plan to apply when migrating.
 
-### 1. `src/app/api/agent/reprocess-orphans/route.ts:159`
+### 1. `src/app/api/agent/reprocess-orphans/route.ts:159` — DONE 2026-05-12
 
 - Entry path: admin one-shot — re-process orphaned interactions that
   never bound to a wedding.
@@ -49,7 +60,7 @@ plan to apply when migrating.
   - Verify no duplicate weddings are minted when the same interaction
     is reprocessed twice (the resolver's email-exact path should hit).
 
-### 2. `src/app/api/agent/reprocess-form-relays/route.ts:117`
+### 2. `src/app/api/agent/reprocess-form-relays/route.ts:117` — DONE 2026-05-12
 
 - Entry path: admin one-shot — re-process Knot / WW form relays that
   fell through the live pipeline.
@@ -60,7 +71,7 @@ plan to apply when migrating.
     re-engagement logic fires correctly for relays that match an
     existing terminal wedding.
 
-### 3. `src/lib/services/brain-dump/imports.ts:158`
+### 3. `src/lib/services/brain-dump/imports.ts:158` — DONE 2026-05-12
 
 - Entry path: operator brain-dump confirm — CSV / screenshot
   ingestion creates weddings for each row.
@@ -75,7 +86,7 @@ plan to apply when migrating.
   - Verify `previous_wedding_id` is stamped for any row that matches a
     terminal wedding.
 
-### 4. `src/lib/services/data-import.ts:942`
+### 4. `src/lib/services/data-import.ts:942` — DONE 2026-05-12
 
 - Entry path: legacy CSV import (pre-brain-dump). Still used by
   /admin/data-import.
@@ -88,7 +99,7 @@ plan to apply when migrating.
   - Verify ordering doesn't matter (the audit caught a case where the
     bulk path created a person before its wedding existed).
 
-### 5. `src/lib/services/crm-import/index.ts:567`
+### 5. `src/lib/services/crm-import/index.ts:567` — DONE 2026-05-12
 
 - Entry path: HoneyBook / Tave / Dubsado scheduled CRM sync.
 - Current: per-record INSERT after CRM-side merge dedup.
@@ -101,7 +112,7 @@ plan to apply when migrating.
     duplicate weddings.
   - Verify external_ids.honeybook is still stamped on the people row.
 
-### 6. `src/lib/services/email/pipeline.ts:1947` and `:2748`
+### 6. `src/lib/services/email/pipeline.ts:1947` and `:2748` — DEFERRED (hot path)
 
 - Entry path: live email pipeline — both fresh inquiries and
   scheduling-tool reconciliations.
@@ -120,7 +131,7 @@ plan to apply when migrating.
 - Risk: this is the hot path. Migrate AFTER the lower-risk sites
   (#1-#5) have soaked in production for at least a week.
 
-### 7. `src/app/(platform)/portal/weddings/page.tsx:538` and `:562`
+### 7. `src/app/(platform)/portal/weddings/page.tsx:538` and `:562` — DONE 2026-05-12
 
 - Entry path: coordinator manual wedding creation in the portal.
 - Current: client-side form posts that INSERT directly via the
@@ -129,6 +140,10 @@ plan to apply when migrating.
   source: 'portal_ui', signals: {...} })`. This is the highest-effort
   migration because the form submission lives in a client component;
   expect to refactor into a server action.
+- Resolution: new route `src/app/api/portal/mint-wedding/route.ts` is
+  the server endpoint the modal posts to. The two browser-side
+  INSERTs (the original + a unique-collision retry) collapse into one
+  server call; the route handles event-code retry on collision.
 - Test plan:
   - Manual: create a wedding via the portal UI with each combination
     of email-only / phone-only / name+date-only signal sets. Verify

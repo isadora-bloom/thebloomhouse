@@ -402,13 +402,6 @@ export async function findIdentityMatches(
 }
 
 /**
- * @deprecated use findIdentityMatches; will be removed in mig 320.
- * Kept as a one-round bridge so existing call sites compile while the
- * import-rename sweep lands incrementally.
- */
-export const resolveIdentity = findIdentityMatches
-
-/**
  * Convert a people row into the candidate shape for downstream matching.
  * Used after a new person is created so we can check for historical
  * tangential signals that now line up with this person.
