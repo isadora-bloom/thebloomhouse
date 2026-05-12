@@ -2784,6 +2784,15 @@ async function runCorrelationAndWeatherCancellation(): Promise<{
 //   Query: ?job=JOB_NAME
 // ---------------------------------------------------------------------------
 
+// Vercel function timeout. Defaults to 60s on Pro plan; this dispatcher
+// runs ~40 different jobs ranging from quick (~1s) to deep (email_poll
+// across N venues, attribution refresh across N venues, alumni cohort
+// regeneration). At 30+ venues the email_poll job exceeds 60s under
+// load. 300s is the Vercel Pro ceiling and gives the fleet the runway
+// it needs through ~80-100 venues. Beyond that the architecture needs
+// to move to a queue-per-venue pattern (see scaling notes 2026-05-12).
+export const maxDuration = 300
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const job = searchParams.get('job') as JobName | null

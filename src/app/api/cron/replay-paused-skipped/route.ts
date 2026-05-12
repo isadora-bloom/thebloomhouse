@@ -164,6 +164,11 @@ async function buildRecap(): Promise<RecapResult> {
   return summary
 }
 
+// Per-venue iteration over paused_period_skipped + notification fan-out.
+// At 200 venues this gets non-trivial. Set to 120s — comfortable for
+// our scale, well under the 300s Vercel Pro ceiling.
+export const maxDuration = 120
+
 export async function GET(request: NextRequest) {
   const { verifyCronAuth } = await import('@/lib/cron-auth')
   const authResult = verifyCronAuth(request, { alwaysDestructive: true })
