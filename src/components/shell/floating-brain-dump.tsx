@@ -17,7 +17,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Brain, X, Loader2, Send, CheckCircle2, AlertCircle, Upload, ArrowRight, HelpCircle } from 'lucide-react'
+import { Brain, X, Loader2, Send, CheckCircle2, AlertCircle, Upload, ArrowRight, HelpCircle, Camera } from 'lucide-react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 
@@ -204,6 +204,104 @@ export function FloatingBrainDump() {
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
   const [file, setFile] = useState<File | null>(null)
+  const [capturing, setCapturing] = useState(false)
+  const [captureError, setCaptureError] = useState<string | null>(null)
+
+  /**
+   * Capture a single frame from a browser tab (or window/screen) via the
+   * Screen Capture API and attach it as a PNG File to the brain-dump.
+   * Lets the coordinator screenshot Knot / Instagram / Pinterest / X /
+   * TikTok / Facebook content without leaving the page.
+   *
+   * Browser support: getDisplayMedia is in every modern desktop browser.
+   * Mobile is best-effort; the button renders regardless and the API
+   * call's NotAllowedError / NotSupportedError surface as an inline hint
+   * so the operator knows to fall back to the file-upload path.
+   */
+  const captureTab = useCallback(async () => {
+    if (capturing) return
+    setCaptureError(null)
+    setCapturing(true)
+    let stream: MediaStream | null = null
+    try {
+      // The browser opens an OS picker listing tabs / windows / screens.
+      // We pass preferCurrentTab=false so the picker defaults to the
+      // tab-list view (most common for socials screenshots).
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'browser' } as MediaTrackConstraints,
+        audio: false,
+        // preferCurrentTab is a Chrome-only hint; left unset so the
+        // picker shows all sources.
+      })
+      const [track] = stream.getVideoTracks()
+      if (!track) throw new Error('No video track in capture stream')
+
+      // ImageCapture is the cleanest path on Chromium. Safari + Firefox
+      // need the video-element + canvas fallback. Try ImageCapture first.
+      let blob: Blob | null = null
+      const ImageCaptureCtor = (window as unknown as {
+        ImageCapture?: new (track: MediaStreamTrack) => { grabFrame: () => Promise<ImageBitmap> }
+      }).ImageCapture
+      if (ImageCaptureCtor) {
+        try {
+          const imageCapture = new ImageCaptureCtor(track)
+          const bitmap = await imageCapture.grabFrame()
+          const canvas = document.createElement('canvas')
+          canvas.width = bitmap.width
+          canvas.height = bitmap.height
+          const ctx = canvas.getContext('2d')
+          if (!ctx) throw new Error('canvas 2d context unavailable')
+          ctx.drawImage(bitmap, 0, 0)
+          blob = await new Promise<Blob | null>((resolve) =>
+            canvas.toBlob(resolve, 'image/png'),
+          )
+        } catch {
+          // Fall through to the video-element path.
+        }
+      }
+      if (!blob) {
+        // Fallback: pump the stream into an off-DOM <video>, wait for
+        // the first frame, paint to canvas, export.
+        const video = document.createElement('video')
+        video.srcObject = stream
+        video.muted = true
+        await video.play()
+        // Allow one paint tick so the frame is real, not a black box.
+        await new Promise((r) => requestAnimationFrame(() => r(null)))
+        const canvas = document.createElement('canvas')
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        const ctx = canvas.getContext('2d')
+        if (!ctx) throw new Error('canvas 2d context unavailable')
+        ctx.drawImage(video, 0, 0)
+        blob = await new Promise<Blob | null>((resolve) =>
+          canvas.toBlob(resolve, 'image/png'),
+        )
+      }
+      if (!blob) throw new Error('Capture produced no image data')
+
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const captured = new File([blob], `screenshot-${stamp}.png`, {
+        type: 'image/png',
+      })
+      setFile(captured)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Capture failed'
+      // NotAllowedError + AbortError happen when the operator cancels
+      // the picker. Don't surface those as errors.
+      if (
+        err instanceof DOMException &&
+        (err.name === 'NotAllowedError' || err.name === 'AbortError')
+      ) {
+        // user dismissed picker — silent
+      } else {
+        setCaptureError(msg)
+      }
+    } finally {
+      if (stream) stream.getTracks().forEach((t) => t.stop())
+      setCapturing(false)
+    }
+  }, [capturing])
   const [state, setState] = useState<SubmitState>({ kind: 'idle' })
   // Bug 9 (2026-05-09). Tracks whether the coordinator typed or pasted
   // in this open lifecycle. Once true, reopen does NOT re-prefill the
@@ -771,7 +869,7 @@ export function FloatingBrainDump() {
                   className="w-full px-3 py-2 border border-sage-200 rounded-lg text-sm"
                   autoFocus
                 />
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <label className="flex items-center gap-1.5 px-3 py-2 text-xs text-sage-600 border border-dashed border-sage-200 rounded-lg cursor-pointer hover:bg-sage-50">
                     <Upload className="w-3.5 h-3.5" />
                     {file ? file.name : 'Attach file'}
@@ -781,6 +879,20 @@ export function FloatingBrainDump() {
                       className="hidden"
                     />
                   </label>
+                  <button
+                    type="button"
+                    onClick={captureTab}
+                    disabled={capturing}
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs text-sage-600 border border-dashed border-sage-200 rounded-lg cursor-pointer hover:bg-sage-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Capture a screenshot of a browser tab or window without leaving this page"
+                  >
+                    {capturing ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Camera className="w-3.5 h-3.5" />
+                    )}
+                    {capturing ? 'Capturing…' : 'Capture tab'}
+                  </button>
                   {file && (
                     <button
                       onClick={() => setFile(null)}
@@ -790,6 +902,11 @@ export function FloatingBrainDump() {
                     </button>
                   )}
                 </div>
+                {captureError && (
+                  <p className="text-xs text-rose-600">
+                    Screen capture failed: {captureError}. Try the Attach file path.
+                  </p>
+                )}
                 {state.kind === 'error' && (
                   <p className="text-xs text-rose-600">{state.message}</p>
                 )}
