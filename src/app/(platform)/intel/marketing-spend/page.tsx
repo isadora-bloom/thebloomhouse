@@ -110,6 +110,8 @@ export default function MarketingSpendPage() {
   // Bulk import textarea (CSV format)
   const [csvText, setCsvText] = useState<string>('')
   const [csvProgress, setCsvProgress] = useState<{ inserted: number; duplicates: number; errors: string[] } | null>(null)
+  // Wave 6E follow-up: apply a single agency tag to every CSV row.
+  const [csvAgencyId, setCsvAgencyId] = useState<string>('')
 
   // ---------------------------------------------------------------
   // Loaders
@@ -283,6 +285,7 @@ export default function MarketingSpendPage() {
               campaignName: cmp || null,
               spendDate: dt,
               amountCents: Math.round(amt * 100),
+              agencyId: csvAgencyId || null,
             }),
           })
           const j = (await resp.json()) as { ok: boolean; inserted?: boolean; error?: string }
@@ -303,7 +306,7 @@ export default function MarketingSpendPage() {
     }
     setCsvProgress({ inserted, duplicates, errors })
     await refresh()
-  }, [csvText, refresh])
+  }, [csvText, csvAgencyId, refresh])
 
   // ---------------------------------------------------------------
   // Render
@@ -494,6 +497,28 @@ export default function MarketingSpendPage() {
           Amounts in dollars (we convert to cents). Idempotent — duplicate
           (channel, campaign, date) rows are skipped.
         </p>
+
+        {agencies.length > 0 ? (
+          <label className="mt-3 flex items-center gap-2 text-xs">
+            <Briefcase className="h-3 w-3 text-[var(--bh-muted)]" />
+            <span className="text-[var(--bh-muted)]">
+              Tag every row with agency:
+            </span>
+            <select
+              value={csvAgencyId}
+              onChange={(e) => setCsvAgencyId(e.target.value)}
+              className="rounded border border-[var(--bh-line)] bg-white px-2 py-1 text-xs"
+            >
+              <option value="">— none —</option>
+              {agencies.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+
         <textarea
           rows={8}
           value={csvText}

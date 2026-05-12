@@ -167,6 +167,18 @@
     {
       "path": "/api/cron?job=booked_data_recovery",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron?job=agency_activity_sweep",
+      "schedule": "30 6 * * *"
+    },
+    {
+      "path": "/api/cron?job=tbh_reports_monthly",
+      "schedule": "0 9 1 * *"
+    },
+    {
+      "path": "/api/cron?job=agency_document_orphans",
+      "schedule": "0 2 * * 0"
     }
   ]
 }

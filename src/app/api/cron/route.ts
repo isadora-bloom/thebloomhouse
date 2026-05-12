@@ -48,6 +48,11 @@ import { refreshVoiceDnaForAllVenues } from '@/lib/services/brain/voice-dna-extr
 import { logEvent } from '@/lib/observability/logger'
 import { computeAttributionParityAllVenues } from '@/lib/services/attribution/parity'
 import { mergePeopleAliasesAllVenues } from '@/lib/services/identity/people-merge-aliases'
+import {
+  runAgencyActivitySweep,
+  runTbhReportsMonthly,
+  runAgencyDocumentOrphans,
+} from '@/lib/services/intel/marketing-agency-cron'
 import { classifyTourOutcomesAllVenues } from '@/lib/services/tour/outcome-classifier'
 import { recoverBookedDataAllVenues } from '@/lib/services/booked-data-recovery'
 import { runTelemetryRetentionPrune } from '@/lib/services/telemetry-retention'
@@ -368,6 +373,13 @@ const VALID_JOBS = [
   // curl until a shared maintenance cron picks it up. Cost
   // ~$0.0003/email; full Rixey ~12k-row backfill is ~$3.60.
   'author_class_backfill',
+  // Wave 6E follow-up (2026-05-12). Agency-tracker maintenance jobs.
+  // Each has a standalone /api/cron/{name}/route.ts for ad-hoc curl;
+  // the Vercel cron schedule fires through here so the cron-runs
+  // logging + verifyCronAuth pattern stays consistent.
+  'agency_activity_sweep',
+  'tbh_reports_monthly',
+  'agency_document_orphans',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -445,6 +457,24 @@ async function runJob(job: JobName): Promise<unknown> {
       // weddings; only writes are to the parity log. Cutover gate
       // is the dashboard at /intel/sources/parity.
       return computeAttributionParityAllVenues(createServiceClient())
+
+    case 'agency_activity_sweep':
+      // Wave 6E follow-up. Auto-writes kpi_missed + report_late entries
+      // into agency_activity_log so the timeline self-populates.
+      return runAgencyActivitySweep()
+
+    case 'tbh_reports_monthly':
+      // Wave 6E follow-up. First of each month — generates internal-
+      // mode TBH Report for every agency with an active engagement
+      // covering the prior calendar month. Idempotent.
+      return runTbhReportsMonthly()
+
+    case 'agency_document_orphans':
+      // Wave 6E follow-up. Sweeps Supabase Storage for files whose
+      // agency_documents row was soft-deleted >30 days ago. Hard
+      // removal only past the retention window so accidental deletes
+      // are recoverable.
+      return runAgencyDocumentOrphans()
 
     case 'merge_people_aliases':
       // T5-Rixey-EEE Bug 1. Per-wedding alias collapse. Sweeps every

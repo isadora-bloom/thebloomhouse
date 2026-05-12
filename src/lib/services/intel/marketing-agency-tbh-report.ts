@@ -225,22 +225,89 @@ async function buildCoverage(
     attributionStart = (data?.[0]?.decided_at as string | null) ?? null
   }
 
+  // Read live coverage state instead of hardcoding. Each substrate
+  // has a real on/off signal we can probe.
+  //
+  // Pixel: venue_config.pixel_installed_at gets stamped the first time
+  // /api/v1/visit lands a successful POST. NULL = not yet installed.
+  const venueId = venueIds[0]
+  let pixel: CoverageDisclosure['pixel'] = 'not_installed'
+  let pixelInstalledAt: string | null = null
+  if (venueId) {
+    const { data: vc } = await service
+      .from('venue_config')
+      .select('pixel_installed_at')
+      .eq('venue_id', venueId)
+      .maybeSingle()
+    if (vc?.pixel_installed_at) {
+      pixel = 'installed'
+      pixelInstalledAt = vc.pixel_installed_at as string
+    }
+  }
+
+  // Google Ads OAuth: probe google_ads_connections.
+  let googleAdsOAuth: CoverageDisclosure['googleAdsOAuth'] = 'not_connected'
+  if (venueId) {
+    const { data: gads } = await service
+      .from('google_ads_connections')
+      .select('status')
+      .eq('venue_id', venueId)
+      .maybeSingle()
+    if (gads?.status === 'connected') googleAdsOAuth = 'connected'
+  }
+
+  // Calendly Q&A: Wave 15 discovery-source extraction is wired into
+  // the webhook handler and writes structured attribution_events.
+  // If we see any discovery_sources rows for this venue (any source),
+  // capture is live. Otherwise treat as webhook_only (the webhook
+  // arrives but no Q&A has matched the extractor yet).
+  let calendlyQa: CoverageDisclosure['calendlyQa'] = 'webhook_only'
+  if (venueId) {
+    const { count } = await service
+      .from('discovery_sources')
+      .select('id', { count: 'exact', head: true })
+      .eq('venue_id', venueId)
+      .limit(1)
+    if ((count ?? 0) > 0) calendlyQa = 'capturing'
+  }
+
   const notes: string[] = []
-  notes.push(
-    'Pixel-based cross-session attribution is not yet deployed. Single-session UTM is captured at form submission; cross-device journeys depend on forensic reconstruction.',
-  )
-  notes.push(
-    'Google Ads OAuth is not connected. Brand-search vs non-brand split relies on utm_term values supplied at the campaign level.',
-  )
+  if (pixel === 'not_installed') {
+    notes.push(
+      'Pixel-based cross-session attribution is not yet deployed. Single-session UTM is captured at form submission; cross-device journeys depend on forensic reconstruction.',
+    )
+  } else {
+    notes.push(
+      `Pixel installed ${pixelInstalledAt ? new Date(pixelInstalledAt).toISOString().slice(0, 10) : ''}. Visits before that date have forensic-only first-touch.`,
+    )
+  }
+  if (googleAdsOAuth === 'not_connected') {
+    notes.push(
+      'Google Ads OAuth is not connected. Brand-search vs non-brand split relies on utm_term values supplied at the campaign level.',
+    )
+  } else {
+    notes.push(
+      'Google Ads OAuth connected. GCLID lookups resolve to keyword + match-type definitively.',
+    )
+  }
+  if (calendlyQa === 'webhook_only') {
+    notes.push(
+      'Calendly webhook arriving but no discovery-source Q&A captured yet. If the "How did you hear about us?" question is on the form, the extractor should match.',
+    )
+  } else {
+    notes.push(
+      'Calendly Q&A discovery-source capture is live. Self-reported answers feed first-touch attribution with self_reported=true.',
+    )
+  }
   notes.push(
     'Pre-attribution-start leads are forensic-only, with ~40-60% confidence on first-touch.',
   )
 
   return {
-    pixel: 'not_installed',
-    pixelInstalledAt: null,
-    googleAdsOAuth: 'not_connected',
-    calendlyQa: 'webhook_only',
+    pixel,
+    pixelInstalledAt,
+    googleAdsOAuth,
+    calendlyQa,
     attributionStart,
     notes,
   }

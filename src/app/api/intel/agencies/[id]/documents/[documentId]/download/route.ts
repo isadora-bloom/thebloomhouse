@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createHash } from 'crypto'
 import {
   getPlatformAuth,
   unauthorized,
@@ -54,6 +55,39 @@ export async function GET(request: NextRequest, ctx: RouteContext) {
         { status: 400 },
       )
     }
+
+    // Write an audit row BEFORE redirecting so a download attempt always
+    // leaves a trace even if the user closes the tab mid-redirect.
+    void (async () => {
+      try {
+        const ipHeader =
+          request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+          request.headers.get('x-real-ip')
+        const uaHeader = request.headers.get('user-agent')
+        const salt = documentId // per-document salt — non-reversible across docs
+        const ipHash = ipHeader
+          ? createHash('sha256')
+              .update(`${salt}:${ipHeader}`)
+              .digest('hex')
+              .slice(0, 32)
+          : null
+        const userAgentHash = uaHeader
+          ? createHash('sha256')
+              .update(`${salt}:${uaHeader}`)
+              .digest('hex')
+              .slice(0, 32)
+          : null
+        await service.from('agency_document_downloads').insert({
+          document_id: documentId,
+          agency_id: agencyId,
+          downloaded_by: auth.userId,
+          ip_hash: ipHash,
+          user_agent_hash: userAgentHash,
+        })
+      } catch (err) {
+        console.warn('[documents/download] audit write failed:', err)
+      }
+    })()
 
     // Heuristic: in-bucket paths don't have a scheme; external URLs do.
     const isExternal = /^https?:\/\//.test(doc.file_url as string)

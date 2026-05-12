@@ -510,7 +510,15 @@ export default function AgencyDetailPage({
 
       {/* Wave 6E depth — profile sections. */}
       <AgencyContactsSection agencyId={agencyId} />
-      <AgencyDocumentsSection agencyId={agencyId} />
+      <AgencyDocumentsSection
+        agencyId={agencyId}
+        engagements={engagements.map((e) => ({
+          id: e.id,
+          venueId: e.venueId,
+          startedAt: e.startedAt,
+          endedAt: e.endedAt,
+        }))}
+      />
       <AgencyKpisSection agencyId={agencyId} />
       {/* Wave 6E depth pass — truth-vs-claim sits right under the KPI
           commitments since the operator mental model is "what they

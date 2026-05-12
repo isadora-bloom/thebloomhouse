@@ -278,6 +278,7 @@ export function AgencyContactsSection({ agencyId }: { agencyId: string }) {
   const [contacts, setContacts] = useState<ContactRow[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const reload = useCallback(async () => {
     setLoading(true)
     try {
@@ -344,39 +345,63 @@ export function AgencyContactsSection({ agencyId }: { agencyId: string }) {
         </p>
       ) : (
         <ul className="mt-3 divide-y divide-[var(--bh-line)]/60">
-          {contacts.map((c) => (
-            <li key={c.id} className="py-3 flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-medium">{c.name}</span>
-                  {c.isPrimary ? (
-                    <span className="rounded-full bg-[var(--bh-sage-50)] px-1.5 py-0.5 text-[10px] uppercase text-[var(--bh-sage-700)]">
-                      primary
-                    </span>
-                  ) : null}
-                  {c.role ? (
-                    <span className="text-xs text-[var(--bh-muted)]">
-                      {ROLE_OPTIONS.find((r) => r.value === c.role)?.label ?? c.role}
-                    </span>
+          {contacts.map((c) =>
+            editingId === c.id ? (
+              <li key={c.id} className="py-3">
+                <ContactForm
+                  agencyId={agencyId}
+                  existing={c}
+                  onSaved={async () => {
+                    setEditingId(null)
+                    await reload()
+                  }}
+                  onCancel={() => setEditingId(null)}
+                />
+              </li>
+            ) : (
+              <li key={c.id} className="py-3 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium">{c.name}</span>
+                    {c.isPrimary ? (
+                      <span className="rounded-full bg-[var(--bh-sage-50)] px-1.5 py-0.5 text-[10px] uppercase text-[var(--bh-sage-700)]">
+                        primary
+                      </span>
+                    ) : null}
+                    {c.role ? (
+                      <span className="text-xs text-[var(--bh-muted)]">
+                        {ROLE_OPTIONS.find((r) => r.value === c.role)?.label ?? c.role}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-0.5 text-xs text-[var(--bh-muted)]">
+                    {[c.email, c.phone].filter(Boolean).join(' · ') || '—'}
+                  </div>
+                  {c.notes ? (
+                    <p className="mt-1 text-xs text-[var(--bh-ink)]">{c.notes}</p>
                   ) : null}
                 </div>
-                <div className="mt-0.5 text-xs text-[var(--bh-muted)]">
-                  {[c.email, c.phone].filter(Boolean).join(' · ') || '—'}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingId(c.id)}
+                    className="text-[var(--bh-muted)] hover:text-[var(--bh-ink)]"
+                    title="Edit"
+                  >
+                    <Edit2 className="h-3 w-3" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDelete(c.id)}
+                    className="text-rose-600 hover:text-rose-800"
+                    title="Delete"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
                 </div>
-                {c.notes ? (
-                  <p className="mt-1 text-xs text-[var(--bh-ink)]">{c.notes}</p>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleDelete(c.id)}
-                className="text-rose-600 hover:text-rose-800"
-                title="Delete"
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </li>
-          ))}
+              </li>
+            ),
+          )}
         </ul>
       )}
     </section>
@@ -385,17 +410,21 @@ export function AgencyContactsSection({ agencyId }: { agencyId: string }) {
 
 function ContactForm({
   agencyId,
+  existing,
   onSaved,
+  onCancel,
 }: {
   agencyId: string
+  existing?: ContactRow
   onSaved: () => Promise<void> | void
+  onCancel?: () => void
 }) {
-  const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
-  const [phone, setPhone] = useState('')
-  const [role, setRole] = useState('')
-  const [notes, setNotes] = useState('')
-  const [isPrimary, setIsPrimary] = useState(false)
+  const [name, setName] = useState(existing?.name ?? '')
+  const [email, setEmail] = useState(existing?.email ?? '')
+  const [phone, setPhone] = useState(existing?.phone ?? '')
+  const [role, setRole] = useState(existing?.role ?? '')
+  const [notes, setNotes] = useState(existing?.notes ?? '')
+  const [isPrimary, setIsPrimary] = useState(existing?.isPrimary ?? false)
   const [submitting, setSubmitting] = useState(false)
   const submit = useCallback(
     async (e: React.FormEvent) => {
@@ -403,24 +432,52 @@ function ContactForm({
       if (!name.trim()) return
       setSubmitting(true)
       try {
-        await fetch(`/api/intel/agencies/${agencyId}/contacts`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name,
-            email: email || null,
-            phone: phone || null,
-            role: role || null,
-            notes: notes || null,
-            isPrimary,
-          }),
-        })
+        if (existing) {
+          await fetch(
+            `/api/intel/agencies/${agencyId}/contacts/${existing.id}`,
+            {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name,
+                email: email || null,
+                phone: phone || null,
+                role: role || null,
+                notes: notes || null,
+                isPrimary,
+              }),
+            },
+          )
+        } else {
+          await fetch(`/api/intel/agencies/${agencyId}/contacts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name,
+              email: email || null,
+              phone: phone || null,
+              role: role || null,
+              notes: notes || null,
+              isPrimary,
+            }),
+          })
+        }
         await onSaved()
       } finally {
         setSubmitting(false)
       }
     },
-    [agencyId, name, email, phone, role, notes, isPrimary, onSaved],
+    [
+      agencyId,
+      existing,
+      name,
+      email,
+      phone,
+      role,
+      notes,
+      isPrimary,
+      onSaved,
+    ],
   )
   return (
     <form
@@ -476,14 +533,25 @@ function ContactForm({
         />
         Primary contact (only one per agency)
       </label>
-      <button
-        type="submit"
-        disabled={submitting || !name.trim()}
-        className="inline-flex items-center gap-2 rounded-md bg-[var(--bh-sage-700)] px-3 py-1.5 text-sm text-white hover:opacity-90 disabled:opacity-50 md:col-span-2"
-      >
-        {submitting ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-        Save contact
-      </button>
+      <div className="md:col-span-2 flex items-center gap-2">
+        <button
+          type="submit"
+          disabled={submitting || !name.trim()}
+          className="inline-flex items-center gap-2 rounded-md bg-[var(--bh-sage-700)] px-3 py-1.5 text-sm text-white hover:opacity-90 disabled:opacity-50"
+        >
+          {submitting ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+          {existing ? 'Save changes' : 'Save contact'}
+        </button>
+        {onCancel ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="text-sm text-[var(--bh-muted)] hover:text-[var(--bh-ink)]"
+          >
+            Cancel
+          </button>
+        ) : null}
+      </div>
     </form>
   )
 }
@@ -527,7 +595,20 @@ const DOCUMENT_KINDS = [
   { value: 'other', label: 'Other' },
 ]
 
-export function AgencyDocumentsSection({ agencyId }: { agencyId: string }) {
+export interface DocsEngagementOption {
+  id: string
+  venueId: string
+  startedAt: string
+  endedAt: string | null
+}
+
+export function AgencyDocumentsSection({
+  agencyId,
+  engagements = [],
+}: {
+  agencyId: string
+  engagements?: DocsEngagementOption[]
+}) {
   const [docs, setDocs] = useState<DocumentRow[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -596,6 +677,7 @@ export function AgencyDocumentsSection({ agencyId }: { agencyId: string }) {
       {showForm ? (
         <DocumentForm
           agencyId={agencyId}
+          engagements={engagements}
           onSaved={async () => {
             setShowForm(false)
             await reload()
@@ -684,9 +766,11 @@ export function AgencyDocumentsSection({ agencyId }: { agencyId: string }) {
 
 function DocumentForm({
   agencyId,
+  engagements,
   onSaved,
 }: {
   agencyId: string
+  engagements: DocsEngagementOption[]
   onSaved: () => Promise<void> | void
 }) {
   const [mode, setMode] = useState<'upload' | 'url'>('upload')
@@ -695,6 +779,7 @@ function DocumentForm({
   const [file, setFile] = useState<File | null>(null)
   const [dragActive, setDragActive] = useState(false)
   const [kind, setKind] = useState('')
+  const [engagementId, setEngagementId] = useState('')
   const [effectiveDate, setEffectiveDate] = useState('')
   const [expiresAt, setExpiresAt] = useState('')
   const [notes, setNotes] = useState('')
@@ -739,6 +824,7 @@ function DocumentForm({
           fd.set('file', file)
           fd.set('name', name)
           if (kind) fd.set('kind', kind)
+          if (engagementId) fd.set('engagementId', engagementId)
           if (effectiveDate) fd.set('effectiveDate', effectiveDate)
           if (expiresAt) fd.set('expiresAt', expiresAt)
           if (notes) fd.set('notes', notes)
@@ -763,6 +849,7 @@ function DocumentForm({
                 name,
                 fileUrl: fileUrl || null,
                 kind: kind || null,
+                engagementId: engagementId || null,
                 effectiveDate: effectiveDate || null,
                 expiresAt: expiresAt || null,
                 notes: notes || null,
@@ -789,6 +876,7 @@ function DocumentForm({
       file,
       fileUrl,
       kind,
+      engagementId,
       effectiveDate,
       expiresAt,
       notes,
@@ -919,6 +1007,20 @@ function DocumentForm({
             </option>
           ))}
         </select>
+        {engagements.length > 0 ? (
+          <select
+            value={engagementId}
+            onChange={(e) => setEngagementId(e.target.value)}
+            className="rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm"
+          >
+            <option value="">— scope: all engagements —</option>
+            {engagements.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.startedAt} → {e.endedAt ?? 'active'}
+              </option>
+            ))}
+          </select>
+        ) : null}
         <input
           type="text"
           placeholder="Notes"
