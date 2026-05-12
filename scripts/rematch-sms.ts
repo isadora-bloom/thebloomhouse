@@ -51,12 +51,15 @@ const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_
 async function rematchForVenue(venueId: string): Promise<void> {
   const since = new Date(Date.now() - LOOKBACK_DAYS * 86_400_000).toISOString()
 
+  // 2026-05-12: rematch runs on BOTH directions. The LLM prompt now
+  // handles inbound self-id ("Hi, this is Sarah") AND outbound
+  // addressee ("Hi Sarah, your tour..."). Filtering to inbound here
+  // skipped the 17 outbound messages cleanup-direction-sql cleared.
   const { data: rows, error } = await sb
     .from('interactions')
-    .select('id, full_body, body_preview, from_email, timestamp')
+    .select('id, full_body, body_preview, from_email, to_email, direction, timestamp')
     .eq('venue_id', venueId)
     .eq('type', 'sms')
-    .eq('direction', 'inbound')
     .or('person_id.is.null,wedding_id.is.null')
     .gte('timestamp', since)
     .order('timestamp', { ascending: false })
@@ -72,6 +75,8 @@ async function rematchForVenue(venueId: string): Promise<void> {
     full_body: string | null
     body_preview: string | null
     from_email: string | null
+    to_email: string | null
+    direction: string
     timestamp: string
   }>
 
@@ -85,17 +90,21 @@ async function rematchForVenue(venueId: string): Promise<void> {
     const text = (row.full_body ?? row.body_preview ?? '').trim()
     if (!text) continue
 
+    // The "other party" phone is from_email on inbound, to_email on outbound.
+    const otherPhone =
+      row.direction === 'inbound' ? row.from_email : row.to_email
+
     const match = await tryMatchSmsByName({
       supabase: sb,
       venueId,
       body: text,
-      fromPhone: row.from_email,
+      fromPhone: otherPhone,
     })
     if (!match) continue
     matched++
 
     samples.push(
-      `  ✓ ${row.timestamp.slice(0, 10)} · ${row.from_email ?? 'no-phone'} → ${match.matchedName} (conf ${match.confidence})`,
+      `  ✓ ${row.timestamp.slice(0, 10)} · ${row.direction} · ${otherPhone ?? 'no-phone'} → ${match.matchedName} (conf ${match.confidence})`,
     )
 
     if (dryRun) continue

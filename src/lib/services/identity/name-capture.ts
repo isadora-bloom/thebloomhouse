@@ -584,6 +584,131 @@ export function inferNameFromEmail(email: string): { first: string | null; last:
   return null
 }
 
+/**
+ * Joint-handle parser for shared couple email accounts. Splits handles
+ * like `justinlovewithsandy@gmail.com`, `michaelandjane@`, `kateandtom@`,
+ * `sam-n-alex@`, `johnplusgina@`. Returns the two partners when both
+ * tokens look like real names + the joiner is in the known set.
+ *
+ * Returns null for:
+ *   - Single-name handles ("justin@", "sandy@" — use inferNameFromEmail)
+ *   - Handles with digits ("justin2025@" — too ambiguous)
+ *   - Handles with no recognised joiner ("justinsandy@" — could be one
+ *     person's compound first name; coordinator labels manually)
+ *
+ * Discovered 2026-05-12 (Justin + Sandy at Rixey) — joint accounts are
+ * common for booked couples and the existing handle-parser missed them
+ * entirely, leaving every SMS unmatched.
+ */
+export function parseJointEmailHandle(
+  email: string,
+): { partner1_first: string; partner2_first: string } | null {
+  if (!email) return null
+  const at = email.indexOf('@')
+  if (at < 1) return null
+  const local = email.slice(0, at).toLowerCase()
+  if (/\d/.test(local)) return null
+
+  // Role addresses are not personal — never treat as a couple handle.
+  if (ROLE_LOCAL_PARTS.has(local)) return null
+
+  // First try explicit separators (`.`, `_`, `-`) with a joiner token.
+  const separated = local.split(/[._-]+/).filter(Boolean)
+  if (separated.length === 3) {
+    const [a, joiner, b] = separated
+    if (KNOWN_JOINERS.has(joiner) && isPlausibleFirstName(a) && isPlausibleFirstName(b)) {
+      return { partner1_first: titleCase(a), partner2_first: titleCase(b) }
+    }
+  }
+
+  // Run-on handles: scan for known joiner substrings inside a single
+  // continuous local part. Conservative — only accept when the two
+  // flanking tokens both pass the stricter isPlausibleFirstName gate.
+  //
+  // Dropped the bare 'n' joiner from this set (used to split "danny"
+  // and "milkhoneyespresso" — too many false positives). The 'n'
+  // joiner is kept for the explicit-separator form ("sam.n.alex").
+  //
+  // Examples that match:
+  //   justinlovewithsandy → justin + sandy (joiner: lovewith)
+  //   michaelandjane     → michael + jane (joiner: and)
+  //   johnplusgina        → john + gina (joiner: plus)
+  for (const joiner of RUN_ON_JOINERS) {
+    const idx = local.indexOf(joiner)
+    if (idx < 3) continue
+    const a = local.slice(0, idx)
+    const b = local.slice(idx + joiner.length)
+    if (!isPlausibleFirstName(a) || !isPlausibleFirstName(b)) continue
+    return { partner1_first: titleCase(a), partner2_first: titleCase(b) }
+  }
+
+  return null
+}
+
+// Separator-form joiners ("kate.and.tom@", "sam_n_alex@", etc).
+const KNOWN_JOINERS = new Set(['and', 'n', 'plus', '&', 'with'])
+
+// Run-on form joiners — substring search inside a single token.
+// Order matters: longer joiners first so "lovewith" wins over the shorter
+// "with" for "justinlovewithsandy". 'n' is intentionally NOT in this
+// list — it's too prone to false splits on long handles ("milkhoneyespresso"
+// would split on the 'n' inside 'honey').
+const RUN_ON_JOINERS: string[] = [
+  'loveswith',
+  'lovewith',
+  'andthe',
+  'meets',
+  'plus',
+  'and',
+  '&',
+]
+
+/** Role addresses (no person behind them — skip every body-email path). */
+const ROLE_LOCAL_PARTS = new Set([
+  'hello', 'hi', 'info', 'contact', 'support', 'help', 'admin',
+  'team', 'office', 'sales', 'marketing', 'noreply', 'no-reply',
+  'donotreply', 'do-not-reply', 'mailer-daemon', 'postmaster',
+  'bounce', 'bounces', 'unsubscribe', 'press', 'pr', 'media',
+  'billing', 'accounts', 'invoices', 'orders', 'service', 'services',
+  'inquiries', 'inquiry', 'reservations', 'bookings', 'events',
+])
+
+/** Words that show up inside email handles but are NEVER first names
+ *  in this context (business names, common nouns, domain leakage).
+ *  Used to reject handle splits where one flank is a non-name word. */
+const NON_NAME_WORDS = new Set([
+  // Domain-word leakage
+  'gmail', 'yahoo', 'hotmail', 'outlook', 'aol', 'icloud', 'proton', 'protonmail',
+  'live', 'me', 'mac', 'msn', 'comcast', 'verizon', 'att', 'sbcglobal',
+  // Generic English nouns we've seen in real handles
+  'milk', 'honey', 'espresso', 'coffee', 'tea', 'cafe', 'shop',
+  'wedding', 'weddings', 'bride', 'brides', 'groom', 'venue',
+  'love', 'loves', 'forever', 'always', 'together', 'us',
+  'family', 'home', 'house', 'studio', 'works', 'media',
+  // Common short noise
+  'the', 'a', 'an', 'is', 'it', 'we', 'our', 'my', 'go', 'on',
+  // Body parts / nouns that look name-shaped
+  'eye', 'eyes', 'son', 'mom', 'dad', 'baby', 'pet',
+])
+
+function isPlausibleFirstName(s: string): boolean {
+  if (!s) return false
+  // Real first names are typically 3-20 chars. 2-char names exist (Ed, Jo, Al)
+  // but are rare enough that requiring 3+ here removes most false splits.
+  if (s.length < 3 || s.length > 20) return false
+  if (!/^[a-z]+$/.test(s)) return false
+  if (NON_NAME_WORDS.has(s)) return false
+  return true
+}
+
+function looksLikeNameToken(s: string): boolean {
+  // Back-compat for older callers — same as isPlausibleFirstName but
+  // accepts 2-char minimum (matches the original less-strict heuristic).
+  if (!s) return false
+  if (s.length < 2 || s.length > 20) return false
+  return /^[a-z]+$/.test(s)
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

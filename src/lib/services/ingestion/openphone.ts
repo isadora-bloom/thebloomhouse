@@ -30,7 +30,24 @@ import { createServiceClient } from '@/lib/supabase/service'
 // ---------------------------------------------------------------------------
 
 const OPENPHONE_API_BASE = 'https://api.openphone.com/v1'
-const DEFAULT_SINCE_HOURS = 24
+// First-sync backfill window — pulls this far back when a venue connects
+// OpenPhone for the first time + on any sync where last_synced_at is null
+// (e.g. a fresh connection or one that had its watermark reset for a
+// historical re-pull). 180 days catches active conversations with booked
+// couples that started months earlier; older threads are usually past-
+// event chatter not worth backfilling.
+const FIRST_SYNC_DAYS = 180
+
+// Overlap window applied to every subsequent sync. The next sync starts
+// from `last_synced_at - OVERLAP_MIN` rather than exactly last_synced_at,
+// so if Quo timestamps lag or our clock skews slightly we never miss a
+// message at the boundary. processed_sms_messages dedups so the overlap
+// never double-writes.
+const OVERLAP_MIN = 15
+
+// Hard ceiling on any backfill window — prevents a buggy caller from
+// asking for "all time" and racking up Quo API costs.
+const MAX_BACKFILL_DAYS = 365
 
 // ---------------------------------------------------------------------------
 // Types
@@ -538,17 +555,51 @@ async function hydrateCallTranscript(
 }
 
 /**
- * Sync recent SMS, voicemails, and call summaries from OpenPhone into
+ * Sync SMS, voicemails, and call summaries from OpenPhone (Quo) into
  * processed_sms_messages (dedup) + interactions (inbox surface).
+ *
+ * Window resolution (in priority order):
+ *   1. Caller passes explicit sinceHours → use it (capped at
+ *      MAX_BACKFILL_DAYS). For scripts that want a forced historical
+ *      pull or for the operator-triggered "Sync now" with an override.
+ *   2. Caller passes explicit sinceIso → use it verbatim. Lets a
+ *      historical-backfill script bound the window precisely.
+ *   3. conn.last_synced_at IS NOT NULL → use last_synced_at - OVERLAP
+ *      (catches messages updated between the previous sync's start and
+ *      its stamp; processed_sms_messages dedups any double-write).
+ *   4. last_synced_at IS NULL → first sync ever for this venue. Pull
+ *      FIRST_SYNC_DAYS back so the venue's existing history (Gabriella,
+ *      Lea, Sarah threads etc.) is in Bloom from day one.
+ *
+ * The previous behaviour was "always last 24h" which silently dropped
+ * every conversation older than yesterday — exactly the symptom
+ * Isadora hit on 2026-05-11 when she connected OpenPhone and only saw
+ * 28 of months of history.
  */
 export async function syncMessages(
   venueId: string,
-  opts: { sinceHours?: number } = {}
+  opts: { sinceHours?: number; sinceIso?: string } = {}
 ): Promise<SyncResult> {
   const conn = await getConnection(venueId)
 
-  const sinceHours = Math.max(1, Math.floor(opts.sinceHours ?? DEFAULT_SINCE_HOURS))
-  const sinceIso = new Date(Date.now() - sinceHours * 60 * 60 * 1000).toISOString()
+  let sinceIso: string
+  if (opts.sinceIso) {
+    sinceIso = opts.sinceIso
+  } else if (opts.sinceHours != null) {
+    const cappedHours = Math.min(
+      Math.max(1, Math.floor(opts.sinceHours)),
+      MAX_BACKFILL_DAYS * 24,
+    )
+    sinceIso = new Date(Date.now() - cappedHours * 60 * 60 * 1000).toISOString()
+  } else if (conn.last_synced_at) {
+    const watermark = new Date(conn.last_synced_at).getTime() - OVERLAP_MIN * 60 * 1000
+    sinceIso = new Date(watermark).toISOString()
+  } else {
+    sinceIso = new Date(Date.now() - FIRST_SYNC_DAYS * 24 * 60 * 60 * 1000).toISOString()
+    console.log(
+      `[openphone] first sync for venue ${venueId} — pulling ${FIRST_SYNC_DAYS}d history`,
+    )
+  }
 
   // Resolve the active phone numbers (those the coordinator hasn't
   // toggled off). If the connection has none yet, discover on the fly so
@@ -936,7 +987,12 @@ export async function syncAllVenues(): Promise<Record<string, SyncResult | { err
   for (const c of connections ?? []) {
     const venueId = c.venue_id as string
     try {
-      out[venueId] = await syncMessages(venueId, { sinceHours: 1 })
+      // Don't pass sinceHours — let syncMessages resolve the window from
+      // last_synced_at (incremental sync) OR FIRST_SYNC_DAYS for a fresh
+      // connection. The previous code forced sinceHours:1, which capped
+      // every cron tick at 1h regardless of how stale the connection was
+      // — venues that just connected would never get their backfill.
+      out[venueId] = await syncMessages(venueId)
     } catch (err) {
       out[venueId] = { error: err instanceof Error ? err.message : String(err) }
       console.error(`[openphone] sync failed for venue ${venueId}:`, err)

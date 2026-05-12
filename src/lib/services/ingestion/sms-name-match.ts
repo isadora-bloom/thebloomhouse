@@ -27,6 +27,102 @@ import {
   validateSmsIdentifyOutput,
 } from '@/config/prompts/sms-identify-person'
 
+// Pulls every email-shaped token out of a body. Same shape used by
+// body-extract.ts; duplicated here so this service doesn't reach into
+// the email-pipeline private helper.
+const BODY_EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi
+
+function findBodyEmails(text: string): string[] {
+  if (!text) return []
+  const out = new Set<string>()
+  let m: RegExpExecArray | null
+  // Reset lastIndex each call (BODY_EMAIL_RE is /g).
+  BODY_EMAIL_RE.lastIndex = 0
+  while ((m = BODY_EMAIL_RE.exec(text))) out.add(m[0].toLowerCase())
+  return [...out]
+}
+
+interface BodyEmailMatchInput {
+  supabase: SupabaseClient
+  venueId: string
+  body: string
+  correlationId?: string
+}
+
+/**
+ * Scan the body for an email address and resolve to a person+wedding
+ * via the canonical identity resolver. When the resolver returns an
+ * existing match, we use it. When it would create a fresh person+
+ * wedding (no existing match for that email), we run the joint-handle
+ * parser to seed names + still create the fresh row — the operator
+ * gets a real Justin + Sandy record instead of a no-name placeholder.
+ */
+async function tryMatchByBodyEmail(
+  input: BodyEmailMatchInput,
+): Promise<MatchByNameResult | null> {
+  const { supabase, venueId, body, correlationId } = input
+  const emails = findBodyEmails(body)
+  if (emails.length === 0) return null
+
+  // Lazy import the resolver + joint-handle parser so module load is cheap.
+  const [{ resolveIdentity }, { parseJointEmailHandle, inferNameFromEmail }] =
+    await Promise.all([
+      import('@/lib/services/identity/resolver'),
+      import('@/lib/services/identity/name-capture'),
+    ])
+
+  for (const email of emails) {
+    // Joint-handle parse first (justinlovewithsandy → {Justin, Sandy}).
+    // Falls back to inferNameFromEmail (first.last) for single-person
+    // handles. Both yield first-name hints that resolveIdentity uses
+    // when minting fresh rows.
+    const joint = parseJointEmailHandle(email)
+    const single = joint ? null : inferNameFromEmail(email)
+
+    const partner1Name = joint?.partner1_first ?? single?.first ?? null
+    const partner2Name = joint?.partner2_first ?? null
+    const fullName = single
+      ? [single.first, single.last].filter(Boolean).join(' ') || null
+      : null
+
+    try {
+      const resolved = await resolveIdentity(
+        venueId,
+        {
+          email,
+          phone: null,
+          fullName,
+          weddingDate: null,
+          partner1Name,
+          partner2Name,
+        },
+        {
+          sourceLabel: 'sms_body_email',
+          supabase,
+          correlationId,
+        },
+      )
+
+      return {
+        personId: resolved.personId,
+        weddingId: resolved.weddingId,
+        matchedName: partner1Name
+          ? partner2Name
+            ? `${partner1Name} & ${partner2Name}`
+            : partner1Name
+          : email,
+        confidence: resolved.matchedBy === 'created_new' ? 80 : 95,
+        evidence: `body email: ${email}${joint ? ` (joint handle → ${partner1Name} & ${partner2Name})` : ''}`,
+      }
+    } catch (err) {
+      console.warn('[sms-name-match] body-email resolve failed (non-fatal):', err)
+      // Try the next email in the body.
+    }
+  }
+
+  return null
+}
+
 const LOOKBACK_MS = 1000 * 60 * 60 * 24 * 180 // 180 days
 
 const CONFIDENT_THRESHOLD = 70
@@ -74,6 +170,27 @@ export async function tryMatchSmsByName(
   input: MatchByNameInput,
 ): Promise<MatchByNameResult | null> {
   const { supabase, venueId, body, fromPhone, correlationId } = input
+  if (!body || body.length < 4) return null
+
+  // ----- Tier 0: body-mentioned email address -----
+  // 2026-05-12: couples often share a joint email in a text ("can you
+  // email us at justinlovewithsandy@gmail.com"). The email is the most
+  // reliable cross-channel identifier — emails outlast phone changes
+  // and joint-handle parsing extracts both partner names at once. Try
+  // this BEFORE the LLM call because:
+  //   - It's deterministic + free (regex + DB lookup, no Anthropic cost)
+  //   - It catches the case the LLM can't (a couple texting their email
+  //     address rarely also self-introduces in the same message)
+  //   - The resolver match by email is the strongest signal in the
+  //     identity chain (see resolver.ts match-chain ordering)
+  const bodyEmailMatch = await tryMatchByBodyEmail({
+    supabase,
+    venueId,
+    body,
+    correlationId,
+  })
+  if (bodyEmailMatch) return bodyEmailMatch
+
   if (!worthClassifying(body)) return null
 
   // Haiku name + event-context extraction.
