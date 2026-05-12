@@ -1056,6 +1056,41 @@ async function persistRow(
     }
   }
 
+  // Inbound-intent classifier (mig 327, Anja Putman / RM-1152). Fires on
+  // every inbound voice/SMS/call/voicemail. Required for the Anja class
+  // of bug: logistics chatter on a fresh phone number gets minted as a
+  // hot inquiry. The classifier emits intent_class (client_logistics,
+  // family_member_proxy, vendor_communication, etc) so downstream heat
+  // scoring + Sage drafts + sequences route correctly. Fire-and-forget.
+  if (row.direction === 'inbound' && insertedInteraction?.id) {
+    const intentChannel =
+      row.channel === 'sms'
+        ? 'sms'
+        : row.channel === 'voicemail'
+          ? 'voicemail'
+          : 'call'
+    void (async () => {
+      try {
+        const { classifyInboundIntent } = await import(
+          '@/lib/services/intel/inbound-intent-classifier'
+        )
+        await classifyInboundIntent({
+          interactionId: insertedInteraction.id as string,
+          body: row.body_text,
+          subject: null,
+          venueId,
+          channel: intentChannel,
+          supabase,
+        })
+      } catch (err) {
+        console.warn(
+          `[openphone] intent-classify failed (${row.openphone_message_id}):`,
+          err instanceof Error ? err.message : String(err),
+        )
+      }
+    })()
+  }
+
   // ---------------------------------------------------------------------------
   // Pattern 9: voice-channel parity hooks (mig 318)
   // ---------------------------------------------------------------------------
