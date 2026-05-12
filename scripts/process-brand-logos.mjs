@@ -105,9 +105,17 @@ async function main() {
   const sources = {
     wordmark: await ensureSourceExists('1.png'), // horizontal lockup
     vertical: await ensureSourceExists('2.png'), // vertical w/ URL
-    icon: await ensureSourceExists('3.png'), // icon only (medium stroke)
-    iconThin: await ensureSourceExists('4.png'), // icon only — thin stroke
-    iconBold: await ensureSourceExists('5.png'), // icon only — bold stroke
+    // 3.png is NOT a clean icon — it's the TBH sub-brand stamp:
+    // thumbprint + "T B H" vertical letters + thebloomhouse.ai URL.
+    // Routed to its own filename so the platform can surface it as
+    // a TBH-specific mark (TBH Report cover, sub-brand chips, etc).
+    tbhStamp: await ensureSourceExists('3.png'),
+    // 5.png is the bold-stroke bare thumbprint — used as the DEFAULT
+    // icon because bold strokes survive downsample to favicon scale
+    // without the curves disappearing.
+    icon: await ensureSourceExists('5.png'),
+    iconThin: await ensureSourceExists('4.png'), // bare thumbprint, thin stroke
+    iconBold: await ensureSourceExists('5.png'), // alias of icon, kept for clarity
   }
 
   const results = []
@@ -220,6 +228,28 @@ async function main() {
         recolored,
         `${REPOS.website}/lockup-vertical-${colorName}.png`,
         { maxWidth: 800 },
+      ),
+    )
+  }
+
+  // 3b. TBH stamp — the thumbprint + "T B H" vertical letters +
+  //     thebloomhouse.ai URL composite from source 3.png. Used as a
+  //     sub-brand mark on TBH Reports + TBH Score surfaces. NOT the
+  //     same as icon-* (which is the bare thumbprint).
+  for (const colorName of Object.keys(COLORS)) {
+    const recolored = await recolor(sources.tbhStamp, COLORS[colorName])
+    results.push(
+      await writePng(
+        recolored,
+        `${REPOS.bloomHouse}/tbh-stamp-${colorName}.png`,
+        { maxWidth: 512 },
+      ),
+    )
+    results.push(
+      await writePng(
+        recolored,
+        `${REPOS.website}/tbh-stamp-${colorName}.png`,
+        { maxWidth: 512 },
       ),
     )
   }
