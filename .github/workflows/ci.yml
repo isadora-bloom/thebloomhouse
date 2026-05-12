@@ -143,6 +143,12 @@ jobs:
       - name: HTML-strip guard — every full_body / body_preview writer routes through htmlToText (T5-Rixey-RR Layer 3)
         run: node scripts/check-html-stripped-at-writer.mjs
 
+      - name: Chokepoint guard — no direct .from('weddings').insert outside mintWedding (audit F5)
+        run: node scripts/check-no-direct-wedding-insert.mjs
+
+      - name: Chokepoint guard — no direct people.merged_into_id writes outside mergePeople / softTombstonePerson (MERGED-INTO-ID-TRACE)
+        run: node scripts/check-no-direct-people-tombstone.mjs
+
       - name: Sage disclosure guard — every outbound Sage send routes through appendAIDisclosure (Stream EEEE)
         run: node scripts/check-sage-disclosure-enforced.mjs
 
