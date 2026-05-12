@@ -180,7 +180,8 @@ VALUES
     'Impressions, reach, saves, profile visits per post. Auto-synced via Meta Graph API once the venue Instagram Business account is connected.',
     'api', 'handle',
     '[]'::jsonb,
-    1, false, 60);
+    1, false, 60)
+ON CONFLICT (platform, metric_type) DO NOTHING;
 
 -- ---- TikTok (display-name based — @handles are not visible in the
 --      notifications follower list, only chosen display names) ----
@@ -203,7 +204,8 @@ VALUES
     'Views, likes, comments, shares per video. Auto-synced via TikTok Display API once connected.',
     'api', 'handle',
     '[]'::jsonb,
-    1, false, 30);
+    1, false, 30)
+ON CONFLICT (platform, metric_type) DO NOTHING;
 
 -- ---- Facebook (display-name based for actor metrics) ----
 INSERT INTO public.social_metrics_config (platform, metric_type, label, description, capture_method, primary_identifier, required_inputs, recommended_frequency_days, is_functional, sort_order)
@@ -225,7 +227,8 @@ VALUES
     'Reach, impressions, reactions per post. Auto-synced via Meta Graph API.',
     'api', 'handle',
     '[]'::jsonb,
-    1, false, 30);
+    1, false, 30)
+ON CONFLICT (platform, metric_type) DO NOTHING;
 
 -- ---- Pinterest (handle-based, no @ prefix in display) ----
 INSERT INTO public.social_metrics_config (platform, metric_type, label, description, capture_method, primary_identifier, required_inputs, recommended_frequency_days, is_functional, sort_order)
@@ -247,6 +250,7 @@ VALUES
     'Who follows a specific board. Open the board → followers list → screenshot.',
     'screenshot', 'handle',
     '[{"key":"target_board_name","type":"text","label":"Board name","required":true}]'::jsonb,
-    14, false, 30);
+    14, false, 30)
+ON CONFLICT (platform, metric_type) DO NOTHING;
 
 NOTIFY pgrst, 'reload schema';
