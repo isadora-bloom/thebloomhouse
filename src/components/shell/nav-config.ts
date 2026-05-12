@@ -25,7 +25,7 @@ import {
   LayoutDashboard, Lightbulb, AlertTriangle,
   TrendingUp, Sparkles as TrendsIcon, Star,
   MapPinIcon, XCircle, Share2, LineChart,
-  MessageSquareText, GitMerge, UserCheck, Send,
+  MessageSquareText, GitMerge, UserCheck, Send, Briefcase,
   // Sage's Brain
   Sparkles, Mic, GraduationCap, ScrollText,
   BookOpen, Store, Settings, MailX, ShieldAlert, Clock as ClockIcon,
@@ -268,6 +268,8 @@ export const MODE_INTEL: ModeConfig = {
       items: [
         { label: 'Sources & ROI', href: '/intel/sources', icon: TrendingUp },
         { label: 'ROI dashboard', href: '/intel/roi', icon: BarChart3 },
+        // Wave 6E — marketing-agency tracker. "Is Hawthorn paying off?"
+        { label: 'Marketing Agencies', href: '/intel/agencies', icon: Briefcase },
         // Tier-D #173: pricing_history changelog. Was a write-only table
         // until this surface — coordinator now sees the trajectory of
         // their pricing decisions + can add why-it-changed notes that
