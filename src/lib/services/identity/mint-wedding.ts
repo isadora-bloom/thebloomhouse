@@ -130,23 +130,57 @@ export async function mintWedding(
   // chain + the createPerson + createWedding paths + the cascade
   // recurrence logic for re-engagement-after-loss. We do NOT
   // re-implement any of that here.
-  const resolved = await resolveIdentity(
-    venueId,
-    {
-      email: signals.email ?? null,
-      phone: signals.phone ?? null,
-      fullName: signals.fullName ?? signals.partner1Name ?? null,
-      weddingDate: signals.weddingDate ?? null,
-      partner1Name: signals.partner1Name ?? null,
-      partner2Name: signals.partner2Name ?? null,
-    },
-    {
-      sourceLabel: source,
-      correlationId: correlationId ?? undefined,
-      supabase,
-      inquirySignalAt: signals.inquiryDate ?? undefined,
-    },
-  )
+  //
+  // Soak telemetry (mig 320): wrap the resolver call so we capture
+  // both success and error rows in mint_wedding_telemetry. Re-throw
+  // on error so callers still see the hard failure as today.
+  let resolved
+  try {
+    resolved = await resolveIdentity(
+      venueId,
+      {
+        email: signals.email ?? null,
+        phone: signals.phone ?? null,
+        fullName: signals.fullName ?? signals.partner1Name ?? null,
+        weddingDate: signals.weddingDate ?? null,
+        partner1Name: signals.partner1Name ?? null,
+        partner2Name: signals.partner2Name ?? null,
+      },
+      {
+        sourceLabel: source,
+        correlationId: correlationId ?? undefined,
+        supabase,
+        inquirySignalAt: signals.inquiryDate ?? undefined,
+      },
+    )
+  } catch (err) {
+    // Soak telemetry: capture the failure row before re-throwing so
+    // the stats endpoint can surface error rate over time.
+    void (async () => {
+      try {
+        const tClient =
+          supabase ??
+          (await import('@/lib/supabase/service')).createServiceClient()
+        await tClient.from('mint_wedding_telemetry').insert({
+          venue_id: venueId,
+          source,
+          reason: reason ?? source,
+          resolved_via: null,
+          wedding_id: null,
+          person_id: null,
+          is_new_wedding: null,
+          is_new_person: null,
+          latency_ms: Date.now() - started,
+          errored: true,
+          error_message: err instanceof Error ? err.message : String(err),
+          correlation_id: correlationId ?? null,
+        })
+      } catch {
+        // Telemetry must never block / mask the real error.
+      }
+    })()
+    throw err
+  }
 
   // Fire the P2 identity cascade on the resolved wedding. The cascade
   // scans candidate_identities + tangential_signals for pre-zero
@@ -193,6 +227,8 @@ export async function mintWedding(
     }
   })()
 
+  const latencyMs = Date.now() - started
+
   logEvent({
     level: 'info',
     msg: 'identity.mint_wedding',
@@ -201,7 +237,7 @@ export async function mintWedding(
     actor: 'system',
     event_type: 'identity.mint_wedding',
     outcome: 'ok',
-    latency_ms: Date.now() - started,
+    latency_ms: latencyMs,
     data: {
       wedding_id: resolved.weddingId,
       person_id: resolved.personId,
@@ -212,6 +248,33 @@ export async function mintWedding(
       reason: reason ?? source,
     },
   })
+
+  // Soak telemetry (mig 320). Fire-and-forget so the persist never
+  // blocks the caller. Errors caught + ignored — telemetry failures
+  // are non-load-bearing.
+  void (async () => {
+    try {
+      const tClient =
+        supabase ??
+        (await import('@/lib/supabase/service')).createServiceClient()
+      await tClient.from('mint_wedding_telemetry').insert({
+        venue_id: venueId,
+        source,
+        reason: reason ?? source,
+        resolved_via: resolved.matchedBy,
+        wedding_id: resolved.weddingId,
+        person_id: resolved.personId,
+        is_new_wedding: resolved.isNew.wedding,
+        is_new_person: resolved.isNew.person,
+        latency_ms: latencyMs,
+        errored: false,
+        error_message: null,
+        correlation_id: correlationId ?? null,
+      })
+    } catch {
+      // Telemetry must never break ingest.
+    }
+  })()
 
   return {
     weddingId: resolved.weddingId,
