@@ -31,7 +31,7 @@ import {
   LayoutDashboard, Lightbulb, AlertTriangle,
   TrendingUp, Sparkles as TrendsIcon, Star,
   MapPinIcon, XCircle, Share2, LineChart,
-  MessageSquareText, GitMerge, UserCheck, Send, Briefcase,
+  MessageSquareText, GitMerge, UserCheck, Send, Briefcase, Camera,
   // Sage's Brain
   Sparkles, Mic, GraduationCap, ScrollText,
   BookOpen, Store, Settings, MailX, ShieldAlert, Clock as ClockIcon,
@@ -276,6 +276,12 @@ export const MODE_INTEL: ModeConfig = {
         { label: 'ROI dashboard', href: '/intel/roi', icon: BarChart3 },
         // Wave 6E — marketing-agency tracker. "Is Hawthorn paying off?"
         { label: 'Marketing Agencies', href: '/intel/agencies', icon: Briefcase },
+        // Social integration -- operator-driven weekly capture of
+        // engagement data Instagram / TikTok / Facebook / Pinterest do
+        // not expose via API. V1 = Instagram New Followers only;
+        // matches surface Point-Zero forensic attribution credit
+        // (couples who engaged before they inquired).
+        { label: 'Social integration', href: '/intel/social-integration', icon: Camera },
         // Tier-D #173: pricing_history changelog. Was a write-only table
         // until this surface — coordinator now sees the trajectory of
         // their pricing decisions + can add why-it-changed notes that
