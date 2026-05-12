@@ -60,8 +60,46 @@ export interface AgencyEngagementRow {
   managedChannels: string[]
   scopeDescription: string | null
   notes: string | null
+  /** Wave 6E depth (mig 306). Per-channel monthly cents allocation. */
+  channelSubBudgets: Record<string, number>
+  /** Wave 6E depth (mig 306). Free-text cadence label. */
+  reportingCadence: string | null
+  /** Wave 6E depth (mig 306). Deep-link to the agency's own dashboard. */
+  dashboardUrl: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface AgencyChannelBreakdownRow {
+  channelKey: string
+  spendCents: number
+  firstTouchLeads: number
+  firstTouchTours: number
+  firstTouchBookings: number
+  bookedRevenueCents: number
+  costPerBookingCents: number | null
+  costPerLeadCents: number | null
+}
+
+export interface AgencyMonthlyTrendRow {
+  /** Month start YYYY-MM-01. */
+  month: string
+  spendCents: number
+  retainerCents: number
+  totalCents: number
+  firstTouchLeads: number
+  firstTouchBookings: number
+}
+
+export interface AgencyBreakdownResult {
+  agencyId: string
+  agencyName: string
+  windowDays: number
+  perChannel: AgencyChannelBreakdownRow[]
+  monthlyTrend: AgencyMonthlyTrendRow[]
+  /** Persona overlay across the agency's attributed first-touch events.
+   *  Map of persona_label → count. */
+  personaCounts: Record<string, number>
 }
 
 export interface AgencyROISummary {
@@ -161,11 +199,22 @@ interface EngagementRowFromDb {
   managed_channels: unknown
   scope_description: string | null
   notes: string | null
+  channel_sub_budgets?: unknown
+  reporting_cadence?: string | null
+  dashboard_url?: string | null
   created_at: string
   updated_at: string
 }
 
 function rowToEngagement(row: EngagementRowFromDb): AgencyEngagementRow {
+  const rawSub = row.channel_sub_budgets
+  const subBudgets: Record<string, number> = {}
+  if (rawSub && typeof rawSub === 'object' && !Array.isArray(rawSub)) {
+    for (const [k, v] of Object.entries(rawSub as Record<string, unknown>)) {
+      const n = Number(v)
+      if (Number.isFinite(n) && n >= 0) subBudgets[k] = Math.round(n)
+    }
+  }
   return {
     id: row.id,
     venueId: row.venue_id,
@@ -178,6 +227,9 @@ function rowToEngagement(row: EngagementRowFromDb): AgencyEngagementRow {
       : [],
     scopeDescription: row.scope_description,
     notes: row.notes,
+    channelSubBudgets: subBudgets,
+    reportingCadence: row.reporting_cadence ?? null,
+    dashboardUrl: row.dashboard_url ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -416,6 +468,10 @@ export interface UpsertEngagementInput {
   managedChannels?: string[]
   scopeDescription?: string | null
   notes?: string | null
+  /** Wave 6E depth (mig 306). { channel_key → monthly cents }. */
+  channelSubBudgets?: Record<string, number>
+  reportingCadence?: string | null
+  dashboardUrl?: string | null
 }
 
 /**
@@ -437,6 +493,15 @@ export async function upsertEngagement(
     .is('deleted_at', null)
     .maybeSingle()
 
+  // Sanitise sub-budgets: only positive integer cents allowed.
+  const cleanSubBudgets: Record<string, number> = {}
+  if (input.channelSubBudgets) {
+    for (const [k, v] of Object.entries(input.channelSubBudgets)) {
+      const n = Number(v)
+      if (Number.isFinite(n) && n >= 0) cleanSubBudgets[k] = Math.round(n)
+    }
+  }
+
   const payload = {
     venue_id: input.venueId,
     agency_id: input.agencyId,
@@ -446,6 +511,9 @@ export async function upsertEngagement(
     managed_channels: input.managedChannels ?? [],
     scope_description: input.scopeDescription ?? null,
     notes: input.notes ?? null,
+    channel_sub_budgets: cleanSubBudgets,
+    reporting_cadence: input.reportingCadence ?? null,
+    dashboard_url: input.dashboardUrl ?? null,
   }
 
   if (existing?.id) {
@@ -675,5 +743,264 @@ export async function computeAgencyROI(args: {
     costPerLeadCents,
     engagements,
     venueIds: args.venueIds,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// computeAgencyBreakdown — per-channel rollup + 12-month trend + persona
+// ---------------------------------------------------------------------------
+// Powers the deeper agency dashboard (Item 3 / Wave 6E dashboard pass).
+// Returns the same totals as computeAgencyROI but sliced per managed
+// channel + per month.
+
+interface AttributionEventBreakdownRow {
+  wedding_id: string | null
+  source_platform: string | null
+  decided_at: string
+  persona_overlay: { persona_label?: string } | null
+}
+
+interface SpendBreakdownRow {
+  amount_cents: number
+  channel: string
+  spend_date: string
+}
+
+function monthKey(iso: string): string {
+  return `${iso.slice(0, 7)}-01`
+}
+
+function monthList(windowDays: number): string[] {
+  const months: string[] = []
+  const now = new Date()
+  const monthsBack = Math.max(1, Math.ceil(windowDays / 30))
+  for (let i = monthsBack - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    months.push(
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`,
+    )
+  }
+  return months
+}
+
+export async function computeAgencyBreakdown(args: {
+  agencyId: string
+  venueIds: string[]
+  windowDays?: number
+}): Promise<AgencyBreakdownResult> {
+  const service = createServiceClient()
+  // For the breakdown we always want at least a 12-month view; window
+  // governs the COMPUTE window for totals but the trend strip always
+  // shows the full N months.
+  const windowDays = Math.max(clampWindow(args.windowDays), 365)
+  const startDate = windowStart(windowDays)
+  const startIso = new Date(`${startDate}T00:00:00.000Z`).toISOString()
+
+  const { data: agencyData } = await service
+    .from('marketing_agencies')
+    .select('id, name')
+    .eq('id', args.agencyId)
+    .is('deleted_at', null)
+    .maybeSingle()
+  const agencyName = (agencyData?.name as string | undefined) ?? '(unknown)'
+
+  // Engagements in scope.
+  let engQuery = service
+    .from('venue_agency_engagements')
+    .select('*')
+    .eq('agency_id', args.agencyId)
+    .is('deleted_at', null)
+  if (args.venueIds.length > 0) {
+    engQuery = engQuery.in('venue_id', args.venueIds)
+  }
+  const { data: engRows } = await engQuery
+  const engagements = (engRows ?? []).map((r) =>
+    rowToEngagement(r as EngagementRowFromDb),
+  )
+  const managedChannelSet = new Set<string>()
+  for (const e of engagements) {
+    for (const c of e.managedChannels) managedChannelSet.add(c)
+  }
+  const managedChannels = [...managedChannelSet]
+
+  // Pull spend rows tagged to this agency in the window.
+  const { data: spendData } = await service
+    .from('marketing_spend_records')
+    .select('amount_cents, channel, spend_date')
+    .eq('agency_id', args.agencyId)
+    .gte('spend_date', startDate)
+
+  // Pull attribution events for the managed channels in window.
+  let attRows: AttributionEventBreakdownRow[] = []
+  if (managedChannels.length > 0 && args.venueIds.length > 0) {
+    const { data } = await service
+      .from('attribution_events')
+      .select('wedding_id, source_platform, decided_at, persona_overlay')
+      .in('venue_id', args.venueIds)
+      .in('source_platform', managedChannels)
+      .eq('is_first_touch', true)
+      .is('reverted_at', null)
+      .gte('decided_at', startIso)
+    attRows = (data ?? []) as AttributionEventBreakdownRow[]
+  }
+
+  // Build wedding-id → status lookup for tour + booking counts.
+  const weddingIds = new Set<string>()
+  for (const r of attRows) if (r.wedding_id) weddingIds.add(r.wedding_id)
+  const statusByWedding = new Map<
+    string,
+    { status: string | null; estimated_value: number | null; booked_at: string | null }
+  >()
+  if (weddingIds.size > 0) {
+    const { data } = await service
+      .from('weddings')
+      .select('id, status, estimated_value, booked_at')
+      .in('id', [...weddingIds])
+    for (const w of data ?? []) {
+      statusByWedding.set(w.id as string, {
+        status: (w.status as string | null) ?? null,
+        estimated_value: (w.estimated_value as number | null) ?? null,
+        booked_at: (w.booked_at as string | null) ?? null,
+      })
+    }
+  }
+
+  // Per-channel aggregation.
+  const perChannelMap = new Map<string, AgencyChannelBreakdownRow>()
+  function ensureChannel(key: string): AgencyChannelBreakdownRow {
+    let row = perChannelMap.get(key)
+    if (!row) {
+      row = {
+        channelKey: key,
+        spendCents: 0,
+        firstTouchLeads: 0,
+        firstTouchTours: 0,
+        firstTouchBookings: 0,
+        bookedRevenueCents: 0,
+        costPerBookingCents: null,
+        costPerLeadCents: null,
+      }
+      perChannelMap.set(key, row)
+    }
+    return row
+  }
+  for (const c of managedChannels) ensureChannel(c)
+
+  for (const s of (spendData ?? []) as SpendBreakdownRow[]) {
+    ensureChannel(s.channel).spendCents += s.amount_cents ?? 0
+  }
+
+  const personaCounts: Record<string, number> = {}
+
+  for (const ev of attRows) {
+    const ch = ev.source_platform ?? 'unknown'
+    const row = ensureChannel(ch)
+    row.firstTouchLeads += 1
+    if (ev.wedding_id) {
+      const w = statusByWedding.get(ev.wedding_id)
+      if (w) {
+        if (
+          w.status === 'tour_completed' ||
+          w.status === 'proposal_sent' ||
+          w.status === 'booked' ||
+          w.status === 'completed'
+        ) {
+          row.firstTouchTours += 1
+        }
+        if (w.status === 'booked' || w.status === 'completed') {
+          row.firstTouchBookings += 1
+          const v = Number(w.estimated_value ?? 0)
+          if (Number.isFinite(v) && v > 0) {
+            row.bookedRevenueCents += Math.round(v * 100)
+          }
+        }
+      }
+    }
+    const persona = ev.persona_overlay?.persona_label
+    if (typeof persona === 'string' && persona.length > 0) {
+      personaCounts[persona] = (personaCounts[persona] ?? 0) + 1
+    }
+  }
+
+  // Finalise CAC per channel.
+  for (const row of perChannelMap.values()) {
+    row.costPerBookingCents =
+      row.firstTouchBookings > 0
+        ? Math.round(row.spendCents / row.firstTouchBookings)
+        : null
+    row.costPerLeadCents =
+      row.firstTouchLeads > 0
+        ? Math.round(row.spendCents / row.firstTouchLeads)
+        : null
+  }
+
+  // Monthly trend — walk the months in window.
+  const trendMonths = monthList(windowDays)
+  const trendByMonth = new Map<string, AgencyMonthlyTrendRow>()
+  for (const m of trendMonths) {
+    trendByMonth.set(m, {
+      month: m,
+      spendCents: 0,
+      retainerCents: 0,
+      totalCents: 0,
+      firstTouchLeads: 0,
+      firstTouchBookings: 0,
+    })
+  }
+  for (const s of (spendData ?? []) as SpendBreakdownRow[]) {
+    const m = monthKey(s.spend_date)
+    const row = trendByMonth.get(m)
+    if (row) {
+      row.spendCents += s.amount_cents ?? 0
+      row.totalCents += s.amount_cents ?? 0
+    }
+  }
+  // Retainer accrual: pro-rate engagement.monthlyFeeCents across months
+  // the engagement was active.
+  for (const e of engagements) {
+    if (e.monthlyFeeCents <= 0) continue
+    for (const m of trendMonths) {
+      const monthStartMs = new Date(`${m}T00:00:00.000Z`).getTime()
+      const monthEndMs = new Date(
+        new Date(monthStartMs).getFullYear(),
+        new Date(monthStartMs).getMonth() + 1,
+        1,
+      ).getTime()
+      const engStartMs = new Date(`${e.startedAt}T00:00:00.000Z`).getTime()
+      const engEndMs = e.endedAt
+        ? new Date(`${e.endedAt}T00:00:00.000Z`).getTime()
+        : Date.now()
+      if (engEndMs <= monthStartMs) continue
+      if (engStartMs >= monthEndMs) continue
+      const row = trendByMonth.get(m)
+      if (row) {
+        row.retainerCents += e.monthlyFeeCents
+        row.totalCents += e.monthlyFeeCents
+      }
+    }
+  }
+  for (const ev of attRows) {
+    const m = monthKey(ev.decided_at)
+    const row = trendByMonth.get(m)
+    if (row) {
+      row.firstTouchLeads += 1
+      if (ev.wedding_id) {
+        const w = statusByWedding.get(ev.wedding_id)
+        if (w && (w.status === 'booked' || w.status === 'completed')) {
+          row.firstTouchBookings += 1
+        }
+      }
+    }
+  }
+
+  return {
+    agencyId: args.agencyId,
+    agencyName,
+    windowDays,
+    perChannel: [...perChannelMap.values()].sort((a, b) =>
+      a.channelKey.localeCompare(b.channelKey),
+    ),
+    monthlyTrend: trendMonths.map((m) => trendByMonth.get(m)!),
+    personaCounts,
   }
 }

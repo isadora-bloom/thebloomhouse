@@ -46,6 +46,8 @@ interface PostBody {
   amountCents?: number
   currency?: string
   notes?: string
+  /** Wave 6E. Optional agency tag for ROI rollups. */
+  agencyId?: string | null
 }
 
 interface AuthContext {
@@ -108,6 +110,10 @@ export async function POST(req: NextRequest) {
     amountCents: body.amountCents,
     currency: body.currency,
     notes: body.notes ?? null,
+    agencyId:
+      typeof body.agencyId === 'string' && body.agencyId.length > 0
+        ? body.agencyId
+        : null,
   })
 
   if (!result.ok) {

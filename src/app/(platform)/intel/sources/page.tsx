@@ -15,6 +15,7 @@ import {
   ArrowRight,
   Layers,
   ChevronRight,
+  Briefcase,
 } from 'lucide-react'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import { InlineInsightBanner } from '@/components/intel/inline-insight-banner'
@@ -1319,6 +1320,15 @@ export default function SourceAttributionPage() {
   const scope = useScope()
   const [funnelRows, setFunnelRows] = useState<FunnelApiRow[]>([])
   const [spendData, setSpendData] = useState<MarketingSpend[]>([])
+  // Wave 6E — agency badges + filter. The page fetches the venue's
+  // marketing_channels + marketing_agencies and builds a channel-key →
+  // {agencyId, agencyName} map so source rows can show a managed-by
+  // chip. The filter is a client-side scoping of the rendered rows;
+  // the underlying funnel + spend queries are unchanged.
+  const [agencyByChannelKey, setAgencyByChannelKey] = useState<
+    Map<string, { id: string; name: string }>
+  >(new Map())
+  const [agencyFilter, setAgencyFilter] = useState<string>('all')
   // T5-Rixey-JJJ: weddings rollup now arrives PRE-AGGREGATED (one row
   // per source × venue) from a server-side endpoint that uses the
   // service-role client. The previous in-page browser fetch was bitten
@@ -1362,6 +1372,44 @@ export default function SourceAttributionPage() {
     url.searchParams.set('multitouch_window', String(multiTouchWindowDays))
     window.history.replaceState({}, '', url.toString())
   }, [multiTouchWindowDays])
+
+  // Wave 6E — fetch agencies + channel→agency map. Non-fatal: if either
+  // endpoint 404s (older deploys) the badges + filter silently degrade.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [agenciesResp, channelsResp] = await Promise.all([
+          fetch('/api/intel/agencies'),
+          fetch('/api/portal/marketing-channels'),
+        ])
+        if (!agenciesResp.ok || !channelsResp.ok) return
+        const aJson = (await agenciesResp.json()) as {
+          agencies?: Array<{ id: string; name: string }>
+        }
+        const cJson = (await channelsResp.json()) as {
+          channels?: Array<{ key: string; managed_by_agency_id: string | null }>
+        }
+        if (cancelled) return
+        const byId = new Map((aJson.agencies ?? []).map((a) => [a.id, a.name]))
+        const next = new Map<string, { id: string; name: string }>()
+        for (const ch of cJson.channels ?? []) {
+          if (ch.managed_by_agency_id && byId.has(ch.managed_by_agency_id)) {
+            next.set(ch.key, {
+              id: ch.managed_by_agency_id,
+              name: byId.get(ch.managed_by_agency_id) ?? '',
+            })
+          }
+        }
+        setAgencyByChannelKey(next)
+      } catch {
+        // non-fatal
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // ---- Fetch data ----
   // Funnel rows come from the multi-touch attribution endpoint (reads
@@ -1960,19 +2008,43 @@ export default function SourceAttributionPage() {
         </div>
       ) : (
         <div className="bg-surface border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="px-6 py-4 border-b border-border">
-            <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2">
-              <ArrowUpDown className="w-5 h-5 text-sage-600" />
-              Source Comparison
-            </h2>
-            <p className="text-xs text-sage-500 mt-1">
-              Showing:{' '}
-              {scope.level === 'company'
-                ? `all venues — ${scope.companyName}`
-                : scope.level === 'group'
-                ? scope.groupName
-                : scope.venueName}
-            </p>
+          <div className="px-6 py-4 border-b border-border flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h2 className="font-heading text-xl font-semibold text-sage-900 flex items-center gap-2">
+                <ArrowUpDown className="w-5 h-5 text-sage-600" />
+                Source Comparison
+              </h2>
+              <p className="text-xs text-sage-500 mt-1">
+                Showing:{' '}
+                {scope.level === 'company'
+                  ? `all venues — ${scope.companyName}`
+                  : scope.level === 'group'
+                  ? scope.groupName
+                  : scope.venueName}
+              </p>
+            </div>
+            {agencyByChannelKey.size > 0 ? (
+              <label className="flex items-center gap-2 text-xs text-sage-600">
+                <span>Agency:</span>
+                <select
+                  value={agencyFilter}
+                  onChange={(e) => setAgencyFilter(e.target.value)}
+                  className="rounded border border-sage-200 bg-white px-2 py-1 text-xs"
+                >
+                  <option value="all">All channels</option>
+                  <option value="none">In-house only (no agency)</option>
+                  {[
+                    ...new Map(
+                      Array.from(agencyByChannelKey.values()).map((a) => [a.id, a]),
+                    ).values(),
+                  ].map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-[640px] w-full text-sm">
@@ -2013,7 +2085,14 @@ export default function SourceAttributionPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {sortedRows.map((row) => {
+                {sortedRows
+                  .filter((row) => {
+                    if (agencyFilter === 'all') return true
+                    const a = agencyByChannelKey.get(row.source_key)
+                    if (agencyFilter === 'none') return !a
+                    return a?.id === agencyFilter
+                  })
+                  .map((row) => {
                   // T5-Rixey-VV Y6: surface the explanatory tooltip on
                   // the Untracked / Pre-Bloom row so coordinators
                   // understand it's a data-coverage gap, not noise.
@@ -2058,6 +2137,15 @@ export default function SourceAttributionPage() {
                           style={{ backgroundColor: getSourceColor(row.source_name) }}
                         />
                         {row.source_name}
+                        {agencyByChannelKey.has(row.source_key) ? (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-800"
+                            title={`Managed by ${agencyByChannelKey.get(row.source_key)?.name}`}
+                          >
+                            <Briefcase className="w-3 h-3" />
+                            {agencyByChannelKey.get(row.source_key)?.name}
+                          </span>
+                        ) : null}
                         {scope.level !== 'venue' && (
                           <VenueChip venueName={row.venue_name} />
                         )}

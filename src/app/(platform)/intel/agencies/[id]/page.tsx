@@ -25,7 +25,18 @@ import {
   X,
   AlertTriangle,
   Check,
+  Settings,
 } from 'lucide-react'
+import {
+  AgencyTrendStrip,
+  AgencyPerChannelTable,
+  AgencyPersonaOverlay,
+  AgencyContactsSection,
+  AgencyDocumentsSection,
+  AgencyKpisSection,
+  AgencyActivitySection,
+  EngagementExtrasForm,
+} from '@/components/intel/agency-detail-sections'
 
 interface AgencyRow {
   id: string
@@ -52,6 +63,33 @@ interface EngagementRow {
   managedChannels: string[]
   scopeDescription: string | null
   notes: string | null
+  channelSubBudgets?: Record<string, number>
+  reportingCadence?: string | null
+  dashboardUrl?: string | null
+}
+
+interface BreakdownResult {
+  agencyId: string
+  windowDays: number
+  perChannel: Array<{
+    channelKey: string
+    spendCents: number
+    firstTouchLeads: number
+    firstTouchTours: number
+    firstTouchBookings: number
+    bookedRevenueCents: number
+    costPerBookingCents: number | null
+    costPerLeadCents: number | null
+  }>
+  monthlyTrend: Array<{
+    month: string
+    spendCents: number
+    retainerCents: number
+    totalCents: number
+    firstTouchLeads: number
+    firstTouchBookings: number
+  }>
+  personaCounts: Record<string, number>
 }
 
 interface ROIRow {
@@ -99,17 +137,20 @@ export default function AgencyDetailPage({
   const [agency, setAgency] = useState<AgencyRow | null>(null)
   const [engagements, setEngagements] = useState<EngagementRow[]>([])
   const [roi, setRoi] = useState<ROIRow | null>(null)
+  const [breakdown, setBreakdown] = useState<BreakdownResult | null>(null)
   const [channels, setChannels] = useState<ChannelRow[]>([])
   const [loading, setLoading] = useState(true)
   const [showEngagementForm, setShowEngagementForm] = useState(false)
+  const [showExtrasForm, setShowExtrasForm] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   const reload = useCallback(async () => {
     setLoading(true)
     try {
-      const [agencyResp, roiResp, channelsResp] = await Promise.all([
+      const [agencyResp, roiResp, breakdownResp, channelsResp] = await Promise.all([
         fetch(`/api/intel/agencies/${agencyId}`),
         fetch(`/api/intel/agencies/${agencyId}/roi?window=90`),
+        fetch(`/api/intel/agencies/${agencyId}/breakdown?window=365`),
         fetch('/api/portal/marketing-channels'),
       ])
 
@@ -124,6 +165,12 @@ export default function AgencyDetailPage({
       if (roiResp.ok) {
         const j = (await roiResp.json()) as { summary: ROIRow | null }
         setRoi(j.summary)
+      }
+      if (breakdownResp.ok) {
+        const j = (await breakdownResp.json()) as {
+          breakdown: BreakdownResult | null
+        }
+        setBreakdown(j.breakdown)
       }
       if (channelsResp.ok) {
         const j = (await channelsResp.json()) as {
@@ -278,19 +325,33 @@ export default function AgencyDetailPage({
             value={roi ? formatDollars(roi.retainerSpendCents) : '—'}
             sub="accrued in window"
           />
-          <BigStat
-            label="First-touch leads"
-            value={roi ? String(roi.firstTouchLeads) : '—'}
-          />
-          <BigStat
-            label="Bookings"
-            value={roi ? String(roi.firstTouchBookings) : '—'}
-            sub={
-              roi && roi.firstTouchTours > 0
-                ? `${roi.firstTouchTours} tours`
-                : undefined
-            }
-          />
+          {/* Wave 6E — clickable drill-down to agency-scoped leads view. */}
+          <Link
+            href={`/intel/agencies/${agencyId}/leads`}
+            className="block"
+            aria-label="Show leads attributed to this agency"
+          >
+            <BigStat
+              label="First-touch leads"
+              value={roi ? String(roi.firstTouchLeads) : '—'}
+              sub={roi && roi.firstTouchLeads > 0 ? 'click to view →' : undefined}
+            />
+          </Link>
+          <Link
+            href={`/intel/agencies/${agencyId}/leads?status=booked`}
+            className="block"
+            aria-label="Show booked weddings attributed to this agency"
+          >
+            <BigStat
+              label="Bookings"
+              value={roi ? String(roi.firstTouchBookings) : '—'}
+              sub={
+                roi && roi.firstTouchTours > 0
+                  ? `${roi.firstTouchTours} tours · click →`
+                  : undefined
+              }
+            />
+          </Link>
           <BigStat
             label="True CAC"
             value={roi ? formatDollars(roi.costPerBookingCents) : '—'}
@@ -369,7 +430,81 @@ export default function AgencyDetailPage({
             ))}
           </div>
         )}
+
+        {/* Wave 6E depth — engagement extras (channel sub-budgets, reporting
+            cadence, dashboard URL). Only shown for the active engagement. */}
+        {activeEngagement ? (
+          <div className="mt-4 border-t border-[var(--bh-line)] pt-4">
+            <button
+              type="button"
+              onClick={() => setShowExtrasForm((v) => !v)}
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--bh-line)] bg-white px-3 py-1 text-xs hover:bg-[var(--bh-sage-50)]"
+            >
+              <Settings className="h-3 w-3" />
+              {showExtrasForm ? 'Hide extras' : 'Edit sub-budgets, cadence, dashboard URL'}
+            </button>
+            {activeEngagement.reportingCadence || activeEngagement.dashboardUrl ? (
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--bh-muted)]">
+                {activeEngagement.reportingCadence ? (
+                  <span>Cadence: {activeEngagement.reportingCadence.replace(/_/g, ' ')}</span>
+                ) : null}
+                {activeEngagement.dashboardUrl ? (
+                  <a
+                    href={activeEngagement.dashboardUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 hover:text-[var(--bh-ink)]"
+                  >
+                    Their dashboard <ExternalLink className="h-3 w-3" />
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
+            {showExtrasForm ? (
+              <div className="mt-3">
+                <EngagementExtrasForm
+                  agencyId={agencyId}
+                  engagementId={activeEngagement.id}
+                  startedAt={activeEngagement.startedAt}
+                  endedAt={activeEngagement.endedAt}
+                  monthlyFeeCents={activeEngagement.monthlyFeeCents}
+                  managedChannels={activeEngagement.managedChannels}
+                  scopeDescription={activeEngagement.scopeDescription}
+                  channelSubBudgets={activeEngagement.channelSubBudgets ?? {}}
+                  reportingCadence={activeEngagement.reportingCadence ?? null}
+                  dashboardUrl={activeEngagement.dashboardUrl ?? null}
+                  channelLabels={
+                    new Map(channels.map((c) => [c.key, c.label]))
+                  }
+                  onSaved={async () => {
+                    setShowExtrasForm(false)
+                    await reload()
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </section>
+
+      {/* Wave 6E — dashboard depth. 12-month trend + per-channel breakdown
+          + persona overlay. Hidden when there's no data to render. */}
+      {breakdown ? (
+        <>
+          <AgencyTrendStrip trend={breakdown.monthlyTrend} />
+          <AgencyPerChannelTable
+            rows={breakdown.perChannel}
+            channelLabels={new Map(channels.map((c) => [c.key, c.label]))}
+          />
+          <AgencyPersonaOverlay personaCounts={breakdown.personaCounts} />
+        </>
+      ) : null}
+
+      {/* Wave 6E depth — profile sections. */}
+      <AgencyContactsSection agencyId={agencyId} />
+      <AgencyDocumentsSection agencyId={agencyId} />
+      <AgencyKpisSection agencyId={agencyId} />
+      <AgencyActivitySection agencyId={agencyId} />
 
       {/* Notes */}
       {agency.notes ? (

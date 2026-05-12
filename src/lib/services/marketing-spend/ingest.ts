@@ -49,6 +49,10 @@ export interface RecordSpendInput {
   sourcePayload?: Record<string, unknown>
   /** Free-text label for which writer landed this row. */
   ingestedBy: string
+  /** Wave 6E. Optional FK to marketing_agencies. When set, tags this
+   *  spend row to the agency for ROI rollups. NULL = unattributed
+   *  (direct spend or in-house). */
+  agencyId?: string | null
   /** Optional client override. Defaults to service-role. */
   supabase?: SupabaseClient
 }
@@ -139,6 +143,7 @@ export async function recordSpend(
     currency: (input.currency ?? 'USD').toUpperCase(),
     source_platform_metadata: input.sourcePayload ?? {},
     ingested_by: input.ingestedBy,
+    agency_id: input.agencyId ?? null,
   }
 
   // Insert with conflict detection on the unique constraint. PostgREST

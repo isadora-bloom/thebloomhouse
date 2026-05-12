@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { createClient } from '@/lib/supabase/client'
 import { useSupabaseList } from '@/lib/hooks/use-supabase-list'
@@ -15,6 +15,7 @@ import {
   ToggleRight,
   Save,
   X,
+  Briefcase,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -40,6 +41,13 @@ interface MarketingChannel {
   is_active: boolean
   notes: string | null
   created_at: string
+  /** Wave 6E. FK to marketing_agencies when an agency manages this channel. */
+  managed_by_agency_id: string | null
+}
+
+interface AgencyOption {
+  id: string
+  name: string
 }
 
 const CATEGORY_OPTIONS = [
@@ -88,7 +96,7 @@ export default function MarketingChannelsConfigPage() {
     if (!venueId) return []
     const { data, error: fetchErr } = await supabase
       .from('marketing_channels')
-      .select('id, venue_id, key, label, category, is_active, notes, created_at')
+      .select('id, venue_id, key, label, category, is_active, notes, created_at, managed_by_agency_id')
       .eq('venue_id', venueId)
       .is('deleted_at', null)
       .order('is_active', { ascending: false })
@@ -96,6 +104,29 @@ export default function MarketingChannelsConfigPage() {
     if (fetchErr) throw fetchErr
     return (data ?? []) as MarketingChannel[]
   }, [venueId, supabase])
+
+  // Wave 6E. Load agencies for the per-channel manager picker.
+  const [agencies, setAgencies] = useState<AgencyOption[]>([])
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const resp = await fetch('/api/intel/agencies')
+        if (!resp.ok) return
+        const j = (await resp.json()) as {
+          agencies?: Array<{ id: string; name: string }>
+        }
+        if (cancelled) return
+        setAgencies(j.agencies ?? [])
+      } catch {
+        // non-fatal
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const agencyById = new Map(agencies.map((a) => [a.id, a.name]))
 
   const {
     rows: channels,
@@ -178,7 +209,10 @@ export default function MarketingChannelsConfigPage() {
     }
   }
 
-  async function saveEdit(c: MarketingChannel, patch: Partial<Pick<MarketingChannel, 'label' | 'category' | 'notes'>>) {
+  async function saveEdit(
+    c: MarketingChannel,
+    patch: Partial<Pick<MarketingChannel, 'label' | 'category' | 'notes' | 'managed_by_agency_id'>>,
+  ) {
     if (!venueId) return
     try {
       const { error: updErr } = await supabase
@@ -317,6 +351,7 @@ export default function MarketingChannelsConfigPage() {
                 {editingId === c.id ? (
                   <ChannelEditRow
                     channel={c}
+                    agencies={agencies}
                     onCancel={() => setEditingId(null)}
                     onSave={(patch) => saveEdit(c, patch)}
                   />
@@ -331,6 +366,12 @@ export default function MarketingChannelsConfigPage() {
                             {CATEGORY_OPTIONS.find((o) => o.value === c.category)?.label ?? c.category}
                           </span>
                         )}
+                        {c.managed_by_agency_id && agencyById.has(c.managed_by_agency_id) ? (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-[10px] font-medium text-amber-800 uppercase">
+                            <Briefcase className="w-3 h-3" />
+                            {agencyById.get(c.managed_by_agency_id)}
+                          </span>
+                        ) : null}
                         {!c.is_active && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sage-100 text-[10px] font-medium text-sage-500 uppercase">inactive</span>
                         )}
@@ -361,14 +402,18 @@ export default function MarketingChannelsConfigPage() {
 
 interface ChannelEditRowProps {
   channel: MarketingChannel
+  agencies: AgencyOption[]
   onCancel: () => void
-  onSave: (patch: Partial<Pick<MarketingChannel, 'label' | 'category' | 'notes'>>) => void
+  onSave: (patch: Partial<Pick<MarketingChannel, 'label' | 'category' | 'notes' | 'managed_by_agency_id'>>) => void
 }
 
-function ChannelEditRow({ channel, onCancel, onSave }: ChannelEditRowProps) {
+function ChannelEditRow({ channel, agencies, onCancel, onSave }: ChannelEditRowProps) {
   const [label, setLabel] = useState(channel.label)
   const [category, setCategory] = useState(channel.category ?? '')
   const [notes, setNotes] = useState(channel.notes ?? '')
+  const [managedByAgencyId, setManagedByAgencyId] = useState<string>(
+    channel.managed_by_agency_id ?? '',
+  )
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -395,9 +440,38 @@ function ChannelEditRow({ channel, onCancel, onSave }: ChannelEditRowProps) {
         placeholder="Internal notes"
         className="w-full rounded border border-sage-200 px-2 py-1 text-sm"
       />
+      <div>
+        <label className="flex items-center gap-2 text-xs text-sage-600">
+          <Briefcase className="w-3 h-3" />
+          Managed by agency
+          <select
+            value={managedByAgencyId}
+            onChange={(e) => setManagedByAgencyId(e.target.value)}
+            className="flex-1 rounded border border-sage-200 px-2 py-1 text-sm"
+          >
+            <option value="">— in-house (no agency) —</option>
+            {agencies.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="mt-1 text-[10px] text-sage-500">
+          When set, attribution sourced from this channel rolls up under
+          the agency in TBH Reports.
+        </p>
+      </div>
       <div className="flex items-center gap-2">
         <button
-          onClick={() => onSave({ label: label.trim(), category: category || null, notes: notes.trim() || null })}
+          onClick={() =>
+            onSave({
+              label: label.trim(),
+              category: category || null,
+              notes: notes.trim() || null,
+              managed_by_agency_id: managedByAgencyId || null,
+            })
+          }
           className="inline-flex items-center gap-1 rounded bg-sage-700 hover:bg-sage-800 text-white text-xs px-2 py-1"
         >
           <Save className="w-3 h-3" />

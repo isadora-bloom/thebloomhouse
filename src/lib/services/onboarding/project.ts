@@ -45,7 +45,7 @@ export interface DayStep {
     | 'kb_seed' | 'readiness_check' | 'manual' | 'pricing_history_ui'
     | 'crm_import_ui' | 'sage_identity' | 'forbidden_topics' | 'tone_preferences'
     | 'web_form_import_ui' | 'extract_packages_ui' | 'tour_scheduler_import_ui'
-    | 'utm_tagging'
+    | 'utm_tagging' | 'seed_agencies'
   /** External admin surface where the coordinator does the actual
    *  work for this step. Page renders this as a "Go to surface" link
    *  so coordinators don't have to memorise where each piece lives.
@@ -125,6 +125,20 @@ export const PROJECT_PLAN: DayPlan[] = [
         actionKey: 'seed_channels',
         linkHref: '/portal/marketing-channels-config',
         linkLabel: 'Open marketing channels',
+      },
+      {
+        // Wave 6E — agency tracker. Optional but high-value: lets the
+        // TBH Report contrast agency-claimed metrics against Bloom's
+        // ground truth. Coordinator skips if they manage marketing
+        // in-house. Each registered agency gets engaged with the
+        // channels they manage so first-touch attribution rolls up.
+        key: 'marketing_agencies',
+        label: 'Add marketing agencies you work with',
+        description:
+          "Optional, but unlocks the TBH Report. If a boutique agency manages any of your channels (Hawthorn, Elite Wedding Marketing, Path & Compass, your in-house Google Ads person, etc.), add them here and tie them to the channels they manage. Bloom contrasts what they claim with what they actually delivered (first-touch leads → tours → bookings). Skip this step if you do all your marketing in-house.",
+        actionKey: 'seed_agencies',
+        linkHref: '/intel/agencies',
+        linkLabel: 'Open marketing agencies',
       },
       {
         key: 'pricing_history',

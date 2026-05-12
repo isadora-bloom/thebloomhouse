@@ -17,6 +17,8 @@ export interface ManualSpendInput {
   amountCents: number
   currency?: string
   notes?: string | null
+  /** Wave 6E. Optional FK to marketing_agencies for ROI rollups. */
+  agencyId?: string | null
 }
 
 export async function recordManualSpend(
@@ -34,5 +36,6 @@ export async function recordManualSpend(
       ? { notes: input.notes, entered_via: 'manual_form' }
       : { entered_via: 'manual_form' },
     ingestedBy: 'manual',
+    agencyId: input.agencyId ?? null,
   })
 }

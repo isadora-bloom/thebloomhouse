@@ -13,7 +13,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { DollarSign, Plus, Loader2, AlertCircle, Check } from 'lucide-react'
+import { DollarSign, Plus, Loader2, AlertCircle, Check, Briefcase } from 'lucide-react'
+import Link from 'next/link'
 
 interface SpendRow {
   id: string
@@ -26,6 +27,11 @@ interface SpendRow {
   currency: string
   ingested_at: string
   ingested_by: string | null
+}
+
+interface AgencyOption {
+  id: string
+  name: string
 }
 
 interface ListResponse {
@@ -97,6 +103,9 @@ export default function MarketingSpendPage() {
   const [amountStr, setAmountStr] = useState<string>('')
   const [currency, setCurrency] = useState<string>('USD')
   const [notes, setNotes] = useState<string>('')
+  // Wave 6E — optional agency tag for ROI rollups.
+  const [agencyId, setAgencyId] = useState<string>('')
+  const [agencies, setAgencies] = useState<AgencyOption[]>([])
 
   // Bulk import textarea (CSV format)
   const [csvText, setCsvText] = useState<string>('')
@@ -135,6 +144,27 @@ export default function MarketingSpendPage() {
     void refresh()
   }, [refresh])
 
+  // Load agencies for the optional tag dropdown.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const resp = await fetch('/api/intel/agencies')
+        if (!resp.ok) return
+        const j = (await resp.json()) as {
+          agencies?: Array<{ id: string; name: string }>
+        }
+        if (cancelled) return
+        setAgencies(j.agencies ?? [])
+      } catch {
+        // non-fatal — page works without the agency dropdown
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   // ---------------------------------------------------------------
   // Submit handlers
   // ---------------------------------------------------------------
@@ -161,6 +191,7 @@ export default function MarketingSpendPage() {
             amountCents,
             currency,
             notes: notes || null,
+            agencyId: agencyId || null,
           }),
         })
         const j = (await resp.json()) as {
@@ -192,7 +223,7 @@ export default function MarketingSpendPage() {
         setSubmitting(false)
       }
     },
-    [channel, campaignName, spendDate, amountStr, currency, notes, refresh],
+    [channel, campaignName, spendDate, amountStr, currency, notes, agencyId, refresh],
   )
 
   const parseCsvAndPost = useCallback(async () => {
@@ -395,6 +426,33 @@ export default function MarketingSpendPage() {
               className="rounded-md border border-[var(--bh-line)] bg-white px-3 py-2 text-sm"
               placeholder="optional"
             />
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm sm:col-span-2 md:col-span-1">
+            <span className="flex items-center gap-1 text-[var(--bh-muted)]">
+              <Briefcase className="h-3 w-3" /> Agency (optional)
+            </span>
+            <select
+              value={agencyId}
+              onChange={(e) => setAgencyId(e.target.value)}
+              className="rounded-md border border-[var(--bh-line)] bg-white px-3 py-2 text-sm"
+            >
+              <option value="">— none (in-house / direct) —</option>
+              {agencies.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+            {agencies.length === 0 ? (
+              <span className="text-[10px] text-[var(--bh-muted)]">
+                No agencies yet.{' '}
+                <Link href="/intel/agencies/new" className="underline">
+                  Add one
+                </Link>{' '}
+                to tag spend.
+              </span>
+            ) : null}
           </label>
 
           <div className="sm:col-span-2 md:col-span-3 flex items-center gap-3">
