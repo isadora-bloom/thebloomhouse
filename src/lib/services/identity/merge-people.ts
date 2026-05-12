@@ -191,6 +191,73 @@ export async function mergePeople(args: MergePeopleArgs): Promise<MergePeopleRes
   }
 }
 
+/**
+ * Soft-tombstone a person row: reassign FK children AND set merged_into_id.
+ * Use when the canonical mergePeople hard-delete is wrong (the phantom-
+ * partner case in profile-to-people-sync — we want the row to survive
+ * for forensic audit even though the LLM said it was a hallucinated
+ * ghost). FK reassignment is identical to mergePeople; only the final
+ * step differs (UPDATE merged_into_id instead of DELETE).
+ *
+ * Returns the same reassignedCounts shape as mergePeople for telemetry
+ * parity. Writes a person_merges audit row tagged with the supplied
+ * `reason` so the soft-tombstone is distinguishable from a hard merge.
+ *
+ * Fix for F1 in MERGED-INTO-ID-TRACE-2026-05-12.md.
+ */
+export async function softTombstonePerson(args: {
+  supabase: SupabaseClient
+  venueId: string
+  keepPersonId: string
+  tombstonePersonId: string
+  reason: string
+}): Promise<MergePeopleResult['reassignedCounts']> {
+  const { supabase, venueId, keepPersonId, tombstonePersonId, reason } = args
+  if (keepPersonId === tombstonePersonId) {
+    throw new Error('softTombstonePerson: keep and tombstone ids are identical')
+  }
+
+  // Load both rows for the audit snapshot. Both must belong to the venue.
+  const { data: kept } = await supabase
+    .from('people').select('*').eq('id', keepPersonId).eq('venue_id', venueId).single()
+  const { data: doomed } = await supabase
+    .from('people').select('*').eq('id', tombstonePersonId).eq('venue_id', venueId).single()
+  if (!kept || !doomed) {
+    throw new Error('softTombstonePerson: one or both people not found for this venue')
+  }
+
+  const reassigned = await reassignChildren(
+    supabase,
+    venueId,
+    keepPersonId,
+    tombstonePersonId,
+    doomed.wedding_id as string | null,
+    kept.wedding_id as string | null,
+  )
+
+  // Audit row — same shape as mergePeople, with reason capturing the
+  // soft-tombstone trigger (e.g., 'phantom_partner', 'duplicate_partner1').
+  await supabase.from('person_merges').insert({
+    venue_id: venueId,
+    kept_person_id: keepPersonId,
+    merged_person_id: tombstonePersonId,
+    signals: [{ type: 'soft_tombstone', detail: reason, weight: 1 }],
+    tier: 'high',
+    confidence_score: 100,
+    snapshot: { person: doomed as Record<string, unknown>, soft_tombstone: true, reason },
+    merged_by: `system:${reason}`,
+  })
+
+  // The tombstone — set merged_into_id instead of DELETE.
+  await supabase
+    .from('people')
+    .update({ merged_into_id: keepPersonId })
+    .eq('id', tombstonePersonId)
+    .is('merged_into_id', null)
+
+  return reassigned
+}
+
 async function childCounts(
   supabase: SupabaseClient,
   venueId: string,

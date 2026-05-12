@@ -707,7 +707,12 @@ export default function ClientProfilePage() {
           .from('people')
           .select('id, role, first_name, last_name, email, phone')
           .eq('wedding_id', weddingId)
-          .eq('venue_id', VENUE_ID),
+          .eq('venue_id', VENUE_ID)
+          // F2 in MERGED-INTO-ID-TRACE-2026-05-12.md: exclude soft-
+          // tombstoned partner rows so duplicates created via the
+          // phantom-tombstone path (or any direct-SQL fixup) stop
+          // rendering twice in Contacts.
+          .is('merged_into_id', null),
         supabase
           .from('interactions')
           // 2026-05-09: select full_body + gmail_thread_id alongside

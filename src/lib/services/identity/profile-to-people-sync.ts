@@ -116,6 +116,7 @@ export type SyncUpdate =
 
 interface PersonRow {
   id: string
+  venue_id: string
   role: string | null
   first_name: string | null
   last_name: string | null
@@ -195,7 +196,7 @@ async function loadPartners(
   const { data, error } = await supabase
     .from('people')
     .select(
-      'id, role, first_name, last_name, display_handle, name_evidence, name_confidence, merged_into_id',
+      'id, venue_id, role, first_name, last_name, display_handle, name_evidence, name_confidence, merged_into_id',
     )
     .eq('wedding_id', weddingId)
     .in('role', ['partner1', 'partner2'])
@@ -416,12 +417,30 @@ async function applyPhantomTombstone(
     // No partner1 row to merge into — bail. Caller still gets the
     // partner_count=1 stamp below if the wedding row needs it.
   } else if (partner2) {
-    const { error } = await supabase
-      .from('people')
-      .update({ merged_into_id: partner1.id })
-      .eq('id', partner2.id)
-    if (error) {
-      throw new Error(`applyPhantomTombstone.tombstone-p2: ${error.message}`)
+    // Fix for F1 in MERGED-INTO-ID-TRACE-2026-05-12.md. Previously this
+    // path set merged_into_id directly without reassigning FK children
+    // (interactions.person_id, drafts, engagement_events, contacts,
+    // tangential_signals). When a phantom partner2 had real child rows
+    // (e.g. an inbound SMS that tryMatchSmsByName had bound to the
+    // ghost), those children orphaned to a tombstoned parent and became
+    // invisible to readers that filter merged_into_id IS NULL.
+    //
+    // softTombstonePerson preserves the row-survives semantic (the
+    // forensic record stays) while reassigning every FK child to
+    // partner1 — same code path mergePeople uses for the hard-delete case.
+    try {
+      const { softTombstonePerson } = await import('./merge-people')
+      await softTombstonePerson({
+        supabase,
+        venueId: partner2.venue_id,
+        keepPersonId: partner1.id,
+        tombstonePersonId: partner2.id,
+        reason: 'phantom_partner',
+      })
+    } catch (err) {
+      throw new Error(
+        `applyPhantomTombstone.tombstone-p2: ${err instanceof Error ? err.message : String(err)}`,
+      )
     }
     updates.push({
       kind: 'phantom_tombstoned',
