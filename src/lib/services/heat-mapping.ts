@@ -1397,6 +1397,25 @@ export async function markAsBooked(
 /**
  * Mark a wedding as lost. Sets score to 0, records the reason and competitor
  * info, and inserts a lost_deals record.
+ *
+ * INVARIANT (migration 323): inserting an engagement_events row with
+ * event_type='marked_lost' is sufficient to flip weddings.status to 'lost'.
+ * A Postgres AFTER INSERT trigger (sync_status_on_marked_lost) handles the
+ * status update and back-fills lost_at / lost_reason from the event's
+ * occurred_at and metadata.reason if those fields are NULL on the wedding.
+ * This means:
+ *   1. The Promise.all below is no longer a single-point-of-failure for
+ *      status sync. If the explicit weddings UPDATE in this function fails,
+ *      the engagement_events INSERT will still flip the status.
+ *   2. Any future writer that inserts a 'marked_lost' event directly,
+ *      without calling markAsLost, will automatically get the status flip.
+ *   3. The trigger cascades through trg_weddings_cascade_lost (mig 314),
+ *      so pending drafts also get cancelled regardless of writer path.
+ *
+ * Don't remove the explicit weddings UPDATE from this function: it keeps
+ * the lost_at / lost_reason / lost_to metadata richer than what the trigger
+ * can derive from the event row alone (the trigger only sees reason, not
+ * lost_to, and only fills lost_at if NULL).
  */
 export async function markAsLost(
   weddingId: string,

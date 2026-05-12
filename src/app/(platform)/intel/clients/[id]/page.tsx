@@ -7,11 +7,13 @@ import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { dedupePeopleByName, pickCanonicalPeople } from '@/lib/utils/couple-name'
 import { htmlToText } from '@/lib/utils/html-text'
+import { detectInteractionFlavor } from '@/lib/utils/interaction-flavor'
 import {
   ArrowLeft,
   Mail,
   Phone,
   Calendar,
+  CalendarCheck,
   Users,
   DollarSign,
   Clock,
@@ -356,10 +358,20 @@ function noteCategoryConfig(category: string): {
   }
 }
 
-function interactionIcon(type: string, direction: string) {
+function interactionIcon(
+  type: string,
+  direction: string,
+  flavor: 'calendly' | null = null,
+) {
+  // Flavor wins over raw type — a Calendly-sourced SMS or meeting
+  // reads more clearly with a calendar icon than with the generic
+  // SMS bubble. The DB type is preserved (still 'sms' / 'meeting'),
+  // only the icon swaps.
+  if (flavor === 'calendly') return <CalendarCheck className="w-4 h-4" />
   if (type === 'call') return <PhoneCall className="w-4 h-4" />
   if (type === 'voicemail') return <Voicemail className="w-4 h-4" />
   if (type === 'sms') return <MessageSquare className="w-4 h-4" />
+  if (type === 'meeting') return <Calendar className="w-4 h-4" />
   return direction === 'inbound'
     ? <ArrowDownRight className="w-4 h-4" />
     : <ArrowUpRight className="w-4 h-4" />
@@ -1247,6 +1259,13 @@ export default function ClientProfilePage() {
                   const cleanFull = htmlToText(int.full_body) || cleanPreview
                   const hasMore = cleanFull.length > cleanPreview.length
                   const canExpand = !!cleanFull
+                  // Disambiguate Calendly-flavoured rows: the DB type is
+                  // 'sms' (venue phone received the Calendly SMS
+                  // notification) or 'meeting' (CSV-imported synthetic
+                  // event), but coordinators read the body as a Calendly
+                  // event, not an SMS conversation. Swap icon + show a
+                  // "Calendly" badge so the visual matches the meaning.
+                  const flavor = detectInteractionFlavor(int.type, int.full_body || int.body_preview)
                   return (
                     <div
                       key={int.id}
@@ -1269,12 +1288,19 @@ export default function ClientProfilePage() {
                       <div className="flex items-start gap-3">
                         <div className={cn(
                           'mt-0.5 shrink-0',
-                          int.direction === 'inbound' ? 'text-blue-500' : 'text-emerald-500'
+                          flavor === 'calendly'
+                            ? 'text-purple-500'
+                            : int.direction === 'inbound' ? 'text-blue-500' : 'text-emerald-500'
                         )}>
-                          {interactionIcon(int.type, int.direction)}
+                          {interactionIcon(int.type, int.direction, flavor)}
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-0.5">
+                            {flavor === 'calendly' && (
+                              <span className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-50 text-purple-700">
+                                Calendly
+                              </span>
+                            )}
                             <p className="text-sm font-medium text-sage-900 truncate">
                               {int.subject || `${int.type} ${int.direction}`}
                             </p>

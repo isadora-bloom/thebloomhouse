@@ -314,10 +314,58 @@ function candidatesFromInteraction(row: InteractionRow): NameCandidate[] {
   return out
 }
 
+/** Structured-prose line detector. Tour-scheduler (and historically
+ *  other adapters) composes weddings.notes as `key:value` lines —
+ *  e.g. `package_interest:Whole Weekend`, `partner2_email:foo@bar`,
+ *  `pricing_calculator:...`. Running the capitalized-pair NAME_RE
+ *  across those lines harvests form-bleed tokens ("Whole Weekend",
+ *  "Final Walkthrough") and writes them onto people.first_name /
+ *  people.last_name. The class fix is to strip any line that looks
+ *  structured BEFORE the regex runs.
+ *
+ *  Match rule: a line whose first token (word characters only) is
+ *  followed immediately by `:`. Examples that match (and get stripped):
+ *    `package_interest:Whole Weekend`
+ *    `partner2_email:foo@bar`
+ *    `unknown_q_a:`
+ *  Examples that do NOT match (free prose, kept for the regex):
+ *    `Megan toured on Saturday`
+ *    `Notes from the planner: Liz Carney is the lead` (space before colon) */
+const STRUCTURED_KV_LINE = /^\w+:/
+
+/** Token-level blacklist mirroring the reconstruct.ts Sonnet judge
+ *  (config/prompts/identity-reconstruction.ts §5 form-value detection,
+ *  lines 297, 335). The judge already refuses these patterns; the regex
+ *  pipeline must refuse them too so it doesn't write them in the first
+ *  place.
+ *
+ *  Examples that get rejected:
+ *    `Whole Weekend`        — Calendly Q1 package_interest value
+ *    `One Day`              — package_interest value
+ *    `Final Walkthrough`    — Calendly event-type name
+ *    `Tour Date`            — Calendly event-type name
+ *    `Pre-Tour Phone`       — Calendly event-type name
+ *  Examples that pass through:
+ *    `Mconn Erinhorrigan`   — concatenated handles; slug detection
+ *                             lives in reconstruct.ts. Shape-wise this
+ *                             is a real First Last so we let it through.
+ *    `Jennifer Biaksangi`   — real name */
+const FORM_BLEED_FIRST = /^(Whole|One|Two|Three|Half|Final|Tour|Pre|Post|Service|Meeting|Booking|Estimate|Package|Day|Night|Pre-Tour|Phone)\s/
+const FORM_BLEED_LAST = /\s(Weekend|Weekday|Day|Night|Walkthrough|Meeting|Booking|Call|Tour|Estimate|Package)$/
+
 /** Pull free-text candidate names from a wedding's notes / sage context.
  *  Coordinator brain-dumps and scheduler imports occasionally name the
  *  couple in plain English. We use a lightweight capitalized-pair scan
- *  identical in spirit to the body-extractor. */
+ *  identical in spirit to the body-extractor.
+ *
+ *  Two layers of defense against form-bleed:
+ *    1. Structured `key:value` lines are stripped BEFORE the regex runs
+ *       (load-bearing — closes the entire class regardless of which
+ *       future Q&A key lands in notes).
+ *    2. The capitalized-pair regex output runs through FORM_BLEED_FIRST
+ *       / FORM_BLEED_LAST blacklists, mirroring the reconstruct.ts
+ *       Sonnet judge's refusal patterns. Belt-and-suspenders for any
+ *       free-prose lines that happen to start with a refused token. */
 function candidatesFromWeddingText(wedding: WeddingRow): NameCandidate[] {
   const out: NameCandidate[] = []
   const NAME_RE = /\b([A-Z][a-z'À-ſ-]{1,29})\s+([A-Z](?:[a-z'À-ſ-]{1,29}|\.))/g
@@ -327,13 +375,28 @@ function candidatesFromWeddingText(wedding: WeddingRow): NameCandidate[] {
     // regex. Sage-context-notes occasionally store rendered HTML.
     const cleanedText = stripHtmlForNameValue(text) ?? ''
     if (!cleanedText) return
+    // 2026-05-12 form-bleed fix: strip structured `key:value` lines
+    // BEFORE running NAME_RE. Tour-scheduler composes notes with
+    // lines like `package_interest:Whole Weekend` — those Capitalized
+    // values satisfy the capitalized-pair regex and get written to
+    // people.first_name / people.last_name. See NAME-LEAK-TRACE-2026-05-12.md.
+    const proseOnly = cleanedText
+      .split('\n')
+      .filter((line) => !STRUCTURED_KV_LINE.test(line.trim()))
+      .join('\n')
+    if (!proseOnly.trim()) return
     NAME_RE.lastIndex = 0
     const seen = new Set<string>()
     let m: RegExpExecArray | null
-    while ((m = NAME_RE.exec(cleanedText)) !== null && seen.size < 8) {
+    while ((m = NAME_RE.exec(proseOnly)) !== null && seen.size < 8) {
       const candidate = `${m[1]} ${m[2]}`
       // Filter obvious non-names — same blacklist as body-extract.ts.
       if (/^(Reply|View|Click|Forward|Read|Send|Open|Visit|Contact|Email|Phone|Subject|Date|From|To|Re|Fwd)\s/.test(candidate)) continue
+      // 2026-05-12 form-bleed fix: token-level blacklist for
+      // package / time-of-day / event-shape tokens that the
+      // reconstruct.ts Sonnet judge already refuses
+      // (config/prompts/identity-reconstruction.ts:297, 335).
+      if (FORM_BLEED_FIRST.test(candidate) || FORM_BLEED_LAST.test(candidate)) continue
       if (/^([A-Z][a-z]+)\s\1\b/.test(candidate)) continue
       if (seen.has(candidate)) continue
       seen.add(candidate)
@@ -596,6 +659,25 @@ export async function upgradePeopleNameFromTouchpoints(
 
   return { upgrades, scanned: people.length }
 }
+
+/** Form-bleed token lists exposed for the repair-form-bleed-names
+ *  backfill script (scripts/repair-form-bleed-names.ts) and tests.
+ *  These mirror the FORM_BLEED_FIRST / FORM_BLEED_LAST regex used
+ *  inside harvestFrom. Source of truth for "which name values are
+ *  package / event-shape bleed and should be NULLed out". */
+export const FORM_BLEED_TOKENS = {
+  /** First-name tokens the reconstruct.ts judge refuses + we now refuse. */
+  firstHeads: [
+    'Whole', 'One', 'Two', 'Three', 'Half', 'Final', 'Tour', 'Pre',
+    'Post', 'Service', 'Meeting', 'Booking', 'Estimate', 'Package',
+    'Day', 'Night', 'Pre-Tour', 'Phone',
+  ] as const,
+  /** Last-name tokens the reconstruct.ts judge refuses + we now refuse. */
+  lastTails: [
+    'Weekend', 'Weekday', 'Day', 'Night', 'Walkthrough', 'Meeting',
+    'Booking', 'Call', 'Tour', 'Estimate', 'Package',
+  ] as const,
+} as const
 
 // Internal exports for the backfill route to construct admin notifications.
 export const __test__ = {

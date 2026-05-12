@@ -155,6 +155,17 @@ export interface NormalisedLeadRow {
   lost_reason?: string | null
   notes?: string | null
 
+  /** Structured Calendly / form Q&A payload. Migration 322 added
+   *  weddings.calendly_qa as the canonical home for `key:value` form
+   *  answers that previously got stuffed into notes as free text.
+   *  Writing here instead of (or in addition to) notes means the
+   *  name-upgrade regex pipeline never sees Capitalized Q&A values
+   *  like "Whole Weekend" as candidate names. Shape:
+   *    { partner2_email?, package_interest?, pricing_calculator?,
+   *      unknown_q_a?, plus any future Calendly question key }
+   *  See NAME-LEAK-TRACE-2026-05-12.md. */
+  calendly_qa?: Record<string, unknown> | null
+
   /** Per-row import-time warnings the coordinator should review.
    *  Schema: { field, issue, value }[] — see migration 175. T5-Rixey-UU
    *  Bug G adds couple_name 'unparseable_concat' warnings when the
@@ -471,6 +482,10 @@ export async function commitNormalisedRows(args: {
         lost_at: row.lost_at ?? null,
         lost_reason: row.lost_reason ?? null,
         notes: row.notes ?? null,
+        // Migration 322: structured Calendly Q&A. Writing here instead
+        // of free-text in notes keeps form-bleed values out of the
+        // name-upgrade regex pipeline.
+        calendly_qa: row.calendly_qa ?? null,
         confidence_flag: confidenceFlag,
         crm_source: crmSource,
         source_provenance: sourceProvenance,

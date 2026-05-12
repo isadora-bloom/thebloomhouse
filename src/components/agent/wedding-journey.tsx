@@ -13,6 +13,7 @@ import {
   XCircle,
   ArrowRight,
   Calendar,
+  CalendarCheck,
   FileSignature,
   Mail,
   Activity,
@@ -68,6 +69,11 @@ interface JourneyEvent {
   source?: string | null
   actor: JourneyActor
   evidence?: Record<string, unknown>
+  /** Optional content flavor — disambiguates rows whose transport
+   *  type (SMS / meeting) doesn't match the rendered body. 'calendly'
+   *  swaps the row icon to a calendar-check + adds a "Calendly" chip
+   *  so the coordinator stops reading these as conversational SMS. */
+  flavor?: 'calendly'
 }
 
 interface CategoryStyle {
@@ -259,7 +265,17 @@ export function WeddingJourney({ weddingId, initialLimit = 200, categories }: Pr
             <div className="absolute left-[15px] top-2 bottom-2 w-[2px] bg-sage-100" aria-hidden />
             <div className="space-y-3">
               {visible.map((e) => {
-                const style = CATEGORY_STYLE[e.category]
+                const baseStyle = CATEGORY_STYLE[e.category]
+                // Flavor override: a Calendly-bodied SMS/meeting row
+                // arrives with category='communication' (since it IS a
+                // raw interaction) but the default Mail icon reads as
+                // "email". Swap to CalendarCheck + a purple accent so
+                // the row visually announces itself as a scheduling
+                // event, not a conversation. Other categories are
+                // unaffected.
+                const style = e.flavor === 'calendly'
+                  ? { ...baseStyle, Icon: CalendarCheck, bg: 'bg-purple-100', text: 'text-purple-700' }
+                  : baseStyle
                 const sourceLabel = formatSource(e.source)
                 // 2026-05-09: communication + ai_draft rows expand
                 // on click when the API supplies a fullBody. Other

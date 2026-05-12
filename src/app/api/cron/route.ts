@@ -431,6 +431,21 @@ const VALID_JOBS = [
   // 40-cron cap); operator can curl /api/cron?job=cohort_damping_refresh
   // until a shared maintenance cron picks it up.
   'cohort_damping_refresh',
+  // 2026-05-12 IDENTITY-RESOLUTION-AUDIT F10. Retroactive duplicate-
+  // people merge. The mintWedding chokepoint blocks NEW duplicates;
+  // this sweep collapses legacy rows where (wedding_id, role,
+  // lower(email)) — or (wedding_id, role, phone) with email-null on
+  // both sides — is identical across multiple active people rows.
+  // Sister sweep to merge_people_aliases (which handles real-vs-
+  // platform-alias email pairings); this one handles same-email-
+  // on-both-rows like the Crystal Fuller RM-0480 case. Calls the
+  // existing mergePeople service per pair so the audit row + child
+  // FK reassignments are uniform with operator-driven merges. NOT
+  // registered in vercel.json (Pro at 40-cron cap); operator can
+  // curl /api/cron?job=auto_merge_duplicate_partners. Same-name-
+  // different-email duplicate class is DEFERRED — needs the AI
+  // adjudicator + confidence gate.
+  'auto_merge_duplicate_partners',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -1119,6 +1134,21 @@ async function runJob(job: JobName): Promise<unknown> {
         '@/lib/services/intel/cohort-damping-refresh'
       )
       return refreshCohortDampingCache(createServiceClient())
+    }
+
+    case 'auto_merge_duplicate_partners': {
+      // 2026-05-12 IDENTITY-RESOLUTION-AUDIT F10. Retroactive sweep
+      // of duplicate `people` rows where (wedding_id, role, email)
+      // or (wedding_id, role, phone with email-null) collides on
+      // multiple active rows. Calls mergePeople per pair so the
+      // audit row + FK reassignment + tombstone path is shared with
+      // operator merges. Same-name-different-email class is deferred
+      // pending the AI adjudicator. Dynamic import keeps the sweep
+      // out of the cold-path bundle for ticks hitting other jobs.
+      const { autoMergeDuplicatePartners } = await import(
+        '@/lib/services/identity/auto-merge-duplicates'
+      )
+      return autoMergeDuplicatePartners(createServiceClient())
     }
   }
 }

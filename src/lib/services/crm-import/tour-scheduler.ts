@@ -915,6 +915,24 @@ function calendlyRowsToNormalised(
           ? `pricing_calculator:${aggregateRouted.get('pricing_calculator')}` : null,
         unknownNotes.length > 0 ? `unknown_q_a:\n  ${unknownNotes.join('\n  ')}` : null,
       ].filter(Boolean).join('\n\n') || null,
+      // Migration 322 — structured Calendly Q&A surface. Parallel to
+      // the `notes` blob above so audit history survives unchanged.
+      // The name-upgrade regex skips structured `key:value` lines AND
+      // never scans calendly_qa, so form-bleed values like
+      // "Whole Weekend" stay out of people.first_name. The Capitalized
+      // Q&A values that historically bled into names via the notes
+      // regex now live here as their own first-class fields. See
+      // NAME-LEAK-TRACE-2026-05-12.md.
+      calendly_qa: (() => {
+        const qa: Record<string, string> = {}
+        if (partner2Email) qa.partner2_email = partner2Email
+        const pkg = aggregateRouted.get('package_interest')
+        if (pkg) qa.package_interest = pkg.replace(/\n/g, ' / ')
+        const calc = aggregateRouted.get('pricing_calculator')
+        if (calc) qa.pricing_calculator = calc
+        if (unknownNotes.length > 0) qa.unknown_q_a = unknownNotes.join('\n')
+        return Object.keys(qa).length > 0 ? qa : null
+      })(),
       interactions,
       tours,
       lost_deal: null,

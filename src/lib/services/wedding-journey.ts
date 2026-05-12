@@ -32,6 +32,7 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import { htmlToText } from '@/lib/utils/html-text'
+import { detectInteractionFlavor } from '@/lib/utils/interaction-flavor'
 
 export type JourneyCategory =
   | 'funnel_step'
@@ -68,6 +69,12 @@ export interface JourneyEvent {
   /** Optional structured payload for click-through detail. The UI
    *  doesn't render this directly — it's the raw evidence. */
   evidence?: Record<string, unknown>
+  /** Optional content "flavor" — disambiguates rows whose underlying
+   *  transport type (SMS / meeting) doesn't match the body content
+   *  the coordinator reads. 'calendly' = body is a structured
+   *  Calendly event payload written by tour-scheduler.ts. The
+   *  renderer swaps icon + adds a 'Calendly' chip when set. */
+  flavor?: 'calendly'
 }
 
 interface BuildOptions {
@@ -449,22 +456,46 @@ export async function getWeddingJourney(
   // regressions.
   for (const ix of (interactionRes.data ?? []) as InteractionRow[]) {
     const isInbound = ix.direction === 'inbound'
-    const typeLabel = ix.type === 'email' ? 'Email' : ix.type === 'call' ? 'Call' : ix.type === 'voicemail' ? 'Voicemail' : 'SMS'
+    // 2026-05-12: detect Calendly-flavoured rows so the timeline
+    // doesn't show "SMS received: Tour scheduled: …" or
+    // "Meeting received: …" when the body is structured Calendly
+    // payload. interactions.type stays correct in the DB (the row
+    // really was an SMS or meeting); only the rendered label and
+    // category badge swap. tour-scheduler.ts writes both flavours:
+    // SMS for venue-phone notifications, meeting for the CSV
+    // import path (line 818, type='meeting' with body
+    // "provider:calendly\n…").
+    const flavor = detectInteractionFlavor(ix.type, ix.full_body || ix.body_preview)
+    const typeLabel = flavor === 'calendly'
+      ? 'Calendly'
+      : ix.type === 'email' ? 'Email'
+      : ix.type === 'call' ? 'Call'
+      : ix.type === 'voicemail' ? 'Voicemail'
+      : ix.type === 'meeting' ? 'Meeting'
+      : 'SMS'
     const cleanPreview = htmlToText(ix.body_preview)
     // 2026-05-09: also strip HTML on the full body so click-expand
     // lands on legible text, not an HTML dump. Falls back to the
     // preview when an old import didn't store full_body.
     const cleanFull = htmlToText(ix.full_body) || cleanPreview
+    // For Calendly rows the subject already starts with "Tour
+    // scheduled: …" or "Post-booking: …" — prefix "Calendly:" so
+    // the coordinator immediately knows what surface this came
+    // from without losing the subject line.
+    const title = flavor === 'calendly'
+      ? `Calendly${ix.subject ? `: ${ix.subject}` : ''}`
+      : `${typeLabel} ${isInbound ? 'received' : 'sent'}${ix.subject ? `: ${ix.subject}` : ''}`
     events.push({
       id: `ix-${ix.id}`,
       timestamp: ix.timestamp,
       category: 'communication',
-      title: `${typeLabel} ${isInbound ? 'received' : 'sent'}${ix.subject ? `: ${ix.subject}` : ''}`,
+      title,
       description: cleanPreview ? cleanPreview.slice(0, 200) : undefined,
       fullBody: cleanFull && cleanFull.length > 0 ? cleanFull : undefined,
       threadId: ix.gmail_thread_id,
       actor: isInbound ? 'couple' : 'venue',
-      evidence: { from_email: ix.from_email, from_name: ix.from_name, direction: ix.direction, type: ix.type },
+      evidence: { from_email: ix.from_email, from_name: ix.from_name, direction: ix.direction, type: ix.type, flavor: flavor ?? undefined },
+      flavor: flavor ?? undefined,
     })
   }
 
