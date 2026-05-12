@@ -346,6 +346,209 @@ async function checkSourceConsistency(sb: SupabaseClient, venueId: string): Prom
   }
 }
 
+// ===========================================================================
+// Dispatch-class invariants (Tier C of incomplete-dispatch-plan, 2026-05-12)
+//
+// The bugs from May 10-12 were one class: a primitive lands in one place,
+// half the consumers update, half rot until a lead trips them. The
+// invariants below probe for the specific shapes those rotting consumers
+// leave behind. Each one is keyed to a concrete past failure so the meaning
+// field can carry the incident pointer.
+// ===========================================================================
+
+async function checkDraftsReservedTldTarget(sb: SupabaseClient, venueId: string): Promise<InvariantResult> {
+  // Zack Hunter / WeddingWire trace (2026-05-12). Pipeline used the
+  // form-relay synthetic .invalid placeholder as drafts.to_email; auto-
+  // sender refused them at send time but the inbox surfaced them
+  // forever. RFC 2606 reserves four TLDs (.invalid/.test/.example/
+  // .localhost) for never-routable use. Mig 328 added a NOT VALID
+  // CHECK constraint so the class can't regrow; this invariant
+  // counts pre-existing offenders for cleanup tracking.
+  const { data } = await sb
+    .from('drafts')
+    .select('id, to_email, status, created_at, wedding_id')
+    .eq('venue_id', venueId)
+    .or('to_email.ilike.%.invalid,to_email.ilike.%.test,to_email.ilike.%.example,to_email.ilike.%.localhost')
+    .limit(SAMPLE_LIMIT * 5)
+  const violations = ((data ?? []) as Array<Record<string, unknown>>).map((d) => ({
+    draft_id: d.id,
+    to_email: d.to_email,
+    status: d.status,
+    wedding_id: d.wedding_id,
+    created_at: d.created_at,
+  }))
+  return {
+    id: 'drafts_reserved_tld_target',
+    name: 'Draft targets a reserved-TLD address that can never send',
+    meaning: 'Form-relay drafts stamped with the synthetic placeholder (e.g. authsolic-<token>@weddingwire.bloom-relay.invalid). Mig 328 blocks new ones; these are pre-fix zombies that should be retargeted to the platform relay or marked manual_via_platform.',
+    count: violations.length,
+    sample: violations.slice(0, SAMPLE_LIMIT),
+  }
+}
+
+async function checkPlaceholderFirstName(sb: SupabaseClient, venueId: string): Promise<InvariantResult> {
+  // Zack Hunter name angle. findOrCreateContact only ran captureNameEvidence
+  // on the INSERT branch — when canonical resolver returned an existing
+  // person on a subsequent inbound, parsed leadName was silently dropped.
+  // Rows stuck with first_name = email-local-part placeholder
+  // (authsolic-XXX, user-XXX, hex-shaped) forever. Pipeline fix in bcec77c
+  // re-stamps via the chokepoint on each inbound, but pre-fix rows still
+  // carry the placeholder until a fresh interaction trips the new path.
+  const { data } = await sb
+    .from('people')
+    .select('id, first_name, email, wedding_id')
+    .eq('venue_id', venueId)
+    .or('first_name.ilike.authsolic-%,first_name.ilike.user-%,first_name.ilike.reply-%,first_name.ilike.member-%')
+    .is('merged_into_id', null)
+    .limit(SAMPLE_LIMIT * 5)
+  const violations = ((data ?? []) as Array<Record<string, unknown>>).map((p) => ({
+    person_id: p.id,
+    first_name: p.first_name,
+    email: p.email,
+    wedding_id: p.wedding_id,
+  }))
+  return {
+    id: 'placeholder_first_name_rows',
+    name: 'Person with relay-token placeholder first_name still un-promoted',
+    meaning: 'Form-relay first inbound created the person; subsequent inbounds carrying the real parsed name silently dropped through the chokepoint (Zack Hunter pattern, May 12). New inbounds re-stamp via the captureNameEvidence hygiene block, but pre-fix rows stay placeholder until a fresh inbound arrives.',
+    count: violations.length,
+    sample: violations.slice(0, SAMPLE_LIMIT),
+  }
+}
+
+async function checkInboundMissingIntentClass(sb: SupabaseClient, venueId: string): Promise<InvariantResult> {
+  // Anja Putman / RM-1152. inbound_intent_class shipped in mig 327
+  // (2026-05-12). Drain cron classifies new inbounds within ~5 min.
+  // Any inbound older than 1h that's still NULL means the drain is
+  // stuck OR a writer path bypassed the classifier. Don't probe rows
+  // older than 14d — that's the bulk of the backfill and they're
+  // expected NULL until the drain finishes.
+  const oneHrAgo = new Date(Date.now() - 60 * 60_000).toISOString()
+  const twoWeeksAgo = new Date(Date.now() - 14 * 86_400_000).toISOString()
+  const { data } = await sb
+    .from('interactions')
+    .select('id, received_at, from_email, subject')
+    .eq('venue_id', venueId)
+    .eq('direction', 'inbound')
+    .is('inbound_intent_class', null)
+    .lt('received_at', oneHrAgo)
+    .gte('received_at', twoWeeksAgo)
+    .limit(SAMPLE_LIMIT * 5)
+  const violations = ((data ?? []) as Array<Record<string, unknown>>).map((i) => ({
+    interaction_id: i.id,
+    received_at: i.received_at,
+    from_email: i.from_email,
+    subject: typeof i.subject === 'string' ? i.subject.slice(0, 80) : null,
+  }))
+  return {
+    id: 'inbound_missing_intent_class',
+    name: 'Recent inbound interaction missing inbound_intent_class',
+    meaning: 'Anja Putman class (May 12). Drain cron should classify within minutes; a backlog older than 1h means the drain is stuck or a fresh writer path bypassed the classifier. Surfaces dispatch-coverage gaps as they form.',
+    count: violations.length,
+    sample: violations.slice(0, SAMPLE_LIMIT),
+  }
+}
+
+async function checkPendingDraftsAged(sb: SupabaseClient, venueId: string): Promise<InvariantResult> {
+  // Draft rotting in pending forever — usually means auto-send eligibility
+  // refused (forbidden topic / unsendable target / cap exhausted) but no
+  // human action was taken. 7d is generous; older than that and the
+  // inbound has gone cold either way.
+  const cutoff = new Date(Date.now() - 7 * 86_400_000).toISOString()
+  const { data } = await sb
+    .from('drafts')
+    .select('id, status, to_email, wedding_id, created_at, auto_sent')
+    .eq('venue_id', venueId)
+    .eq('status', 'pending')
+    .eq('auto_sent', false)
+    .lt('created_at', cutoff)
+    .limit(SAMPLE_LIMIT * 5)
+  const violations = ((data ?? []) as Array<Record<string, unknown>>).map((d) => ({
+    draft_id: d.id,
+    to_email: d.to_email,
+    wedding_id: d.wedding_id,
+    age_days: Math.round((Date.now() - new Date(d.created_at as string).getTime()) / 86_400_000),
+  }))
+  return {
+    id: 'pending_drafts_aged',
+    name: 'Draft stuck pending for over 7 days',
+    meaning: 'Either auto-send refused (forbidden topic / unsendable target / cap exhausted) or coordinator never acted. Old pending drafts are forensic debt — the inbound has gone cold either way.',
+    count: violations.length,
+    sample: violations.slice(0, SAMPLE_LIMIT),
+  }
+}
+
+async function checkDuplicateAuthsolicUnmerged(sb: SupabaseClient, venueId: string): Promise<InvariantResult> {
+  // WeddingWire authsolic token is per-prospect stable. Two un-merged
+  // weddings sharing the same token = the prospect's conversation got
+  // split across multiple lead rows. Surfaces gaps in the identity-
+  // matching pipeline (resolver-helpers / candidate identities).
+  const { data } = await sb
+    .from('interactions')
+    .select('id, wedding_id, extracted_identity')
+    .eq('venue_id', venueId)
+    .not('wedding_id', 'is', null)
+    .not('extracted_identity', 'is', null)
+    .limit(2000)
+  const tokenToWeddings = new Map<string, Set<string>>()
+  type Row = { id: string; wedding_id: string | null; extracted_identity: Record<string, unknown> | null }
+  for (const r of ((data ?? []) as Row[])) {
+    const token = r.extracted_identity?.authsolic
+    if (typeof token !== 'string' || !token) continue
+    const set = tokenToWeddings.get(token) ?? new Set<string>()
+    if (r.wedding_id) set.add(r.wedding_id)
+    tokenToWeddings.set(token, set)
+  }
+  const violations: Record<string, unknown>[] = []
+  for (const [token, wIds] of tokenToWeddings.entries()) {
+    if (wIds.size > 1) {
+      violations.push({ authsolic: token, wedding_count: wIds.size, wedding_ids: [...wIds].slice(0, 5) })
+      if (violations.length >= SAMPLE_LIMIT * 5) break
+    }
+  }
+  return {
+    id: 'duplicate_authsolic_unmerged',
+    name: 'WeddingWire authsolic token spans multiple un-merged weddings',
+    meaning: 'The token is per-prospect stable; multiple lead rows means identity matching split one prospect across many. Manual merge or resolver tuning needed. (2026-04-30 Rixey had 10 prospects collapsed into one wedding from the inverse failure — same pipeline weakness.)',
+    count: violations.length,
+    sample: violations.slice(0, SAMPLE_LIMIT),
+  }
+}
+
+async function checkAuthsolicNoWedding(sb: SupabaseClient, venueId: string): Promise<InvariantResult> {
+  // Interaction with WW authsolic in extracted_identity but no wedding
+  // attached. The form-relay parser fired but contact resolution or
+  // wedding creation failed downstream. Pre-pipeline-fix bug class.
+  const { data } = await sb
+    .from('interactions')
+    .select('id, from_email, subject, received_at, extracted_identity')
+    .eq('venue_id', venueId)
+    .is('wedding_id', null)
+    .not('extracted_identity', 'is', null)
+    .limit(500)
+  type Row = { id: string; from_email: string | null; subject: string | null; received_at: string | null; extracted_identity: Record<string, unknown> | null }
+  const violations: Record<string, unknown>[] = []
+  for (const r of ((data ?? []) as Row[])) {
+    const token = r.extracted_identity?.authsolic
+    if (typeof token !== 'string' || !token) continue
+    violations.push({
+      interaction_id: r.id,
+      from_email: r.from_email,
+      subject: typeof r.subject === 'string' ? r.subject.slice(0, 80) : null,
+      received_at: r.received_at,
+      authsolic: token,
+    })
+    if (violations.length >= SAMPLE_LIMIT * 5) break
+  }
+  return {
+    id: 'authsolic_interaction_no_wedding',
+    name: 'WW-relay interaction with authsolic token but no linked wedding',
+    meaning: 'Form-relay parser extracted a prospect identity but downstream wedding creation never ran. The lead is invisible on /agent and on Intel rollups. Usually means findOrCreateContact returned null (placeholder filter) or a wedding-create branch in pipeline.ts crashed mid-flight.',
+    count: violations.length,
+    sample: violations.slice(0, SAMPLE_LIMIT),
+  }
+}
+
 /**
  * Run all invariants for one venue and return the result array.
  * Order is deterministic so coordinator UIs and JSON consumers can
@@ -365,6 +568,13 @@ export async function runDataIntegrityChecks(
     checkNoFutureEvents(sb, venueId),
     checkDuplicateGmailIds(sb, venueId),
     checkSourceConsistency(sb, venueId),
+    // Tier C dispatch-class probes (2026-05-12)
+    checkDraftsReservedTldTarget(sb, venueId),
+    checkPlaceholderFirstName(sb, venueId),
+    checkInboundMissingIntentClass(sb, venueId),
+    checkPendingDraftsAged(sb, venueId),
+    checkDuplicateAuthsolicUnmerged(sb, venueId),
+    checkAuthsolicNoWedding(sb, venueId),
   ])
 }
 
