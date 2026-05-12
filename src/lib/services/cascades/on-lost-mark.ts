@@ -3,7 +3,7 @@
  *
  * Fires when a wedding transitions to status='lost'.
  *
- * Postgres trigger trg_weddings_cascade_lost (migration 307) handles
+ * Postgres trigger trg_weddings_cascade_lost (migration 314) handles
  * draft cancellation directly. This JS-side cascade adds:
  *   1. Heat recompute — drops the wedding out of any active-cohort
  *      heat distributions so /intel/heat-map reflects reality.

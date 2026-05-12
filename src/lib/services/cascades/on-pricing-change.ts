@@ -4,7 +4,7 @@
  * Fires after a pricing_history row lands. Every pending draft created
  * BEFORE the effective_date is flagged stale so the coordinator UI can
  * prompt regenerate-with-new-pricing. The drafts column populated:
- * drafts.pricing_stale_at (migration 307).
+ * drafts.pricing_stale_at (migration 314).
  *
  * Contract: fire-and-forget. Never throws.
  *

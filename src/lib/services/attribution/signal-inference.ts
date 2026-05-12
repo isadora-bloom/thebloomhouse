@@ -626,7 +626,7 @@ export async function applySignalInference(
   if (targetStatus && targetStatus !== currentStatus) {
     await sb.from('weddings').update({ status: targetStatus }).eq('id', weddingId)
 
-    // Cascade Pattern 2 (migration 307): lost-mark cascade. Trigger 307
+    // Cascade Pattern 2 (migration 314): lost-mark cascade. Trigger 307
     // handles draft cancellation Postgres-side; this fires the JS-side
     // heat recompute + lifecycle event row. Fire-and-forget.
     if (targetStatus === 'lost' && currentStatus !== 'lost') {

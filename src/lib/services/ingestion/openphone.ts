@@ -1025,6 +1025,35 @@ async function persistRow(
         )
       })
     }
+
+    // 2026-05-12 (mig 313). SMS scheduling extractor — fire-and-forget on
+    // inbound SMS only. The Haiku judge reads the last 30d of SMS for the
+    // wedding and writes/updates a tours row when the thread evidences a
+    // confirmed or completed visit. Trigger trg_tours_touch_has_toured
+    // (mig 306) then stamps weddings.has_toured_in_person, which closes
+    // the Sage prompt awareness loop (no more "come tour" drafts after a
+    // tour). Inbound only because the venue-side messages are echoes; the
+    // signal we need (couple agreeing / thanking post-tour) is in the
+    // inbound side.
+    if (row.direction === 'inbound' && row.channel === 'sms') {
+      void (async () => {
+        try {
+          const { extractTourSignalsFromSmsThread } = await import(
+            '@/lib/services/sms/scheduling-extractor'
+          )
+          await extractTourSignalsFromSmsThread({
+            supabase,
+            weddingId,
+            venueId,
+          })
+        } catch (err) {
+          console.warn(
+            `[openphone] sms scheduling extractor failed (${row.openphone_message_id}):`,
+            err instanceof Error ? err.message : String(err),
+          )
+        }
+      })()
+    }
   }
 
   return true

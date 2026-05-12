@@ -191,7 +191,7 @@ export async function POST(request: NextRequest) {
     })
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    // Cascade Pattern 2 (migration 307): flag drafts created before the
+    // Cascade Pattern 2 (migration 314): flag drafts created before the
     // new effective_date as pricing-stale. Fire-and-forget.
     void (async () => {
       try {
@@ -248,7 +248,7 @@ export async function POST(request: NextRequest) {
     const { error } = await supabase.from('pricing_history').insert(payloads)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    // Cascade Pattern 2 (migration 307): flag stale drafts. Fire from
+    // Cascade Pattern 2 (migration 314): flag stale drafts. Fire from
     // the EARLIEST effective_date in the batch so any draft predating
     // ANY new pricing change gets flagged.
     const earliest = payloads.reduce(

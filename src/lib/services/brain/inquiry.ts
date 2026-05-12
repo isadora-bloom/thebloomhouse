@@ -283,6 +283,70 @@ async function loadPersonalityData(venueId: string): Promise<PersonalityData> {
 }
 
 /**
+ * Look up the channel mix for a wedding: how many inbound emails vs
+ * inbound SMS does this couple have on record. Used to inject an SMS-
+ * ONLY-LEAD context line into the Sage prompt so the AI knows when
+ * the channel of record is SMS and an email draft may need
+ * coordinator review rather than auto-send.
+ *
+ * Inbound-only by design: outbound (Sage-authored emails or texts the
+ * coordinator sent) describes what we did, not how the couple talks
+ * to us. The signal we want is "the couple has only ever texted" —
+ * that's an inbound-side property.
+ *
+ * Best-effort: fetches via `count: 'exact', head: true` so we never
+ * stream interaction bodies; failure returns nulls so the prompt
+ * silently omits the line rather than blocking generation.
+ *
+ * 2026-05-12 / mig 313.
+ */
+async function loadWeddingChannelMix(weddingId: string): Promise<{
+  emailCount: number | null
+  smsCount: number | null
+}> {
+  try {
+    const supabase = createServiceClient()
+    const [emailRes, smsRes] = await Promise.all([
+      supabase
+        .from('interactions')
+        .select('id', { count: 'exact', head: true })
+        .eq('wedding_id', weddingId)
+        .eq('direction', 'inbound')
+        .eq('type', 'email'),
+      supabase
+        .from('interactions')
+        .select('id', { count: 'exact', head: true })
+        .eq('wedding_id', weddingId)
+        .eq('direction', 'inbound')
+        .eq('type', 'sms'),
+    ])
+    return {
+      emailCount: emailRes.count ?? null,
+      smsCount: smsRes.count ?? null,
+    }
+  } catch {
+    return { emailCount: null, smsCount: null }
+  }
+}
+
+/**
+ * Build the SMS-only context line when applicable. Returns an empty
+ * string when the couple has email correspondence on file (the default
+ * Sage prompt is already calibrated for email-channel couples) or when
+ * counts are unavailable.
+ *
+ * 2026-05-12 / mig 313.
+ */
+function renderSmsOnlyChannelLine(
+  emailCount: number | null,
+  smsCount: number | null,
+): string {
+  if (emailCount === null || smsCount === null) return ''
+  if (!(emailCount === 0 && smsCount > 0)) return ''
+  return '\n- CHANNEL: This couple is SMS-only — no email correspondence exists. Generated email drafts should be flagged for coordinator review (not auto-send) since they may want SMS sent via a different system.'
+}
+
+/**
  * Check if a specific date is available at the venue.
  * Returns availability info and nearby alternative dates if booked.
  */
@@ -688,6 +752,51 @@ export async function generateInquiryDraft(
     } catch {
       // Soft-context loader failure must NEVER block draft generation.
     }
+
+    // Pattern 5 (mig 315). Latest classified inbound dimensions.
+    // First-touch path: the inquiry that triggered THIS draft is the
+    // latest inbound; the classifier fired-and-forget against it from
+    // the pipeline. By the time inquiry-brain runs in the same request
+    // the classifier may still be in flight, so the lookup is best-
+    // effort — surface what's available, never block.
+    try {
+      const supabase = createServiceClient()
+      const { data: latestInbound } = await supabase
+        .from('interactions')
+        .select('sentiment, urgency, family_mentioned')
+        .eq('wedding_id', weddingId)
+        .eq('direction', 'inbound')
+        .not('haiku_classified_at', 'is', null)
+        .order('timestamp', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (latestInbound) {
+        const sig: string[] = []
+        if (latestInbound.sentiment) sig.push(`Latest inbound sentiment: ${latestInbound.sentiment}`)
+        if (latestInbound.urgency) sig.push(`Latest inbound urgency: ${latestInbound.urgency}`)
+        sig.push(`Latest inbound mentions family/planner: ${latestInbound.family_mentioned ? 'yes' : 'no'}`)
+        if (sig.length > 0) {
+          contextBlock += `\n\n## LATEST INBOUND SIGNAL:\n- ${sig.join('\n- ')}`
+        }
+      }
+    } catch {
+      // Latest-inbound enrichment must NEVER block draft generation.
+    }
+
+    // 2026-05-12 (mig 313). SMS-only channel awareness. When the couple
+    // has zero inbound emails but inbound SMS on record, the email
+    // draft Sage is about to write may be the wrong channel entirely —
+    // surface the signal so downstream coordinator-review can gate
+    // auto-send. has_toured_in_person already covers the tour-CTA case
+    // through the existing TOUR STATUS line; this complements that
+    // signal for the channel side.
+    try {
+      const { emailCount, smsCount } = await loadWeddingChannelMix(weddingId)
+      const line = renderSmsOnlyChannelLine(emailCount, smsCount)
+      if (line) contextBlock += line
+    } catch {
+      // Channel-mix enrichment must NEVER block draft generation.
+    }
   }
 
   // Step 7: Add learning context from past feedback (approved drafts, rejections, edits)
@@ -896,6 +1005,21 @@ export async function generateFollowUp(
     .limit(1)
     .single()
 
+  // Pattern 5 (mig 315). Latest inbound dimensions from the Haiku
+  // classifier. Surface sentiment / urgency / family_mentioned so the
+  // follow-up draft matches the couple's emotional tenor + cadence
+  // without re-inferring from raw body each call. Inbound-only because
+  // dimensions describe how the couple sounds, not us.
+  const { data: latestInbound } = await supabase
+    .from('interactions')
+    .select('sentiment, urgency, family_mentioned, haiku_classified_at')
+    .eq('wedding_id', weddingId)
+    .eq('direction', 'inbound')
+    .not('haiku_classified_at', 'is', null)
+    .order('timestamp', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
   // Build context
   let contextBlock = `\n\n## FOLLOW-UP CONTEXT:\n- Days since last contact: ${daysSinceLastContact}`
   if (daysSinceLastContact >= 14) {
@@ -920,6 +1044,18 @@ export async function generateFollowUp(
     }
     if (wedding.lost_locked_by_operator) {
       contextBlock += '\n- LOST STATUS: Coordinator has permanently closed this lead. Generate the draft for coordinator review only; never auto-send.'
+    }
+
+    // 2026-05-12 (mig 313). SMS-only channel awareness on the follow-up
+    // path. Same predicate as the new_inquiry side; centralised via the
+    // shared helpers so a future change to the SMS-only doctrine lands
+    // in one place.
+    try {
+      const { emailCount, smsCount } = await loadWeddingChannelMix(weddingId)
+      const line = renderSmsOnlyChannelLine(emailCount, smsCount)
+      if (line) contextBlock += line
+    } catch {
+      // Channel-mix enrichment must NEVER block draft generation.
     }
 
     // Coordinator brain-dump notes (last 14 days). Acknowledge without
@@ -962,6 +1098,19 @@ export async function generateFollowUp(
 
   if (lastInteraction) {
     contextBlock += `\n\n## LAST EMAIL:\nSubject: ${lastInteraction.subject ?? '(no subject)'}\nDirection: ${lastInteraction.direction}\nPreview: ${(lastInteraction.body_preview as string)?.slice(0, 300) ?? ''}`
+  }
+
+  // Pattern 5 (mig 315). Cached Haiku verdict on the latest inbound.
+  // Three short lines so the draft can match the couple's tenor and
+  // mention pace. Skipped when no classified inbound exists yet.
+  if (latestInbound) {
+    const sig: string[] = []
+    if (latestInbound.sentiment) sig.push(`Latest inbound sentiment: ${latestInbound.sentiment}`)
+    if (latestInbound.urgency) sig.push(`Latest inbound urgency: ${latestInbound.urgency}`)
+    sig.push(`Latest inbound mentions family/planner: ${latestInbound.family_mentioned ? 'yes' : 'no'}`)
+    if (sig.length > 0) {
+      contextBlock += `\n\n## LATEST INBOUND SIGNAL:\n- ${sig.join('\n- ')}`
+    }
   }
 
   if (openerPhrase) {

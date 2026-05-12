@@ -50,20 +50,20 @@ ALTER TABLE public.drafts
 COMMENT ON COLUMN public.drafts.pricing_stale_at IS
   'When set, the draft was generated before the most recent pricing change. '
   'Coordinator UI surfaces a "regenerate to refresh pricing" prompt. '
-  'Cleared on regenerate. Cascade Pattern 2 (migration 307).';
+  'Cleared on regenerate. Cascade Pattern 2 (migration 314).';
 
 COMMENT ON COLUMN public.drafts.personality_stale_at IS
   'When set, the draft was generated against a personality config older '
   'than the current venue_ai_config. Coordinator UI surfaces a '
   '"regenerate to refresh voice" prompt. Cleared on regenerate. Cascade '
-  'Pattern 2 (migration 307).';
+  'Pattern 2 (migration 314).';
 
 COMMENT ON COLUMN public.drafts.cancelled_reason IS
   'Why a draft transitioned to status=rejected via a cascade (rather '
   'than coordinator reject with feedback). Example values: '
   '''wedding_lost'' | ''pricing_invalidated'' | ''personality_changed''. '
   'Distinct from feedback_notes (coordinator-written learning input). '
-  'Cascade Pattern 2 (migration 307).';
+  'Cascade Pattern 2 (migration 314).';
 
 -- Partial index so "find every stale draft for venue X" stays fast.
 CREATE INDEX IF NOT EXISTS idx_drafts_stale

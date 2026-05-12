@@ -379,6 +379,57 @@ async function loadWeddingContext(weddingId: string): Promise<string> {
     }
   }
 
+  // Pattern 5 (mig 315). Cached Haiku verdict on the latest inbound.
+  // Three short lines so the client-brain reply matches the couple's
+  // tenor / urgency and acknowledges family mentions appropriately.
+  // Skipped when no classified inbound exists yet.
+  const { data: latestInbound } = await supabase
+    .from('interactions')
+    .select('sentiment, urgency, family_mentioned')
+    .eq('wedding_id', weddingId)
+    .eq('direction', 'inbound')
+    .not('haiku_classified_at', 'is', null)
+    .order('timestamp', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (latestInbound) {
+    const sig: string[] = []
+    if (latestInbound.sentiment) sig.push(`Latest inbound sentiment: ${latestInbound.sentiment}`)
+    if (latestInbound.urgency) sig.push(`Latest inbound urgency: ${latestInbound.urgency}`)
+    sig.push(`Latest inbound mentions family/planner: ${latestInbound.family_mentioned ? 'yes' : 'no'}`)
+    parts.push(sig.join('\n'))
+  }
+
+  // 2026-05-12 (mig 313). SMS-only channel awareness. When this couple's
+  // entire inbound history is SMS (no email), the email draft Sage is
+  // about to compose may be the wrong channel — surface the signal so
+  // coordinator review can gate auto-send. Inbound-only counts: outbound
+  // describes us, not how the couple speaks. The CHANNEL PREFERENCE
+  // line above handles the explicit-declaration case
+  // (people.preferred_contact_channel); this one handles the implicit
+  // case where we just observe the couple has only ever texted.
+  const [emailRes, smsRes] = await Promise.all([
+    supabase
+      .from('interactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('wedding_id', weddingId)
+      .eq('direction', 'inbound')
+      .eq('type', 'email'),
+    supabase
+      .from('interactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('wedding_id', weddingId)
+      .eq('direction', 'inbound')
+      .eq('type', 'sms'),
+  ])
+  const emailCount = emailRes.count ?? null
+  const smsCount = smsRes.count ?? null
+  if (emailCount !== null && smsCount !== null && emailCount === 0 && smsCount > 0) {
+    parts.push(
+      'CHANNEL: This couple is SMS-only — no email correspondence exists. Generated email drafts should be flagged for coordinator review (not auto-send) since they may want SMS sent via a different system.',
+    )
+  }
+
   return parts.join('\n')
 }
 

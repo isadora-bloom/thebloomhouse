@@ -345,6 +345,7 @@ interface HeatScoreResult {
   previousScore: number
   temperatureTier: string
   pointsAwarded: number
+  overridden?: boolean
 }
 
 interface LeaderboardEntry {
@@ -687,14 +688,37 @@ export async function recalculateHeatScore(
 ): Promise<HeatScoreResult> {
   const supabase = createServiceClient()
 
-  // Get current score before recalculation
+  // Get current score before recalculation. Also pull the override
+  // sentinel (Pattern 10 / migration 312). When an operator has locked
+  // heat_score, recalculateHeatScore must early-return WITHOUT writing
+  // to weddings.heat_score or temperature_tier; the override value IS
+  // the canonical score.
   const { data: wedding } = await supabase
     .from('weddings')
-    .select('heat_score')
+    .select('heat_score, heat_score_overridden_at, heat_score_override_value')
     .eq('id', weddingId)
     .single()
 
   const previousScore = (wedding?.heat_score as number) ?? 0
+
+  // Pattern 10 override short-circuit. We respect the override and emit
+  // pointsAwarded=0 so cron callers don't log a fake delta. The tier is
+  // derived from the override value via the same getTier function the
+  // normal path uses, so consumers (sequences, UI badges) see a coherent
+  // tier+score pair.
+  const overriddenAt = (wedding as { heat_score_overridden_at?: string | null } | null)?.heat_score_overridden_at
+  if (overriddenAt) {
+    const overrideValue = (wedding as { heat_score_override_value?: number | null } | null)?.heat_score_override_value
+    const finalScore = typeof overrideValue === 'number' ? overrideValue : previousScore
+    return {
+      weddingId,
+      newScore: finalScore,
+      previousScore,
+      temperatureTier: getTier(finalScore),
+      pointsAwarded: 0,
+      overridden: true,
+    }
+  }
 
   // Fetch all engagement events for this wedding. Decay keys off
   // occurred_at (the real event timestamp — email date, tour date),

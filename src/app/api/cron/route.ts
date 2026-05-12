@@ -373,6 +373,12 @@ const VALID_JOBS = [
   // curl until a shared maintenance cron picks it up. Cost
   // ~$0.0003/email; full Rixey ~12k-row backfill is ~$3.60.
   'author_class_backfill',
+  // Pattern 5 (mig 315). Drains interactions with haiku_classified_at
+  // IS NULL AND direction='inbound'. Fire-and-forget path covers most
+  // rows synchronously; this is the safety net + historical backfill.
+  // 50 rows / tick, concurrency=5, 5-min buffer so freshly-inserted rows
+  // get a chance via the fire-and-forget path first.
+  'inbound_haiku_drain',
   // Wave 6E follow-up (2026-05-12). Agency-tracker maintenance jobs.
   // Each has a standalone /api/cron/{name}/route.ts for ad-hoc curl;
   // the Vercel cron schedule fires through here so the cron-runs
@@ -380,6 +386,17 @@ const VALID_JOBS = [
   'agency_activity_sweep',
   'tbh_reports_monthly',
   'agency_document_orphans',
+  // 2026-05-12 (mig 313). SMS lifecycle fix — rebinds engagement_events
+  // whose wedding_id is NULL because the heat-fire raced ahead of the
+  // identity-resolver wedding-mint. Walks orphan rows, joins through
+  // interactions on metadata.interaction_id (or openphone_message_id
+  // fallback), updates wedding_id, then recomputes heat once per
+  // affected wedding. Daily — backstop only; openphone.ts ingest fires
+  // recordEngagementEvent synchronously with a wedding_id when one is
+  // resolved. NOT registered in vercel.json (Pro at 40-cron cap);
+  // operator can curl /api/cron?job=orphan_engagement_rebind until a
+  // shared maintenance cron picks it up.
+  'orphan_engagement_rebind',
 ] as const
 
 type JobName = (typeof VALID_JOBS)[number]
@@ -986,6 +1003,30 @@ async function runJob(job: JobName): Promise<unknown> {
         '@/lib/services/email/author-class-backfill'
       )
       return runAuthorClassBackfill()
+    }
+
+    case 'inbound_haiku_drain': {
+      // Pattern 5 (mig 315). Drains pending inbound rows whose
+      // haiku_classified_at IS NULL. 5-min buffer so the fire-and-forget
+      // path attached to the email pipeline gets first pass. 50 rows/tick,
+      // concurrency=5 inside the worker. Idempotent.
+      const { runInboundHaikuDrain } = await import(
+        '@/lib/services/intel/inbound-haiku-drain'
+      )
+      return runInboundHaikuDrain()
+    }
+
+    case 'orphan_engagement_rebind': {
+      // 2026-05-12 (mig 313). Daily backstop for SMS heat orphans. Rebinds
+      // engagement_events.wedding_id from the matched interaction (via
+      // metadata.interaction_id or openphone_message_id fallback). 1000
+      // rows/tick — well above steady-state arrival rate. Per-wedding
+      // recompute deduped via Set keyed on (venue, wedding) so a 14-event
+      // orphan cluster (Justin & Sandy case) recomputes exactly once.
+      const { rebindOrphanEngagementEvents } = await import(
+        '@/lib/services/sms/orphan-rebind'
+      )
+      return rebindOrphanEngagementEvents(createServiceClient())
     }
   }
 }

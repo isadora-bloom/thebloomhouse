@@ -44,6 +44,8 @@ export interface ZoomConnection {
   is_active: boolean
   created_at: string
   updated_at: string
+  /** Watermark for incremental sync (migration 311). NULL = first sync. */
+  last_synced_at: string | null
 }
 
 export interface ZoomRecordingFile {
@@ -86,6 +88,16 @@ export const ZOOM_SCOPES = ['recording:read', 'meeting:read', 'user:read']
 // Refresh tokens whose expires_at is within this many ms of now
 const REFRESH_BUFFER_MS = 60 * 1000
 
+// First-sync lookback (no prior watermark). Matches the legacy default
+// that the cron used to apply on every tick.
+const FIRST_SYNC_DAYS = 30
+
+// Watermark overlap. Zoom finalizes recordings minutes after a meeting
+// ends; a 30-minute backstep catches meetings whose recording_files
+// became available right after the previous tick's read.
+// Mirrors the OpenPhone pattern (openphone.ts:595-596 uses OVERLAP_MIN).
+const OVERLAP_MIN = 30
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -125,6 +137,52 @@ async function persistTokens(
 
 async function markInactive(connectionId: string): Promise<void> {
   await persistTokens(connectionId, { is_active: false })
+}
+
+// ---------------------------------------------------------------------------
+// Watermark helpers (Pattern 4, migration 311)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the most-recent last_synced_at across the venue's active Zoom
+ * connections. We sync via /users/me/recordings (per-account), and any
+ * meeting older than the most recent successful tick is already in
+ * processed_zoom_meetings, so the max watermark across active accounts
+ * is the safe resume point.
+ */
+async function readZoomWatermark(venueId: string): Promise<Date | null> {
+  const supabase = createServiceClient()
+  const { data, error } = await supabase
+    .from('zoom_connections')
+    .select('last_synced_at')
+    .eq('venue_id', venueId)
+    .eq('is_active', true)
+    .not('last_synced_at', 'is', null)
+    .order('last_synced_at', { ascending: false })
+    .limit(1)
+  if (error || !data || data.length === 0) return null
+  const raw = data[0]?.last_synced_at as string | null
+  if (!raw) return null
+  const t = new Date(raw)
+  return Number.isFinite(t.getTime()) ? t : null
+}
+
+/**
+ * Stamp last_synced_at on every active connection for a venue. Called
+ * at the end of a successful syncMeetings run. Failure to write the
+ * watermark is logged but never thrown; the sync itself succeeded.
+ */
+async function writeZoomWatermark(venueId: string, at: Date): Promise<void> {
+  const supabase = createServiceClient()
+  const iso = at.toISOString()
+  const { error } = await supabase
+    .from('zoom_connections')
+    .update({ last_synced_at: iso, updated_at: iso })
+    .eq('venue_id', venueId)
+    .eq('is_active', true)
+  if (error) {
+    console.warn(`[zoom] failed to write last_synced_at for venue ${venueId}:`, error.message)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -296,16 +354,40 @@ interface ZoomRecordingsResponse {
 /**
  * Paginate through `/users/me/recordings` for the lookback window. Returns a
  * normalized list. Filters out meetings without any recording_files.
+ *
+ * Window resolution priority (Pattern 4, mig 311):
+ *   1. opts.sinceIso: caller-supplied absolute start.
+ *   2. opts.sinceDays: caller-supplied lookback in days.
+ *   3. last_synced_at on zoom_connections, minus OVERLAP_MIN (30-min
+ *      backstep so meetings finalized right after the prior tick land).
+ *   4. FIRST_SYNC_DAYS (30): first sync ever for this connection.
  */
 export async function fetchRecordings(
   venueId: string,
-  opts: { sinceDays?: number } = {}
+  opts: { sinceDays?: number; sinceIso?: string } = {}
 ): Promise<ZoomMeetingSummary[]> {
   const { accessToken } = await getZoomClient(venueId)
 
-  const sinceDays = opts.sinceDays ?? 30
   const to = new Date()
-  const from = new Date(to.getTime() - sinceDays * 24 * 60 * 60 * 1000)
+  let from: Date
+  if (opts.sinceIso) {
+    from = new Date(opts.sinceIso)
+    if (!Number.isFinite(from.getTime())) {
+      from = new Date(to.getTime() - FIRST_SYNC_DAYS * 24 * 60 * 60 * 1000)
+    }
+  } else if (opts.sinceDays != null) {
+    from = new Date(to.getTime() - opts.sinceDays * 24 * 60 * 60 * 1000)
+  } else {
+    // Resolve watermark inline so direct fetchRecordings callers also
+    // benefit (cron + onboarding paths). syncMeetings re-uses this
+    // helper, so the watermark is read once per orchestrated sync.
+    const watermark = await readZoomWatermark(venueId)
+    if (watermark) {
+      from = new Date(watermark.getTime() - OVERLAP_MIN * 60 * 1000)
+    } else {
+      from = new Date(to.getTime() - FIRST_SYNC_DAYS * 24 * 60 * 60 * 1000)
+    }
+  }
   const fromStr = from.toISOString().split('T')[0]
   const toStr = to.toISOString().split('T')[0]
 
@@ -465,9 +547,14 @@ async function matchWeddingByName(
  */
 export async function syncMeetings(
   venueId: string,
-  opts: { sinceDays?: number } = {}
+  opts: { sinceDays?: number; sinceIso?: string } = {}
 ): Promise<ZoomSyncResult> {
   const supabase = createServiceClient()
+  // Stamp the watermark with the start-of-sync timestamp, not the
+  // end-of-sync. Anything Zoom adds DURING the sync would be missed
+  // otherwise; the OVERLAP_MIN backstep guards against duplicates on
+  // the next tick (processed_zoom_meetings dedup is the belt anyway).
+  const syncStartedAt = new Date()
 
   let client: { accessToken: string; accountEmail: string | null; connectionId: string; zoomUserId: string }
   try {
@@ -637,6 +724,16 @@ export async function syncMeetings(
       console.error('[zoom] sync row insert threw:', err)
       result.errors++
     }
+  }
+
+  // Advance the watermark using the sync-start timestamp. fetchRecordings
+  // already read the prior watermark to decide its window, so stamping
+  // syncStartedAt here means the next tick resumes from (now - 30min
+  // overlap) instead of re-pulling the legacy 30-day default. Skip the
+  // stamp when the caller forced a custom window (sinceIso/sinceDays):
+  // those are backfill / manual runs, not the polling cron.
+  if (!opts.sinceIso && opts.sinceDays == null) {
+    await writeZoomWatermark(venueId, syncStartedAt)
   }
 
   return result

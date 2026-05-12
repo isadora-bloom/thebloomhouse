@@ -52,11 +52,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+interface FetchObservationsOutcome {
+  observations: FredObservation[]
+  fetchError: string | null
+}
+
 async function fetchSeriesObservations(
   seriesId: string,
   apiKey: string,
   startDate: string,
-): Promise<FredObservation[]> {
+): Promise<FetchObservationsOutcome> {
   const params = new URLSearchParams({
     series_id: seriesId,
     observation_start: startDate,
@@ -69,12 +74,13 @@ async function fetchSeriesObservations(
   try {
     response = await fetch(url)
   } catch (err) {
-    console.error(`[fred-fetch] Network error for ${seriesId}:`, err instanceof Error ? err.message : err)
-    return []
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(`[fred-fetch] Network error for ${seriesId}:`, msg)
+    return { observations: [], fetchError: `network: ${msg}` }
   }
   if (!response.ok) {
     console.error(`[fred-fetch] FRED returned ${response.status} for ${seriesId}`)
-    return []
+    return { observations: [], fetchError: `http ${response.status}` }
   }
 
   let body: FredApiResponse
@@ -82,14 +88,14 @@ async function fetchSeriesObservations(
     body = (await response.json()) as FredApiResponse
   } catch {
     console.error(`[fred-fetch] Failed to parse FRED response for ${seriesId}`)
-    return []
+    return { observations: [], fetchError: 'parse error' }
   }
   if (body.error_message) {
     console.error(`[fred-fetch] FRED error for ${seriesId}:`, body.error_message)
-    return []
+    return { observations: [], fetchError: body.error_message }
   }
 
-  return body.observations ?? []
+  return { observations: body.observations ?? [], fetchError: null }
 }
 
 export interface FredFetchResult {
@@ -99,9 +105,77 @@ export interface FredFetchResult {
   error?: string
 }
 
+const FRED_BACKFILL_DAYS = 400  // 13 months gives the correlation engine a full 12-month window plus margin
+const FRED_OVERLAP_DAYS = 1     // FRED revises historical values; re-pull the last day every tick
+
+/**
+ * Read the per-series watermark from fred_series_sync_state. Returns the
+ * last successful fetch timestamp or null if this series has never synced
+ * (or sync state row is absent). See migration 311.
+ */
+async function getFredWatermark(seriesId: string): Promise<Date | null> {
+  const supabase = createServiceClient()
+  const { data, error } = await supabase
+    .from('fred_series_sync_state')
+    .select('last_fetched_at')
+    .eq('series_id', seriesId)
+    .maybeSingle()
+  if (error || !data?.last_fetched_at) return null
+  const t = new Date(data.last_fetched_at as string)
+  return Number.isFinite(t.getTime()) ? t : null
+}
+
+async function recordFredSuccess(seriesId: string): Promise<void> {
+  const supabase = createServiceClient()
+  const nowIso = new Date().toISOString()
+  await supabase
+    .from('fred_series_sync_state')
+    .upsert(
+      {
+        series_id: seriesId,
+        last_fetched_at: nowIso,
+        last_error_at: null,
+        last_error: null,
+        updated_at: nowIso,
+      },
+      { onConflict: 'series_id' },
+    )
+}
+
+async function recordFredError(seriesId: string, message: string): Promise<void> {
+  const supabase = createServiceClient()
+  const nowIso = new Date().toISOString()
+  // Don't touch last_fetched_at: we want the next run to retry from the
+  // same watermark, not silently advance past a failed window.
+  const existing = await supabase
+    .from('fred_series_sync_state')
+    .select('last_fetched_at')
+    .eq('series_id', seriesId)
+    .maybeSingle()
+  await supabase
+    .from('fred_series_sync_state')
+    .upsert(
+      {
+        series_id: seriesId,
+        last_fetched_at: existing.data?.last_fetched_at ?? null,
+        last_error_at: nowIso,
+        last_error: message.slice(0, 500),
+        updated_at: nowIso,
+      },
+      { onConflict: 'series_id' },
+    )
+}
+
 /**
  * Fetch + upsert a single series. Returns counts for the caller to
  * aggregate. Skips '.' observations (FRED's "no value" sentinel).
+ *
+ * Watermark behaviour (Pattern 4, mig 311):
+ *   - First sync (no fred_series_sync_state row): backfill 400 days.
+ *   - Subsequent: pull from (last_fetched_at - 1 day) to today.
+ *   - opts.startDate forces a full refetch from the caller-supplied date.
+ *   - Success upserts the watermark; failure records last_error without
+ *     advancing last_fetched_at so the next run retries the same window.
  */
 export async function fetchFredSeries(
   seriesId: string,
@@ -112,12 +186,35 @@ export async function fetchFredSeries(
     return { series_id: seriesId, observations_returned: 0, rows_upserted: 0, error: 'FRED_API_KEY not configured' }
   }
 
-  // Default to 13 months ago — gives the correlation engine a full
-  // 12-month window plus a one-month margin for lagged math.
-  const startDate = opts.startDate ?? new Date(Date.now() - 400 * 86_400_000).toISOString().slice(0, 10)
+  let startDate: string
+  if (opts.startDate) {
+    startDate = opts.startDate
+  } else {
+    const watermark = await getFredWatermark(seriesId)
+    if (watermark) {
+      const overlapped = new Date(watermark.getTime() - FRED_OVERLAP_DAYS * 86_400_000)
+      startDate = overlapped.toISOString().slice(0, 10)
+    } else {
+      startDate = new Date(Date.now() - FRED_BACKFILL_DAYS * 86_400_000).toISOString().slice(0, 10)
+    }
+  }
 
-  const observations = await fetchSeriesObservations(seriesId, apiKey, startDate)
+  const { observations, fetchError } = await fetchSeriesObservations(seriesId, apiKey, startDate)
+  if (fetchError) {
+    await recordFredError(seriesId, fetchError)
+    return {
+      series_id: seriesId,
+      observations_returned: 0,
+      rows_upserted: 0,
+      error: fetchError,
+    }
+  }
   if (observations.length === 0) {
+    // Empty result is not necessarily a failure (FRED can return 0 obs
+    // when there are no new data points since the last revision). Treat
+    // as success so the watermark advances and we don't keep re-pulling
+    // the same empty window.
+    await recordFredSuccess(seriesId)
     return { series_id: seriesId, observations_returned: 0, rows_upserted: 0 }
   }
 
@@ -145,6 +242,9 @@ export async function fetchFredSeries(
     .filter((r) => Number.isFinite(r.value))
 
   if (rows.length === 0) {
+    // All observations filtered (e.g. all '.' sentinels). Treat as a
+    // successful tick so we don't re-scan the same null window.
+    await recordFredSuccess(seriesId)
     return { series_id: seriesId, observations_returned: observations.length, rows_upserted: 0 }
   }
 
@@ -156,6 +256,7 @@ export async function fetchFredSeries(
     .select('id')
   const count = insertedRows?.length ?? 0
   if (error) {
+    await recordFredError(seriesId, error.message)
     return {
       series_id: seriesId,
       observations_returned: observations.length,
@@ -163,6 +264,7 @@ export async function fetchFredSeries(
       error: error.message,
     }
   }
+  await recordFredSuccess(seriesId)
   return {
     series_id: seriesId,
     observations_returned: observations.length,

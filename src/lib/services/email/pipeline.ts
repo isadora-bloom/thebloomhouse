@@ -1579,6 +1579,30 @@ export async function processIncomingEmail(
     }
   }
 
+  // Pattern 5 (mig 315): inbound Haiku dimensions — sentiment / urgency /
+  // family_mentioned land on the interactions row so downstream brain
+  // prompts read the cached judgment instead of re-inferring from raw
+  // body text. Fire-and-forget; the cron drain (inbound_haiku_drain) is
+  // the safety net for misses. Outbound rows (wave9InboundFromOwn) skip —
+  // the dimensions are about how the couple sounds, not how we sound.
+  if (!wave9InboundFromOwn) {
+    void (async () => {
+      try {
+        const mod = await import('@/lib/services/intel/inbound-haiku-classifier')
+        await mod.classifyInboundInteraction({
+          interactionId,
+          body: email.body,
+          subject: email.subject,
+          venueId,
+          supabase,
+          correlationId,
+        })
+      } catch (err) {
+        console.warn('[pipeline] haiku-classify non-fatal:', err)
+      }
+    })()
+  }
+
   // Wave 4 Phase 4 (2026-05-10): Wave-3 per-email sender_identity capture
   // retired. The Sonnet judge in identity/reconstruct.ts is the source of
   // truth for canonical names; profile-to-people-sync writes them onto
@@ -1953,7 +1977,7 @@ export async function processIncomingEmail(
     if (newWedding) {
       weddingId = newWedding.id as string
 
-      // Cascade Pattern 2 (migration 307): synchronous pre-zero identity
+      // Cascade Pattern 2 (migration 314): synchronous pre-zero identity
       // match. Without this, anonymous storefront signals (Knot CSV, IG
       // screenshots) wait for the daily cron before binding to the new
       // wedding. Fire-and-forget; the cascade is idempotent.
