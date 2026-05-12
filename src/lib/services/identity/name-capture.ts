@@ -96,6 +96,7 @@ export type NameSource =
   | 'email_signature_extraction'   // Wave-3 sender_identity from signature
   | 'email_identity_extract_header' // Wave-3 sender_identity from from_header (still LLM-classified, lower confidence)
   | 'email_identity_extract_body'   // Wave-3 sender_identity from body self-reference
+  | 'reconstruct_profile_partner2'  // Wave-4 Sonnet judge wrote a non-phantom partner2 to couple_identity_profile; profile-to-people-sync minted the partner2 row from it. High confidence.
 
 export type Platform =
   | 'pinterest'
@@ -400,6 +401,11 @@ const CONFIDENCE_BY_SOURCE: Record<NameSource, number> = {
   email_signature_extraction: 75,
   email_identity_extract_header: 60,
   email_identity_extract_body: 50,
+  // Sonnet reconstruct judge — already weighed every piece of evidence
+  // for the couple. When it emits a non-phantom partner2 name at
+  // confidence_0_100 >= some threshold, it's the highest-quality
+  // structured signal we have short of coordinator typing.
+  reconstruct_profile_partner2: 90,
 }
 
 /** Sources whose confidence depends on shape, not source. */

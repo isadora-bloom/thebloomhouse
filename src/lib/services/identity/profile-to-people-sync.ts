@@ -113,6 +113,13 @@ export type SyncUpdate =
       personId: string
       role: 'partner1' | 'partner2'
     }
+  | {
+      kind: 'partner2_created'
+      personId: string
+      first: string | null
+      last: string | null
+      confidence: number
+    }
 
 interface PersonRow {
   id: string
@@ -592,6 +599,67 @@ export async function syncProfileToPeople(
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           console.warn(`[profile-to-people-sync] partner2 sync failed: ${msg}`)
+        }
+      } else {
+        // Bug 4 of Sophie trace (RM-1040): partner2 row was never
+        // created during ingest. Causes vary by entry path (Calendly
+        // notification missed the extras.partnerName extraction, classifier
+        // didn't surface partnerName, etc). The forensic profile carries
+        // the partner2 name + non-phantom flag at high confidence — that's
+        // the truth source. Mint the partner2 row from it.
+        //
+        // Wedding-scoped to the partner1's wedding (already loaded into
+        // partners); venue_id matches partner1's. Phone is partner1's
+        // phone if it's the only one we have; otherwise left null and
+        // the operator can fill via the lead-detail edit path.
+        try {
+          const partner1Row = partners.find((p) => p.role === 'partner1') ?? null
+          if (partner1Row) {
+            const profileP2 = profile.names.partner2
+            const first = profileP2.first?.trim() || null
+            const last = profileP2.last?.trim() || null
+            if (first || last) {
+              const { data: newP2, error: insErr } = await supabase
+                .from('people')
+                .insert({
+                  venue_id: partner1Row.venue_id,
+                  wedding_id: weddingId,
+                  role: 'partner2',
+                  first_name: first,
+                  last_name: last,
+                })
+                .select('id')
+                .single()
+              if (insErr) {
+                console.warn(`[profile-to-people-sync] partner2 create failed: ${insErr.message}`)
+              } else if (newP2) {
+                // Stamp name_evidence via the chokepoint so the forensic
+                // record reflects this came from reconstruction.
+                try {
+                  const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+                  await captureNameEvidence(supabase, newP2.id as string, {
+                    first,
+                    last,
+                    source: 'reconstruct_profile_partner2',
+                  })
+                } catch (capErr) {
+                  console.warn(
+                    `[profile-to-people-sync] partner2 evidence stamp failed: ${capErr instanceof Error ? capErr.message : String(capErr)}`,
+                  )
+                }
+                updates.push({
+                  kind: 'partner2_created',
+                  personId: newP2.id as string,
+                  first,
+                  last,
+                  confidence: profileP2.confidence_0_100 ?? 0,
+                })
+              }
+            }
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          console.warn(`[profile-to-people-sync] partner2 create branch failed: ${msg}`)
         }
       }
     }
