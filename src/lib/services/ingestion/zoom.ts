@@ -571,6 +571,18 @@ export async function syncMeetings(
       // T5-Rixey-BBB: Zoom meetings are touchpoint signals — the lead
       // showed up to a virtual tour AFTER discovering the venue.
       // signal-class-justified: zoom meetings are touchpoint
+      //
+      // Pattern 3 (BLOOM-PATTERNS-ZOOM-OUT.md): body-extract parity.
+      // Transcripts often carry "yeah email me at..." or joint handles
+      // that the email extractor would catch. Run the same chain.
+      const transcriptForExtract = transcriptText.slice(0, 50000)
+      const { extractIdentityFromEmail } = await import(
+        '@/lib/services/identity/body-extract'
+      )
+      const zoomExtractedIdentity = extractIdentityFromEmail(
+        { subject, body: transcriptForExtract },
+        { ownEmails: new Set<string>() },
+      )
       const { data: insertedInteraction, error: iError } = await supabase
         .from('interactions')
         .insert({
@@ -580,9 +592,10 @@ export async function syncMeetings(
           direction: 'inbound',
           subject,
           body_preview: bodyPreview,
-          full_body: transcriptText.slice(0, 50000),
+          full_body: transcriptForExtract,
           timestamp: meeting.startTime || new Date().toISOString(),
           signal_class: 'touchpoint',
+          extracted_identity: zoomExtractedIdentity,
         })
         .select('id')
         .maybeSingle()

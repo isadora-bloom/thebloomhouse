@@ -590,6 +590,38 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: insertErr?.message ?? 'Failed to record entry' }, { status: 500 })
   }
 
+  // Pattern 3 (BLOOM-PATTERNS-ZOOM-OUT.md): body-extract parity. Operator
+  // notes often mention emails / phones / joint handles ("told Sarah about
+  // parking, her number is..."). Run the same chain that runs on emails
+  // and stash the result so the AI parser + resolver can lean on it.
+  // Fire-and-forget — never blocks the brain-dump response.
+  void (async () => {
+    try {
+      const { extractIdentityFromEmail } = await import(
+        '@/lib/services/identity/body-extract'
+      )
+      const extracted = extractIdentityFromEmail(
+        { body: rawText },
+        { ownEmails: new Set<string>() },
+      )
+      const hasSignal =
+        extracted.emails.length > 0 ||
+        extracted.phones.length > 0 ||
+        extracted.names.length > 0
+      if (hasSignal) {
+        await supabase
+          .from('brain_dump_entries')
+          .update({
+            parse_result: { body_extract_identity: extracted },
+          })
+          .eq('id', entry.id)
+          .is('parse_result', null)
+      }
+    } catch (err) {
+      console.warn('[brain-dump] body-extract non-fatal:', err)
+    }
+  })()
+
   // 1.5 URL fast path (T5-ι.3). When the coordinator pastes nothing
   // but a URL (or a URL + trivial preamble), fetch the page, extract
   // og:title / og:description / og:image, and surface a propose-and-

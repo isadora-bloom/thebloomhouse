@@ -926,6 +926,19 @@ async function persistRow(
         ? `Voicemail from ${externalNumber ?? 'unknown'}`
         : `Call ${row.direction === 'inbound' ? 'from' : 'with'} ${externalNumber ?? 'unknown'}`
 
+  // Pattern 3 (BLOOM-PATTERNS-ZOOM-OUT.md): body-extract parity. Voice
+  // / SMS / voicemail bodies often carry "yeah email me at..." or joint
+  // handles. Same chain that runs on emails. ownEmails empty: voice
+  // channels don't quote venue's own email-domain often, and the
+  // resolver downstream filters venue-match anyway.
+  const { extractIdentityFromEmail } = await import(
+    '@/lib/services/identity/body-extract'
+  )
+  const voiceExtractedIdentity = extractIdentityFromEmail(
+    { subject, body: row.body_text },
+    { ownEmails: new Set<string>() },
+  )
+
   const interactionPayload: Record<string, unknown> = {
     venue_id: venueId,
     person_id: personId,
@@ -951,6 +964,9 @@ async function persistRow(
     // outbound from venue line = operator. The Haiku author classifier
     // re-checks bodies later but this is a safe synchronous default.
     author_class: row.direction === 'inbound' ? 'couple' : 'operator',
+    // Pattern 3: every channel populates extracted_identity for
+    // forensic record + retroactive linkage scripts.
+    extracted_identity: voiceExtractedIdentity,
   }
 
   const { data: insertedInteraction, error: interErr } = await supabase

@@ -683,6 +683,25 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
     // surface inline.
     const body = buildInteractionBody({ hint, hdr, row: data, notes })
 
+    // Pattern 3 (BLOOM-PATTERNS-ZOOM-OUT.md): body-extract parity on the
+    // free-text notes field. Couples sometimes drop secondary emails /
+    // phone numbers / partner names into the "questions" textarea — the
+    // structured form fields miss those.
+    let notesBodyExtract: Record<string, unknown> | undefined
+    try {
+      const { extractIdentityFromEmail } = await import(
+        '@/lib/services/identity/body-extract'
+      )
+      if (notes && notes.trim()) {
+        notesBodyExtract = extractIdentityFromEmail(
+          { body: notes },
+          { ownEmails: new Set<string>() },
+        ) as unknown as Record<string, unknown>
+      }
+    } catch {
+      // body-extract is enrichment, not gate-quality. Skip on failure.
+    }
+
     const interaction: NormalisedInteractionRow = {
       occurred_at: submissionIso,
       direction: 'inbound',
@@ -693,12 +712,15 @@ async function parseWebForm(config: AdapterConfig): Promise<ParseResult> {
       // so the lead-source-derivation chain can distinguish first-party
       // calculator submissions ("website") from a generic third-party
       // form (still "website" but lower confidence).
+      //
+      // Pattern 3: merge the body-extracted notes signal alongside.
       extracted_identity: {
         provider: hint.provider,
         is_first_party: hint.provider === 'rixey_calculator',
         // hear_source feeds Priority-2 directly. 'website' is the
         // structural answer for calculator submissions.
         hear_source: 'website',
+        ...(notesBodyExtract ? { body_extract_from_notes: notesBodyExtract } : {}),
       },
       // T5-Rixey-BBB: form submissions are touchpoint class. The
       // lead used the calculator AFTER discovering the venue — the
