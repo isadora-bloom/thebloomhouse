@@ -11,6 +11,34 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-05-12 (Wave 6E depth — TBH Report narrative)
+
+New prompt: `tbh-report.prompt.v1.0` (constant `TBH_REPORT_PROMPT_VERSION`
+in `src/lib/services/intel/marketing-agency-tbh-report.ts`).
+
+Used by `computeTbhReport` to generate the executive summary, conflict
+findings, recommendations, and optional cover-note for a marketing-
+agency performance report. Two tone modes encoded in the system prompt:
+`internal` (sharp, conflict-forward, for venue operator alone) and
+`shareable` (collaborative, divergence-as-different-views, suitable for
+forwarding to the agency).
+
+Doctrine baked into the system prompt:
+1. Use only the numbers in the provided structured snapshot — no
+   invented values.
+2. Cite channels by name (google_ads, meta_ads, the_knot…) not vague
+   phrases.
+3. Surface coverage caveats next to the numbers they affect.
+4. KPI status semantics (hit / close / miss / too_early / not_measurable
+   / no_data) preserved verbatim from the resolver.
+5. Internal mode produces `null` for notesForAgency; shareable mode
+   always produces a 2-3 sentence cover note.
+
+Cost target: ~$0.04-0.06 per report (Sonnet, ~5-8k tokens in / ~1-1.5k
+out). Reports persist to `public.tbh_reports` (migration 308) so re-
+reads don't trigger fresh LLM calls — operator triggers regeneration
+explicitly via the `/intel/agencies/[id]/tbh-report` page.
+
 ## 2026-05-11 (Wave 22 — bias remediation, Wave 21 audit fix-up)
 
 Wave 21 audited every prompt in `src/config/prompts/` against the

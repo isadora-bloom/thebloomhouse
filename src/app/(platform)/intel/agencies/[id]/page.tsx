@@ -34,6 +34,7 @@ import {
   AgencyContactsSection,
   AgencyDocumentsSection,
   AgencyKpisSection,
+  AgencyKpiPerformanceSection,
   AgencyActivitySection,
   EngagementExtrasForm,
 } from '@/components/intel/agency-detail-sections'
@@ -259,6 +260,13 @@ export default function AgencyDetailPage({
           ) : null}
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            href={`/intel/agencies/${agencyId}/tbh-report`}
+            className="inline-flex items-center gap-1 rounded-md border border-[var(--bh-sage-500)] bg-[var(--bh-sage-50)] px-3 py-1.5 text-sm text-[var(--bh-sage-700)] hover:bg-[var(--bh-sage-100)]"
+            title="Open the TBH Report (truth-vs-claim review)"
+          >
+            <Briefcase className="h-3 w-3" /> TBH Report
+          </Link>
           <Link
             href={`/intel/agencies/${agencyId}/edit`}
             className="inline-flex items-center gap-1 rounded-md border border-[var(--bh-line)] bg-white px-3 py-1.5 text-sm hover:bg-[var(--bh-sage-50)]"
@@ -504,6 +512,11 @@ export default function AgencyDetailPage({
       <AgencyContactsSection agencyId={agencyId} />
       <AgencyDocumentsSection agencyId={agencyId} />
       <AgencyKpisSection agencyId={agencyId} />
+      {/* Wave 6E depth pass — truth-vs-claim sits right under the KPI
+          commitments since the operator mental model is "what they
+          promised → did they deliver". Hides itself when no KPIs are
+          set. */}
+      <AgencyKpiPerformanceSection agencyId={agencyId} />
       <AgencyActivitySection agencyId={agencyId} />
 
       {/* Notes */}

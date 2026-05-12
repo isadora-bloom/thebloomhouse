@@ -883,7 +883,7 @@ export async function generateFollowUp(
   // has observed since the last email.
   const { data: wedding } = await supabase
     .from('weddings')
-    .select('wedding_date, guest_count_estimate, source, status, sage_context_notes')
+    .select('wedding_date, wedding_date_locked_by_operator, guest_count_estimate, source, status, sage_context_notes, has_toured_in_person, lost_locked_by_operator')
     .eq('id', weddingId)
     .single()
 
@@ -907,9 +907,20 @@ export async function generateFollowUp(
   }
 
   if (wedding) {
-    if (wedding.wedding_date) contextBlock += `\n- Wedding date: ${wedding.wedding_date}`
+    if (wedding.wedding_date) {
+      const lockSuffix = wedding.wedding_date_locked_by_operator ? ' (locked by coordinator)' : ''
+      contextBlock += `\n- Wedding date: ${wedding.wedding_date}${lockSuffix}`
+    }
     if (wedding.guest_count_estimate) contextBlock += `\n- Guest count: ${wedding.guest_count_estimate}`
     if (wedding.source) contextBlock += `\n- Source: ${wedding.source}`
+
+    // Sticky-state Pattern 1 (migration 306).
+    if (wedding.has_toured_in_person) {
+      contextBlock += '\n- TOUR STATUS: Already visited the venue in person — do not push the tour CTA or invite them to schedule a tour.'
+    }
+    if (wedding.lost_locked_by_operator) {
+      contextBlock += '\n- LOST STATUS: Coordinator has permanently closed this lead. Generate the draft for coordinator review only; never auto-send.'
+    }
 
     // Coordinator brain-dump notes (last 14 days). Acknowledge without
     // quoting — these are back-channel observations, not talking points.

@@ -260,17 +260,35 @@ async function loadWeddingContext(weddingId: string): Promise<string> {
 
   const { data: wedding } = await supabase
     .from('weddings')
-    .select('wedding_date, guest_count_estimate, status, source, booking_value, notes, sage_context_notes')
+    .select('wedding_date, wedding_date_locked_by_operator, guest_count_estimate, status, source, booking_value, notes, sage_context_notes, has_toured_in_person, lost_locked_by_operator, day_of_timeline_locked, ceremony_start_confirmed_at, reception_end_confirmed_at')
     .eq('id', weddingId)
     .single()
 
   if (!wedding) return ''
 
   const parts: string[] = []
-  if (wedding.wedding_date) parts.push(`Wedding date: ${wedding.wedding_date}`)
+  if (wedding.wedding_date) {
+    const lockSuffix = wedding.wedding_date_locked_by_operator ? ' (locked by coordinator)' : ''
+    parts.push(`Wedding date: ${wedding.wedding_date}${lockSuffix}`)
+  }
   if (wedding.guest_count_estimate) parts.push(`Guest count: ${wedding.guest_count_estimate}`)
   if (wedding.status) parts.push(`Status: ${wedding.status}`)
   if (wedding.notes) parts.push(`Notes: ${(wedding.notes as string).slice(0, 500)}`)
+
+  // Sticky-state Pattern 1 (migration 306): surface per-couple decisions
+  // the coordinator has frozen. Sage prompts respect these without
+  // additional schema reads at draft time.
+  if (wedding.has_toured_in_person) {
+    parts.push('TOUR STATUS: This couple has already visited the venue in person. Do not invite them on a tour or push the tour CTA. Tour-class details (parking, where to find us) are not relevant.')
+  }
+  if (wedding.lost_locked_by_operator) {
+    parts.push('LOST STATUS: Coordinator has permanently closed this lead. Reactivation drafts must not be sent. If you generate a draft, route it to coordinator review only — do not auto-send.')
+  }
+  if (wedding.day_of_timeline_locked) {
+    parts.push('DAY-OF TIMELINE: The ceremony / reception schedule for this wedding is operator-confirmed. Do not propose alternative times or suggest changes to the schedule.')
+  } else if (wedding.ceremony_start_confirmed_at || wedding.reception_end_confirmed_at) {
+    parts.push('DAY-OF TIMELINE: Some times are operator-confirmed. Reference the confirmed times verbatim; do not suggest alternatives for those.')
+  }
 
   // Coordinator observations from the brain-dump feature (Phase 2.5 Task
   // 28). Last 14 days, newest first. These are the unspoken signals the
@@ -335,7 +353,7 @@ async function loadWeddingContext(weddingId: string): Promise<string> {
   // Get the people associated with this wedding
   const { data: people } = await supabase
     .from('people')
-    .select('first_name, last_name, role')
+    .select('first_name, last_name, role, preferred_contact_channel')
     .eq('wedding_id', weddingId)
     .in('role', ['partner1', 'partner2'])
 
@@ -348,6 +366,17 @@ async function loadWeddingContext(weddingId: string): Promise<string> {
       return `${name} (${p.role})`
     })
     parts.push(`Couple: ${names.join(' & ')}`)
+
+    // Sticky-state Pattern 1: preferred channel. If any partner declared
+    // a non-email channel, surface it so drafts route correctly. Email
+    // is the default and not worth surfacing.
+    const channels = (people as Array<{ preferred_contact_channel: string | null }>)
+      .map((p) => p.preferred_contact_channel)
+      .filter((c): c is string => !!c && c !== 'email')
+    if (channels.length > 0) {
+      const channel = channels[0]
+      parts.push(`CHANNEL PREFERENCE: This couple prefers ${channel.toUpperCase()}, not email. If you generate an email draft, flag it for coordinator review rather than auto-sending; the coordinator may want to send via ${channel} instead.`)
+    }
   }
 
   return parts.join('\n')

@@ -226,6 +226,9 @@ interface PeopleRow {
   email: string | null
   merged_into_id: string | null
   wedding_id: string | null
+  /** Sticky-state Pattern 1: when true, name-upgrade skips this row.
+   *  See migration 306. */
+  name_locked_by_operator: boolean | null
 }
 
 interface WeddingRow {
@@ -495,7 +498,7 @@ export async function upgradePeopleNameFromTouchpoints(
   // ---- Pull all people on the wedding (skip tombstones). -----------------
   const { data: peopleRows } = await supabase
     .from('people')
-    .select('id, first_name, last_name, email, merged_into_id, wedding_id')
+    .select('id, first_name, last_name, email, merged_into_id, wedding_id, name_locked_by_operator')
     .eq('wedding_id', weddingId)
     .is('merged_into_id', null)
   const people: PeopleRow[] = (peopleRows ?? []) as PeopleRow[]
@@ -540,6 +543,10 @@ export async function upgradePeopleNameFromTouchpoints(
   // ---- Per-person: pick best candidate, write if not dryRun. -------------
   const upgrades: NameUpgrade[] = []
   for (const person of people) {
+    // Sticky-state Pattern 1: operator-locked names are frozen. The
+    // forensic record (name_evidence) still receives new claims via
+    // upstream writers; only the *displayed* projection is locked.
+    if (person.name_locked_by_operator === true) continue
     const winner = pickBestCandidate(person, allCandidates)
     if (!winner) continue
     // Sanity: don't write if the resolved values exactly equal current.

@@ -636,12 +636,17 @@ async function findLostReactivationCandidates(
     now.getTime() - dontPilOnDays * 24 * 60 * 60 * 1000,
   ).toISOString()
 
+  // Sticky-state Pattern 1 (migration 306): lost_locked_by_operator
+  // means the coordinator has declared this couple permanently gone.
+  // Reactivation cron must skip these weddings — operator override of
+  // the auto-engagement path.
   const { data: weddings, error } = await supabase
     .from('weddings')
-    .select('id, lost_at')
+    .select('id, lost_at, lost_locked_by_operator')
     .eq('venue_id', seq.venue_id)
     .eq('status', 'lost')
     .not('lost_at', 'is', null)
+    .neq('lost_locked_by_operator', true)
     .limit(500)
   if (error || !weddings) return []
 

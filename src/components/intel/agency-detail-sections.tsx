@@ -27,6 +27,11 @@ import {
   ExternalLink,
   Edit2,
   Check,
+  CheckCircle2,
+  XCircle,
+  Minus,
+  HelpCircle,
+  CircleSlash,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -491,11 +496,24 @@ interface DocumentRow {
   id: string
   name: string
   fileUrl: string | null
+  fileSizeBytes: number | null
+  mimeType: string | null
   kind: string | null
   effectiveDate: string | null
   expiresAt: string | null
   notes: string | null
   createdAt: string
+}
+
+function isExternalUrl(s: string | null): boolean {
+  return !!s && /^https?:\/\//.test(s)
+}
+
+function formatBytes(n: number | null): string {
+  if (n === null || !Number.isFinite(n)) return ''
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
 const DOCUMENT_KINDS = [
@@ -596,48 +614,68 @@ export function AgencyDocumentsSection({ agencyId }: { agencyId: string }) {
         </p>
       ) : (
         <ul className="mt-3 divide-y divide-[var(--bh-line)]/60">
-          {docs.map((d) => (
-            <li key={d.id} className="py-3 flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  {d.fileUrl ? (
-                    <a
-                      href={d.fileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-medium hover:underline"
-                    >
-                      {d.name}
-                      <ExternalLink className="ml-1 inline h-3 w-3" />
-                    </a>
-                  ) : (
-                    <span className="font-medium">{d.name}</span>
-                  )}
-                  {d.kind ? (
-                    <span className="rounded-full bg-[var(--bh-warm-50)] px-2 py-0.5 text-[10px] uppercase text-[var(--bh-muted)]">
-                      {DOCUMENT_KINDS.find((k) => k.value === d.kind)?.label ?? d.kind}
-                    </span>
+          {docs.map((d) => {
+            // External URL (Drive/Dropbox/etc): link straight.
+            // In-bucket: route through the download endpoint which
+            // mints a short-lived signed URL.
+            const href = d.fileUrl
+              ? isExternalUrl(d.fileUrl)
+                ? d.fileUrl
+                : `/api/intel/agencies/${agencyId}/documents/${d.id}/download`
+              : null
+            return (
+              <li key={d.id} className="py-3 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {href ? (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium hover:underline"
+                      >
+                        {d.name}
+                        <ExternalLink className="ml-1 inline h-3 w-3" />
+                      </a>
+                    ) : (
+                      <span className="font-medium">{d.name}</span>
+                    )}
+                    {d.kind ? (
+                      <span className="rounded-full bg-[var(--bh-warm-50)] px-2 py-0.5 text-[10px] uppercase text-[var(--bh-muted)]">
+                        {DOCUMENT_KINDS.find((k) => k.value === d.kind)?.label ?? d.kind}
+                      </span>
+                    ) : null}
+                    {d.fileSizeBytes ? (
+                      <span className="text-[10px] text-[var(--bh-muted)]">
+                        {formatBytes(d.fileSizeBytes)}
+                      </span>
+                    ) : null}
+                    {d.fileUrl && !isExternalUrl(d.fileUrl) ? (
+                      <span className="rounded-full bg-[var(--bh-sage-50)] px-1.5 py-0.5 text-[9px] uppercase text-[var(--bh-sage-700)]">
+                        uploaded
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-0.5 text-xs text-[var(--bh-muted)]">
+                    {d.effectiveDate ? `Effective ${d.effectiveDate}` : null}
+                    {d.effectiveDate && d.expiresAt ? ' · ' : null}
+                    {d.expiresAt ? `Expires ${d.expiresAt}` : null}
+                  </div>
+                  {d.notes ? (
+                    <p className="mt-1 text-xs text-[var(--bh-ink)]">{d.notes}</p>
                   ) : null}
                 </div>
-                <div className="mt-0.5 text-xs text-[var(--bh-muted)]">
-                  {d.effectiveDate ? `Effective ${d.effectiveDate}` : null}
-                  {d.effectiveDate && d.expiresAt ? ' · ' : null}
-                  {d.expiresAt ? `Expires ${d.expiresAt}` : null}
-                </div>
-                {d.notes ? (
-                  <p className="mt-1 text-xs text-[var(--bh-ink)]">{d.notes}</p>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleDelete(d.id)}
-                className="text-rose-600 hover:text-rose-800"
-                title="Remove"
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </li>
-          ))}
+                <button
+                  type="button"
+                  onClick={() => void handleDelete(d.id)}
+                  className="text-rose-600 hover:text-rose-800"
+                  title="Remove"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </li>
+            )
+          })}
         </ul>
       )}
     </section>
@@ -651,102 +689,276 @@ function DocumentForm({
   agencyId: string
   onSaved: () => Promise<void> | void
 }) {
+  const [mode, setMode] = useState<'upload' | 'url'>('upload')
   const [name, setName] = useState('')
   const [fileUrl, setFileUrl] = useState('')
+  const [file, setFile] = useState<File | null>(null)
+  const [dragActive, setDragActive] = useState(false)
   const [kind, setKind] = useState('')
   const [effectiveDate, setEffectiveDate] = useState('')
   const [expiresAt, setExpiresAt] = useState('')
   const [notes, setNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleFileChosen = useCallback((f: File | null) => {
+    setFile(f)
+    setError(null)
+    if (f && !name.trim()) {
+      // Auto-prefill the display name with the filename without
+      // extension. Operator can override before saving.
+      setName(f.name.replace(/\.[a-z0-9]{1,8}$/i, ''))
+    }
+    if (f && f.size > 25 * 1024 * 1024) {
+      setError(
+        `${(f.size / 1024 / 1024).toFixed(1)}MB exceeds the 25MB upload limit. Upload to Drive/Dropbox and paste a URL instead.`,
+      )
+    }
+  }, [name])
+
   const submit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault()
-      if (!name.trim()) return
+      setError(null)
+      if (!name.trim()) {
+        setError('Name required.')
+        return
+      }
+      if (mode === 'upload' && !file) {
+        setError('Pick a file to upload, or switch to URL mode.')
+        return
+      }
+      if (mode === 'url' && !fileUrl.trim()) {
+        setError('Paste a URL or switch to upload mode.')
+        return
+      }
       setSubmitting(true)
       try {
-        await fetch(`/api/intel/agencies/${agencyId}/documents`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name,
-            fileUrl: fileUrl || null,
-            kind: kind || null,
-            effectiveDate: effectiveDate || null,
-            expiresAt: expiresAt || null,
-            notes: notes || null,
-          }),
-        })
+        if (mode === 'upload' && file) {
+          const fd = new FormData()
+          fd.set('file', file)
+          fd.set('name', name)
+          if (kind) fd.set('kind', kind)
+          if (effectiveDate) fd.set('effectiveDate', effectiveDate)
+          if (expiresAt) fd.set('expiresAt', expiresAt)
+          if (notes) fd.set('notes', notes)
+          const resp = await fetch(
+            `/api/intel/agencies/${agencyId}/documents/upload`,
+            { method: 'POST', body: fd },
+          )
+          if (!resp.ok) {
+            const j = (await resp.json().catch(() => null)) as
+              | { error?: string }
+              | null
+            setError(j?.error ?? `Upload failed (${resp.status})`)
+            return
+          }
+        } else {
+          const resp = await fetch(
+            `/api/intel/agencies/${agencyId}/documents`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name,
+                fileUrl: fileUrl || null,
+                kind: kind || null,
+                effectiveDate: effectiveDate || null,
+                expiresAt: expiresAt || null,
+                notes: notes || null,
+              }),
+            },
+          )
+          if (!resp.ok) {
+            const j = (await resp.json().catch(() => null)) as
+              | { error?: string }
+              | null
+            setError(j?.error ?? `Save failed (${resp.status})`)
+            return
+          }
+        }
         await onSaved()
       } finally {
         setSubmitting(false)
       }
     },
-    [agencyId, name, fileUrl, kind, effectiveDate, expiresAt, notes, onSaved],
+    [
+      agencyId,
+      mode,
+      name,
+      file,
+      fileUrl,
+      kind,
+      effectiveDate,
+      expiresAt,
+      notes,
+      onSaved,
+    ],
   )
+
   return (
     <form
       onSubmit={submit}
-      className="mt-3 grid grid-cols-1 gap-3 rounded-lg border border-[var(--bh-line)] bg-[var(--bh-sage-50)]/40 p-3 md:grid-cols-2"
+      className="mt-3 space-y-3 rounded-lg border border-[var(--bh-line)] bg-[var(--bh-sage-50)]/40 p-3"
     >
+      {/* Mode toggle */}
+      <div className="flex gap-2 text-xs">
+        <button
+          type="button"
+          onClick={() => setMode('upload')}
+          className={`rounded-full border px-3 py-1 ${
+            mode === 'upload'
+              ? 'border-[var(--bh-sage-700)] bg-[var(--bh-sage-700)] text-white'
+              : 'border-[var(--bh-line)] bg-white text-[var(--bh-ink)]'
+          }`}
+        >
+          Upload file
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode('url')}
+          className={`rounded-full border px-3 py-1 ${
+            mode === 'url'
+              ? 'border-[var(--bh-sage-700)] bg-[var(--bh-sage-700)] text-white'
+              : 'border-[var(--bh-line)] bg-white text-[var(--bh-ink)]'
+          }`}
+        >
+          Paste URL
+        </button>
+      </div>
+
+      {/* Drag-and-drop / file picker (upload mode) */}
+      {mode === 'upload' ? (
+        <div
+          onDragEnter={(e) => {
+            e.preventDefault()
+            setDragActive(true)
+          }}
+          onDragOver={(e) => {
+            e.preventDefault()
+            setDragActive(true)
+          }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={(e) => {
+            e.preventDefault()
+            setDragActive(false)
+            const f = e.dataTransfer.files?.[0]
+            if (f) handleFileChosen(f)
+          }}
+          className={`rounded-lg border-2 border-dashed p-4 text-center transition ${
+            dragActive
+              ? 'border-[var(--bh-sage-500)] bg-[var(--bh-sage-50)]'
+              : 'border-[var(--bh-line)] bg-white'
+          }`}
+        >
+          {file ? (
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-sm font-medium">{file.name}</span>
+              <span className="text-xs text-[var(--bh-muted)]">
+                {formatBytes(file.size)} · {file.type || 'unknown type'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setFile(null)}
+                className="mt-1 text-xs text-rose-600 hover:underline"
+              >
+                Choose a different file
+              </button>
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-[var(--bh-muted)]">
+                Drag a file here, or
+              </p>
+              <label className="mt-2 inline-block cursor-pointer rounded-md border border-[var(--bh-line)] bg-white px-3 py-1 text-xs hover:bg-[var(--bh-sage-50)]">
+                pick a file
+                <input
+                  type="file"
+                  hidden
+                  onChange={(e) =>
+                    handleFileChosen(e.target.files?.[0] ?? null)
+                  }
+                />
+              </label>
+              <p className="mt-2 text-[10px] text-[var(--bh-muted)]">
+                PDF · Word · Excel · PowerPoint · images · CSV · text. Max
+                25MB.
+              </p>
+            </>
+          )}
+        </div>
+      ) : (
+        <input
+          type="url"
+          placeholder="https://… (Drive / Dropbox / agency portal)"
+          value={fileUrl}
+          onChange={(e) => setFileUrl(e.target.value)}
+          className="w-full rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm"
+        />
+      )}
+
       <input
         type="text"
-        placeholder="Document name"
+        placeholder="Display name"
         required
         value={name}
         onChange={(e) => setName(e.target.value)}
-        className="rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm md:col-span-2"
+        className="w-full rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm"
       />
-      <input
-        type="url"
-        placeholder="URL (Drive / Dropbox / portal)"
-        value={fileUrl}
-        onChange={(e) => setFileUrl(e.target.value)}
-        className="rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm md:col-span-2"
-      />
-      <select
-        value={kind}
-        onChange={(e) => setKind(e.target.value)}
-        className="rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm"
-      >
-        <option value="">— type —</option>
-        {DOCUMENT_KINDS.map((k) => (
-          <option key={k.value} value={k.value}>
-            {k.label}
-          </option>
-        ))}
-      </select>
-      <input
-        type="text"
-        placeholder="Notes"
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-        className="rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm"
-      />
-      <label className="text-xs text-[var(--bh-muted)]">
-        Effective date
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <select
+          value={kind}
+          onChange={(e) => setKind(e.target.value)}
+          className="rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm"
+        >
+          <option value="">— type —</option>
+          {DOCUMENT_KINDS.map((k) => (
+            <option key={k.value} value={k.value}>
+              {k.label}
+            </option>
+          ))}
+        </select>
         <input
-          type="date"
-          value={effectiveDate}
-          onChange={(e) => setEffectiveDate(e.target.value)}
-          className="mt-1 w-full rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm"
+          type="text"
+          placeholder="Notes"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          className="rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm"
         />
-      </label>
-      <label className="text-xs text-[var(--bh-muted)]">
-        Expires at
-        <input
-          type="date"
-          value={expiresAt}
-          onChange={(e) => setExpiresAt(e.target.value)}
-          className="mt-1 w-full rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm"
-        />
-      </label>
+        <label className="text-xs text-[var(--bh-muted)]">
+          Effective date
+          <input
+            type="date"
+            value={effectiveDate}
+            onChange={(e) => setEffectiveDate(e.target.value)}
+            className="mt-1 w-full rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm"
+          />
+        </label>
+        <label className="text-xs text-[var(--bh-muted)]">
+          Expires at
+          <input
+            type="date"
+            value={expiresAt}
+            onChange={(e) => setExpiresAt(e.target.value)}
+            className="mt-1 w-full rounded-md border border-[var(--bh-line)] bg-white px-2 py-1 text-sm"
+          />
+        </label>
+      </div>
+
+      {error ? (
+        <div className="rounded-md border border-rose-200 bg-rose-50 p-2 text-xs text-rose-800">
+          {error}
+        </div>
+      ) : null}
+
       <button
         type="submit"
         disabled={submitting || !name.trim()}
-        className="inline-flex items-center gap-2 rounded-md bg-[var(--bh-sage-700)] px-3 py-1.5 text-sm text-white hover:opacity-90 disabled:opacity-50 md:col-span-2"
+        className="inline-flex items-center gap-2 rounded-md bg-[var(--bh-sage-700)] px-3 py-1.5 text-sm text-white hover:opacity-90 disabled:opacity-50"
       >
         {submitting ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-        Save document
+        {mode === 'upload' ? 'Upload + save' : 'Save link'}
       </button>
     </form>
   )
@@ -999,6 +1211,259 @@ function KpiForm({
         Save commitment
       </button>
     </form>
+  )
+}
+
+// ===========================================================================
+// KPI truth-vs-claim section
+// ===========================================================================
+
+interface KpiPerformanceRow {
+  kpiId: string
+  metricName: string
+  metricDisplay: string
+  targetValue: number
+  targetUnit: string
+  targetWindow: string
+  effectiveFrom: string
+  actualValue: number | null
+  actualLabel: string
+  measurementDays: number
+  gapPct: number | null
+  direction: 'higher_better' | 'lower_better' | 'neutral'
+  status:
+    | 'hit'
+    | 'close'
+    | 'miss'
+    | 'too_early'
+    | 'not_measurable'
+    | 'no_data'
+  statusLabel: string
+  reasoning: string
+  confidence: 'high' | 'medium' | 'low'
+  confidenceReasoning: string
+}
+
+function formatKpiValue(
+  value: number | null,
+  unit: string,
+): string {
+  if (value === null) return '—'
+  if (unit === 'usd') {
+    return `$${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+  }
+  if (unit === 'cents') {
+    return `$${(value / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+  }
+  if (unit === 'percent') return `${value.toFixed(1)}%`
+  if (unit === 'ratio') return `${value.toFixed(2)}×`
+  if (unit === 'days' || unit === 'minutes') {
+    return `${Math.round(value)} ${unit}`
+  }
+  // count / other
+  return value < 10 ? value.toFixed(1) : value.toFixed(0)
+}
+
+function StatusIcon({ status }: { status: KpiPerformanceRow['status'] }) {
+  switch (status) {
+    case 'hit':
+      return <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+    case 'close':
+      return <Minus className="h-4 w-4 text-amber-600" />
+    case 'miss':
+      return <XCircle className="h-4 w-4 text-rose-600" />
+    case 'too_early':
+      return <HelpCircle className="h-4 w-4 text-sky-600" />
+    case 'not_measurable':
+      return <CircleSlash className="h-4 w-4 text-[var(--bh-muted)]" />
+    case 'no_data':
+      return <HelpCircle className="h-4 w-4 text-[var(--bh-muted)]" />
+  }
+}
+
+function statusRowClass(status: KpiPerformanceRow['status']): string {
+  switch (status) {
+    case 'hit':
+      return 'border-emerald-200 bg-emerald-50/50'
+    case 'close':
+      return 'border-amber-200 bg-amber-50/50'
+    case 'miss':
+      return 'border-rose-200 bg-rose-50/50'
+    case 'too_early':
+      return 'border-sky-200 bg-sky-50/50'
+    case 'not_measurable':
+    case 'no_data':
+      return 'border-[var(--bh-line)] bg-[var(--bh-warm-50)]/40'
+  }
+}
+
+export function AgencyKpiPerformanceSection({
+  agencyId,
+  windowDays = 90,
+}: {
+  agencyId: string
+  windowDays?: number
+}) {
+  const [rows, setRows] = useState<KpiPerformanceRow[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const reload = useCallback(async () => {
+    setLoading(true)
+    try {
+      const resp = await fetch(
+        `/api/intel/agencies/${agencyId}/kpi-performance?window=${windowDays}`,
+      )
+      if (!resp.ok) return
+      const j = (await resp.json()) as { rows: KpiPerformanceRow[] }
+      setRows(j.rows ?? [])
+    } finally {
+      setLoading(false)
+    }
+  }, [agencyId, windowDays])
+
+  useEffect(() => {
+    void reload()
+  }, [reload])
+
+  // Hide entirely when no KPIs exist (the KPIs section above prompts the
+  // operator to add commitments).
+  if (loading) {
+    return (
+      <section className="rounded-2xl border border-[var(--bh-line)] bg-white p-5 shadow-sm">
+        <h2 className="font-serif text-lg flex items-center gap-2">
+          <Target className="h-4 w-4" /> Truth vs claim
+        </h2>
+        <div className="mt-3 flex items-center gap-2 text-xs text-[var(--bh-muted)]">
+          <Loader2 className="h-3 w-3 animate-spin" /> Resolving against actuals…
+        </div>
+      </section>
+    )
+  }
+  if (rows.length === 0) return null
+
+  const summary = {
+    hit: rows.filter((r) => r.status === 'hit').length,
+    close: rows.filter((r) => r.status === 'close').length,
+    miss: rows.filter((r) => r.status === 'miss').length,
+    other: rows.filter((r) =>
+      ['too_early', 'not_measurable', 'no_data'].includes(r.status),
+    ).length,
+  }
+
+  return (
+    <section className="rounded-2xl border border-[var(--bh-line)] bg-white p-5 shadow-sm">
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="font-serif text-lg flex items-center gap-2">
+          <Target className="h-4 w-4" /> Truth vs claim
+          <span className="text-xs text-[var(--bh-muted)]">
+            ({rows.length} commitment{rows.length === 1 ? '' : 's'})
+          </span>
+        </h2>
+        <div className="flex items-center gap-3 text-xs text-[var(--bh-muted)]">
+          {summary.hit > 0 ? (
+            <span className="inline-flex items-center gap-1 text-emerald-700">
+              <CheckCircle2 className="h-3 w-3" /> {summary.hit} hit
+            </span>
+          ) : null}
+          {summary.close > 0 ? (
+            <span className="inline-flex items-center gap-1 text-amber-700">
+              <Minus className="h-3 w-3" /> {summary.close} close
+            </span>
+          ) : null}
+          {summary.miss > 0 ? (
+            <span className="inline-flex items-center gap-1 text-rose-700">
+              <XCircle className="h-3 w-3" /> {summary.miss} miss
+            </span>
+          ) : null}
+          {summary.other > 0 ? (
+            <span className="inline-flex items-center gap-1">
+              <HelpCircle className="h-3 w-3" /> {summary.other} pending
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <p className="mt-1 text-xs text-[var(--bh-muted)]">
+        Each commitment resolved against Bloom&apos;s measured actuals over the
+        last {windowDays} days. Hover the status for the reasoning.
+      </p>
+
+      <div className="mt-4 space-y-2">
+        {rows.map((r) => (
+          <KpiPerformanceCard key={r.kpiId} row={r} />
+        ))}
+      </div>
+
+      <div className="mt-4 border-t border-[var(--bh-line)] pt-3 text-[11px] text-[var(--bh-muted)]">
+        Confidence labels reflect sample size and window scaling.
+        Numbers expressed in the unit each KPI specifies; CAC and CPL are
+        bloom-measured cost per first-touch booking / lead.
+      </div>
+    </section>
+  )
+}
+
+function KpiPerformanceCard({ row }: { row: KpiPerformanceRow }) {
+  const target = formatKpiValue(row.targetValue, row.targetUnit)
+  const actual = formatKpiValue(row.actualValue, row.targetUnit)
+  return (
+    <div
+      className={`rounded-lg border p-3 text-sm ${statusRowClass(row.status)}`}
+    >
+      <div className="flex items-baseline justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <StatusIcon status={row.status} />
+          <span className="font-medium">{row.metricDisplay}</span>
+          <span className="text-xs text-[var(--bh-muted)]">
+            ({row.targetWindow.replace(/_/g, ' ')})
+          </span>
+        </div>
+        <span
+          className={`text-xs font-medium ${
+            row.status === 'hit'
+              ? 'text-emerald-700'
+              : row.status === 'close'
+                ? 'text-amber-700'
+                : row.status === 'miss'
+                  ? 'text-rose-700'
+                  : 'text-[var(--bh-muted)]'
+          }`}
+          title={row.reasoning}
+        >
+          {row.statusLabel}
+        </span>
+      </div>
+      <div className="mt-2 flex items-baseline gap-4 flex-wrap text-sm">
+        <div>
+          <span className="text-[10px] uppercase tracking-wide text-[var(--bh-muted)]">
+            Promised
+          </span>
+          <div className="font-serif text-lg tabular-nums">{target}</div>
+        </div>
+        <div>
+          <span className="text-[10px] uppercase tracking-wide text-[var(--bh-muted)]">
+            Measured
+          </span>
+          <div className="font-serif text-lg tabular-nums">{actual}</div>
+        </div>
+        {row.gapPct !== null ? (
+          <div>
+            <span className="text-[10px] uppercase tracking-wide text-[var(--bh-muted)]">
+              Gap
+            </span>
+            <div className="font-serif text-lg tabular-nums">
+              {row.gapPct > 0 ? '+' : ''}
+              {row.gapPct.toFixed(0)}%
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <div
+        className="mt-2 text-[11px] text-[var(--bh-muted)]"
+        title={row.confidenceReasoning}
+      >
+        {row.actualLabel} · confidence: {row.confidence}
+      </div>
+    </div>
   )
 }
 

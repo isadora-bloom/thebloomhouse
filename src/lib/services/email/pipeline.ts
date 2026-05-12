@@ -2236,11 +2236,33 @@ export async function processIncomingEmail(
     // does NOT replace it — the original acquisition channel wins.
     const { data: existingWedding } = await supabase
       .from('weddings')
-      .select('wedding_date, guest_count_estimate, estimated_guests, utm_source, utm_medium, utm_campaign, utm_term, utm_content')
+      .select('wedding_date, wedding_date_locked_by_operator, wedding_date_evidence, guest_count_estimate, estimated_guests, utm_source, utm_medium, utm_campaign, utm_term, utm_content')
       .eq('id', weddingId)
       .single()
     const patch: Record<string, unknown> = {}
-    if (existingWedding && !existingWedding.wedding_date && parsedEventDate) {
+    // Sticky-state Pattern 1 (migration 306): wedding_date_evidence is
+    // append-only. Every parsed date signal — including ones we don't
+    // promote into the wedding_date column — gets a forensic row so
+    // conflicts are inspectable on the coordinator side. The column
+    // itself only updates when (a) it's empty today and (b) the operator
+    // hasn't locked it.
+    if (existingWedding && parsedEventDate) {
+      const existingEvidence = Array.isArray(existingWedding.wedding_date_evidence)
+        ? (existingWedding.wedding_date_evidence as Array<Record<string, unknown>>)
+        : []
+      const newEvidence = {
+        source: 'email_body_extraction',
+        value: parsedEventDate,
+        precision: parsedEventDateObj?.precision ?? 'day',
+        confidence: 60,
+        captured_at: email.date ?? new Date().toISOString(),
+        interaction_id: interactionId,
+        actor_id: null,
+      }
+      patch.wedding_date_evidence = [...existingEvidence, newEvidence]
+    }
+    const dateLocked = existingWedding?.wedding_date_locked_by_operator === true
+    if (existingWedding && !existingWedding.wedding_date && parsedEventDate && !dateLocked) {
       patch.wedding_date = parsedEventDate
       patch.wedding_date_precision = parsedEventDateObj?.precision ?? null
     }
