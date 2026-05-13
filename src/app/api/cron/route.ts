@@ -1243,11 +1243,12 @@ async function runPruneMaintenance(): Promise<{
   dunning: { reminder_1_fired: number; reminder_2_fired: number; sage_paused_fired: number; read_only_fired: number; errors: string[] }
   source_freshness: Awaited<ReturnType<typeof runSourceFreshnessSweep>>
   form_bleed_nuke: { rows_nulled: number; errors: string[] }
+  empty_wedding_prune: { rows_deleted: number; errors: string[] }
 }> {
   const { runAuditRetentionPrune } = await import('@/lib/services/audit-retention')
   const { detectBulkReadAnomalies } = await import('@/lib/services/bulk-read-anomaly')
   const { runDunningEscalate } = await import('@/lib/services/billing/dunning')
-  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness, formBleed] = await Promise.allSettled([
+  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness, formBleed, emptyWeddings] = await Promise.allSettled([
     runTelemetryRetentionPrune(),
     runPruneRateLimits(),
     runPruneBrainDumpStale(),
@@ -1271,6 +1272,15 @@ async function runPruneMaintenance(): Promise<{
     // bad name; next legit signal repopulates via name-upgrade or the
     // judge once a profile exists.
     runFormBleedNuke(),
+    // Folded in 2026-05-13. Deletes weddings that have ZERO identifying
+    // signal anywhere — no person with a name/email/phone, no
+    // interactions, no engagement_events. These are pure ghost rows
+    // born from sources like the HoneyBook held-date import (project
+    // name = just a package label like "Whole Weekend") or duplicate
+    // mints that got auto-decayed to lost without ever having content.
+    // Defensive: never touches a wedding with booked_at — even if all
+    // other signal got wiped, a real booking must survive.
+    runEmptyWeddingPrune(),
   ])
 
   const telemetryResult =
@@ -1357,6 +1367,14 @@ async function runPruneMaintenance(): Promise<{
           return { rows_nulled: 0, errors: [String(formBleed.reason)] }
         })()
 
+  const emptyWeddingResult =
+    emptyWeddings.status === 'fulfilled'
+      ? emptyWeddings.value
+      : (() => {
+          console.error('[prune_maintenance] empty_wedding_prune failed:', emptyWeddings.reason)
+          return { rows_deleted: 0, errors: [String(emptyWeddings.reason)] }
+        })()
+
   return {
     telemetry: telemetryResult,
     rate_limits: rateLimitsResult,
@@ -1367,6 +1385,7 @@ async function runPruneMaintenance(): Promise<{
     dunning: dunningResult,
     source_freshness: sourceFreshnessResult,
     form_bleed_nuke: formBleedResult,
+    empty_wedding_prune: emptyWeddingResult,
   }
 }
 
@@ -1419,6 +1438,93 @@ async function runFormBleedNuke(): Promise<{
   } catch (err) {
     errors.push(err instanceof Error ? err.message : String(err))
     return { rows_nulled: 0, errors }
+  }
+}
+
+/**
+ * 2026-05-13. Delete weddings that have ZERO identifying signal.
+ *
+ * A wedding is "empty" when:
+ *   - no person row has a name (first or last), email, or phone
+ *   - no interactions
+ *   - no engagement_events
+ *   - no booked_at (defensive — never touch a wedding that ever
+ *     flipped to booked, even if everything else got wiped)
+ *
+ * 130 such rows accumulated at Rixey before this sweep landed.
+ * Sources: HoneyBook held-date imports where project_name was a pure
+ * package label ("Whole Weekend", "One Day") and the package-only
+ * refusal in honeybook.ts shipped same day catches new ones; legacy
+ * rows need this nightly sweep to clean up.
+ *
+ * Statement-level idempotent. Safe to re-run nightly.
+ */
+async function runEmptyWeddingPrune(): Promise<{
+  rows_deleted: number
+  errors: string[]
+}> {
+  const supabase = createServiceClient()
+  const errors: string[] = []
+  try {
+    // Pull candidate wedding ids first. PostgREST doesn't compose
+    // multi-table NOT EXISTS into a single statement cleanly, so we
+    // walk in two steps: select empties, then delete by id list.
+    // Idempotent — the gate re-evaluates on every tick.
+    const { data: weddings, error: selErr } = await supabase
+      .from('weddings')
+      .select('id')
+      .is('booked_at', null)
+      .limit(5000)
+    if (selErr) {
+      errors.push(`select weddings failed: ${selErr.message}`)
+      return { rows_deleted: 0, errors }
+    }
+    const candidateIds = (weddings ?? []).map((w) => w.id as string)
+    if (candidateIds.length === 0) return { rows_deleted: 0, errors }
+
+    // Filter to the "empty" subset by checking each related table.
+    // Bounded by booked_at IS NULL (which is most leads), but the
+    // EXISTS check makes this O(n × 3 lookups). Acceptable at Rixey
+    // scale (~600 weddings); revisit if a venue grows past 10k.
+    const emptyIds: string[] = []
+    for (const id of candidateIds) {
+      // Any person with any identifying data?
+      const { count: peopleWithData } = await supabase
+        .from('people')
+        .select('id', { head: true, count: 'exact' })
+        .eq('wedding_id', id)
+        .is('merged_into_id', null)
+        .or('first_name.not.is.null,last_name.not.is.null,email.not.is.null,phone.not.is.null')
+      if ((peopleWithData ?? 0) > 0) continue
+      // Any interactions?
+      const { count: interactions } = await supabase
+        .from('interactions')
+        .select('id', { head: true, count: 'exact' })
+        .eq('wedding_id', id)
+      if ((interactions ?? 0) > 0) continue
+      // Any engagement events?
+      const { count: events } = await supabase
+        .from('engagement_events')
+        .select('id', { head: true, count: 'exact' })
+        .eq('wedding_id', id)
+      if ((events ?? 0) > 0) continue
+      emptyIds.push(id)
+    }
+
+    if (emptyIds.length === 0) return { rows_deleted: 0, errors }
+
+    const { error: delErr } = await supabase
+      .from('weddings')
+      .delete()
+      .in('id', emptyIds)
+    if (delErr) {
+      errors.push(`delete failed: ${delErr.message}`)
+      return { rows_deleted: 0, errors }
+    }
+    return { rows_deleted: emptyIds.length, errors }
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : String(err))
+    return { rows_deleted: 0, errors }
   }
 }
 
