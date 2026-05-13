@@ -284,6 +284,82 @@ export async function POST(
   // landed via the chokepoint above.
   void captureResult
 
+  // Step 7 / A1 (2026-05-13): set the profile-level operator lock so
+  // the next Wave 4 reconstruction can't drift the
+  // couple_identity_profile.profile.names.partner{1,2} fields away
+  // from the operator-confirmed values. Two writes:
+  //   1. push the override into profile.names.partner{N} so the
+  //      forensic record matches the operator's truth NOW (not after
+  //      the next nightly judge run)
+  //   2. set partner{N}_locked_by_operator=true so future runs preserve
+  //      the override even when the LLM proposes a different name
+  // Per-partner role drives which side is locked. Best-effort —
+  // failure logs + continues (the people-side override already
+  // succeeded; profile lock is the consistency layer).
+  try {
+    const { data: personRole } = await supabase
+      .from('people')
+      .select('role')
+      .eq('id', body.personId)
+      .maybeSingle()
+    const role = (personRole?.role as string | null) ?? null
+    if (role === 'partner1' || role === 'partner2') {
+      const { data: prof } = await supabase
+        .from('couple_identity_profile')
+        .select('profile')
+        .eq('wedding_id', weddingId)
+        .maybeSingle()
+      const currentProfile = (prof?.profile ?? null) as {
+        names?: {
+          partner1?: { first?: string | null; last?: string | null; confidence_0_100?: number; evidence_quote?: string | null } | null
+          partner2?: { first?: string | null; last?: string | null; confidence_0_100?: number; evidence_quote?: string | null } | null
+          name_quality?: string
+          is_phantom_partner_relationship?: boolean
+        }
+      } | null
+      if (currentProfile && currentProfile.names) {
+        const partnerKey = role === 'partner1' ? 'partner1' : 'partner2'
+        const overriddenPartner = {
+          first: first || null,
+          last: last || null,
+          confidence_0_100: 100,
+          evidence_quote: 'operator manual override',
+        }
+        const mergedProfile = {
+          ...currentProfile,
+          names: {
+            ...currentProfile.names,
+            [partnerKey]: overriddenPartner,
+            // Upgrade name_quality when partner1 is set — operator
+            // confirmation is the highest possible signal.
+            ...(role === 'partner1'
+              ? { name_quality: 'high' as const }
+              : {}),
+          },
+        }
+        const lockColumn =
+          role === 'partner1'
+            ? { partner1_locked_by_operator: true }
+            : { partner2_locked_by_operator: true }
+        await supabase
+          .from('couple_identity_profile')
+          .update({
+            profile: mergedProfile,
+            ...lockColumn,
+            locked_at: new Date().toISOString(),
+            locked_by_user_id: auth.userId,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('wedding_id', weddingId)
+      }
+    }
+  } catch (err) {
+    console.warn(
+      '[name-evidence] profile lock write failed (non-fatal):',
+      err instanceof Error ? err.message : err,
+    )
+  }
+
   // Telemetry — analytics chain uses this to measure how much manual
   // cleanup the system requires per venue.
   logEvent({

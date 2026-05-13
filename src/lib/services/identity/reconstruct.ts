@@ -869,7 +869,7 @@ export async function reconstructCoupleIdentity(
 
   const { data: existing } = await supabase
     .from('couple_identity_profile')
-    .select('cost_cents, reconstruction_count')
+    .select('cost_cents, reconstruction_count, profile, partner1_locked_by_operator, partner2_locked_by_operator')
     .eq('wedding_id', weddingId)
     .maybeSingle()
 
@@ -882,10 +882,36 @@ export async function reconstructCoupleIdentity(
   const cumulativeCostCents = existingCostCents + newCallCostCents
   const newCount = existing ? existingCount + 1 : 1
 
+  // Step 7 / A1 (2026-05-13): operator name locks. When the existing
+  // profile has partner1_locked_by_operator or partner2_locked_by_operator
+  // set, preserve the operator-confirmed partner from the previous
+  // profile rather than letting the new LLM verdict overwrite it. The
+  // judge keeps working on the unlocked partner + every other section
+  // (residence, occupations, emotional_truths, etc) — only the name
+  // is frozen.
+  const partner1Locked = !!(existing as { partner1_locked_by_operator?: boolean } | null)?.partner1_locked_by_operator
+  const partner2Locked = !!(existing as { partner2_locked_by_operator?: boolean } | null)?.partner2_locked_by_operator
+  const existingProfile = (existing as { profile?: typeof profile } | null)?.profile ?? null
+  let mergedProfile = profile
+  if ((partner1Locked || partner2Locked) && existingProfile) {
+    mergedProfile = {
+      ...profile,
+      names: {
+        ...profile.names,
+        partner1: partner1Locked
+          ? (existingProfile.names?.partner1 ?? profile.names.partner1)
+          : profile.names.partner1,
+        partner2: partner2Locked
+          ? (existingProfile.names?.partner2 ?? profile.names.partner2)
+          : profile.names.partner2,
+      },
+    }
+  }
+
   const upsertRow = {
     wedding_id: weddingId,
     venue_id: venueId,
-    profile,
+    profile: mergedProfile,
     evidence_summary: summary,
     last_reconstructed_at: new Date().toISOString(),
     last_signal_at: lastSignalAt,

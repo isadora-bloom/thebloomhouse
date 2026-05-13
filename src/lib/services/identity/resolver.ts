@@ -1093,6 +1093,29 @@ export async function resolveIdentity(
       .eq('id', personId)
   }
 
+  // Step 7 / A2 (2026-05-13): append every identifier observed in this
+  // signal to the wedding's historical identifier pool on
+  // couple_identity_profile.identifiers. Fire-and-forget; never blocks
+  // the resolve. Pool reads from this for future re-engagement match
+  // attempts where people.email/phone may have been overwritten by
+  // intermediate signals — the pool retains every identifier ever seen.
+  try {
+    const { captureSignalIdentifiers } = await import('./capture-identifier')
+    captureSignalIdentifiers({
+      weddingId,
+      email: signals.email,
+      phone: signals.phone,
+      displayName: signals.fullName ?? signals.partner1Name,
+      source: sourceLabel ?? 'identity_resolver',
+      supabase,
+    })
+  } catch (err) {
+    // Best-effort. The profile row may not exist yet (Pattern A); the
+    // helper logs that as a typed skip without throwing.
+    console.warn('[identity/resolver] captureSignalIdentifiers failed:',
+      err instanceof Error ? err.message : err)
+  }
+
   return {
     personId,
     weddingId,
