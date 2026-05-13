@@ -120,6 +120,13 @@ export type SyncUpdate =
       last: string | null
       confidence: number
     }
+  | {
+      kind: 'partner1_created'
+      personId: string
+      first: string | null
+      last: string | null
+      confidence: number
+    }
 
 interface PersonRow {
   id: string
@@ -595,6 +602,83 @@ export async function syncProfileToPeople(
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           console.warn(`[profile-to-people-sync] partner1 sync failed: ${msg}`)
+        }
+      } else {
+        // 2026-05-13: mirror of the partner2-missing branch below. The
+        // partner1 people row was never created during ingest — happens
+        // when the resolver attaches via a partner2 match (e.g. an email
+        // alias landed on people.email and the resolver returned an
+        // existing wedding whose partner1 was already tombstoned/merged),
+        // or when an SMS-only intake minted a wedding with only a
+        // partner1 phone row that later got role-reassigned. In all
+        // those cases the forensic profile carries the partner1 name
+        // at the judge's confidence — that's the truth source. Mint
+        // the partner1 row from it.
+        //
+        // venue_id comes from the wedding (we have weddingId in scope
+        // but no partner1Row to crib from; either a partner2 row gives
+        // us the venue_id, or we fetch weddings.venue_id directly).
+        try {
+          const profileP1 = profile.names.partner1
+          const first = profileP1.first?.trim() || null
+          const last = profileP1.last?.trim() || null
+          if (first || last) {
+            let venueIdForInsert: string | null = null
+            const partner2Row = partners.find((p) => p.role === 'partner2') ?? null
+            if (partner2Row) {
+              venueIdForInsert = partner2Row.venue_id
+            } else {
+              const { data: wRow } = await supabase
+                .from('weddings')
+                .select('venue_id')
+                .eq('id', weddingId)
+                .maybeSingle()
+              venueIdForInsert = (wRow?.venue_id as string | null) ?? null
+            }
+            if (venueIdForInsert) {
+              const { data: newP1, error: insErr } = await supabase
+                .from('people')
+                .insert({
+                  venue_id: venueIdForInsert,
+                  wedding_id: weddingId,
+                  role: 'partner1',
+                  first_name: first,
+                  last_name: last,
+                })
+                .select('id')
+                .single()
+              if (insErr) {
+                console.warn(`[profile-to-people-sync] partner1 create failed: ${insErr.message}`)
+              } else if (newP1) {
+                try {
+                  const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+                  await captureNameEvidence(supabase, newP1.id as string, {
+                    first,
+                    last,
+                    source: 'reconstruct_profile_partner1',
+                  })
+                } catch (capErr) {
+                  console.warn(
+                    `[profile-to-people-sync] partner1 evidence stamp failed: ${capErr instanceof Error ? capErr.message : String(capErr)}`,
+                  )
+                }
+                updates.push({
+                  kind: 'partner1_created',
+                  personId: newP1.id as string,
+                  first,
+                  last,
+                  confidence: profileP1.confidence_0_100 ?? 0,
+                })
+              }
+            } else {
+              console.warn(
+                `[profile-to-people-sync] partner1 create skipped: no venue_id for wedding ${weddingId}`,
+              )
+            }
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          console.warn(`[profile-to-people-sync] partner1 create branch failed: ${msg}`)
         }
       }
     }
