@@ -26,11 +26,12 @@
  *      moment we know who the couple is.
  *   4. Emit a structured `identity.mint_wedding` event for telemetry.
  *
- * For THIS round, the 8 direct-INSERT call sites are NOT migrated. That's
- * the next sweep (see docs/IDENTITY-CHOKEPOINT-MIGRATION.md). New callers
- * MUST use this helper; existing inline writes get caught by the
- * `scripts/check-no-direct-wedding-insert.mjs` guard which fails CI on
- * any new `.from('weddings').insert(` outside the canonical paths.
+ * 2026-05-12 sweep migrated 8 of 9 direct-INSERT call sites. 2026-05-13
+ * G2 closure migrated the final two (pipeline.ts:2036 fresh inquiry +
+ * :2838 scheduling event). The CI guard
+ * `scripts/check-no-direct-wedding-insert.mjs` now has an empty
+ * GRANDFATHERED set — every wedding mint outside `resolver.ts` +
+ * `mint-wedding.ts` fails CI. See docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
  *
  * Constitution anchor: bloom-constitution.md — Point-Zero doctrine says
  * pre-zero signals are attribution credit. The cascade-fire at the end is

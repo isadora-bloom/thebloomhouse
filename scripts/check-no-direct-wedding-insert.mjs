@@ -40,22 +40,24 @@ const CANONICAL = new Set([
 ])
 
 // ---------------------------------------------------------------------------
-// Grandfathered call sites — these are scheduled for migration to
-// `mintWedding` in the next sweep. Remove from this list as each one is
-// migrated. Adding NEW entries here without an explicit migration plan
-// defeats the purpose of the guard.
+// Grandfathered call sites — empty after 2026-05-13 G2 closure.
 //
 // 2026-05-12 sweep: 8 sites migrated (brain-dump/imports, data-import,
 // crm-import/index, reprocess-form-relays, reprocess-orphans, the two
 // portal/weddings/page.tsx INSERTs collapsed into one server endpoint,
 // and that new /api/portal/mint-wedding route which is itself a
-// mintWedding caller). The two pipeline.ts INSERTs are the only
-// remaining direct writers, deferred for a separate soak. See
-// docs/IDENTITY-CHOKEPOINT-MIGRATION.md.
+// mintWedding caller).
+//
+// 2026-05-13 G2: pipeline.ts:2036 (fresh inquiry) + :2838 (scheduling
+// event) migrated. Both now call mintWedding with a post-mint UPDATE for
+// pipeline-specific columns (UTM, wedding_date_precision, estimated_guests,
+// status upgrade, tour_date). The CI guard now refuses ANY direct
+// .from('weddings').insert(...) outside CANONICAL.
+//
+// Any future addition to this set requires a separate migration plan and
+// a memo entry in bloom-identity-resolution-doctrine.md.
 // ---------------------------------------------------------------------------
-const GRANDFATHERED = new Set([
-  'src/lib/services/email/pipeline.ts',
-])
+const GRANDFATHERED = new Set([])
 
 // Walk src/ recursively, collect .ts + .tsx files, regex-match the
 // chokepoint pattern. Multi-line so the `\n.insert` shape is caught.

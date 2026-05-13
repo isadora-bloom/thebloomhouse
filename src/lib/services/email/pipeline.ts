@@ -42,6 +42,7 @@ import {
   type SchedulingEvent,
 } from '@/lib/services/ingestion/scheduling-tool-parsers'
 import { findIdentityMatches } from '@/lib/services/identity/resolution'
+import { mintWedding } from '@/lib/services/identity/mint-wedding'
 import { recordKnowledgeGaps } from '@/lib/services/intel/knowledge-gaps'
 import { applySignalInference } from '@/lib/services/attribution/signal-inference'
 import { createNotification } from '@/lib/services/admin-notifications'
@@ -2032,45 +2033,103 @@ export async function processIncomingEmail(
     const utmFromIdentity = extractUtmFromExtractedIdentity(extractedIdentity)
     const hasUtmAtCreate = !!(utmFromIdentity.utm_source || utmFromIdentity.utm_medium
       || utmFromIdentity.utm_campaign || utmFromIdentity.utm_term || utmFromIdentity.utm_content)
-    const { data: newWedding } = await supabase
-      .from('weddings')
-      .insert({
-        venue_id: venueId,
-        status: 'inquiry',
-        source: detectedSource,
-        inquiry_date: inquiryDateValue,
-        wedding_date: parsedEventDate,
-        wedding_date_precision: parsedEventDateObj?.precision ?? null,
-        guest_count_estimate: parsedGuestCount,
-        // T5-schema-gap (165): explicit lead-side estimate. Sits alongside
-        // guest_count_estimate (legacy / mixed-purpose). Both populated on
-        // create so the trigger watch list and capacity-aware narration
-        // stay in sync from row birth.
-        estimated_guests: parsedEstimatedGuests,
-        // Migration 316: heat_score / temperature_tier are no longer
-        // stored columns. Heat is derived by the wedding_heat view from
-        // engagement_events at read time.
-        // Stream WWW: UTM from extracted_identity. utm_first_seen_at
-        // anchors to inquiry_date so the "earliest UTM signal" stamp
-        // tracks the email arrival, not wall-clock NOW (which would
-        // drift on a Gmail backfill).
-        utm_source: utmFromIdentity.utm_source ?? null,
-        utm_medium: utmFromIdentity.utm_medium ?? null,
-        utm_campaign: utmFromIdentity.utm_campaign ?? null,
-        utm_term: utmFromIdentity.utm_term ?? null,
-        utm_content: utmFromIdentity.utm_content ?? null,
-        utm_first_seen_at: hasUtmAtCreate ? inquiryDateValue : null,
+
+    // G2 closure (2026-05-13): migrated from direct .from('weddings')
+    // .insert(...) to mintWedding. The chokepoint enforces venue-scoped
+    // resolveIdentity match chain, fires the P2 identity cascade, writes
+    // mint_wedding_telemetry, and unlocks Wave 2C re-engagement-after-
+    // loss linking (previous_wedding_id) for the email path — historically
+    // pipeline.ts always minted fresh, even when the matched person had
+    // a terminal prior wedding. After this change the resolver's Branch
+    // B fires correctly here.
+    //
+    // mintWedding sets the core columns (venue_id, status='inquiry',
+    // inquiry_date, wedding_date, source_provenance='identity_resolver').
+    // Pipeline-specific columns (wedding_date_precision, estimated_guests,
+    // legacy source, UTM keys) are written by the post-mint UPDATE below.
+    let newWedding: { id: string } | null = null
+    let mintedIsNew = false
+    try {
+      const extractedPhone =
+        typeof extractedIdentity?.phone === 'string'
+          ? (extractedIdentity.phone as string)
+          : null
+      const minted = await mintWedding({
+        venueId,
+        source: 'email_pipeline',
+        signals: {
+          email: fromEmail,
+          phone: extractedPhone,
+          fullName: fromName ?? null,
+          weddingDate: parsedEventDate,
+          inquiryDate: inquiryDateValue,
+        },
+        reason: 'fresh_inquiry',
+        supabase,
+        correlationId,
       })
-      .select('id')
-      .single()
+      newWedding = { id: minted.weddingId }
+      mintedIsNew = minted.isNew
+      // mintWedding's resolveIdentity may have minted a NEW person if the
+      // match chain missed everything findOrCreateContact saw. That's a
+      // rare race; reconcile by adopting the resolver's personId so all
+      // downstream writes go to the canonical row.
+      if (!personId || personId !== minted.personId) {
+        personId = minted.personId
+      }
+    } catch (mintErr) {
+      console.error(
+        '[pipeline] mintWedding (fresh_inquiry) failed:',
+        mintErr instanceof Error ? mintErr.message : mintErr,
+      )
+    }
 
     if (newWedding) {
-      weddingId = newWedding.id as string
+      weddingId = newWedding.id
+
+      // Post-mint UPDATE — apply pipeline-specific fields the resolver
+      // doesn't know about: legacy source column (Wave 7B classifier
+      // recomputes canonical source from attribution_events; this column
+      // remains as a display-tier fallback per the source-attribution
+      // doctrine), wedding_date_precision, lead-side guest estimates,
+      // and the UTM keys mined from extracted_identity.
+      //
+      // GUARD (G2 correctness fix): only apply on a freshly-minted
+      // wedding. mintWedding's resolveIdentity can attach to an EXISTING
+      // non-terminal wedding via Branch A (e.g., phone-match against a
+      // person who has an active wedding) — overwriting status/source/UTM
+      // on that row would clobber coordinator-set state. The pre-migration
+      // direct INSERT couldn't hit this because it always minted fresh;
+      // the migration introduces the new branch and we honour the
+      // never-overwrite rule on attach.
+      if (mintedIsNew) {
+        try {
+          await supabase
+            .from('weddings')
+            .update({
+              source: detectedSource,
+              wedding_date_precision: parsedEventDateObj?.precision ?? null,
+              guest_count_estimate: parsedGuestCount,
+              estimated_guests: parsedEstimatedGuests,
+              utm_source: utmFromIdentity.utm_source ?? null,
+              utm_medium: utmFromIdentity.utm_medium ?? null,
+              utm_campaign: utmFromIdentity.utm_campaign ?? null,
+              utm_term: utmFromIdentity.utm_term ?? null,
+              utm_content: utmFromIdentity.utm_content ?? null,
+              utm_first_seen_at: hasUtmAtCreate ? inquiryDateValue : null,
+            })
+            .eq('id', weddingId)
+        } catch (err) {
+          console.warn('[pipeline] post-mint pipeline-fields UPDATE failed:', err)
+        }
+      }
 
       // Cascade Pattern 2 (migration 314): synchronous pre-zero identity
-      // match. Without this, anonymous storefront signals (Knot CSV, IG
-      // screenshots) wait for the daily cron before binding to the new
-      // wedding. Fire-and-forget; the cascade is idempotent.
+      // match for anonymous storefront signals (Knot CSV, IG screenshots).
+      // Distinct from mintWedding's built-in triggerIdentityCascade which
+      // walks candidate_identities + tangential_signals from the resolver
+      // angle; this one binds inquiry-anchored storefront candidates that
+      // pre-date Point Zero. Fire-and-forget; idempotent.
       void (async () => {
         try {
           const { triggerNewInquiryCascade } = await import(
@@ -2078,7 +2137,7 @@ export async function processIncomingEmail(
           )
           await triggerNewInquiryCascade({
             venueId,
-            weddingId: newWedding.id as string,
+            weddingId: newWedding!.id,
             supabase,
           })
         } catch (err) {
@@ -2086,13 +2145,8 @@ export async function processIncomingEmail(
         }
       })()
 
-      // Link person to wedding
-      if (personId) {
-        await supabase
-          .from('people')
-          .update({ wedding_id: weddingId })
-          .eq('id', personId)
-      }
+      // people.wedding_id is already attached by resolveIdentity Branch
+      // C (resolver.ts:962-964). Skip the redundant update.
 
       // Second partner: if classifier extracted a name, seed partner2 so
       // the detail/kanban has a couple label. Best-effort — skip silently
@@ -2834,76 +2888,98 @@ export async function processIncomingEmail(
       // appeared completed BEFORE the inquiry was received.
       const inquiryDateForSchedulingEvent =
         chooseEventTime(email.date) ?? new Date().toISOString()
-      const { data: newWedding } = await supabase
-        .from('weddings')
-        .insert({
-          venue_id: venueId,
-          status: targetStatus,
-          source: schedulingEvent.source,
-          inquiry_date: inquiryDateForSchedulingEvent,
-          tour_date: parseEventTime(schedulingEvent.eventDatetime),
-          // Migration 316: heat_score / temperature_tier dropped, heat is
-          // derived by the wedding_heat view.
-        })
-        .select('id')
-        .single()
-      if (newWedding) {
-        weddingId = newWedding.id as string
-
-        // Ensure a partner1 person exists. findOrCreateContact may have
-        // returned null (spam classification skips contact lookup, or
-        // earlier branches that early-returned). A wedding with no
-        // people is invisible on the leads UI and breaks downstream
-        // matching, so synthesise one from the invitee email + name
-        // here so every Calendly-created wedding has a real lead row.
-        //
-        // Wave 2A: route through the chokepoint. The placeholder
-        // first_name on the INSERT uses email-local-part if the synth
-        // name fails the username/proxy shape check (rare but possible
-        // when Calendly invitee = a Knot relay alias). The chokepoint
-        // call after the INSERT records the gmail_from_name signal +
-        // dual-writes the picked first_name / last_name / confidence.
-        if (!personId && schedulingEvent.inviteeEmail) {
-          const { isProxyShaped, isUsernameShaped, captureNameEvidence } = await import('@/lib/services/identity/name-capture')
-          const inviteeEmail = schedulingEvent.inviteeEmail
-          const inviteeName = (schedulingEvent.inviteeName ?? '').trim()
-          const placeholderFirst = (() => {
-            if (!inviteeName) return inviteeEmail.split('@')[0]
-            if (isProxyShaped(inviteeName) || isUsernameShaped(inviteeName)) {
-              return inviteeEmail.split('@')[0]
-            }
-            return inviteeName.split(/\s+/)[0] ?? inviteeEmail.split('@')[0]
-          })()
-          const { data: synth } = await supabase
-            .from('people')
-            .insert({
-              venue_id: venueId,
-              wedding_id: weddingId,
-              role: 'partner1',
-              first_name: placeholderFirst,
-              last_name: null,
-              email: inviteeEmail,
-              phone: schedulingEvent.extras?.phone ?? null,
-            })
-            .select('id')
-            .single()
-          if (synth) {
-            personId = synth.id as string
-            if (inviteeName) {
-              try {
-                await captureNameEvidence(supabase, personId, {
-                  full: inviteeName,
-                  email: inviteeEmail,
-                  source: 'gmail_from_name',
-                })
-              } catch (err) {
-                console.warn('[pipeline] name-capture (scheduling synth) failed:', err instanceof Error ? err.message : err)
-              }
-            }
-          }
-        } else if (personId) {
-          await supabase.from('people').update({ wedding_id: weddingId, role: 'partner1' }).eq('id', personId)
+      // G2 closure (2026-05-13): migrated to mintWedding. Same shape as
+      // the fresh-inquiry path above: resolver creates person if missing
+      // (replacing the synth-person block below), enforces venue-scoped
+      // match chain, fires the P2 cascade + telemetry. Post-mint UPDATE
+      // applies status=targetStatus + tour_date + source — fields the
+      // resolver doesn't carry.
+      let newWedding: { id: string } | null = null
+      let mintedSchedIsNew = false
+      try {
+        const inviteeEmail = schedulingEvent.inviteeEmail ?? null
+        const inviteeName = (schedulingEvent.inviteeName ?? '').trim() || null
+        const invitePhone = schedulingEvent.extras?.phone ?? null
+        if (!inviteeEmail && !invitePhone) {
+          // No identifier on the scheduling event — can't mint. Pre-fix
+          // this path also bailed (the synth-person block requires
+          // inviteeEmail). Drop to fall-through.
+          throw new Error('scheduling_event missing inviteeEmail and phone')
         }
+        const minted = await mintWedding({
+          venueId,
+          source: 'email_pipeline',
+          signals: {
+            email: inviteeEmail,
+            phone: invitePhone,
+            fullName: inviteeName,
+            weddingDate: null,
+            inquiryDate: inquiryDateForSchedulingEvent,
+          },
+          reason: `scheduling_event:${schedulingEvent.kind}`,
+          supabase,
+          correlationId,
+        })
+        newWedding = { id: minted.weddingId }
+        mintedSchedIsNew = minted.isNew
+        // Adopt resolver's personId — replaces the synth-person block.
+        if (!personId || personId !== minted.personId) {
+          personId = minted.personId
+        }
+      } catch (mintErr) {
+        console.error(
+          '[pipeline] mintWedding (scheduling_event) failed:',
+          mintErr instanceof Error ? mintErr.message : mintErr,
+        )
+      }
+      if (newWedding) {
+        weddingId = newWedding.id
+
+        // Post-mint UPDATE — apply scheduling-specific columns. Status
+        // upgrade from resolver's default 'inquiry' to the targetStatus
+        // (tour_scheduled / tour_completed / etc.) derived from the
+        // schedulingEvent.kind. tour_date is the actual event datetime,
+        // distinct from inquiry_date (the moment the couple clicked Book).
+        //
+        // GUARD (G2 correctness fix): same as fresh-inquiry path. Only
+        // overwrite status/source/tour_date on a freshly-minted wedding.
+        // If resolver attached to an existing wedding (e.g., the matched
+        // person already had an active wedding in status='booked'), do
+        // NOT overwrite — coordinator-set state wins.
+        if (mintedSchedIsNew) {
+          try {
+            await supabase
+              .from('weddings')
+              .update({
+                status: targetStatus,
+                source: schedulingEvent.source,
+                tour_date: parseEventTime(schedulingEvent.eventDatetime),
+              })
+              .eq('id', weddingId)
+          } catch (err) {
+            console.warn('[pipeline] post-mint scheduling-event UPDATE failed:', err)
+          }
+        } else {
+          // Attached to existing wedding. Stamp tour_date only when the
+          // existing wedding has no tour_date yet — a real tour scheduled
+          // event arriving for a wedding that didn't have one is genuine
+          // new information, not a clobber. Status + source are left
+          // alone (never-overwrite policy).
+          try {
+            await supabase
+              .from('weddings')
+              .update({ tour_date: parseEventTime(schedulingEvent.eventDatetime) })
+              .eq('id', weddingId)
+              .is('tour_date', null)
+          } catch (err) {
+            console.warn('[pipeline] attach-path tour_date stamp failed:', err)
+          }
+        }
+
+        // personId is already attached to weddingId by resolveIdentity
+        // Branch C (resolver.ts:962-964). The old synth-person block +
+        // the `else if (personId)` re-attach were both replaced by the
+        // mintWedding call above.
         await supabase.from('interactions').update({ wedding_id: weddingId, person_id: personId }).eq('id', interactionId)
 
         // Same orphan sweep as the new-inquiry path. A scheduling-

@@ -8,14 +8,33 @@ Companion to:
 
 ## Status
 
-2026-05-12 sweep: 8 of 9 grandfathered sites migrated to `mintWedding`.
-The remaining direct-INSERT writer is `email/pipeline.ts` (two call
-sites: fresh inquiry + scheduling-tool reconciliation), deliberately
-deferred to a separate soak because it is the hot path.
+2026-05-13 G2 closure: ALL 9 grandfathered sites migrated to
+`mintWedding`. The CI guard (`scripts/check-no-direct-wedding-insert.mjs`)
+now has an empty `GRANDFATHERED` set — any direct
+`.from('weddings').insert(` outside `resolver.ts` / `mint-wedding.ts`
+fails CI.
 
-The CI guard (`scripts/check-no-direct-wedding-insert.mjs`) now allows
-only `email/pipeline.ts` in its `GRANDFATHERED` set. Any new
-`.from('weddings').insert(` elsewhere fails CI.
+The two pipeline.ts hot-path sites are now wrapped:
+- Fresh inquiry path (was `:1947`, now `:2036` after Wave 4 inserts):
+  mintWedding source=`email_pipeline` reason=`fresh_inquiry`.
+- Scheduling-event path (was `:2748`, now `:2838`): mintWedding
+  source=`email_pipeline` reason=`scheduling_event:<kind>`.
+
+Both apply a post-mint UPDATE for pipeline-specific columns the
+resolver doesn't carry: UTM keys, wedding_date_precision,
+guest_count_estimate, estimated_guests, status upgrade (scheduling
+path only), tour_date (scheduling path only), legacy source column.
+
+Side effects of the migration:
+- Wave 2C re-engagement-after-loss linking now fires on the email
+  path. Previously only direct resolveIdentity callers
+  (crm-import/web-form/openphone/zoom/twilio) got `previous_wedding_id`
+  stamped; the email path always minted fresh.
+- mint_wedding_telemetry will start accumulating rows for the email
+  path. Pre-migration the table was empty because pipeline.ts didn't
+  go through mintWedding. Operator can now use
+  `/api/admin/mint-wedding-stats` to see real soak data.
+- Telemetry-as-soak-signal becomes actually useful for future migrations.
 
 ## Goal
 
@@ -112,7 +131,7 @@ plan to apply when migrating.
     duplicate weddings.
   - Verify external_ids.honeybook is still stamped on the people row.
 
-### 6. `src/lib/services/email/pipeline.ts:1947` and `:2748` — DEFERRED (hot path)
+### 6. `src/lib/services/email/pipeline.ts:2036` and `:2838` — DONE 2026-05-13 (G2)
 
 - Entry path: live email pipeline — both fresh inquiries and
   scheduling-tool reconciliations.
