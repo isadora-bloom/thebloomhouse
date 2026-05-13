@@ -30,9 +30,12 @@ export const maxDuration = 300
 // in processIncomingEmail — the new detector fires at write time now, so
 // future syncs don't need this, but historical rows do.
 //
-// Leaves stale "lead = relay address" people/weddings in place; they'll
-// be cleaned up by /api/agent/cleanup-ghost-weddings once the
-// interactions no longer point at them. Idempotent — re-running is safe.
+// Leaves stale "lead = relay address" people/weddings in place. Per
+// [[bloom-identity-resolution-doctrine]] §"What gets DELETED" + Step 9
+// refactor (2026-05-13), cleanup-ghost-weddings no longer deletes
+// empty-inquiry weddings — empties are signal, not garbage. The stale
+// relay-address weddings sit harmlessly; readers filter on
+// non_couple_at / merged_into_id where relevant. Idempotent — re-running is safe.
 // ---------------------------------------------------------------------------
 
 export async function POST() {
