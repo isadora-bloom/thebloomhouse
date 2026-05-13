@@ -11,6 +11,39 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-05-12 (Inbound intent classifier — fact extraction + relay recognition)
+
+Bumped `inbound-intent.v1` → `inbound-intent.v2`
+(`INBOUND_INTENT_PROMPT_VERSION` in
+`src/lib/services/intel/inbound-intent-classifier.ts`).
+
+Two changes shipped in the same prompt revision:
+
+1. Removed the deterministic-channel short-circuit (band-aid pattern).
+   Now a single Haiku call decides intent for every inbound — doctrine:
+   classify via LLM, not rules. Same shape as the folder-AI v1.1 ship
+   earlier today. Relay-pattern guidance moved into the prompt so Haiku
+   recognises Knot Pro Inbox (📩 + theknot.com markers), Calendly /
+   Acuity notifications, WW / HCTG / Zola relays, and treats the
+   couple's intake-form "Interested Services" list as a SHOPPING LIST
+   not logistics chatter (fixed the Keeley Tate class).
+
+2. Added structured fact extraction. The classifier now also returns
+   `extracted_facts: { names[], wedding_date, guest_count, phone,
+   email, source_mentioned, budget_signal }`. One Haiku call, two
+   jobs. Wave 4 Sonnet identity judge reads from
+   `interactions.extracted_facts` to widen its signal pool;
+   marketing-attribution reads `source_mentioned` as one data point
+   corroborating self-reported source; Sage tone gates on
+   `budget_signal`. Wired across every inbound channel (email + SMS +
+   call + voicemail + Zoom transcript + brain-dump) since
+   classifyInboundIntent is already the unified entry point.
+
+Response contract changed: callers must handle the new
+`extracted_facts` field on `IntentVerdict`. Idempotency precheck +
+persistence updated to round-trip through `interactions.extracted_facts`
+(jsonb column added in migration 331). maxTokens bumped 300 → 700.
+
 ## 2026-05-12 (Inbox folder AI — relay-pattern recognition)
 
 Bumped `inbox-folder-ai.prompt.v1.0` → `inbox-folder-ai.prompt.v1.1`

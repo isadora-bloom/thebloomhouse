@@ -23,7 +23,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import { logEvent } from '@/lib/observability/logger'
 
-export const INBOUND_INTENT_PROMPT_VERSION = 'inbound-intent.v1'
+export const INBOUND_INTENT_PROMPT_VERSION = 'inbound-intent.v2'
 
 export type IntentClass =
   | 'new_inquiry'
@@ -74,10 +74,38 @@ const VALID_INTENT_CLASSES: ReadonlySet<IntentClass> = new Set([
   'unknown',
 ])
 
+export type BudgetSignal = 'within' | 'too_expensive' | null
+
+export interface ExtractedFacts {
+  /** All proper names mentioned in the body. Includes the sender's
+   *  own name if stated, partners' names, family members, vendors. */
+  names: string[]
+  /** Wedding date as stated by the sender (ISO yyyy-mm-dd preferred,
+   *  fall back to human-readable like "October 2027" if no day given). */
+  wedding_date: string | null
+  /** Guest count as stated. Integer, no string units. */
+  guest_count: number | null
+  /** Phone number found IN THE BODY (not the From: header). */
+  phone: string | null
+  /** Email address found IN THE BODY (not the From: header). */
+  email: string | null
+  /** Source mention as stated ("Instagram", "The Knot", "a friend's
+   *  wedding", etc). null if no source named. */
+  source_mentioned: string | null
+  /** Explicit budget signal. 'within' = "this fits our budget" /
+   *  "we can afford that". 'too_expensive' = "this is over our budget" /
+   *  "too expensive". null when neither stated. */
+  budget_signal: BudgetSignal
+}
+
 export interface IntentVerdict {
   intent_class: IntentClass
   referenced_couple_name: string | null
   note: string | null
+  /** Structured payload extracted in the same Haiku call. null when
+   *  the row was classified before mig 331 or when the body had
+   *  nothing to surface. */
+  extracted_facts: ExtractedFacts | null
 }
 
 export interface ClassifyIntentInput {
@@ -99,107 +127,26 @@ const FALLBACK: IntentVerdict = {
   intent_class: 'unknown',
   referenced_couple_name: null,
   note: null,
+  extracted_facts: null,
 }
 
-/**
- * 2026-05-12 — deterministic short-circuit.
- *
- * The LLM classifier over-trusts BODY vocabulary when the inbound's
- * CHANNEL already tells us the intent. Two live misclassifications
- * caught the same day this shipped:
- *
- *   - Keeley Tate (Knot inquiry) → labeled `client_logistics`.
- *     Why: Knot intake form's "Interested Services" line listed
- *     "Tables and chairs, Linens, Lighting, Sound equipment..." which
- *     Haiku matched against the client_logistics vocabulary list.
- *   - Hassan Abidi (Calendly tour booking) → labeled `vendor_outreach`.
- *     Why: Calendly notification body says "We have an amazing tour
- *     planned for you" — Haiku read that as a vendor pitching the
- *     venue.
- *
- * Form-relay parsers (Knot / WeddingWire / HCTG / Zola) and scheduling-
- * event parsers (Calendly / Acuity) ALREADY know deterministically
- * that the inbound is inquiry-stage. We shouldn't be paying Haiku to
- * answer a question we already answered upstream. This helper detects
- * those channels from the from_email + body markers and returns the
- * canonical intent without an LLM call.
- *
- * Returns null when no deterministic match — caller falls through to
- * the LLM path.
- */
-function inferDeterministicIntent(
-  fromEmail: string | null | undefined,
-  body: string,
-  subject: string,
-): IntentVerdict | null {
-  const from = (fromEmail ?? '').toLowerCase()
-  const bodyText = body.toLowerCase()
-  const subj = subject.toLowerCase()
+const SYSTEM_PROMPT = `You are a forensic classifier reading one inbound communication to a wedding venue. Your job is to identify WHAT the inbound is — not who it's from or how to respond — AND surface any structured facts the body carries (names, dates, counts, contact info, source mention, budget signal).
 
-  // Form-relay senders. The parsers in form-relay-parsers.ts already
-  // fired and classified the row as new_inquiry upstream; the LLM has
-  // nothing to add and frequently gets it wrong on the form's
-  // "Interested Services" list.
-  const FORM_RELAY_DOMAINS = [
-    '@theknot.com', '@knotemail.com', '@member.theknot.com',
-    '@weddingwire.com', '@mail.weddingwire.com', '@authsolic.com',
-    '@theknotww.com', '@herecomestheguide.com', '@zola.com',
-  ]
-  if (FORM_RELAY_DOMAINS.some((d) => from.includes(d))) {
-    return {
-      intent_class: 'new_inquiry',
-      referenced_couple_name: null,
-      note: 'deterministic: form-relay channel (Knot/WW/HCTG/Zola).',
-    }
-  }
-
-  // Form-relay body markers (catch the case where the from address was
-  // rewritten / forwarded but the wrapper text is still recognisable).
-  const FORM_RELAY_BODY_MARKERS = [
-    'new lead for', 'the knot pro network',
-    'weddingpro inbox', 'authsolic',
-    'view more info:', 'new calculator submission',
-  ]
-  if (FORM_RELAY_BODY_MARKERS.some((m) => bodyText.includes(m))) {
-    return {
-      intent_class: 'new_inquiry',
-      referenced_couple_name: null,
-      note: 'deterministic: form-relay body markers.',
-    }
-  }
-
-  // Scheduling-tool notifications (Calendly + Acuity invitee
-  // confirmations). The invitee is by definition the couple booking
-  // a tour — that's inquiry-stage, not vendor or client_logistics.
-  const SCHEDULING_DOMAINS = [
-    '@calendly.com', '@calendlymail.com', '@acuityscheduling.com',
-  ]
-  const SCHEDULING_BODY_MARKERS = [
-    'a new event has been scheduled', 'invitee:', 'invitee email:',
-    'event type:', 'rixey manor venue tour', // generic enough; safe across venues since Calendly always names the event type
-  ]
-  if (
-    SCHEDULING_DOMAINS.some((d) => from.includes(d)) ||
-    SCHEDULING_BODY_MARKERS.some((m) => bodyText.includes(m) || subj.includes(m))
-  ) {
-    return {
-      intent_class: 'new_inquiry',
-      referenced_couple_name: null,
-      note: 'deterministic: scheduling-tool invitee confirmation (Calendly/Acuity).',
-    }
-  }
-
-  return null
-}
-
-const SYSTEM_PROMPT = `You are a forensic classifier reading one inbound communication to a wedding venue. Your job is to identify WHAT the inbound is — not who it's from or how to respond.
-
-Return ONLY a JSON object with exactly these three keys:
+Return ONLY a JSON object with exactly these four keys:
 
 {
   "intent_class": one of the 11 classes below,
   "referenced_couple_name": string | null,
-  "note": string | null
+  "note": string | null,
+  "extracted_facts": {
+    "names": string[],
+    "wedding_date": string | null,
+    "guest_count": number | null,
+    "phone": string | null,
+    "email": string | null,
+    "source_mentioned": string | null,
+    "budget_signal": "within" | "too_expensive" | null
+  }
 }
 
 == Intent classes ==
@@ -208,8 +155,24 @@ new_inquiry
   A prospective couple making FIRST contact. They're shopping for a venue.
   Signals: "is your venue available", "we're getting married in [date]",
   generic discovery questions, no prior context, first-name introductions
-  ("Hi I'm Sarah and my fiance and I are looking..."). Calendly tour
-  bookings from new email addresses also count.
+  ("Hi I'm Sarah and my fiance and I are looking...").
+
+  Platform relays (IMPORTANT — these rewrite the From: header so the
+  sender looks like a normal gmail.com address; do NOT read a gmail
+  From: as evidence the sender is the couple typing from scratch):
+    - Knot Pro Inbox — subject contains "📩" + "sent you a new message",
+      OR body references "theknot.com" / "The Knot Pro Network". The
+      couple's intake-form selections (e.g. "Interested Services:
+      Tables and chairs, Linens, Lighting, Sound equipment") are a
+      SHOPPING LIST not logistics chatter. Classify as new_inquiry.
+    - WeddingWire / Here Comes The Guide / Zola relays — body
+      references the platform name + an intake form. new_inquiry.
+    - Calendly / Acuity invitee notifications — subject "New Event:" /
+      "Invitee:" / "New appointment", body links calendly.com or
+      acuityscheduling.com. These are couples BOOKING a tour, not
+      vendors pitching the venue. Phrases like "amazing tour planned
+      for you" are Calendly boilerplate, not vendor language.
+      Classify as new_inquiry.
 
 inquiry_followup
   An existing inquiry-stage couple replying or following up. Same shape
@@ -293,12 +256,142 @@ One short sentence (<=200 chars) explaining the call. Audit only;
 coordinator may read this to understand why a row was classified the
 way it was. Don't quote PII verbatim; describe the signal.
 
+== extracted_facts ==
+
+Surface structured facts the BODY carries. Be conservative — only fill
+a field when the body states it explicitly. Empty list / null for
+anything you'd have to guess.
+
+  names
+    All proper names mentioned in the body. Include the sender's own
+    name if stated ("Hi, I'm Sarah"), partners ("my fiance Tom"),
+    family members ("our daughter Kajlie"), vendors ("Sammy's florist").
+    First-name-only is fine. Deduplicate within the list. Empty array
+    when no names appear. Do NOT include the venue name, the venue's
+    own staff, or generic role words ("the bride", "my partner").
+
+  wedding_date
+    Date as stated by the sender. Prefer ISO format (yyyy-mm-dd) when
+    the body gives a full date; fall back to a human-readable string
+    when only month + year are given ("October 2027" → "2027-10").
+    null when not stated.
+
+  guest_count
+    Integer count of guests if stated ("about 120 guests" → 120,
+    "between 80 and 100" → 90). null when not stated.
+
+  phone
+    Phone number found IN THE BODY (not the From: header). Strip
+    formatting — output digits only ("(555) 123-4567" → "5551234567").
+    Include country code if stated. null when no phone in body.
+
+  email
+    Email address found IN THE BODY (not the From: header). Useful
+    when the sender writes "my email is ..." or signs off with a
+    different address than the From: header. null when no body
+    email found.
+
+  source_mentioned
+    The acquisition source the sender names ("found you on Instagram",
+    "we saw you on The Knot", "a friend of ours got married here").
+    Output a short normalized label: "Instagram", "The Knot",
+    "WeddingWire", "Zola", "Google", "referral", "website", "walk-in",
+    "Pinterest", or the literal name they gave. null when no source
+    is named. Do NOT infer source from the channel (a Knot relay
+    doesn't automatically mean source="The Knot" unless the BODY
+    says so — Wave 7B's forensic role classifier decides canonical
+    source).
+
+  budget_signal
+    Explicit budget framing.
+      "within" — "this is in our budget", "we can afford that",
+        "the price works", "fits our number".
+      "too_expensive" — "this is over our budget", "out of range",
+        "too expensive for us", "we can't afford".
+    null when neither stated. Do not infer from indirect signals.
+
 Output ONLY the JSON object. No markdown, no commentary.`
 
 interface RawVerdict {
   intent_class?: unknown
   referenced_couple_name?: unknown
   note?: unknown
+  extracted_facts?: unknown
+}
+
+function normalizeFacts(raw: unknown): ExtractedFacts | null {
+  if (!raw || typeof raw !== 'object') return null
+  const obj = raw as Record<string, unknown>
+
+  const names: string[] = Array.isArray(obj.names)
+    ? Array.from(
+        new Set(
+          (obj.names as unknown[])
+            .filter((n): n is string => typeof n === 'string')
+            .map((n) => n.trim())
+            .filter((n) => n.length > 0 && n.length <= 120),
+        ),
+      ).slice(0, 20)
+    : []
+
+  const weddingDate =
+    typeof obj.wedding_date === 'string' && obj.wedding_date.trim()
+      ? obj.wedding_date.trim().slice(0, 40)
+      : null
+
+  const guestCountRaw =
+    typeof obj.guest_count === 'number'
+      ? obj.guest_count
+      : typeof obj.guest_count === 'string'
+        ? Number(obj.guest_count)
+        : NaN
+  const guestCount =
+    Number.isFinite(guestCountRaw) && guestCountRaw > 0 && guestCountRaw < 10000
+      ? Math.round(guestCountRaw)
+      : null
+
+  const phone =
+    typeof obj.phone === 'string' && obj.phone.trim()
+      ? obj.phone.replace(/[^\d+]/g, '').slice(0, 20) || null
+      : null
+
+  const email =
+    typeof obj.email === 'string' && obj.email.includes('@')
+      ? obj.email.trim().toLowerCase().slice(0, 120)
+      : null
+
+  const sourceMentioned =
+    typeof obj.source_mentioned === 'string' && obj.source_mentioned.trim()
+      ? obj.source_mentioned.trim().slice(0, 80)
+      : null
+
+  const budgetRaw =
+    typeof obj.budget_signal === 'string' ? obj.budget_signal.trim().toLowerCase() : ''
+  const budgetSignal: BudgetSignal =
+    budgetRaw === 'within' || budgetRaw === 'too_expensive' ? budgetRaw : null
+
+  // Surface null when literally nothing landed — saves a useless jsonb row.
+  if (
+    names.length === 0 &&
+    !weddingDate &&
+    guestCount === null &&
+    !phone &&
+    !email &&
+    !sourceMentioned &&
+    budgetSignal === null
+  ) {
+    return null
+  }
+
+  return {
+    names,
+    wedding_date: weddingDate,
+    guest_count: guestCount,
+    phone,
+    email,
+    source_mentioned: sourceMentioned,
+    budget_signal: budgetSignal,
+  }
 }
 
 function normalize(raw: RawVerdict): IntentVerdict | null {
@@ -312,10 +405,12 @@ function normalize(raw: RawVerdict): IntentVerdict | null {
     typeof raw?.note === 'string' && raw.note.trim()
       ? raw.note.trim().slice(0, 500)
       : null
+  const extractedFacts = normalizeFacts(raw?.extracted_facts)
   return {
     intent_class: cls as IntentClass,
     referenced_couple_name: referenced,
     note,
+    extracted_facts: extractedFacts,
   }
 }
 
@@ -335,7 +430,7 @@ export async function classifyInboundIntent(
   try {
     const { data: existing } = await supabase
       .from('interactions')
-      .select('intent_classified_at, intent_class, intent_referenced_couple_name, intent_classifier_note')
+      .select('intent_classified_at, intent_class, intent_referenced_couple_name, intent_classifier_note, extracted_facts')
       .eq('id', interactionId)
       .single()
     if (existing?.intent_classified_at) {
@@ -344,6 +439,8 @@ export async function classifyInboundIntent(
         referenced_couple_name:
           (existing.intent_referenced_couple_name as string | null) ?? null,
         note: (existing.intent_classifier_note as string | null) ?? null,
+        extracted_facts:
+          (existing.extracted_facts as ExtractedFacts | null) ?? null,
       }
     }
   } catch {
@@ -354,69 +451,18 @@ export async function classifyInboundIntent(
   const body = (input.body ?? '').slice(0, 6000)
   if (!body.trim() && !subject.trim()) return FALLBACK
 
-  // Deterministic short-circuit BEFORE the LLM. Form-relay senders and
-  // Calendly/Acuity invitee confirmations are inquiry-stage by channel
-  // definition; the LLM has nothing to add and frequently misreads the
-  // body vocabulary (Knot's "Interested Services" list → client_logistics;
-  // Calendly's "amazing tour planned" → vendor_outreach). Scoped to the
-  // email channel — phone/meeting/sms bodies don't carry these signals.
-  if (channel === 'email') {
-    const det = inferDeterministicIntent(input.fromEmail ?? null, body, subject)
-    if (det) {
-      try {
-        await supabase
-          .from('interactions')
-          .update({
-            intent_class: det.intent_class,
-            intent_referenced_couple_name: det.referenced_couple_name,
-            intent_classifier_note: det.note,
-            intent_classified_at: new Date().toISOString(),
-          })
-          .eq('id', interactionId)
-          .is('intent_classified_at', null)
-      } catch (err) {
-        logEvent({
-          level: 'warn',
-          msg: 'inbound_intent persist (deterministic) failed',
-          venueId,
-          correlationId: correlationId ?? null,
-          actor: 'system',
-          event_type: 'inbound_intent.classify',
-          outcome: 'fail',
-          data: {
-            interactionId,
-            error: err instanceof Error ? err.message : String(err),
-          },
-        })
-        return det
-      }
-      logEvent({
-        level: 'info',
-        msg: 'inbound_intent classified (deterministic)',
-        venueId,
-        correlationId: correlationId ?? null,
-        actor: 'system',
-        event_type: 'inbound_intent.classify',
-        outcome: 'ok',
-        data: {
-          interactionId,
-          channel,
-          intent_class: det.intent_class,
-          note: det.note,
-        },
-      })
-      return det
-    }
-  }
-
-  const userPrompt = `CHANNEL: ${channel}\nSUBJECT: ${subject || '(none)'}\n\nBODY:\n${body || '(empty)'}`
+  const from = (input.fromEmail ?? '').trim().slice(0, 200)
+  const userPrompt = `CHANNEL: ${channel}\nFROM: ${from || '(unknown)'}\nSUBJECT: ${subject || '(none)'}\n\nBODY:\n${body || '(empty)'}`
 
   let raw: RawVerdict
   try {
     raw = await callAIJson<RawVerdict>({
       systemPrompt: SYSTEM_PROMPT,
       userPrompt,
-      maxTokens: 300,
+      // v2 returns the extraction payload alongside intent; the names
+      // array + signal fields push the response budget. 700 leaves
+      // headroom; observed payloads are ~250-400 tokens.
+      maxTokens: 700,
       temperature: 0.2,
       venueId,
       taskType: 'inbound_intent_classify',
@@ -468,6 +514,7 @@ export async function classifyInboundIntent(
         intent_referenced_couple_name: verdict.referenced_couple_name,
         intent_classifier_note: verdict.note,
         intent_classified_at: new Date().toISOString(),
+        extracted_facts: verdict.extracted_facts,
       })
       .eq('id', interactionId)
       .is('intent_classified_at', null)
