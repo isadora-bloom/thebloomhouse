@@ -1362,6 +1362,21 @@ function CalendlyIntegrationSection({ venueId }: { venueId: string | null | unde
       if (accessToken.trim()) {
         setHasStoredToken(true)
         setAccessToken('')
+        // Fire-and-forget — cache the Calendly host URI on the server so
+        // the webhook handler can route cold bookings to this venue
+        // immediately. Without this, path-A routing in the webhook waits
+        // for the first manual backfill / cron tick before the URI is
+        // cached; first bookings between OAuth save and first poll would
+        // be dropped.
+        // Failure here is non-fatal — getCalendlyClient also self-heals
+        // on the next server-side touch, so the URI lands eventually.
+        fetch('/api/admin/calendly/cache-host-uri', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ venueId }),
+        }).catch((cacheErr) => {
+          console.warn('Calendly host-URI cache call failed (non-fatal):', cacheErr)
+        })
       }
       setMessage({ type: 'success', text: 'Calendly settings saved.' })
     } catch (err) {

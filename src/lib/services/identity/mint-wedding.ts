@@ -57,6 +57,7 @@ export type WeddingSource =
   | 'web_form'
   | 'portal_ui'
   | 'twilio_webhook'
+  | 'calendly_webhook'
   | 'calculator'
   | 'crm_import'
   | 'reprocess_orphans'

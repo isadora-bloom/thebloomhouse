@@ -167,6 +167,40 @@ export async function getCalendlyClient(venueId: string): Promise<ClientHandle> 
     if (isExpired(tokens.expires_at)) {
       accessToken = await refreshAccessToken(venueId, tokens)
     }
+    // Self-heal: resolve tokens.user + tokens.organization from /users/me
+    // and persist back to venue_config when missing. The webhook handler's
+    // path-A routing (host URI match against venue_config.calendly_tokens
+    // ->>user) only works if these URIs are cached, and the settings page
+    // historically only persisted access_token. This block makes the first
+    // server-side touch self-healing for any venue with a token saved.
+    if (!tokens.user || !tokens.organization) {
+      try {
+        const me = await calendlyGet<CalendlyUserMe>(accessToken, '/users/me')
+        const updated: CalendlyTokens = {
+          ...tokens,
+          access_token: accessToken,
+          user: tokens.user ?? me.resource.uri,
+          organization: tokens.organization ?? me.resource.current_organization,
+        }
+        await supabase
+          .from('venue_config')
+          .update({ calendly_tokens: updated, updated_at: new Date().toISOString() })
+          .eq('venue_id', venueId)
+        return {
+          token: accessToken,
+          cached: { organization: updated.organization, user: updated.user },
+          fromEnv: false,
+        }
+      } catch (err) {
+        // Non-fatal — caller can still issue authenticated requests; the
+        // missing URIs just mean webhook path-A won't route until a later
+        // call succeeds. Log and fall through.
+        console.warn(
+          `[calendly/getCalendlyClient] /users/me self-heal failed for venue ${venueId}:`,
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
     return {
       token: accessToken,
       cached: { organization: tokens.organization, user: tokens.user },
