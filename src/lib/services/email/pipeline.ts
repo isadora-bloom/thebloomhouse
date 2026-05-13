@@ -14,11 +14,16 @@
 
 import { createServiceClient } from '@/lib/supabase/service'
 import {
-  classifyEmail,
   shouldAutoIgnore,
   isMachineGenerated,
   type ClassificationResult,
 } from '@/lib/services/brain/router'
+import {
+  classifyInboundRaw,
+  intentToEmailClassification,
+  stampInboundVerdict,
+  type IntentVerdict,
+} from '@/lib/services/intel/inbound-intent-classifier'
 import { generateInquiryDraft, BRAIN_PROMPT_VERSION as INQUIRY_BRAIN_PROMPT_VERSION } from '@/lib/services/brain/inquiry'
 import { generateClientDraft, BRAIN_PROMPT_VERSION as CLIENT_BRAIN_PROMPT_VERSION } from '@/lib/services/brain/client'
 import { fetchNewEmails, sendEmail, type EmailAttachment, type ParsedEmail } from '@/lib/services/email/gmail'
@@ -1316,6 +1321,14 @@ export async function processIncomingEmail(
   // pipeline's contract intact (heat-mapping skips it because skipDraft
   // is true, but a deterministic value beats an LLM call we don't need).
   let classification: ClassificationResult
+  // Holds the full IntentVerdict from classifyInboundRaw when the
+  // pipeline takes the unified-classifier path. Used after the
+  // interactions insert to stamp intent_class / extracted_facts /
+  // referenced_couple_name + fire heat-suppression + family-member-
+  // proxy resolver — replaces the old fire-and-forget
+  // classifyInboundIntent call. Null on the synth + humanRequested
+  // paths (no LLM ran, nothing to stamp).
+  let unifiedVerdict: IntentVerdict | null = null
   if (humanRequested) {
     classification = {
       classification: 'inquiry_reply',
@@ -1330,21 +1343,48 @@ export async function processIncomingEmail(
   } else if (formLead) {
     classification = synthClassificationFromFormLead(formLead)
   } else {
+    // 2026-05-12 — unified classifier path. classifyInboundRaw returns the
+    // full IntentVerdict (intent_class, extracted_facts, signals,
+    // confidence) in ONE Haiku call. The legacy classifyEmail was a
+    // second round trip emitting overlapping fields; we now derive the
+    // 7-class email_classification deterministically from intent_class
+    // and read the signals payload for the rest of ClassificationResult.
+    // After the interaction row is inserted, stampInboundVerdict
+    // persists the verdict + fires side effects (heat suppression,
+    // referenced-couple resolver). This removes the previous fire-and-
+    // forget classifyInboundIntent at the end of the pipeline — the
+    // stamp happens inline now.
     try {
-      classification = await classifyEmail(
+      const verdict = await classifyInboundRaw({
+        body: email.body,
+        subject: email.subject,
         venueId,
-        {
-          from: fromEmail,
-          subject: email.subject,
-          body: email.body,
+        channel: 'email',
+        fromEmail,
+        priorInteractionCount,
+        threadHasPriorOutbound,
+        correlationId,
+      })
+      unifiedVerdict = verdict
+      classification = {
+        classification: intentToEmailClassification(verdict.intent_class),
+        confidence: verdict.confidence,
+        extractedData: {
+          senderName: verdict.signals.sender_name ?? undefined,
+          partnerName: verdict.signals.partner_name ?? undefined,
+          eventDate: verdict.signals.event_date ?? undefined,
+          guestCount: verdict.signals.guest_count ?? undefined,
+          estimatedGuests: verdict.signals.guest_count ?? undefined,
+          source: verdict.signals.source ?? undefined,
+          questions: verdict.signals.questions,
+          urgencyLevel: verdict.signals.urgency_level,
+          sentiment: verdict.signals.sentiment,
+          mentionsTourRequest: verdict.signals.mentions_tour_request,
+          mentionsFamilyAttending: verdict.signals.mentions_family_attending,
+          commitmentLevel: verdict.signals.commitment_level,
+          specificityScore: verdict.signals.specificity_score,
         },
-        {
-          priorInteractionCount,
-          threadHasPriorOutbound,
-          priorInteractionsFromSender,
-          correlationId,
-        }
-      )
+      }
     } catch (err) {
       await logPipelineError(venueId, 'classify', err, {
         messageId: email.messageId,
@@ -1619,29 +1659,29 @@ export async function processIncomingEmail(
       }
     })()
 
-    // Inbound-intent classifier (mig 327, Anja Putman / RM-1152 trace).
-    // Decides whether THIS inbound is a new_inquiry / client_logistics /
-    // family_member_proxy / vendor_communication / etc. Downstream
-    // consumers (heat scoring, Sage drafts, sequence triggers) read
-    // intent_class instead of assuming every inbound is a fresh prospect.
-    // Fire-and-forget; cron drain catches misses.
-    void (async () => {
-      try {
-        const mod = await import('@/lib/services/intel/inbound-intent-classifier')
-        await mod.classifyInboundIntent({
-          interactionId,
-          body: email.body,
-          subject: email.subject,
-          venueId,
-          channel: 'email',
-          fromEmail: rawFromEmail,
-          supabase,
-          correlationId,
-        })
-      } catch (err) {
-        console.warn('[pipeline] intent-classify non-fatal:', err)
-      }
-    })()
+    // Stamp the unified-classifier verdict onto the row (mig 327 +
+    // mig 331). v3 (2026-05-12): the verdict was already computed
+    // synchronously by classifyInboundRaw when classification ran;
+    // we just persist it here + fire the side effects (heat
+    // suppression for non-couple intents, family-member-proxy
+    // resolver). When unifiedVerdict is null (synth/humanRequested
+    // paths), nothing to stamp. Fire-and-forget; cron drain catches
+    // misses for any future pipeline branches that bypass the
+    // unified path.
+    if (unifiedVerdict) {
+      const verdictForStamp = unifiedVerdict
+      void (async () => {
+        try {
+          await stampInboundVerdict(interactionId, verdictForStamp, {
+            venueId,
+            supabase,
+            correlationId,
+          })
+        } catch (err) {
+          console.warn('[pipeline] intent-stamp non-fatal:', err)
+        }
+      })()
+    }
   }
 
   // Wave 4 Phase 4 (2026-05-10): Wave-3 per-email sender_identity capture

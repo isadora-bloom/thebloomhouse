@@ -23,7 +23,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import { logEvent } from '@/lib/observability/logger'
 
-export const INBOUND_INTENT_PROMPT_VERSION = 'inbound-intent.v2'
+export const INBOUND_INTENT_PROMPT_VERSION = 'inbound-intent.v3'
 
 export type IntentClass =
   | 'new_inquiry'
@@ -98,14 +98,100 @@ export interface ExtractedFacts {
   budget_signal: BudgetSignal
 }
 
+/**
+ * 7-class email classification used by the draft pipeline to decide
+ * which brain (inquiry / client) to invoke. Deterministically derived
+ * from the 11-class `intent_class` — see intentToEmailClassification.
+ *
+ * Replaces the standalone classifyEmail Haiku call (router.ts) so
+ * inbounds only pay for one classifier round trip, not two.
+ */
+export type EmailClassification =
+  | 'new_inquiry'
+  | 'inquiry_reply'
+  | 'client_message'
+  | 'vendor'
+  | 'spam'
+  | 'internal'
+  | 'other'
+
+/**
+ * Per-inbound signal payload formerly produced by classifyEmail's
+ * extractedData. Used by the draft pipeline for heat signals + brain
+ * prompts. v3 adds these to the unified Haiku call so the pipeline
+ * doesn't need a second classifier round trip.
+ */
+export interface InboundSignals {
+  /** Specific questions the sender asked. Empty array when none. */
+  questions: string[]
+  urgency_level: 'low' | 'medium' | 'high'
+  sentiment: 'positive' | 'neutral' | 'negative'
+  commitment_level: 'none' | 'considering' | 'decided'
+  /** 0.0-1.0 — how specific the email is. 0.0 for "do you host
+   *  weddings?", 1.0 for "we want July 18 2026, 140 guests, plated
+   *  dinner, tour Saturday at 2pm". */
+  specificity_score: number
+  mentions_tour_request: boolean
+  mentions_family_attending: boolean
+  /** Acquisition source the sender names: "the_knot", "weddingwire",
+   *  "google", "instagram", "referral", "website", "zola", "other", or
+   *  null when not stated. Distinct from extracted_facts.source_mentioned
+   *  (that one preserves the literal phrasing; this one normalizes to
+   *  the canonical CRM source vocabulary). */
+  source: string | null
+  /** Sender's own name when stated in the body / signature. */
+  sender_name: string | null
+  /** Partner / fiance name when explicitly mentioned. */
+  partner_name: string | null
+  /** Wedding date as stated. ISO yyyy-mm-dd preferred. */
+  event_date: string | null
+  /** Guest count if stated. Integer 1-1000. */
+  guest_count: number | null
+}
+
 export interface IntentVerdict {
   intent_class: IntentClass
   referenced_couple_name: string | null
   note: string | null
+  /** Confidence in the intent_class verdict, 0-100. */
+  confidence: number
   /** Structured payload extracted in the same Haiku call. null when
    *  the row was classified before mig 331 or when the body had
    *  nothing to surface. */
   extracted_facts: ExtractedFacts | null
+  /** v3 (2026-05-12) — heat / brain signals merged in from classifyEmail. */
+  signals: InboundSignals
+}
+
+/**
+ * Derive the 7-class email classification (for draft routing) from
+ * the 11-class intent. Deterministic — no second LLM call. The
+ * classifier prompt instructs the model on the 11 classes; the
+ * pipeline only needs the 7-class verdict for which brain to invoke.
+ */
+export function intentToEmailClassification(
+  intent: IntentClass,
+): EmailClassification {
+  switch (intent) {
+    case 'new_inquiry':
+      return 'new_inquiry'
+    case 'inquiry_followup':
+      return 'inquiry_reply'
+    case 'client_logistics':
+    case 'client_emotional':
+    case 'family_member_proxy':
+      return 'client_message'
+    case 'vendor_communication':
+    case 'vendor_outreach':
+      return 'vendor'
+    case 'spam_outreach':
+      return 'spam'
+    case 'coordinator_internal':
+      return 'internal'
+    case 'auto_reply':
+    case 'unknown':
+      return 'other'
+  }
 }
 
 export interface ClassifyIntentInput {
@@ -123,21 +209,41 @@ export interface ClassifyIntentInput {
   correlationId?: string | null
 }
 
+const FALLBACK_SIGNALS: InboundSignals = {
+  questions: [],
+  urgency_level: 'low',
+  sentiment: 'neutral',
+  commitment_level: 'none',
+  specificity_score: 0,
+  mentions_tour_request: false,
+  mentions_family_attending: false,
+  source: null,
+  sender_name: null,
+  partner_name: null,
+  event_date: null,
+  guest_count: null,
+}
+
 const FALLBACK: IntentVerdict = {
   intent_class: 'unknown',
   referenced_couple_name: null,
   note: null,
+  confidence: 0,
   extracted_facts: null,
+  signals: { ...FALLBACK_SIGNALS },
 }
 
-const SYSTEM_PROMPT = `You are a forensic classifier reading one inbound communication to a wedding venue. Your job is to identify WHAT the inbound is — not who it's from or how to respond — AND surface any structured facts the body carries (names, dates, counts, contact info, source mention, budget signal).
+const SYSTEM_PROMPT = `You are a forensic classifier reading one inbound communication to a wedding venue. Your job is to identify WHAT the inbound is, surface any structured facts the body carries, AND emit the per-inbound signals the draft pipeline needs (urgency, sentiment, commitment, specificity, tour-request mention, family mention, source, sender/partner names, wedding date, guest count).
 
-Return ONLY a JSON object with exactly these four keys:
+This output replaces TWO classifier round trips with one — there is no second Haiku call to fill in signals downstream.
+
+Return ONLY a JSON object with exactly these six keys:
 
 {
   "intent_class": one of the 11 classes below,
   "referenced_couple_name": string | null,
   "note": string | null,
+  "confidence": integer 0-100,
   "extracted_facts": {
     "names": string[],
     "wedding_date": string | null,
@@ -146,6 +252,20 @@ Return ONLY a JSON object with exactly these four keys:
     "email": string | null,
     "source_mentioned": string | null,
     "budget_signal": "within" | "too_expensive" | null
+  },
+  "signals": {
+    "questions": string[],
+    "urgency_level": "low" | "medium" | "high",
+    "sentiment": "positive" | "neutral" | "negative",
+    "commitment_level": "none" | "considering" | "decided",
+    "specificity_score": number,
+    "mentions_tour_request": boolean,
+    "mentions_family_attending": boolean,
+    "source": string | null,
+    "sender_name": string | null,
+    "partner_name": string | null,
+    "event_date": string | null,
+    "guest_count": number | null
   }
 }
 
@@ -310,13 +430,182 @@ anything you'd have to guess.
         "too expensive for us", "we can't afford".
     null when neither stated. Do not infer from indirect signals.
 
+== signals ==
+
+Per-inbound metadata the draft pipeline uses for brain selection +
+heat scoring. Be conservative — only fill a field when the body
+states it.
+
+  questions
+    Array of distinct questions the sender asked. Extract each
+    separately. Empty array when none.
+
+  urgency_level
+    "low"    — general browsing, no time pressure.
+    "medium" — actively planning, has a date in mind.
+    "high"   — date is soon, explicit urgency ("need to book this
+                week", "tour ASAP"), or wedding within 90 days.
+
+  sentiment
+    "positive" — excited, enthusiastic, warm.
+    "neutral"  — informational, matter-of-fact.
+    "negative" — frustrated, concerned, complaining.
+
+  commitment_level
+    "none"        — just curious, browsing, fact-finding.
+    "considering" — actively comparing venues, has asked pricing,
+                    gathering info.
+    "decided"     — explicit "we want to book", "we're ready to move
+                    forward", date set + pushing to lock in.
+
+  specificity_score
+    0.0 to 1.0 — how specific the email is.
+    0.0 → "do you host weddings?"
+    0.5 → "we're thinking summer 2026 for around 120 guests"
+    1.0 → "July 18 2026, 140 guests, plated dinner, tour Saturday
+           at 2pm". Higher = more signal the couple has done
+           homework.
+
+  mentions_tour_request
+    true if the sender explicitly asks to book / schedule / come
+    see / tour the venue. False for Calendly notifications (the
+    booking already happened; the inbound is a system confirmation).
+
+  mentions_family_attending
+    true if parents, family, or wedding party are explicitly
+    mentioned as involved/attending.
+
+  source
+    Canonical CRM source key derived from explicit mentions in the
+    body OR from the relay channel. One of:
+      "the_knot", "weddingwire", "google", "instagram", "referral",
+      "website", "walk_in", "zola", "pinterest", "calendly",
+      "wedding_pro", or "other".
+    A Knot Pro Inbox relay → "the_knot". A Calendly notification
+    on a brand-new email → "calendly". A "found you on Google" →
+    "google". null when no canonical source is identifiable.
+    Distinct from extracted_facts.source_mentioned (which preserves
+    the literal phrase).
+
+  sender_name
+    Sender's name from the body / signature (NOT just the From
+    header, which can be misleading on platform relays). null when
+    not stated.
+
+  partner_name
+    Partner / fiance name when explicitly mentioned. null when not
+    stated.
+
+  event_date
+    Wedding date as stated. ISO yyyy-mm-dd preferred; human-readable
+    OK ("Fall 2026") when only month/season given. null when not
+    stated. This may duplicate extracted_facts.wedding_date — that
+    is fine; downstream consumers read from whichever they prefer.
+
+  guest_count
+    Integer guest count. Take the midpoint of ranges. Skip
+    qualitative words ("small", "intimate"). 1-1000 range gate. null
+    when not stated. May duplicate extracted_facts.guest_count.
+
 Output ONLY the JSON object. No markdown, no commentary.`
 
 interface RawVerdict {
   intent_class?: unknown
   referenced_couple_name?: unknown
   note?: unknown
+  confidence?: unknown
   extracted_facts?: unknown
+  signals?: unknown
+}
+
+function normalizeSignals(raw: unknown): InboundSignals {
+  if (!raw || typeof raw !== 'object') return { ...FALLBACK_SIGNALS }
+  const obj = raw as Record<string, unknown>
+
+  const questions: string[] = Array.isArray(obj.questions)
+    ? (obj.questions as unknown[])
+        .filter((q): q is string => typeof q === 'string')
+        .map((q) => q.trim())
+        .filter((q) => q.length > 0 && q.length <= 300)
+        .slice(0, 12)
+    : []
+
+  const urgencyRaw =
+    typeof obj.urgency_level === 'string' ? obj.urgency_level.toLowerCase() : ''
+  const urgency: InboundSignals['urgency_level'] =
+    urgencyRaw === 'high' || urgencyRaw === 'medium' || urgencyRaw === 'low'
+      ? urgencyRaw
+      : 'low'
+
+  const sentimentRaw =
+    typeof obj.sentiment === 'string' ? obj.sentiment.toLowerCase() : ''
+  const sentiment: InboundSignals['sentiment'] =
+    sentimentRaw === 'positive' || sentimentRaw === 'negative' || sentimentRaw === 'neutral'
+      ? sentimentRaw
+      : 'neutral'
+
+  const commitRaw =
+    typeof obj.commitment_level === 'string' ? obj.commitment_level.toLowerCase() : ''
+  const commitment: InboundSignals['commitment_level'] =
+    commitRaw === 'decided' || commitRaw === 'considering' || commitRaw === 'none'
+      ? commitRaw
+      : 'none'
+
+  const specificityRaw =
+    typeof obj.specificity_score === 'number'
+      ? obj.specificity_score
+      : typeof obj.specificity_score === 'string'
+        ? Number(obj.specificity_score)
+        : NaN
+  const specificity = Number.isFinite(specificityRaw)
+    ? Math.max(0, Math.min(1, specificityRaw))
+    : 0
+
+  const sourceRaw =
+    typeof obj.source === 'string' && obj.source.trim()
+      ? obj.source.trim().toLowerCase().slice(0, 40)
+      : null
+
+  const senderName =
+    typeof obj.sender_name === 'string' && obj.sender_name.trim()
+      ? obj.sender_name.trim().slice(0, 120)
+      : null
+
+  const partnerName =
+    typeof obj.partner_name === 'string' && obj.partner_name.trim()
+      ? obj.partner_name.trim().slice(0, 120)
+      : null
+
+  const eventDate =
+    typeof obj.event_date === 'string' && obj.event_date.trim()
+      ? obj.event_date.trim().slice(0, 40)
+      : null
+
+  const guestCountRaw =
+    typeof obj.guest_count === 'number'
+      ? obj.guest_count
+      : typeof obj.guest_count === 'string'
+        ? Number(obj.guest_count)
+        : NaN
+  const guestCount =
+    Number.isFinite(guestCountRaw) && guestCountRaw > 0 && guestCountRaw < 10000
+      ? Math.round(guestCountRaw)
+      : null
+
+  return {
+    questions,
+    urgency_level: urgency,
+    sentiment,
+    commitment_level: commitment,
+    specificity_score: specificity,
+    mentions_tour_request: obj.mentions_tour_request === true,
+    mentions_family_attending: obj.mentions_family_attending === true,
+    source: sourceRaw,
+    sender_name: senderName,
+    partner_name: partnerName,
+    event_date: eventDate,
+    guest_count: guestCount,
+  }
 }
 
 function normalizeFacts(raw: unknown): ExtractedFacts | null {
@@ -405,64 +694,72 @@ function normalize(raw: RawVerdict): IntentVerdict | null {
     typeof raw?.note === 'string' && raw.note.trim()
       ? raw.note.trim().slice(0, 500)
       : null
+  const confidenceRaw =
+    typeof raw?.confidence === 'number'
+      ? raw.confidence
+      : typeof raw?.confidence === 'string'
+        ? Number(raw.confidence)
+        : NaN
+  const confidence = Number.isFinite(confidenceRaw)
+    ? Math.max(0, Math.min(100, Math.round(confidenceRaw)))
+    : 60
   const extractedFacts = normalizeFacts(raw?.extracted_facts)
+  const signals = normalizeSignals(raw?.signals)
   return {
     intent_class: cls as IntentClass,
     referenced_couple_name: referenced,
     note,
+    confidence,
     extracted_facts: extractedFacts,
+    signals,
   }
 }
 
 /**
- * Run the intent classifier on one inbound interaction. Idempotent:
- * skipped when intent_classified_at IS NOT NULL. NEVER throws.
+ * Pure LLM call — runs the unified classifier and returns a normalized
+ * verdict. NO DB writes, NO idempotency gate. Use this when you need
+ * the verdict BEFORE the interaction row exists (the email pipeline
+ * runs this early to drive draft routing, then stamps the row after
+ * insert with the cached result).
+ *
+ * NEVER throws. Returns FALLBACK on failure.
  */
-export async function classifyInboundIntent(
-  input: ClassifyIntentInput,
-): Promise<IntentVerdict> {
-  const { interactionId, venueId, channel, correlationId } = input
-  const supabase = input.supabase ?? createServiceClient()
-
-  if (!interactionId || !venueId) return FALLBACK
-
-  // Idempotency gate.
-  try {
-    const { data: existing } = await supabase
-      .from('interactions')
-      .select('intent_classified_at, intent_class, intent_referenced_couple_name, intent_classifier_note, extracted_facts')
-      .eq('id', interactionId)
-      .single()
-    if (existing?.intent_classified_at) {
-      return {
-        intent_class: (existing.intent_class as IntentClass) ?? FALLBACK.intent_class,
-        referenced_couple_name:
-          (existing.intent_referenced_couple_name as string | null) ?? null,
-        note: (existing.intent_classifier_note as string | null) ?? null,
-        extracted_facts:
-          (existing.extracted_facts as ExtractedFacts | null) ?? null,
-      }
-    }
-  } catch {
-    // Soft-fail the precheck.
-  }
+export async function classifyInboundRaw(input: {
+  body: string | null | undefined
+  subject: string | null | undefined
+  venueId: string
+  channel: ClassifyIntentInput['channel']
+  fromEmail?: string | null
+  /** Thread context — helps the classifier distinguish new_inquiry
+   *  vs inquiry_followup vs client_message when prior conversation
+   *  history is the only differentiator. */
+  priorInteractionCount?: number
+  threadHasPriorOutbound?: boolean
+  correlationId?: string | null
+}): Promise<IntentVerdict> {
+  const { venueId, channel, correlationId } = input
+  if (!venueId) return FALLBACK
 
   const subject = (input.subject ?? '').slice(0, 500)
   const body = (input.body ?? '').slice(0, 6000)
   if (!body.trim() && !subject.trim()) return FALLBACK
 
   const from = (input.fromEmail ?? '').trim().slice(0, 200)
-  const userPrompt = `CHANNEL: ${channel}\nFROM: ${from || '(unknown)'}\nSUBJECT: ${subject || '(none)'}\n\nBODY:\n${body || '(empty)'}`
+  const threadBlock =
+    typeof input.priorInteractionCount === 'number' ||
+    typeof input.threadHasPriorOutbound === 'boolean'
+      ? `\n\nTHREAD CONTEXT:\n- Prior messages on this thread: ${input.priorInteractionCount ?? 0}\n- Venue has already sent outbound on this thread: ${input.threadHasPriorOutbound ? 'yes' : 'no'}\n\nIf prior messages > 0 OR prior outbound = yes, this is almost certainly NOT a new_inquiry — prefer inquiry_followup or a client_* class.`
+      : ''
+  const userPrompt = `CHANNEL: ${channel}\nFROM: ${from || '(unknown)'}\nSUBJECT: ${subject || '(none)'}\n\nBODY:\n${body || '(empty)'}${threadBlock}`
 
   let raw: RawVerdict
   try {
     raw = await callAIJson<RawVerdict>({
       systemPrompt: SYSTEM_PROMPT,
       userPrompt,
-      // v2 returns the extraction payload alongside intent; the names
-      // array + signal fields push the response budget. 700 leaves
-      // headroom; observed payloads are ~250-400 tokens.
-      maxTokens: 700,
+      // v3 returns intent + facts + signals + confidence — observed
+      // payloads ~500-900 tokens. 1200 leaves headroom.
+      maxTokens: 1200,
       temperature: 0.2,
       venueId,
       taskType: 'inbound_intent_classify',
@@ -474,16 +771,13 @@ export async function classifyInboundIntent(
   } catch (err) {
     logEvent({
       level: 'warn',
-      msg: 'inbound_intent ai call failed',
+      msg: 'inbound_intent ai call failed (raw)',
       venueId,
       correlationId: correlationId ?? null,
       actor: 'system',
       event_type: 'inbound_intent.classify',
       outcome: 'fail',
-      data: {
-        interactionId,
-        error: err instanceof Error ? err.message : String(err),
-      },
+      data: { error: err instanceof Error ? err.message : String(err) },
     })
     return FALLBACK
   }
@@ -492,19 +786,42 @@ export async function classifyInboundIntent(
   if (!verdict) {
     logEvent({
       level: 'warn',
-      msg: 'inbound_intent invalid verdict',
+      msg: 'inbound_intent invalid verdict (raw)',
       venueId,
       correlationId: correlationId ?? null,
       actor: 'system',
       event_type: 'inbound_intent.classify',
       outcome: 'fail',
-      data: {
-        interactionId,
-        sample: JSON.stringify(raw).slice(0, 300),
-      },
+      data: { sample: JSON.stringify(raw).slice(0, 300) },
     })
     return FALLBACK
   }
+
+  return verdict
+}
+
+/**
+ * Persist a previously-computed verdict onto the interactions row.
+ * Idempotent: only stamps when intent_classified_at IS NULL. Returns
+ * the verdict unchanged. NEVER throws.
+ *
+ * Use this from the pipeline when classifyInboundRaw fired BEFORE
+ * the interaction insert — once the row exists, call stampInboundVerdict
+ * to write the verdict + fire side effects (heat suppression,
+ * referenced-couple resolver).
+ */
+export async function stampInboundVerdict(
+  interactionId: string,
+  verdict: IntentVerdict,
+  options: {
+    venueId: string
+    supabase?: SupabaseClient
+    correlationId?: string | null
+  },
+): Promise<void> {
+  const { venueId, correlationId } = options
+  const supabase = options.supabase ?? createServiceClient()
+  if (!interactionId || !venueId) return
 
   try {
     await supabase
@@ -521,30 +838,18 @@ export async function classifyInboundIntent(
   } catch (err) {
     logEvent({
       level: 'warn',
-      msg: 'inbound_intent persist failed',
+      msg: 'inbound_intent stamp failed',
       venueId,
       correlationId: correlationId ?? null,
       actor: 'system',
       event_type: 'inbound_intent.classify',
       outcome: 'fail',
-      data: {
-        interactionId,
-        error: err instanceof Error ? err.message : String(err),
-      },
+      data: { interactionId, error: err instanceof Error ? err.message : String(err) },
     })
-    return verdict
+    return
   }
 
   // Family-member-proxy + vendor-communication resolver (checkpoint 6).
-  // The classifier extracted a referenced couple name (e.g. "Kajlie"
-  // from "Kajlie's mom"). Look up the venue's recent weddings by fuzzy
-  // partner1/partner2 first-name match. If a confident match exists,
-  // reattach this interaction to that wedding via mintWedding's merge
-  // path so the conversation lands on the booked couple's row.
-  //
-  // Fire-and-forget. If no match is found, the interaction stays on
-  // its own wedding (or the orphan path) and a coordinator can
-  // manually re-link via the lead-detail panel.
   if (
     verdict.referenced_couple_name &&
     (verdict.intent_class === 'family_member_proxy' ||
@@ -582,14 +887,7 @@ export async function classifyInboundIntent(
     })()
   }
 
-  // Heat suppression: when intent is in the non-couple set, zero the
-  // points on this interaction's engagement_events. The heat-as-view
-  // (mig 316) sums points * decay; setting points=0 makes the row
-  // invisible to the trajectory without losing the audit history.
-  //
-  // Fire-and-forget — failure here doesn't unwind the classification.
-  // The cron drain (when it lands) can re-attempt suppression on rows
-  // that missed.
+  // Heat suppression for non-couple intents.
   if (NON_COUPLE_INTENTS.has(verdict.intent_class)) {
     void (async () => {
       try {
@@ -608,17 +906,6 @@ export async function classifyInboundIntent(
             event_type: 'inbound_intent.suppress',
             outcome: 'fail',
             data: { interactionId, error: suppErr.message },
-          })
-        } else {
-          logEvent({
-            level: 'info',
-            msg: 'inbound_intent suppressed heat',
-            venueId,
-            correlationId: correlationId ?? null,
-            actor: 'system',
-            event_type: 'inbound_intent.suppress',
-            outcome: 'ok',
-            data: { interactionId, intent_class: verdict.intent_class },
           })
         }
       } catch (err) {
@@ -641,7 +928,7 @@ export async function classifyInboundIntent(
 
   logEvent({
     level: 'info',
-    msg: 'inbound_intent classified',
+    msg: 'inbound_intent stamped',
     venueId,
     correlationId: correlationId ?? null,
     actor: 'system',
@@ -649,10 +936,66 @@ export async function classifyInboundIntent(
     outcome: 'ok',
     data: {
       interactionId,
-      channel,
       intent_class: verdict.intent_class,
       referenced_couple_name: verdict.referenced_couple_name,
     },
+  })
+}
+
+/**
+ * Run the intent classifier on one inbound interaction. Idempotent:
+ * skipped when intent_classified_at IS NOT NULL. NEVER throws.
+ */
+export async function classifyInboundIntent(
+  input: ClassifyIntentInput,
+): Promise<IntentVerdict> {
+  const { interactionId, venueId, channel, correlationId } = input
+  const supabase = input.supabase ?? createServiceClient()
+
+  if (!interactionId || !venueId) return FALLBACK
+
+  // Idempotency gate.
+  try {
+    const { data: existing } = await supabase
+      .from('interactions')
+      .select('intent_classified_at, intent_class, intent_referenced_couple_name, intent_classifier_note, extracted_facts')
+      .eq('id', interactionId)
+      .single()
+    if (existing?.intent_classified_at) {
+      return {
+        intent_class: (existing.intent_class as IntentClass) ?? FALLBACK.intent_class,
+        referenced_couple_name:
+          (existing.intent_referenced_couple_name as string | null) ?? null,
+        note: (existing.intent_classifier_note as string | null) ?? null,
+        confidence: 0, // pre-existing rows don't carry confidence; fall back
+        extracted_facts:
+          (existing.extracted_facts as ExtractedFacts | null) ?? null,
+        signals: { ...FALLBACK_SIGNALS },
+      }
+    }
+  } catch {
+    // Soft-fail the precheck.
+  }
+
+  // Delegate the LLM call to the pure helper, then stamp the row.
+  const verdict = await classifyInboundRaw({
+    body: input.body,
+    subject: input.subject,
+    venueId,
+    channel,
+    fromEmail: input.fromEmail ?? null,
+    correlationId,
+  })
+
+  if (verdict.intent_class === 'unknown' && verdict.confidence === 0) {
+    // FALLBACK — nothing to persist or side-effect.
+    return verdict
+  }
+
+  await stampInboundVerdict(interactionId, verdict, {
+    venueId,
+    supabase,
+    correlationId,
   })
 
   return verdict

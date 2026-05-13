@@ -12,7 +12,6 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
-import { callAIJson } from '@/lib/ai/client'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1.
  *  v1.1 (T5-schema-gap, migration 165): added estimatedGuests extraction
@@ -198,85 +197,6 @@ export function isMachineGenerated(headers?: Record<string, string>): string | n
 // classifyEmail
 // ---------------------------------------------------------------------------
 
-const CLASSIFICATION_SYSTEM_PROMPT = `You are an email classification engine for a wedding venue. Your job is to analyze inbound emails and determine:
-
-1. **Classification** — What type of email is this?
-   - "new_inquiry": A couple reaching out for the FIRST TIME about hosting their wedding. Usually mentions wedding date, guest count, interest in the venue, or comes from a wedding platform (The Knot, WeddingWire, Zola, etc.).
-   - "inquiry_reply": A reply to an existing conversation with a lead/inquiry who has NOT yet booked. They're continuing a conversation about availability, pricing, tours, etc.
-   - "client_message": A message from a couple who has ALREADY BOOKED the venue. They're asking about planning, vendors, timeline, logistics, or day-of details.
-   - "vendor": An email from a vendor (caterer, photographer, DJ, florist, planner, etc.) about an upcoming event, partnership, or general vendor business.
-   - "spam": Unsolicited commercial email, marketing, newsletters, or clearly irrelevant messages.
-   - "internal": An email from within the venue team (staff, owner, coordinator).
-   - "other": Anything that doesn't clearly fit the above categories.
-
-2. **Extracted Data** — Pull out structured information:
-   - senderName: The name of the person emailing (from the email body or signature, not just the from address)
-   - partnerName: If they mention a partner/fiance name
-   - eventDate: Any mentioned wedding date (return as ISO string YYYY-MM-DD if specific, or descriptive like "Fall 2026" if vague)
-   - guestCount: Estimated guest count if mentioned (kept for legacy callers; same data as estimatedGuests)
-   - estimatedGuests: Lead-side headcount estimate. Extract an integer when the email says any of:
-       * "150 guests" / "around 200" / "about 100" / "120-130 people" / "150 attendees" / "100 head"
-       * Numerical range ("120-150 people", "100 to 130") -> take the MIDPOINT and round to the nearest whole number
-       * Approximate words ("around 150", "roughly 100") -> use the integer they gave
-       * Mixed phrasing ("80 to 100 of our closest friends") -> take the midpoint
-     Leave NULL when the couple uses qualitative language only:
-       * "small wedding" / "large wedding" / "intimate" / "big" / "tiny" -> NULL (do NOT infer numbers from adjectives)
-       * "we don't know yet" / "still figuring out the list" -> NULL
-     Range gate: integers must be 1-1000. If the value is outside that, return NULL.
-     The same number can be returned in both guestCount and estimatedGuests when present.
-   - source: If identifiable (the_knot, wedding_wire, google, instagram, referral, website, zola, other)
-   - questions: Array of specific questions they're asking (extract each distinct question)
-   - urgencyLevel: "low" (general browsing), "medium" (actively planning, has a date), "high" (date is soon, needs quick response, or explicitly says urgent)
-   - sentiment: "positive" (excited, enthusiastic), "neutral" (informational), "negative" (frustrated, concerned)
-   - mentionsTourRequest: true if the sender explicitly asks to book / schedule / come see / tour the venue
-   - mentionsFamilyAttending: true if parents, family, or wedding party are explicitly mentioned as involved/attending
-   - commitmentLevel: "none" (just curious, browsing), "considering" (actively comparing / gathering info / asked pricing), "decided" (clear intent to book — "we want to book", "we're ready to move forward", date set and pushing to lock in)
-   - specificityScore: 0.0 to 1.0, how specific this email is. 0.0 for "do you host weddings?". 0.5 for "we're thinking summer 2026 for around 120 guests". 1.0 for "we want July 18 2026 for 140 guests, plated dinner, we'd like to tour next Saturday at 2pm". Higher = more signal the couple has done their homework.
-
-3. **Confidence** — How confident are you in the classification? (0-100)
-   - 90-100: Very clear classification
-   - 70-89: Likely correct but some ambiguity
-   - 50-69: Best guess, human should verify
-   - Below 50: Unclear, flag for human review
-
-IMPORTANT DISTINCTIONS:
-- New inquiry vs reply: new inquiries have NO prior conversation context. Replies reference previous emails or are part of an existing thread.
-- Inquiry reply vs client message: inquiry replies are from people still DECIDING. Client messages are from people who have BOOKED.
-- Platform emails (The Knot, WeddingWire, Zola): these forward inquiry details but the actual sender is the couple, not the platform.
-
-RELAY PATTERNS — recognise these BEFORE you classify (the From: header gets rewritten to the couple's gmail address on most of these, so a gmail.com sender is NOT evidence the sender is a vendor or random outreach):
-
-- Knot Pro Inbox relay: subject contains "📩" emoji AND "sent you a new message", OR body references "theknot.com" / "The Knot Pro Network". The couple's intake-form selections — e.g. "Interested Services: Tables and chairs, Linens, Lighting, Sound equipment" — is a SHOPPING LIST, not a booked-couple logistics conversation. Classify as new_inquiry.
-
-- Calendly / Acuity notifications: subject starts with "New Event:" / "Invitee:" / "Event scheduled" / "New appointment" / "Rescheduled:" / "Canceled:", body links calendly.com or acuityscheduling.com. The invitee is the couple booking (or having previously booked + now rescheduling/canceling) a tour. Classify as inquiry_reply when there's prior thread context, otherwise new_inquiry. Boilerplate phrases like "amazing tour planned for you" are Calendly's copy, NOT vendor pitch language.
-
-- WeddingWire / Here Comes The Guide / Zola intake forms: body references the platform name + a form-relay wrapper ("New Lead for...", "WeddingPro Inbox", "authsolic..."). Classify as new_inquiry.
-
-- Pricing-calculator submissions: body contains "NEW CALCULATOR SUBMISSION" or "Your Rixey Manor estimate" / "<venue> estimate". The couple submitted the on-site calculator and got a price. Classify as inquiry_reply when there's prior conversation, otherwise new_inquiry.
-
-Do NOT label any of these patterns as vendor / spam / other. The whole reason these platforms exist is to route real couples to venues; their content is by definition lead activity.
-
-Return JSON matching this exact structure:
-{
-  "classification": "new_inquiry" | "inquiry_reply" | "client_message" | "vendor" | "spam" | "internal" | "other",
-  "confidence": number,
-  "extractedData": {
-    "senderName": string | null,
-    "partnerName": string | null,
-    "eventDate": string | null,
-    "guestCount": number | null,
-    "estimatedGuests": number | null,
-    "source": string | null,
-    "questions": string[],
-    "urgencyLevel": "low" | "medium" | "high",
-    "sentiment": "positive" | "neutral" | "negative",
-    "mentionsTourRequest": boolean,
-    "mentionsFamilyAttending": boolean,
-    "commitmentLevel": "none" | "considering" | "decided",
-    "specificityScore": number
-  }
-}`
-
 /**
  * Use AI to classify an inbound email and extract structured data.
  *
@@ -288,6 +208,22 @@ Return JSON matching this exact structure:
  * an ongoing conversation". Without these signals the LLM was re-labelling
  * every thread reply as new_inquiry and the pipeline was minting duplicate
  * weddings on every round-trip.
+ */
+/**
+ * Classify an inbound email + extract structured data.
+ *
+ * v2 (2026-05-12) — back-compat adapter over the unified inbound
+ * classifier (`classifyInboundRaw` in
+ * `lib/services/intel/inbound-intent-classifier.ts`). Routes the same
+ * Haiku call that the email pipeline uses, deriving the 7-class
+ * EmailClassification deterministically from the 11-class intent_class
+ * and reading the signals payload for extractedData. Single source of
+ * truth for the prompt + relay-pattern recognition.
+ *
+ * Existing callers (pipeline.ts, reprocess-orphans, etc.) keep working
+ * unchanged — the signature is identical. New pipeline code can use
+ * `classifyInboundRaw` directly to get the full verdict (intent_class +
+ * extracted_facts + signals) without a second adapter hop.
  */
 export async function classifyEmail(
   venueId: string,
@@ -303,61 +239,41 @@ export async function classifyEmail(
     correlationId?: string
   }
 ): Promise<ClassificationResult> {
-  const contextBlock = context
-    ? `\n\nTHREAD CONTEXT:\n- Prior messages in this thread for this venue: ${context.priorInteractionCount ?? 0}\n- Venue has previously sent outbound on this thread: ${context.threadHasPriorOutbound ? 'yes' : 'no'}\n- Prior messages from this sender across all threads: ${context.priorInteractionsFromSender ?? 0}\n\nIf prior interactions > 0 OR prior outbound on thread = yes, this is almost\ncertainly NOT a new_inquiry — prefer inquiry_reply or client_message.`
-    : ''
+  // Lazy import to avoid a circular dependency through pipeline.ts.
+  const { classifyInboundRaw, intentToEmailClassification } = await import(
+    '@/lib/services/intel/inbound-intent-classifier'
+  )
 
-  const userPrompt = `Classify this email:
-
-FROM: ${email.from}
-SUBJECT: ${email.subject}
-
-BODY:
-${email.body.slice(0, 3000)}${contextBlock}`
-
-  const result = await callAIJson<ClassificationResult>({
-    systemPrompt: CLASSIFICATION_SYSTEM_PROMPT,
-    userPrompt,
-    maxTokens: 800,
-    temperature: 0.1,
+  const verdict = await classifyInboundRaw({
+    body: email.body,
+    subject: email.subject,
     venueId,
-    taskType: 'email_classification',
-    // Haiku tier per Playbook 19.8 — small label set (7 classification
-    // values), bounded structured output, high volume. Sonnet was
-    // 12x the cost for the same answer. OPS-21.4.2 enforcement.
-    tier: 'haiku',
-    promptVersion: BRAIN_PROMPT_VERSION,
-    correlationId: context?.correlationId,
+    channel: 'email',
+    fromEmail: email.from,
+    priorInteractionCount: context?.priorInteractionCount,
+    threadHasPriorOutbound: context?.threadHasPriorOutbound,
+    correlationId: context?.correlationId ?? null,
   })
 
-  // Normalize and validate
-  const validClassifications: EmailClassification[] = [
-    'new_inquiry',
-    'inquiry_reply',
-    'client_message',
-    'vendor',
-    'spam',
-    'internal',
-    'other',
-  ]
-
-  if (!validClassifications.includes(result.classification)) {
-    result.classification = 'other'
-    result.confidence = Math.min(result.confidence, 50)
+  return {
+    classification: intentToEmailClassification(verdict.intent_class),
+    confidence: verdict.confidence,
+    extractedData: {
+      senderName: verdict.signals.sender_name ?? undefined,
+      partnerName: verdict.signals.partner_name ?? undefined,
+      eventDate: verdict.signals.event_date ?? undefined,
+      guestCount: verdict.signals.guest_count ?? undefined,
+      estimatedGuests: verdict.signals.guest_count ?? undefined,
+      source: verdict.signals.source ?? undefined,
+      questions: verdict.signals.questions,
+      urgencyLevel: verdict.signals.urgency_level,
+      sentiment: verdict.signals.sentiment,
+      mentionsTourRequest: verdict.signals.mentions_tour_request,
+      mentionsFamilyAttending: verdict.signals.mentions_family_attending,
+      commitmentLevel: verdict.signals.commitment_level,
+      specificityScore: verdict.signals.specificity_score,
+    },
   }
-
-  // Ensure extractedData has required fields
-  result.extractedData = {
-    ...result.extractedData,
-    questions: result.extractedData?.questions ?? [],
-    urgencyLevel: result.extractedData?.urgencyLevel ?? 'low',
-    sentiment: result.extractedData?.sentiment ?? 'neutral',
-  }
-
-  // Clamp confidence
-  result.confidence = Math.max(0, Math.min(100, result.confidence))
-
-  return result
 }
 
 // ---------------------------------------------------------------------------

@@ -11,6 +11,53 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-05-12 (Inbound classifier v3 — unification with classifyEmail)
+
+Bumped `inbound-intent.v2` → `inbound-intent.v3`
+(`INBOUND_INTENT_PROMPT_VERSION` in
+`src/lib/services/intel/inbound-intent-classifier.ts`).
+
+Doctrine unification. The pipeline previously made TWO Haiku calls
+per inbound email — `classifyEmail` (router.ts, 7-class) and
+`classifyInboundIntent` (intel, 11-class) — that emitted overlapping
+verdicts and sometimes disagreed (e.g. Knot Pro Inbox labelled
+new_inquiry by intent but vendor by email-classification → Sage
+skipped drafting).
+
+v3 collapses them into one call. Output gains a `signals` payload
+(questions, urgency_level, sentiment, commitment_level,
+specificity_score, mentions_tour_request, mentions_family_attending,
+source, sender_name, partner_name, event_date, guest_count) +
+explicit confidence field — the per-inbound metadata the draft
+pipeline used to ask classifyEmail for. The 7-class
+EmailClassification is now DERIVED deterministically from the
+11-class intent_class via `intentToEmailClassification`, so there's
+no second LLM round trip.
+
+Pipeline flow:
+  - `classifyInboundRaw` runs synchronously early in the pipeline
+    (replaces classifyEmail). Pure LLM call, no DB writes, no
+    idempotency gate.
+  - Verdict drives draft routing immediately.
+  - After interaction insert, `stampInboundVerdict` persists
+    intent_class + extracted_facts + side-effects (heat suppression,
+    referenced-couple resolver). Replaces the prior fire-and-forget
+    classifyInboundIntent.
+  - `classifyEmail` (router.ts) is now a thin back-compat adapter
+    over classifyInboundRaw for non-pipeline callers
+    (reprocess-orphans).
+
+Prompt additions:
+  - `signals` section enumerates the 12 metadata fields with strict
+    extraction rules.
+  - `THREAD CONTEXT` block surfaces priorInteractionCount +
+    threadHasPriorOutbound when provided (so the classifier can
+    distinguish new_inquiry vs inquiry_followup vs client_message
+    from history alone).
+  - FROM line in user prompt.
+
+maxTokens bumped 700 → 1200 for the larger response payload.
+
 ## 2026-05-12 (Router classifier v1.2 — relay-pattern recognition)
 
 Bumped `router-brain.prompt.v1.1` → `router-brain.prompt.v1.2`
