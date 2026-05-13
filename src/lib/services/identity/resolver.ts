@@ -726,6 +726,129 @@ async function createWedding(
 }
 
 // ---------------------------------------------------------------------------
+// Public entry: resolvePersonOnly
+// ---------------------------------------------------------------------------
+
+export interface PersonOnlyResult {
+  personId: string
+  isNew: boolean
+  matchedBy:
+    | 'email_exact'
+    | 'email_canonical'
+    | 'phone'
+    | 'created_new'
+}
+
+/**
+ * Resolve a person record from inbound signals WITHOUT touching the
+ * wedding side of the graph. Used by signal-pre-classification paths
+ * (SMS intent gate, Twilio webhook, OpenPhone poll) where a person row
+ * must exist for the interaction insert, but a wedding mint should be
+ * gated on a downstream intent classifier verdict.
+ *
+ * Why this is separate from resolveIdentity:
+ * RM-1123 (bus driver texting Rixey about hotel pickup, 2026-05-13)
+ * was minted as a wedding because the SMS path calls resolveIdentity,
+ * which unconditionally creates a wedding in Branch C when no match
+ * exists. The phase classifier correctly flags it as
+ * "client_logistics" / "vendor_communication" post-mint, but by then
+ * the ghost wedding is already in the leads list and feeds Heat /
+ * Sage / sequence drafts.
+ *
+ * The fix is to defer the wedding mint behind classifyInboundIntent.
+ * This helper returns only the person side so the caller can write
+ * the interaction, run the classifier, and conditionally call
+ * mintWedding (which internally calls resolveIdentity and finds the
+ * just-created person via the phone match chain, then mints the
+ * wedding only when intent says couple).
+ *
+ * Match chain is identical to resolveIdentity's steps 1-5:
+ *   email_exact → email_canonical → phone → create_new
+ * Skips step 4 (name+date) — it requires a wedding_date which we
+ * don't have at SMS-first time.
+ */
+export async function resolvePersonOnly(
+  venueId: string,
+  signals: IdentitySignals,
+  options: ResolverOptions = {},
+): Promise<PersonOnlyResult> {
+  const supabase = options.supabase ?? createServiceClient()
+  const sourceLabel = options.sourceLabel ?? null
+
+  let hit: PersonHit | null = null
+  let matchedBy: PersonOnlyResult['matchedBy'] = 'created_new'
+
+  if (signals.email) {
+    hit = await findByEmailExact(supabase, venueId, signals.email)
+    if (hit) matchedBy = 'email_exact'
+  }
+  if (!hit && signals.email) {
+    hit = await findByEmailCanonical(supabase, venueId, signals.email)
+    if (hit) matchedBy = 'email_canonical'
+  }
+  if (!hit && signals.phone) {
+    hit = await findByPhone(supabase, venueId, signals.phone)
+    if (hit) matchedBy = 'phone'
+  }
+
+  if (hit) {
+    // Same canon-chase + non-name backfill as resolveIdentity.
+    const personId = await resolveCanonicalPerson(supabase, hit.id)
+    const updates: Record<string, unknown> = {}
+    if (signals.email && !hit.email) {
+      updates.email = normalizeEmail(signals.email) ?? signals.email
+    }
+    if (signals.phone && !hit.phone) {
+      updates.phone = normalizePhone(signals.phone)
+    }
+    if (Object.keys(updates).length > 0) {
+      await supabase.from('people').update(updates).eq('id', personId)
+    }
+    // Name capture routes through the chokepoint identically to
+    // resolveIdentity. Skipping it here would leak the very name
+    // corruption the Wave 2B work fixed.
+    if (signals.fullName || signals.partner1Name || signals.email) {
+      try {
+        const { captureNameEvidence, inferNameFromEmail } = await import('./name-capture')
+        const importedSource = pickNameSourceForLabel(sourceLabel)
+        const fullForCapture = signals.fullName ?? signals.partner1Name
+        if (fullForCapture) {
+          await captureNameEvidence(supabase, personId, {
+            full: fullForCapture,
+            email: signals.email ?? null,
+            source: importedSource,
+          })
+        }
+        if (signals.email) {
+          const fromEmail = inferNameFromEmail(signals.email)
+          if (fromEmail) {
+            await captureNameEvidence(supabase, personId, {
+              first: fromEmail.first,
+              last: fromEmail.last,
+              email: signals.email,
+              source: 'email_handle_parse',
+            })
+          }
+        }
+      } catch (err) {
+        console.warn('[resolvePersonOnly] name-capture (existing) failed:',
+          err instanceof Error ? err.message : err)
+      }
+    }
+    return { personId, isNew: false, matchedBy }
+  }
+
+  // No match — create fresh person via the same chokepoint path
+  // resolveIdentity uses, so name-capture confidence + display_handle
+  // rules apply uniformly.
+  const newId = await createPerson(supabase, venueId, signals, sourceLabel)
+  if (!newId) {
+    throw new Error('resolvePersonOnly: createPerson failed; cannot proceed')
+  }
+  return { personId: newId, isNew: true, matchedBy: 'created_new' }
+}
+
+// ---------------------------------------------------------------------------
 // Public entry: resolveIdentity
 // ---------------------------------------------------------------------------
 

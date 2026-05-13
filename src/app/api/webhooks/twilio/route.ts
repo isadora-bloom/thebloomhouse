@@ -18,7 +18,9 @@
  * a retried delivery returns 200 with no second interaction insert.
  *
  * Identity resolution: phone-based match through the canonical resolver
- * (resolveIdentity from src/lib/services/identity/resolver.ts). On a fresh
+ * (resolvePersonOnly from src/lib/services/identity/resolver.ts; the
+ * wedding mint is deferred behind classifyInboundIntent — see Step 5b
+ * / RM-1123). On a fresh
  * SMS from an unknown number the resolver mints a new person + wedding.
  * The author_class defaults to 'couple' for real-looking inbound texts;
  * outbound texts (from a venue-own phone) flip direction='outbound'
@@ -37,7 +39,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
 import { createServiceClient } from '@/lib/supabase/service'
 import { verifyTwilioSignature } from '@/lib/services/sms/twilio-signature'
-import { resolveIdentity } from '@/lib/services/identity/resolver'
+// resolvePersonOnly + mintWedding are dynamically imported below; the
+// top-level static import was resolveIdentity pre-Step-5b.
 import { enqueueIdentityReconstruction } from '@/lib/services/identity/enqueue-reconstruction'
 
 const TWIML_OK = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
@@ -197,13 +200,22 @@ export async function POST(request: NextRequest) {
 
   const { venueId, direction } = lookup
 
-  // ---- Identity resolution ----
+  // ---- Identity resolution (person only — wedding mint is gated on
+  // the classifier verdict downstream, per Step 5b / RM-1123). ----
   // For inbound, the couple is From; for outbound, the couple is To.
   const couplePhone = direction === 'inbound' ? fromPhone : toPhone
   let personId: string | null = null
   let weddingId: string | null = null
   try {
-    const resolved = await resolveIdentity(
+    // Person-only resolve. resolvePersonOnly runs the email/canonical/
+    // phone match chain and creates a fresh person row when no match
+    // exists, but does NOT mint a wedding. The wedding mint is deferred
+    // to the post-classifier gate below — same fix that the OpenPhone
+    // poll uses. Pre-fix every inbound SMS minted a wedding, which
+    // accumulated ghost weddings for bus drivers / vendors / autoreplies
+    // (RM-1123 class).
+    const { resolvePersonOnly } = await import('@/lib/services/identity/resolver')
+    const resolved = await resolvePersonOnly(
       venueId,
       {
         email: null,
@@ -221,11 +233,21 @@ export async function POST(request: NextRequest) {
       },
     )
     personId = resolved.personId
-    weddingId = resolved.weddingId
+    // Hydrate weddingId from the matched person (existing couple case).
+    // For freshly-created persons this is null; the gate-on-classifier
+    // block below decides whether to mint.
+    if (personId) {
+      const { data: personRow } = await supabase
+        .from('people')
+        .select('wedding_id')
+        .eq('id', personId)
+        .maybeSingle()
+      weddingId = (personRow?.wedding_id as string | null) ?? null
+    }
   } catch (err) {
     // Identity resolution should never crash the route — record the
     // webhook anyway so coordinator audit can backfill manually.
-    console.error('[webhook/twilio] identity resolve failed; continuing without person/wedding:', err)
+    console.error('[webhook/twilio] person resolve failed; continuing without person/wedding:', err)
   }
 
   // ---- Insert interaction ----
@@ -290,33 +312,115 @@ export async function POST(request: NextRequest) {
     console.warn('[webhook/twilio] webhook_log insert failed (likely race):', logErr.message)
   }
 
-  // ---- Lifecycle signal + identity reconstruction ----
-  // Fire-and-forget. Inbound SMS from a couple is signal for the lifecycle
-  // engine + Wave 4 reconstruction loop.
-  if (weddingId && direction === 'inbound') {
-    void (async () => {
-      try {
-        const { recordSmsLifecycleSignal } = await import(
-          '@/lib/services/lifecycle/state-machine'
-        )
-        await recordSmsLifecycleSignal({
-          supabase,
-          venueId,
-          weddingId: weddingId!,
-          direction: 'inbound',
-          body,
-        })
-      } catch (err) {
-        console.warn('[webhook/twilio] lifecycle signal hook failed (non-fatal):', err)
+  // ---- Intent classifier (SYNC) + gated wedding mint ----
+  // Step 5b (RM-1123, 2026-05-13): classify the inbound SMS before
+  // deciding to mint a wedding for fresh persons. Mirrors the OpenPhone
+  // poll path. Skipped for outbound (the couple is the destination,
+  // intent doesn't apply).
+  if (direction === 'inbound' && interaction.id) {
+    let intentVerdict:
+      | { intent_class: string; referenced_couple_name: string | null }
+      | null = null
+    try {
+      const { classifyInboundIntent } = await import(
+        '@/lib/services/intel/inbound-intent-classifier'
+      )
+      const verdict = await classifyInboundIntent({
+        interactionId: interaction.id as string,
+        body,
+        subject: null,
+        venueId,
+        channel: 'sms',
+        correlationId,
+        supabase,
+      })
+      intentVerdict = {
+        intent_class: verdict.intent_class as string,
+        referenced_couple_name: verdict.referenced_couple_name ?? null,
       }
-    })()
-    void enqueueIdentityReconstruction({
-      weddingId,
-      venueId,
-      triggerSignal: 'sms_received',
-    }).catch((err) =>
-      console.warn('[webhook/twilio] reconstruction enqueue failed (non-fatal):', err),
-    )
+    } catch (err) {
+      console.warn('[webhook/twilio] intent-classify failed (non-fatal):', err)
+    }
+
+    // Couple-intent gate. Only mint when classifier verdicts the SMS as
+    // a couple-relevant inquiry. Vendors, bus drivers, autoreplies stay
+    // as orphan interactions.
+    // Same gate shape as OpenPhone: mint when classifier verdicts a
+    // couple-relevant intent AND the person doesn't already have a
+    // wedding. The personIsFresh check is intentionally NOT used —
+    // returning senders whose first message was bare-greeting (no mint
+    // back then) still get minted when intent later surfaces.
+    const COUPLE_INTENTS = new Set(['new_inquiry', 'inquiry_followup'])
+    const shouldMint =
+      !weddingId &&
+      !!couplePhone &&
+      intentVerdict &&
+      COUPLE_INTENTS.has(intentVerdict.intent_class)
+
+    if (shouldMint && intentVerdict) {
+      try {
+        const { mintWedding } = await import('@/lib/services/identity/mint-wedding')
+        const minted = await mintWedding({
+          venueId,
+          source: 'twilio_webhook',
+          signals: {
+            email: null,
+            phone: couplePhone,
+            fullName: null,
+            weddingDate: null,
+            inquiryDate: timestampIso,
+          },
+          reason: `intent:${intentVerdict.intent_class}`,
+          supabase,
+          correlationId,
+        })
+        weddingId = minted.weddingId
+        // Backfill interaction.wedding_id now that mint succeeded.
+        await supabase
+          .from('interactions')
+          .update({ wedding_id: weddingId })
+          .eq('id', interaction.id as string)
+        console.log(
+          `[webhook/twilio] minted wedding ${weddingId} from intent=${intentVerdict.intent_class}`,
+        )
+      } catch (mintErr) {
+        console.warn('[webhook/twilio] gated mint failed:', mintErr)
+      }
+    }
+
+    // Lifecycle + reconstruction enqueue downstream — only fire when we
+    // actually have a wedding to attach the signals to. Existing-couple
+    // weddings (hydrated above) AND newly-minted weddings (just above)
+    // both qualify.
+    if (weddingId) {
+      void (async () => {
+        try {
+          const { recordSmsLifecycleSignal } = await import(
+            '@/lib/services/lifecycle/state-machine'
+          )
+          await recordSmsLifecycleSignal({
+            supabase,
+            venueId,
+            weddingId: weddingId!,
+            direction: 'inbound',
+            body,
+          })
+        } catch (err) {
+          console.warn('[webhook/twilio] lifecycle signal hook failed (non-fatal):', err)
+        }
+      })()
+      // Reconstruction enqueue: mintWedding already enqueues for new
+      // mints (per Step 4 / C2). This explicit enqueue covers the
+      // existing-couple-with-new-signal case where mintWedding wasn't
+      // called. 24h dedupe inside enqueue collapses bursts.
+      void enqueueIdentityReconstruction({
+        weddingId,
+        venueId,
+        triggerSignal: 'sms_received',
+      }).catch((err) =>
+        console.warn('[webhook/twilio] reconstruction enqueue failed (non-fatal):', err),
+      )
+    }
   }
 
   console.log('[webhook/twilio] processed', {

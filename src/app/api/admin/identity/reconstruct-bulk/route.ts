@@ -213,6 +213,13 @@ export async function POST(req: NextRequest) {
     ? rawRows.filter((r) => !excludeIds.has(r.id))
     : rawRows
   const rows = filteredRows.slice(0, limit)
+  // Pagination: advance offset by RAW fetched count, not filtered count.
+  // If a venue has 800 profiled weddings sorting before 100 unprofiled
+  // ones, the first page fetches rows 0-799 raw, filters to 0 after
+  // exclusion, but we still need to advance to offset=800 for the
+  // next page to surface the unprofiled tail. Bug discovered during
+  // step 5 bandaid recheck.
+  const nextOffsetAdvance = onlyMissingProfile ? rawRows.length : rows.length
 
   const startedAt = Date.now()
   const result = {
@@ -231,7 +238,7 @@ export async function POST(req: NextRequest) {
     timeboxed: false,
     costCents: 0,
     hasMore: false,
-    nextOffset: offset + rows.length,
+    nextOffset: offset + nextOffsetAdvance,
     failures: [] as Array<{ weddingId: string; error: string }>,
   }
 
@@ -288,7 +295,7 @@ export async function POST(req: NextRequest) {
   }
 
   result.hasMore =
-    result.totalCount > 0 && offset + rows.length < (result.totalCount ?? 0)
+    result.totalCount > 0 && offset + nextOffsetAdvance < (result.totalCount ?? 0)
   // Round cost to 4 dp (sub-cent precision matches couple_identity_profile.cost_cents).
   result.costCents = Math.round(result.costCents * 10_000) / 10_000
 

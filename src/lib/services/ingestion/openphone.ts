@@ -875,14 +875,20 @@ async function persistRow(
     }
   }
 
-  // Resolver create-fresh: INBOUND only. Outbound to an unknown number
-  // is more likely a vendor/friend/wrong-number than a fresh prospect;
-  // creating a wedding for them pollutes the lead list. Surface as
-  // unmatched and let the operator attach if it really is a couple.
+  // Person-only resolve: INBOUND only. Outbound to an unknown number
+  // is more likely a vendor/friend/wrong-number than a fresh prospect.
+  //
+  // Step 5b (2026-05-13, RM-1123): pre-fix this called resolveIdentity
+  // which unconditionally minted a wedding via Branch C. Bus drivers,
+  // vendors, autoreplies all minted ghost weddings that polluted the
+  // leads list. The fix splits the resolve: person is created here
+  // (we need the row for the interaction insert), but the wedding mint
+  // is deferred until the inbound-intent classifier runs and verdicts
+  // a couple-relevant intent class.
   if (!personId && externalNumber && row.direction === 'inbound') {
     try {
-      const { resolveIdentity } = await import('@/lib/services/identity/resolver')
-      const resolved = await resolveIdentity(
+      const { resolvePersonOnly } = await import('@/lib/services/identity/resolver')
+      const resolved = await resolvePersonOnly(
         venueId,
         {
           email: null,
@@ -899,9 +905,10 @@ async function persistRow(
         },
       )
       personId = resolved.personId
-      weddingId = resolved.weddingId
+      // weddingId stays null; the gate-on-classifier block below decides
+      // whether to mint based on intent_class.
     } catch (err) {
-      console.warn('[openphone] resolveIdentity failed (non-fatal):', err)
+      console.warn('[openphone] resolvePersonOnly failed (non-fatal):', err)
     }
   }
 
@@ -1061,7 +1068,15 @@ async function persistRow(
   // of bug: logistics chatter on a fresh phone number gets minted as a
   // hot inquiry. The classifier emits intent_class (client_logistics,
   // family_member_proxy, vendor_communication, etc) so downstream heat
-  // scoring + Sage drafts + sequences route correctly. Fire-and-forget.
+  // scoring + Sage drafts + sequences route correctly.
+  //
+  // Step 5b (RM-1123, 2026-05-13): classifier is SYNC for inbound so we
+  // can gate the wedding mint on its verdict. Pre-fix it ran
+  // fire-and-forget AFTER the mint, which meant bus drivers, vendors,
+  // and autoreplies created ghost weddings before classification could
+  // refuse them. Cost: ~500ms Haiku call per inbound. OpenPhone polls
+  // every 15min so the latency impact at 50 SMS/poll is +25s — well
+  // within the 5-min cron ceiling.
   if (row.direction === 'inbound' && insertedInteraction?.id) {
     const intentChannel =
       row.channel === 'sms'
@@ -1069,26 +1084,121 @@ async function persistRow(
         : row.channel === 'voicemail'
           ? 'voicemail'
           : 'call'
-    void (async () => {
+    let intentVerdict:
+      | { intent_class: string; referenced_couple_name: string | null }
+      | null = null
+    try {
+      const { classifyInboundIntent } = await import(
+        '@/lib/services/intel/inbound-intent-classifier'
+      )
+      const verdict = await classifyInboundIntent({
+        interactionId: insertedInteraction.id as string,
+        body: row.body_text,
+        subject: null,
+        venueId,
+        channel: intentChannel,
+        supabase,
+      })
+      intentVerdict = {
+        intent_class: verdict.intent_class as string,
+        referenced_couple_name: verdict.referenced_couple_name ?? null,
+      }
+    } catch (err) {
+      console.warn(
+        `[openphone] intent-classify failed (${row.openphone_message_id}):`,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
+
+    // Gate the wedding mint on classifier verdict. Couple-intent classes
+    // (new_inquiry, inquiry_followup) trigger mintWedding. Everything
+    // else — client_logistics, vendor_communication, vendor_outreach,
+    // spam_outreach, auto_reply, coordinator_internal, family_member_proxy,
+    // client_emotional, unknown — leaves the interaction as an orphan
+    // with personId set but weddingId null. Operator can later attach
+    // via the inbox if a misclassification surfaces.
+    //
+    // family_member_proxy + client_emotional explicitly skipped here:
+    // they reference an existing wedding that should already be on file.
+    // The classifier emits referenced_couple_name; a future step can
+    // bind them to the matching wedding by name. For now they stay
+    // orphan and the operator triages.
+    // Mint when classifier verdicts couple-intent AND the person doesn't
+    // already have a wedding. Gates on `!weddingId` rather than
+    // `personIsFresh` so a returning sender whose first SMS was a bare
+    // "Hi" (classifier=unknown → no mint) gets minted on the SECOND
+    // message that surfaces intent — even though their person row
+    // already exists by then. The `!weddingId` check is the load-bearing
+    // safety: existing-wedding couples never get a duplicate mint.
+    const COUPLE_INTENTS = new Set(['new_inquiry', 'inquiry_followup'])
+    const shouldMint =
+      !weddingId &&
+      externalNumber &&
+      intentVerdict &&
+      COUPLE_INTENTS.has(intentVerdict.intent_class)
+
+    if (shouldMint && intentVerdict) {
       try {
-        const { classifyInboundIntent } = await import(
-          '@/lib/services/intel/inbound-intent-classifier'
-        )
-        await classifyInboundIntent({
-          interactionId: insertedInteraction.id as string,
-          body: row.body_text,
-          subject: null,
+        const { mintWedding } = await import('@/lib/services/identity/mint-wedding')
+        const minted = await mintWedding({
           venueId,
-          channel: intentChannel,
+          source: 'sms_inbound',
+          signals: {
+            email: null,
+            phone: externalNumber,
+            fullName: null,
+            weddingDate: null,
+            inquiryDate: row.occurred_at ?? undefined,
+          },
+          reason: `intent:${intentVerdict.intent_class}`,
           supabase,
+          correlationId: null,
         })
-      } catch (err) {
+        weddingId = minted.weddingId
+        // Backfill the interaction's wedding_id now that the mint
+        // succeeded. The original heat-fire block at line 1005 ran with
+        // weddingId=null (since mint was deferred), so we also fire
+        // initial_inquiry heat here so the new lead lands at the same
+        // baseline as the pre-fix flow. Fire-and-forget; never blocks.
+        if (insertedInteraction?.id) {
+          await supabase
+            .from('interactions')
+            .update({ wedding_id: weddingId })
+            .eq('id', insertedInteraction.id as string)
+        }
+        const postMintEventType = pickVoiceEventType(row)
+        if (postMintEventType) {
+          void recordEngagementEvent(
+            venueId,
+            weddingId,
+            postMintEventType,
+            row.direction,
+            {
+              source: 'openphone',
+              channel: row.channel,
+              openphone_message_id: row.openphone_message_id,
+              interaction_id: (insertedInteraction?.id as string | undefined) ?? null,
+              minted_via: 'sms_intent_gate',
+            },
+            row.occurred_at ?? undefined,
+          ).catch((err) => {
+            console.warn(
+              `[openphone] post-mint heat fire failed (${row.openphone_message_id}):`,
+              err instanceof Error ? err.message : String(err),
+            )
+          })
+        }
+        console.log(
+          `[openphone] minted wedding ${weddingId} from intent=${intentVerdict.intent_class} ` +
+            `(phone=${externalNumber}, openphone=${row.openphone_message_id})`,
+        )
+      } catch (mintErr) {
         console.warn(
-          `[openphone] intent-classify failed (${row.openphone_message_id}):`,
-          err instanceof Error ? err.message : String(err),
+          `[openphone] gated mint failed (${row.openphone_message_id}):`,
+          mintErr instanceof Error ? mintErr.message : String(mintErr),
         )
       }
-    })()
+    }
   }
 
   // ---------------------------------------------------------------------------
