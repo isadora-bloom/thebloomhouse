@@ -36,7 +36,7 @@ import { LIFECYCLE_FOLDERS } from './lifecycle'
  * PROMPTS-CHANGELOG.md when the system prompt or response contract
  * changes meaningfully.
  */
-export const BRAIN_INBOX_FOLDER_AI_PROMPT_VERSION = 'inbox-folder-ai.prompt.v1.0'
+export const BRAIN_INBOX_FOLDER_AI_PROMPT_VERSION = 'inbox-folder-ai.prompt.v1.1'
 
 const BODY_SLICE_LIMIT = 2000
 
@@ -92,6 +92,32 @@ const SYSTEM_PROMPT_LINES: string[] = [
   '    not "advertiser", because the platform is relaying a real',
   '    couple. Look at the body content, not just the sender domain.',
   '  - When you cannot tell, pick "other".',
+  '',
+  'Relay patterns to recognize (the From: address gets rewritten to the',
+  'couple\'s actual email so the venue can reply directly — do NOT read',
+  'a gmail.com From: as evidence the sender is the couple typing from',
+  'scratch). Pick "new_inquiry" or "potential_client" not "vendor" /',
+  '"advertiser" / "other" when you see these:',
+  '',
+  '  Knot Pro Inbox relay — subject contains "📩" emoji + "sent you a',
+  '    new message", or body references "theknot.com" or "The Knot Pro".',
+  '    These are real couples reaching out via Knot\'s pro-inbox channel.',
+  '    Classify as "new_inquiry" unless body content shows the couple',
+  '    has already toured / replied multiple times (then "potential_client").',
+  '',
+  '  Calendly notifications — subject starts with "New Event:" or',
+  '    "Invitee:" or "Event scheduled", body links calendly.com. Means',
+  '    a couple booked a tour or planning call. Classify as',
+  '    "potential_client" (a tour is a stage past initial inquiry).',
+  '    Reschedule / cancellation notifications from Calendly are also',
+  '    "potential_client" — they\'re about an engaged couple\'s tour.',
+  '',
+  '  Acuity Scheduling — subject contains "New appointment" or',
+  '    "Appointment scheduled", body links acuityscheduling.com.',
+  '    Same rule as Calendly — classify as "potential_client".',
+  '',
+  '  WeddingWire / Here Comes The Guide / Zola relays — body references',
+  '    the platform name, classify as "new_inquiry".',
   '',
   'Return a single JSON object with exactly this shape:',
   '  {',

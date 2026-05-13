@@ -11,6 +11,33 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-05-12 (Inbox folder AI — relay-pattern recognition)
+
+Bumped `inbox-folder-ai.prompt.v1.0` → `inbox-folder-ai.prompt.v1.1`
+(`BRAIN_INBOX_FOLDER_AI_PROMPT_VERSION` in
+`src/lib/services/inbox/folder-ai-classifier.ts`).
+
+Two live misclassifications caught the gap (Keeley Tate via Knot Pro
+Inbox, Hassan Abidi via Calendly tour booking) — both landed in the
+Vendors folder because the From: header gets rewritten to the couple's
+gmail address. The classifier couldn't tell from a generic `@gmail.com`
+sender that the email was a platform relay.
+
+v1.1 adds a "Relay patterns to recognize" section enumerating:
+- Knot Pro Inbox — subject "📩" + "sent you a new message", body links
+  theknot.com → `new_inquiry`.
+- Calendly notifications — subject "New Event:" / "Invitee:" / "Event
+  scheduled", body links calendly.com → `potential_client` (a tour is
+  stage past initial inquiry).
+- Acuity Scheduling — subject "New appointment" / "Appointment
+  scheduled", body links acuityscheduling.com → `potential_client`.
+- WeddingWire / Here Comes The Guide / Zola relays → `new_inquiry`.
+
+Also reinforces: gmail.com From: alone is NOT evidence the sender is
+the couple typing from scratch — check body markers first.
+
+No structural changes to the response contract.
+
 ## 2026-05-12 (Wave 6E depth — TBH Report narrative)
 
 New prompt: `tbh-report.prompt.v1.0` (constant `TBH_REPORT_PROMPT_VERSION`

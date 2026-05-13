@@ -73,6 +73,7 @@ interface ReclassRow {
   subject: string | null
   full_body: string | null
   direction: string | null
+  lifecycle_folder: LifecycleFolder | null
 }
 
 export async function POST(req: NextRequest) {
@@ -82,7 +83,7 @@ export async function POST(req: NextRequest) {
   if (!auth.venueId) return forbidden('no venue scope on session')
 
   const body = (await req.json().catch(() => null)) as
-    | { batchSize?: number; maxRows?: number }
+    | { batchSize?: number; maxRows?: number; sourceFolders?: string[] }
     | null
   const batchSize = clampInt(
     body?.batchSize,
@@ -96,6 +97,26 @@ export async function POST(req: NextRequest) {
     1,
     HARD_MAX_ROWS,
   )
+
+  // Which folders to re-sweep. Default 'other' for backward compatibility
+  // (the original long-tail sweep). Caller can pass any of the six folder
+  // names to re-decide rows already labelled — for example 'vendor' if a
+  // historical Haiku run mislabelled Knot Pro Inbox or Calendly relays
+  // as vendor, and the prompt has since been improved.
+  const ALLOWED_SOURCE_FOLDERS = new Set<LifecycleFolder>([
+    'new_inquiry',
+    'potential_client',
+    'client',
+    'vendor',
+    'advertiser',
+    'other',
+  ])
+  const requestedFolders = Array.isArray(body?.sourceFolders) ? body!.sourceFolders : null
+  const sourceFolders: LifecycleFolder[] = requestedFolders && requestedFolders.length > 0
+    ? requestedFolders.filter((f): f is LifecycleFolder =>
+        typeof f === 'string' && ALLOWED_SOURCE_FOLDERS.has(f as LifecycleFolder),
+      )
+    : ['other']
 
   const venueId = auth.venueId
   if (!venueId) return badRequest('caller has no resolved venue')
@@ -115,11 +136,11 @@ export async function POST(req: NextRequest) {
   // rows can stay 'other' without harm.
   const { data: rows, error } = await supabase
     .from('interactions')
-    .select('id, venue_id, from_email, from_name, subject, full_body, direction')
+    .select('id, venue_id, from_email, from_name, subject, full_body, direction, lifecycle_folder')
     .eq('venue_id', venueId)
     .eq('type', 'email')
     .eq('direction', 'inbound')
-    .eq('lifecycle_folder', 'other')
+    .in('lifecycle_folder', sourceFolders)
     .not('from_email', 'is', null)
     .not('full_body', 'is', null)
     .order('created_at', { ascending: false })
@@ -204,8 +225,11 @@ export async function POST(req: NextRequest) {
     for (const result of results) {
       if (!result) continue
       const { row, ai } = result
-      if (ai.folder === 'other') {
-        byFolder.other += 1
+      // Skip no-op: AI agrees with the row's current label. Catches both
+      // the original 'other' → 'other' case AND the re-sweep case where
+      // Haiku confirms the existing vendor/advertiser/etc verdict.
+      if (ai.folder === row.lifecycle_folder) {
+        byFolder[ai.folder] = (byFolder[ai.folder] ?? 0) + 1
         continue
       }
       if (ai.confidence < CONFIDENCE_THRESHOLD) {

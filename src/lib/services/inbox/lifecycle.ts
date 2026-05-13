@@ -146,58 +146,6 @@ const ADVERTISER_DOMAIN_SET: ReadonlySet<string> = new Set(
   ADVERTISER_DOMAINS.map((d) => d.toLowerCase()),
 )
 
-// ---------------------------------------------------------------------------
-// Inquiry-stage channel domains (2026-05-12).
-// ---------------------------------------------------------------------------
-//
-// Form-relay platforms (Knot / WeddingWire / HCTG / Zola intake forms) and
-// scheduling-tool notifications (Calendly / Acuity invitee confirmations)
-// are inquiry-stage by channel definition. The couple is shopping or
-// booking a tour — they're never a vendor and never an advertiser.
-//
-// Mirrors the deterministic short-circuit in inbound-intent-classifier.ts.
-// Two live misclassifications caught the bug class on 2026-05-12:
-//   - Keeley Tate (Knot intake) → Vendors folder. Some upstream tagged
-//     the sender as vendor (people.role or senderClassification override).
-//   - Hassan Abidi (Calendly tour) → Vendors folder. Folder-AI read
-//     "amazing tour planned for you" as a vendor pitch.
-//
-// Step 0 of decideLifecycleFolder consults this set BEFORE the vendor /
-// advertiser / client checks so neither a stale people.role nor a Haiku
-// misread can override the channel-level truth.
-const INQUIRY_STAGE_CHANNEL_DOMAINS: readonly string[] = [
-  'theknot.com',
-  'knotemail.com',
-  'member.theknot.com',
-  'mail.theknot.com',
-  'auth.theknot.com',
-  'weddingwire.com',
-  'mail.weddingwire.com',
-  'authsolic.com',
-  'theknotww.com',
-  'herecomestheguide.com',
-  'zola.com',
-  'mail.zola.com',
-  'calendly.com',
-  'calendlymail.com',
-  'acuityscheduling.com',
-] as const
-
-const INQUIRY_STAGE_DOMAIN_SET: ReadonlySet<string> = new Set(
-  INQUIRY_STAGE_CHANNEL_DOMAINS.map((d) => d.toLowerCase()),
-)
-
-function isInquiryStageChannel(domain: string | null | undefined): boolean {
-  if (!domain) return false
-  const d = domain.toLowerCase().trim()
-  if (!d) return false
-  if (INQUIRY_STAGE_DOMAIN_SET.has(d)) return true
-  for (const dom of INQUIRY_STAGE_DOMAIN_SET) {
-    if (d.endsWith(`.${dom}`)) return true
-  }
-  return false
-}
-
 /**
  * True if `domain` (or its parent suffix) matches the advertiser
  * allow-list. Matches `mail.theknot.com` against `theknot.com`, etc.
@@ -294,31 +242,6 @@ export function decideLifecycleFolder(
     aiClassification,
     venueVendorDomains,
   } = input
-
-  // 0) Inquiry-stage channel override (2026-05-12). Form-relay senders
-  //    (Knot / WeddingWire / HCTG / Zola) and scheduling-tool invitee
-  //    confirmations (Calendly / Acuity) are inquiry-stage by channel
-  //    definition. Route by wedding state and skip the vendor /
-  //    advertiser branches entirely. Without this, a stale people.role
-  //    or a misread by the Haiku folder classifier could drop a fresh
-  //    Knot inquiry into Vendors or a Calendly tour booking into
-  //    Advertisers. Same root cause as inferDeterministicIntent in
-  //    inbound-intent-classifier.ts — the channel knows the answer
-  //    before the LLM does.
-  if (isInquiryStageChannel(senderDomain)) {
-    if (weddingStatus === 'booked' || weddingStatus === 'completed' || !!bookedAt) {
-      return 'client'
-    }
-    if (
-      weddingStatus === 'tour_scheduled' ||
-      weddingStatus === 'tour_completed' ||
-      weddingStatus === 'proposal_sent' ||
-      hasTourEvent
-    ) {
-      return 'potential_client'
-    }
-    return 'new_inquiry'
-  }
 
   // 1) Advertiser — sender domain in allow-list AND no wedding link.
   //    Without the no-wedding gate a Knot inquiry-relay would land here
@@ -601,13 +524,24 @@ export async function updateThreadLifecycleFolder(
     venueVendorDomains,
   })
 
-  // Step 6b: AI fallback — only when caller opted in AND the rule chain
-  // would otherwise drop the thread into 'other'. We pick the most-recent
-  // inbound row (richest body, freshest sender) and hand it to the AI
-  // classifier. The result feeds back through decideLifecycleFolder via
-  // aiClassification — keeping the deterministic rule chain authoritative.
+  // Step 6b: AI consultation — fires whenever the rule chain landed on
+  // one of the "intent-judgment" folders ('other', 'vendor', 'advertiser')
+  // where structured signal alone can't reliably name the sender's role.
+  // The trust-Haiku doctrine (2026-05-12): when the rule chain has firm
+  // wedding-state evidence ('client' = booked, 'new_inquiry' = first
+  // inbound on an inquiry-stage wedding, 'potential_client' = tour /
+  // proposal sent), we keep that verdict — it's grounded in CRM facts.
+  // Otherwise we hand the email to Haiku and feed its verdict back
+  // through decideLifecycleFolder via aiClassification.
+  //
+  // Caught two live misclassifications on 2026-05-12 (Keeley Tate Knot
+  // Pro Inbox + Hassan Abidi Calendly tour) where the From: was rewritten
+  // to the couple's gmail and the rule chain (or an earlier reclass-AI
+  // run with a weaker prompt) settled on 'vendor'. Letting Haiku
+  // re-decide with the v1.1 prompt rescues these.
+  const AI_RECONSIDER_FOLDERS = new Set<LifecycleFolder>(['other', 'vendor', 'advertiser'])
   let folder = ruleFolder
-  if (useAi && ruleFolder === 'other') {
+  if (useAi && AI_RECONSIDER_FOLDERS.has(ruleFolder)) {
     type InboundRow = {
       direction: string
       from_email?: string | null
@@ -642,17 +576,40 @@ export async function updateThreadLifecycleFolder(
         },
         { correlationId },
       )
-      folder = decideLifecycleFolder({
-        weddingStatus,
-        bookedAt,
-        inboundCount,
-        outboundCount,
-        hasTourEvent,
-        senderDomain,
-        senderRole,
-        aiClassification: ai.folder,
-        venueVendorDomains,
-      })
+
+      // Two paths depending on what the rule chain landed on:
+      //
+      // Rule said 'other' — feed AI back through decideLifecycleFolder
+      // so the no-strong-signal gate still applies. Preserves the
+      // original long-tail-bucket behaviour.
+      //
+      // Rule said 'vendor' / 'advertiser' — these branches fire from
+      // a stale people.role or a domain allow-list match that we have
+      // reason to doubt. If Haiku is confident (>= 70) and disagrees,
+      // trust Haiku. Hard CRM signals (booked wedding, wedding status)
+      // would have routed the row to 'client' / 'potential_client' /
+      // 'new_inquiry' BEFORE step 2 fired vendor — so by definition,
+      // when we land here, the structured floor is not load-bearing.
+      const AI_CONFIDENCE_OVERRIDE_THRESHOLD = 70
+      if (ruleFolder === 'other') {
+        folder = decideLifecycleFolder({
+          weddingStatus,
+          bookedAt,
+          inboundCount,
+          outboundCount,
+          hasTourEvent,
+          senderDomain,
+          senderRole,
+          aiClassification: ai.folder,
+          venueVendorDomains,
+        })
+      } else if (
+        ai.folder !== ruleFolder &&
+        ai.folder !== 'other' &&
+        ai.confidence >= AI_CONFIDENCE_OVERRIDE_THRESHOLD
+      ) {
+        folder = ai.folder
+      }
     }
   }
 
