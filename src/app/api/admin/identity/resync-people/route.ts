@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
     try {
       const result = await syncProfileToPeople(wid, { supabase })
       if (result.ok) {
-        if (result.updates.length > 0) synced += 1
+        if (result.updated.length > 0) synced += 1
         else skipped += 1
       } else {
         skipped += 1

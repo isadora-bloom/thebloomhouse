@@ -769,6 +769,18 @@ function calendlyRowsToNormalised(
       bodyLines.push(`scheduled_at:${r.startIso ?? '(unknown)'}`)
       if (r.createdIso) bodyLines.push(`created_at:${r.createdIso}`)
       if (r.location) bodyLines.push(`location:${r.location}`)
+      // 2026-05-13 Pass H: persist the Calendly invitee name in the
+      // synth body. Pre-fix, the body only had partner2_name from the
+      // Q&A questions — partner1's name was thrown away when the CSV
+      // import collapsed Invitee First/Last Name columns into the
+      // NormalisedLeadRow.partner1_first_name field (which propagates
+      // to the people row but not the audit-body). Result: judge
+      // re-reads the body and sees no partner1 name → name_quality='low'
+      // → profile-to-people-sync did nothing (RM-0317 Laryssa case).
+      // Belt + suspenders: this line + extracted_identity stamp below.
+      const inviteeFull = [r.inviteeFirst, r.inviteeLast].filter(Boolean).join(' ').trim()
+      if (inviteeFull) bodyLines.push(`partner1_name:${inviteeFull}`)
+      if (r.inviteeEmail) bodyLines.push(`partner1_email:${r.inviteeEmail}`)
       if (r.canceled) {
         bodyLines.push(`cancelled:true${r.canceledBy ? ` (by ${r.canceledBy})` : ''}`)
         if (r.cancellationDerived) {
@@ -795,6 +807,12 @@ function calendlyRowsToNormalised(
         provider: 'calendly',
         event_type: r.eventTypeName,
       }
+      // 2026-05-13 Pass H: stamp invitee name + email on extracted_identity
+      // so coordinator UIs + retroactive linkage scripts have the name
+      // without re-parsing the synth body. Same Laryssa fix.
+      if (r.inviteeFirst) rowExtractedIdentity.partner1_first_name = r.inviteeFirst
+      if (r.inviteeLast) rowExtractedIdentity.partner1_last_name = r.inviteeLast
+      if (r.inviteeEmail) rowExtractedIdentity.partner1_email = r.inviteeEmail
       const rowLeadSourceRaw = r.questionsRouted.get('lead_source')
       if (rowLeadSourceRaw) {
         const recognised = recogniseHearSource(rowLeadSourceRaw)
