@@ -817,14 +817,19 @@ export async function stampInboundVerdict(
     venueId: string
     supabase?: SupabaseClient
     correlationId?: string | null
+    /** When true, overwrites intent_class even if it was previously
+     *  stamped. Used by the admin reclass endpoint to force a fresh
+     *  verdict on rows that landed before a prompt revision. Default
+     *  false preserves idempotency for the live fire-and-forget path. */
+    forceOverwrite?: boolean
   },
 ): Promise<void> {
-  const { venueId, correlationId } = options
+  const { venueId, correlationId, forceOverwrite } = options
   const supabase = options.supabase ?? createServiceClient()
   if (!interactionId || !venueId) return
 
   try {
-    await supabase
+    let q = supabase
       .from('interactions')
       .update({
         intent_class: verdict.intent_class,
@@ -834,7 +839,10 @@ export async function stampInboundVerdict(
         extracted_facts: verdict.extracted_facts,
       })
       .eq('id', interactionId)
-      .is('intent_classified_at', null)
+    if (!forceOverwrite) {
+      q = q.is('intent_classified_at', null)
+    }
+    await q
   } catch (err) {
     logEvent({
       level: 'warn',

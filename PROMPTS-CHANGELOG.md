@@ -11,6 +11,28 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-05-12 (Folder-AI deletion + reclass endpoint rewrite)
+
+`src/lib/services/inbox/folder-ai-classifier.ts` deleted. The
+`/api/admin/reclass-folders-ai` endpoint that referenced it was
+rewritten to use the unified classifier path:
+
+  Per row:
+    1. classifyInboundRaw — fresh intent verdict
+    2. stampInboundVerdict (forceOverwrite: true) — replaces any
+       prior intent_class on the row
+    3. updateThreadLifecycleFolder — recomputes folder from the
+       freshly-stamped intent_class + wedding state
+
+Same endpoint URL, same `sourceFolders` arg. Response shape changed
+slightly: `reclassified` and `folder_changed` counters replace the
+old `updated` / `by_folder` aggregation. `folder_transitions` map
+shows the before→after folder counts.
+
+stampInboundVerdict gained a `forceOverwrite: boolean` option for
+admin reclass paths that need to replace an existing intent_class.
+Default false preserves the live fire-and-forget idempotency.
+
 ## 2026-05-12 (Folder-AI retired — folder = f(intent_class, wedding state))
 
 NOT a prompt bump — a deletion. The folder-AI Haiku call

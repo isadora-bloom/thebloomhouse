@@ -1,34 +1,23 @@
 // ---------------------------------------------------------------------------
-// /api/admin/reclass-folders-ai -- one-shot AI reclassification of inbox
-// rows currently bucketed as 'other'.
+// /api/admin/reclass-folders-ai — historical reclass via the unified
+// inbound classifier + deterministic folder writer.
 // ---------------------------------------------------------------------------
 //
-// Live rule chain in lifecycle.ts handles ~50% of Isadora's inbox cleanly,
-// but the long tail (vendors not linked to people.role='vendor', cold
-// SaaS spam from random gmail accounts) ends up in 'other'. This endpoint
-// lets an admin sweep the existing 'other' rows through Haiku to relabel
-// the high-confidence ones.
+// 2026-05-12 rewrite. The endpoint used to call classifyFolderAI directly
+// (the retired 2-call architecture). After folder-AI was retired
+// (commit c32b85b), folder = f(intent_class, wedding state) — so a
+// reclass is really an INTENT reclass with a folder recompute as a
+// downstream effect.
 //
-// Auth: any authenticated venue user. The query is hard-scoped to the
-// caller's auth.venueId so a venue owner can only reclass their own
-// inbox -- no cross-venue blast radius. Demo mode is rejected.
-// (Initial spec gated this to super_admin but Isadora is the venue
-// owner not a platform super_admin and got 403'd; the per-venue scope
-// is the real safety boundary, not the role.)
+// New flow per row:
+//   1. Re-run the unified classifier (classifyInboundRaw).
+//   2. Force-stamp the new verdict on the row (forceOverwrite: true).
+//   3. Recompute the folder via updateThreadLifecycleFolder. The folder
+//      writer reads the freshly-stamped intent_class and re-derives the
+//      folder deterministically.
 //
-// Behaviour:
-//   - Selects interactions where lifecycle_folder='other' AND from_email
-//     IS NOT NULL AND length(full_body) >= 30 AND venue_id matches the
-//     caller's auth.venueId, ordered by created_at desc.
-//   - Processes in batches of {batchSize} (default 20, max 50). Each row
-//     gets one Haiku call. Total scanned capped at {maxRows} (default
-//     2000, max 5000).
-//   - Updates lifecycle_folder ONLY when AI confidence >= 70 AND the new
-//     folder is not 'other'. Anything below the bar is left alone.
-//   - Wraps every per-row AI call in try/catch. A single failure logs
-//     and skips that row -- the sweep never aborts mid-batch.
-//
-// Cost ceiling: ~$0.0003/Haiku call. 2000 rows = $0.60 worst case.
+// Auth: any authenticated venue user, scoped to their own venue. Demo
+// blocked. ~$0.0003/row Haiku cost (one call per inbound).
 // ---------------------------------------------------------------------------
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -39,30 +28,21 @@ import {
   forbidden,
   badRequest,
 } from '@/lib/api/auth-helpers'
-import { classifyFolderAI } from '@/lib/services/inbox/folder-ai-classifier'
-import type { LifecycleFolder } from '@/lib/services/inbox/lifecycle'
-import { promoteVendorDomain } from '@/lib/services/inbox/vendor-domains'
+import {
+  classifyInboundRaw,
+  stampInboundVerdict,
+} from '@/lib/services/intel/inbound-intent-classifier'
+import {
+  updateThreadLifecycleFolder,
+  type LifecycleFolder,
+} from '@/lib/services/inbox/lifecycle'
 
-// 5-minute cap. Vercel Pro functions allow up to 300s. A full 2000-row
-// sweep at 200ms/row = 400s, so the UI must call with a smaller cap if
-// it wants to finish in one request -- the endpoint will return early
-// when the budget is hit.
 export const maxDuration = 300
 
-const DEFAULT_BATCH_SIZE = 20
-const MAX_BATCH_SIZE = 50
-const DEFAULT_MAX_ROWS = 2000
+const DEFAULT_BATCH_SIZE = 10
+const MAX_BATCH_SIZE = 30
+const DEFAULT_MAX_ROWS = 500
 const HARD_MAX_ROWS = 5000
-const CONFIDENCE_THRESHOLD = 70
-// Vendor-domain auto-promotion uses a stricter bar than reclass.
-// Reclass at ≥ 70 is safe because we're labelling ONE row; auto-promoting
-// a domain to the venue's vendor allow-list affects every FUTURE email
-// from that domain, so we want a clearly-confident Haiku call. Mismatch
-// the constants on purpose — the comment is the spec.
-const VENDOR_PROMOTION_THRESHOLD = 80
-// Stop processing new batches when the elapsed time crosses this bound.
-// Leaves headroom for the final batch + JSON serialization before the
-// platform's 300s wall.
 const TIME_BUDGET_MS = 280_000
 
 interface ReclassRow {
@@ -74,6 +54,8 @@ interface ReclassRow {
   full_body: string | null
   direction: string | null
   lifecycle_folder: LifecycleFolder | null
+  gmail_thread_id: string | null
+  type: string | null
 }
 
 export async function POST(req: NextRequest) {
@@ -85,24 +67,9 @@ export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as
     | { batchSize?: number; maxRows?: number; sourceFolders?: string[] }
     | null
-  const batchSize = clampInt(
-    body?.batchSize,
-    DEFAULT_BATCH_SIZE,
-    1,
-    MAX_BATCH_SIZE,
-  )
-  const maxRows = clampInt(
-    body?.maxRows,
-    DEFAULT_MAX_ROWS,
-    1,
-    HARD_MAX_ROWS,
-  )
+  const batchSize = clampInt(body?.batchSize, DEFAULT_BATCH_SIZE, 1, MAX_BATCH_SIZE)
+  const maxRows = clampInt(body?.maxRows, DEFAULT_MAX_ROWS, 1, HARD_MAX_ROWS)
 
-  // Which folders to re-sweep. Default 'other' for backward compatibility
-  // (the original long-tail sweep). Caller can pass any of the six folder
-  // names to re-decide rows already labelled — for example 'vendor' if a
-  // historical Haiku run mislabelled Knot Pro Inbox or Calendly relays
-  // as vendor, and the prompt has since been improved.
   const ALLOWED_SOURCE_FOLDERS = new Set<LifecycleFolder>([
     'new_inquiry',
     'potential_client',
@@ -112,11 +79,12 @@ export async function POST(req: NextRequest) {
     'other',
   ])
   const requestedFolders = Array.isArray(body?.sourceFolders) ? body!.sourceFolders : null
-  const sourceFolders: LifecycleFolder[] = requestedFolders && requestedFolders.length > 0
-    ? requestedFolders.filter((f): f is LifecycleFolder =>
-        typeof f === 'string' && ALLOWED_SOURCE_FOLDERS.has(f as LifecycleFolder),
-      )
-    : ['other']
+  const sourceFolders: LifecycleFolder[] =
+    requestedFolders && requestedFolders.length > 0
+      ? requestedFolders.filter((f): f is LifecycleFolder =>
+          typeof f === 'string' && ALLOWED_SOURCE_FOLDERS.has(f as LifecycleFolder),
+        )
+      : ['other']
 
   const venueId = auth.venueId
   if (!venueId) return badRequest('caller has no resolved venue')
@@ -124,19 +92,11 @@ export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
   const startedAt = Date.now()
 
-  // Pull the candidate set. We only need fields the classifier reads +
-  // the id for the update. Order by created_at desc so the most recent
-  // misclassifications get fixed first (newer rows are higher value to
-  // a coordinator triaging today's inbox).
-  // Restrict to inbound only. Outbound rows are messages WE sent
-  // (Sage nurture sequences, coordinator replies). Classifying them
-  // as "new inquiries" or "vendors" makes no sense — they are our
-  // own voice. The lifecycle_folder column is per-thread so the
-  // inbound row's classification represents the thread; outbound
-  // rows can stay 'other' without harm.
   const { data: rows, error } = await supabase
     .from('interactions')
-    .select('id, venue_id, from_email, from_name, subject, full_body, direction, lifecycle_folder')
+    .select(
+      'id, venue_id, from_email, from_name, subject, full_body, direction, lifecycle_folder, gmail_thread_id, type',
+    )
     .eq('venue_id', venueId)
     .eq('type', 'email')
     .eq('direction', 'inbound')
@@ -147,16 +107,9 @@ export async function POST(req: NextRequest) {
     .limit(maxRows)
 
   if (error) {
-    return NextResponse.json(
-      { ok: false, error: error.message },
-      { status: 500 },
-    )
+    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
   }
 
-  // Filter the body-length floor in JS rather than SQL. Postgres has a
-  // length() filter but PostgREST's not.is.null + length() chain needs
-  // an or() expression that's brittle; the JS filter is bounded by
-  // maxRows anyway so the cost is negligible.
   const candidates = (rows ?? []).filter(
     (r) =>
       typeof r.full_body === 'string' &&
@@ -166,160 +119,113 @@ export async function POST(req: NextRequest) {
   ) as ReclassRow[]
 
   let scanned = 0
-  let updated = 0
+  let reclassified = 0
+  let folderChanged = 0
   let aiErrors = 0
-  let lowConfidence = 0
-  let vendorDomainsPromoted = 0
-  // Track domains already promoted in this sweep so a venue with 47
-  // Gibson Rental emails fires one upsert, not 47. Carries across
-  // batches for the lifetime of the request.
-  const firedVendorDomains = new Set<string>()
-  const byFolder: Record<string, number> = {
-    new_inquiry: 0,
-    potential_client: 0,
-    vendor: 0,
-    advertiser: 0,
-    other: 0,
-  }
+  const folderTransitions: Record<string, number> = {}
+  // Dedup thread re-folder work across batches — many inbounds may share
+  // a thread, but the folder writer updates every interaction on the
+  // thread at once, so we only need to fire updateThreadLifecycleFolder
+  // ONCE per gmail_thread_id per sweep.
+  const refoldedThreads = new Set<string>()
 
   for (let i = 0; i < candidates.length; i += batchSize) {
     if (Date.now() - startedAt > TIME_BUDGET_MS) break
 
     const batch = candidates.slice(i, i + batchSize)
 
-    // Process each row in parallel within a batch. Haiku tolerates this
-    // easily and the per-call cost-tracker writes are async fire-and-forget.
-    const results = await Promise.all(
+    await Promise.all(
       batch.map(async (row) => {
         scanned += 1
+        const correlationId = `reclass-${row.id}-${startedAt}`
         try {
-          const direction =
-            row.direction === 'outbound' ? 'outbound' : 'inbound'
-          const ai = await classifyFolderAI(
+          // Step 1: Re-classify via the unified classifier.
+          const verdict = await classifyInboundRaw({
+            body: row.full_body,
+            subject: row.subject,
             venueId,
-            {
-              from: row.from_email ?? '',
-              fromName: row.from_name ?? null,
-              subject: row.subject ?? null,
-              body: row.full_body ?? '',
-              direction,
-            },
-            { correlationId: `reclass-folders-ai-${startedAt}` },
-          )
-          return { row, ai }
+            channel: 'email',
+            fromEmail: row.from_email,
+            correlationId,
+          })
+
+          // Step 2: Force-stamp the fresh verdict on the row (overrides
+          // any prior intent_class so the folder writer reads the new
+          // value).
+          await stampInboundVerdict(row.id, verdict, {
+            venueId,
+            supabase,
+            correlationId,
+            forceOverwrite: true,
+          })
+
+          reclassified += 1
         } catch (err) {
           aiErrors += 1
-          console.warn('[reclass-folders-ai] classifier threw', {
+          console.warn('[reclass-folders-ai] reclassify failed', {
             id: row.id,
             err: err instanceof Error ? err.message : 'unknown',
           })
-          return null
         }
       }),
     )
 
-    // Group acceptable updates by target folder so we can issue a small
-    // number of UPDATE statements rather than one per row.
-    const updatesByFolder = new Map<LifecycleFolder, string[]>()
-
-    for (const result of results) {
-      if (!result) continue
-      const { row, ai } = result
-      // Skip no-op: AI agrees with the row's current label. Catches both
-      // the original 'other' → 'other' case AND the re-sweep case where
-      // Haiku confirms the existing vendor/advertiser/etc verdict.
-      if (ai.folder === row.lifecycle_folder) {
-        byFolder[ai.folder] = (byFolder[ai.folder] ?? 0) + 1
-        continue
-      }
-      if (ai.confidence < CONFIDENCE_THRESHOLD) {
-        lowConfidence += 1
-        continue
-      }
-      const list = updatesByFolder.get(ai.folder) ?? []
-      list.push(row.id)
-      updatesByFolder.set(ai.folder, list)
+    // Step 3: Recompute folder per thread (deduped). updateThreadLifecycleFolder
+    // reads the freshly-stamped intent_class + wedding state, then
+    // updates every interaction on the thread to the new folder.
+    const threadsInBatch = new Set<string | null>()
+    for (const row of batch) {
+      const key = row.gmail_thread_id ?? `solo:${row.id}`
+      if (refoldedThreads.has(key)) continue
+      refoldedThreads.add(key)
+      threadsInBatch.add(row.gmail_thread_id)
     }
 
-    // Vendor-domain auto-promotion (mig 258). Stricter confidence bar
-    // than reclass (80 vs 70) because promoting a domain affects every
-    // FUTURE email from it. Collect distinct domains in this batch
-    // first, then fire one upsert per new-this-sweep domain. firedVendorDomains
-    // dedupes across batches for the lifetime of the request.
-    const batchDomainsToPromote = new Set<string>()
-    for (const result of results) {
-      if (!result) continue
-      const { row, ai } = result
-      if (ai.folder !== 'vendor') continue
-      if (ai.confidence < VENDOR_PROMOTION_THRESHOLD) continue
-      const fromEmail = (row.from_email ?? '').toLowerCase().trim()
-      const at = fromEmail.lastIndexOf('@')
-      const domain = at > 0 ? fromEmail.slice(at + 1) : ''
-      if (!domain) continue
-      if (firedVendorDomains.has(domain)) continue
-      batchDomainsToPromote.add(domain)
-    }
-    for (const domain of batchDomainsToPromote) {
-      firedVendorDomains.add(domain)
+    for (const threadId of threadsInBatch) {
       try {
-        const ok = await promoteVendorDomain({
+        const result = await updateThreadLifecycleFolder({
+          supabase,
           venueId,
-          domain,
-          confidence: VENDOR_PROMOTION_THRESHOLD,
-          source: 'ai_classifier',
+          threadId: threadId ?? null,
+          interactionId: threadId ? null : batch.find((r) => !r.gmail_thread_id)?.id ?? null,
         })
-        if (ok) vendorDomainsPromoted += 1
+        // Track folder transitions. We only know the BATCH started at
+        // sourceFolder X; if the new folder is different, count it.
+        const newFolder = result.folder
+        if (newFolder) {
+          // Compare against any row in this batch to detect change.
+          const sampleRow = batch.find(
+            (r) => (r.gmail_thread_id ?? null) === (threadId ?? null),
+          )
+          const oldFolder = sampleRow?.lifecycle_folder ?? null
+          if (oldFolder && oldFolder !== newFolder) {
+            folderChanged += 1
+            const key = `${oldFolder}→${newFolder}`
+            folderTransitions[key] = (folderTransitions[key] ?? 0) + 1
+          }
+        }
       } catch (err) {
-        console.warn('[reclass-folders-ai] vendor-domain promotion failed', {
-          domain,
+        console.warn('[reclass-folders-ai] folder recompute failed', {
+          threadId,
           err: err instanceof Error ? err.message : 'unknown',
         })
       }
     }
-
-    // Issue one UPDATE per target folder. Each update is scoped to the
-    // caller's venue and the ids we just classified -- no risk of
-    // re-stamping an already-correct row.
-    for (const [folder, ids] of updatesByFolder) {
-      if (ids.length === 0) continue
-      const { error: updErr } = await supabase
-        .from('interactions')
-        .update({ lifecycle_folder: folder })
-        .eq('venue_id', venueId)
-        .in('id', ids)
-      if (updErr) {
-        console.warn('[reclass-folders-ai] update failed', {
-          folder,
-          count: ids.length,
-          err: updErr.message,
-        })
-        continue
-      }
-      updated += ids.length
-      byFolder[folder] = (byFolder[folder] ?? 0) + ids.length
-    }
   }
 
-  const durationMs = Date.now() - startedAt
   return NextResponse.json({
     ok: true,
     scanned,
-    updated,
-    vendor_domains_promoted: vendorDomainsPromoted,
-    by_folder: byFolder,
+    reclassified,
+    folder_changed: folderChanged,
+    folder_transitions: folderTransitions,
     ai_errors: aiErrors,
-    low_confidence: lowConfidence,
-    duration_ms: durationMs,
+    duration_ms: Date.now() - startedAt,
     candidate_pool: candidates.length,
   })
 }
 
-function clampInt(
-  raw: unknown,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
+function clampInt(raw: unknown, fallback: number, min: number, max: number): number {
   const n = typeof raw === 'number' ? raw : Number(raw)
   if (!Number.isFinite(n)) return fallback
   return Math.min(max, Math.max(min, Math.floor(n)))
