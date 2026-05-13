@@ -133,10 +133,6 @@
       "schedule": "5 0 * * *"
     },
     {
-      "path": "/api/cron?job=identity_judge_sweep",
-      "schedule": "*/5 * * * *"
-    },
-    {
       "path": "/api/cron?job=outcome_measurement",
       "schedule": "0 6 * * 0"
     },
