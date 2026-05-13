@@ -889,20 +889,44 @@ export async function reconstructCoupleIdentity(
   // judge keeps working on the unlocked partner + every other section
   // (residence, occupations, emotional_truths, etc) — only the name
   // is frozen.
-  const partner1Locked = !!(existing as { partner1_locked_by_operator?: boolean } | null)?.partner1_locked_by_operator
-  const partner2Locked = !!(existing as { partner2_locked_by_operator?: boolean } | null)?.partner2_locked_by_operator
-  const existingProfile = (existing as { profile?: typeof profile } | null)?.profile ?? null
+  //
+  // Race-window mitigation (Pass E, 2026-05-13): re-read the lock state
+  // + locked-partner names IMMEDIATELY before the upsert. The original
+  // `existing` snapshot is from BEFORE the Sonnet call (~1-3s ago); an
+  // operator who set a lock during that window would have their lock
+  // ignored if we only consulted the stale snapshot. The re-read
+  // shrinks the race to <10ms. A full optimistic-lock via WHERE
+  // updated_at = expected is the race-free fix but requires UPDATE/
+  // INSERT branching instead of UPSERT; deferred until operator
+  // volume justifies the complexity.
+  const { data: latest } = await supabase
+    .from('couple_identity_profile')
+    .select('profile, partner1_locked_by_operator, partner2_locked_by_operator')
+    .eq('wedding_id', weddingId)
+    .maybeSingle()
+  const partner1Locked = !!(
+    (latest as { partner1_locked_by_operator?: boolean } | null)?.partner1_locked_by_operator ??
+    (existing as { partner1_locked_by_operator?: boolean } | null)?.partner1_locked_by_operator
+  )
+  const partner2Locked = !!(
+    (latest as { partner2_locked_by_operator?: boolean } | null)?.partner2_locked_by_operator ??
+    (existing as { partner2_locked_by_operator?: boolean } | null)?.partner2_locked_by_operator
+  )
+  const lockSourceProfile =
+    (latest as { profile?: typeof profile } | null)?.profile ??
+    (existing as { profile?: typeof profile } | null)?.profile ??
+    null
   let mergedProfile = profile
-  if ((partner1Locked || partner2Locked) && existingProfile) {
+  if ((partner1Locked || partner2Locked) && lockSourceProfile) {
     mergedProfile = {
       ...profile,
       names: {
         ...profile.names,
         partner1: partner1Locked
-          ? (existingProfile.names?.partner1 ?? profile.names.partner1)
+          ? (lockSourceProfile.names?.partner1 ?? profile.names.partner1)
           : profile.names.partner1,
         partner2: partner2Locked
-          ? (existingProfile.names?.partner2 ?? profile.names.partner2)
+          ? (lockSourceProfile.names?.partner2 ?? profile.names.partner2)
           : profile.names.partner2,
       },
     }

@@ -31,7 +31,7 @@ export async function POST() {
 
   const { data: rows, error } = await supabase
     .from('interactions')
-    .select('id, from_email, subject, timestamp, gmail_message_id, created_at')
+    .select('id, from_email, subject, timestamp, gmail_message_id, gmail_thread_id, created_at')
     .eq('venue_id', venueId)
     .eq('type', 'email')
     .order('created_at', { ascending: true })
@@ -40,17 +40,29 @@ export async function POST() {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // Bucket by (from_email|subject|minute). Keep the first, delete the rest.
+  // Bucket by (from_email|gmail_thread_id|subject|minute). Keep the
+  // first, delete the rest.
+  //
+  // 2026-05-13 (Pass F): gmail_thread_id added to the key to prevent
+  // collapsing two legitimately-distinct threads that happen to land
+  // in the same minute from the same sender with the same subject
+  // (e.g., generic "Inquiry from John" sent to two of the venue's
+  // linked addresses on separate threads). When gmail_thread_id is
+  // missing (non-Gmail source, or row pre-dates thread capture), the
+  // empty-string slot falls back to the pre-fix behaviour, so this is
+  // strictly more conservative than before.
   const buckets = new Map<string, string[]>()
   for (const r of (rows ?? []) as Array<{
     id: string
     from_email: string | null
     subject: string | null
     timestamp: string | null
+    gmail_thread_id: string | null
   }>) {
     if (!r.from_email || !r.timestamp) continue
     const minute = new Date(r.timestamp).toISOString().slice(0, 16) // YYYY-MM-DDTHH:mm
-    const key = `${r.from_email.toLowerCase()}|${(r.subject ?? '').trim()}|${minute}`
+    const threadKey = (r.gmail_thread_id ?? '').trim()
+    const key = `${r.from_email.toLowerCase()}|${threadKey}|${(r.subject ?? '').trim()}|${minute}`
     if (!buckets.has(key)) buckets.set(key, [])
     buckets.get(key)!.push(r.id)
   }
