@@ -22,6 +22,7 @@ import {
   Clock,
   Mail,
   ArrowUpRight,
+  RefreshCw,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -338,6 +339,7 @@ function DraftCard({
   onEdit,
   onReject,
   onSend,
+  onRegenerate,
   isProcessing,
   showVenueChip,
 }: {
@@ -347,6 +349,7 @@ function DraftCard({
   onEdit: (draft: Draft) => void
   onReject: (draft: Draft) => void
   onSend: (draft: Draft) => void
+  onRegenerate: (id: string) => void
   isProcessing: boolean
   showVenueChip: boolean
 }) {
@@ -511,6 +514,15 @@ function DraftCard({
           >
             <Send className="w-4 h-4" />
             Approve & Send
+          </button>
+          <button
+            onClick={() => onRegenerate(draft.id)}
+            disabled={isProcessing}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-sage-700 border border-sage-300 rounded-lg hover:bg-sage-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Have Sage re-draft this with the current lead state (tour cancellations, fresh prompts, latest context). Overwrites the existing draft body."
+          >
+            <RefreshCw className="w-4 h-4" />
+            Regenerate
           </button>
           <button
             onClick={() => onReject(draft)}
@@ -785,6 +797,45 @@ export default function ApprovalQueuePage() {
     } catch (err) {
       console.error('Failed to approve draft:', err)
       setError('Failed to approve draft')
+    } finally {
+      setProcessingId(null)
+    }
+  }
+
+  // ---- Regenerate the draft body ----
+  // Calls the server endpoint which re-runs the brain against the
+  // CURRENT lead state. Replaces draft_body + original_sage_body in
+  // place; status stays 'pending'. Used when the original draft is
+  // stale (e.g. tour was cancelled after the draft was generated,
+  // or a stronger prompt version has shipped since).
+  const handleRegenerate = async (id: string) => {
+    setProcessingId(id)
+    try {
+      const res = await fetch(`/api/agent/drafts/${id}/regenerate`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({} as { error?: string }))
+        throw new Error(j.error || `HTTP ${res.status}`)
+      }
+      const j = (await res.json()) as { draftId?: string }
+      // Refetch the single draft so the UI shows the new body without
+      // a full page reload.
+      if (j.draftId) {
+        const { data: refreshed } = await supabase
+          .from('drafts')
+          .select('*')
+          .eq('id', j.draftId)
+          .maybeSingle()
+        if (refreshed) {
+          setDrafts((prev) =>
+            prev.map((d) => (d.id === id ? (refreshed as Draft) : d)),
+          )
+        }
+      }
+    } catch (err) {
+      console.error('Failed to regenerate draft:', err)
+      setError(err instanceof Error ? err.message : 'Failed to regenerate draft')
     } finally {
       setProcessingId(null)
     }
@@ -1108,6 +1159,7 @@ export default function ApprovalQueuePage() {
               onEdit={setEditingDraft}
               onReject={setRejectingDraft}
               onSend={setSendingDraft}
+              onRegenerate={handleRegenerate}
               isProcessing={processingId === draft.id}
               showVenueChip={showVenueChip}
             />
