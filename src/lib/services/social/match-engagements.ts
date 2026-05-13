@@ -251,10 +251,11 @@ export async function matchEngagementsForCapture(
 
     if (samples.length < 50) {
       // Fallback chain: name → email → wedding event_code → "Unknown".
-      // Many Rixey rows still carry form-bleed first/last that the
-      // repair-form-bleed-names script will eventually NULL out;
-      // email + event_code are stable fallbacks the coordinator can
-      // still recognise.
+      // Form-bleed first/last names are blocked upstream by
+      // FORM_BLEED_FIRST/LAST regex in name-upgrade.ts (writers refuse
+      // to set them) + honeybook.ts isPackageOnlyName. Email +
+      // event_code are stable fallbacks for the legacy rows still on
+      // disk pre-class-fix.
       const coupleName = person
         ? [person.first_name, person.last_name].filter(Boolean).join(' ') || null
         : null

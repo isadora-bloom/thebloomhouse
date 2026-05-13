@@ -660,11 +660,13 @@ export async function upgradePeopleNameFromTouchpoints(
   return { upgrades, scanned: people.length }
 }
 
-/** Form-bleed token lists exposed for the repair-form-bleed-names
- *  backfill script (scripts/repair-form-bleed-names.ts) and tests.
- *  These mirror the FORM_BLEED_FIRST / FORM_BLEED_LAST regex used
- *  inside harvestFrom. Source of truth for "which name values are
- *  package / event-shape bleed and should be NULLed out". */
+/** Form-bleed token lists exposed for tests. These mirror the
+ *  FORM_BLEED_FIRST / FORM_BLEED_LAST regex used inside harvestFrom.
+ *  Source of truth for "which name values are package / event-shape
+ *  bleed and should be refused by writers". The repair-form-bleed-names
+ *  backfill script + nightly cron were retired 2026-05-13 Step 10 —
+ *  upstream class fix (FORM_BLEED_FIRST/LAST refusal here +
+ *  isPackageOnlyName in honeybook.ts) prevents new corruption. */
 export const FORM_BLEED_TOKENS = {
   /** First-name tokens the reconstruct.ts judge refuses + we now refuse. */
   firstHeads: [

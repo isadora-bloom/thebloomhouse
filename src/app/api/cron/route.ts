@@ -1245,8 +1245,6 @@ async function runPruneMaintenance(): Promise<{
   consumer_requests_expired: { rows_expired: number; errors: string[] }
   dunning: { reminder_1_fired: number; reminder_2_fired: number; sage_paused_fired: number; read_only_fired: number; errors: string[] }
   source_freshness: Awaited<ReturnType<typeof runSourceFreshnessSweep>>
-  form_bleed_nuke: { rows_nulled: number; errors: string[] }
-  empty_wedding_prune: { rows_deleted: number; errors: string[] }
   calendly_uri_backfill: { scanned: number; cached: number; already: number; failed: number }
   non_couple_tombstone: { total_scanned: number; total_tombstoned: number; errors: string[] }
   orphan_promote_social: { total_scanned: number; total_promoted: number; errors: string[] }
@@ -1255,7 +1253,7 @@ async function runPruneMaintenance(): Promise<{
   const { runAuditRetentionPrune } = await import('@/lib/services/audit-retention')
   const { detectBulkReadAnomalies } = await import('@/lib/services/bulk-read-anomaly')
   const { runDunningEscalate } = await import('@/lib/services/billing/dunning')
-  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness, formBleed, emptyWeddings, calendlyUri, nonCouple, orphanPromote] = await Promise.allSettled([
+  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness, calendlyUri, nonCouple, orphanPromote] = await Promise.allSettled([
     runTelemetryRetentionPrune(),
     runPruneRateLimits(),
     runPruneBrainDumpStale(),
@@ -1270,24 +1268,13 @@ async function runPruneMaintenance(): Promise<{
     // a small admin_notifications write surface). The standalone
     // 'source_freshness' job string is still accepted for ad-hoc runs.
     runSourceFreshnessSweep(),
-    // Folded in 2026-05-13. NULLs people rows where BOTH first_name +
-    // last_name are Calendly form-bleed tokens ("Whole Weekend",
-    // "One Day", "Vendor Meeting", "(Unknown) Day", etc.). Wave 4
-    // Sonnet judge can't catch these because the ghost weddings born
-    // from Calendly tour bookings never get a couple_identity_profile
-    // row — so identity_judge_sweep skips them. This sweep nukes the
-    // bad name; next legit signal repopulates via name-upgrade or the
-    // judge once a profile exists.
-    runFormBleedNuke(),
-    // Folded in 2026-05-13. Deletes weddings that have ZERO identifying
-    // signal anywhere — no person with a name/email/phone, no
-    // interactions, no engagement_events. These are pure ghost rows
-    // born from sources like the HoneyBook held-date import (project
-    // name = just a package label like "Whole Weekend") or duplicate
-    // mints that got auto-decayed to lost without ever having content.
-    // Defensive: never touches a wedding with booked_at — even if all
-    // other signal got wiped, a real booking must survive.
-    runEmptyWeddingPrune(),
+    // 2026-05-13 Step 10: runFormBleedNuke + runEmptyWeddingPrune
+    // retired. name-upgrade.ts FORM_BLEED_FIRST/LAST + honeybook.ts
+    // isPackageOnlyName are the upstream class fixes; empty weddings
+    // are signal per doctrine (not garbage). See
+    // [[bloom-identity-resolution-doctrine]] §"What gets DELETED" +
+    // [[bloom-repair-endpoint-classification]].
+    //
     // Folded in 2026-05-13 (G1 closure). For every venue with a stored
     // Calendly access_token but no cached user/organization URI, fetch
     // /users/me and write back to venue_config. Without this the
@@ -1400,22 +1387,6 @@ async function runPruneMaintenance(): Promise<{
           return { venues_scanned: 0, reminders_fired: 0, errors: 1 }
         })()
 
-  const formBleedResult =
-    formBleed.status === 'fulfilled'
-      ? formBleed.value
-      : (() => {
-          console.error('[prune_maintenance] form_bleed_nuke failed:', formBleed.reason)
-          return { rows_nulled: 0, errors: [String(formBleed.reason)] }
-        })()
-
-  const emptyWeddingResult =
-    emptyWeddings.status === 'fulfilled'
-      ? emptyWeddings.value
-      : (() => {
-          console.error('[prune_maintenance] empty_wedding_prune failed:', emptyWeddings.reason)
-          return { rows_deleted: 0, errors: [String(emptyWeddings.reason)] }
-        })()
-
   const calendlyUriResult =
     calendlyUri.status === 'fulfilled'
       ? calendlyUri.value
@@ -1460,151 +1431,10 @@ async function runPruneMaintenance(): Promise<{
     consumer_requests_expired: expiredResult,
     dunning: dunningResult,
     source_freshness: sourceFreshnessResult,
-    form_bleed_nuke: formBleedResult,
-    empty_wedding_prune: emptyWeddingResult,
     calendly_uri_backfill: calendlyUriResult,
     non_couple_tombstone: nonCoupleResult,
     orphan_promote_social: orphanPromoteResult.social,
     orphan_promote_reviews: orphanPromoteResult.reviews,
-  }
-}
-
-/**
- * 2026-05-13. NULL out people.first_name + last_name on rows where BOTH
- * names are Calendly form-bleed tokens. Mirrors the both-sides rule
- * the SQL one-shot used.
- *
- * Why this is required as a recurring cron: ghost weddings born from
- * Calendly tour bookings never get a couple_identity_profile row, so
- * the Wave 4 identity_judge_sweep skips them. Without a separate
- * sweep, form-bleed names accumulate forever.
- *
- * Statement-level idempotent. Safe to re-run.
- */
-async function runFormBleedNuke(): Promise<{
-  rows_nulled: number
-  errors: string[]
-}> {
-  const supabase = createServiceClient()
-  const errors: string[] = []
-
-  // Same token lists as FORM_BLEED_TOKENS in
-  // src/lib/services/identity/name-upgrade.ts. Inlined here so a future
-  // change there doesn't silently shift this cron's behaviour without
-  // a deliberate edit. Keep the two in lock-step.
-  const FIRST_HEADS = [
-    'Whole', 'One', 'Two', 'Three', 'Half', 'Final', 'Tour', 'Pre',
-    'Post', 'Service', 'Meeting', 'Booking', 'Estimate', 'Package',
-    'Day', 'Night', 'Pre-Tour', 'Phone', 'Vendor', '(Unknown)',
-  ]
-  const LAST_TAILS = [
-    'Weekend', 'Weekday', 'Day', 'Night', 'Walkthrough', 'Meeting',
-    'Booking', 'Call', 'Tour', 'Estimate', 'Package', 'Phone',
-  ]
-
-  try {
-    const { data, error } = await supabase
-      .from('people')
-      .update({ first_name: null, last_name: null, name_evidence: [] })
-      .in('first_name', FIRST_HEADS)
-      .in('last_name', LAST_TAILS)
-      .select('id')
-
-    if (error) {
-      errors.push(`update failed: ${error.message}`)
-      return { rows_nulled: 0, errors }
-    }
-    return { rows_nulled: (data ?? []).length, errors }
-  } catch (err) {
-    errors.push(err instanceof Error ? err.message : String(err))
-    return { rows_nulled: 0, errors }
-  }
-}
-
-/**
- * 2026-05-13. Delete weddings that have ZERO identifying signal.
- *
- * A wedding is "empty" when:
- *   - no person row has a name (first or last), email, or phone
- *   - no interactions
- *   - no engagement_events
- *   - no booked_at (defensive — never touch a wedding that ever
- *     flipped to booked, even if everything else got wiped)
- *
- * 130 such rows accumulated at Rixey before this sweep landed.
- * Sources: HoneyBook held-date imports where project_name was a pure
- * package label ("Whole Weekend", "One Day") and the package-only
- * refusal in honeybook.ts shipped same day catches new ones; legacy
- * rows need this nightly sweep to clean up.
- *
- * Statement-level idempotent. Safe to re-run nightly.
- */
-async function runEmptyWeddingPrune(): Promise<{
-  rows_deleted: number
-  errors: string[]
-}> {
-  const supabase = createServiceClient()
-  const errors: string[] = []
-  try {
-    // Pull candidate wedding ids first. PostgREST doesn't compose
-    // multi-table NOT EXISTS into a single statement cleanly, so we
-    // walk in two steps: select empties, then delete by id list.
-    // Idempotent — the gate re-evaluates on every tick.
-    const { data: weddings, error: selErr } = await supabase
-      .from('weddings')
-      .select('id')
-      .is('booked_at', null)
-      .limit(5000)
-    if (selErr) {
-      errors.push(`select weddings failed: ${selErr.message}`)
-      return { rows_deleted: 0, errors }
-    }
-    const candidateIds = (weddings ?? []).map((w) => w.id as string)
-    if (candidateIds.length === 0) return { rows_deleted: 0, errors }
-
-    // Filter to the "empty" subset by checking each related table.
-    // Bounded by booked_at IS NULL (which is most leads), but the
-    // EXISTS check makes this O(n × 3 lookups). Acceptable at Rixey
-    // scale (~600 weddings); revisit if a venue grows past 10k.
-    const emptyIds: string[] = []
-    for (const id of candidateIds) {
-      // Any person with any identifying data?
-      const { count: peopleWithData } = await supabase
-        .from('people')
-        .select('id', { head: true, count: 'exact' })
-        .eq('wedding_id', id)
-        .is('merged_into_id', null)
-        .or('first_name.not.is.null,last_name.not.is.null,email.not.is.null,phone.not.is.null')
-      if ((peopleWithData ?? 0) > 0) continue
-      // Any interactions?
-      const { count: interactions } = await supabase
-        .from('interactions')
-        .select('id', { head: true, count: 'exact' })
-        .eq('wedding_id', id)
-      if ((interactions ?? 0) > 0) continue
-      // Any engagement events?
-      const { count: events } = await supabase
-        .from('engagement_events')
-        .select('id', { head: true, count: 'exact' })
-        .eq('wedding_id', id)
-      if ((events ?? 0) > 0) continue
-      emptyIds.push(id)
-    }
-
-    if (emptyIds.length === 0) return { rows_deleted: 0, errors }
-
-    const { error: delErr } = await supabase
-      .from('weddings')
-      .delete()
-      .in('id', emptyIds)
-    if (delErr) {
-      errors.push(`delete failed: ${delErr.message}`)
-      return { rows_deleted: 0, errors }
-    }
-    return { rows_deleted: emptyIds.length, errors }
-  } catch (err) {
-    errors.push(err instanceof Error ? err.message : String(err))
-    return { rows_deleted: 0, errors }
   }
 }
 
