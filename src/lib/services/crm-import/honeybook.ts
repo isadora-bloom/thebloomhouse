@@ -293,6 +293,36 @@ function stripTrailingPossessive(token: string): string {
   return token.replace(/['’][sS]$/u, '')
 }
 
+/**
+ * Rixey's HoneyBook has held-date placeholders where the project_name
+ * is JUST the package label ("Whole Weekend", "One Day", "Final
+ * Walkthrough", "Vendor Meeting", "(Unknown) Day", etc.) — no couple
+ * named yet. parseProjectName used to fall through to the single-
+ * partner path on these, splitting "Whole Weekend" into partner1_first
+ * = 'Whole', partner1_last = 'Weekend'. Combined with a real
+ * client_email from the same CSV row, that minted weddings with real
+ * gmails attached to bleed-named people.
+ *
+ * Token sets mirror FORM_BLEED_TOKENS in name-upgrade.ts. Both heads
+ * AND tails must match (so a real surname like 'Day' in 'Sydney Day'
+ * isn't filtered out — Sydney isn't in firstHeads).
+ */
+const PACKAGE_HEADS = new Set<string>([
+  'whole', 'one', 'two', 'three', 'half', 'final', 'tour', 'pre',
+  'post', 'service', 'meeting', 'booking', 'estimate', 'package',
+  'day', 'night', 'pre-tour', 'phone', 'vendor', '(unknown)',
+])
+const PACKAGE_TAILS = new Set<string>([
+  'weekend', 'weekday', 'day', 'night', 'walkthrough', 'meeting',
+  'booking', 'call', 'tour', 'estimate', 'package', 'phone',
+])
+
+function isPackageOnlyName(raw: string): boolean {
+  const tokens = raw.toLowerCase().trim().split(/\s+/).filter(Boolean)
+  if (tokens.length !== 2) return false
+  return PACKAGE_HEADS.has(tokens[0]!) && PACKAGE_TAILS.has(tokens[1]!)
+}
+
 function parseProjectName(raw: string | null): ParsedNames {
   const empty: ParsedNames = {
     partner1_first: null, partner1_last: null,
@@ -308,6 +338,22 @@ function parseProjectName(raw: string | null): ParsedNames {
   // Defensive: also strip a trailing possessive 's that the wedding-
   // word strip left dangling. e.g. "Rebecca and Mike's" → "Rebecca and Mike".
   stripped = stripTrailingPossessive(stripped).trim()
+
+  // 2026-05-13. Refuse package-only project names like "Whole Weekend",
+  // "One Day", "Vendor Meeting". These are HoneyBook placeholders for
+  // held dates / planning slots / non-couple events — they're not names
+  // and turning them into people rows is the root cause of the form-
+  // bleed accumulation cron-cleaned every night. Return empty so the
+  // wedding row gets minted without a partner1 from this CSV column;
+  // a real signal (client_name field, follow-up email, contract) will
+  // fill the names later.
+  if (isPackageOnlyName(stripped)) return empty
+
+  // Also catch the "(Unknown) Day" / "(Unknown) Weekend" shape where
+  // the project name is a placeholder + package label.
+  if (/^\(unknown\)\s+(day|weekend|walkthrough|meeting|tour|phone|night)$/i.test(stripped)) {
+    return empty
+  }
 
   // Two partners?  "Sarah & Mike Chen" / "Sarah and Mike Chen"
   const splitMatch = stripped.split(/\s+(?:&|and|\+)\s+/i)
