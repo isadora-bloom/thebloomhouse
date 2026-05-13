@@ -90,19 +90,33 @@ export async function POST(req: NextRequest) {
   }
   const dryRun = body.dryRun === true
 
-  const firstHeads = new Set<string>(FORM_BLEED_TOKENS.firstHeads as readonly string[])
+  // Token sets — extended beyond FORM_BLEED_TOKENS to include the
+  // "Vendor" + "(Unknown)" first-name heads that the Calendly parser
+  // emits on package-as-name rows.
+  const firstHeads = new Set<string>([
+    ...(FORM_BLEED_TOKENS.firstHeads as readonly string[]),
+    'Vendor',
+    '(Unknown)',
+  ])
   const lastTails = new Set<string>(FORM_BLEED_TOKENS.lastTails as readonly string[])
 
   const supabase = createServiceClient()
 
-  // Pull candidate population (people with empty name_evidence).
-  // Volume bounded by venue's people count (O(weddings)); in-memory
-  // filter on token membership is fine.
+  // 2026-05-13 rewrite. The previous filter `name_evidence IS NULL OR =
+  // '[]'::jsonb` excluded 100% of polluted rows because the Calendly
+  // parser stamped evidence at parse time (pointing at the Q&A as the
+  // source). With evidence present but pointing at a bleed-shaped name,
+  // the rows looked "validated" to this endpoint and got skipped. Drop
+  // the evidence gate.
+  //
+  // ALSO require BOTH-sides match (first_name in firstHeads AND
+  // last_name in lastTails) so legitimate names like "Sydney Day"
+  // (real surname is "Day") aren't false positives. The one-sided
+  // match in v1 would have nuked her.
   const { data: rows, error } = await supabase
     .from('people')
     .select('id, wedding_id, venue_id, first_name, last_name, name_evidence')
     .eq('venue_id', venueId)
-    .or('name_evidence.is.null,name_evidence.eq.[]')
     .is('merged_into_id', null)
 
   if (error) {
@@ -116,10 +130,8 @@ export async function POST(req: NextRequest) {
   const matches = candidates.filter((p) => {
     const f = (p.first_name ?? '').trim()
     const l = (p.last_name ?? '').trim()
-    if (!f && !l) return false
-    if (f && firstHeads.has(f)) return true
-    if (l && lastTails.has(l)) return true
-    return false
+    if (!f || !l) return false
+    return firstHeads.has(f) && lastTails.has(l)
   })
 
   const samples: Array<{
@@ -152,7 +164,7 @@ export async function POST(req: NextRequest) {
     if (dryRun) continue
     const { error: updErr } = await supabase
       .from('people')
-      .update({ first_name: null, last_name: null })
+      .update({ first_name: null, last_name: null, name_evidence: [] })
       .eq('id', p.id)
       .is('merged_into_id', null)
     if (updErr) {

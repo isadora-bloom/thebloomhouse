@@ -1242,11 +1242,12 @@ async function runPruneMaintenance(): Promise<{
   consumer_requests_expired: { rows_expired: number; errors: string[] }
   dunning: { reminder_1_fired: number; reminder_2_fired: number; sage_paused_fired: number; read_only_fired: number; errors: string[] }
   source_freshness: Awaited<ReturnType<typeof runSourceFreshnessSweep>>
+  form_bleed_nuke: { rows_nulled: number; errors: string[] }
 }> {
   const { runAuditRetentionPrune } = await import('@/lib/services/audit-retention')
   const { detectBulkReadAnomalies } = await import('@/lib/services/bulk-read-anomaly')
   const { runDunningEscalate } = await import('@/lib/services/billing/dunning')
-  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness] = await Promise.allSettled([
+  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness, formBleed] = await Promise.allSettled([
     runTelemetryRetentionPrune(),
     runPruneRateLimits(),
     runPruneBrainDumpStale(),
@@ -1261,6 +1262,15 @@ async function runPruneMaintenance(): Promise<{
     // a small admin_notifications write surface). The standalone
     // 'source_freshness' job string is still accepted for ad-hoc runs.
     runSourceFreshnessSweep(),
+    // Folded in 2026-05-13. NULLs people rows where BOTH first_name +
+    // last_name are Calendly form-bleed tokens ("Whole Weekend",
+    // "One Day", "Vendor Meeting", "(Unknown) Day", etc.). Wave 4
+    // Sonnet judge can't catch these because the ghost weddings born
+    // from Calendly tour bookings never get a couple_identity_profile
+    // row — so identity_judge_sweep skips them. This sweep nukes the
+    // bad name; next legit signal repopulates via name-upgrade or the
+    // judge once a profile exists.
+    runFormBleedNuke(),
   ])
 
   const telemetryResult =
@@ -1339,6 +1349,14 @@ async function runPruneMaintenance(): Promise<{
           return { venues_scanned: 0, reminders_fired: 0, errors: 1 }
         })()
 
+  const formBleedResult =
+    formBleed.status === 'fulfilled'
+      ? formBleed.value
+      : (() => {
+          console.error('[prune_maintenance] form_bleed_nuke failed:', formBleed.reason)
+          return { rows_nulled: 0, errors: [String(formBleed.reason)] }
+        })()
+
   return {
     telemetry: telemetryResult,
     rate_limits: rateLimitsResult,
@@ -1348,6 +1366,59 @@ async function runPruneMaintenance(): Promise<{
     consumer_requests_expired: expiredResult,
     dunning: dunningResult,
     source_freshness: sourceFreshnessResult,
+    form_bleed_nuke: formBleedResult,
+  }
+}
+
+/**
+ * 2026-05-13. NULL out people.first_name + last_name on rows where BOTH
+ * names are Calendly form-bleed tokens. Mirrors the both-sides rule
+ * the SQL one-shot used.
+ *
+ * Why this is required as a recurring cron: ghost weddings born from
+ * Calendly tour bookings never get a couple_identity_profile row, so
+ * the Wave 4 identity_judge_sweep skips them. Without a separate
+ * sweep, form-bleed names accumulate forever.
+ *
+ * Statement-level idempotent. Safe to re-run.
+ */
+async function runFormBleedNuke(): Promise<{
+  rows_nulled: number
+  errors: string[]
+}> {
+  const supabase = createServiceClient()
+  const errors: string[] = []
+
+  // Same token lists as FORM_BLEED_TOKENS in
+  // src/lib/services/identity/name-upgrade.ts. Inlined here so a future
+  // change there doesn't silently shift this cron's behaviour without
+  // a deliberate edit. Keep the two in lock-step.
+  const FIRST_HEADS = [
+    'Whole', 'One', 'Two', 'Three', 'Half', 'Final', 'Tour', 'Pre',
+    'Post', 'Service', 'Meeting', 'Booking', 'Estimate', 'Package',
+    'Day', 'Night', 'Pre-Tour', 'Phone', 'Vendor', '(Unknown)',
+  ]
+  const LAST_TAILS = [
+    'Weekend', 'Weekday', 'Day', 'Night', 'Walkthrough', 'Meeting',
+    'Booking', 'Call', 'Tour', 'Estimate', 'Package', 'Phone',
+  ]
+
+  try {
+    const { data, error } = await supabase
+      .from('people')
+      .update({ first_name: null, last_name: null, name_evidence: [] })
+      .in('first_name', FIRST_HEADS)
+      .in('last_name', LAST_TAILS)
+      .select('id')
+
+    if (error) {
+      errors.push(`update failed: ${error.message}`)
+      return { rows_nulled: 0, errors }
+    }
+    return { rows_nulled: (data ?? []).length, errors }
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : String(err))
+    return { rows_nulled: 0, errors }
   }
 }
 
