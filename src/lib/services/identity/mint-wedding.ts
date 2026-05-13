@@ -229,6 +229,57 @@ export async function mintWedding(
     }
   })()
 
+  // C2 (2026-05-13): enqueue Wave 4 identity reconstruction for every
+  // freshly-minted wedding. Pre-fix, the enqueue was sprinkled across
+  // individual ingestion paths (email pipeline, calendly, twilio,
+  // contracts) which left mintWedding's other callers (brain-dump,
+  // crm-import, data-import, portal-mint, reprocess-*) silently missing
+  // an enqueue. Rixey audit found ~159 weddings (54% of all 'Unknown'
+  // leads) with NO couple_identity_profile because the judge never got
+  // a job for them. Centralising the enqueue inside mintWedding closes
+  // that gap uniformly across every entry path.
+  //
+  // Trigger signal is the source label so the judge logs can be sliced
+  // by intake path. 24h dedupe inside enqueue handles repeated mints
+  // (e.g., re-engagement Branch B fires the cascade for the same person,
+  // resolveIdentity is called twice on the same row — dedupe skips).
+  // Fire-and-forget; never block the mint.
+  //
+  // Only enqueue when we actually minted a NEW wedding. Attaching to an
+  // existing wedding (Branch A) does NOT need a fresh reconstruction
+  // because the judge has already (presumably) seen this wedding once;
+  // the 7-day drift refresh in judge-sweep handles staleness.
+  if (resolved.isNew.wedding) {
+    void (async () => {
+      try {
+        const { enqueueIdentityReconstruction } = await import('./enqueue-reconstruction')
+        await enqueueIdentityReconstruction({
+          weddingId: resolved.weddingId,
+          venueId,
+          triggerSignal: `mint_wedding:${source}`,
+          supabase,
+        })
+      } catch (err) {
+        // Truly never throws (see enqueue-reconstruction.ts contract),
+        // but defensive: log + continue. Drift-refresh sweep (7d) is
+        // the safety net if a single enqueue silently drops.
+        logEvent({
+          level: 'warn',
+          msg: 'identity.mint_wedding.enqueue_failed',
+          venueId,
+          correlationId: correlationId ?? null,
+          actor: 'system',
+          event_type: 'identity.mint_wedding',
+          outcome: 'fail',
+          data: {
+            wedding_id: resolved.weddingId,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        })
+      }
+    })()
+  }
+
   const latencyMs = Date.now() - started
 
   logEvent({

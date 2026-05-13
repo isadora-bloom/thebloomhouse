@@ -74,6 +74,17 @@ interface BulkBody {
   offset?: number
   force?: boolean
   mode?: 'enqueue' | 'sync'
+  /**
+   * C2 backfill scope (2026-05-13). When true, the bulk endpoint
+   * pre-filters to weddings that DON'T have a couple_identity_profile
+   * yet — the Pattern A cohort. Without this filter, an operator
+   * running a full backfill would re-enqueue every wedding in the
+   * venue (~929 at Rixey) including the 729 that already have profiles,
+   * burning ~$0.02 × 729 = $14.58 of unnecessary LLM cost. Drift
+   * refresh (judge-sweep, 7d) handles staleness for the already-
+   * profiled rows independently.
+   */
+  onlyMissingProfile?: boolean
 }
 
 interface AuthContext {
@@ -146,7 +157,29 @@ export async function POST(req: NextRequest) {
     .maybeSingle()
   if (!venueRow) return notFound('venue')
 
+  const onlyMissingProfile = body.onlyMissingProfile === true
+
+  // If filtering to weddings without a profile, fetch the set of
+  // wedding_ids that DO have one and exclude them. couple_identity_profile
+  // is venue-scoped via FK; we filter by venue at read time to keep the
+  // exclusion list bounded. Typical venue: 700-1000 profiles, fits in
+  // a single PostgREST page.
+  let excludeIds = new Set<string>()
+  if (onlyMissingProfile) {
+    const { data: profileRows } = await supabase
+      .from('couple_identity_profile')
+      .select('wedding_id')
+      .eq('venue_id', venueId)
+      .limit(5000)
+    excludeIds = new Set(
+      (profileRows ?? []).map((r) => r.wedding_id as string),
+    )
+  }
+
   // Total count (non-tombstoned) for hasMore / paging UX.
+  // When onlyMissingProfile, this is the count BEFORE excluding profiled
+  // weddings — paginators should still walk the same range and let the
+  // exclusion happen page-by-page.
   const { count: totalCount } = await supabase
     .from('weddings')
     .select('id', { count: 'exact', head: true })
@@ -154,13 +187,19 @@ export async function POST(req: NextRequest) {
     .is('merged_into_id', null)
 
   // Page of weddings to process.
+  // When filtering, over-fetch by 4x so the in-memory exclude doesn't
+  // leave the caller with a short page. Capped at MAX_LIMIT * 4 to keep
+  // payload bounded.
+  const fetchLimit = onlyMissingProfile
+    ? Math.min(limit * 4, MAX_LIMIT * 4)
+    : limit
   const { data: weddings, error: pageErr } = await supabase
     .from('weddings')
     .select('id')
     .eq('venue_id', venueId)
     .is('merged_into_id', null)
     .order('created_at', { ascending: true })
-    .range(offset, offset + limit - 1)
+    .range(offset, offset + fetchLimit - 1)
 
   if (pageErr) {
     return NextResponse.json(
@@ -169,7 +208,11 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const rows = (weddings ?? []) as WeddingPick[]
+  const rawRows = (weddings ?? []) as WeddingPick[]
+  const filteredRows = onlyMissingProfile
+    ? rawRows.filter((r) => !excludeIds.has(r.id))
+    : rawRows
+  const rows = filteredRows.slice(0, limit)
 
   const startedAt = Date.now()
   const result = {
