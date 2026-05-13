@@ -199,6 +199,16 @@ export interface NormalisedInteractionRow {
   /** Mirrors interactions.type CHECK. 'meeting' added by migration 100,
    *  'web_form' added by migration 178 (T5-Rixey-HH). */
   type: 'email' | 'call' | 'voicemail' | 'sms' | 'meeting' | 'web_form'
+  /** 2026-05-13: adapter-provided unique key from the source system —
+   *  Calendly event_uuid, HoneyBook event id, Knot inquiry id. When
+   *  set, commitNormalisedRows runs classifyImportRow against
+   *  crm_import_rows (migration 335) BEFORE inserting the interaction:
+   *  - 'unchanged' state → interaction NOT inserted (re-upload no-op)
+   *  - 'new' / 'state_changed' → inserted + recordResolution called
+   *  This is the universal dedup layer for recurring CSV uploads.
+   *  Adapters without a stable per-row key leave this null.
+   *  See bloom-recurring-csv-import-doctrine.md. */
+  external_id?: string | null
   subject?: string | null
   body?: string | null
   /** T5-Rixey-TT: lets adapters write factual attribution data (e.g.
@@ -269,6 +279,12 @@ export interface CommitResult {
   ok: boolean
   weddingsInserted: number
   interactionsInserted: number
+  /** 2026-05-13: count of interactions skipped by the crm_import_rows
+   *  dedup layer (migration 335). Equals the number of rows in this
+   *  batch whose external_id was already seen with the same
+   *  content_hash. Operator UI shows "weekly Knot re-upload: 95% of
+   *  rows already known". Absent on batches with no external_id rows. */
+  interactionsSkippedDedup?: number
   toursInserted: number
   lostDealsInserted: number
   errors: string[]
@@ -777,6 +793,82 @@ export async function commitNormalisedRows(args: {
 
       // interactions
       if (row.interactions?.length) {
+        // 2026-05-13 recurring-CSV dedup wire-in. Migration 335 +
+        // memory/bloom-recurring-csv-import-doctrine.md. For any
+        // interaction with external_id (Calendly event_uuid, HoneyBook
+        // event id, Knot inquiry id), check crm_import_rows BEFORE
+        // inserting:
+        //   - state='unchanged' → skip the insert (row was already
+        //     written by a prior upload of the same CSV)
+        //   - 'new' / 'state_changed' → include in batch + remember
+        //     importRowId so recordResolution can fire after commit
+        // Adapters without per-row identity (legacy generic_csv,
+        // web_form one-shots) leave external_id null and bypass the
+        // dedup branch — same as before.
+        const decisions: Array<{
+          interaction: NormalisedInteractionRow
+          importRowId: string | null
+          willInsert: boolean
+        }> = []
+        // Lazy import — only loads when an adapter actually populates
+        // external_id. Most legacy adapter calls bypass entirely.
+        let importRowsModule: typeof import('./import-rows') | null = null
+        for (const i of row.interactions) {
+          if (!i.external_id) {
+            decisions.push({ interaction: i, importRowId: null, willInsert: true })
+            continue
+          }
+          if (!importRowsModule) {
+            importRowsModule = await import('./import-rows')
+          }
+          try {
+            const classified = await importRowsModule.classifyImportRow({
+              supabase,
+              venueId,
+              source: crmSource as Parameters<typeof importRowsModule.classifyImportRow>[0]['source'],
+              identity: {
+                externalId: i.external_id,
+                email: row.partner1_email ?? null,
+                phone: row.partner1_phone ?? null,
+                fullName: [row.partner1_first_name, row.partner1_last_name]
+                  .filter(Boolean).join(' ') || null,
+                inquiryDate: row.inquiry_date ?? i.occurred_at,
+                weddingDate: row.wedding_date ?? null,
+              },
+              state: {
+                status: row.status ?? null,
+                weddingDate: row.wedding_date ?? null,
+                guestCount: row.guest_count_estimate ?? null,
+                tourScheduledFor: i.type === 'meeting' ? i.occurred_at : null,
+                canceled: (i.subject ?? '').includes('[cancelled')
+                  || (i.subject ?? '').includes('[rescheduled')
+                  || row.status === 'cancelled',
+                extras: { subject: i.subject ?? null },
+              },
+              rowData: {
+                external_id: i.external_id,
+                subject: i.subject,
+                occurred_at: i.occurred_at,
+                type: i.type,
+                status: row.status,
+              },
+            })
+            decisions.push({
+              interaction: i,
+              importRowId: classified.importRowId,
+              willInsert: classified.state !== 'unchanged',
+            })
+          } catch (err) {
+            // Dedup failure must not block the import — fall through
+            // to insert as before. Log + continue.
+            console.warn(
+              `[crm-import] classifyImportRow failed (continuing without dedup): `,
+              err instanceof Error ? err.message : err,
+            )
+            decisions.push({ interaction: i, importRowId: null, willInsert: true })
+          }
+        }
+        // Build payload from interactions we decided to insert.
         // T5-Rixey-RR fix #1: CRM exports often round-trip user-pasted
         // rich text — strip HTML at the writer so structured readers
         // (lead_source derivation regex, AI grounding) never see tags.
@@ -784,7 +876,9 @@ export async function commitNormalisedRows(args: {
         // metadata from CSVs e.g. HoneyBook's "Lead Source" column,
         // Calendly's Q7 answer) so lead-source-derivation Priority-2
         // can read it without adapters touching weddings.source.
-        const interactionPayloads = row.interactions.map((i) => {
+        const insertDecisions = decisions.filter((d) => d.willInsert)
+        const skippedCount = decisions.length - insertDecisions.length
+        const interactionPayloads = insertDecisions.map(({ interaction: i }) => {
           const cleanBody = i.body ? htmlToText(i.body) : null
           return {
             venue_id: venueId,
@@ -814,7 +908,9 @@ export async function commitNormalisedRows(args: {
             surface: i.surface ?? defaultSurface,
           }
         })
-        const { error: intErr } = await supabase.from('interactions').insert(interactionPayloads)
+        const { error: intErr } = interactionPayloads.length === 0
+          ? { error: null }
+          : await supabase.from('interactions').insert(interactionPayloads)
         if (intErr) {
           // #88 rollback: kill the wedding (and cascade-clean the
           // people row we may have just inserted) so we don't leave a
@@ -828,6 +924,37 @@ export async function commitNormalisedRows(args: {
           rowAborted = true
         } else {
           result.interactionsInserted += interactionPayloads.length
+          // Track skipped (dedup-unchanged) count separately for
+          // operator-visible telemetry. Per-batch, not lifetime.
+          if (skippedCount > 0) {
+            result.interactionsSkippedDedup =
+              (result.interactionsSkippedDedup ?? 0) + skippedCount
+          }
+          // After successful insert: stamp the crm_import_rows
+          // resolution for every interaction we classified. 'unchanged'
+          // rows already have a resolution from prior commit;
+          // 'new'/'state_changed' rows landed here with resolution
+          // 'flagged' (placeholder) and need recordResolution to make
+          // them queryable as attached_strong.
+          if (importRowsModule) {
+            for (const d of decisions) {
+              if (!d.importRowId || !d.willInsert) continue
+              try {
+                await importRowsModule.recordResolution({
+                  supabase,
+                  importRowId: d.importRowId,
+                  resolution: 'attached_strong',
+                  resolvedWeddingId: weddingId,
+                  reason: `crm_import: attached on ${crmSource} commit`,
+                })
+              } catch (err) {
+                console.warn(
+                  `[crm-import] recordResolution failed: `,
+                  err instanceof Error ? err.message : err,
+                )
+              }
+            }
+          }
         }
       }
       if (rowAborted) continue

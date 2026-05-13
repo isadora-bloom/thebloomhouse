@@ -845,6 +845,12 @@ function calendlyRowsToNormalised(
         // an email about it. Keep it off /agent/inbox; lead-detail
         // timelines aggregate every surface.
         surface: 'integration_event',
+        // 2026-05-13 (mig 335): per-row stable identifier for the
+        // crm_import_rows dedup ledger. Calendly assigns a UUID per
+        // booking; passing it here lets commitNormalisedRows skip the
+        // insert on re-upload of the same CSV. Falls null on rows
+        // where the CSV column was blank — those bypass dedup.
+        external_id: r.eventUuid ?? null,
       })
 
       if (overrideBucket === 'tour') {
