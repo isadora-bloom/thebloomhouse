@@ -43,7 +43,82 @@ import { pickSource, type EvidenceEntry } from '@/lib/services/identity/pick-fro
  * formatter. Universal-rules SOFT-CONTEXT NOTES POLICY now governs
  * verbatim-quote handling for both paths.
  */
-export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.3'
+export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.4'
+
+/**
+ * 2026-05-12 — Tour-state awareness.
+ *
+ * Sage was drafting "Would you like to book a tour?" for couples who
+ * had a tour scheduled + canceled (Emily Stegmeier, Tent Pricing
+ * Inquiry, May 12). The existing has_toured_in_person flag covers the
+ * "tour completed in person" case but not the scheduled-then-canceled
+ * case — and the new_inquiry path didn't even read wedding state.
+ *
+ * Reads engagement_events for tour_scheduled / tour_cancelled /
+ * tour_completed and returns a one-line TOUR STATUS string for the
+ * draft prompt. Caller appends to contextBlock. Returns null when no
+ * tour signals exist (greenfield inquiry — keep the default tour CTA).
+ */
+async function loadTourStateLine(
+  supabase: ReturnType<typeof createServiceClient>,
+  weddingId: string,
+): Promise<string | null> {
+  try {
+    const { data: events } = await supabase
+      .from('engagement_events')
+      .select('event_type, created_at')
+      .eq('wedding_id', weddingId)
+      .in('event_type', ['tour_scheduled', 'tour_cancelled', 'tour_completed', 'tour_rescheduled'])
+      .order('created_at', { ascending: false })
+      .limit(20)
+    if (!events || events.length === 0) return null
+
+    // Most recent terminal-tour-state wins. tour_completed > tour_cancelled
+    // > tour_scheduled in priority for the same timeline ordering, since
+    // an older tour_scheduled doesn't override a newer cancel.
+    const latest = events[0]
+    const latestType = latest.event_type as string
+    const latestDate = (() => {
+      try { return new Date(latest.created_at as string).toISOString().slice(0, 10) }
+      catch { return null }
+    })()
+
+    if (latestType === 'tour_completed') {
+      return '- TOUR STATUS: Already toured Rixey Manor' +
+        (latestDate ? ` on ${latestDate}` : '') +
+        '. Do NOT push the tour CTA or suggest scheduling another tour. Reference the in-person visit naturally.'
+    }
+    if (latestType === 'tour_cancelled') {
+      // Find the most recent tour_scheduled BEFORE this cancel to mention
+      // the originally-planned date, so Sage can acknowledge the cancel.
+      const priorScheduled = events.find(
+        (e) =>
+          (e.event_type === 'tour_scheduled' || e.event_type === 'tour_rescheduled') &&
+          (e.created_at as string) < (latest.created_at as string),
+      )
+      const scheduledDate = priorScheduled
+        ? (() => {
+            try { return new Date(priorScheduled.created_at as string).toISOString().slice(0, 10) }
+            catch { return null }
+          })()
+        : null
+      return '- TOUR STATUS: A tour was scheduled' +
+        (scheduledDate ? ` (originally for ${scheduledDate})` : '') +
+        ' and then CANCELLED' +
+        (latestDate ? ` on ${latestDate}` : '') +
+        '. Acknowledge the cancellation warmly and offer to reschedule when their plans firm up — do NOT draft as if this is first contact or suggest "booking a tour" as if no tour ever existed.'
+    }
+    if (latestType === 'tour_scheduled' || latestType === 'tour_rescheduled') {
+      return '- TOUR STATUS: A tour is currently scheduled' +
+        (latestDate ? ` (booked ${latestDate})` : '') +
+        '. Reference the upcoming tour rather than inviting them to book one. If they ask logistics questions, anchor your answer to the scheduled visit.'
+    }
+    return null
+  } catch {
+    // Tour-state lookup must NEVER block draft generation.
+    return null
+  }
+}
 import { selectPhrase } from '@/lib/ai/phrase-selector'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
@@ -754,6 +829,20 @@ export async function generateInquiryDraft(
       // Soft-context loader failure must NEVER block draft generation.
     }
 
+    // Tour-state awareness (v1.4). Reads engagement_events for the
+    // most recent tour signal so Sage doesn't suggest "book a tour"
+    // when one is already scheduled, completed, or scheduled-then-
+    // cancelled. The new_inquiry path didn't previously load any
+    // wedding-state at all — Emily's Tent Pricing reply caught the
+    // gap.
+    try {
+      const supabase = createServiceClient()
+      const tourLine = await loadTourStateLine(supabase, weddingId)
+      if (tourLine) contextBlock += `\n\n## CURRENT TOUR STATE:\n${tourLine}`
+    } catch {
+      // Tour-state enrichment must NEVER block draft generation.
+    }
+
     // Pattern 5 (mig 315). Latest classified inbound dimensions.
     // First-touch path: the inquiry that triggered THIS draft is the
     // latest inbound; the classifier fired-and-forget against it from
@@ -1056,8 +1145,16 @@ export async function generateFollowUp(
     if (wedding.guest_count_estimate) contextBlock += `\n- Guest count: ${wedding.guest_count_estimate}`
     if (pickedSource) contextBlock += `\n- Source: ${pickedSource}`
 
-    // Sticky-state Pattern 1 (migration 306).
-    if (wedding.has_toured_in_person) {
+    // Tour-state awareness (v1.4). Prefer the engagement_events-driven
+    // line so the follow-up acknowledges scheduled / cancelled / completed
+    // states uniformly with the new_inquiry path. has_toured_in_person
+    // falls through as a backstop when no engagement_events match —
+    // covers the legacy in-person-tour case where the event row may
+    // pre-date the engagement_events plumbing.
+    const tourLine = await loadTourStateLine(supabase, weddingId)
+    if (tourLine) {
+      contextBlock += `\n${tourLine}`
+    } else if (wedding.has_toured_in_person) {
       contextBlock += '\n- TOUR STATUS: Already visited the venue in person — do not push the tour CTA or invite them to schedule a tour.'
     }
     if (wedding.lost_locked_by_operator) {

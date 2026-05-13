@@ -11,6 +11,38 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-05-12 (Inquiry-brain v1.4 — tour-state awareness)
+
+Bumped `inquiry-brain.prompt.v1.3` → `inquiry-brain.prompt.v1.4`
+(`BRAIN_PROMPT_VERSION` in `src/lib/services/brain/inquiry.ts`).
+
+Bug caught: Sage drafted "Would you like to book a tour?" for Emily
+Stegmeier after she had scheduled (May 10) AND canceled (May 12) her
+tour. The new_inquiry path didn't load any wedding-state at all; the
+follow-up path read `has_toured_in_person` boolean but that only
+covers the in-person-completed case, not scheduled-then-cancelled.
+
+Added `loadTourStateLine()` that reads engagement_events for
+tour_scheduled / tour_cancelled / tour_completed / tour_rescheduled
+and returns the most recent terminal-state as a CURRENT TOUR STATE
+context line:
+
+  - tour_completed → "Already toured Rixey Manor on YYYY-MM-DD. Do NOT
+    push the tour CTA..."
+  - tour_cancelled → "A tour was scheduled (originally for YYYY-MM-DD)
+    and then CANCELLED on YYYY-MM-DD. Acknowledge the cancellation
+    warmly and offer to reschedule when their plans firm up — do NOT
+    draft as if this is first contact or suggest 'booking a tour' as
+    if no tour ever existed."
+  - tour_scheduled / tour_rescheduled → "A tour is currently scheduled
+    (booked YYYY-MM-DD). Reference the upcoming tour rather than
+    inviting them to book one."
+
+Wired into both new_inquiry and follow-up paths. Follow-up path
+preserves `has_toured_in_person` as a backstop when no
+engagement_events match (covers legacy rows that pre-date the events
+plumbing).
+
 ## 2026-05-12 (Inbound intent classifier — fact extraction + relay recognition)
 
 Bumped `inbound-intent.v1` → `inbound-intent.v2`
