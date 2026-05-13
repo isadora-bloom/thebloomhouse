@@ -11,6 +11,34 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-05-12 (Router classifier v1.2 — relay-pattern recognition)
+
+Bumped `router-brain.prompt.v1.1` → `router-brain.prompt.v1.2`
+(`BRAIN_PROMPT_VERSION` in `src/lib/services/brain/router.ts`).
+
+`classifyEmail` is the third Haiku classifier (after intent v2 and
+folder-AI v1.1) that decides whether Sage drafts. Without this update
+it could still label Knot Pro Inbox or Calendly relays as 'vendor' /
+'other' even though the other two classifiers now correctly call them
+new_inquiry — and the draft pipeline gates on `classifyEmail`'s
+verdict, so Sage stayed silent.
+
+Added a RELAY PATTERNS section enumerating:
+- Knot Pro Inbox — 📩 + "sent you a new message" + theknot.com
+  reference. Treats the form's "Interested Services" list as a
+  SHOPPING LIST, not booked-couple logistics.
+- Calendly / Acuity — "New Event:" / "Invitee:" / "New appointment" /
+  "Rescheduled:" / "Canceled:" subjects + body links to platform.
+  Boilerplate "amazing tour planned for you" is Calendly copy, NOT
+  vendor language.
+- WeddingWire / HCTG / Zola intake forms.
+- Pricing-calculator submissions ("NEW CALCULATOR SUBMISSION", "Your
+  <venue> estimate").
+
+Explicit guidance: do NOT label any of these as vendor / spam / other.
+The whole reason these platforms exist is to route real couples to
+venues; their content is by definition lead activity.
+
 ## 2026-05-12 (Inquiry-brain v1.4 — tour-state awareness)
 
 Bumped `inquiry-brain.prompt.v1.3` → `inquiry-brain.prompt.v1.4`

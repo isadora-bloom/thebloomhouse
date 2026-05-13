@@ -3409,6 +3409,116 @@ export async function processIncomingEmail(
         console.warn('[pipeline] mark ai_opted_out failed (non-fatal):', err)
       }
     }
+
+    // Tour-welcome draft for Calendly / Acuity tour bookings (2026-05-12).
+    // The Calendly notification itself is a system email — we correctly
+    // skip drafting a reply to notifications@calendly.com. But the
+    // *couple* booking the tour deserves a warm welcome + prep email
+    // to their actual address. Trigger that here (only for the positive
+    // tour_scheduled kind — not for cancels or reschedules). Inquiry-
+    // brain v1.4 reads the CURRENT TOUR STATE block from engagement_events
+    // so the draft references the upcoming tour by date rather than
+    // suggesting "book a tour".
+    if (
+      schedulingEvent &&
+      weddingId &&
+      schedulingEvent.kind === 'tour_scheduled' &&
+      schedulingEvent.inviteeEmail
+    ) {
+      const inviteeEmail = schedulingEvent.inviteeEmail
+      const inviteeName = (schedulingEvent.inviteeName ?? '').trim() || null
+      // Synthetic inquiry body conveying the booking action in the
+      // couple's voice. Inquiry-brain treats this as fresh outreach
+      // from the couple; the CURRENT TOUR STATE line carries the real
+      // date/time signal so the draft anchors to the booked visit
+      // rather than re-pitching the tour.
+      const synthBody = inviteeName
+        ? `Hi Rixey Manor! This is ${inviteeName} — I just booked a venue tour through your Calendly. Looking forward to seeing the space!`
+        : `Hi Rixey Manor! I just booked a venue tour through your Calendly. Looking forward to seeing the space!`
+      const synthSubject = 'Tour booked'
+
+      try {
+        const result = await generateInquiryDraft({
+          venueId,
+          contactEmail: inviteeEmail,
+          inquiry: {
+            from: inviteeEmail,
+            subject: synthSubject,
+            body: synthBody,
+          },
+          extractedData: {
+            questions: [],
+            eventDate: null,
+            guestCount: null,
+          },
+          taskType: 'new_inquiry',
+          source: schedulingEvent.source ?? detectedSource,
+          receivedAtAddress,
+          weddingId,
+          correlationId,
+        })
+
+        if (result.draft && result.draft.trim().length > 0) {
+          const { data: draftRow, error: draftErr } = await supabase
+            .from('drafts')
+            .insert({
+              venue_id: venueId,
+              wedding_id: weddingId,
+              interaction_id: interactionId,
+              to_email: inviteeEmail,
+              subject: `Welcome — your Rixey Manor tour`,
+              draft_body: result.draft,
+              original_sage_body: result.draft,
+              confidence_score: result.confidence,
+              status: 'pending',
+              context_type: 'inquiry',
+              brain_used: 'inquiry',
+              prompt_version_used: INQUIRY_BRAIN_PROMPT_VERSION,
+              correlation_id: correlationId,
+              auto_sent: false,
+            })
+            .select('id')
+            .single()
+
+          if (draftErr) {
+            log.warn('pipeline.tour_welcome_draft_insert_failed', {
+              event_type: 'tour_welcome',
+              outcome: 'fail',
+              data: {
+                interactionId,
+                weddingId,
+                inviteeEmail,
+                error: draftErr.message,
+              },
+            })
+          } else {
+            log.info('pipeline.tour_welcome_draft_created', {
+              event_type: 'tour_welcome',
+              outcome: 'ok',
+              data: {
+                interactionId,
+                weddingId,
+                inviteeEmail,
+                draftId: draftRow?.id,
+                confidence: result.confidence,
+              },
+            })
+          }
+        }
+      } catch (err) {
+        log.warn('pipeline.tour_welcome_draft_failed', {
+          event_type: 'tour_welcome',
+          outcome: 'fail',
+          data: {
+            interactionId,
+            weddingId,
+            inviteeEmail,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        })
+      }
+    }
+
     return {
       interactionId,
       draftId: null,

@@ -18,7 +18,7 @@ import { callAIJson } from '@/lib/ai/client'
  *  v1.1 (T5-schema-gap, migration 165): added estimatedGuests extraction
  *  field with explicit guidance for ranges, approximate phrasing, and
  *  the "do not infer numbers from adjectives" gate. */
-export const BRAIN_PROMPT_VERSION = 'router-brain.prompt.v1.1'
+export const BRAIN_PROMPT_VERSION = 'router-brain.prompt.v1.2'
 import {
   SPAM_KEYWORDS,
   checkSpam,
@@ -243,6 +243,18 @@ IMPORTANT DISTINCTIONS:
 - New inquiry vs reply: new inquiries have NO prior conversation context. Replies reference previous emails or are part of an existing thread.
 - Inquiry reply vs client message: inquiry replies are from people still DECIDING. Client messages are from people who have BOOKED.
 - Platform emails (The Knot, WeddingWire, Zola): these forward inquiry details but the actual sender is the couple, not the platform.
+
+RELAY PATTERNS — recognise these BEFORE you classify (the From: header gets rewritten to the couple's gmail address on most of these, so a gmail.com sender is NOT evidence the sender is a vendor or random outreach):
+
+- Knot Pro Inbox relay: subject contains "📩" emoji AND "sent you a new message", OR body references "theknot.com" / "The Knot Pro Network". The couple's intake-form selections — e.g. "Interested Services: Tables and chairs, Linens, Lighting, Sound equipment" — is a SHOPPING LIST, not a booked-couple logistics conversation. Classify as new_inquiry.
+
+- Calendly / Acuity notifications: subject starts with "New Event:" / "Invitee:" / "Event scheduled" / "New appointment" / "Rescheduled:" / "Canceled:", body links calendly.com or acuityscheduling.com. The invitee is the couple booking (or having previously booked + now rescheduling/canceling) a tour. Classify as inquiry_reply when there's prior thread context, otherwise new_inquiry. Boilerplate phrases like "amazing tour planned for you" are Calendly's copy, NOT vendor pitch language.
+
+- WeddingWire / Here Comes The Guide / Zola intake forms: body references the platform name + a form-relay wrapper ("New Lead for...", "WeddingPro Inbox", "authsolic..."). Classify as new_inquiry.
+
+- Pricing-calculator submissions: body contains "NEW CALCULATOR SUBMISSION" or "Your Rixey Manor estimate" / "<venue> estimate". The couple submitted the on-site calculator and got a price. Classify as inquiry_reply when there's prior conversation, otherwise new_inquiry.
+
+Do NOT label any of these patterns as vendor / spam / other. The whole reason these platforms exist is to route real couples to venues; their content is by definition lead activity.
 
 Return JSON matching this exact structure:
 {
