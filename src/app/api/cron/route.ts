@@ -34,6 +34,7 @@ import { runBacktrackAllVenues } from '@/lib/services/identity/backtrack'
 import { syncMeetings as syncZoomMeetings } from '@/lib/services/ingestion/zoom'
 import { syncAllVenues as syncOpenPhoneAllVenues } from '@/lib/services/ingestion/openphone'
 import { runCalendlyUriBackfill } from '@/lib/services/ingestion/calendly'
+import { tombstoneNonCouplesAllVenues } from '@/lib/services/identity/non-couple-tombstone'
 import { runDataIntegritySweepAllVenues } from '@/lib/services/data-integrity'
 import { sweepReEngagementConversions } from '@/lib/services/re-engagement'
 import {
@@ -1246,11 +1247,12 @@ async function runPruneMaintenance(): Promise<{
   form_bleed_nuke: { rows_nulled: number; errors: string[] }
   empty_wedding_prune: { rows_deleted: number; errors: string[] }
   calendly_uri_backfill: { scanned: number; cached: number; already: number; failed: number }
+  non_couple_tombstone: { total_scanned: number; total_tombstoned: number; errors: string[] }
 }> {
   const { runAuditRetentionPrune } = await import('@/lib/services/audit-retention')
   const { detectBulkReadAnomalies } = await import('@/lib/services/bulk-read-anomaly')
   const { runDunningEscalate } = await import('@/lib/services/billing/dunning')
-  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness, formBleed, emptyWeddings, calendlyUri] = await Promise.allSettled([
+  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness, formBleed, emptyWeddings, calendlyUri, nonCouple] = await Promise.allSettled([
     runTelemetryRetentionPrune(),
     runPruneRateLimits(),
     runPruneBrainDumpStale(),
@@ -1292,6 +1294,16 @@ async function runPruneMaintenance(): Promise<{
     // safety net for venues whose settings-save hook missed (network
     // blip) or pre-fix venues whose tokens predate the hook entirely.
     runCalendlyUriBackfill(),
+    // Folded in 2026-05-13 (Step 5c / RM-1123). Soft-tombstones Unknown
+    // weddings whose interaction thread classifies as non-couple
+    // (vendor_communication, vendor_outreach, spam_outreach, auto_reply,
+    // coordinator_internal). Uses pre-computed interactions.intent_class
+    // — zero LLM cost. Rolls up the per-thread distribution and only
+    // tombstones when EVERY classified inbound is non-couple AND at
+    // least one is high-confidence. Booked / completed weddings are
+    // protected. Soft-tombstone preserves the forensic record per the
+    // Constitution.
+    tombstoneNonCouplesAllVenues(),
   ])
 
   const telemetryResult =
@@ -1394,6 +1406,22 @@ async function runPruneMaintenance(): Promise<{
           return { scanned: 0, cached: 0, already: 0, failed: 0 }
         })()
 
+  const nonCoupleResult =
+    nonCouple.status === 'fulfilled'
+      ? {
+          total_scanned: nonCouple.value.total_scanned,
+          total_tombstoned: nonCouple.value.total_tombstoned,
+          errors: nonCouple.value.errors,
+        }
+      : (() => {
+          console.error('[prune_maintenance] non_couple_tombstone failed:', nonCouple.reason)
+          return {
+            total_scanned: 0,
+            total_tombstoned: 0,
+            errors: [String(nonCouple.reason)],
+          }
+        })()
+
   return {
     telemetry: telemetryResult,
     rate_limits: rateLimitsResult,
@@ -1406,6 +1434,7 @@ async function runPruneMaintenance(): Promise<{
     form_bleed_nuke: formBleedResult,
     empty_wedding_prune: emptyWeddingResult,
     calendly_uri_backfill: calendlyUriResult,
+    non_couple_tombstone: nonCoupleResult,
   }
 }
 

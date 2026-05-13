@@ -368,6 +368,10 @@ async function findActiveWeddingForPerson(
       .eq('id', directWeddingId)
       .eq('venue_id', venueId)
       .is('merged_into_id', null)
+      // Step 5c (RM-1123): skip non-couple tombstones. A future signal
+      // from the same phone/email shouldn't re-attach to a wedding the
+      // tombstone cron flagged as not-a-couple.
+      .is('non_couple_at', null)
       .maybeSingle()
     if (w) return w as WeddingHit
   }
@@ -388,6 +392,7 @@ async function findActiveWeddingForPerson(
     .eq('id', fallbackWeddingId)
     .eq('venue_id', venueId)
     .is('merged_into_id', null)
+    .is('non_couple_at', null)
     .maybeSingle()
   return (w as WeddingHit | null) ?? null
 }
@@ -443,6 +448,7 @@ async function listWeddingsForPerson(
     .in('id', [...ids])
     .eq('venue_id', venueId)
     .is('merged_into_id', null)
+    .is('non_couple_at', null)
     .order('inquiry_date', { ascending: false, nullsFirst: false })
   return ((weddings ?? []) as WeddingHit[])
 }

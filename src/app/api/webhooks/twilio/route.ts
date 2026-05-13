@@ -236,13 +236,27 @@ export async function POST(request: NextRequest) {
     // Hydrate weddingId from the matched person (existing couple case).
     // For freshly-created persons this is null; the gate-on-classifier
     // block below decides whether to mint.
+    // Step 5c: skip non-couple-tombstoned weddings — a vendor's recurring
+    // SMS shouldn't re-attach to the tombstone. The new SMS will either
+    // be classified as non-couple again (no mint) or as new_inquiry
+    // (rare; would mint a fresh wedding through the gate below).
     if (personId) {
       const { data: personRow } = await supabase
         .from('people')
         .select('wedding_id')
         .eq('id', personId)
         .maybeSingle()
-      weddingId = (personRow?.wedding_id as string | null) ?? null
+      const candidateWeddingId = (personRow?.wedding_id as string | null) ?? null
+      if (candidateWeddingId) {
+        const { data: candidate } = await supabase
+          .from('weddings')
+          .select('id')
+          .eq('id', candidateWeddingId)
+          .is('non_couple_at', null)
+          .is('merged_into_id', null)
+          .maybeSingle()
+        weddingId = (candidate?.id as string | null) ?? null
+      }
     }
   } catch (err) {
     // Identity resolution should never crash the route — record the

@@ -459,6 +459,12 @@ export default function LeadsPage() {
           client_codes!client_codes_wedding_id_fkey ( code )
         `)
         .in('status', ['inquiry', 'tour_scheduled', 'tour_completed', 'proposal_sent'])
+        // Step 5c (RM-1123, 2026-05-13): non_couple_at IS NULL filters
+        // out soft-tombstoned non-couple weddings (bus drivers, vendor
+        // texts, autoreplies that pre-Step-5b minted ghosts). The
+        // tombstone cron sets this column; readers everywhere honour
+        // the filter so a non-couple never appears as an active lead.
+        .is('non_couple_at', null)
       // NOTE: previously filtered `.gt('heat_score', 0)`. Removed because
       // it was masking a real bug: inquiries whose initial_inquiry event
       // never triggered recalculateHeatScore sat at 0 indefinitely, so

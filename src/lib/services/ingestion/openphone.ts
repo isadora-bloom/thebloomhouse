@@ -914,13 +914,27 @@ async function persistRow(
 
   if (!weddingId && personId) {
     // Hydrate wedding_id from the matched person so the interaction
-    // gets linked.
+    // gets linked. Step 5c: filter out non-couple-tombstoned weddings
+    // — if the person's previous wedding got tombstoned by the sweep
+    // (e.g., a vendor's recurring SMS), don't re-attach the new signal
+    // to it. The interaction stays orphan; the classifier+mint gate
+    // below decides whether THIS new SMS warrants a fresh wedding.
     const { data: personRow } = await supabase
       .from('people')
       .select('wedding_id')
       .eq('id', personId)
       .maybeSingle()
-    weddingId = (personRow?.wedding_id as string | null) ?? null
+    const candidateWeddingId = (personRow?.wedding_id as string | null) ?? null
+    if (candidateWeddingId) {
+      const { data: candidate } = await supabase
+        .from('weddings')
+        .select('id')
+        .eq('id', candidateWeddingId)
+        .is('non_couple_at', null)
+        .is('merged_into_id', null)
+        .maybeSingle()
+      weddingId = (candidate?.id as string | null) ?? null
+    }
   }
 
   // 3) Inbox-visible interaction
