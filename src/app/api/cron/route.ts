@@ -35,6 +35,7 @@ import { syncMeetings as syncZoomMeetings } from '@/lib/services/ingestion/zoom'
 import { syncAllVenues as syncOpenPhoneAllVenues } from '@/lib/services/ingestion/openphone'
 import { runCalendlyUriBackfill } from '@/lib/services/ingestion/calendly'
 import { tombstoneNonCouplesAllVenues } from '@/lib/services/identity/non-couple-tombstone'
+import { promoteAllOrphansAllVenues } from '@/lib/services/identity/orphan-promote'
 import { runDataIntegritySweepAllVenues } from '@/lib/services/data-integrity'
 import { sweepReEngagementConversions } from '@/lib/services/re-engagement'
 import {
@@ -1248,11 +1249,13 @@ async function runPruneMaintenance(): Promise<{
   empty_wedding_prune: { rows_deleted: number; errors: string[] }
   calendly_uri_backfill: { scanned: number; cached: number; already: number; failed: number }
   non_couple_tombstone: { total_scanned: number; total_tombstoned: number; errors: string[] }
+  orphan_promote_social: { total_scanned: number; total_promoted: number; errors: string[] }
+  orphan_promote_reviews: { total_scanned: number; total_promoted: number; errors: string[] }
 }> {
   const { runAuditRetentionPrune } = await import('@/lib/services/audit-retention')
   const { detectBulkReadAnomalies } = await import('@/lib/services/bulk-read-anomaly')
   const { runDunningEscalate } = await import('@/lib/services/billing/dunning')
-  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness, formBleed, emptyWeddings, calendlyUri, nonCouple] = await Promise.allSettled([
+  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness, formBleed, emptyWeddings, calendlyUri, nonCouple, orphanPromote] = await Promise.allSettled([
     runTelemetryRetentionPrune(),
     runPruneRateLimits(),
     runPruneBrainDumpStale(),
@@ -1304,6 +1307,21 @@ async function runPruneMaintenance(): Promise<{
     // protected. Soft-tombstone preserves the forensic record per the
     // Constitution.
     tombstoneNonCouplesAllVenues(),
+    // Folded in 2026-05-13 (Step 6 / G4 + G5). Two orphan→wedding
+    // promote sweeps:
+    //  - social_engagements where match_status='unmatched' get re-run
+    //    against the current people roster. New persons that arrived
+    //    since the last match attempt now bind to old IG follower
+    //    screenshots.
+    //  - reviews where wedding_id IS NULL get the conservative
+    //    reviewer_name → people.last_name lookup (only binds on
+    //    UNIQUE last-name match). Mirrors the lazy bind in
+    //    /api/intel/reviews/[id]/draft-response but runs eagerly so
+    //    coordinator sees attribution rolled up without clicking.
+    // Audio orphans (tour_transcript_orphans) stay coordinator-paced
+    // via /agent/audio-inbox — extracting identity from transcripts
+    // would need Sonnet and the manual UI handles current volume.
+    promoteAllOrphansAllVenues(),
   ])
 
   const telemetryResult =
@@ -1422,6 +1440,17 @@ async function runPruneMaintenance(): Promise<{
           }
         })()
 
+  const orphanPromoteResult =
+    orphanPromote.status === 'fulfilled'
+      ? orphanPromote.value
+      : (() => {
+          console.error('[prune_maintenance] orphan_promote failed:', orphanPromote.reason)
+          return {
+            social: { total_scanned: 0, total_promoted: 0, errors: [String(orphanPromote.reason)] },
+            reviews: { total_scanned: 0, total_promoted: 0, errors: [] },
+          }
+        })()
+
   return {
     telemetry: telemetryResult,
     rate_limits: rateLimitsResult,
@@ -1435,6 +1464,8 @@ async function runPruneMaintenance(): Promise<{
     empty_wedding_prune: emptyWeddingResult,
     calendly_uri_backfill: calendlyUriResult,
     non_couple_tombstone: nonCoupleResult,
+    orphan_promote_social: orphanPromoteResult.social,
+    orphan_promote_reviews: orphanPromoteResult.reviews,
   }
 }
 
