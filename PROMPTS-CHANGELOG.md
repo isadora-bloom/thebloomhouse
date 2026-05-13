@@ -11,6 +11,54 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-05-12 (Folder-AI retired — folder = f(intent_class, wedding state))
+
+NOT a prompt bump — a deletion. The folder-AI Haiku call
+(`inbox-folder-ai.prompt.v1.1`) is no longer invoked by the live
+email pipeline. It remains in `src/lib/services/inbox/folder-ai-classifier.ts`
+for the moment only because the `/api/admin/reclass-folders-ai`
+endpoint still references it; that endpoint's behaviour is being
+reworked in a follow-up to fire intent re-classification + recompute
+the folder deterministically.
+
+Why retired
+-----------
+The folder writer ran a 7-step rule chain (advertiser domain, vendor
+people.role, wedding state, etc) with Haiku as a fallback when the
+rules returned 'other' / 'vendor' / 'advertiser'. That meant
+sender-side judgment was BOTH heuristic (stale people.role, hardcoded
+ADVERTISER_DOMAINS list) AND LLM-corrective — a hybrid that violated
+the doctrine "LLM judges, structured signals decide". When the
+classifier disagreed with the rule chain, we papered over it with
+`useAi: true` + confidence thresholds; the disagreement was the
+real bug.
+
+The unified inbound classifier (`inbound-intent.v3`) is now the
+SINGLE source of LLM judgment per inbound. Folder selection is a
+deterministic function of:
+  - CRM state (booked / tour scheduled / past inquiry) → structural
+    floor. Booked wedding = 'client' regardless of intent.
+  - intent_class → sender-side judgment. new_inquiry / inquiry_followup
+    → 'new_inquiry'. client_* → 'potential_client' (when no booked
+    link yet). vendor_* → 'vendor'. spam_outreach → 'advertiser'
+    when domain matches the allow-list, otherwise 'other'.
+    auto_reply / coordinator_internal / unknown → 'other'.
+  - Per-venue vendor-domain allow-list → coordinator-curated promotion.
+
+No second Haiku call per inbound. Pipeline goes from 2 LLM calls →
+1 LLM call per inbound email.
+
+Pipeline integration
+--------------------
+`updateThreadLifecycleFolder` gains an `intentClassOverride` arg.
+The live pipeline computes the unified verdict synchronously
+(`classifyInboundRaw`), passes `intent_class` directly to the folder
+writer, then stamps the verdict on the row fire-and-forget. The
+override avoids a race where the folder writer reads the row before
+the stamp lands. When the override is null (pre-classifier rows,
+drain hasn't caught up), the writer falls back to reading
+intent_class from the most recent inbound on the thread.
+
 ## 2026-05-12 (Inbound classifier v3 — unification with classifyEmail)
 
 Bumped `inbound-intent.v2` → `inbound-intent.v3`

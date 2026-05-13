@@ -1702,13 +1702,13 @@ export async function processIncomingEmail(
       venueId,
       threadId: email.threadId ?? null,
       interactionId,
-      // 2026-05-12 — Haiku is the primary classifier. Live pipeline used
-      // to keep useAi=false to save Haiku calls, but the rule chain alone
-      // misclassified Knot Pro Inbox + Calendly relays (From: rewritten
-      // to the couple's gmail). Let Haiku decide every inbound; cost
-      // is ~$0.0003/email and the prompt was strengthened to recognise
-      // the relay patterns. Doctrine: classify via LLM, not rules.
-      useAi: true,
+      // Doctrine fix (2026-05-12): intent_class from the unified
+      // classifier IS the LLM judgment. updateThreadLifecycleFolder
+      // reads it + wedding state to deterministically pick the
+      // folder — no second Haiku call. Pass the verdict's
+      // intent_class directly so the lookup doesn't race the
+      // fire-and-forget stampInboundVerdict.
+      intentClassOverride: unifiedVerdict?.intent_class ?? null,
       correlationId,
     })
   } catch (folderErr) {

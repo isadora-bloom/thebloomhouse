@@ -179,7 +179,22 @@ export type WeddingStatusInput =
   | 'cancelled'
   | null
 
+/** Sender-side intent classes the LLM may emit. Imported as a string
+ *  to keep this module independent of the intent classifier's full
+ *  enum union (avoids a coupling that would force lifecycle.ts to
+ *  re-export every intent change). Unknown values are treated as
+ *  null. */
+export type IntentClassInput = string | null
+
 export interface LifecycleDecisionInput {
+  /**
+   * Intent verdict from the unified inbound classifier (the LLM's
+   * judgment on what kind of message this is). Drives sender-side
+   * folder selection — replaces the prior "rule chain + AI fallback"
+   * shape. Pass null when the row has not yet been classified
+   * (rule chain falls back to structural-only signals).
+   */
+  intentClass: IntentClassInput
   /** weddings.status. null when the interaction has no wedding link. */
   weddingStatus: WeddingStatusInput
   /** weddings.booked_at — non-null is also enough to flip to 'client'. */
@@ -192,45 +207,52 @@ export interface LifecycleDecisionInput {
   hasTourEvent: boolean
   /** Sender domain extracted from from_email. lower-cased preferred. */
   senderDomain: string | null
-  /** people.role on the joined person (partner1 / vendor / family / etc). */
+  /** people.role on the joined person (partner1 / vendor / family /
+   *  etc). Trusts the classifier verdict over this when they disagree
+   *  — a stale 'vendor' role on a real couple shouldn't pin them in
+   *  Vendors forever. */
   senderRole: string | null
   /**
-   * Optional override from a downstream classifier. If the classifier
-   * has already labelled the sender as 'vendor' or 'advertiser', we
-   * trust it ahead of the heuristic chain. Today this hook is unused
-   * but present so a future LLM-backed classifier can plug in.
-   */
-  senderClassification?: string | null
-  /**
-   * Optional folder hint from the AI classifier (folder-ai-classifier.ts).
-   * Only consulted when the rule chain would otherwise return 'other'
-   * AND there is no strong structured signal: no wedding link,
-   * no people.role, no advertiser-domain match. The fallback ordering
-   * keeps deterministic CRM signal authoritative; AI is a tie-breaker
-   * for the long tail. Pass null/undefined to skip the AI branch.
-   */
-  aiClassification?: LifecycleFolder | null
-  /**
-   * Per-venue vendor-domain allow-list (migration 258). Sister of the
-   * global ADVERTISER_DOMAINS but venue-scoped. When the rule chain
-   * would otherwise fall to 'other', if the sender domain is on this
-   * allow-list AND there's no wedding link, return 'vendor' directly —
-   * skipping the Haiku reclass call. Loaded once per
-   * updateThreadLifecycleFolder via loadVendorDomains() (5min cache).
-   * Pass null/undefined or an empty set to disable the check.
+   * Per-venue vendor-domain allow-list (migration 258). When the
+   * sender domain is on this list AND no wedding is linked, returns
+   * 'vendor' directly. Belongs to the venue's CRM truth, not the
+   * classifier's judgment — coordinator-curated.
    */
   venueVendorDomains?: Set<string> | null
 }
 
 /**
- * Decide which lifecycle folder a thread belongs to. Priority order
- * matches migration 242's SQL backfill exactly. Each branch is a
- * single boolean test against the input — no I/O, no allocations.
+ * Decide which lifecycle folder a thread belongs to.
+ *
+ * 2026-05-12 doctrine rewrite. Previously the function ran a 7-step
+ * rule chain with an optional Haiku fallback at step 6. That meant
+ * sender-side judgment (vendor / advertiser / new_inquiry) was driven
+ * by stale people.role values and a hard-coded ADVERTISER_DOMAINS
+ * allow-list, with Haiku second-guessing only when the rules ran out.
+ *
+ * The unified inbound classifier (intent_class) is now the SINGLE
+ * source of LLM judgment per inbound. Folder selection becomes a
+ * deterministic function of:
+ *   - CRM state (wedding booked / tour scheduled / past inquiry) =>
+ *     STRUCTURAL FLOOR. A booked wedding is 'client' regardless of
+ *     intent. A tour scheduled is 'potential_client'.
+ *   - intent_class => sender-side judgment. new_inquiry /
+ *     inquiry_followup → new_inquiry. client_* → potential_client.
+ *     vendor_* → vendor. spam_outreach → advertiser (when domain
+ *     matches) or other. auto_reply / coordinator_internal /
+ *     unknown → other.
+ *   - Per-venue vendor-domain allow-list => coordinator-curated
+ *     promotion of unknown-but-trusted vendor domains.
+ *
+ * No second Haiku call. No "rule chain decides, AI patches" hybrid.
+ * If intent_class is null (pre-classifier row, drain hasn't run),
+ * fall back to the structural signals + advertiser-domain check.
  */
 export function decideLifecycleFolder(
   input: LifecycleDecisionInput,
 ): LifecycleFolder {
   const {
+    intentClass,
     weddingStatus,
     bookedAt,
     inboundCount,
@@ -238,28 +260,15 @@ export function decideLifecycleFolder(
     hasTourEvent,
     senderDomain,
     senderRole,
-    senderClassification,
-    aiClassification,
     venueVendorDomains,
   } = input
 
-  // 1) Advertiser — sender domain in allow-list AND no wedding link.
-  //    Without the no-wedding gate a Knot inquiry-relay would land here
-  //    and the real lead would vanish from the inbox.
-  if (
-    !weddingStatus &&
-    (senderClassification === 'advertiser' || isAdvertiserDomain(senderDomain))
-  ) {
-    return 'advertiser'
-  }
+  // ----- STRUCTURAL FLOOR — CRM state always wins -----
+  //
+  // A booked wedding is a client, even if the latest inbound looks
+  // like vendor outreach. A scheduled tour is a potential_client.
+  // These are hard CRM truths the classifier can't override.
 
-  // 2) Vendor — explicit role on the joined person, or a downstream
-  //    classifier handed us the label.
-  if (senderRole === 'vendor' || senderClassification === 'vendor') {
-    return 'vendor'
-  }
-
-  // 3) Client — wedding is booked.
   if (
     weddingStatus === 'booked' ||
     weddingStatus === 'completed' ||
@@ -268,83 +277,98 @@ export function decideLifecycleFolder(
     return 'client'
   }
 
-  // 4) Potential client — wedding past 'inquiry', tour event exists,
-  //    or the couple has replied back on this thread.
   if (
     weddingStatus === 'tour_scheduled' ||
     weddingStatus === 'tour_completed' ||
-    weddingStatus === 'proposal_sent'
+    weddingStatus === 'proposal_sent' ||
+    hasTourEvent
   ) {
     return 'potential_client'
   }
-  if (hasTourEvent) return 'potential_client'
-  if (outboundCount >= 1 && inboundCount >= 2) return 'potential_client'
 
-  // 5) New inquiry — wedding is still in inquiry stage and the
-  //    couple has not replied back yet. Inbound count <= 1 means
-  //    the only inbound on the thread is the original inquiry /
-  //    relay. Whether Sage has already sent a nurture reply is
-  //    deliberately ignored: Isadora's rule is "never heard from
-  //    before, never responded" meaning the COUPLE has not
-  //    responded, not the venue. Without this relaxation, every
-  //    Knot inquiry where Sage replied auto-fell into Other.
-  if (
-    weddingStatus === 'inquiry' &&
-    inboundCount <= 1
-  ) {
-    return 'new_inquiry'
+  if (weddingStatus === 'inquiry' && outboundCount >= 1 && inboundCount >= 2) {
+    // Couple has replied back at least once after our outreach —
+    // they're engaged, no longer a brand-new inquiry.
+    return 'potential_client'
   }
 
-  // 5b) Vendor — per-venue vendor-domain allow-list (mig 258). Sister
-  //     of the global ADVERTISER_DOMAINS pass at step 1, but for the
-  //     other side of the long tail. A coordinator (or Haiku via the
-  //     reclass-folders-ai sweep) has previously confirmed this domain
-  //     belongs to a real wedding-vendor business. Subsequent emails
-  //     from the same domain skip the Haiku call and land in 'vendor'
-  //     directly. Saves ~$0.0003/email × thousands per year.
+  // ----- INTENT-DRIVEN — classifier verdict drives the rest -----
   //
-  //     Same no-wedding-link gate as the advertiser pass: a real
-  //     vendor coordinating a SPECIFIC booked wedding still belongs
-  //     under the wedding's lifecycle (client/potential_client),
-  //     which the rule chain has already established by step 4. We
-  //     only catch the un-tied case here.
+  // intent_class is the LLM's judgment on what the message IS. We
+  // map the 11 intent classes to the 6 folders below. CRM state is
+  // already accounted for above, so the mapping is sender-shape only.
+
+  if (intentClass) {
+    switch (intentClass) {
+      case 'new_inquiry':
+      case 'inquiry_followup':
+        return 'new_inquiry'
+
+      case 'client_logistics':
+      case 'client_emotional':
+      case 'family_member_proxy':
+        // Classifier says "this is a booked-couple-side message" but
+        // we have no booked wedding linked. Either the link hasn't
+        // resolved yet (race) or the classifier missed. Treat as
+        // engaged-lead (potential_client) — never demote to vendor
+        // or advertiser when the classifier says client-side.
+        return 'potential_client'
+
+      case 'vendor_communication':
+      case 'vendor_outreach':
+        return 'vendor'
+
+      case 'spam_outreach':
+        // Cold solicitation. If the sender domain is on the
+        // advertiser allow-list, it's an advertiser (Knot pitching
+        // venues, SaaS sales, etc); otherwise just other.
+        if (isAdvertiserDomain(senderDomain)) return 'advertiser'
+        return 'other'
+
+      case 'auto_reply':
+      case 'coordinator_internal':
+      case 'unknown':
+        return 'other'
+
+      default:
+        // Forward-compat: unknown intent string falls through to the
+        // null-intent path below.
+        break
+    }
+  }
+
+  // ----- NULL-INTENT FALLBACK — classifier hasn't run yet -----
+  //
+  // Pre-classifier rows + interactions where the drain hasn't caught
+  // up. Use structural signals only. Once intent_class lands, the
+  // folder writer recomputes from this same function.
+
+  if (
+    !weddingStatus &&
+    senderDomain &&
+    isAdvertiserDomain(senderDomain)
+  ) {
+    return 'advertiser'
+  }
+
+  if (senderRole === 'vendor') return 'vendor'
+
   if (
     !weddingStatus &&
     senderDomain &&
     venueVendorDomains &&
     venueVendorDomains.size > 0
   ) {
-    if (venueVendorDomains.has(senderDomain)) {
-      return 'vendor'
-    }
-    // Suffix match — `notifications.gibsonrental.com` matches
-    // `gibsonrental.com`. Mirrors isAdvertiserDomain() behaviour.
+    if (venueVendorDomains.has(senderDomain)) return 'vendor'
     for (const dom of venueVendorDomains) {
       if (senderDomain.endsWith(`.${dom}`)) return 'vendor'
     }
   }
 
-  // 6) AI fallback — the rule chain is about to return 'other'. If
-  //    we have an aiClassification AND no strong structured signal
-  //    (no wedding link, no people.role, not on the advertiser list),
-  //    trust the AI label. The "no strong signal" gate prevents the
-  //    AI from second-guessing a deterministic CRM hit. We also drop
-  //    AI labels that are themselves 'other' (no value-add) and
-  //    disallow the AI from picking 'client' here, since 'client'
-  //    requires a real weddings.booked_at link the AI cannot see.
-  if (aiClassification && aiClassification !== 'other' && aiClassification !== 'client') {
-    const hasStrongSignal =
-      weddingStatus !== null ||
-      senderRole !== null ||
-      senderClassification === 'vendor' ||
-      senderClassification === 'advertiser' ||
-      isAdvertiserDomain(senderDomain)
-    if (!hasStrongSignal) {
-      return aiClassification
-    }
+  if (weddingStatus === 'inquiry' && inboundCount <= 1) {
+    return 'new_inquiry'
   }
 
-  // 7) Other — anything left.
   return 'other'
 }
 
@@ -374,26 +398,36 @@ export interface UpdateThreadFolderArgs {
   /** interactions.id of the row that triggered this update. */
   interactionId?: string | null
   /**
-   * Optional: when true, after the rule chain runs, if the would-be
-   * folder is 'other' AND the most recent inbound on the thread has a
-   * non-trivial body (>= 30 chars), classifyFolderAI is invoked and
-   * the result is fed back through decideLifecycleFolder via
-   * aiClassification. Default false. The live email pipeline keeps the
-   * default off; the one-shot reclass endpoint flips it on.
+   * @deprecated 2026-05-12. The Haiku folder-AI fallback was retired
+   * when intent_class became the single source of LLM judgment per
+   * inbound. updateThreadLifecycleFolder now reads intent_class from
+   * the most recent inbound on the thread and feeds it into the
+   * deterministic decideLifecycleFolder mapper. Field kept on the
+   * args interface so existing callers compile; ignored at runtime.
    */
   useAi?: boolean
   /**
-   * Optional correlation id passed through to the AI classifier so the
-   * Haiku call lands in api_costs with the same correlation_id as the
-   * triggering inbound. Ignored when useAi is false.
+   * Optional correlation id, threaded into logging for traceability.
    */
   correlationId?: string
+  /**
+   * Direct intent_class override — bypasses the DB lookup for the
+   * thread's most recent inbound. The live pipeline runs
+   * classifyInboundRaw synchronously early but stamps the row
+   * fire-and-forget AFTER the interaction insert. Passing the
+   * verdict's intent_class here avoids the race where
+   * updateThreadLifecycleFolder reads the row before stamping has
+   * landed. Falls back to the DB lookup when null/undefined.
+   */
+  intentClassOverride?: string | null
 }
 
 export async function updateThreadLifecycleFolder(
   args: UpdateThreadFolderArgs,
 ): Promise<{ folder: LifecycleFolder | null; updated: number }> {
-  const { supabase, venueId, threadId, interactionId, useAi, correlationId } = args
+  const { supabase, venueId, threadId, interactionId, intentClassOverride } = args
+  // useAi + correlationId no longer load-bearing — the AI fallback
+  // was retired in favour of reading intent_class from the row.
 
   // Step 1: Fetch every interaction on the thread for this venue.
   // venue_id is enforced so a forensic-replay run on a different
@@ -405,7 +439,7 @@ export async function updateThreadLifecycleFolder(
   // simply ignore them.
   let q = supabase
     .from('interactions')
-    .select('id, direction, wedding_id, person_id, from_email, from_name, subject, full_body, body_preview, timestamp, gmail_thread_id')
+    .select('id, direction, wedding_id, person_id, from_email, from_name, subject, full_body, body_preview, timestamp, gmail_thread_id, intent_class')
     .eq('venue_id', venueId)
     .eq('type', 'email')
 
@@ -513,7 +547,34 @@ export async function updateThreadLifecycleFolder(
     venueVendorDomains = null
   }
 
-  const ruleFolder = decideLifecycleFolder({
+  // Step 6: Load intent_class. The unified classifier stamps this on
+  // every inbound; we read it so the folder decision uses the LLM's
+  // verdict instead of running a separate folder-AI Haiku call.
+  //
+  // Prefer the caller's override when supplied (live pipeline path —
+  // avoids a race where the fire-and-forget stamp hasn't landed yet).
+  // Otherwise read from the row.
+  let intentClass: string | null = intentClassOverride ?? null
+  if (!intentClass) {
+    type InboundLite = {
+      direction: string
+      intent_class?: string | null
+      timestamp?: string | null
+    }
+    const inboundRows = (rows as unknown as InboundLite[]).filter(
+      (r) => r.direction === 'inbound' && r.intent_class,
+    )
+    inboundRows.sort((a, b) => {
+      const ta = a.timestamp ? Date.parse(a.timestamp) : 0
+      const tb = b.timestamp ? Date.parse(b.timestamp) : 0
+      return tb - ta
+    })
+    intentClass = inboundRows[0]?.intent_class ?? null
+  }
+
+  // Step 7: Decide.
+  const folder = decideLifecycleFolder({
+    intentClass,
     weddingStatus,
     bookedAt,
     inboundCount,
@@ -523,95 +584,6 @@ export async function updateThreadLifecycleFolder(
     senderRole,
     venueVendorDomains,
   })
-
-  // Step 6b: AI consultation — fires whenever the rule chain landed on
-  // one of the "intent-judgment" folders ('other', 'vendor', 'advertiser')
-  // where structured signal alone can't reliably name the sender's role.
-  // The trust-Haiku doctrine (2026-05-12): when the rule chain has firm
-  // wedding-state evidence ('client' = booked, 'new_inquiry' = first
-  // inbound on an inquiry-stage wedding, 'potential_client' = tour /
-  // proposal sent), we keep that verdict — it's grounded in CRM facts.
-  // Otherwise we hand the email to Haiku and feed its verdict back
-  // through decideLifecycleFolder via aiClassification.
-  //
-  // Caught two live misclassifications on 2026-05-12 (Keeley Tate Knot
-  // Pro Inbox + Hassan Abidi Calendly tour) where the From: was rewritten
-  // to the couple's gmail and the rule chain (or an earlier reclass-AI
-  // run with a weaker prompt) settled on 'vendor'. Letting Haiku
-  // re-decide with the v1.1 prompt rescues these.
-  const AI_RECONSIDER_FOLDERS = new Set<LifecycleFolder>(['other', 'vendor', 'advertiser'])
-  let folder = ruleFolder
-  if (useAi && AI_RECONSIDER_FOLDERS.has(ruleFolder)) {
-    type InboundRow = {
-      direction: string
-      from_email?: string | null
-      from_name?: string | null
-      subject?: string | null
-      full_body?: string | null
-      body_preview?: string | null
-      timestamp?: string | null
-    }
-    const inboundRows = (rows as unknown as InboundRow[]).filter(
-      (r) => r.direction === 'inbound',
-    )
-    inboundRows.sort((a, b) => {
-      const ta = a.timestamp ? Date.parse(a.timestamp) : 0
-      const tb = b.timestamp ? Date.parse(b.timestamp) : 0
-      return tb - ta
-    })
-    const latest = inboundRows[0]
-    const body = (latest?.full_body ?? latest?.body_preview ?? '').toString()
-    if (latest && latest.from_email && body.length >= 30) {
-      // Lazy import to keep the lifecycle module's import graph stable
-      // for the unit tests that don't need the AI client surface.
-      const { classifyFolderAI } = await import('./folder-ai-classifier')
-      const ai = await classifyFolderAI(
-        venueId,
-        {
-          from: latest.from_email,
-          fromName: latest.from_name ?? null,
-          subject: latest.subject ?? null,
-          body,
-          direction: 'inbound',
-        },
-        { correlationId },
-      )
-
-      // Two paths depending on what the rule chain landed on:
-      //
-      // Rule said 'other' — feed AI back through decideLifecycleFolder
-      // so the no-strong-signal gate still applies. Preserves the
-      // original long-tail-bucket behaviour.
-      //
-      // Rule said 'vendor' / 'advertiser' — these branches fire from
-      // a stale people.role or a domain allow-list match that we have
-      // reason to doubt. If Haiku is confident (>= 70) and disagrees,
-      // trust Haiku. Hard CRM signals (booked wedding, wedding status)
-      // would have routed the row to 'client' / 'potential_client' /
-      // 'new_inquiry' BEFORE step 2 fired vendor — so by definition,
-      // when we land here, the structured floor is not load-bearing.
-      const AI_CONFIDENCE_OVERRIDE_THRESHOLD = 70
-      if (ruleFolder === 'other') {
-        folder = decideLifecycleFolder({
-          weddingStatus,
-          bookedAt,
-          inboundCount,
-          outboundCount,
-          hasTourEvent,
-          senderDomain,
-          senderRole,
-          aiClassification: ai.folder,
-          venueVendorDomains,
-        })
-      } else if (
-        ai.folder !== ruleFolder &&
-        ai.folder !== 'other' &&
-        ai.confidence >= AI_CONFIDENCE_OVERRIDE_THRESHOLD
-      ) {
-        folder = ai.folder
-      }
-    }
-  }
 
   // Step 7: Stamp every interaction on the thread. Using gmail_thread_id
   // when available means coordinator-side outbound rows from a sibling
