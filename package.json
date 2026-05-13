@@ -16,7 +16,8 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:report": "playwright show-report e2e/report",
-    "check:links": "node scripts/check-internal-links.mjs"
+    "check:links": "node scripts/check-internal-links.mjs",
+    "check:wedding-cascade": "node scripts/check-merge-weddings-cascade.mjs"
   },
   "keywords": [],
   "author": "",
