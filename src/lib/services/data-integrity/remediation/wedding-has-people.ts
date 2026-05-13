@@ -217,7 +217,15 @@ export async function remediateGhostWeddings(
           .is('merged_into_id', null)
           .limit(1)
         if (!existing1 || existing1.length === 0) {
-          const first = (partner1Claim?.first ?? '').trim() || '(Unknown)'
+          // 2026-05-13 Pass G: NULL placeholder instead of "(Unknown)"
+          // literal. Reading "(Unknown)" as the first_name string is
+          // semantically wrong — it means "the couple's first name is
+          // literally the word Unknown". NULL means "we don't know"
+          // and lets the leads list render its own "(name unknown)"
+          // UI affordance. The Wave 4 judge fills NULL once signal
+          // arrives; "(Unknown)" string would block syncPartnerName's
+          // namesEqual guard from ever upgrading.
+          const first = (partner1Claim?.first ?? '').trim() || null
           const last = (partner1Claim?.last ?? '').trim() || null
           const { error: ins1Err } = await sb.from('people').insert({
             venue_id: venueId,
@@ -252,7 +260,9 @@ export async function remediateGhostWeddings(
             .is('merged_into_id', null)
             .limit(1)
           if (!existing2 || existing2.length === 0) {
-            const first2 = (partner2Claim.first ?? '').trim() || '(Unknown)'
+            // 2026-05-13 Pass G: NULL not "(Unknown)" literal. Same
+            // reasoning as partner1 above.
+            const first2 = (partner2Claim.first ?? '').trim() || null
             const last2 = (partner2Claim.last ?? '').trim() || null
             const { error: ins2Err } = await sb.from('people').insert({
               venue_id: venueId,
@@ -321,7 +331,11 @@ export async function remediateGhostWeddings(
         venue_id: venueId,
         wedding_id: ghost.id,
         role: 'partner1',
-        first_name: firstName || '(Unknown)',
+        // 2026-05-13 Pass G: NULL not "(Unknown)" literal — see Tier 1
+        // comment. firstName here is derived from the inbound's
+        // from_name or email-local-part; if neither produced a usable
+        // token, NULL is the correct sentinel.
+        first_name: firstName || null,
         last_name: lastName,
         email: inbound.from_email.toLowerCase(),
         name_evidence: [

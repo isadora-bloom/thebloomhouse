@@ -560,10 +560,26 @@ export async function syncProfileToPeople(
     }
   }
 
-  // Branch 2: high/medium-quality name updates.
+  // Branch 2: per-partner sync. Previously gated on
+  // `name_quality === 'high' || 'medium'`, which silently discarded
+  // every couple where the judge graded the OVERALL quality as 'low'
+  // but had a confident individual partner claim. RM-0317 (2026-05-13):
+  // judge extracted partner2='Dale Settle' at 85% confidence from a
+  // Calendly Q&A field, but because partner1 had no claim (Calendly
+  // invitee 20girl.mama23@gmail.com had no real human name) the
+  // overall name_quality landed at 'low' — Dale Settle never landed
+  // on a partner2 people row, and the leads list rendered "Unknown".
+  //
+  // Fix (2026-05-13 Pass G): include 'low'. Each partner's syncPartnerName
+  // call already enforces its own confidence guards (only beat strongest
+  // existing evidence; idempotent when names already match), so opening
+  // the outer gate doesn't bypass safety — it just lets the
+  // per-partner logic run. The 'low' bucket is exactly the cohort
+  // where ONE partner is confident while the other isn't.
   if (
     profile.names.name_quality === 'high' ||
-    profile.names.name_quality === 'medium'
+    profile.names.name_quality === 'medium' ||
+    profile.names.name_quality === 'low'
   ) {
     if (profile.names.partner1) {
       const partner1Row = partners.find((p) => p.role === 'partner1') ?? null
