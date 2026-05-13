@@ -216,6 +216,79 @@ export async function getCalendlyClient(venueId: string): Promise<ClientHandle> 
   throw new CalendlyNotConfiguredError()
 }
 
+/**
+ * Walk every venue_config with a stored Calendly access_token but
+ * missing user/organization URIs, and trigger the self-heal in
+ * getCalendlyClient to cache them. Idempotent — venues already cached
+ * are skipped, venues with no token are skipped, venues whose
+ * /users/me call fails are logged and moved on.
+ *
+ * Wired into prune_maintenance daily so a brand-new venue connecting
+ * Calendly tomorrow has its host URI cached within 24h even if the
+ * settings-page server hook misses (network blip, etc). Closes the
+ * cold-start window for the Calendly webhook's path-A routing.
+ *
+ * Returns counts for telemetry: scanned (rows with tokens), cached
+ * (rows we just resolved), already (rows that were already cached),
+ * failed (rows whose /users/me call errored).
+ */
+export async function runCalendlyUriBackfill(): Promise<{
+  scanned: number
+  cached: number
+  already: number
+  failed: number
+}> {
+  const supabase = createServiceClient()
+  const { data: rows, error } = await supabase
+    .from('venue_config')
+    .select('venue_id, calendly_tokens')
+    .not('calendly_tokens', 'is', null)
+    .limit(1000)
+  if (error) {
+    console.error('[calendly/uri-backfill] venue_config read failed:', error.message)
+    return { scanned: 0, cached: 0, already: 0, failed: 0 }
+  }
+  const candidates = (rows ?? []).filter((row) => {
+    const t = row.calendly_tokens as CalendlyTokens | null
+    return !!t?.access_token && (!t.user || !t.organization)
+  })
+  let cached = 0
+  let failed = 0
+  for (const row of candidates) {
+    // Serial. /users/me is fast (sub-second) and we want to avoid
+    // fanning out 100 outbound HTTPS calls in parallel that could trip
+    // Calendly rate limits at scale.
+    try {
+      const before = row.calendly_tokens as CalendlyTokens
+      await getCalendlyClient(row.venue_id as string)
+      // Re-read to verify the cache actually populated. getCalendlyClient's
+      // self-heal swallows /users/me errors and falls through.
+      const { data: after } = await supabase
+        .from('venue_config')
+        .select('calendly_tokens')
+        .eq('venue_id', row.venue_id as string)
+        .maybeSingle()
+      const afterTokens = (after?.calendly_tokens ?? null) as CalendlyTokens | null
+      if (afterTokens?.user && afterTokens?.organization && (!before.user || !before.organization)) {
+        cached++
+      } else if (!afterTokens?.user || !afterTokens?.organization) {
+        failed++
+      }
+    } catch (err) {
+      console.warn(
+        `[calendly/uri-backfill] venue ${row.venue_id} backfill failed:`,
+        err instanceof Error ? err.message : err,
+      )
+      failed++
+    }
+  }
+  const already = (rows ?? []).filter((row) => {
+    const t = row.calendly_tokens as CalendlyTokens | null
+    return !!t?.access_token && !!t.user && !!t.organization
+  }).length
+  return { scanned: candidates.length, cached, already, failed }
+}
+
 async function calendlyGet<T>(token: string, path: string): Promise<T> {
   const url = path.startsWith('http') ? path : `${CALENDLY_BASE}${path}`
   const res = await fetch(url, {

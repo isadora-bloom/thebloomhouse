@@ -33,6 +33,7 @@ import { resolveVenueCandidates } from '@/lib/services/identity/candidate-resolv
 import { runBacktrackAllVenues } from '@/lib/services/identity/backtrack'
 import { syncMeetings as syncZoomMeetings } from '@/lib/services/ingestion/zoom'
 import { syncAllVenues as syncOpenPhoneAllVenues } from '@/lib/services/ingestion/openphone'
+import { runCalendlyUriBackfill } from '@/lib/services/ingestion/calendly'
 import { runDataIntegritySweepAllVenues } from '@/lib/services/data-integrity'
 import { sweepReEngagementConversions } from '@/lib/services/re-engagement'
 import {
@@ -1244,11 +1245,12 @@ async function runPruneMaintenance(): Promise<{
   source_freshness: Awaited<ReturnType<typeof runSourceFreshnessSweep>>
   form_bleed_nuke: { rows_nulled: number; errors: string[] }
   empty_wedding_prune: { rows_deleted: number; errors: string[] }
+  calendly_uri_backfill: { scanned: number; cached: number; already: number; failed: number }
 }> {
   const { runAuditRetentionPrune } = await import('@/lib/services/audit-retention')
   const { detectBulkReadAnomalies } = await import('@/lib/services/bulk-read-anomaly')
   const { runDunningEscalate } = await import('@/lib/services/billing/dunning')
-  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness, formBleed, emptyWeddings] = await Promise.allSettled([
+  const [telemetry, rate_limits, brain_dump_stale, audit, bulkRead, expired, dunning, sourceFreshness, formBleed, emptyWeddings, calendlyUri] = await Promise.allSettled([
     runTelemetryRetentionPrune(),
     runPruneRateLimits(),
     runPruneBrainDumpStale(),
@@ -1281,6 +1283,15 @@ async function runPruneMaintenance(): Promise<{
     // Defensive: never touches a wedding with booked_at — even if all
     // other signal got wiped, a real booking must survive.
     runEmptyWeddingPrune(),
+    // Folded in 2026-05-13 (G1 closure). For every venue with a stored
+    // Calendly access_token but no cached user/organization URI, fetch
+    // /users/me and write back to venue_config. Without this the
+    // webhook handler's path-A routing (host URI match) cannot resolve
+    // venueId, and cold bookings drop. The settings page also fires a
+    // single-venue cache call after token save; this cron is the daily
+    // safety net for venues whose settings-save hook missed (network
+    // blip) or pre-fix venues whose tokens predate the hook entirely.
+    runCalendlyUriBackfill(),
   ])
 
   const telemetryResult =
@@ -1375,6 +1386,14 @@ async function runPruneMaintenance(): Promise<{
           return { rows_deleted: 0, errors: [String(emptyWeddings.reason)] }
         })()
 
+  const calendlyUriResult =
+    calendlyUri.status === 'fulfilled'
+      ? calendlyUri.value
+      : (() => {
+          console.error('[prune_maintenance] calendly_uri_backfill failed:', calendlyUri.reason)
+          return { scanned: 0, cached: 0, already: 0, failed: 0 }
+        })()
+
   return {
     telemetry: telemetryResult,
     rate_limits: rateLimitsResult,
@@ -1386,6 +1405,7 @@ async function runPruneMaintenance(): Promise<{
     source_freshness: sourceFreshnessResult,
     form_bleed_nuke: formBleedResult,
     empty_wedding_prune: emptyWeddingResult,
+    calendly_uri_backfill: calendlyUriResult,
   }
 }
 
