@@ -1247,10 +1247,24 @@ export async function processIncomingEmail(
   // insert (we need weddingId to be resolved first). The skipDraft
   // computation below covers the per-email reasons; gate results are
   // applied later in the flow as `gateSkipDraft`.
+  // 2026-05-13: formLead-detected emails bypass the venue_email_filters
+  // no_draft action. Calculator submissions arrive from the venue's own
+  // domain (calculator notifications) and would otherwise be vetoed by
+  // the auto-learned `rixeymanor.com -> no_draft` filter that's correct
+  // for transactional venue mail (contract receipts, internal forwards)
+  // but wrong for new-lead notifications. detectFormRelay already
+  // confirmed this is a real intake — let the filter veto only the
+  // ones the system has no other evidence for. schedulingEvent +
+  // humanRequested + opts.skipDraft still hard-skip (those are
+  // structural, not policy).
+  // RM-Lyndsey-Rivera bug 2026-05-13: calculator-only inquiry had zero
+  // drafts because both calculator emails (from rixeymanor.com) hit the
+  // auto-learned filter. Bug class: a "real lead" signal arriving via
+  // venue-own-domain envelope.
   const skipDraft =
     opts?.skipDraft === true ||
-    filterHit?.action === 'no_draft' ||
-    earlyFilterHit?.action === 'no_draft' ||
+    (!formLead && filterHit?.action === 'no_draft') ||
+    (!formLead && earlyFilterHit?.action === 'no_draft') ||
     Boolean(schedulingEvent) ||
     humanRequested
 

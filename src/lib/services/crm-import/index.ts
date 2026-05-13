@@ -315,12 +315,16 @@ export interface AdapterConfig {
 
 /** Identifier the adapter registry exposes to the UI. Most adapters use
  *  the same string as their crm_source enum value (honeybook, dubsado,
- *  generic_csv, web_form), but the tour-scheduler adapter uses its own
- *  identifier ('tour_scheduler') because it commits with crm_source=
- *  'generic_csv' (no dedicated enum value yet). Registry-name is what
- *  the API route + UI provider-picker key off; crm_source is what the
- *  shared commit helper writes to the DB. */
-export type AdapterName = CrmSource | 'tour_scheduler'
+ *  generic_csv, web_form), but some adapters use their own identifier
+ *  because they commit with crm_source='generic_csv' (no dedicated enum
+ *  value yet — adding one requires a migration on the weddings.crm_source
+ *  CHECK constraint). 'tour_scheduler' and 'knot' are the current
+ *  alias-only entries. Registry-name is what the API route + UI
+ *  provider-picker key off; crm_source is what the shared commit helper
+ *  writes to the DB. The recurring-CSV dedup ledger
+ *  (crm_import_rows.source) does carry 'knot' as a distinct value so
+ *  per-row identity is correctly partitioned at the dedup layer. */
+export type AdapterName = CrmSource | 'tour_scheduler' | 'knot'
 
 export interface CrmAdapter {
   /** Stable identifier exposed to the UI provider-picker. */
@@ -347,6 +351,7 @@ import { aislePlannerAdapter } from './aisleplanner'
 import { genericCsvAdapter } from './generic-csv'
 import { webFormAdapter } from './web-form'
 import { tourSchedulerAdapter } from './tour-scheduler'
+import { knotAdapter } from './knot'
 
 export const ADAPTERS: ReadonlyArray<CrmAdapter> = [
   genericCsvAdapter,
@@ -355,6 +360,7 @@ export const ADAPTERS: ReadonlyArray<CrmAdapter> = [
   aislePlannerAdapter,
   webFormAdapter,
   tourSchedulerAdapter,
+  knotAdapter,
 ]
 
 export function findAdapter(name: string): CrmAdapter | null {
