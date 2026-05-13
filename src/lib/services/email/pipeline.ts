@@ -3488,8 +3488,6 @@ export async function processIncomingEmail(
           },
           extractedData: {
             questions: [],
-            eventDate: null,
-            guestCount: null,
           },
           taskType: 'new_inquiry',
           source: schedulingEvent.source ?? detectedSource,

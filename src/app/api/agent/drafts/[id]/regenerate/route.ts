@@ -177,7 +177,7 @@ export async function POST(
         venueId,
         contactEmail: fromEmail,
         inquiry: { from: fromEmail, subject, body },
-        extractedData: { questions: [], eventDate: null, guestCount: null },
+        extractedData: { questions: [] },
         taskType: 'new_inquiry',
         weddingId,
         correlationId,
