@@ -119,7 +119,22 @@ export async function captureIdentifier(
       // weddings before Wave 4 has minted a profile). Skip silently —
       // the next reconstructCoupleIdentity run will mint the row and
       // future captures will land.
-      return { ok: false, reason: `read failed: ${readErr.message}` }
+      //
+      // BUT: missing-column errors signal an unapplied migration (mig
+      // 333 specifically). On 2026-05-13, every captureIdentifier call
+      // silently no-op'd for hours because mig 333 hadn't been applied
+      // and the silent {ok:false} return swallowed it. Loud-log on
+      // this specific signature so future unapplied-migration cases
+      // get caught fast.
+      const msg = readErr.message ?? ''
+      if (/column .* (does not exist|missing)/i.test(msg) || /identifiers/i.test(msg) && /column/i.test(msg)) {
+        console.error(
+          '[captureIdentifier] schema appears stale — column "identifiers" missing on couple_identity_profile. ' +
+          'Apply supabase/migrations/333_profile_locks_and_identifiers.sql in Studio. ' +
+          `Underlying error: ${msg}`,
+        )
+      }
+      return { ok: false, reason: `read failed: ${msg}` }
     }
     if (!row) {
       return { ok: false, reason: 'no profile row yet' }

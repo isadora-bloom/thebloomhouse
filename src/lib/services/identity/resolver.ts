@@ -249,7 +249,17 @@ async function findByEmailExact(
     .is('merged_into_id', null)
     .order('created_at', { ascending: true })
     .limit(1)
-  return (aliasData && aliasData[0]) ? (aliasData[0] as PersonHit) : null
+  if (aliasData && aliasData[0]) return aliasData[0] as PersonHit
+
+  // Step 7b (2026-05-13): pool fallback. The historical identifier
+  // pool on couple_identity_profile.identifiers stores every email /
+  // phone / name spelling observed across a wedding's lifetime
+  // (mig 333 / A2). If `people.email` has since been overwritten
+  // with the couple's new identifier, the live `ilike` above misses
+  // — but the old email is preserved on the pool. Looking it up
+  // there rescues the re-emergence-from-new-identifier case the pool
+  // was designed for.
+  return await findPersonByPoolIdentifier(supabase, venueId, 'email', norm)
 }
 
 async function findByEmailCanonical(
@@ -298,10 +308,86 @@ async function findByPhone(
     .order('created_at', { ascending: true })
   if (!data) return null
   const candidates = data.filter((r) => normalizePhone(r.phone as string | null) === norm)
-  if (candidates.length === 0) return null
-  // Prefer the candidate that has an email populated (more complete row).
-  const withEmail = candidates.find((c) => !!c.email)
-  return (withEmail ?? candidates[0]) as PersonHit
+  if (candidates.length > 0) {
+    // Prefer the candidate that has an email populated (more complete row).
+    const withEmail = candidates.find((c) => !!c.email)
+    return (withEmail ?? candidates[0]) as PersonHit
+  }
+  // Step 7b (2026-05-13): pool fallback. Symmetric with findByEmailExact.
+  return await findPersonByPoolIdentifier(supabase, venueId, 'phone', norm)
+}
+
+/**
+ * Step 7b / A2 pool reader (2026-05-13).
+ *
+ * Searches `couple_identity_profile.identifiers` (mig 333) for an
+ * entry matching `{type, value}`. Returns the partner1 person row of
+ * the most-recently-created venue-scoped, non-tombstoned wedding whose
+ * profile holds the identifier in its historical pool.
+ *
+ * Why this exists
+ * ---------------
+ * `people.email` and `people.phone` are LIVE columns — when a couple
+ * switches phones or moves to a new email, the next signal that lands
+ * overwrites them. The historical pool preserves every observed
+ * identifier, so re-emergence under an old identifier still matches.
+ *
+ * Contract
+ * --------
+ * - Returns null on no match. Never throws — pool failures must fall
+ *   back to "no match" rather than poisoning the resolve.
+ * - Only returns a hit if the identifier's wedding belongs to this
+ *   venue AND the wedding is not merged-away or non-couple-tombstoned.
+ * - The matched person row is the most recently created `people` row
+ *   on the matched wedding(s), so chained merges resolve to a canonical
+ *   row.
+ *
+ * Pool entries are normalised by the writer (`captureIdentifier`) — we
+ * assume `normalisedValue` is already in canonical form (lowercase
+ * email, E.164 phone). Callers normalise before passing in.
+ */
+async function findPersonByPoolIdentifier(
+  supabase: SupabaseClient,
+  venueId: string,
+  type: 'email' | 'phone',
+  normalisedValue: string,
+): Promise<PersonHit | null> {
+  if (!normalisedValue) return null
+
+  // jsonb @> operator: pool entries can have additional fields
+  // (first_seen_at, last_seen_at, source); @> matches on a subset.
+  const { data: profiles, error: profErr } = await supabase
+    .from('couple_identity_profile')
+    .select('wedding_id')
+    .contains('identifiers', [{ type, value: normalisedValue }])
+    .limit(20)
+  if (profErr || !profiles || profiles.length === 0) return null
+
+  const candidateWeddingIds = profiles
+    .map((p) => p.wedding_id as string | null)
+    .filter((id): id is string => !!id)
+  if (candidateWeddingIds.length === 0) return null
+
+  const { data: weddings, error: wedErr } = await supabase
+    .from('weddings')
+    .select('id')
+    .in('id', candidateWeddingIds)
+    .eq('venue_id', venueId)
+    .is('merged_into_id', null)
+    .is('non_couple_at', null)
+    .order('created_at', { ascending: false })
+  if (wedErr || !weddings || weddings.length === 0) return null
+
+  const matchedIds = weddings.map((w) => w.id as string)
+  const { data: people, error: ppErr } = await supabase
+    .from('people')
+    .select('id, venue_id, wedding_id, email, phone, first_name, last_name, merged_into_id')
+    .in('wedding_id', matchedIds)
+    .is('merged_into_id', null)
+    .order('created_at', { ascending: true })
+    .limit(1)
+  if (ppErr || !people || people.length === 0) return null
+  return people[0] as PersonHit
 }
 
 async function findByNamePlusDate(

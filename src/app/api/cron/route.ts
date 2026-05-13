@@ -1249,6 +1249,7 @@ async function runPruneMaintenance(): Promise<{
   non_couple_tombstone: { total_scanned: number; total_tombstoned: number; errors: string[] }
   orphan_promote_social: { total_scanned: number; total_promoted: number; errors: string[] }
   orphan_promote_reviews: { total_scanned: number; total_promoted: number; errors: string[] }
+  orphan_promote_audio: { total_scanned: number; total_promoted: number; errors: string[] }
 }> {
   const { runAuditRetentionPrune } = await import('@/lib/services/audit-retention')
   const { detectBulkReadAnomalies } = await import('@/lib/services/bulk-read-anomaly')
@@ -1294,20 +1295,20 @@ async function runPruneMaintenance(): Promise<{
     // protected. Soft-tombstone preserves the forensic record per the
     // Constitution.
     tombstoneNonCouplesAllVenues(),
-    // Folded in 2026-05-13 (Step 6 / G4 + G5). Two orphan→wedding
-    // promote sweeps:
+    // Folded in 2026-05-13 (Step 6 / G4 + G5; audio added Pass C).
+    // Three orphan→wedding promote sweeps:
     //  - social_engagements where match_status='unmatched' get re-run
     //    against the current people roster. New persons that arrived
     //    since the last match attempt now bind to old IG follower
     //    screenshots.
     //  - reviews where wedding_id IS NULL get the conservative
     //    reviewer_name → people.last_name lookup (only binds on
-    //    UNIQUE last-name match). Mirrors the lazy bind in
-    //    /api/intel/reviews/[id]/draft-response but runs eagerly so
-    //    coordinator sees attribution rolled up without clicking.
-    // Audio orphans (tour_transcript_orphans) stay coordinator-paced
-    // via /agent/audio-inbox — extracting identity from transcripts
-    // would need Sonnet and the manual UI handles current volume.
+    //    UNIQUE last-name match).
+    //  - tour_transcript_orphans get regex email/phone extraction
+    //    against people.email/phone; on unambiguous hit + a tour
+    //    scheduled within ±3h, the orphan is attached to that tour.
+    //    LLM-based identity extraction from spoken dialog is the
+    //    natural follow-up; /agent/audio-inbox handles the long tail.
     promoteAllOrphansAllVenues(),
   ])
 
@@ -1419,6 +1420,7 @@ async function runPruneMaintenance(): Promise<{
           return {
             social: { total_scanned: 0, total_promoted: 0, errors: [String(orphanPromote.reason)] },
             reviews: { total_scanned: 0, total_promoted: 0, errors: [] },
+            audio: { total_scanned: 0, total_promoted: 0, errors: [] },
           }
         })()
 
@@ -1435,6 +1437,7 @@ async function runPruneMaintenance(): Promise<{
     non_couple_tombstone: nonCoupleResult,
     orphan_promote_social: orphanPromoteResult.social,
     orphan_promote_reviews: orphanPromoteResult.reviews,
+    orphan_promote_audio: orphanPromoteResult.audio,
   }
 }
 
