@@ -602,7 +602,10 @@ export function BriefingsPanel() {
   const pastBriefings = history.filter((b) => b.id !== briefing?.id)
 
   return (
-    <div className="space-y-8">
+    // Panel uses space-y-5 (tighter than the parent Dashboard's
+    // space-y-8) so the briefing reads as one cohesive section rather
+    // than competing with sibling Dashboard sections.
+    <div className="space-y-5">
       {/* ------------------------------------------------------------------ */}
       {/* Header                                                              */}
       {/* ------------------------------------------------------------------ */}
