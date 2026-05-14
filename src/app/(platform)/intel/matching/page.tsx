@@ -193,6 +193,12 @@ function MatchingPageInner() {
   const [error, setError] = useState<string | null>(null)
   const [processing, setProcessing] = useState<string | null>(null)
   const [showSnoozed, setShowSnoozed] = useState(false)
+  // Hide low-tier ("Loose") rows from the main pending queue by default.
+  // These are first-name-only / wedding-date-only signals that produce
+  // huge volumes of weak suggestions (e.g. "Both named Nicole within 7d"
+  // with completely different last names + emails). Coordinator can
+  // reveal them via the toggle below the tabs.
+  const [showLoose, setShowLoose] = useState(false)
 
   const fetchData = useCallback(async () => {
     const supabase = createClient()
@@ -387,15 +393,23 @@ function MatchingPageInner() {
     }))
   }, [signalQueue, signalsById])
 
-  // Stats
-  const pendingCount = queue.filter((q) => q.status === 'pending').length
+  // Stats — pending is split into tight (high + medium) and loose (low).
+  const pendingMatches = queue.filter((q) => q.status === 'pending')
+  const pendingTightCount = pendingMatches.filter((q) => q.tier !== 'low').length
+  const pendingLooseCount = pendingMatches.filter((q) => q.tier === 'low').length
+  const pendingCount = pendingTightCount // headline tile reflects what's visible
   const snoozedCount = queue.filter((q) => q.status === 'snoozed').length
   const mergedThisMonth = 0 // Would query historical merged records
 
-  // Filter pairs by current tab (pending vs snoozed)
-  const visiblePairs = pairs.filter((p) =>
-    showSnoozed ? p.queueItem.status === 'snoozed' : p.queueItem.status === 'pending'
-  )
+  // Filter pairs by current tab + loose-tier toggle. Low-tier pairs (first
+  // name only / wedding date only) hide unless the operator opts in.
+  const visiblePairs = pairs.filter((p) => {
+    const s = p.queueItem.status
+    if (showSnoozed) return s === 'snoozed'
+    if (s !== 'pending') return false
+    if (!showLoose && p.queueItem.tier === 'low') return false
+    return true
+  })
 
   // ----- Actions: all go through the Phase 8 resolve endpoint ---------------
 
@@ -532,28 +546,44 @@ function MatchingPageInner() {
       </div>
 
       {/* Queue filter tabs */}
-      {!loading && (pendingCount > 0 || snoozedCount > 0) && (
-        <div className="flex items-center gap-1 bg-sage-50 rounded-lg p-1 w-fit">
-          <button
-            onClick={() => setShowSnoozed(false)}
-            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-              !showSnoozed
-                ? 'bg-surface text-sage-900 shadow-sm'
-                : 'text-sage-600 hover:text-sage-800'
-            }`}
-          >
-            Pending ({pendingCount})
-          </button>
-          <button
-            onClick={() => setShowSnoozed(true)}
-            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-              showSnoozed
-                ? 'bg-surface text-sage-900 shadow-sm'
-                : 'text-sage-600 hover:text-sage-800'
-            }`}
-          >
-            Snoozed ({snoozedCount})
-          </button>
+      {!loading && (pendingCount > 0 || snoozedCount > 0 || pendingLooseCount > 0) && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-1 bg-sage-50 rounded-lg p-1 w-fit">
+            <button
+              onClick={() => setShowSnoozed(false)}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                !showSnoozed
+                  ? 'bg-surface text-sage-900 shadow-sm'
+                  : 'text-sage-600 hover:text-sage-800'
+              }`}
+            >
+              Pending ({pendingCount})
+            </button>
+            <button
+              onClick={() => setShowSnoozed(true)}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                showSnoozed
+                  ? 'bg-surface text-sage-900 shadow-sm'
+                  : 'text-sage-600 hover:text-sage-800'
+              }`}
+            >
+              Snoozed ({snoozedCount})
+            </button>
+          </div>
+          {!showSnoozed && pendingLooseCount > 0 && (
+            <p className="text-xs text-sage-500">
+              {pendingLooseCount} loose match
+              {pendingLooseCount === 1 ? '' : 'es'} hidden (first-name-only
+              or wedding-date-only signals).{' '}
+              <button
+                type="button"
+                onClick={() => setShowLoose((v) => !v)}
+                className="underline text-sage-700 hover:text-sage-900"
+              >
+                {showLoose ? 'Hide them' : 'Show them'}
+              </button>
+            </p>
+          )}
         </div>
       )}
 

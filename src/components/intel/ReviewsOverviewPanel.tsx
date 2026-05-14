@@ -19,6 +19,7 @@ import {
   Loader2,
   MessageSquare,
   Sparkles,
+  ExternalLink,
 } from 'lucide-react'
 import {
   ResponsiveContainer,
@@ -53,6 +54,15 @@ interface ThemeRow {
   count: number
 }
 
+interface SourceLinks {
+  google_listing: string | null
+  the_knot: string | null
+  wedding_wire: string | null
+  zola: string | null
+  yelp: string | null
+  facebook: string | null
+}
+
 interface Rollup {
   venue_id: string
   total: number
@@ -64,6 +74,7 @@ interface Rollup {
   sources: SourceRow[]
   monthly: MonthlyRow[]
   top_themes: ThemeRow[]
+  source_links: SourceLinks
   sentiment_trend: {
     recent_avg: number | null
     prior_avg: number | null
@@ -127,6 +138,22 @@ export function ReviewsOverviewPanel() {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`)
+      // Optimistically reflect the queue change so the button + gap count
+      // update instantly. The subsequent load() reconciles with the real
+      // counts the analytics endpoint computes from the database.
+      setRollup((prev) =>
+        prev
+          ? {
+              ...prev,
+              solicitations: {
+                ...prev.solicitations,
+                gap_count: Math.max(0, prev.solicitations.gap_count - (json.enqueued ?? 0)),
+                queued: prev.solicitations.queued + (json.enqueued ?? 0),
+                total_12mo: prev.solicitations.total_12mo + (json.enqueued ?? 0),
+              },
+            }
+          : prev,
+      )
       setBackfillResult(
         `Queued ${json.enqueued} request${json.enqueued === 1 ? '' : 's'}, skipped ${json.skipped}. The drafter will turn each into a tailored ask within the next cron tick.`,
       )
@@ -184,8 +211,42 @@ export function ReviewsOverviewPanel() {
         ? 'text-rose-700'
         : 'text-sage-700'
 
+  const linkStrip = (
+    [
+      { key: 'google', label: 'Google', href: rollup.source_links?.google_listing },
+      { key: 'the_knot', label: 'The Knot', href: rollup.source_links?.the_knot },
+      {
+        key: 'wedding_wire',
+        label: 'WeddingWire',
+        href: rollup.source_links?.wedding_wire,
+      },
+      { key: 'zola', label: 'Zola', href: rollup.source_links?.zola },
+      { key: 'yelp', label: 'Yelp', href: rollup.source_links?.yelp },
+      { key: 'facebook', label: 'Facebook', href: rollup.source_links?.facebook },
+    ] as const
+  ).filter((s) => !!s.href)
+
   return (
     <div className="space-y-5">
+      {/* Source listings strip — quick open-in-tab for each platform */}
+      {linkStrip.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-sage-500 mr-1">Open your listing:</span>
+          {linkStrip.map((s) => (
+            <a
+              key={s.key}
+              href={s.href as string}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border border-sage-200 bg-white text-sage-800 hover:bg-sage-50"
+            >
+              {s.label}
+              <ExternalLink className="w-3 h-3 text-sage-400" />
+            </a>
+          ))}
+        </div>
+      ) : null}
+
       {/* Headline tiles */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Tile

@@ -27,6 +27,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Activity,
+  Star,
+  RefreshCw,
 } from 'lucide-react'
 
 interface VenueLocation {
@@ -49,6 +51,14 @@ interface VenueLocation {
   location_derived_at: string | null
   // TIER 7e (2026-05-14): Google Place ID for review polling.
   google_place_id: string | null
+  // TIER 7+ (2026-05-14): other review platform URLs / IDs. These have no
+  // public APIs so ingestion is paste-only, but storing them powers the
+  // "open on each platform" link strip on /intel/reviews.
+  the_knot_url: string | null
+  wedding_wire_url: string | null
+  zola_url: string | null
+  yelp_business_id: string | null
+  facebook_page_id: string | null
 }
 
 interface OwnerPresence {
@@ -78,6 +88,11 @@ const EMPTY: VenueLocation = {
   dc_region_proxy: null,
   location_derived_at: null,
   google_place_id: null,
+  the_knot_url: null,
+  wedding_wire_url: null,
+  zola_url: null,
+  yelp_business_id: null,
+  facebook_page_id: null,
 }
 
 interface DerivePreview {
@@ -106,6 +121,15 @@ export default function VenueInfoSettingsPage() {
   const [deriveApplying, setDeriveApplying] = useState(false)
   const [derivePreview, setDerivePreview] = useState<DerivePreview[] | null>(null)
   const [deriveErrors, setDeriveErrors] = useState<string[]>([])
+  // TIER 7+ (2026-05-14) — Google Place ID test + on-demand refresh
+  const [placeIdTesting, setPlaceIdTesting] = useState(false)
+  const [placeIdTestResult, setPlaceIdTestResult] = useState<
+    | { ok: true; name?: string; address?: string }
+    | { ok: false; error: string }
+    | null
+  >(null)
+  const [googlePulling, setGooglePulling] = useState(false)
+  const [googlePullResult, setGooglePullResult] = useState<string | null>(null)
 
   useEffect(() => {
     if (!venueId) return
@@ -115,7 +139,7 @@ export default function VenueInfoSettingsPage() {
         supabase
           .from('venues')
           .select(
-            'address_line1, city, state, zip, latitude, longitude, parking_instructions, entry_instructions, day_of_contact_name, day_of_contact_phone, google_trends_metro, noaa_station_id, census_fips, metro_msa_code, dc_region_proxy, location_derived_at, google_place_id',
+            'address_line1, city, state, zip, latitude, longitude, parking_instructions, entry_instructions, day_of_contact_name, day_of_contact_phone, google_trends_metro, noaa_station_id, census_fips, metro_msa_code, dc_region_proxy, location_derived_at, google_place_id, the_knot_url, wedding_wire_url, zola_url, yelp_business_id, facebook_page_id',
           )
           .eq('id', venueId)
           .maybeSingle(),
@@ -167,6 +191,11 @@ export default function VenueInfoSettingsPage() {
       metro_msa_code: data.metro_msa_code || null,
       dc_region_proxy: data.dc_region_proxy,
       google_place_id: data.google_place_id || null,
+      the_knot_url: data.the_knot_url || null,
+      wedding_wire_url: data.wedding_wire_url || null,
+      zola_url: data.zola_url || null,
+      yelp_business_id: data.yelp_business_id || null,
+      facebook_page_id: data.facebook_page_id || null,
     }
     const configPayload = {
       owner_note_to_couples: owner.owner_note_to_couples || null,
@@ -222,6 +251,77 @@ export default function VenueInfoSettingsPage() {
       setError(`Preview error: ${msg}`)
     } finally {
       setDerivePreviewing(false)
+    }
+  }
+
+  async function handleTestPlaceId() {
+    const id = (data.google_place_id ?? '').trim()
+    if (!id) {
+      setPlaceIdTestResult({ ok: false, error: 'Paste a Place ID first.' })
+      return
+    }
+    setPlaceIdTesting(true)
+    setPlaceIdTestResult(null)
+    try {
+      const resp = await fetch('/api/intel/reviews/google-validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ place_id: id }),
+      })
+      const json = (await resp.json()) as {
+        ok?: boolean
+        display_name?: string
+        formatted_address?: string
+        error?: string
+      }
+      if (!resp.ok || !json.ok) {
+        setPlaceIdTestResult({
+          ok: false,
+          error: json.error ?? `Validation failed (HTTP ${resp.status})`,
+        })
+        return
+      }
+      setPlaceIdTestResult({
+        ok: true,
+        name: json.display_name,
+        address: json.formatted_address,
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setPlaceIdTestResult({ ok: false, error: msg })
+    } finally {
+      setPlaceIdTesting(false)
+    }
+  }
+
+  async function handleGooglePullNow() {
+    const id = (data.google_place_id ?? '').trim()
+    if (!id) {
+      setGooglePullResult('Paste and save a Place ID first.')
+      return
+    }
+    setGooglePulling(true)
+    setGooglePullResult(null)
+    try {
+      const resp = await fetch('/api/intel/reviews/google-pull', { method: 'POST' })
+      const json = (await resp.json()) as {
+        ok?: boolean
+        reviews_fetched?: number
+        reviews_inserted?: number
+        error?: string
+      }
+      if (!resp.ok || !json.ok) {
+        setGooglePullResult(json.error ?? `Pull failed (HTTP ${resp.status})`)
+        return
+      }
+      setGooglePullResult(
+        `Pulled ${json.reviews_fetched ?? 0} from Google · ${json.reviews_inserted ?? 0} new (rest were already on file).`,
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setGooglePullResult(`Pull error: ${msg}`)
+    } finally {
+      setGooglePulling(false)
     }
   }
 
@@ -525,11 +625,81 @@ export default function VenueInfoSettingsPage() {
               className={inputCls}
               placeholder="e.g. ChIJN1t_tDeuEmsRUsoyG83frY4"
               value={data.google_place_id ?? ''}
-              onChange={(e) => set('google_place_id', e.target.value || null)}
+              onChange={(e) => {
+                set('google_place_id', e.target.value || null)
+                setPlaceIdTestResult(null)
+              }}
             />
-            <p className="text-[11px] text-sage-500 mt-1">
-              Look up via Google&apos;s Place ID Finder. Once set, the
-              weekly cron pulls new Google reviews automatically.
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <button
+                type="button"
+                onClick={handleTestPlaceId}
+                disabled={placeIdTesting || !data.google_place_id}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-sage-300 text-xs font-medium text-sage-800 hover:bg-sage-50 disabled:opacity-50"
+              >
+                {placeIdTesting ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-3 h-3" />
+                )}
+                Test
+              </button>
+              <button
+                type="button"
+                onClick={handleGooglePullNow}
+                disabled={googlePulling || !data.google_place_id}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-sage-700 text-white text-xs font-medium hover:bg-sage-800 disabled:opacity-50"
+              >
+                {googlePulling ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-3 h-3" />
+                )}
+                Pull reviews now
+              </button>
+              <a
+                href="https://developers.google.com/maps/documentation/places/web-service/place-id"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] text-sage-600 hover:text-sage-900 underline"
+              >
+                Place ID Finder ↗
+              </a>
+            </div>
+            {placeIdTestResult ? (
+              <div
+                className={`mt-2 rounded-md border px-3 py-2 text-xs ${
+                  placeIdTestResult.ok
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : 'border-rose-200 bg-rose-50 text-rose-800'
+                }`}
+              >
+                {placeIdTestResult.ok ? (
+                  <>
+                    <div className="font-medium">
+                      {placeIdTestResult.name ?? 'Place found'}
+                    </div>
+                    {placeIdTestResult.address ? (
+                      <div className="text-emerald-700">{placeIdTestResult.address}</div>
+                    ) : null}
+                  </>
+                ) : (
+                  placeIdTestResult.error
+                )}
+              </div>
+            ) : null}
+            {googlePullResult ? (
+              <p className="text-xs text-sage-700 mt-2">{googlePullResult}</p>
+            ) : null}
+            <p className="text-[11px] text-sage-500 mt-2 leading-relaxed">
+              Google&apos;s public API returns up to 5 reviews per pull
+              (the same 5 most-relevant they show on the listing). Weekly
+              cron handles ongoing refresh. For historical backfill, paste
+              older reviews on the{' '}
+              <a href="/intel/reviews/paste" className="underline hover:text-sage-700">
+                Bulk Paste
+              </a>{' '}
+              page.
             </p>
           </div>
           <div>
@@ -570,6 +740,81 @@ export default function VenueInfoSettingsPage() {
                 Capitol)
               </span>
             </label>
+          </div>
+        </div>
+      </section>
+
+      {/* ---------- TIER 7+ — other review platforms ---------- */}
+      <section className="mb-8 rounded-xl border border-sage-100 bg-white p-6">
+        <div className="flex items-center gap-2 mb-2">
+          <Star className="w-4 h-4 text-sage-700" />
+          <h2 className="font-medium text-sage-900">Other review platforms</h2>
+        </div>
+        <p className="text-xs text-sage-500 leading-relaxed mb-4">
+          Only Google has a public reviews API. For The Knot, WeddingWire,
+          Zola, Yelp, and Facebook, paste reviews on the{' '}
+          <a href="/intel/reviews/paste" className="underline hover:text-sage-900">
+            Bulk Paste
+          </a>{' '}
+          page. Storing each platform&apos;s URL or business ID here lets
+          you and Sage open the live listing in one click from the
+          reviews page.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-1">
+              The Knot listing URL
+            </label>
+            <input
+              className={inputCls}
+              placeholder="https://www.theknot.com/marketplace/..."
+              value={data.the_knot_url ?? ''}
+              onChange={(e) => set('the_knot_url', e.target.value || null)}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-1">
+              WeddingWire listing URL
+            </label>
+            <input
+              className={inputCls}
+              placeholder="https://www.weddingwire.com/biz/..."
+              value={data.wedding_wire_url ?? ''}
+              onChange={(e) => set('wedding_wire_url', e.target.value || null)}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-1">
+              Zola listing URL
+            </label>
+            <input
+              className={inputCls}
+              placeholder="https://www.zola.com/wedding-vendors/..."
+              value={data.zola_url ?? ''}
+              onChange={(e) => set('zola_url', e.target.value || null)}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-sage-700 mb-1">
+              Yelp business ID <span className="text-sage-400">(or URL)</span>
+            </label>
+            <input
+              className={inputCls}
+              placeholder="rixey-manor-rixeyville"
+              value={data.yelp_business_id ?? ''}
+              onChange={(e) => set('yelp_business_id', e.target.value || null)}
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-xs font-medium text-sage-700 mb-1">
+              Facebook Page ID <span className="text-sage-400">(or page URL)</span>
+            </label>
+            <input
+              className={inputCls}
+              placeholder="rixeymanor or 123456789012345"
+              value={data.facebook_page_id ?? ''}
+              onChange={(e) => set('facebook_page_id', e.target.value || null)}
+            />
           </div>
         </div>
       </section>

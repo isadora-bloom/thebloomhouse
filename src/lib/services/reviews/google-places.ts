@@ -1,42 +1,60 @@
 /**
- * Google Places reviews fetcher (TIER 7e, 2026-05-14).
+ * Google Places reviews fetcher — Places API v1 (TIER 7+ 2026-05-14).
  *
- * The Google Places Details API is the only free public review surface
- * across the wedding industry. It returns up to 5 reviews per call
- * (most relevant by default; can also request newest). The API cost is
- * one "Place Details" call per venue per poll — Google's free tier
- * covers our scale comfortably.
+ * Migrated from the legacy maps.googleapis.com/place/details endpoint to
+ * places.googleapis.com/v1/places/{placeId}. The v1 API gives us a stable
+ * resource name per review (places/{placeId}/reviews/{reviewId}) which we
+ * use directly as source_review_id, instead of the legacy
+ * `google-${time}-${author}` derivation that broke on reviewer renames.
+ *
+ * Returns up to 5 reviews per call. v1 has no explicit "newest" sort —
+ * Google returns its picks for the venue. Dedupe by (venue_id, source,
+ * source_review_id) catches reruns. For full historical backfill,
+ * operators paste reviews via /intel/reviews/paste.
  *
  * Other sources (Knot, WeddingWire, Zola, Yelp, Facebook) do not have
- * usable public APIs for review text. Those remain paste-only in the
- * /intel/reviews/paste UI.
+ * usable public APIs for review text. Those remain paste-only.
  *
- * Polling cadence: weekly via the new `google_places_reviews_refresh`
- * cron job. Dedupe is by (venue_id, source='google', source_review_id).
- * Google's review-id stability is decent — same review text + reviewer
- * returns the same id in our experience.
+ * Polling cadence: weekly via the `google_places_reviews_refresh` cron
+ * + operator-triggered `POST /api/intel/reviews/google-pull` for first-
+ * run / on-demand.
  *
  * Env: GOOGLE_PLACES_API_KEY. The key needs Places API (New) enabled.
  */
 
 import { createServiceClient } from '@/lib/supabase/service'
 
-const PLACES_ENDPOINT = 'https://maps.googleapis.com/maps/api/place/details/json'
+const PLACES_V1_ENDPOINT = 'https://places.googleapis.com/v1/places'
 
-interface GoogleReview {
-  author_name: string
-  rating: number
+interface V1LocalizedText {
   text: string
-  time: number // Unix seconds
-  language?: string
+  languageCode?: string
 }
 
-interface PlaceDetailsResponse {
-  result?: {
-    reviews?: GoogleReview[]
-  }
-  status: string
-  error_message?: string
+interface V1AuthorAttribution {
+  displayName?: string
+  uri?: string
+  photoUri?: string
+}
+
+interface V1Review {
+  name: string // "places/{placeId}/reviews/{reviewId}" — stable
+  rating: number
+  text?: V1LocalizedText
+  originalText?: V1LocalizedText
+  publishTime?: string // ISO 8601
+  authorAttribution?: V1AuthorAttribution
+}
+
+interface V1PlaceResponse {
+  id?: string
+  displayName?: V1LocalizedText
+  formattedAddress?: string
+  reviews?: V1Review[]
+}
+
+interface V1ErrorBody {
+  error?: { code?: number; message?: string; status?: string }
 }
 
 export interface GooglePlacesPollResult {
@@ -47,20 +65,72 @@ export interface GooglePlacesPollResult {
   error?: string
 }
 
+export interface GooglePlaceValidation {
+  ok: boolean
+  place_id?: string
+  display_name?: string
+  formatted_address?: string
+  error?: string
+}
+
+async function fetchV1(
+  placeId: string,
+  fieldMask: string,
+): Promise<{ data?: V1PlaceResponse; error?: string }> {
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY
+  if (!apiKey) return { error: 'GOOGLE_PLACES_API_KEY not configured' }
+
+  const url = `${PLACES_V1_ENDPOINT}/${encodeURIComponent(placeId)}`
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': fieldMask,
+      },
+    })
+    if (!res.ok) {
+      // v1 returns JSON {error:{code,message,status}}
+      try {
+        const body = (await res.json()) as V1ErrorBody
+        return {
+          error: `${body.error?.status ?? res.status}: ${body.error?.message ?? res.statusText}`,
+        }
+      } catch {
+        return { error: `HTTP ${res.status} ${res.statusText}` }
+      }
+    }
+    const data = (await res.json()) as V1PlaceResponse
+    return { data }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'fetch failed' }
+  }
+}
+
+/**
+ * Validate a Google Place ID without writing anything. Returns the
+ * venue's display name + formatted address. Powers the "Test" button on
+ * /settings/venue-info so operators can confirm they've pasted the right
+ * Place ID before the weekly cron starts polling against it.
+ */
+export async function validateGooglePlaceId(
+  placeId: string,
+): Promise<GooglePlaceValidation> {
+  if (!placeId || placeId.trim().length === 0) {
+    return { ok: false, error: 'place_id is empty' }
+  }
+  const { data, error } = await fetchV1(placeId.trim(), 'id,displayName,formattedAddress')
+  if (error || !data) return { ok: false, error: error ?? 'no response' }
+  return {
+    ok: true,
+    place_id: data.id ?? placeId,
+    display_name: data.displayName?.text,
+    formatted_address: data.formattedAddress,
+  }
+}
+
 export async function pollGooglePlacesForVenue(
   venueId: string,
 ): Promise<GooglePlacesPollResult> {
-  const apiKey = process.env.GOOGLE_PLACES_API_KEY
-  if (!apiKey) {
-    return {
-      venue_id: venueId,
-      ok: false,
-      reviews_fetched: 0,
-      reviews_inserted: 0,
-      error: 'GOOGLE_PLACES_API_KEY not configured',
-    }
-  }
-
   const supabase = createServiceClient()
   const { data: venue, error: vErr } = await supabase
     .from('venues')
@@ -78,57 +148,46 @@ export async function pollGooglePlacesForVenue(
     }
   }
 
-  const url = new URL(PLACES_ENDPOINT)
-  url.searchParams.set('place_id', venue.google_place_id as string)
-  url.searchParams.set('fields', 'reviews')
-  url.searchParams.set('reviews_sort', 'newest')
-  url.searchParams.set('key', apiKey)
-
-  let json: PlaceDetailsResponse
-  try {
-    const res = await fetch(url.toString())
-    json = (await res.json()) as PlaceDetailsResponse
-  } catch (err) {
+  const placeId = (venue.google_place_id as string).trim()
+  const { data, error } = await fetchV1(placeId, 'id,reviews')
+  if (error || !data) {
     return {
       venue_id: venueId,
       ok: false,
       reviews_fetched: 0,
       reviews_inserted: 0,
-      error: err instanceof Error ? err.message : 'fetch failed',
+      error: error ?? 'no response',
     }
   }
 
-  if (json.status !== 'OK') {
-    return {
-      venue_id: venueId,
-      ok: false,
-      reviews_fetched: 0,
-      reviews_inserted: 0,
-      error: `${json.status}: ${json.error_message ?? 'no detail'}`,
-    }
-  }
-
-  const fetched = json.result?.reviews ?? []
+  const fetched = data.reviews ?? []
   if (fetched.length === 0) {
     return { venue_id: venueId, ok: true, reviews_fetched: 0, reviews_inserted: 0 }
   }
 
-  // Dedupe by (venue_id, source='google', source_review_id).
-  // Google doesn't give a stable id; we derive one from author+time which
-  // is stable enough for the same review across polls (Google's own
-  // review-detail page keys on the same).
-  const rows = fetched.map((r) => ({
-    venue_id: venueId,
-    source: 'google' as const,
-    source_review_id: `google-${r.time}-${r.author_name.replace(/\s+/g, '_').toLowerCase()}`,
-    reviewer_name: r.author_name,
-    rating: r.rating,
-    body: r.text,
-    review_date: new Date(r.time * 1000).toISOString().slice(0, 10),
-    title: null as string | null,
-  }))
+  // Build dedupe candidates from v1's stable `name` field.
+  const rows = fetched
+    .filter((r) => r.name && r.rating && (r.text?.text || r.originalText?.text))
+    .map((r) => {
+      const body = (r.text?.text ?? r.originalText?.text ?? '').trim()
+      const publish = r.publishTime ? new Date(r.publishTime) : new Date()
+      return {
+        venue_id: venueId,
+        source: 'google' as const,
+        source_review_id: r.name, // full resource name; stable forever
+        reviewer_name: r.authorAttribution?.displayName ?? null,
+        rating: Math.round(r.rating),
+        body,
+        review_date: publish.toISOString().slice(0, 10),
+        title: null as string | null,
+      }
+    })
 
-  // Check which source_review_ids already exist for this venue.
+  if (rows.length === 0) {
+    return { venue_id: venueId, ok: true, reviews_fetched: fetched.length, reviews_inserted: 0 }
+  }
+
+  // Dedupe by (venue_id, source='google', source_review_id).
   const ids = rows.map((r) => r.source_review_id)
   const { data: existing } = await supabase
     .from('reviews')

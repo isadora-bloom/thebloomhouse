@@ -99,6 +99,21 @@ function emailDomain(s: string | null | undefined): string {
   return i > 0 ? s!.slice(i + 1).toLowerCase().trim() : ''
 }
 
+// Freemail / generic-inbox domains where "two same-named people on the
+// same domain" is genuinely ambiguous (two Sarah Smiths on gmail.com are
+// not necessarily the same person). The full-name + domain HIGH rule
+// skips these to avoid false auto-merges on common names.
+const FREEMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com',
+  'yahoo.com', 'ymail.com', 'rocketmail.com',
+  'hotmail.com', 'outlook.com', 'live.com', 'msn.com',
+  'icloud.com', 'me.com', 'mac.com',
+  'aol.com',
+  'protonmail.com', 'proton.me', 'pm.me',
+  'fastmail.com', 'fastmail.fm',
+  'zoho.com', 'gmx.com', 'gmx.us', 'yandex.com', 'mail.com',
+])
+
 function lastInitial(s: string | null | undefined): string {
   const n = normalise(s)
   return n[0] ?? ''
@@ -234,6 +249,29 @@ function scorePair(
       signals.push({
         type: 'full_name_plus_partner_window',
         detail: `${cFirst} ${cLast} + partner "${cPartner}" within ${config.name_plus_partner_days}d`,
+        weight: 0.95,
+      })
+    }
+  }
+  // Full name (first + last) + same email DOMAIN (not freemail) within
+  // the partner window → HIGH. Catches HoneyBook pm-inbound relays
+  // (per-prospect addresses on a deterministic domain) and corp/CRM
+  // shadow addresses where the same person inquired twice from
+  // different mailboxes on one tenant. Freemail domains are excluded
+  // because two same-named Gmail/Yahoo people are genuinely ambiguous.
+  {
+    const cDom = emailDomain(cEmail)
+    const pDom = emailDomain(pEmail)
+    if (
+      cFirst && pFirst && cFirst === pFirst &&
+      cLast && pLast && cLast === pLast &&
+      cDom && cDom === pDom &&
+      !FREEMAIL_DOMAINS.has(cDom) &&
+      daysApart(candidateDate, person.created_at) <= config.name_plus_partner_days
+    ) {
+      signals.push({
+        type: 'full_name_plus_email_domain',
+        detail: `${cFirst} ${cLast} both at ${cDom} within ${config.name_plus_partner_days}d`,
         weight: 0.95,
       })
     }

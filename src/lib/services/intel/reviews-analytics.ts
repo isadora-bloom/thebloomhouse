@@ -37,6 +37,15 @@ export interface ReviewsAnalyticsTheme {
   count: number
 }
 
+export interface ReviewsAnalyticsSourceLinks {
+  google_listing: string | null // derived from google_place_id
+  the_knot: string | null
+  wedding_wire: string | null
+  zola: string | null
+  yelp: string | null
+  facebook: string | null
+}
+
 export interface ReviewsAnalyticsRollup {
   venue_id: string
   total: number
@@ -48,6 +57,7 @@ export interface ReviewsAnalyticsRollup {
   sources: ReviewsAnalyticsSourceRow[]
   monthly: ReviewsAnalyticsMonthly[]
   top_themes: ReviewsAnalyticsTheme[]
+  source_links: ReviewsAnalyticsSourceLinks
   sentiment_trend: {
     recent_avg: number | null
     prior_avg: number | null
@@ -75,12 +85,50 @@ export async function computeReviewsAnalytics(
   venueId: string,
 ): Promise<ReviewsAnalyticsRollup> {
   const supabase = createServiceClient()
-  const { data } = await supabase
-    .from('reviews')
-    .select('source, rating, sentiment_score, themes, response_text, review_date')
-    .eq('venue_id', venueId)
-    .order('review_date', { ascending: false })
-    .limit(2000)
+  const [reviewsRes, venueRes] = await Promise.all([
+    supabase
+      .from('reviews')
+      .select('source, rating, sentiment_score, themes, response_text, review_date')
+      .eq('venue_id', venueId)
+      .order('review_date', { ascending: false })
+      .limit(2000),
+    supabase
+      .from('venues')
+      .select(
+        'google_place_id, the_knot_url, wedding_wire_url, zola_url, yelp_business_id, facebook_page_id',
+      )
+      .eq('id', venueId)
+      .maybeSingle(),
+  ])
+  const data = reviewsRes.data
+
+  type VenueRow = {
+    google_place_id: string | null
+    the_knot_url: string | null
+    wedding_wire_url: string | null
+    zola_url: string | null
+    yelp_business_id: string | null
+    facebook_page_id: string | null
+  }
+  const v = (venueRes.data ?? null) as VenueRow | null
+  const source_links: ReviewsAnalyticsSourceLinks = {
+    google_listing: v?.google_place_id
+      ? `https://search.google.com/local/reviews?placeid=${encodeURIComponent(v.google_place_id)}`
+      : null,
+    the_knot: v?.the_knot_url ?? null,
+    wedding_wire: v?.wedding_wire_url ?? null,
+    zola: v?.zola_url ?? null,
+    yelp: v?.yelp_business_id
+      ? v.yelp_business_id.startsWith('http')
+        ? v.yelp_business_id
+        : `https://www.yelp.com/biz/${encodeURIComponent(v.yelp_business_id)}`
+      : null,
+    facebook: v?.facebook_page_id
+      ? v.facebook_page_id.startsWith('http')
+        ? v.facebook_page_id
+        : `https://www.facebook.com/${encodeURIComponent(v.facebook_page_id)}/reviews`
+      : null,
+  }
 
   type Row = {
     source: string
@@ -273,6 +321,7 @@ export async function computeReviewsAnalytics(
     sources,
     monthly,
     top_themes,
+    source_links,
     sentiment_trend: { recent_avg, prior_avg, direction },
     solicitations: {
       gap_count,
