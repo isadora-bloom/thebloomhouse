@@ -137,6 +137,12 @@ export interface TourPrepEvidence {
   venueIntel: TourPrepVenueIntelSummary | null
   tour: TourPrepTourEvidence
   recentInteractions: TourPrepInteractionEvidence[]
+  /**
+   * Plain-English climate block for the tour's month + hour. Built by
+   * lib/services/intel/climate-context.ts. Optional — caller passes
+   * null when the venue has no history pulled yet. TIER 6++ (2026-05-14).
+   */
+  climateContextBlock?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -443,6 +449,16 @@ export function buildTourPrepUserPrompt(evidence: TourPrepEvidence): string {
         lines.push(truncate(ix.body_excerpt, MAX_INTERACTION_BODY_CHARS) ?? '')
       }
     }
+    lines.push('')
+  }
+
+  // TIER 6++ (2026-05-14). Venue climate record for the tour's month
+  // and hour. Surfaces "typical for this month" so the briefing can
+  // call out "forecast is 81°F vs typical 78°F — couple may want
+  // outdoor portrait time moved earlier".
+  if (evidence.climateContextBlock) {
+    lines.push('## Venue climate record (this month, this venue)')
+    lines.push(evidence.climateContextBlock)
     lines.push('')
   }
 

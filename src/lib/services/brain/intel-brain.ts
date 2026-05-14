@@ -60,6 +60,13 @@ interface VenueDataContext {
   trendDeviations: TrendDeviationRow[]
   recentRecommendations: RecommendationRow[]
   weatherForecast: WeatherRow[]
+  /**
+   * TIER 6++ (2026-05-14). Venue's own historical climate record for
+   * the current month + relevant past anomalies with ops impact.
+   * Sage uses this to answer "what's April like at your venue?" from
+   * the venue's 20-year data, not from generic regional knowledge.
+   */
+  climateContextBlock: string | null
   economicIndicators: Record<string, number>
   consultantMetrics: ConsultantMetricRow[]
   topPhrases: PhraseRow[]
@@ -1266,6 +1273,18 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     } as WeddingSummary
   })
 
+  // TIER 6++ (2026-05-14). Pull the venue's climate record for the
+  // current month so Sage has venue-specific historical context for
+  // "what's April like" type questions. Fire-and-forget shape — when
+  // history hasn't been pulled yet, climateContextBlock stays null
+  // and the prompt section just doesn't render.
+  const { getVenueClimateContext: _getClimate } = await import(
+    '@/lib/services/intel/climate-context'
+  )
+  const climateCtx = await _getClimate(venueId, {
+    month: new Date().getUTCMonth() + 1,
+  }).catch(() => null)
+
   return {
     venueName: (venueResult.data?.name as string) ?? 'Unknown Venue',
     recentWeddings: recentWeddingsWithHeat,
@@ -1274,6 +1293,7 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     trendDeviations: (trendsResult.data ?? []) as TrendDeviationRow[],
     recentRecommendations: (recommendationsResult.data ?? []) as RecommendationRow[],
     weatherForecast: (weatherResult.data ?? []) as WeatherRow[],
+    climateContextBlock: climateCtx?.promptBlock ?? null,
     economicIndicators: indicators,
     consultantMetrics: (consultantResult.data ?? []) as ConsultantMetricRow[],
     topPhrases: (phrasesResult.data ?? []) as PhraseRow[],
@@ -1382,6 +1402,13 @@ function formatDataContext(data: VenueDataContext): string {
       `  - ${w.date}: ${w.conditions ?? 'N/A'}, high=${w.high_temp ?? '?'}°F, low=${w.low_temp ?? '?'}°F, precip=${w.precipitation ?? 0}in`
     ).join('\n')
     sections.push(`WEATHER FORECAST (next 14 days):\n${weatherLines}`)
+  }
+
+  // TIER 6++ (2026-05-14). Venue's historical climate record for the
+  // current month. Lets Sage answer "what's April like at your venue?"
+  // from the venue's own 20 years of data rather than guessing.
+  if (data.climateContextBlock) {
+    sections.push(`VENUE CLIMATE RECORD:\n${data.climateContextBlock}`)
   }
 
   // Economic indicators

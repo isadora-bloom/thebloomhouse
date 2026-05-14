@@ -769,9 +769,31 @@ async function getAIExplanation(
     )
     const internalCtxBlock = formatInternalContextForPrompt(internalCtx)
 
+    // TIER 6++ (2026-05-14). Pull active weather anomalies that overlap
+    // the analysis window. A real cold snap or wet stretch is a much
+    // better explanation for a pipeline dip than "funnel issues".
+    const { getActiveAnomalies: _getActive } = await import(
+      '@/lib/services/intel/climate-context'
+    )
+    const activeWeather = await _getActive(venueId).catch(() => [])
+    const weatherCtxBlock =
+      activeWeather.length > 0
+        ? `Active weather events overlapping this window:\n${activeWeather
+            .map((a) => {
+              const impact =
+                a.inquiriesDuring !== null && a.inquiriesTypical !== null
+                  ? ` (similar events historically saw ${a.inquiriesDuring} inquiries vs typical ${a.inquiriesTypical})`
+                  : ''
+              return `  - [${a.severity}] ${a.description}${impact}`
+            })
+            .join('\n')}`
+        : ''
+
     const taskInstructions = `When given a metric anomaly, provide a concise explanation and 2-3 possible causes ranked by likelihood, each with one concrete action the venue team can take this week.
 
 If the venue's Internal Context (coordinator absences, property state changes, pricing changes, marketing channels) is provided, weigh those causes BEFORE generic funnel shape explanations. A coordinator on vacation explains a response-time drop better than "funnel issues" does.
+
+If Active Weather Events are listed, weigh them as a primary cause when the metric is inquiry-volume or tour-related. A cold snap or sub-zero stretch at this venue's location historically drops inquiries; surface that explicitly with the historical comparison.
 
 Return JSON with this exact shape:
 {
@@ -810,9 +832,12 @@ Analysis window: ${periodStart} to ${periodEnd}
 
 ${internalCtxBlock}
 
+${weatherCtxBlock}
+
 Provide 2-3 possible causes ranked by likelihood, each with one concrete action.
-Weight Internal Context findings heavily, if a coordinator was out, the venue was
-in renovation, or pricing changed, those are more likely than generic funnel causes.`,
+Weight Internal Context and Active Weather Events heavily — if a coordinator was
+out, the venue was in renovation, pricing changed, or a real weather event is in
+flight, those are more likely than generic funnel causes.`,
 
       maxTokens: 600,
       temperature: 0.3,

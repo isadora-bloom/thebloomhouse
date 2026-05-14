@@ -186,9 +186,39 @@ export async function draftReEngagementMessage(
     }
   }
 
-  const systemPrompt = coupleNotesBlock
-    ? `${SYSTEM_PROMPT}\n\n${coupleNotesBlock}\n\nSoft-context handling for the COUPLE'S NOTES above: use them ONLY to shape tone toward patience and slack. Never quote them verbatim. Never reference sensitive notes (health, grief, family conflict, financial stress) by content. Never imply you tracked the candidate or know the specific event. The signal-count and surveillance-feel rules above remain absolute.`
-    : SYSTEM_PROMPT
+  // TIER 6++ (2026-05-14). Venue climate context for the current month.
+  // When the candidate is being nudged about an upcoming season, the
+  // drafter can lean on real venue numbers ("April here typically averages
+  // 68°F daytime") rather than generic regional phrasing. Fire-and-forget.
+  let climateBlock: string | null = null
+  try {
+    const { getVenueClimateContext } = await import(
+      '@/lib/services/intel/climate-context'
+    )
+    const climate = await getVenueClimateContext(c.venue_id, {
+      month: new Date().getUTCMonth() + 1,
+    })
+    if (climate.available && climate.promptBlock) {
+      climateBlock = climate.promptBlock
+    }
+  } catch {
+    // Climate enrichment is optional; never block re-engagement.
+  }
+
+  const systemPromptParts: string[] = [SYSTEM_PROMPT]
+  if (coupleNotesBlock) {
+    systemPromptParts.push(coupleNotesBlock)
+    systemPromptParts.push(
+      "Soft-context handling for the COUPLE'S NOTES above: use them ONLY to shape tone toward patience and slack. Never quote them verbatim. Never reference sensitive notes (health, grief, family conflict, financial stress) by content. Never imply you tracked the candidate or know the specific event. The signal-count and surveillance-feel rules above remain absolute.",
+    )
+  }
+  if (climateBlock) {
+    systemPromptParts.push(`VENUE CLIMATE RECORD:\n${climateBlock}`)
+    systemPromptParts.push(
+      'Use the climate record sparingly — only when it naturally fits the message (e.g. inviting them back for a season-specific tour). Never list raw numbers; the operator voice is warm, not meteorological.',
+    )
+  }
+  const systemPrompt = systemPromptParts.join('\n\n')
 
   const userPrompt = buildUserPrompt(args.channel, venue, {
     source_platform: c.source_platform,

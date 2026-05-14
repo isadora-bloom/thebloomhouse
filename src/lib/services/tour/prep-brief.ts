@@ -40,6 +40,7 @@ import {
 } from '@/config/prompts/tour-prep-brief'
 import type { CoupleIdentityProfile } from '@/config/prompts/identity-reconstruction'
 import type { CoupleIntelOutput } from '@/config/prompts/couple-intel-derive'
+import { getVenueClimateContext } from '@/lib/services/intel/climate-context'
 
 export {
   TOUR_PREP_BRIEF_PROMPT_VERSION,
@@ -385,6 +386,21 @@ export async function generateTourPrepBrief(
 
   const venueIntel = await loadVenueIntel(supabase, venueId)
 
+  // TIER 6++ (2026-05-14). Climate context for the tour's specific
+  // month + hour. Lets the briefer call out "forecast is X°F vs
+  // typical Y°F for this hour" without re-narrating from scratch.
+  let climateContextBlock: string | null = null
+  if (tour.scheduled_at) {
+    const scheduledDate = new Date(tour.scheduled_at)
+    if (!isNaN(scheduledDate.getTime())) {
+      const climate = await getVenueClimateContext(venueId, {
+        date: tour.scheduled_at,
+        hour: scheduledDate.getHours(),
+      })
+      if (climate.available) climateContextBlock = climate.promptBlock
+    }
+  }
+
   const evidence: TourPrepEvidence = {
     weddingId,
     tourId: tour.id,
@@ -403,6 +419,7 @@ export async function generateTourPrepBrief(
       calendar_notes: calendarEv.notes ?? tour.notes,
     },
     recentInteractions: interactions,
+    climateContextBlock,
   }
 
   const systemPrompt = buildTourPrepSystemPrompt()

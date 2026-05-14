@@ -608,7 +608,24 @@ export async function generateWeeklyBriefing(
   // enrichment, so a load failure returns empty rollups + null block
   // and the LLM simply doesn't see the section.
   const supabaseForThemes = createServiceClient()
-  const [metrics, priorMetrics, deviations, weather, indicators, alerts, phaseB, macroContext, themePulse] = await Promise.all([
+  // TIER 6++ (2026-05-14). Climate context for the current month +
+  // active weather anomalies. The weekly narrative reads the venue's
+  // own 20-year record rather than guessing.
+  const { getVenueClimateContext: _getWeeklyClimate, getActiveAnomalies: _getWeeklyAnomalies } =
+    await import('@/lib/services/intel/climate-context')
+  const [
+    metrics,
+    priorMetrics,
+    deviations,
+    weather,
+    indicators,
+    alerts,
+    phaseB,
+    macroContext,
+    themePulse,
+    weeklyClimate,
+    activeWeatherAnomalies,
+  ] = await Promise.all([
     getWeddingMetrics(venueId, fromDate, toDate),
     getWeddingMetrics(venueId, priorFrom, priorTo),
     detectTrendDeviations(venueId),
@@ -622,6 +639,10 @@ export async function generateWeeklyBriefing(
       headerLabel: 'EMOTIONAL THEMES THIS WEEK',
       maxThemes: 8,
     }),
+    _getWeeklyClimate(venueId, { month: new Date().getUTCMonth() + 1 }).catch(
+      () => ({ available: false, promptBlock: null }) as { available: false; promptBlock: null },
+    ),
+    _getWeeklyAnomalies(venueId).catch(() => []),
   ])
 
   // Classical compute: deltas + change percentages. The LLM never
@@ -705,7 +726,16 @@ PLATFORM SIGNAL HEALTH (last 7 days):
 - Auto-linked to leads: ${phaseB.autoLinked} (Tier 1 deterministic + Tier 2 AI)
 - High-funnel non-converting: ${phaseB.highFunnelNonConverting} candidates engaged deeply but didn't inquire
 - Conflicts to review: ${phaseB.openConflicts}
-${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / correlation narrations):\n${macroContext.block}\n` : ''}${themePulse.block ? `\n${themePulse.block}\n` : ''}
+${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / correlation narrations):\n${macroContext.block}\n` : ''}${themePulse.block ? `\n${themePulse.block}\n` : ''}${weeklyClimate.available && weeklyClimate.promptBlock ? `\nVENUE CLIMATE RECORD (this month at this venue):\n${weeklyClimate.promptBlock}\n` : ''}${activeWeatherAnomalies.length > 0 ? `\nACTIVE WEATHER EVENTS THIS WEEK:\n${activeWeatherAnomalies
+  .map(
+    (a) =>
+      `- [${a.severity}] ${a.description}${
+        a.inquiriesDuring !== null && a.inquiriesTypical !== null
+          ? ` (historical impact: ${a.inquiriesDuring} inquiries during similar stretches vs typical ${a.inquiriesTypical})`
+          : ''
+      }`,
+  )
+  .join('\n')}\n` : ''}
 Generate the weekly briefing.`
 
   // Call AI to generate the briefing narrative.
@@ -854,6 +884,12 @@ export async function generateMonthlyBriefing(
 
   // Gather current period + prior period metrics + all other data sources
   const supabaseForMonthlyThemes = createServiceClient()
+  // TIER 6++ (2026-05-14). Climate context for the current month so
+  // the monthly narrative can frame "April ran 4°F warmer this year,
+  // historically that's correlated with X" without re-deriving.
+  const { getVenueClimateContext: _getMonthlyClimate } = await import(
+    '@/lib/services/intel/climate-context'
+  )
   const [
     currentMetrics,
     priorMetrics,
@@ -863,6 +899,7 @@ export async function generateMonthlyBriefing(
     alerts,
     macroContext,
     themePulse,
+    monthlyClimate,
   ] = await Promise.all([
     getWeddingMetrics(venueId, currentFrom, currentTo),
     getWeddingMetrics(venueId, priorFrom, priorTo),
@@ -877,6 +914,9 @@ export async function generateMonthlyBriefing(
       headerLabel: 'EMOTIONAL THEMES THIS MONTH',
       maxThemes: 10,
     }),
+    _getMonthlyClimate(venueId, { month: new Date().getUTCMonth() + 1 }).catch(
+      () => ({ available: false, promptBlock: null }) as { available: false; promptBlock: null },
+    ),
   ])
 
   const demandScore = calculateDemandScore(indicators)
@@ -947,7 +987,7 @@ ${weatherSummary}
 
 ANOMALY ALERTS:
 ${alertSummary}
-${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / correlation narrations):\n${macroContext.block}\n` : ''}${themePulse.block ? `\n${themePulse.block}\n` : ''}
+${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / correlation narrations):\n${macroContext.block}\n` : ''}${themePulse.block ? `\n${themePulse.block}\n` : ''}${monthlyClimate.available && monthlyClimate.promptBlock ? `\nVENUE CLIMATE RECORD (this month at this venue):\n${monthlyClimate.promptBlock}\n` : ''}
 Generate the monthly briefing with strategic recommendations.`
 
   // Call AI to generate the monthly briefing.

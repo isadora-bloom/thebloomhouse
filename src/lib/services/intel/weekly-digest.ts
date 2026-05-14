@@ -22,6 +22,10 @@ import {
   loadVenueAutoContextRollup,
   type AutoContextThemeRollup,
 } from '@/lib/services/identity/auto-context-loader'
+import {
+  getVenueClimateContext,
+  getActiveAnomalies,
+} from '@/lib/services/intel/climate-context'
 
 /** Prompt revision identifier. See PROMPTS-CHANGELOG.md / OPS-21.5.1.
  *  v1.0 (LLM-CALL-INVENTORY backfill): initial versioning for the
@@ -456,6 +460,44 @@ async function buildSeasonalAdvisory(
         priority: maxTemp > 95 || minTemp < 32 ? 'medium' : 'low',
       })
     }
+  }
+
+  // TIER 6++ (2026-05-14). Pull the venue's own climate record for the
+  // current month + active anomalies. Replaces region-generic guesses
+  // with venue-specific 20-year data.
+  const currentMonth = new Date().getUTCMonth() + 1
+  const climate = await getVenueClimateContext(venueId, { month: currentMonth })
+  if (climate.available && climate.monthProfile) {
+    const p = climate.monthProfile
+    if (p.daytimeTempF !== null) {
+      items.push({
+        text: `${p.monthLabel} historically averages ${Math.round(p.daytimeTempF)}°F daytime at this venue${
+          p.daytimePrecipProbPct !== null
+            ? `, with rain in ${Math.round(p.daytimePrecipProbPct)}% of daytime hours`
+            : ''
+        }`,
+        priority: 'low',
+      })
+    }
+    if (p.tempTrendF !== null && Math.abs(p.tempTrendF) >= 1) {
+      const dir = p.tempTrendF > 0 ? 'warmer' : 'cooler'
+      items.push({
+        text: `${p.monthLabel} has trended ${Math.abs(p.tempTrendF).toFixed(1)}°F ${dir} vs the prior decade`,
+        priority: 'low',
+      })
+    }
+  }
+
+  const activeAnomalies = await getActiveAnomalies(venueId)
+  for (const a of activeAnomalies.slice(0, 2)) {
+    const impactNote =
+      a.inquiriesDuring !== null && a.inquiriesTypical !== null && a.inquiriesTypical > 0
+        ? ` (inquiries during similar stretches: ${a.inquiriesDuring} vs typical ${a.inquiriesTypical})`
+        : ''
+    items.push({
+      text: `Active weather event: ${a.description}${impactNote}`,
+      priority: a.severity === 'extreme' ? 'high' : 'medium',
+    })
   }
 
   // Upcoming capacity pressure

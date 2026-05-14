@@ -464,6 +464,24 @@ export async function buildSageIntelligenceContext(
     console.warn('[sage-intel] Failed to fetch weather summary:', err)
   }
 
+  // TIER 6++ (2026-05-14). Venue's own historical climate record for
+  // the current month. Lets Sage answer "what's April like?" from the
+  // venue's 20-year record. Fire-and-forget: silent when history hasn't
+  // been pulled yet.
+  try {
+    const { getVenueClimateContext } = await import(
+      '@/lib/services/intel/climate-context'
+    )
+    const climate = await getVenueClimateContext(venueId, {
+      month: new Date().getUTCMonth() + 1,
+    })
+    if (climate.available && climate.promptBlock) {
+      sections.push(`VENUE CLIMATE RECORD:\n${climate.promptBlock}`)
+    }
+  } catch (err) {
+    console.warn('[sage-intel] Failed to fetch climate context:', err)
+  }
+
   // --- Review vocabulary (approved phrases for Sage) ---
   try {
     const vocabulary = await getReviewVocabulary(venueId)

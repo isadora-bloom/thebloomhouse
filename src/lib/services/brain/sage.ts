@@ -626,6 +626,29 @@ export async function generateSageResponse(
     weddingBlock = `\n--- WEDDING CONTEXT ---\n${parts.join('\n')}\n--- END WEDDING CONTEXT ---\n`
   }
 
+  // TIER 6++ (2026-05-14). Venue climate context for the wedding's
+  // month. Lets Sage answer couple questions like "what's the weather
+  // usually like for an October wedding here?" from the venue's own
+  // 20-year record instead of guessing. Only fires when the wedding
+  // date is known + history has been pulled.
+  let climateBlock = ''
+  if (weddingContext?.eventDate) {
+    try {
+      const { getVenueClimateContext } = await import(
+        '@/lib/services/intel/climate-context'
+      )
+      const climate = await getVenueClimateContext(venueId, {
+        date: weddingContext.eventDate,
+      })
+      if (climate.available && climate.promptBlock) {
+        climateBlock = `\n--- VENUE CLIMATE RECORD (for your wedding's month) ---\n${climate.promptBlock}\n--- END CLIMATE RECORD ---\n`
+      }
+    } catch (err) {
+      // Fire-and-forget — never block the chat on climate lookup.
+      console.warn('[sage] climate context lookup failed:', err)
+    }
+  }
+
   // Build file context block (for uploaded files or contract text)
   let fileContextBlock = ''
   if (fileContext) {
@@ -636,6 +659,7 @@ export async function generateSageResponse(
   const systemPrompt = [
     built.systemPrompt,
     weddingBlock,
+    climateBlock,
     kbContext,
     intelligenceContext,
     fileContextBlock,
