@@ -13,7 +13,7 @@
  *   - agree            : true iff both produced the same canonical value
  *   - detail jsonb     : cluster confidence / evidence count / etc.
  *
- * The `/intel/sources/parity` dashboard reads from this table to show
+ * The `/admin/sources-parity` dashboard reads from this table to show
  * the agreement rate over time + drill into divergent rows.
  *
  * Runs at 05:30 UTC daily (vercel.json cron `compute_attribution_parity`)

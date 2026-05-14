@@ -903,7 +903,7 @@ async function commitWebForm(args: {
     signal_date: r.inquiry_date ?? new Date().toISOString(),
     // C-INGEST-5 Finding 2 fix (2026-05-08): was writing confirmed_match
     // with matched_person_id=null + confidence=1.0, which inflated the
-    // confirmed-match rate on /intel/sources/parity and blocked FK
+    // confirmed-match rate on /admin/sources-parity and blocked FK
     // joins from finding the person. Writes unmatched instead;
     // phase_b_sweep promotes when the inquiry's person row arrives.
     match_status: 'unmatched',

@@ -202,7 +202,7 @@ const VALID_JOBS = [
   // T5-Rixey-BBB (2026-05-02). Side-by-side parity scan: writes one
   // attribution_parity_log row per active wedding per run with the
   // legacy 7-tier chain output AND the new identity-cluster compute
-  // output. Drives /intel/sources/parity dashboard. Cutover gate:
+  // output. Drives /admin/sources-parity dashboard. Cutover gate:
   // USE_CLUSTER_FIRST_TOUCH flips ON only when dashboard shows
   // >=90% agreement for 7 consecutive days AND CCC has been running
   // for >=48h. Sequenced AFTER backtrace_scan (04:30) and
@@ -528,7 +528,7 @@ async function runJob(job: JobName): Promise<unknown> {
       // T5-Rixey-BBB. Side-by-side scan: per-wedding chain + cluster
       // outputs into attribution_parity_log. Read-only against
       // weddings; only writes are to the parity log. Cutover gate
-      // is the dashboard at /intel/sources/parity.
+      // is the dashboard at /admin/sources-parity.
       return computeAttributionParityAllVenues(createServiceClient())
 
     case 'agency_activity_sweep':
@@ -738,7 +738,7 @@ async function runJob(job: JobName): Promise<unknown> {
       // storefront candidate (Knot/WW/IG/Pinterest/...) on first_name
       // + last_initial + state + ±90/+14d window. High-confidence
       // matches auto-link via attribution_events; medium queue for
-      // /intel/identity-backtrack coordinator review; low + no-match
+      // /admin/identity-backtrack coordinator review; low + no-match
       // get backtrack_attempted_at stamped so the next sweep skips
       // them for REATTEMPT_WINDOW_DAYS (7d). Idempotent — re-running
       // doesn't re-link or duplicate. Pure rule scoring; no LLM.
