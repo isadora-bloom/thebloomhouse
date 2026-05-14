@@ -17,7 +17,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { GitMerge, ArrowRight, AlertCircle, Users, Calendar, Network } from 'lucide-react'
+import { GitMerge, ArrowRight, AlertCircle, Users, Calendar, Network, Sparkles } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 
@@ -125,7 +125,7 @@ export default function IdentityAdminPage() {
         {/* Wave 10 — person-keyed identity decision UX. ONE decision per
             real person, not N per handle. The legacy handle-merges page
             stays linked below for power-user inspection. */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Link
             href="/admin/identity/decisions"
             className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-sage-300 bg-sage-50 text-sm text-sage-700 hover:bg-sage-100 whitespace-nowrap"
@@ -133,6 +133,14 @@ export default function IdentityAdminPage() {
           >
             <Users className="w-4 h-4" />
             Identity decisions
+          </Link>
+          <Link
+            href="/admin/identity/backtrack"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-sage-300 bg-warm-white text-sm text-sage-700 hover:bg-sage-50 whitespace-nowrap"
+            title="Storefront candidates the backtrack runner matched to weddings but couldn't auto-link"
+          >
+            <Sparkles className="w-4 h-4" />
+            Backtrack review
           </Link>
           <Link
             href="/admin/identity/handle-merges"

@@ -18,7 +18,7 @@
  *     'rule') with source_type='conversation' + confidence_flag=
  *     'imported_high'.
  *   - phrase_usage rows (top 30 by frequency) tagged
- *     confidence_flag='imported_high' so /intel/voice-dna can show
+ *     confidence_flag='imported_high' so /sage/voice-dna can show
  *     "X phrases mined from your past writing".
  *   - review_language rows for memorable distinctive phrases tagged
  *     confidence_flag='imported_high' with source_type='conversation'…
@@ -593,7 +593,7 @@ async function persistVoiceAnchors(
     } catch { /* swallow */ }
   }
 
-  // Distinctive phrases → review_language so they show up in /intel/voice-dna
+  // Distinctive phrases → review_language so they show up in /sage/voice-dna
   // alongside review-mined phrases. source_type CHECK only allows
   // ('review', 'transcript', 'manual'); use 'manual' and rely on
   // confidence_flag to distinguish backfill-derived rows from
@@ -780,7 +780,7 @@ export async function extractVoiceDnaFromBackfill(
   let writeResult = { rowsWritten: 0, phrasesExtracted: 0 }
   try {
     // T5-Rixey-LL: derive signal_date from the freshest source-email
-    // timestamp so backfill rows window correctly on /intel/voice-dna's
+    // timestamp so backfill rows window correctly on /sage/voice-dna's
     // weekly tracker.
     const signalDate = deriveSignalDate(samples)
     writeResult = await persistVoiceAnchors(supabase, venueId, agg, sampleIdsRef, signalDate)

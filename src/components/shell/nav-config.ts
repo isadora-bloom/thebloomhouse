@@ -297,7 +297,6 @@ export const MODE_INTEL: ModeConfig = {
       title: 'Voice of customer',
       items: [
         { label: 'Reviews', href: '/intel/reviews', icon: Star },
-        { label: 'Voice DNA', href: '/intel/voice-dna', icon: TrendsIcon },
         { label: 'Briefings', href: '/intel/briefings', icon: Newspaper },
       ],
     },
@@ -397,6 +396,7 @@ export const MODE_SAGE: ModeConfig = {
       items: [
         { label: 'AI Personality', href: '/settings/personality', icon: Sparkles, daily: true },
         { label: 'Voice Games', href: '/settings/voice', icon: Mic },
+        { label: 'Voice DNA', href: '/sage/voice-dna', icon: TrendsIcon },
         { label: 'Teach Voice', href: '/agent/learning', icon: GraduationCap },
         { label: 'Recent Learnings', href: '/agent/learning/recent-edits', icon: BookOpen },
         { label: 'Always / Never Rules', href: '/agent/rules', icon: ScrollText },
@@ -602,7 +602,7 @@ export const GEAR_GROUPS: GearGroup[] = [
       { label: 'Identity audit', href: '/admin/identity', icon: GitMerge, requiresRole: 'org_admin' },
       { label: 'Identity decisions', href: '/admin/identity/decisions', icon: ListOrdered, requiresRole: 'org_admin' },
       { label: 'Handle merges', href: '/admin/identity/handle-merges', icon: Workflow, requiresRole: 'org_admin' },
-      { label: 'Identity backtrack', href: '/admin/identity-backtrack', icon: Sparkles, requiresRole: 'org_admin' },
+      { label: 'Identity backtrack', href: '/admin/identity/backtrack', icon: Sparkles, requiresRole: 'org_admin' },
       { label: 'Disagreements', href: '/admin/disagreements', icon: AlertTriangle, requiresRole: 'org_admin' },
       { label: 'Source parity', href: '/admin/sources-parity', icon: BarChart3, requiresRole: 'org_admin' },
       { label: 'Attribution roles', href: '/admin/attribution/roles', icon: UsersRound, requiresRole: 'org_admin' },

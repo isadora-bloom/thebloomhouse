@@ -50,7 +50,7 @@
  * Trigger surfaces:
  *   1. Inline async after wedding insert (fire-and-forget, never blocks)
  *   2. Daily cron (sweep)
- *   3. Manual via /api/intel/identity-backtrack (page UI at /admin/identity-backtrack)
+ *   3. Manual via /api/intel/identity-backtrack (page UI at /admin/identity/backtrack)
  *
  * Anchor: bloom-constitution.md Point-Zero doctrine — pre-zero
  * tangential signals are attribution credit; post-zero are nurture.
@@ -967,7 +967,7 @@ export interface BacktrackReviewItem {
 
 /**
  * List all pending medium-confidence matches for a venue. Surface for
- * the /admin/identity-backtrack coordinator UI. Recomputes scores in
+ * the /admin/identity/backtrack coordinator UI. Recomputes scores in
  * memory so the page reflects current data without re-stamping rows.
  */
 export async function listPendingBacktrackReview(
@@ -1020,7 +1020,7 @@ export async function listPendingBacktrackReview(
 }
 
 /**
- * Coordinator-confirmed link from /admin/identity-backtrack — same writer
+ * Coordinator-confirmed link from /admin/identity/backtrack — same writer
  * as the auto-link path, but tier='tier_2_coordinator' + decided_by='coordinator'.
  */
 export async function applyBacktrackLink(

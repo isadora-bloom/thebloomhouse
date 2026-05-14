@@ -7,7 +7,7 @@
  * review_language with source_type='gmail_backfill'.
  *
  * Designed as a generic onboarding feature — any venue with a Gmail
- * connection can trigger this from /intel/voice-dna. Not Rixey-specific.
+ * connection can trigger this from /sage/voice-dna. Not Rixey-specific.
  *
  * Per-run cap: 200 emails. Larger histories require multiple invocations
  * (deduplication on phrase text means re-runs are idempotent).

@@ -8,7 +8,7 @@ import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
 //
 // Phase 5 Tasks 48, 49, 51 — Voice DNA composite endpoint. Reads the
 // venue's AI personality config, mined review language, and voice training
-// history, and returns a single payload tuned for the /intel/voice-dna
+// history, and returns a single payload tuned for the /sage/voice-dna
 // page. No new tables: everything composes from existing schema.
 //
 // Query params:

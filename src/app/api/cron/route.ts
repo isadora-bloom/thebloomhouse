@@ -738,7 +738,7 @@ async function runJob(job: JobName): Promise<unknown> {
       // storefront candidate (Knot/WW/IG/Pinterest/...) on first_name
       // + last_initial + state + ±90/+14d window. High-confidence
       // matches auto-link via attribution_events; medium queue for
-      // /admin/identity-backtrack coordinator review; low + no-match
+      // /admin/identity/backtrack coordinator review; low + no-match
       // get backtrack_attempted_at stamped so the next sweep skips
       // them for REATTEMPT_WINDOW_DAYS (7d). Idempotent — re-running
       // doesn't re-link or duplicate. Pure rule scoring; no LLM.

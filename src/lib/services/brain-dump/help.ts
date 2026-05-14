@@ -59,7 +59,7 @@ export const HELP_SURFACE_MAP: Array<{
   // Voice
   {
     topic: 'Voice DNA',
-    href: '/intel/voice-dna',
+    href: '/sage/voice-dna',
     summary: 'The phrases and tone Sage learned from your past replies and confirmed reviews.',
     aliases: ['voice', 'tone', 'phrases sage uses'],
   },
