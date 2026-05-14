@@ -1,7 +1,9 @@
 'use client'
 
 /**
- * /intel/disagreements — Wave 17 disagreement surfacing dashboard.
+ * /admin/disagreements — disagreement surfacing dashboard (moved
+ * from /intel in Round 2 audit TIER 3, 2026-05-14; legacy route
+ * redirects via next.config.ts).
  *
  * Anchor docs:
  *   - bloom-constitution.md (Pattern 12: the disagreement IS the gold)

@@ -1,7 +1,9 @@
 'use client'
 
 /**
- * /intel/calibration — Wave 18 prediction calibration dashboard.
+ * /admin/calibration — prediction calibration dashboard (moved from
+ * /intel in Round 2 audit TIER 3, 2026-05-14; legacy route redirects
+ * via next.config.ts).
  *
  * Anchor docs:
  *   - feedback_measure_dont_assume.md (the dashboard exists so the

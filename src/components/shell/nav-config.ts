@@ -307,7 +307,6 @@ export const MODE_INTEL: ModeConfig = {
         { label: 'All Clients', href: '/intel/clients', icon: UserCheck },
         { label: 'Matching / Dedup', href: '/intel/matching', icon: GitMerge },
         { label: 'Candidate Review', href: '/intel/candidates', icon: Sparkles },
-        { label: 'Identity Backtrack', href: '/intel/identity-backtrack', icon: Sparkles },
         { label: 'Re-engagement', href: '/intel/reengagement', icon: Send },
       ],
     },
@@ -316,9 +315,7 @@ export const MODE_INTEL: ModeConfig = {
       items: [
         { label: 'Ask Anything', href: '/intel/nlq', icon: MessageSquareText, badge: 'AI' },
         { label: 'Health Score', href: '/intel/health', icon: Activity },
-        // Wave 18 — prediction calibration loop. Measures Wave 5A's
-        // close-probability against actual booked / lost outcomes.
-        { label: 'Prediction Calibration', href: '/intel/calibration', icon: Gauge },
+        { label: 'Channel Truth', href: '/intel/channel-truth', icon: ShieldCheck },
       ],
     },
   ],
@@ -592,6 +589,27 @@ export const GEAR_GROUPS: GearGroup[] = [
       // for single-venue tenants the page is one card with no
       // comparison surface. Visible at group / company scope only.
       { label: 'Regions', href: '/intel/regions', icon: MapPin, requiresRole: 'org_admin', requiresScope: 'group' },
+    ],
+  },
+  {
+    // Engineering surfaces: identity audits, attribution audits, model
+    // calibration, data-integrity sweeps. All gated to org_admin via
+    // /admin/layout.tsx. Round 2 audit TIER 3 (2026-05-14) — pages
+    // moved from /intel/* and surfaced in nav so they stop being
+    // unreachable.
+    title: 'Admin',
+    items: [
+      { label: 'Identity audit', href: '/admin/identity', icon: GitMerge, requiresRole: 'org_admin' },
+      { label: 'Identity decisions', href: '/admin/identity/decisions', icon: ListOrdered, requiresRole: 'org_admin' },
+      { label: 'Handle merges', href: '/admin/identity/handle-merges', icon: Workflow, requiresRole: 'org_admin' },
+      { label: 'Identity backtrack', href: '/admin/identity-backtrack', icon: Sparkles, requiresRole: 'org_admin' },
+      { label: 'Disagreements', href: '/admin/disagreements', icon: AlertTriangle, requiresRole: 'org_admin' },
+      { label: 'Source parity', href: '/admin/sources-parity', icon: BarChart3, requiresRole: 'org_admin' },
+      { label: 'Attribution roles', href: '/admin/attribution/roles', icon: UsersRound, requiresRole: 'org_admin' },
+      { label: 'Prediction calibration', href: '/admin/calibration', icon: Gauge, requiresRole: 'org_admin' },
+      { label: 'Data integrity', href: '/admin/integrity', icon: ShieldCheck, requiresRole: 'org_admin' },
+      { label: 'Imports', href: '/admin/imports', icon: Upload, requiresRole: 'org_admin' },
+      { label: 'Onboarding thesis', href: '/admin/onboarding/thesis', icon: Lightbulb, requiresRole: 'org_admin' },
     ],
   },
   {

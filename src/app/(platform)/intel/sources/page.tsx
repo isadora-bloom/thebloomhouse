@@ -1886,7 +1886,7 @@ export default function SourceAttributionPage() {
             Re-attribute scheduling-tool bookings →
           </Link>
           <Link
-            href="/intel/sources/parity"
+            href="/admin/sources-parity"
             className="text-xs font-medium text-sage-600 hover:text-sage-900 underline-offset-2 hover:underline"
             title="Coordinator audit: where computed first-touch disagrees with the legacy lead source field."
           >
