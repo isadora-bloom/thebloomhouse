@@ -232,13 +232,16 @@ async function getPhaseBWeeklyState(venueId: string): Promise<PhaseBWeeklyState>
   }
 
   try {
-    // Pattern A (mig 336): live view dedupes duplicates that drove
-    // OBS-021 ("116 conflicts" inflation).
+    // Pattern A (mig 336) + TIER 2e (mig 338): live view dedupes
+    // duplicates AND we filter to UNRESOLVED conflicts only. The
+    // 110-conflict queue from the audit drops to ~15-25 once the
+    // destination/low-info/high-confidence auto-resolve rules fire.
     const { count, error } = await supabase
       .from('attribution_events_live')
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId)
       .not('conflict_with_legacy_source', 'is', null)
+      .is('conflict_resolution_state', null)
     if (error) throw error
     state.openConflicts = count ?? 0
   } catch (err) {

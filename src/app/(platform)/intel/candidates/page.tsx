@@ -98,14 +98,16 @@ export default function CandidatesReviewPage() {
           .is('deleted_at', null)
           .is('resolved_wedding_id', null)
           .order('last_seen', { ascending: false }),
-        // Pattern A (mig 336): live view filters tombstoned dupes
-        // that drove the "116 conflicts" / "Zachary Gragan × 9"
-        // inflation flagged in the Round 2 audit.
+        // Pattern A (mig 336) + TIER 2e (mig 338): live view dedupes
+        // duplicates AND we filter to UNRESOLVED conflicts only.
+        // Audited 110-conflict queue collapses once destination /
+        // low-info auto-resolve rules fire on write OR via backfill.
         sb
           .from('attribution_events_live')
           .select('*')
           .eq('venue_id', venueId)
           .not('conflict_with_legacy_source', 'is', null)
+          .is('conflict_resolution_state', null)
           .order('decided_at', { ascending: false }),
         sb
           .from('attribution_events_live')

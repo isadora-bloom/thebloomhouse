@@ -47,6 +47,11 @@ export interface AttributionEventInsertRow {
   bucket: string
   conflict_with_legacy_source: string | null
   signal_class?: 'source' | string
+  // TIER 2e (mig 338): write-time auto-resolution stamps. Null when
+  // the row has no conflict or no auto-resolve rule fires.
+  conflict_resolution_state?: string | null
+  conflict_resolved_at?: string | null
+  conflict_resolved_by?: string | null
 }
 
 export interface AttributionEventInsertResult {

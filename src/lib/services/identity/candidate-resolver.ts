@@ -49,6 +49,11 @@ import {
   type PerPlatformWindowMap,
 } from './windows'
 import { insertAttributionEventsIdempotent } from './attribution-events-writer'
+import { decideAutoResolve } from '@/lib/services/attribution/auto-resolve'
+import {
+  filterSignalsByEligibility,
+  getMatchEligibilityBandDays,
+} from './match-eligibility'
 
 // Hard-coded fallbacks. Per-platform overrides flow through
 // loadPerPlatformWindows + windowsForPlatform (T2-D / ARCH-8.5.3).
@@ -120,6 +125,19 @@ interface PersonMatch {
   inquiry_date: string | null
   tour_date: string | null
   legacy_source: string | null
+  /** TIER 2b (2026-05-14): quality grade for confidence capping.
+   *  'strong' = full last_name match. 'medium' = last_initial + state
+   *  agreement. 'weak' = last_initial only with no state, or state
+   *  disagrees. Resolver caps tier-1 name-window confidence on
+   *  medium/weak to avoid the audit-cited 93%-on-mismatch false
+   *  positive. Optional so existing call sites (exact, full_name)
+   *  don't need to populate. */
+  match_quality?: 'strong' | 'medium' | 'weak'
+  /** Optional last_name of the matched person — surfaced for quality
+   *  scoring at the resolver layer. */
+  matched_last_name?: string | null
+  /** Wedding's state at match time, for state-agreement scoring. */
+  wedding_state?: string | null
 }
 
 interface WeddingRow {
@@ -128,6 +146,7 @@ interface WeddingRow {
   source: string | null
   inquiry_date: string | null
   tour_date: string | null
+  state?: string | null
 }
 
 interface PersonRow {
@@ -320,7 +339,7 @@ async function findNameWindowMatches(
       const chunk = candidateWeddingIds.slice(i, i + CHUNK)
       const { data: weds } = await supabase
         .from('weddings')
-        .select('id, venue_id, source, inquiry_date, tour_date')
+        .select('id, venue_id, source, inquiry_date, tour_date, state')
         .in('id', chunk)
       for (const w of (weds ?? []) as WeddingRow[]) wedMap.set(w.id, w)
     }
@@ -368,12 +387,44 @@ async function findNameWindowMatches(
     if (!inWindow) continue
 
     seenWeddings.add(wed.id)
+    // TIER 2b (2026-05-14): compute match quality grade so the
+    // resolver can cap confidence on weaker matches. The audit
+    // cited "first-name-only with mismatched last initial at 93%".
+    // The findNameWindowMatches function already enforces last_initial
+    // existence — but candidate.last_initial='S' matches a wedding
+    // person.last_name='Stephens' even when the candidate's actual
+    // full last name might have been 'Smith'. State agreement is
+    // the additional axis we use to distinguish.
+    const candidateLastNorm = (c.last_name ?? '').toLowerCase().trim()
+    const personLastNorm = (p.last_name ?? '').toLowerCase().trim()
+    let quality: 'strong' | 'medium' | 'weak' = 'medium'
+    if (candidateLastNorm && personLastNorm && candidateLastNorm === personLastNorm) {
+      // Full last_name match. Strongest evidence — auto-link confidence.
+      quality = 'strong'
+    } else if (c.state && wed.state) {
+      const sa = c.state.toLowerCase().trim()
+      const sb = wed.state.toLowerCase().trim()
+      if (sa && sb && sa !== sb) {
+        // State disagreement on a last-initial-only candidate. Audit
+        // case: this is the "mismatched last initial 93%" foot-gun.
+        quality = 'weak'
+      } else if (sa === sb) {
+        quality = 'medium'
+      }
+    } else if (!c.state && !c.last_name) {
+      // No discriminating evidence beyond last_initial-prefix. Weak.
+      quality = 'weak'
+    }
+
     matches.push({
       person_id: p.id,
       wedding_id: wed.id,
       inquiry_date: wed.inquiry_date,
       tour_date: wed.tour_date,
       legacy_source: wed.source,
+      match_quality: quality,
+      matched_last_name: p.last_name ?? null,
+      wedding_state: wed.state ?? null,
     })
 
     if (!other_candidates_in_window && targets.length > 0) {
@@ -605,10 +656,34 @@ async function writeAttributionEvents(args: {
   reasoning?: string
 }): Promise<{ flagged_conflict: boolean; error?: string }> {
   const { supabase, candidate, match, tier, decided_by, confidence, reasoning } = args
-  const signals = await fetchSignalsForCandidate(supabase, candidate.id)
-  if (signals.length === 0) {
+  const rawSignals = await fetchSignalsForCandidate(supabase, candidate.id)
+  if (rawSignals.length === 0) {
     return { flagged_conflict: false, error: 'no signals attached to candidate' }
   }
+
+  // TIER 2a (mig 338, 2026-05-14): eligibility-band gate. Drops
+  // signals more than band_days from the wedding's nearest anchor
+  // (inquiry / tour / booked). Exact-match tier is exempt because
+  // email/phone match is rock-solid regardless of timeline distance.
+  // The audit found Zachary Gragan with a 260d signal that should
+  // have been gated out before scoring.
+  const bandDays = await getMatchEligibilityBandDays(supabase, candidate.venue_id)
+  const { eligible, dropped } = filterSignalsByEligibility(
+    rawSignals,
+    {
+      inquiry_date: match.inquiry_date ?? null,
+      tour_date: match.tour_date ?? null,
+    },
+    bandDays,
+    { exempt: tier === 'tier_1_exact' },
+  )
+  if (eligible.length === 0) {
+    return {
+      flagged_conflict: false,
+      error: `eligibility-gate dropped all ${rawSignals.length} signals (band=${bandDays}d, first dropped: ${dropped[0]?.reason})`,
+    }
+  }
+  const signals = eligible
 
   const inquiryTs = match.inquiry_date ? new Date(match.inquiry_date).getTime() : null
 
@@ -624,11 +699,24 @@ async function writeAttributionEvents(args: {
     }
   }
 
+  // TIER 2e (auto-resolve, 2026-05-14): decide at write-time whether
+  // the conflict would auto-resolve. If yes, stamp resolution
+  // metadata on the row so it never enters the coordinator queue.
+  // No legacy source = no conflict = no resolution needed.
+  const autoResolveDecision = conflict_flag
+    ? decideAutoResolve({
+        legacy_source: match.legacy_source ?? null,
+        computed_source: candidate.source_platform ?? null,
+        computed_confidence: confidence,
+      })
+    : { resolution_state: null, reason: null }
+
   const rows = signals
     .filter((s) => s.signal_date)
     .map((s) => {
       const sigTs = new Date(s.signal_date!).getTime()
       const bucket = inquiryTs !== null && sigTs >= inquiryTs ? 'nurture' : 'attribution'
+      const rowConflictFlag = bucket === 'attribution' ? conflict_flag : null
       return {
         venue_id: candidate.venue_id,
         candidate_identity_id: candidate.id,
@@ -641,7 +729,22 @@ async function writeAttributionEvents(args: {
         reasoning: reasoning ?? null,
         is_first_touch: false,
         bucket,
-        conflict_with_legacy_source: bucket === 'attribution' ? conflict_flag : null,
+        conflict_with_legacy_source: rowConflictFlag,
+        // TIER 2e: stamp auto-resolution metadata when a write-time
+        // rule fires. Conflicts with no auto-resolution stay open
+        // and surface in /intel/candidates conflicts tab.
+        conflict_resolution_state:
+          rowConflictFlag && autoResolveDecision.resolution_state
+            ? autoResolveDecision.resolution_state
+            : null,
+        conflict_resolved_at:
+          rowConflictFlag && autoResolveDecision.resolution_state
+            ? new Date().toISOString()
+            : null,
+        conflict_resolved_by:
+          rowConflictFlag && autoResolveDecision.resolution_state
+            ? 'system_rule'
+            : null,
         // T5-Rixey-BBB: attribution_events anchor source-class
         // discovery touches (or post-discovery re-engagement on the
         // same acquisition platform).
@@ -943,9 +1046,35 @@ export async function resolveCandidate(args: {
   const tier1 = await findNameWindowMatches(supabase, candidate, w.tier_1_hours)
 
   if (tier1 && tier1.matches.length === 1 && !tier1.other_candidates_in_window) {
-    const conf = 90 + Math.min(5, candidate.funnel_depth)
+    // TIER 2b (2026-05-14): match-quality-aware confidence. Audit
+    // found 93% confidence on first-name-only matches with mismatched
+    // state. Cap by quality grade:
+    //   strong: full last_name match → 90-95 (original behaviour)
+    //   medium: last_initial + state agreement → 75-80
+    //   weak: last_initial only with no/disagreeing state → 55 (below
+    //         auto-link threshold; routes to coordinator review)
+    const match = tier1.matches[0]
+    const base = match.match_quality === 'strong'
+      ? 90 + Math.min(5, candidate.funnel_depth)
+      : match.match_quality === 'weak'
+        ? 55
+        : 75 + Math.min(5, candidate.funnel_depth)
+    const conf = base
+
+    // Weak matches don't auto-link — route to coordinator review with
+    // a lower confidence stamp so the operator can see "this was on
+    // the wire but flagged for manual review."
+    if (match.match_quality === 'weak') {
+      await supabase
+        .from('candidate_identities')
+        .update({ review_status: 'needs_review' })
+        .eq('id', candidate.id)
+      summary.deferred_to_ai++
+      return summary
+    }
+
     const { flagged_conflict, error } = await writeAttributionEvents({
-      supabase, candidate, match: tier1.matches[0],
+      supabase, candidate, match,
       tier: 'tier_1_name_window', decided_by: 'auto', confidence: conf,
     })
     if (error) summary.errors.push(error)
@@ -985,6 +1114,22 @@ export async function resolveCandidate(args: {
     supabase, candidate, tier2HoursForPlatform, /* needsCompetitorCheck */ false,
   )
   if (!tier2 || tier2.matches.length === 0) {
+    // TIER 2d (2026-05-14): zero-match candidates were going into
+    // 'needs_review' indirectly via Tier-2 ambiguity flows. Now soft-
+    // delete them via deleted_at so the coordinator queue at
+    // /intel/candidates only shows actionable items (the page already
+    // filters .is('deleted_at', null)). The candidate stays for
+    // audit/forensic queries; it just doesn't surface in the review
+    // queue. Skip if the coordinator already reviewed it.
+    await supabase
+      .from('candidate_identities')
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_reason: 'auto_dismissed_no_matches',
+      })
+      .eq('id', candidate.id)
+      .is('deleted_at', null)
+      .neq('review_status', 'reviewed')
     summary.no_match++
     return summary
   }

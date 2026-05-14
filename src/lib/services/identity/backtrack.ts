@@ -63,6 +63,11 @@ import { recalculateHeatScore } from '../heat-mapping'
 import { normalizeSource } from '../normalize-source'
 import { insertAttributionEventsIdempotent } from './attribution-events-writer'
 import { insertTouchpointIdempotent } from './touchpoints-writer'
+import { decideAutoResolve } from '@/lib/services/attribution/auto-resolve'
+import {
+  filterSignalsByEligibility,
+  getMatchEligibilityBandDays,
+} from './match-eligibility'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -506,6 +511,23 @@ async function autoLinkCandidate(args: {
     .map((e) => e.signal_id)
     .filter((v): v is string => Boolean(v)))
 
+  // TIER 2a: eligibility-band gate. Backtrack is name + state + window
+  // matching — same false-positive class as the Zachary Gragan audit
+  // case. Drop signals outside the venue's band before scoring.
+  const bandDaysBT = await getMatchEligibilityBandDays(supabase, candidate.venue_id)
+  const bandFilterBT = filterSignalsByEligibility(
+    signalRows,
+    { inquiry_date: wedding.inquiry_date ?? null },
+    bandDaysBT,
+  )
+  if (bandFilterBT.eligible.length === 0) {
+    return {
+      ok: false,
+      error: `eligibility-gate dropped all ${signalRows.length} signals (band=${bandDaysBT}d). Backtrack rejected.`,
+    }
+  }
+  const gatedSignalRows = bandFilterBT.eligible
+
   const inquiryTs = wedding.inquiry_date ? new Date(wedding.inquiry_date).getTime() : null
 
   // Conflict detection mirrors candidate-resolver writeAttributionEvents.
@@ -519,11 +541,21 @@ async function autoLinkCandidate(args: {
   }
 
   const reasoning = `backtrack score=${match.score.toFixed(2)} evidence=[${match.evidence.join(', ')}] partner=${match.matchedPartner}`
-  const rowsToInsert = signalRows
+  // TIER 2e (auto-resolve, 2026-05-14): same write-time auto-resolution
+  // pattern as candidate-resolver.
+  const backtrackAutoResolve = conflictFlag
+    ? decideAutoResolve({
+        legacy_source: wedding.source ?? null,
+        computed_source: candidate.source_platform ?? null,
+        computed_confidence: Math.round(match.score * 100),
+      })
+    : { resolution_state: null, reason: null }
+  const rowsToInsert = gatedSignalRows
     .filter((s) => s.signal_date && !linkedSignalIds.has(s.id))
     .map((s) => {
       const sigTs = new Date(s.signal_date!).getTime()
       const bucket = inquiryTs !== null && sigTs >= inquiryTs ? 'nurture' : 'attribution'
+      const rowConflict = bucket === 'attribution' ? conflictFlag : null
       return {
         venue_id: candidate.venue_id,
         candidate_identity_id: candidate.id,
@@ -537,7 +569,19 @@ async function autoLinkCandidate(args: {
         reasoning,
         is_first_touch: false,
         bucket,
-        conflict_with_legacy_source: bucket === 'attribution' ? conflictFlag : null,
+        conflict_with_legacy_source: rowConflict,
+        conflict_resolution_state:
+          rowConflict && backtrackAutoResolve.resolution_state
+            ? backtrackAutoResolve.resolution_state
+            : null,
+        conflict_resolved_at:
+          rowConflict && backtrackAutoResolve.resolution_state
+            ? new Date().toISOString()
+            : null,
+        conflict_resolved_by:
+          rowConflict && backtrackAutoResolve.resolution_state
+            ? 'system_rule'
+            : null,
         // Attribution rows always represent source-class signals — that's
         // what they exist to credit. Declared explicitly per BBB doctrine
         // (migration 192) instead of relying on the column default.
@@ -593,8 +637,9 @@ async function autoLinkCandidate(args: {
 
   // Backfill wedding_touchpoints. Pattern A (mig 336): the shared
   // helper does pre-check on the new signal_id column + race-window
-  // backstop via the partial unique index.
-  for (const s of signalRows) {
+  // backstop via the partial unique index. TIER 2a: iterate the gated
+  // set so touchpoints don't include out-of-band signals either.
+  for (const s of gatedSignalRows) {
     if (!s.signal_date) continue
     await insertTouchpointIdempotent(supabase, {
       venue_id: candidate.venue_id,
@@ -1079,11 +1124,23 @@ export async function applyBacktrackLink(
 
   const reasoning = `backtrack coordinator link score=${score.toFixed(2)} evidence=[${evidence.join(', ')}] partner=${partner}${reason ? ` note="${reason}"` : ''}${coordinatorUserId ? ` by=${coordinatorUserId}` : ''}`
 
+  // TIER 2e: write-time auto-resolution for coordinator-confirmed
+  // backtracks. Coordinator already vouched for the match, so a
+  // legacy/computed disagreement is even more cleanly auto-resolvable.
+  const coordAutoResolve = conflictFlag
+    ? decideAutoResolve({
+        legacy_source: wedding.source ?? null,
+        computed_source: candForWriter.source_platform ?? null,
+        computed_confidence: Math.round(score * 100),
+      })
+    : { resolution_state: null, reason: null }
+
   const insertRows = signalRows
     .filter((s2) => s2.signal_date && !linked.has(s2.id))
     .map((s2) => {
       const sigTs = new Date(s2.signal_date!).getTime()
       const bucket = inquiryTs !== null && sigTs >= inquiryTs ? 'nurture' : 'attribution'
+      const rowConflict = bucket === 'attribution' ? conflictFlag : null
       return {
         venue_id: venueId,
         candidate_identity_id: candidateId,
@@ -1096,7 +1153,19 @@ export async function applyBacktrackLink(
         reasoning,
         is_first_touch: false,
         bucket,
-        conflict_with_legacy_source: bucket === 'attribution' ? conflictFlag : null,
+        conflict_with_legacy_source: rowConflict,
+        conflict_resolution_state:
+          rowConflict && coordAutoResolve.resolution_state
+            ? coordAutoResolve.resolution_state
+            : null,
+        conflict_resolved_at:
+          rowConflict && coordAutoResolve.resolution_state
+            ? new Date().toISOString()
+            : null,
+        conflict_resolved_by:
+          rowConflict && coordAutoResolve.resolution_state
+            ? 'system_rule'
+            : null,
         // Attribution rows always represent source-class signals — see
         // sibling insert above for the BBB doctrine reference.
         signal_class: 'source' as const,
