@@ -78,7 +78,7 @@ export async function backfillVenueClimateNorms(
 
   const { data: venue, error: vErr } = await supabase
     .from('venues')
-    .select('latitude, longitude, timezone')
+    .select('latitude, longitude')
     .eq('id', venueId)
     .single()
 
@@ -97,8 +97,6 @@ export async function backfillVenueClimateNorms(
   const fetchStart = fmtDate(priorStart)
   const fetchEnd = fmtDate(recentEnd)
 
-  const timezone = (venue.timezone as string | null) ?? 'America/New_York'
-
   const url = new URL(ARCHIVE_URL)
   url.searchParams.set('latitude', String(venue.latitude))
   url.searchParams.set('longitude', String(venue.longitude))
@@ -107,7 +105,11 @@ export async function backfillVenueClimateNorms(
   url.searchParams.set('hourly', 'temperature_2m,precipitation,snowfall')
   url.searchParams.set('temperature_unit', 'fahrenheit')
   url.searchParams.set('precipitation_unit', 'inch')
-  url.searchParams.set('timezone', timezone)
+  // timezone=auto: Open-Meteo derives the venue's local timezone from
+  // lat/lon. Hourly timestamps come back in local time, so hour-of-day
+  // semantics are correct for a venue in California, Hawaii, Eastern
+  // Europe, anywhere. NEVER hardcode America/New_York — multi-venue.
+  url.searchParams.set('timezone', 'auto')
 
   const res = await fetch(url.toString())
   if (!res.ok) {

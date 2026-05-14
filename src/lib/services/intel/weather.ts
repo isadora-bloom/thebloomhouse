@@ -257,7 +257,10 @@ export async function fetchWeatherForecast(
   url.searchParams.set('latitude', String(venue.latitude))
   url.searchParams.set('longitude', String(venue.longitude))
   url.searchParams.set('daily', 'temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode')
-  url.searchParams.set('timezone', 'America/New_York')
+  // timezone=auto: Open-Meteo derives the venue's local timezone from
+  // the lat/lon we pass. Previously hardcoded America/New_York which
+  // mislabelled forecasts for any non-East-Coast venue. TIER 6+ fix.
+  url.searchParams.set('timezone', 'auto')
   url.searchParams.set('forecast_days', '14')
 
   const res = await fetch(url.toString())

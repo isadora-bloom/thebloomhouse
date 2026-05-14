@@ -73,6 +73,11 @@ const VALID_JOBS = [
   'heat_decay',
   'trends_refresh',
   'weather_forecast',
+  // TIER 6+ (2026-05-14). Annual sweep that pulls 20 years of hourly
+  // archive data from Open-Meteo for every venue with lat/lon set,
+  // recomputes climate_norms + anomaly_events with joined ops impact.
+  // Climate norms do not move overnight — annual cadence is enough.
+  'weather_history_refresh',
   // T5-ε.1 (2026-05-01): renamed from 'economic_indicators' which wrote
   // the legacy economic_indicators table (FRED series id mapped to a
   // friendly name). The correlation engine reads fred_indicators, so the
@@ -474,6 +479,13 @@ async function runJob(job: JobName): Promise<unknown> {
 
     case 'weather_forecast':
       return runWeatherForecastWithTourStamp()
+
+    case 'weather_history_refresh':
+      // TIER 6+ (2026-05-14). Annual sweep across all venues with
+      // lat/lon. Refreshes climate_norms (month × hour × decade) +
+      // anomaly_events (notable past weather + ops impact). Per-venue
+      // cost is one Open-Meteo archive call + local aggregation.
+      return refreshWeatherHistoryAllVenues()
 
     case 'fred_daily_refresh':
     case 'economic_indicators':
@@ -2608,6 +2620,46 @@ async function fetchWeatherForAllVenues(): Promise<Record<string, number>> {
     }
   }
 
+  return results
+}
+
+/**
+ * TIER 6+ (2026-05-14). Annual climate-norms + anomaly-events refresh
+ * for every venue with lat/lon. Iterates serially so a slow Open-Meteo
+ * response on one venue doesn't time-budget out the others; each call
+ * is ~5-15 seconds. Returns per-venue row counts (climate + anomaly).
+ */
+async function refreshWeatherHistoryAllVenues(): Promise<
+  Record<string, { climate_rows: number; anomaly_rows: number; error?: string }>
+> {
+  const supabase = createServiceClient()
+  const { backfillVenueClimateNorms } = await import(
+    '@/lib/services/intel/weather-climate-norms'
+  )
+
+  const { data: venues, error } = await supabase
+    .from('venues')
+    .select('id')
+    .not('latitude', 'is', null)
+    .not('longitude', 'is', null)
+
+  if (error || !venues || venues.length === 0) {
+    console.warn('[cron] No venues with lat/lng found for weather history refresh')
+    return {}
+  }
+
+  const results: Record<string, { climate_rows: number; anomaly_rows: number; error?: string }> = {}
+  for (const v of venues) {
+    const id = v.id as string
+    try {
+      const r = await backfillVenueClimateNorms(id)
+      results[id] = { climate_rows: r.climateRows, anomaly_rows: r.anomalyRows }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[cron] weather_history_refresh failed for venue ${id}:`, msg)
+      results[id] = { climate_rows: 0, anomaly_rows: 0, error: msg }
+    }
+  }
   return results
 }
 
