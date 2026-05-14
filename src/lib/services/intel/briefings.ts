@@ -22,6 +22,10 @@ import { getWeatherForDateRange } from './weather'
 import { getLatestIndicators, calculateDemandScore } from './fred-demand'
 import { getActiveAlerts } from './anomaly-detection'
 import { getAnomalyDisplay } from '@/lib/services/anomaly/display-labels'
+import {
+  getVenueManifest,
+  manifestToSystemPrompt,
+} from '@/lib/services/manifest/venue-manifest'
 import { sendEmail as sendGmail } from '../email/gmail'
 import { sendEmail as sendTransactionalEmail } from '../email/transport'
 import {
@@ -729,6 +733,16 @@ Generate the weekly briefing.`
       open_conflicts: phaseB.openConflicts,
     },
   })
+
+  // TIER 1 / Pattern B (2026-05-14): inject venue manifest as the
+  // FIRST chunk of the system prompt. Without this, the audit caught
+  // briefings hallucinating "80 inquiries" when the real number was
+  // different. With the manifest the model sees what tables it has,
+  // what's empty, and what's out of scope — so it composes prose
+  // over verifiable numbers instead of inventing them.
+  const manifest = await getVenueManifest(venueId)
+  const manifestPrompt = manifestToSystemPrompt(manifest)
+  const systemPromptWithManifest = `${manifestPrompt}\n\n---\n\n${weeklyBuilt.systemPrompt}`
   const aiResult = await withAiCache(
     `briefing:${venueId}:${fromDate}:${weeklyBuilt.promptVersion}`,
     () => callAIJson<{
@@ -738,7 +752,7 @@ Generate the weekly briefing.`
       anomaly_summary: string[]
       recommendations: string[]
     }>({
-      systemPrompt: weeklyBuilt.systemPrompt,
+      systemPrompt: systemPromptWithManifest,
       userPrompt: weeklyUserPrompt,
       maxTokens: 1500,
       temperature: 0.4,

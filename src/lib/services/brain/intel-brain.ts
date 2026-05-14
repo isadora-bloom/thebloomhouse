@@ -14,6 +14,10 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { callAI, callAIJson, CLAUDE_MODEL } from '@/lib/ai/client'
 import { buildCoordinatorPrompt } from '@/lib/ai/coordinator-prompt'
+import {
+  getVenueManifest,
+  manifestToSystemPrompt,
+} from '@/lib/services/manifest/venue-manifest'
 
 /** Prompt revision identifier — see PROMPTS-CHANGELOG.md / OPS-21.5.1. */
 // TRENDS-DIAGNOSIS Fix 4 / Finding F (2026-05-09): bumped 1.1 → 1.2.
@@ -1702,18 +1706,27 @@ export async function answerNaturalLanguageQuery(
 ): Promise<NLQResult> {
   const supabase = createServiceClient()
 
-  // Gather all relevant venue data
-  const venueData = await gatherVenueData(venueId)
+  // TIER 1 / Pattern B (mig-336 era, 2026-05-14): the manifest is the
+  // FIRST chunk of the system prompt — before voice DNA, before task
+  // instructions. Tells the model what tables exist, what's empty,
+  // what's out of scope. Without this, the audit caught the model
+  // asking the user for data it should already have ("I see 178
+  // active tours but no monthly breakdown — can you provide?").
+  const [venueData, manifest] = await Promise.all([
+    gatherVenueData(venueId),
+    getVenueManifest(venueId),
+  ])
   const dataContext = formatDataContext(venueData)
+  const manifestPrompt = manifestToSystemPrompt(manifest)
 
-  // Call AI with venue data as context
+  // Call AI with manifest + venue data as context.
   const { systemPrompt, promptVersion, contentTier } = await buildCoordinatorPrompt({
     venueId,
     surface: 'nlq_intel',
     taskInstructions: buildNLQTaskInstructions(venueData.venueName),
   })
   const aiResult = await callAI({
-    systemPrompt,
+    systemPrompt: `${manifestPrompt}\n\n---\n\n${systemPrompt}`,
     userPrompt: `Here is the current data for ${venueData.venueName}:\n\n${dataContext}\n\n---\n\nQuestion: ${query}`,
     maxTokens: 1500,
     temperature: 0.3,

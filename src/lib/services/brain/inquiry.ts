@@ -129,6 +129,10 @@ import { getApprovedPhrases } from '@/lib/services/intel/review-language'
 import { getLearningContext, getVoicePreferences } from '@/lib/services/learning'
 import { loadAutoContextForWedding } from '@/lib/services/identity/auto-context-loader'
 import { logEvent } from '@/lib/observability/logger'
+import {
+  getVenueManifest,
+  manifestToSystemPrompt,
+} from '@/lib/services/manifest/venue-manifest'
 
 /**
  * Minimum number of "good" trained examples (approved + edited drafts)
@@ -955,8 +959,24 @@ export async function generateInquiryDraft(
     // Learning context is enrichment, not critical
   }
 
-  // Assemble the full system prompt (Layer 1 + 2 + 3 + learning)
-  const systemPrompt = `${UNIVERSAL_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${learningBlock}`
+  // TIER 1e (agent-impact pass, 2026-05-14): inject venue manifest
+  // BEFORE voice DNA. Today Sage drafts know voice + KB + couple
+  // context but NOT venue stats. Manifest lets her say "most couples
+  // here book within 23 days of inquiring" or "your inquiry came in
+  // during our peak month (October)" instead of generic prose.
+  //
+  // Failure here is non-fatal — drafts still work without the
+  // manifest, they just lose the venue-stat enrichment.
+  let manifestBlock = ''
+  try {
+    const manifest = await getVenueManifest(venueId)
+    manifestBlock = `${manifestToSystemPrompt(manifest)}\n\n---\n\n`
+  } catch {
+    // Skip enrichment on manifest failure
+  }
+
+  // Assemble the full system prompt (manifest + Layer 1 + 2 + 3 + learning)
+  const systemPrompt = `${manifestBlock}${UNIVERSAL_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${learningBlock}`
 
   // Call AI
   const result = await callAI({
@@ -1294,7 +1314,17 @@ export async function generateFollowUp(
     // Learning context is enrichment, not critical
   }
 
-  const systemPrompt = `${UNIVERSAL_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${learningBlock}`
+  // TIER 1e: same manifest enrichment as the primary inquiry-draft
+  // path above (follow-up brain shares the system-prompt shape).
+  let manifestBlockFollowUp = ''
+  try {
+    const manifest = await getVenueManifest(venueId)
+    manifestBlockFollowUp = `${manifestToSystemPrompt(manifest)}\n\n---\n\n`
+  } catch {
+    // Skip enrichment on manifest failure
+  }
+
+  const systemPrompt = `${manifestBlockFollowUp}${UNIVERSAL_RULES}\n\n${personalityPrompt}\n\n${taskPrompt}${learningBlock}`
 
   const result = await callAI({
     systemPrompt,

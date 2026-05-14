@@ -29,6 +29,10 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { callAIJson } from '@/lib/ai/client'
+import {
+  getVenueManifest,
+  manifestToSystemPrompt,
+} from '@/lib/services/manifest/venue-manifest'
 
 /**
  * Prompt revision identifier. Per Playbook OPS-21.5.1 / T1-E.
@@ -158,6 +162,27 @@ export async function adjudicateAmbiguousMatch(args: {
     return { match_wedding_id: null, confidence: 0, reasoning: 'no candidate weddings' }
   }
   const userPrompt = buildUserPrompt(candidate, candidates)
+
+  // TIER 1d (Pattern B, 2026-05-14): inject venue-specific timing
+  // bands into the system prompt so reasoning becomes venue-specific.
+  // Pre-manifest reasoning was generic ("260d seems distant"); with
+  // the manifest the model can reference THIS venue's typical
+  // inquiry-to-signal lag to say "outside the 90d eligibility band
+  // for your venue" vs "well within the typical 23d window".
+  let manifestPrompt = ''
+  if (venueId) {
+    try {
+      const manifest = await getVenueManifest(venueId)
+      manifestPrompt = manifestToSystemPrompt(manifest)
+    } catch {
+      // Manifest fetch failure is non-fatal — fall back to generic
+      // reasoning.
+    }
+  }
+  const systemPromptWithManifest = manifestPrompt
+    ? `${manifestPrompt}\n\n---\n\n${SYSTEM_PROMPT}`
+    : SYSTEM_PROMPT
+
   // Sonnet per LLM-CALL-INVENTORY tier-correctness sweep (v1.1).
   // Earlier v1.0 ran on Haiku per OPS-21.4.2 (`Sonnet was overkill`)
   // but this is qualitative attribution: first-name + last-initial +
@@ -166,7 +191,7 @@ export async function adjudicateAmbiguousMatch(args: {
   // wrong couple, and the cost of that error far outweighs the 12x
   // per-call delta.
   const response = await callAIJson<AIResponse>({
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: systemPromptWithManifest,
     userPrompt,
     maxTokens: 400,
     temperature: 0.1,
