@@ -32,6 +32,7 @@ import {
   TrendingUp, Sparkles as TrendsIcon, Star,
   MapPinIcon, XCircle, Share2, LineChart,
   MessageSquareText, GitMerge, UserCheck, Send, Briefcase, Camera,
+  Cloud,
   // Sage's Brain
   Sparkles, Mic, GraduationCap, ScrollText,
   BookOpen, Store, Settings, MailX, ShieldAlert, Clock as ClockIcon,
@@ -212,6 +213,7 @@ export const MODE_WEDDINGS: ModeConfig = {
 // Pages covered: /intel/dashboard (absorbs briefings as BriefingsPanel),
 // /intel/insights, /intel/anomalies, /intel/market-pulse, /intel/nlq,
 // /intel/sources, /intel/roi, /intel/reach, /intel/trends, /intel/reviews,
+// /intel/weather (TIER 6, 2026-05-14),
 // /sage/voice-dna, /intel/tours, /intel/lost-deals,
 // /intel/social, /intel/forecasts, /intel/health,
 // /intel/clients, /intel/clients/[id], /intel/matching,
@@ -251,6 +253,7 @@ export const MODE_INTEL: ModeConfig = {
       items: [
         { label: 'Trends', href: '/intel/trends', icon: TrendsIcon },
         { label: 'Cultural Moments', href: '/intel/cultural-moments', icon: Sparkles },
+        { label: 'Weather', href: '/intel/weather', icon: Cloud },
         { label: 'Macro Correlations', href: '/intel/macro-correlations', icon: GitMerge, badge: 'AI' },
         { label: 'Marketing Reach', href: '/intel/reach', icon: BarChart3 },
         { label: 'Tours', href: '/intel/tours', icon: MapPinIcon },
