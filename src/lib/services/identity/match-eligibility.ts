@@ -19,6 +19,17 @@
  * effective value. Agent-impact pass: 90d (audit's first suggestion)
  * is too tight for Rixey where inquiry-to-tour averages 30-60d and
  * tour-to-book is another 30-90d.
+ *
+ * Why NOT mirrored in the email pipeline's wedding-find step
+ * -----------------------------------------------------------
+ * The agent-impact pass flagged that if we hard-capped at 90d, the
+ * email pipeline could orphan-mint MORE weddings (signals outside
+ * the band fall through to mint). We chose 180d default which is
+ * WIDER than the pipeline's name+date join window (7 days in
+ * resolver.ts:findByNamePlusDate). So this gate can never reject
+ * something the pipeline would have matched — no mirror needed.
+ * If the band is ever tightened below 30d, revisit this and add a
+ * mirror in resolver.ts.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'

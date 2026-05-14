@@ -132,17 +132,50 @@ export default function CandidatesReviewPage() {
         weddingIds.size > 0
           ? sb.from('weddings').select('id, source, status, inquiry_date').in('id', Array.from(weddingIds))
           : Promise.resolve({ data: [] }),
+        // TIER 0b (reasoning-binding fix, 2026-05-14): the Round 2
+        // audit caught Eleanor Pittinger's card showing Bonnie Alger's
+        // name. Cause was THIS query returning all people per wedding
+        // (partners, family, planners) unordered, and the map keeping
+        // only the first row. The reasoning was correctly bound to
+        // the event but the WRONG person was displayed.
+        // Fix: pull role + last_initial too, then prefer partner1 ->
+        // primary -> partner2 in that order, falling back to first
+        // partner-ish row.
         weddingIds.size > 0
-          ? sb.from('people').select('wedding_id, first_name, last_name').in('wedding_id', Array.from(weddingIds))
+          ? sb
+              .from('people')
+              .select('wedding_id, first_name, last_name, role')
+              .in('wedding_id', Array.from(weddingIds))
+              .in('role', ['partner1', 'primary', 'partner2'])
           : Promise.resolve({ data: [] }),
       ])
 
       const candMap = new Map<string, CandidateRow>(
         ((candRes.data ?? []) as CandidateRow[]).map((c) => [c.id, c]),
       )
-      const peopleByWedding = new Map<string, { first_name: string | null; last_name: string | null }>()
-      for (const p of (peopleRes.data ?? []) as Array<{ wedding_id: string; first_name: string | null; last_name: string | null }>) {
-        if (!peopleByWedding.has(p.wedding_id)) peopleByWedding.set(p.wedding_id, { first_name: p.first_name, last_name: p.last_name })
+      // Role-aware partner pick. partner1 wins; primary is the legacy
+      // single-partner role; partner2 fills only if neither exists.
+      const peopleByWedding = new Map<
+        string,
+        { first_name: string | null; last_name: string | null; role: string }
+      >()
+      const peopleRows = (peopleRes.data ?? []) as Array<{
+        wedding_id: string
+        first_name: string | null
+        last_name: string | null
+        role: string
+      }>
+      const roleRank = (role: string): number =>
+        role === 'partner1' ? 0 : role === 'primary' ? 1 : role === 'partner2' ? 2 : 3
+      for (const p of peopleRows) {
+        const existing = peopleByWedding.get(p.wedding_id)
+        if (!existing || roleRank(p.role) < roleRank(existing.role)) {
+          peopleByWedding.set(p.wedding_id, {
+            first_name: p.first_name,
+            last_name: p.last_name,
+            role: p.role,
+          })
+        }
       }
       const wedMap = new Map<string, WeddingRow>()
       for (const w of (wedRes.data ?? []) as Omit<WeddingRow, 'first_name' | 'last_name'>[]) {
@@ -255,16 +288,33 @@ export default function CandidatesReviewPage() {
         needsReview.length === 0 ? (
           <EmptyState icon={CheckCircle2} text="Inbox zero. No candidates waiting on you." />
         ) : (
-          <div className="space-y-3">
-            {needsReview.map((c) => (
-              <NeedsReviewCard
-                key={c.id}
-                candidate={c}
-                venueId={venueId}
-                onDismiss={() => dismissCandidate(c.id)}
-                onLink={(weddingId) => linkCandidateToWedding(c.id, weddingId)}
-              />
-            ))}
+          // TIER 2c (surface clustering, 2026-05-14): group candidates
+          // that share normalized first_name + last_initial (+ state
+          // when set). Operators reviewed dozens of near-duplicate
+          // cards before because each platform/cluster minted its own
+          // candidate. Group view shows them as one stack with each
+          // candidate listed inside, so reviewer can pattern-match
+          // ("oh these 3 are all the same person") and act once.
+          <div className="space-y-4">
+            {groupCandidatesByFingerprint(needsReview).map((group) =>
+              group.candidates.length === 1 ? (
+                <NeedsReviewCard
+                  key={group.candidates[0].id}
+                  candidate={group.candidates[0]}
+                  venueId={venueId}
+                  onDismiss={() => dismissCandidate(group.candidates[0].id)}
+                  onLink={(weddingId) => linkCandidateToWedding(group.candidates[0].id, weddingId)}
+                />
+              ) : (
+                <ClusteredCandidates
+                  key={group.key}
+                  group={group}
+                  venueId={venueId}
+                  onDismiss={dismissCandidate}
+                  onLink={linkCandidateToWedding}
+                />
+              ),
+            )}
           </div>
         )
       ) : tab === 'conflicts' ? (
@@ -554,6 +604,116 @@ function RecentCard({ event, onRevert }: {
           {isAiTier ? 'AI: ' : 'Coordinator: '}"{event.reasoning}"
         </p>
       )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// TIER 2c — fingerprint clustering for the review queue
+// ---------------------------------------------------------------------------
+
+interface CandidateGroup {
+  key: string
+  /** Display label, e.g. "Zachary G. (VA)". */
+  label: string
+  candidates: CandidateRow[]
+}
+
+/**
+ * Group candidates that share the same identity fingerprint —
+ * normalized first_name + last_initial + state. Anchor: Round 2
+ * audit TIER 2c (2026-05-14). Operators reviewed N independent
+ * cards for the same person across platforms; this collapses them
+ * into one decision per group.
+ *
+ * Ordering preserved within groups (most-recent-last_seen first).
+ * Groups themselves ordered by the most-recent last_seen across
+ * any member candidate.
+ */
+function groupCandidatesByFingerprint(rows: CandidateRow[]): CandidateGroup[] {
+  const buckets = new Map<string, CandidateGroup>()
+  for (const c of rows) {
+    const fp = fingerprintKey(c)
+    let g = buckets.get(fp)
+    if (!g) {
+      g = {
+        key: fp,
+        label: candidateLabel(c),
+        candidates: [],
+      }
+      buckets.set(fp, g)
+    }
+    g.candidates.push(c)
+  }
+  const out = [...buckets.values()]
+  // Sort candidates within each group by last_seen desc.
+  for (const g of out) {
+    g.candidates.sort((a, b) => (b.last_seen ?? '').localeCompare(a.last_seen ?? ''))
+  }
+  // Sort groups by max last_seen across members, desc.
+  out.sort((a, b) => {
+    const aMax = a.candidates.reduce((acc, c) => (c.last_seen && c.last_seen > acc ? c.last_seen : acc), '')
+    const bMax = b.candidates.reduce((acc, c) => (c.last_seen && c.last_seen > acc ? c.last_seen : acc), '')
+    return bMax.localeCompare(aMax)
+  })
+  return out
+}
+
+function fingerprintKey(c: CandidateRow): string {
+  const first = (c.first_name ?? '').toLowerCase().trim()
+  const initial = (c.last_initial ?? '').toLowerCase().trim()
+  const state = (c.state ?? '').toLowerCase().trim()
+  // No first_name = singleton (use id so it doesn't collide with
+  // other no-name candidates).
+  if (!first) return `__nofp_${c.id}`
+  return `${first}|${initial}|${state}`
+}
+
+function candidateLabel(c: CandidateRow): string {
+  const name = c.first_name ?? '?'
+  const initial = c.last_initial ? `${c.last_initial.toUpperCase()}.` : ''
+  const state = c.state ? ` (${c.state.toUpperCase()})` : ''
+  return `${name} ${initial}${state}`.trim()
+}
+
+function ClusteredCandidates({
+  group,
+  venueId,
+  onDismiss,
+  onLink,
+}: {
+  group: CandidateGroup
+  venueId: string
+  onDismiss: (id: string) => void
+  onLink: (candidateId: string, weddingId: string) => void
+}) {
+  const platforms = Array.from(new Set(group.candidates.map((c) => c.source_platform)))
+  const totalSignals = group.candidates.reduce((acc, c) => acc + (c.signal_count ?? 0), 0)
+  return (
+    <div className="rounded-xl border border-amber-300 bg-amber-50/40 p-3 shadow-sm">
+      <div className="flex items-center justify-between gap-2 mb-2 px-1">
+        <p className="text-sm font-semibold text-sage-900">
+          {group.candidates.length} candidates · {group.label}
+        </p>
+        <p className="text-xs text-sage-600">
+          {platforms.map(platformLabel).join(' + ')} · {totalSignals} total signals
+        </p>
+      </div>
+      <p className="px-1 mb-3 text-xs text-sage-600">
+        Same first name + last initial{group.candidates[0].state ? ` + state` : ''}. Likely the same
+        person across platforms. Review each; linking one to a wedding does not link the others.
+      </p>
+      <div className="space-y-3">
+        {group.candidates.map((c) => (
+          <NeedsReviewCard
+            key={c.id}
+            candidate={c}
+            venueId={venueId}
+            onDismiss={() => onDismiss(c.id)}
+            onLink={(weddingId) => onLink(c.id, weddingId)}
+          />
+        ))}
+      </div>
     </div>
   )
 }

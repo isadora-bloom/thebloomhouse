@@ -18,6 +18,7 @@ import {
   isPdfPreview,
   readParseResultKind,
 } from '@/lib/services/brain-dump/parse-result-schema'
+import { generateBrainDumpSummaryBounded } from '@/lib/services/brain-dump/summary'
 
 /**
  * Resolve a pending brain-dump clarification.
@@ -144,10 +145,21 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       resolved_at: new Date().toISOString(),
     }).eq('id', id)
     const next = nextHrefFor({ intent: `${shape}_preview` })
+    // TIER 1 brain-dump manifest wire-in (2026-05-14): Sage prose
+    // summary informed by the venue manifest. Bounded 1500ms; null
+    // on timeout so confirms stay snappy.
+    const sageSummary = await generateBrainDumpSummaryBounded({
+      venueId: auth.venueId,
+      importLabel: `${shape} CSV import`,
+      rowsImported: (summary.inserted ?? 0) + (summary.updated ?? 0),
+      domain: 'csv_import',
+      details: `inserted=${summary.inserted ?? 0} updated=${summary.updated ?? 0} skipped=${summary.skipped ?? 0}`,
+    })
     return NextResponse.json({
       id,
       status: 'confirmed',
       importSummary: summary,
+      sageSummary,
       nextHref: next?.nextHref ?? null,
       nextLabel: next?.nextLabel ?? null,
     })
@@ -191,10 +203,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       resolved_at: new Date().toISOString(),
     }).eq('id', id)
     const next = nextHrefFor({ intent: 'reviews_from_screenshot' })
+    const sageSummary = await generateBrainDumpSummaryBounded({
+      venueId: auth.venueId,
+      importLabel: 'reviews from screenshot',
+      rowsImported: reviewsSrc.length,
+      domain: 'reviews',
+      details: `sources=${Array.from(new Set(reviewsSrc.map((r) => r.source ?? 'other'))).join(',')}`,
+    })
     return NextResponse.json({
       id,
       status: 'confirmed',
       importSummary: summary,
+      sageSummary,
       nextHref: next?.nextHref ?? null,
       nextLabel: next?.nextLabel ?? null,
     })
@@ -225,10 +245,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       resolved_at: new Date().toISOString(),
     }).eq('id', id)
     const next = nextHrefFor({ intent: 'storefront_analytics_preview' })
+    const sageSummary = await generateBrainDumpSummaryBounded({
+      venueId: auth.venueId,
+      importLabel: `${analytics.source ?? 'storefront'} analytics`,
+      rowsImported: analytics.rows?.length ?? 0,
+      domain: 'storefront_analytics',
+      details: `metric=${analytics.metric ?? 'unknown'} source=${analytics.source ?? 'unknown'}`,
+    })
     return NextResponse.json({
       id,
       status: 'confirmed',
       importSummary: summary,
+      sageSummary,
       nextHref: next?.nextHref ?? null,
       nextLabel: next?.nextLabel ?? null,
     })
@@ -317,10 +345,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     })()
 
     const next = nextHrefFor({ intent: 'client_note', weddingId: proposedNote.weddingId })
+    const sageSummary = await generateBrainDumpSummaryBounded({
+      venueId: auth.venueId,
+      importLabel: 'context note for one wedding',
+      rowsImported: 1,
+      domain: 'other',
+      details: `couple_label=${proposedNote.coupleLabel ?? 'unknown'} note_len=${proposedNote.noteBody.length}`,
+    })
     return NextResponse.json({
       id,
       status: 'confirmed',
       appendedTo: proposedNote.weddingId,
+      sageSummary,
       nextHref: next?.nextHref ?? null,
       nextLabel: next?.nextLabel ?? null,
     })
@@ -370,11 +406,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       routed_to: [{ table: 'knowledge_base', id: null, action: `insert:${inserted},deduped:${existingSet.size}` }],
     }).eq('id', id)
     const next = nextHrefFor({ intent: 'knowledge_base_import' })
+    const sageSummary = await generateBrainDumpSummaryBounded({
+      venueId: auth.venueId,
+      importLabel: 'knowledge base entries',
+      rowsImported: inserted,
+      domain: 'other',
+      details: `inserted=${inserted} deduped=${existingSet.size}`,
+    })
     return NextResponse.json({
       id,
       status: 'confirmed',
       inserted,
       deduped: existingSet.size,
+      sageSummary,
       nextHref: next?.nextHref ?? null,
       nextLabel: next?.nextLabel ?? null,
     })
@@ -408,10 +452,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       routed_to: [{ table: 'knowledge_gaps', id: insertedRow.id, action: 'insert' }],
     }).eq('id', id)
     const next = nextHrefFor({ intent: 'operational_note' })
+    const sageSummary = await generateBrainDumpSummaryBounded({
+      venueId: auth.venueId,
+      importLabel: 'operational knowledge gap',
+      rowsImported: 1,
+      domain: 'other',
+      details: `note_len=${proposedOpNote.noteBody.length}`,
+    })
     return NextResponse.json({
       id,
       status: 'confirmed',
       knowledge_gap_id: insertedRow.id,
+      sageSummary,
       nextHref: next?.nextHref ?? null,
       nextLabel: next?.nextLabel ?? null,
     })
@@ -452,10 +504,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }],
     }).eq('id', id)
     const next = nextHrefFor({ intent: 'staff_observation' })
+    const sageSummary = await generateBrainDumpSummaryBounded({
+      venueId: auth.venueId,
+      importLabel: 'staff observation',
+      rowsImported: 1,
+      domain: 'other',
+      details: `staff_name=${trimmed} matched=${match ? 'yes' : 'unresolved'}`,
+    })
     return NextResponse.json({
       id,
       status: 'confirmed',
       staffMatchId: match?.id ?? null,
+      sageSummary,
       nextHref: next?.nextHref ?? null,
       nextLabel: next?.nextLabel ?? null,
     })
@@ -508,10 +568,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }],
     }).eq('id', id)
     const next = nextHrefFor({ intent: 'analytics' })
+    const sageSummary = await generateBrainDumpSummaryBounded({
+      venueId: auth.venueId,
+      importLabel: 'marketing spend rows',
+      rowsImported: rows.length,
+      domain: 'other',
+      details: `inserted=${summary.inserted} updated=${summary.updated} skipped=${summary.skipped}`,
+    })
     return NextResponse.json({
       id,
       status: 'confirmed',
       importSummary: summary,
+      sageSummary,
       nextHref: next?.nextHref ?? null,
       nextLabel: next?.nextLabel ?? null,
     })
@@ -588,10 +656,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }).eq('id', id)
 
       const next = nextHrefFor({ intent: `${detection.shape}_preview` })
+      const sageSummary = await generateBrainDumpSummaryBounded({
+        venueId: auth.venueId,
+        importLabel: `${detection.shape} PDF import`,
+        rowsImported: dataRows.length,
+        domain: 'csv_import',
+        details: `inserted=${summary.inserted ?? 0} via_pdf=true`,
+      })
       return NextResponse.json({
         id,
         status: 'confirmed',
         importSummary: summary,
+        sageSummary,
         pdfRoute: 'csv_import',
         nextHref: next?.nextHref ?? null,
         nextLabel: next?.nextLabel ?? null,
@@ -623,12 +699,25 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       resolved_at: route.needsClarification ? null : new Date().toISOString(),
     }).eq('id', id)
 
+    // Skip Sage summary on needsClarification — the operator is mid-
+    // flow and the surface they'll see next is a clarification panel,
+    // not a confirmation. Confirmation path below gets the prose.
+    const sageSummary = route.needsClarification
+      ? null
+      : await generateBrainDumpSummaryBounded({
+          venueId: auth.venueId,
+          importLabel: `PDF document classified as ${parsed.intent}`,
+          rowsImported: 1,
+          domain: 'other',
+          details: `intent=${parsed.intent} confidence=${parsed.confidence}`,
+        })
     return NextResponse.json({
       id,
       status: route.needsClarification ? 'needs_clarification' : 'confirmed',
       pdfRoute: 'text_classifier',
       classifierIntent: parsed.intent,
       classifierConfidence: parsed.confidence,
+      sageSummary,
       needsClarification: route.needsClarification,
       clarificationQuestion: route.clarificationQuestion,
       nextHref: route.nextHref ?? null,
@@ -637,6 +726,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 
   // Case G: plain clarification — just stamp the status and the answer.
+  // No Sage summary here; nothing was imported, this is a metadata stamp.
   const updates: Record<string, unknown> = {
     parse_status: 'confirmed',
     resolved_at: new Date().toISOString(),
