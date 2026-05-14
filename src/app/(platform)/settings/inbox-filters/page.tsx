@@ -330,21 +330,10 @@ function FilterAuditLine({
   action: Filter['action']
 }) {
   if (!audit) return null
-  if (!audit.auditable) {
-    const reason =
-      audit.unauditable_reason === 'pre_storage'
-        ? 'Pre-storage filter, no audit log available.'
-        : 'Gmail-label filter, not tracked via interactions table.'
+  if (audit.count_30d === 0) {
     return (
       <p className="text-xs text-sage-400 mt-1 flex items-center gap-1">
         <Info className="w-3 h-3" />
-        {reason}
-      </p>
-    )
-  }
-  if (audit.count_30d === 0) {
-    return (
-      <p className="text-xs text-sage-400 mt-1">
         No matches in the last 30 days. Rule may be redundant.
       </p>
     )

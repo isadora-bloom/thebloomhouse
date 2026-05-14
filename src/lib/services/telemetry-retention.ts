@@ -39,6 +39,11 @@ export const TELEMETRY_TTLS = {
   cron_runs: 30,
   metered_events: 90,
   lead_score_history: 365,
+  // TIER 5e+ (mig 339, 2026-05-14). Filter-match audit log. 90 days
+  // covers "this rule has been pulling weight" + "what triggered before
+  // I changed the rule yesterday" while keeping the table small enough
+  // that the audit endpoint scans in-memory.
+  venue_email_filter_matches: 90,
 } as const
 
 export interface TelemetryRetentionResult {
@@ -46,6 +51,7 @@ export interface TelemetryRetentionResult {
   cron_runs_deleted: number
   metered_events_deleted: number
   lead_score_history_deleted: number
+  venue_email_filter_matches_deleted: number
   errors: string[]
 }
 
@@ -122,9 +128,28 @@ export async function runTelemetryRetentionPrune(): Promise<TelemetryRetentionRe
     errors.push(`lead_score_history: ${err instanceof Error ? err.message : 'unknown'}`)
   }
 
+  // venue_email_filter_matches — matched_at when the pipeline filtered the
+  // email. 90-day retention is the audit window.
+  const filterMatchesCutoff = ttl(TELEMETRY_TTLS.venue_email_filter_matches)
+  let filterMatchesDeleted = 0
+  try {
+    const { data, error } = await supabase
+      .from('venue_email_filter_matches')
+      .delete()
+      .lt('matched_at', filterMatchesCutoff)
+      .select('id')
+    if (error) errors.push(`venue_email_filter_matches: ${error.message}`)
+    filterMatchesDeleted = (data ?? []).length
+  } catch (err) {
+    errors.push(
+      `venue_email_filter_matches: ${err instanceof Error ? err.message : 'unknown'}`,
+    )
+  }
+
   console.log(
     `[telemetry_retention] api_costs=${apiCostsDeleted} cron_runs=${cronRunsDeleted} ` +
-    `metered_events=${meteredEventsDeleted} lead_score_history=${leadScoreHistoryDeleted}` +
+    `metered_events=${meteredEventsDeleted} lead_score_history=${leadScoreHistoryDeleted} ` +
+    `filter_matches=${filterMatchesDeleted}` +
     (errors.length > 0 ? ` errors=${errors.length}` : ''),
   )
 
@@ -133,6 +158,7 @@ export async function runTelemetryRetentionPrune(): Promise<TelemetryRetentionRe
     cron_runs_deleted: cronRunsDeleted,
     metered_events_deleted: meteredEventsDeleted,
     lead_score_history_deleted: leadScoreHistoryDeleted,
+    venue_email_filter_matches_deleted: filterMatchesDeleted,
     errors,
   }
 }

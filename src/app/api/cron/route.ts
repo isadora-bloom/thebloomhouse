@@ -1322,6 +1322,7 @@ async function runPruneMaintenance(): Promise<{
             cron_runs_deleted: 0,
             metered_events_deleted: 0,
             lead_score_history_deleted: 0,
+            venue_email_filter_matches_deleted: 0,
             errors: [String(telemetry.reason)],
           }
         })()

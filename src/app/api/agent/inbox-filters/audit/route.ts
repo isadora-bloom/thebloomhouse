@@ -1,23 +1,35 @@
 /**
  * /api/agent/inbox-filters/audit
  *
- * For each venue_email_filters rule, count how many inbound interactions
- * the rule's pattern caught in the last 30 days, plus a few sample
- * senders + the last-match timestamp. Coordinators get answers to
- * "is this rule still pulling its weight" without leaving the settings
- * page.
+ * For each venue_email_filters rule, count how many emails the rule
+ * caught in the last 30 days, plus a few sample senders + the last-
+ * match timestamp.
  *
- * ignore rules: not auditable post-hoc. Those emails never persist (we
- * bail before the classifier writes to interactions). The endpoint
- * still returns the rule row with count=null + reason='pre_storage'.
+ * Data source: venue_email_filter_matches (migration 339). The pipeline
+ * writes one row per filter decision, so ignore + no_draft + gmail_label
+ * rules are all real numbers from here, not derived guesses. The log
+ * holds 90 days of decisions; the audit endpoint windows to 30.
  *
- * no_draft rules: scan interactions(direction='inbound') in last 30d
- * for matching sender, return aggregate counts and last hit.
+ * No fallback to the legacy interaction-scan path: if a venue is on a
+ * pre-339 codepath, the row simply shows count_30d=0 and the operator
+ * sees that the rule has not fired (which is the honest signal).
  */
 
 import { NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
+
+interface AuditEntry {
+  filter_id: string
+  pattern: string
+  pattern_type: 'sender_exact' | 'sender_domain' | 'gmail_label'
+  action: 'ignore' | 'no_draft'
+  auditable: boolean
+  unauditable_reason: string | null
+  count_30d: number
+  last_match_at: string | null
+  sample_senders: string[]
+}
 
 interface FilterRow {
   id: string
@@ -26,33 +38,10 @@ interface FilterRow {
   action: 'ignore' | 'no_draft'
 }
 
-interface AuditEntry {
+interface MatchRow {
   filter_id: string
-  pattern: string
-  pattern_type: FilterRow['pattern_type']
-  action: FilterRow['action']
-  auditable: boolean
-  unauditable_reason: string | null
-  count_30d: number
-  last_match_at: string | null
-  sample_senders: string[]
-}
-
-function extractDomain(email: string): string {
-  const at = email.lastIndexOf('@')
-  if (at === -1) return email.toLowerCase()
-  return email.slice(at + 1).toLowerCase()
-}
-
-function senderMatches(filter: FilterRow, fromEmail: string): boolean {
-  const pattern = filter.pattern.toLowerCase().trim()
-  const from = fromEmail.toLowerCase().trim()
-  if (filter.pattern_type === 'sender_exact') return from === pattern
-  if (filter.pattern_type === 'sender_domain') {
-    const domain = extractDomain(from)
-    return domain === pattern || domain.endsWith(`.${pattern}`)
-  }
-  return false
+  from_email: string
+  matched_at: string
 }
 
 export async function GET() {
@@ -75,98 +64,34 @@ export async function GET() {
 
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
 
-  // Pull recent inbound interactions for the venue, plus the sender email
-  // via the contacts → people join. Cap at 5000 rows — for a busy venue
-  // this is the last ~30 days. If we ever spill that, we'll page or
-  // push this to a materialized view.
-  const { data: interactions, error: iErr } = await supabase
-    .from('interactions')
-    .select('id, person_id, timestamp')
+  // One scan, then group in-memory. Capped at 10k decisions per 30-day
+  // window — a busy venue with a chatty ignore rule could exceed; if so
+  // we'll switch to per-rule queries.
+  const { data: matchRows, error: mErr } = await supabase
+    .from('venue_email_filter_matches')
+    .select('filter_id, from_email, matched_at')
     .eq('venue_id', auth.venueId)
-    .eq('direction', 'inbound')
-    .gte('timestamp', since)
-    .order('timestamp', { ascending: false })
-    .limit(5000)
+    .gte('matched_at', since)
+    .order('matched_at', { ascending: false })
+    .limit(10000)
 
-  if (iErr) return NextResponse.json({ error: iErr.message }, { status: 500 })
+  if (mErr) return NextResponse.json({ error: mErr.message }, { status: 500 })
 
-  const personIds = Array.from(
-    new Set(
-      (interactions ?? [])
-        .map((r) => (r as { person_id: string | null }).person_id)
-        .filter(Boolean) as string[],
-    ),
-  )
-
-  const emailByPerson = new Map<string, string>()
-  if (personIds.length > 0) {
-    const { data: contactRows } = await supabase
-      .from('contacts')
-      .select('person_id, value, people:person_id(venue_id)')
-      .eq('type', 'email')
-      .in('person_id', personIds)
-
-    for (const c of contactRows ?? []) {
-      const row = c as unknown as {
-        person_id: string
-        value: string
-        people:
-          | { venue_id: string | null }
-          | { venue_id: string | null }[]
-          | null
-      }
-      const person = Array.isArray(row.people) ? row.people[0] : row.people
-      if (person?.venue_id !== auth.venueId) continue
-      const pid = row.person_id
-      const val = row.value
-      if (pid && val && !emailByPerson.has(pid)) {
-        emailByPerson.set(pid, val.toLowerCase())
-      }
+  const byFilter = new Map<string, { count: number; last: string | null; senders: Set<string> }>()
+  for (const m of (matchRows ?? []) as MatchRow[]) {
+    const existing = byFilter.get(m.filter_id) ?? {
+      count: 0,
+      last: null as string | null,
+      senders: new Set<string>(),
     }
+    existing.count++
+    if (!existing.last || m.matched_at > existing.last) existing.last = m.matched_at
+    if (existing.senders.size < 5) existing.senders.add(m.from_email)
+    byFilter.set(m.filter_id, existing)
   }
 
   const audit: AuditEntry[] = rows.map((f) => {
-    if (f.action === 'ignore') {
-      return {
-        filter_id: f.id,
-        pattern: f.pattern,
-        pattern_type: f.pattern_type,
-        action: f.action,
-        auditable: false,
-        unauditable_reason: 'pre_storage',
-        count_30d: 0,
-        last_match_at: null,
-        sample_senders: [],
-      }
-    }
-    if (f.pattern_type === 'gmail_label') {
-      return {
-        filter_id: f.id,
-        pattern: f.pattern,
-        pattern_type: f.pattern_type,
-        action: f.action,
-        auditable: false,
-        unauditable_reason: 'label_not_stored',
-        count_30d: 0,
-        last_match_at: null,
-        sample_senders: [],
-      }
-    }
-
-    let count = 0
-    let lastMatchAt: string | null = null
-    const sampleSendersSet = new Set<string>()
-    for (const it of interactions ?? []) {
-      const row = it as { id: string; person_id: string | null; timestamp: string }
-      if (!row.person_id) continue
-      const email = emailByPerson.get(row.person_id)
-      if (!email) continue
-      if (!senderMatches(f, email)) continue
-      count++
-      if (!lastMatchAt || row.timestamp > lastMatchAt) lastMatchAt = row.timestamp
-      if (sampleSendersSet.size < 5) sampleSendersSet.add(email)
-    }
-
+    const agg = byFilter.get(f.id)
     return {
       filter_id: f.id,
       pattern: f.pattern,
@@ -174,9 +99,9 @@ export async function GET() {
       action: f.action,
       auditable: true,
       unauditable_reason: null,
-      count_30d: count,
-      last_match_at: lastMatchAt,
-      sample_senders: Array.from(sampleSendersSet),
+      count_30d: agg?.count ?? 0,
+      last_match_at: agg?.last ?? null,
+      sample_senders: agg ? Array.from(agg.senders) : [],
     }
   })
 

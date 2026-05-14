@@ -48,7 +48,7 @@ import { applySignalInference } from '@/lib/services/attribution/signal-inferenc
 import { createNotification } from '@/lib/services/admin-notifications'
 import { trackCoordinatorAction, trackResponseTime } from '@/lib/services/intel/consultant-tracking'
 import { appendAIDisclosure, fetchDisclosureContext } from '@/lib/services/brain/ai-disclosure'
-import { matchFilter, clearFilterCache } from '@/lib/services/email/inbox-filters'
+import { matchFilter, clearFilterCache, logFilterMatch } from '@/lib/services/email/inbox-filters'
 import { parseFuzzyDate, parseGuestCount, validateEstimatedGuests } from '@/lib/services/fuzzy-date'
 import { chooseEventTime, parseEventTime } from '@/lib/services/event-time'
 import { detectFormRelay, type FormRelayLead } from '@/lib/services/ingestion/form-relay-parsers'
@@ -930,6 +930,9 @@ export async function processIncomingEmail(
   // fired — meaning there's real booking signal to capture.
   const earlyFilterHit = await matchFilter(venueId, rawFromEmail, email.labels ?? [])
   if (earlyFilterHit?.action === 'ignore' && !schedulingPreCheck) {
+    // TIER 5e+ (mig 339): log the decision so the audit endpoint can
+    // count ignore-rule hits. Fire-and-forget; never blocks the bail.
+    void logFilterMatch(venueId, earlyFilterHit, rawFromEmail)
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
   }
 
@@ -1188,7 +1191,18 @@ export async function processIncomingEmail(
   //   action='no_draft' → classify + persist interaction, but don't draft.
   const filterHit = await matchFilter(venueId, fromEmail, email.labels ?? [])
   if (filterHit?.action === 'ignore') {
+    void logFilterMatch(venueId, filterHit, fromEmail)
     return { interactionId: null, draftId: null, classification: 'ignore', autoSent: false }
+  }
+  if (filterHit?.action === 'no_draft' && !formLead) {
+    // Log the no_draft hit too. The interaction WILL persist (intel
+    // layer still sees it), but having a dedicated decision row lets
+    // the audit show per-rule counts that match what the operator
+    // configured, independent of pipeline-side schema drift.
+    void logFilterMatch(venueId, filterHit, fromEmail)
+  }
+  if (earlyFilterHit?.action === 'no_draft' && !formLead) {
+    void logFilterMatch(venueId, earlyFilterHit, rawFromEmail)
   }
   // Stream EEEE: human-escalation request. Detected on the raw subject
   // before any LLM work. When set, the pipeline will:

@@ -99,6 +99,33 @@ export interface FilterMatch {
   filterId: string
   pattern: string
   pattern_type: VenueEmailFilter['pattern_type']
+  matchedLabel?: string
+}
+
+/**
+ * Persist a filter decision so the TIER 5e audit endpoint has real
+ * numbers for ignore + gmail_label rules. Fire-and-forget — never
+ * blocks the pipeline, never throws. Migration 339.
+ */
+export async function logFilterMatch(
+  venueId: string,
+  match: FilterMatch,
+  fromEmail: string,
+): Promise<void> {
+  try {
+    const supabase = createServiceClient()
+    await supabase.from('venue_email_filter_matches').insert({
+      venue_id: venueId,
+      filter_id: match.filterId,
+      pattern: match.pattern,
+      pattern_type: match.pattern_type,
+      action: match.action,
+      from_email: fromEmail.toLowerCase().trim(),
+      matched_label: match.matchedLabel ?? null,
+    })
+  } catch (err) {
+    console.warn(`[inbox-filters] log write failed for venue ${venueId}:`, err)
+  }
 }
 
 /**
@@ -117,12 +144,15 @@ export async function matchFilter(
   // Precedence: ignore > no_draft. Gather all matches, pick strictest.
   let strongest: FilterMatch | null = null
   for (const f of filters) {
-    const matched =
-      f.pattern_type === 'gmail_label'
-        ? labelMatches(f, gmailLabels)
-        : senderMatches(f, fromEmail)
-
+    const isLabel = f.pattern_type === 'gmail_label'
+    const matched = isLabel ? labelMatches(f, gmailLabels) : senderMatches(f, fromEmail)
     if (!matched) continue
+
+    // Capture the matched label so the audit row carries which Gmail
+    // category triggered the rule (CATEGORY_PROMOTIONS vs CATEGORY_UPDATES).
+    const matchedLabel = isLabel
+      ? gmailLabels.find((l) => l.toUpperCase() === f.pattern.toUpperCase())
+      : undefined
 
     if (f.action === 'ignore') {
       return {
@@ -130,6 +160,7 @@ export async function matchFilter(
         filterId: f.id,
         pattern: f.pattern,
         pattern_type: f.pattern_type,
+        matchedLabel,
       }
     }
     if (!strongest) {
@@ -138,6 +169,7 @@ export async function matchFilter(
         filterId: f.id,
         pattern: f.pattern,
         pattern_type: f.pattern_type,
+        matchedLabel,
       }
     }
   }
