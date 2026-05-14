@@ -20,6 +20,8 @@ const nextConfig: NextConfig = {
       { source: '/intel/voice-dna', destination: '/sage/voice-dna', permanent: true },
       // TIER 4b: Identity Backtrack becomes sub-route under /admin/identity.
       { source: '/admin/identity-backtrack', destination: '/admin/identity/backtrack', permanent: true },
+      // TIER 4c: Briefings folded into Intelligence Dashboard.
+      { source: '/intel/briefings', destination: '/intel/dashboard', permanent: true },
     ]
   },
 }

@@ -22,6 +22,7 @@ import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel
 import { VenueChip } from '@/components/intel/venue-chip'
 import { WeeklyLearnedCard } from '@/components/intel/WeeklyLearnedCard'
 import { PostTourBrowsingCard } from '@/components/intel/PostTourBrowsingCard'
+import { BriefingsPanel } from '@/components/intel/BriefingsPanel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -629,6 +630,12 @@ export default function IntelligenceDashboardPage() {
           </button>
         </div>
       )}
+
+      {/* ---- This week's / month's briefing ---- */}
+      {/* Round 2 audit TIER 4c (2026-05-14): briefing folded in from
+          /intel/briefings. Latest briefing renders here; the archive
+          of past briefings is collapsed inside the panel. */}
+      <BriefingsPanel />
 
       {/* ---- Quick Stats Row ---- */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

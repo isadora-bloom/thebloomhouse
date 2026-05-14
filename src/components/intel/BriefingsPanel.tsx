@@ -518,10 +518,13 @@ function BriefingHistoryItem({ briefing, showVenue }: { briefing: Briefing; show
 }
 
 // ---------------------------------------------------------------------------
-// Main Page
+// Main Panel — mounted on the Intelligence Dashboard. Round 2 audit
+// TIER 4c (2026-05-14): /intel/briefings page was retired and folded
+// into the dashboard so the operator's morning-check surface IS the
+// weekly briefing. Past briefings live in the archive section below.
 // ---------------------------------------------------------------------------
 
-export default function BriefingsPage() {
+export function BriefingsPanel() {
   const scope = useScope()
   const [activeTab, setActiveTab] = useState<'weekly' | 'monthly'>('weekly')
   const [briefing, setBriefing] = useState<Briefing | null>(null)
@@ -605,11 +608,12 @@ export default function BriefingsPage() {
       {/* ------------------------------------------------------------------ */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="font-heading text-3xl font-bold text-sage-900 mb-1">
-            Intelligence Briefings
-          </h1>
-          <p className="text-sage-600 text-sm">
-            AI-generated weekly and monthly summaries of your venue's performance, market conditions, and recommended actions. Read the latest briefing to stay informed without digging through dashboards.
+          <h2 className="font-heading text-xl font-bold text-sage-900 flex items-center gap-2">
+            <FileText className="w-5 h-5 text-sage-500" />
+            This {activeTab === 'weekly' ? 'week' : 'month'}&apos;s briefing
+          </h2>
+          <p className="text-sage-500 text-xs mt-0.5">
+            AI-generated summary of performance, market conditions, and recommended actions.
           </p>
         </div>
 

@@ -209,10 +209,10 @@ export const MODE_WEDDINGS: ModeConfig = {
 // ---------------------------------------------------------------------------
 // Mode: INTEL — analytics, market signals, ROI
 // ---------------------------------------------------------------------------
-// Pages covered: /intel/dashboard, /intel/insights, /intel/anomalies,
-// /intel/market-pulse, /intel/nlq, /intel/briefings, /intel/sources,
-// /intel/roi, /intel/reach, /intel/trends, /intel/reviews,
-// /intel/voice-dna, /intel/tours, /intel/lost-deals,
+// Pages covered: /intel/dashboard (absorbs briefings as BriefingsPanel),
+// /intel/insights, /intel/anomalies, /intel/market-pulse, /intel/nlq,
+// /intel/sources, /intel/roi, /intel/reach, /intel/trends, /intel/reviews,
+// /sage/voice-dna, /intel/tours, /intel/lost-deals,
 // /intel/social, /intel/forecasts, /intel/health,
 // /intel/clients, /intel/clients/[id], /intel/matching,
 // /intel/annotations, /intel/team-compare, /intel/macro-correlations (T5-θ.1)
@@ -297,7 +297,6 @@ export const MODE_INTEL: ModeConfig = {
       title: 'Voice of customer',
       items: [
         { label: 'Reviews', href: '/intel/reviews', icon: Star },
-        { label: 'Briefings', href: '/intel/briefings', icon: Newspaper },
       ],
     },
     {
