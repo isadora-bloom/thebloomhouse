@@ -184,6 +184,47 @@ export async function learnFiltersForAllVenues(): Promise<Record<string, number>
 async function learnFiltersForVenue(venueId: string): Promise<number> {
   const supabase = createServiceClient()
 
+  // 2026-05-13: own-domain guard. The venue's connected gmail addresses
+  // produce a lot of looped-back inbound (auto-replies, contract receipts,
+  // calculator notifications) that legitimately don't get drafts.
+  // Auto-learning no_draft on this domain then vetoes REAL leads that
+  // arrive FROM the venue's own domain (calculator-submit emails the
+  // venue's own form sends with reply-to=couple). Bug discovered via
+  // RM-Lyndsey-Rivera 2026-05-13: calculator-only inquiry got zero
+  // drafts because rixeymanor.com had been auto-learned as no_draft.
+  // Collect the set of own-domains here so the loop below skips them.
+  const ownDomains = new Set<string>()
+  try {
+    const { data: conns } = await supabase
+      .from('gmail_connections')
+      .select('email_address')
+      .eq('venue_id', venueId)
+    for (const c of conns ?? []) {
+      const email = (c as { email_address: string | null }).email_address
+      if (!email) continue
+      const dom = extractDomain(email.toLowerCase())
+      if (dom) ownDomains.add(dom)
+    }
+  } catch (err) {
+    console.warn(`[inbox-filters] gmail_connections lookup failed for ${venueId}:`, err)
+  }
+  // Belt + suspenders: also check venue_own_emails (manually-curated
+  // alternate sending addresses).
+  try {
+    const { data: own } = await supabase
+      .from('venue_own_emails')
+      .select('email')
+      .eq('venue_id', venueId)
+    for (const c of own ?? []) {
+      const email = (c as { email: string | null }).email
+      if (!email) continue
+      const dom = extractDomain(email.toLowerCase())
+      if (dom) ownDomains.add(dom)
+    }
+  } catch {
+    // venue_own_emails may not exist in older schemas — ignore.
+  }
+
   // Look at inbound interactions from the last 60 days with a classification.
   // We rely on drafts.context_type + interactions.brain_used being set for
   // actionable mail; non-actionable mail has no draft. So a sender whose
@@ -283,6 +324,11 @@ async function learnFiltersForVenue(venueId: string): Promise<number> {
     if (stats.undrafted / stats.total < 0.9) continue // 90%+ never produced a draft
     // Skip common personal providers — we should never learn to suppress gmail.com
     if (PERSONAL_PROVIDER_DOMAINS.has(domain)) continue
+    // 2026-05-13: skip the venue's own domain — see ownDomains init
+    // above. Auto-learning no_draft here vetoes calculator submissions +
+    // any other legitimate-lead intake that arrives via reply-to spoof
+    // from the venue's own form/calculator.
+    if (ownDomains.has(domain)) continue
 
     const { error } = await supabase.from('venue_email_filters').insert({
       venue_id: venueId,
