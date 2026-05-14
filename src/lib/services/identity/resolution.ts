@@ -68,7 +68,7 @@ export interface IdentityMatch {
   label: string
 }
 
-interface MatchConfig {
+export interface MatchConfig {
   name_plus_partner_days: number
   name_last_initial_days: number
   name_wedding_date_days: number
@@ -152,7 +152,7 @@ function usernameMatchesName(
   return false
 }
 
-type PersonRow = {
+export type PersonRow = {
   id: string
   venue_id: string
   wedding_id: string | null
@@ -166,7 +166,7 @@ type PersonRow = {
   wedding_date?: string | null // hydrated via join
 }
 
-async function loadVenueConfig(
+export async function loadVenueConfig(
   supabase: SupabaseClient,
   venueId: string
 ): Promise<MatchConfig> {
@@ -203,7 +203,7 @@ async function loadCandidatePeople(
   })
 }
 
-function scorePair(
+export function scorePair(
   candidate: IdentityCandidate,
   person: PersonRow,
   config: MatchConfig
