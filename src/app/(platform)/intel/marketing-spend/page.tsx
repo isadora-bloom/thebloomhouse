@@ -340,8 +340,8 @@ export default function MarketingSpendPage() {
             Marketing Spend
           </h1>
           <p className="mt-1 text-sm text-[var(--bh-muted)]">
-            Record what you spend per channel, per day. Wave 6B layers
-            persona × channel ROI on top.
+            Record what you spend per channel, per day. Persona × channel
+            ROI rolls up on top.
           </p>
         </div>
         {headerStats}

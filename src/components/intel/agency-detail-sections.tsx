@@ -225,8 +225,8 @@ export function AgencyPersonaOverlay({
     <section className="rounded-2xl border border-[var(--bh-line)] bg-white p-5 shadow-sm">
       <h2 className="font-serif text-lg">Persona distribution</h2>
       <p className="mt-1 text-xs text-[var(--bh-muted)]">
-        Which personas this agency&apos;s channels brought, based on Wave 5A
-        couple_intel labels overlaid on first-touch attribution.
+        Which personas this agency&apos;s channels brought, based on
+        reconstructed-couple persona labels overlaid on first-touch attribution.
       </p>
       <div className="mt-4 space-y-2">
         {entries.map(([label, n]) => (

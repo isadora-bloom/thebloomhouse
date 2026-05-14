@@ -483,7 +483,7 @@ export default function CohortIntelDashboard() {
             Voice that lands
           </h2>
           <span className="text-xs text-sage-500 ml-auto">
-            per persona · Wave 5C will pipe this into Sage drafts
+            per persona · feeds Sage drafts once enough samples land
           </span>
         </div>
         {rollup.voice_calibration.length === 0 ? (

@@ -18,7 +18,8 @@
     "test:e2e:report": "playwright show-report e2e/report",
     "check:links": "node scripts/check-internal-links.mjs",
     "check:wedding-cascade": "node scripts/check-merge-weddings-cascade.mjs",
-    "check:people-insert": "node scripts/check-no-direct-people-insert.mjs"
+    "check:people-insert": "node scripts/check-no-direct-people-insert.mjs",
+    "check:operator-vocab": "node scripts/check-operator-vocab.mjs"
   },
   "keywords": [],
   "author": "",

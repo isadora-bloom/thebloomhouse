@@ -123,7 +123,7 @@ export default function ChannelSourcePage(
         <div>
           <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-stone-500 mb-2">
             <Compass className="w-3 h-3" />
-            Wave 25 · Channel Intelligence Hub
+            Channel Intelligence Hub
           </div>
           <h1 className="text-4xl font-serif text-stone-900 mb-1">
             {snapshot?.display_name ?? channel_slug}
@@ -416,8 +416,8 @@ export default function ChannelSourcePage(
                 Disagreement findings ({payload.disagreements.length})
               </h3>
               <p className="text-sm text-amber-900 mb-3">
-                Wave 17 detected divergence between stated source (CRM / couple form) and
-                forensic source for cases involving this channel.
+                We detected divergence between the stated source (CRM / couple form) and
+                the forensic source for cases involving this channel.
               </p>
               <ul className="space-y-2 text-sm">
                 {payload.disagreements.slice(0, 5).map((d) => (
@@ -447,17 +447,11 @@ export default function ChannelSourcePage(
           {/* Reproducibility footer */}
           <div className="bg-stone-50 border border-stone-200 rounded p-4 text-xs text-stone-600">
             <strong className="text-stone-800">Reproducibility:</strong> Snapshot computed
-            at <code className="font-mono">{snapshot.computed_at_iso}</code> via{' '}
-            <code className="font-mono">
-              {snapshot.confidence_signals.computed_with_function}
-            </code>{' '}
-            from <code className="font-mono">attribution_events</code> +{' '}
-            <code className="font-mono">weddings</code> +{' '}
-            <code className="font-mono">marketing_spend_records</code> +{' '}
-            <code className="font-mono">reviews</code> +{' '}
-            <code className="font-mono">couple_intel</code>. Story-arc segmentation per
-            Wave 7B (role) + Wave 16 (intent). The presentation export above freezes this
-            snapshot so the share-token URL is stable.
+            at <code className="font-mono">{snapshot.computed_at_iso}</code> from
+            auto-attributed first-touch rows, weddings, marketing spend, reviews, and
+            reconstructed couple intel. Story-arc segmentation reads each channel&apos;s
+            role and intent. The presentation export above freezes this snapshot so the
+            share-token URL is stable.
           </div>
         </div>
       )}

@@ -179,8 +179,8 @@ export default function IdentityWindowsPage() {
           <strong>Tier 1 hours:</strong> auto-link window. Within this,
           a single match auto-resolves at high confidence.{' '}
           <strong>Tier 2 days:</strong> wide window. Between Tier 1 and
-          Tier 2, the AI adjudicator gets the candidates with full
-          context — never auto-link.
+          Tier 2, the AI reviewer gets the candidates with full context;
+          never auto-link.
         </p>
       </header>
 
@@ -273,10 +273,9 @@ export default function IdentityWindowsPage() {
       <div className="rounded-lg border border-dashed border-sage-200 bg-sage-50/30 p-4">
         <p className="text-sm font-medium text-sage-700 mb-2">Add a custom platform</p>
         <p className="text-xs text-sage-500 mb-3">
-          For platforms not on the default list — e.g. a regional bridal
-          magazine, a niche venue listing site. The key should match
-          whatever your candidate-import pipeline writes into{' '}
-          <code className="bg-white px-1 rounded">candidate_identities.source_platform</code>.
+          For platforms not on the default list, e.g. a regional bridal
+          magazine or a niche venue listing site. The key should match
+          whatever your candidate-import pipeline labels the source as.
         </p>
         <div className="flex gap-2">
           <input

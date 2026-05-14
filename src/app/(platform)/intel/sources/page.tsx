@@ -651,7 +651,7 @@ function MultiTouchSplitPanel({
         </div>
       ) : buckets.length === 0 ? (
         <div className="px-5 py-6 text-center text-xs text-sage-500">
-          No booked weddings have platform-signal attribution in this window. Try widening to 1 year or All time, or wait for Phase B matches to ramp up.
+          No booked weddings have platform-signal attribution in this window. Try widening to 1 year or All time, or wait for candidate matches to ramp up.
         </div>
       ) : (
         <div className="px-5 py-4 space-y-2">
@@ -1832,7 +1832,7 @@ export default function SourceAttributionPage() {
           >
             Open the Channel Intelligence Hub
           </a>{' '}
-          (Wave 25 supersedes this UX).
+          (the newer surface that supersedes this one).
         </p>
         {scope.level === 'company' && (
           <p className="text-xs text-sage-500 mt-2">

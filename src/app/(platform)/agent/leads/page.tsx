@@ -221,7 +221,7 @@ function confidenceFlagBadge(flag: string): { bg: string; text: string; label: s
         bg: 'bg-amber-50',
         text: 'text-amber-700',
         label: 'Imported',
-        title: 'Inferred from Gmail backfill — fields may be classifier-derived rather than live-pipeline truth.',
+        title: 'Reconstructed from your Gmail history. Some fields are best-guesses rather than live-confirmed.',
       }
     case 'manual':
       return {

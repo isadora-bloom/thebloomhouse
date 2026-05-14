@@ -280,7 +280,7 @@ export default function IdentityReconciliationPage() {
 
       {Object.keys(result.fieldsBackfilled).length > 0 && (
         <div className="rounded-lg border border-sage-200 bg-sage-50 p-4">
-          <h3 className="text-sm font-medium text-sage-900 mb-2">Field backfill plan</h3>
+          <h3 className="text-sm font-medium text-sage-900 mb-2">Fields ready to be filled in</h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
             {Object.entries(result.fieldsBackfilled).map(([field, n]) => (
               <div key={field} className="rounded bg-white px-2 py-1 border border-sage-200">

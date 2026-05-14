@@ -120,6 +120,9 @@ jobs:
       - name: White-label check — no hardcoded 'Sage' in couple portal
         run: node scripts/check-no-hardcoded-sage.mjs
 
+      - name: Operator-vocab guard — no engineering vocabulary in product surfaces
+        run: node scripts/check-operator-vocab.mjs
+
       - name: PII guard — no raw err.message logs in T3 insights (T5-α.3)
         run: node scripts/check-no-raw-err-logs-in-t3.mjs
 

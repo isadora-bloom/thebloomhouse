@@ -127,8 +127,8 @@ export function VenueThesisPanel({
               Venue thesis pending
             </div>
             <div className="text-sm text-stone-600">
-              Once Wave 4 has reconstructed enough couples, Bloom will
-              synthesise your venue&rsquo;s strategic identity — archetype,
+              Once enough couples have been reconstructed, Bloom will
+              synthesise your venue&rsquo;s strategic identity: archetype,
               over-indexed personas, voice that resonates, and gaps to invest
               in. You&rsquo;ll never start blank.
             </div>

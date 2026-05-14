@@ -226,8 +226,8 @@ export default function CandidatesReviewPage() {
 
   async function revertAttribution(eventId: string, asAcceptLegacy = false) {
     const msg = asAcceptLegacy
-      ? 'Keep legacy source? Reverts the attribution row; first-touch is recomputed.'
-      : 'Revert this attribution? Stays in audit trail; first-touch is recomputed.'
+      ? 'Keep the original source? This undoes the auto-attribution and recomputes first-touch.'
+      : 'Undo this auto-attribution? Stays in the audit trail; first-touch is recomputed.'
     if (!confirm(msg)) return
     const res = await fetch('/api/intel/attribution', {
       method: 'POST',
@@ -319,7 +319,7 @@ export default function CandidatesReviewPage() {
         )
       ) : tab === 'conflicts' ? (
         conflicts.length === 0 ? (
-          <EmptyState icon={CheckCircle2} text="No source conflicts. Auto-attribution agrees with legacy source on every lead." />
+          <EmptyState icon={CheckCircle2} text="No source conflicts. Auto-attribution agrees with the original source on every lead." />
         ) : (
           <div className="space-y-3">
             {conflicts.map((e) => (
@@ -520,7 +520,7 @@ function ConflictCard({ event, onAcceptComputed, onAcceptLegacy }: {
             {w?.first_name && w?.last_name ? `${w.first_name} ${w.last_name}` : 'wedding'}
           </p>
           <p className="text-xs text-amber-700 mt-1">
-            Legacy <code className="text-[10px]">leads.source</code>: <strong>{w?.source ?? 'unset'}</strong>
+            Original source: <strong>{w?.source ?? 'unset'}</strong>
             {' '}·{' '}
             Computed first-touch: <strong>{platformLabel(event.source_platform)}</strong> ({event.confidence}%)
           </p>
@@ -549,7 +549,7 @@ function ConflictCard({ event, onAcceptComputed, onAcceptLegacy }: {
               onClick={onAcceptLegacy}
               className="text-xs px-3 py-1.5 border border-sage-200 rounded-lg hover:bg-sage-50 text-sage-700 inline-flex items-center gap-1"
             >
-              <RotateCcw className="w-3 h-3" /> Keep legacy
+              <RotateCcw className="w-3 h-3" /> Keep original
             </button>
           </div>
         </div>

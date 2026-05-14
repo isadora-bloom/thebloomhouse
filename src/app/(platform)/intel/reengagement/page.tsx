@@ -428,7 +428,7 @@ export default function ReEngagementPage() {
       <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-700">
         <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
         <p>
-          Stage 2 of Phase D Tier 2: AI drafting + send/discard tracking. Stage 3 (60-day conversion attribution + ROI panel) is still to ship.
+          Stage 2 of re-engagement: AI drafting + send/discard tracking is live. Stage 3 (60-day conversion attribution + ROI panel) is still to ship.
         </p>
       </div>
     </div>

@@ -845,8 +845,8 @@ export default function ClassificationHealthPage() {
         </h2>
         <p className="text-xs text-sage-500">
           Trailing 30-day total per venue. Projected monthly run-rate is
-          the same number — the trailing window is exactly 30 calendar
-          days. RLS limits the table to venues you have access to.
+          the same number; the trailing window is exactly 30 calendar
+          days. Only venues you have access to appear here.
         </p>
         {venueCosts.length === 0 ? (
           <p className="text-sm text-sage-500">

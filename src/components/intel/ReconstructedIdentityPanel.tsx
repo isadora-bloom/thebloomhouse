@@ -600,10 +600,10 @@ export function ReconstructedIdentityPanel({
         </div>
       </Section>
 
-      {/* Persona placeholder (Wave 5A) */}
+      {/* Persona placeholder — fills in once persona derivation runs */}
       <Section icon={<Brain className="w-3.5 h-3.5" />} title="Persona">
         <div className="text-xs text-sage-400 italic">
-          Wave 5A will fill this — persona derivation reads from this
+          Persona will fill in once the derivation step runs over this
           forensic profile.
         </div>
       </Section>

@@ -372,8 +372,8 @@ export default function OnboardingProjectPage() {
           <h1 className="font-heading text-2xl font-semibold text-sage-900">5-day onboarding project</h1>
           <p className="text-sm text-sage-600 mt-2 max-w-2xl">
             The structured first-week project for enterprise venues. Five days
-            of focused setup — Gmail backfill, marketing channels, pricing
-            history, CRM ingestion, voice DNA, knowledge base — that produces
+            of focused setup (Gmail history import, marketing channels, pricing
+            history, CRM ingestion, voice DNA, knowledge base) that produces
             real intelligence by end of week instead of the friend-of-Isadora
             15-min path.
           </p>
@@ -574,7 +574,7 @@ const READINESS_EXPLAINERS: Record<number, string[] | null> = {
     'AI identity — venue_ai_config has both ai_name and ai_email set',
     'Forbidden topics — at least one venue_forbidden_topics row',
     'Tone preferences — at least one personality slider moved off the platform default',
-    'Backfill — coordinator marks the 12-month Gmail backfill done',
+    'Gmail history import: coordinator confirms the 12-month catch-up is done',
   ],
   2: null,
   3: [
@@ -679,7 +679,7 @@ function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, o
                     className="inline-flex items-center gap-1 rounded bg-sage-700 hover:bg-sage-800 disabled:opacity-50 text-white text-xs font-medium px-2 py-1"
                   >
                     <Sparkles className="w-3 h-3" />
-                    {busy ? 'Running…' : 'Run voice DNA extraction from Gmail backfill'}
+                    {busy ? 'Running…' : 'Run voice DNA from the Gmail history import'}
                   </button>
                 )}
                 {!stepDone && isCurrent && status === 'in_progress' && s.actionKey !== 'voice_dna_extract' && (
@@ -760,12 +760,12 @@ function GoLiveChecklist({
       status: aiNameSet ? 'pass' : 'pending',
       detail: aiNameSet
         ? `Set to "${aiName}".`
-        : 'Auto-backfilled to "<Venue> Concierge" if you skip — set it now via Settings → Personality to keep the venue voice on-brand.',
+        : 'Defaults to "<Venue> Concierge" if you skip. Set it now via Settings → Personality to keep the venue voice on-brand.',
     },
     {
-      label: '12-month backfill (paid venues, ≥ 80%)',
+      label: '12-month Gmail history import (paid venues, ≥ 80%)',
       status: 'pending',
-      detail: 'See the backfill checklist above. Free / starter venues skip this check; paid venues must reach 80/100 before the gate releases.',
+      detail: 'See the Gmail history import checklist above. Free / starter venues skip this check; paid venues must reach 80/100 before the gate releases.',
     },
   ]
 

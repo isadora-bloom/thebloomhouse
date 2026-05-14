@@ -129,7 +129,7 @@ export default function ChannelIntelHubPage() {
         <div>
           <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-stone-500 mb-2">
             <Compass className="w-3 h-3" />
-            Wave 25 · Channel Intelligence Hub
+            Channel Intelligence Hub
           </div>
           <h1 className="text-3xl font-serif text-stone-900 mb-2">Channel intelligence</h1>
           <p className="text-stone-600 max-w-3xl">
@@ -164,7 +164,7 @@ export default function ChannelIntelHubPage() {
               href="/intel/channel-truth"
               className="text-sage-700 hover:text-sage-900 underline underline-offset-2"
             >
-              Wave 24: Channel Truth
+              Channel Truth audit
             </Link>
           </div>
         </div>
@@ -286,12 +286,12 @@ export default function ChannelIntelHubPage() {
       {payload && (
         <div className="mt-8 bg-stone-50 border border-stone-200 rounded p-4 text-xs text-stone-600">
           <strong className="text-stone-800">Calibration:</strong>{' '}
-          Snapshots computed via <code className="font-mono">computeChannelSnapshot</code>{' '}
-          (deterministic from attribution_events + weddings + marketing_spend_records +
-          reviews + couple_intel). Forensic Discovery / Validation / Broadcast / Cross-
-          platform-footprint segmentation per Wave 7B + Wave 16. Real CAC excludes
-          broadcast intent + cross-platform-footprint Tenant 2 wide-AI rows. Asterisks
-          flag rows classified under v1-suspect prompts (PROMPT-BIAS-AUDIT.md).
+          Snapshots are deterministic, computed from auto-attributed first-touch rows,
+          weddings, marketing spend, reviews, and reconstructed couple intel.
+          Forensic Discovery / Validation / Broadcast / Cross-platform-footprint
+          segmentation uses each channel&apos;s role and intent. Real CAC excludes
+          broadcast intent and cross-platform-footprint wide-AI-reviewed rows.
+          Asterisks flag rows classified under earlier prompts that may be biased.
         </div>
       )}
 

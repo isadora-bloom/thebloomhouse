@@ -254,10 +254,9 @@ export default function MarketingChannelsConfigPage() {
         </div>
         <p className="text-sm text-sage-600 max-w-2xl">
           The canonical list of channels this venue actively markets through.
-          /intel/sources reads this to build the channel-mix dashboard. The
-          email pipeline writes the &apos;key&apos; values into{' '}
-          <code className="bg-sage-50 px-1 rounded">weddings.source</code> and{' '}
-          <code className="bg-sage-50 px-1 rounded">attribution_events.source_platform</code>.
+          The Channel Intelligence Hub reads this to build the channel-mix
+          dashboard, and the email pipeline tags every inquiry and first-touch
+          row with the channel key you set here.
           Add long-tail channels (regional magazines, partnerships, ad campaigns)
           here without a code deploy.
         </p>

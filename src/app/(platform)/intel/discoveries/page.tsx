@@ -108,9 +108,9 @@ const STATUS_TITLES: Record<StatusKey, string> = {
 const STATUS_DESCRIPTIONS: Record<StatusKey, string> = {
   pending:
     'Hypotheses the engine surfaced this week. Read the evidence, then decide whether to test, action, or dismiss.',
-  in_progress: 'Wave 7C is running the recommended test. Result lands here when complete.',
+  in_progress: 'The recommended test is running. Result lands here when complete.',
   validated:
-    'The test confirmed this pattern. Action is recommended; promotion into a Wave 5/6 bucket is queued for Wave 7D.',
+    'The test confirmed this pattern. Action is recommended; the finding will roll into related insight rollups.',
   refuted: 'The test ran but did not confirm. Kept for audit; safe to ignore.',
   dismissed:
     'Coordinator dismissed without testing. Audit trail preserved.',
@@ -247,7 +247,7 @@ function DiscoveryCard({
                   onClick={() => onValidate(d.id)}
                   disabled={busy}
                   className="inline-flex items-center gap-1 px-2 py-1 text-[10px] border border-blue-300 text-blue-700 rounded hover:bg-blue-50 disabled:opacity-50"
-                  title="Run Wave 7C validation now (designs + executes + interprets)"
+                  title="Run validation now (designs, executes, and interprets the test)"
                 >
                   {busy ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
@@ -263,7 +263,7 @@ function DiscoveryCard({
                   onClick={() => onApplyFeedback(d.id)}
                   disabled={busy}
                   className="inline-flex items-center gap-1 px-2 py-1 text-[10px] border border-emerald-300 text-emerald-700 rounded hover:bg-emerald-50 disabled:opacity-50"
-                  title="Apply feedback to consuming Wave 5/6 systems now"
+                  title="Apply this finding to related insights right now"
                 >
                   {busy ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
@@ -366,7 +366,7 @@ function DiscoveryCard({
         {d.recommended_test && (
           <div className="bg-amber-50/40 border border-amber-100 rounded-lg px-4 py-3">
             <div className="text-[11px] font-medium text-amber-800 uppercase tracking-wide mb-1">
-              Recommended test (Wave 7C)
+              Recommended test
             </div>
             <p className="text-xs text-amber-900 leading-snug">
               {d.recommended_test}
@@ -428,7 +428,7 @@ function DiscoveryCard({
             >
               <span className="inline-flex items-center gap-1.5">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                Feedback into Wave 5/6
+                Apply this finding to related insights
                 {d.feedback_applied_at ? (
                   <span className="text-emerald-600 text-[10px]">
                     · applied {relativeTime(d.feedback_applied_at)}

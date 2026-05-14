@@ -388,7 +388,7 @@ function EmailListItem({
         {interaction.confidence_flag === 'imported_low' && (
           <span
             className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-amber-50 text-amber-700"
-            title="This email was inferred from Gmail backfill, not the live pipeline."
+            title="This email came from your Gmail history, not from live polling."
           >
             Imported
           </span>

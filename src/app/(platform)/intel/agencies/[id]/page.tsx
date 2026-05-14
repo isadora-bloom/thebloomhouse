@@ -553,7 +553,7 @@ function NoROIBanner({ activeEngagement }: { activeEngagement: boolean }) {
         <p className="mt-1 text-amber-800">
           {activeEngagement
             ? 'Either the agency is brand-new, channel keys aren’t mapped yet, or attribution is going elsewhere. Verify managed channels on the engagement and check /intel/sources for the broader picture.'
-            : 'The ROI panel reads attribution_events whose source_platform matches the channels you mark as agency-managed on the engagement.'}
+            : 'The ROI panel reads auto-attributed first-touch rows whose source platform matches the channels you mark as agency-managed on the engagement.'}
         </p>
       </div>
     </div>

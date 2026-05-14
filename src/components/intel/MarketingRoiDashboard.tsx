@@ -247,7 +247,7 @@ export function MarketingRoiDashboard() {
             >
               Channel Intelligence Hub
             </a>{' '}
-            (Wave 25).
+            (the newer hub).
           </p>
         </div>
 
@@ -420,9 +420,9 @@ export function MarketingRoiDashboard() {
             <ul className="mt-2 space-y-1 text-sm">
               {summary.topPersonasBySize.length === 0 ? (
                 <li className="text-stone-500">
-                  No persona overlay yet. Run the persona-backfill on{' '}
-                  /api/admin/marketing-spend/persona-backfill once
-                  Wave 5A couple_intel is populated.
+                  No persona overlay yet. Run the persona catch-up on{' '}
+                  /api/admin/marketing-spend/persona-backfill once enough
+                  couples have been reconstructed.
                 </li>
               ) : (
                 summary.topPersonasBySize.map((p) => (
