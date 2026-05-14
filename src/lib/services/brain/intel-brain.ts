@@ -67,6 +67,13 @@ interface VenueDataContext {
    * the venue's 20-year data, not from generic regional knowledge.
    */
   climateContextBlock: string | null
+  /**
+   * TIER 7d (2026-05-14). Venue's reviews rollup + representative
+   * couple-language phrases. Lets Sage drafts weave real review
+   * language without quoting verbatim, and answer "what do other
+   * couples say about you" from real data.
+   */
+  reviewsContextBlock: string | null
   economicIndicators: Record<string, number>
   consultantMetrics: ConsultantMetricRow[]
   topPhrases: PhraseRow[]
@@ -1285,6 +1292,14 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     month: new Date().getUTCMonth() + 1,
   }).catch(() => null)
 
+  // TIER 7d (2026-05-14). Venue reviews context — what couples say
+  // about you, recent volume, sentiment direction, representative
+  // phrases. Lets Sage weave real couple language into drafts.
+  const { getVenueReviewsContext: _getReviews } = await import(
+    '@/lib/services/intel/reviews-context'
+  )
+  const reviewsCtx = await _getReviews(venueId).catch(() => null)
+
   return {
     venueName: (venueResult.data?.name as string) ?? 'Unknown Venue',
     recentWeddings: recentWeddingsWithHeat,
@@ -1294,6 +1309,7 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     recentRecommendations: (recommendationsResult.data ?? []) as RecommendationRow[],
     weatherForecast: (weatherResult.data ?? []) as WeatherRow[],
     climateContextBlock: climateCtx?.promptBlock ?? null,
+    reviewsContextBlock: reviewsCtx?.promptBlock ?? null,
     economicIndicators: indicators,
     consultantMetrics: (consultantResult.data ?? []) as ConsultantMetricRow[],
     topPhrases: (phrasesResult.data ?? []) as PhraseRow[],
@@ -1409,6 +1425,12 @@ function formatDataContext(data: VenueDataContext): string {
   // from the venue's own 20 years of data rather than guessing.
   if (data.climateContextBlock) {
     sections.push(`VENUE CLIMATE RECORD:\n${data.climateContextBlock}`)
+  }
+
+  // TIER 7d (2026-05-14). Venue's reviews profile + couple-language
+  // phrases. Sage weaves the register, never quotes verbatim.
+  if (data.reviewsContextBlock) {
+    sections.push(`VENUE REVIEWS PROFILE:\n${data.reviewsContextBlock}`)
   }
 
   // Economic indicators

@@ -41,6 +41,7 @@ import {
 import type { CoupleIdentityProfile } from '@/config/prompts/identity-reconstruction'
 import type { CoupleIntelOutput } from '@/config/prompts/couple-intel-derive'
 import { getVenueClimateContext } from '@/lib/services/intel/climate-context'
+import { getVenueReviewsContext } from '@/lib/services/intel/reviews-context'
 
 export {
   TOUR_PREP_BRIEF_PROMPT_VERSION,
@@ -401,6 +402,17 @@ export async function generateTourPrepBrief(
     }
   }
 
+  // TIER 7d (2026-05-14). Reviews profile so the briefer can call out
+  // top themes ("guests rave about the gardens — point them out") and
+  // register-match phrases.
+  let reviewsContextBlock: string | null = null
+  try {
+    const reviews = await getVenueReviewsContext(venueId)
+    if (reviews.available) reviewsContextBlock = reviews.promptBlock
+  } catch {
+    // Reviews context is enrichment, never blocks a tour brief.
+  }
+
   const evidence: TourPrepEvidence = {
     weddingId,
     tourId: tour.id,
@@ -420,6 +432,7 @@ export async function generateTourPrepBrief(
     },
     recentInteractions: interactions,
     climateContextBlock,
+    reviewsContextBlock,
   }
 
   const systemPrompt = buildTourPrepSystemPrompt()

@@ -21,6 +21,7 @@ import { useScope } from '@/lib/hooks/use-scope'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { createClient } from '@/lib/supabase/client'
 import { VenueChip } from '@/components/intel/venue-chip'
+import { ReviewsOverviewPanel } from '@/components/intel/ReviewsOverviewPanel'
 
 const supabase = createClient()
 
@@ -42,7 +43,7 @@ interface ReviewPhrase {
 }
 
 type FilterTab = 'all' | 'sage' | 'marketing'
-type PageView = 'phrases' | 'reviews'
+type PageView = 'overview' | 'phrases' | 'reviews'
 
 interface SourceReview {
   id: string
@@ -602,7 +603,7 @@ function SourceReviewCard({
 export default function ReviewAnalysisPage() {
   const scope = useScope()
   const aiName = useAiName()
-  const [pageView, setPageView] = useState<PageView>('phrases')
+  const [pageView, setPageView] = useState<PageView>('overview')
   const [phrases, setPhrases] = useState<ReviewPhrase[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -830,9 +831,11 @@ export default function ReviewAnalysisPage() {
             Reviews
           </h1>
           <p className="text-sage-600">
-            {pageView === 'phrases'
-              ? 'Extracted themes and sentiment from your reviews across The Knot, WeddingWire, and Google. See what guests love most — these phrases get fed back into your AI\'s voice training.'
-              : 'Source reviews from Google, The Knot, and WeddingWire. Draft responses and track sentiment.'}
+            {pageView === 'overview'
+              ? 'Volume, sentiment direction, and what couples mention most across every source you ingest.'
+              : pageView === 'phrases'
+                ? 'Extracted themes and sentiment from your reviews across The Knot, WeddingWire, and Google. See what guests love most — these phrases get fed back into your AI\'s voice training.'
+                : 'Source reviews from Google, The Knot, and WeddingWire. Draft responses and track sentiment.'}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -861,6 +864,16 @@ export default function ReviewAnalysisPage() {
       {/* ---- Page view switcher ---- */}
       <div className="flex items-center gap-1 bg-sage-50 rounded-lg p-1 w-fit">
         <button
+          onClick={() => setPageView('overview')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+            pageView === 'overview'
+              ? 'bg-surface text-sage-900 shadow-sm'
+              : 'text-sage-600 hover:text-sage-800'
+          }`}
+        >
+          Overview
+        </button>
+        <button
           onClick={() => setPageView('phrases')}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
             pageView === 'phrases'
@@ -886,6 +899,11 @@ export default function ReviewAnalysisPage() {
           )}
         </button>
       </div>
+
+      {/* ================================================================ */}
+      {/* OVERVIEW VIEW (TIER 7b)                                          */}
+      {/* ================================================================ */}
+      {pageView === 'overview' && <ReviewsOverviewPanel />}
 
       {/* ================================================================ */}
       {/* EXTRACTED PHRASES VIEW                                           */}

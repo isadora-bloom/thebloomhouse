@@ -78,6 +78,10 @@ const VALID_JOBS = [
   // recomputes climate_norms + anomaly_events with joined ops impact.
   // Climate norms do not move overnight — annual cadence is enough.
   'weather_history_refresh',
+  // TIER 7e (2026-05-14). Weekly pull of new Google Places reviews
+  // for every venue with a google_place_id set. Other review sources
+  // (Knot/WW/Zola/Yelp/Facebook) remain paste-only.
+  'google_places_reviews_refresh',
   // T5-ε.1 (2026-05-01): renamed from 'economic_indicators' which wrote
   // the legacy economic_indicators table (FRED series id mapped to a
   // friendly name). The correlation engine reads fred_indicators, so the
@@ -486,6 +490,17 @@ async function runJob(job: JobName): Promise<unknown> {
       // anomaly_events (notable past weather + ops impact). Per-venue
       // cost is one Open-Meteo archive call + local aggregation.
       return refreshWeatherHistoryAllVenues()
+
+    case 'google_places_reviews_refresh': {
+      // TIER 7e (2026-05-14). Weekly pull. Per-venue cost is one
+      // Places Details API call; free tier covers our scale. Dedupes
+      // by (venue_id, source='google', source_review_id) so the
+      // 5-most-recent ceiling does not cause duplicates.
+      const { pollGooglePlacesForAllVenues } = await import(
+        '@/lib/services/reviews/google-places'
+      )
+      return pollGooglePlacesForAllVenues()
+    }
 
     case 'fred_daily_refresh':
     case 'economic_indicators':

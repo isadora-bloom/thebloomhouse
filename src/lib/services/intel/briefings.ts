@@ -613,6 +613,12 @@ export async function generateWeeklyBriefing(
   // own 20-year record rather than guessing.
   const { getVenueClimateContext: _getWeeklyClimate, getActiveAnomalies: _getWeeklyAnomalies } =
     await import('@/lib/services/intel/climate-context')
+  // TIER 7d (2026-05-14). Venue reviews context for the briefing
+  // narrator so it can frame what couples are saying alongside the
+  // pipeline metrics.
+  const { getVenueReviewsContext: _getWeeklyReviews } = await import(
+    '@/lib/services/intel/reviews-context'
+  )
   const [
     metrics,
     priorMetrics,
@@ -625,6 +631,7 @@ export async function generateWeeklyBriefing(
     themePulse,
     weeklyClimate,
     activeWeatherAnomalies,
+    weeklyReviewsCtx,
   ] = await Promise.all([
     getWeddingMetrics(venueId, fromDate, toDate),
     getWeddingMetrics(venueId, priorFrom, priorTo),
@@ -643,6 +650,9 @@ export async function generateWeeklyBriefing(
       () => ({ available: false, promptBlock: null }) as { available: false; promptBlock: null },
     ),
     _getWeeklyAnomalies(venueId).catch(() => []),
+    _getWeeklyReviews(venueId).catch(
+      () => ({ available: false, promptBlock: null }) as { available: false; promptBlock: null },
+    ),
   ])
 
   // Classical compute: deltas + change percentages. The LLM never
@@ -735,7 +745,7 @@ ${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / corre
           : ''
       }`,
   )
-  .join('\n')}\n` : ''}
+  .join('\n')}\n` : ''}${weeklyReviewsCtx.available && weeklyReviewsCtx.promptBlock ? `\nVENUE REVIEWS PROFILE:\n${weeklyReviewsCtx.promptBlock}\n` : ''}
 Generate the weekly briefing.`
 
   // Call AI to generate the briefing narrative.
@@ -890,6 +900,11 @@ export async function generateMonthlyBriefing(
   const { getVenueClimateContext: _getMonthlyClimate } = await import(
     '@/lib/services/intel/climate-context'
   )
+  // TIER 7d (2026-05-14). Reviews context for the monthly strategic
+  // narrative.
+  const { getVenueReviewsContext: _getMonthlyReviews } = await import(
+    '@/lib/services/intel/reviews-context'
+  )
   const [
     currentMetrics,
     priorMetrics,
@@ -900,6 +915,7 @@ export async function generateMonthlyBriefing(
     macroContext,
     themePulse,
     monthlyClimate,
+    monthlyReviewsCtx,
   ] = await Promise.all([
     getWeddingMetrics(venueId, currentFrom, currentTo),
     getWeddingMetrics(venueId, priorFrom, priorTo),
@@ -915,6 +931,9 @@ export async function generateMonthlyBriefing(
       maxThemes: 10,
     }),
     _getMonthlyClimate(venueId, { month: new Date().getUTCMonth() + 1 }).catch(
+      () => ({ available: false, promptBlock: null }) as { available: false; promptBlock: null },
+    ),
+    _getMonthlyReviews(venueId).catch(
       () => ({ available: false, promptBlock: null }) as { available: false; promptBlock: null },
     ),
   ])
@@ -987,7 +1006,7 @@ ${weatherSummary}
 
 ANOMALY ALERTS:
 ${alertSummary}
-${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / correlation narrations):\n${macroContext.block}\n` : ''}${themePulse.block ? `\n${themePulse.block}\n` : ''}${monthlyClimate.available && monthlyClimate.promptBlock ? `\nVENUE CLIMATE RECORD (this month at this venue):\n${monthlyClimate.promptBlock}\n` : ''}
+${macroContext.hasContent ? `\nMACRO CONTEXT (cultural / FRED / calendar / correlation narrations):\n${macroContext.block}\n` : ''}${themePulse.block ? `\n${themePulse.block}\n` : ''}${monthlyClimate.available && monthlyClimate.promptBlock ? `\nVENUE CLIMATE RECORD (this month at this venue):\n${monthlyClimate.promptBlock}\n` : ''}${monthlyReviewsCtx.available && monthlyReviewsCtx.promptBlock ? `\nVENUE REVIEWS PROFILE:\n${monthlyReviewsCtx.promptBlock}\n` : ''}
 Generate the monthly briefing with strategic recommendations.`
 
   // Call AI to generate the monthly briefing.

@@ -47,6 +47,8 @@ interface VenueLocation {
   metro_msa_code: string | null
   dc_region_proxy: boolean | null
   location_derived_at: string | null
+  // TIER 7e (2026-05-14): Google Place ID for review polling.
+  google_place_id: string | null
 }
 
 interface OwnerPresence {
@@ -75,6 +77,7 @@ const EMPTY: VenueLocation = {
   metro_msa_code: null,
   dc_region_proxy: null,
   location_derived_at: null,
+  google_place_id: null,
 }
 
 interface DerivePreview {
@@ -112,7 +115,7 @@ export default function VenueInfoSettingsPage() {
         supabase
           .from('venues')
           .select(
-            'address_line1, city, state, zip, latitude, longitude, parking_instructions, entry_instructions, day_of_contact_name, day_of_contact_phone, google_trends_metro, noaa_station_id, census_fips, metro_msa_code, dc_region_proxy, location_derived_at',
+            'address_line1, city, state, zip, latitude, longitude, parking_instructions, entry_instructions, day_of_contact_name, day_of_contact_phone, google_trends_metro, noaa_station_id, census_fips, metro_msa_code, dc_region_proxy, location_derived_at, google_place_id',
           )
           .eq('id', venueId)
           .maybeSingle(),
@@ -163,6 +166,7 @@ export default function VenueInfoSettingsPage() {
       census_fips: data.census_fips || null,
       metro_msa_code: data.metro_msa_code || null,
       dc_region_proxy: data.dc_region_proxy,
+      google_place_id: data.google_place_id || null,
     }
     const configPayload = {
       owner_note_to_couples: owner.owner_note_to_couples || null,
@@ -512,6 +516,21 @@ export default function VenueInfoSettingsPage() {
               value={data.noaa_station_id ?? ''}
               onChange={(e) => set('noaa_station_id', e.target.value || null)}
             />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-xs font-medium text-sage-700 mb-1">
+              Google Place ID <span className="text-sage-400">(for review polling)</span>
+            </label>
+            <input
+              className={inputCls}
+              placeholder="e.g. ChIJN1t_tDeuEmsRUsoyG83frY4"
+              value={data.google_place_id ?? ''}
+              onChange={(e) => set('google_place_id', e.target.value || null)}
+            />
+            <p className="text-[11px] text-sage-500 mt-1">
+              Look up via Google&apos;s Place ID Finder. Once set, the
+              weekly cron pulls new Google reviews automatically.
+            </p>
           </div>
           <div>
             <label className="block text-xs font-medium text-sage-700 mb-1">

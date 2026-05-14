@@ -183,6 +183,10 @@
     {
       "path": "/api/cron?job=weather_history_refresh",
       "schedule": "0 3 1 1 *"
+    },
+    {
+      "path": "/api/cron?job=google_places_reviews_refresh",
+      "schedule": "0 4 * * 1"
     }
   ]
 }

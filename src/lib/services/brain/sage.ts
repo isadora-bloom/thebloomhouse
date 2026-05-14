@@ -649,6 +649,23 @@ export async function generateSageResponse(
     }
   }
 
+  // TIER 7d (2026-05-14). Venue reviews profile so Sage can answer
+  // "what do other couples say about this venue?" with real top
+  // themes + register-matched language. Never quotes a review
+  // verbatim (the helper provides phrases for register-matching only).
+  let reviewsBlock = ''
+  try {
+    const { getVenueReviewsContext } = await import(
+      '@/lib/services/intel/reviews-context'
+    )
+    const reviews = await getVenueReviewsContext(venueId)
+    if (reviews.available && reviews.promptBlock) {
+      reviewsBlock = `\n--- VENUE REVIEWS PROFILE ---\n${reviews.promptBlock}\n--- END REVIEWS PROFILE ---\n`
+    }
+  } catch (err) {
+    console.warn('[sage] reviews context lookup failed:', err)
+  }
+
   // Build file context block (for uploaded files or contract text)
   let fileContextBlock = ''
   if (fileContext) {
@@ -660,6 +677,7 @@ export async function generateSageResponse(
     built.systemPrompt,
     weddingBlock,
     climateBlock,
+    reviewsBlock,
     kbContext,
     intelligenceContext,
     fileContextBlock,

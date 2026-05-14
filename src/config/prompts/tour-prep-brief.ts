@@ -143,6 +143,12 @@ export interface TourPrepEvidence {
    * null when the venue has no history pulled yet. TIER 6++ (2026-05-14).
    */
   climateContextBlock?: string | null
+  /**
+   * Plain-English reviews profile block (top themes, sentiment direction,
+   * representative phrases). Built by lib/services/intel/reviews-context.ts.
+   * TIER 7d (2026-05-14).
+   */
+  reviewsContextBlock?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +465,15 @@ export function buildTourPrepUserPrompt(evidence: TourPrepEvidence): string {
   if (evidence.climateContextBlock) {
     lines.push('## Venue climate record (this month, this venue)')
     lines.push(evidence.climateContextBlock)
+    lines.push('')
+  }
+
+  // TIER 7d (2026-05-14). Reviews profile so the briefer can point to
+  // top themes the couple will likely have read about + register-match
+  // approved couple-language phrases (NEVER quote verbatim).
+  if (evidence.reviewsContextBlock) {
+    lines.push('## Venue reviews profile')
+    lines.push(evidence.reviewsContextBlock)
     lines.push('')
   }
 
