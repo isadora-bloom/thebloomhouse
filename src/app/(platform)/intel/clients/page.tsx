@@ -161,10 +161,12 @@ function ClientsPageInner() {
           .from('people')
           .select('id, wedding_id, first_name, last_name, role, email, phone')
           .eq('venue_id', VENUE_ID),
-        supabase
-          .from('contacts')
-          .select('id, person_id, type, value')
-          .eq('venue_id', VENUE_ID),
+        // contacts has no venue_id column (schema at mig 001). Scope
+        // is via RLS routing through people.venue_id (mig 006). Adding
+        // .eq('venue_id', ...) here caused PostgREST to reject the
+        // entire query and the page rendered "Failed to load client
+        // data" (OBS-022 in Round 2 audit, 2026-05-14).
+        supabase.from('contacts').select('id, person_id, type, value'),
       ])
       if (weddingRes.error) throw weddingRes.error
       if (personRes.error) throw personRes.error

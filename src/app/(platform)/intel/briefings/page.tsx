@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { useScope } from '@/lib/hooks/use-scope'
 import { VenueChip } from '@/components/intel/venue-chip'
+import { getAnomalyDisplay } from '@/lib/services/anomaly/display-labels'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -852,21 +853,32 @@ export default function BriefingsPage() {
             </h3>
             {(content?.anomaly_details?.length ?? 0) > 0 ? (
               <ul className="space-y-3">
-                {content?.anomaly_details?.map((a, i) => (
-                  <li key={i} className="flex items-start gap-2.5">
-                    <AlertTriangle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
-                      a.severity === 'critical' ? 'text-rose-500' : a.severity === 'warning' ? 'text-gold-500' : 'text-sage-400'
-                    }`} />
-                    <div className="text-sm text-sage-700 leading-relaxed min-w-0">
-                      <span className="font-medium text-sage-900">{a.metric.replace(/_/g, ' ')}</span>
-                      <span className="text-[10px] uppercase tracking-wide ml-2 text-sage-500">{a.severity}</span>
-                      <p className="mt-1">{a.explanation || '(explanation pending)'}</p>
-                      {a.top_action && (
-                        <p className="mt-1 text-xs text-sage-600 italic">→ Suggested: {a.top_action}</p>
-                      )}
-                    </div>
-                  </li>
-                ))}
+                {content?.anomaly_details?.map((a, i) => {
+                  const display = getAnomalyDisplay(a.metric)
+                  return (
+                    <li key={i} className="flex items-start gap-2.5">
+                      <AlertTriangle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+                        a.severity === 'critical' ? 'text-rose-500' : a.severity === 'warning' ? 'text-gold-500' : 'text-sage-400'
+                      }`} />
+                      <div className="text-sm text-sage-700 leading-relaxed min-w-0">
+                        <span className="font-medium text-sage-900">{display.title}</span>
+                        <span className="text-[10px] uppercase tracking-wide ml-2 text-sage-500">{a.severity}</span>
+                        <p className="mt-1">{a.explanation || display.description || '(explanation pending)'}</p>
+                        {a.top_action && (
+                          <p className="mt-1 text-xs text-sage-600 italic">→ Suggested: {a.top_action}</p>
+                        )}
+                        {display.cta && (
+                          <a
+                            href={display.cta.href}
+                            className="mt-1 inline-block text-xs text-sage-700 hover:text-sage-900 underline underline-offset-2"
+                          >
+                            {display.cta.label} →
+                          </a>
+                        )}
+                      </div>
+                    </li>
+                  )
+                })}
               </ul>
             ) : (content?.anomaly_summary?.length ?? 0) > 0 ? (
               <ul className="space-y-3">

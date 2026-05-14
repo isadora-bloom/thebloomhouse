@@ -313,8 +313,10 @@ async function tryPriority5UtmFromAttributionEvents(
   // raw_payload jsonb that may include a utm_source). Cheap check:
   // if any attribution_event for this wedding has a signal whose
   // raw payload mentions utm, surface that.
+  // Pattern A (mig 336): live view filters tombstoned duplicates so
+  // first-touch derivation isn't biased by the racing-writer artifacts.
   const { data: events } = await supabase
-    .from('attribution_events')
+    .from('attribution_events_live')
     .select('id, signal_id, source_platform, is_first_touch')
     .eq('wedding_id', wedding.id)
     .order('decided_at', { ascending: true })

@@ -48,6 +48,7 @@ import {
   windowsForPlatform,
   type PerPlatformWindowMap,
 } from './windows'
+import { insertAttributionEventsIdempotent } from './attribution-events-writer'
 
 // Hard-coded fallbacks. Per-platform overrides flow through
 // loadPerPlatformWindows + windowsForPlatform (T2-D / ARCH-8.5.3).
@@ -650,11 +651,13 @@ async function writeAttributionEvents(args: {
     })
 
   if (rows.length === 0) return { flagged_conflict: false }
-  const { data: insertedAttribution, error: insErr } = await supabase
-    .from('attribution_events')
-    .insert(rows)
-    .select('id, venue_id')
-  if (insErr) return { flagged_conflict: false, error: `attribution insert: ${insErr.message}` }
+  // Pattern A (mig 336): idempotent insert. Pre-filters rows whose
+  // (candidate_identity_id, wedding_id, signal_id) tuple is already
+  // live; partial unique index is the race-window backstop.
+  const insertResult = await insertAttributionEventsIdempotent(supabase, rows)
+  if (insertResult.error)
+    return { flagged_conflict: false, error: `attribution insert: ${insertResult.error}` }
+  const insertedAttribution = insertResult.data
 
   // Wave 7B (mig 264). Fire-and-forget channel-role classifier enqueue.
   // Every newly-written attribution_event needs a forensic role decision

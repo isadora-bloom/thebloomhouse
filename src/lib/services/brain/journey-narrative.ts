@@ -117,11 +117,13 @@ async function fetchContext(supabase: SupabaseClient, weddingId: string) {
     }
   }
 
+  // Pattern A (mig 336): live view filters reverted + tombstoned so
+  // Sage's journey narrative reflects deduped attributions, not the
+  // inflated counts that triggered the Round 2 audit.
   const { data: attribRaw } = await supabase
-    .from('attribution_events')
+    .from('attribution_events_live')
     .select('signal_id, source_platform, decided_at, is_first_touch, bucket, tier, reasoning')
     .eq('wedding_id', weddingId)
-    .is('reverted_at', null)
   const attributions = (attribRaw ?? []) as AttributionRow[]
 
   const { data: peopleRaw } = await supabase
@@ -415,17 +417,33 @@ export async function generateOrFetch(
   }
 
   if (existing && !force) {
+    // Pattern A (mig 336): an explicit bust signal is checked first.
+    // Pre-336 the only freshness check was attribution-count drift,
+    // which catches INCREASES but not the DECREASE from dedup. Mass
+    // mutations (Pattern A dedup, mergeWeddings, wave-7B reclassify)
+    // now set weddings.narrative_cache_busted_at to force regen even
+    // when the count stays the same or drops.
+    const { data: wedFresh } = await supabase
+      .from('weddings')
+      .select('narrative_cache_busted_at')
+      .eq('id', weddingId)
+      .maybeSingle()
+    const bustedAt = (wedFresh as { narrative_cache_busted_at: string | null } | null)
+      ?.narrative_cache_busted_at
+    const cacheIsBusted =
+      bustedAt &&
+      existing.generated_at &&
+      new Date(bustedAt).getTime() > new Date(existing.generated_at).getTime()
+
     // Cheap freshness check: does the wedding still have ~the same
-    // attribution count as when we generated? attribution_events are
-    // the consequence-bearing rows (every signal-attached candidate
-    // resolved to this wedding produces one), so drift here means
-    // the journey changed enough to matter.
+    // attribution count as when we generated? Uses the live view so
+    // tombstoned rows don't keep the cache valid past dedup.
     const { count: currentAttribs } = await supabase
-      .from('attribution_events')
+      .from('attribution_events_live')
       .select('id', { count: 'exact', head: true })
       .eq('wedding_id', weddingId)
-      .is('reverted_at', null)
     if (
+      !cacheIsBusted &&
       typeof currentAttribs === 'number' &&
       Math.abs(currentAttribs - existing.attribution_count_at_generation) <= STALENESS_DELTA
     ) {

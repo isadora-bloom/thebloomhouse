@@ -614,11 +614,13 @@ async function gatherVenueData(venueId: string): Promise<VenueDataContext> {
     // and nurture rows; the breakdown scopes to bucket='attribution'
     // (the discovery-credit rows). Joined to weddings for status so
     // we can compute conversion = booked / total.
+    // Pattern A (mig 336): live view filters tombstoned dupes so NLQ
+    // doesn't see "Knot: 47 attributions" when 9 of those are racing-
+    // writer duplicates of the same Zachary Gragan signal.
     supabase
-      .from('attribution_events')
+      .from('attribution_events_live')
       .select('source_platform, bucket, wedding_id, weddings!inner(status)')
       .eq('venue_id', venueId)
-      .is('reverted_at', null)
       .gte('decided_at', ninetyDaysAgoIso)
       .limit(2000),
 

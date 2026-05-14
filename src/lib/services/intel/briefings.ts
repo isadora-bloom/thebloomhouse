@@ -21,6 +21,7 @@ import { detectTrendDeviations } from './trends'
 import { getWeatherForDateRange } from './weather'
 import { getLatestIndicators, calculateDemandScore } from './fred-demand'
 import { getActiveAlerts } from './anomaly-detection'
+import { getAnomalyDisplay } from '@/lib/services/anomaly/display-labels'
 import { sendEmail as sendGmail } from '../email/gmail'
 import { sendEmail as sendTransactionalEmail } from '../email/transport'
 import {
@@ -197,11 +198,12 @@ async function getPhaseBWeeklyState(venueId: string): Promise<PhaseBWeeklyState>
     // attribution_events with decided_by='coordinator' — those are
     // legitimate auto-links from the system's perspective and were
     // being undercounted before.
+    // Pattern A (mig 336): live view excludes tombstoned duplicates so
+    // Briefings doesn't double-count the same auto-link.
     const { count, error } = await supabase
-      .from('attribution_events')
+      .from('attribution_events_live')
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId)
-      .is('reverted_at', null)
       .in('decided_by', ['auto', 'ai', 'coordinator'])
       .gte('decided_at', sevenDaysAgo)
     if (error) throw error
@@ -226,12 +228,13 @@ async function getPhaseBWeeklyState(venueId: string): Promise<PhaseBWeeklyState>
   }
 
   try {
+    // Pattern A (mig 336): live view dedupes duplicates that drove
+    // OBS-021 ("116 conflicts" inflation).
     const { count, error } = await supabase
-      .from('attribution_events')
+      .from('attribution_events_live')
       .select('id', { count: 'exact', head: true })
       .eq('venue_id', venueId)
       .not('conflict_with_legacy_source', 'is', null)
-      .is('reverted_at', null)
     if (error) throw error
     state.openConflicts = count ?? 0
   } catch (err) {
@@ -1109,7 +1112,8 @@ async function deliverBriefingEmail(
           .filter((a) => a.severity !== 'info')
           .slice(0, 5)
           .map((a) => {
-            const lines = [`  • [${a.severity.toUpperCase()}] ${a.metric.replace(/_/g, ' ')}: ${a.explanation}`]
+            const display = getAnomalyDisplay(a.metric)
+            const lines = [`  • [${a.severity.toUpperCase()}] ${display.title}: ${a.explanation}`]
             if (a.top_action) lines.push(`    → suggested: ${a.top_action}`)
             return lines.join('\n')
           })

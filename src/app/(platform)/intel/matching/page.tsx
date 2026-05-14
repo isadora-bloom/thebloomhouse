@@ -228,10 +228,10 @@ function MatchingPageInner() {
           .from('people')
           .select('id, first_name, last_name, wedding_id')
           .eq('venue_id', VENUE_ID),
-        supabase
-          .from('contacts')
-          .select('id, person_id, type, value')
-          .eq('venue_id', VENUE_ID),
+        // contacts has no venue_id column — scope is via RLS routing
+        // through people.venue_id. Adding .eq('venue_id') here is what
+        // caused OBS-022/-023 "Failed to load match queue".
+        supabase.from('contacts').select('id, person_id, type, value'),
         supabase
           .from('venue_ai_config')
           .select('ai_name')

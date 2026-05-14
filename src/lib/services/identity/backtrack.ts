@@ -61,6 +61,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { recalculateHeatScore } from '../heat-mapping'
 import { normalizeSource } from '../normalize-source'
+import { insertAttributionEventsIdempotent } from './attribution-events-writer'
+import { insertTouchpointIdempotent } from './touchpoints-writer'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -544,11 +546,11 @@ async function autoLinkCandidate(args: {
     })
 
   if (rowsToInsert.length > 0) {
-    const { data: insertedAttribution, error: insErr } = await supabase
-      .from('attribution_events')
-      .insert(rowsToInsert)
-      .select('id, venue_id')
-    if (insErr) return { ok: false, error: `attribution insert ${candidate.id}: ${insErr.message}` }
+    // Pattern A (mig 336): idempotent insert via shared helper.
+    const insertResult = await insertAttributionEventsIdempotent(supabase, rowsToInsert)
+    if (insertResult.error)
+      return { ok: false, error: `attribution insert ${candidate.id}: ${insertResult.error}` }
+    const insertedAttribution = insertResult.data
 
     // Wave 7B (mig 264). Fire-and-forget role-classifier enqueue.
     if (insertedAttribution && insertedAttribution.length > 0) {
@@ -589,25 +591,20 @@ async function autoLinkCandidate(args: {
     .is('resolved_wedding_id', null) // race-guard
   if (updErr) return { ok: false, error: `candidate resolve ${candidate.id}: ${updErr.message}` }
 
-  // Backfill wedding_touchpoints (mirrors candidate-resolver pattern).
+  // Backfill wedding_touchpoints. Pattern A (mig 336): the shared
+  // helper does pre-check on the new signal_id column + race-window
+  // backstop via the partial unique index.
   for (const s of signalRows) {
     if (!s.signal_date) continue
-    const { data: existingTp } = await supabase
-      .from('wedding_touchpoints')
-      .select('id')
-      .eq('wedding_id', wedding.id)
-      .contains('metadata', { signal_id: s.id })
-      .limit(1)
-    if ((existingTp ?? []).length > 0) continue
-    await supabase.from('wedding_touchpoints').insert({
+    await insertTouchpointIdempotent(supabase, {
       venue_id: candidate.venue_id,
       wedding_id: wedding.id,
+      signal_id: s.id,
       source: s.source_platform ?? candidate.source_platform,
       medium: 'platform_signal',
       touch_type: 'other',
       occurred_at: s.signal_date,
       metadata: {
-        signal_id: s.id,
         candidate_identity_id: candidate.id,
         action_class: s.action_class,
         source_platform: s.source_platform ?? candidate.source_platform,
@@ -1106,11 +1103,11 @@ export async function applyBacktrackLink(
       }
     })
   if (insertRows.length > 0) {
-    const { data: insertedAttribution, error: insErr } = await supabase
-      .from('attribution_events')
-      .insert(insertRows)
-      .select('id, venue_id')
-    if (insErr) return { ok: false, error: `attribution insert: ${insErr.message}` }
+    // Pattern A (mig 336): idempotent insert via shared helper.
+    const insertResult = await insertAttributionEventsIdempotent(supabase, insertRows)
+    if (insertResult.error)
+      return { ok: false, error: `attribution insert: ${insertResult.error}` }
+    const insertedAttribution = insertResult.data
 
     // Wave 7B (mig 264). Fire-and-forget role-classifier enqueue.
     if (insertedAttribution && insertedAttribution.length > 0) {
@@ -1151,25 +1148,19 @@ export async function applyBacktrackLink(
     .is('resolved_wedding_id', null)
   if (updErr) return { ok: false, error: `candidate resolve: ${updErr.message}` }
 
-  // Touchpoints + first-touch + heat (best-effort).
+  // Touchpoints + first-touch + heat (best-effort). Pattern A
+  // (mig 336): shared idempotent writer.
   for (const s2 of signalRows) {
     if (!s2.signal_date) continue
-    const { data: existingTp } = await supabase
-      .from('wedding_touchpoints')
-      .select('id')
-      .eq('wedding_id', weddingId)
-      .contains('metadata', { signal_id: s2.id })
-      .limit(1)
-    if ((existingTp ?? []).length > 0) continue
-    await supabase.from('wedding_touchpoints').insert({
+    await insertTouchpointIdempotent(supabase, {
       venue_id: venueId,
       wedding_id: weddingId,
+      signal_id: s2.id,
       source: s2.source_platform ?? candForWriter.source_platform,
       medium: 'platform_signal',
       touch_type: 'other',
       occurred_at: s2.signal_date,
       metadata: {
-        signal_id: s2.id,
         candidate_identity_id: candidateId,
         action_class: s2.action_class,
         source_platform: s2.source_platform ?? candForWriter.source_platform,

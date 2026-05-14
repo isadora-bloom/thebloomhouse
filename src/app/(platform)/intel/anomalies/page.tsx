@@ -18,6 +18,7 @@ import {
 import { useScope } from '@/lib/hooks/use-scope'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 import { UpgradeGate } from '@/components/ui/upgrade-gate'
+import { getAnomalyDisplay } from '@/lib/services/anomaly/display-labels'
 
 // ---------------------------------------------------------------------------
 // Phase 6 Task 57: Anomaly Alerts page
@@ -78,10 +79,10 @@ const SEVERITY_RANK: Record<AnomalyRow['severity'], number> = {
 
 function formatMetric(name: string): string {
   if (!name) return '--'
-  return name
-    .split('_')
-    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
-    .join(' ')
+  // OBS-027/Pattern C (mig 336 era): prefer the curated label map so
+  // operators see "Auto-link rate" not "Auto Link Rate". Falls back
+  // to title-case for keys not yet mapped.
+  return getAnomalyDisplay(name).title
 }
 
 function formatDate(iso: string): string {

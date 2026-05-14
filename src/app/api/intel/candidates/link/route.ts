@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPlatformAuth } from '@/lib/api/auth-helpers'
 import { createServiceClient } from '@/lib/supabase/service'
 import { recomputeFirstTouch } from '@/lib/services/identity/candidate-resolver'
+import { insertAttributionEventsIdempotent } from '@/lib/services/identity/attribution-events-writer'
 import { recalculateHeatScore } from '@/lib/services/heat-mapping'
 import { normalizeSource } from '@/lib/services/normalize-source'
 import { requirePlan, planErrorBody } from '@/lib/auth/require-plan'
@@ -138,8 +139,13 @@ export async function POST(req: NextRequest) {
     })
 
   if (rows.length > 0) {
-    const { error: insErr } = await supabase.from('attribution_events').insert(rows)
-    if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 })
+    // Pattern A (mig 336): idempotent insert. Operator may click Link
+    // twice concurrently (double-tap on slow mobile) — the helper
+    // dedupes via the partial unique index instead of inserting two
+    // sets of the same signals.
+    const insertResult = await insertAttributionEventsIdempotent(supabase, rows)
+    if (insertResult.error)
+      return NextResponse.json({ error: insertResult.error }, { status: 500 })
   }
 
   await supabase

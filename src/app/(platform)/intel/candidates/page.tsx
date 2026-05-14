@@ -98,18 +98,19 @@ export default function CandidatesReviewPage() {
           .is('deleted_at', null)
           .is('resolved_wedding_id', null)
           .order('last_seen', { ascending: false }),
+        // Pattern A (mig 336): live view filters tombstoned dupes
+        // that drove the "116 conflicts" / "Zachary Gragan × 9"
+        // inflation flagged in the Round 2 audit.
         sb
-          .from('attribution_events')
+          .from('attribution_events_live')
           .select('*')
           .eq('venue_id', venueId)
           .not('conflict_with_legacy_source', 'is', null)
-          .is('reverted_at', null)
           .order('decided_at', { ascending: false }),
         sb
-          .from('attribution_events')
+          .from('attribution_events_live')
           .select('*')
           .eq('venue_id', venueId)
-          .is('reverted_at', null)
           .order('decided_at', { ascending: false })
           .limit(50),
       ])
