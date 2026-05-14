@@ -41,6 +41,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveIdentity } from './resolver'
+import { mirrorCoupleFromWedding } from './mirror-couple'
 import { logEvent } from '@/lib/observability/logger'
 
 /**
@@ -183,6 +184,30 @@ export async function mintWedding(
     })()
     throw err
   }
+
+  // Phase A dual-write (Identity-First Architecture): mirror the
+  // resolved wedding into the new `couples` table. The mirror is
+  // additive — its failure never blocks the wedding mint. Fire-and-
+  // forget so a slow mirror doesn't stretch the caller latency.
+  // See IDENTITY-FIRST-ARCHITECTURE.md §8 (Phase A) and
+  // src/lib/services/identity/mirror-couple.ts header.
+  void (async () => {
+    try {
+      const mirrorClient =
+        supabase ??
+        (await import('@/lib/supabase/service')).createServiceClient()
+      await mirrorCoupleFromWedding({
+        venueId,
+        weddingId: resolved.weddingId,
+        supabase: mirrorClient,
+        correlationId: correlationId ?? null,
+      })
+    } catch {
+      // mirrorCoupleFromWedding never throws (see its contract). This
+      // catch is paranoid double-belt — if it ever does throw, swallow
+      // it so the divergence dashboard catches the drift instead.
+    }
+  })()
 
   // Fire the P2 identity cascade on the resolved wedding. The cascade
   // scans candidate_identities + tangential_signals for pre-zero
