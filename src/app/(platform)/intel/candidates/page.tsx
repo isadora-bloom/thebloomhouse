@@ -22,6 +22,7 @@ import {
   Activity, ArrowRight, RotateCcw,
 } from 'lucide-react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
+import { EmptyState } from '@/components/ui/empty-state'
 
 interface CandidateRow {
   id: string
@@ -358,15 +359,6 @@ function TabBtn({ active, onClick, count, children }: { active: boolean; onClick
       {children}
       {count > 0 && <span className="ml-2 px-1.5 py-0.5 text-xs rounded-full bg-sage-100 text-sage-700">{count}</span>}
     </button>
-  )
-}
-
-function EmptyState({ icon: Icon, text }: { icon: typeof CheckCircle2; text: string }) {
-  return (
-    <div className="bg-surface border border-border rounded-xl p-10 text-center">
-      <Icon className="w-10 h-10 text-sage-300 mx-auto mb-3" />
-      <p className="text-sm text-sage-600">{text}</p>
-    </div>
   )
 }
 

@@ -96,7 +96,8 @@ interface BriefingContent {
   // Was being squeezed into the alertSummary string for the AI
   // prompt, then summarized away by the AI itself. Preserved
   // structurally so the email body always shows the full reasoning
-  // verbatim, and the /intel/briefings dashboard can render them.
+  // verbatim, and the BriefingsPanel on the Intelligence Dashboard
+  // can render them.
   anomaly_details?: Array<{
     metric: string
     alert_type: string

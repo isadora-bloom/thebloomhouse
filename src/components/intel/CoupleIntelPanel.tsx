@@ -47,6 +47,7 @@ import {
   Lightbulb,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { WhyThisCard } from '@/components/ui/why-this-card'
 
 interface PredictedCloseProbability {
   pct_0_100: number
@@ -141,7 +142,6 @@ export function CoupleIntelPanel({ weddingId }: { weddingId: string }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
-  const [showReasoning, setShowReasoning] = useState(false)
 
   const fetchIntel = useCallback(async () => {
     try {
@@ -345,35 +345,19 @@ export function CoupleIntelPanel({ weddingId }: { weddingId: string }) {
             {intel.recommended_next_action.timing}
           </span>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowReasoning((v) => !v)}
-          className="mt-1 text-[11px] text-sage-500 hover:text-sage-700 underline-offset-2 hover:underline"
-        >
-          {showReasoning ? 'Hide reasoning' : 'Show reasoning'}
-        </button>
-        {showReasoning && (
-          <div className="mt-2 text-xs text-sage-600 leading-relaxed border-l-2 border-sage-200 pl-3 space-y-2">
-            <p>{intel.recommended_next_action.reasoning}</p>
-            {intel.predicted_close_probability.reasoning && (
-              <div>
-                <span className="text-[10px] uppercase tracking-wide text-sage-500 mr-1">
-                  close-prob:
-                </span>
-                {intel.predicted_close_probability.reasoning}
-              </div>
-            )}
-            {intel.predicted_close_probability.key_signals.length > 0 && (
-              <ul className="list-disc list-inside space-y-0.5">
-                {intel.predicted_close_probability.key_signals.map((sig, i) => (
-                  <li key={i} className="text-[11px]">
-                    {sig}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
+        <WhyThisCard
+          className="mt-2"
+          title="Why this action, why now"
+          reasoning={[
+            intel.recommended_next_action.reasoning,
+            intel.predicted_close_probability.reasoning
+              ? `Close-probability rationale: ${intel.predicted_close_probability.reasoning}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join('\n\n')}
+          evidence={intel.predicted_close_probability.key_signals}
+        />
       </div>
 
       {/* Sensitivity flags — chips. handle_with is coaching, never raw quote. */}

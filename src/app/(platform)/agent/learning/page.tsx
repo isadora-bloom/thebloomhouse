@@ -24,6 +24,7 @@ import {
   Wand2,
 } from 'lucide-react'
 import { VoiceDNAPanel } from '@/components/agent/VoiceDNAPanel'
+import { DataMaturity } from '@/components/ui/data-maturity'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -702,17 +703,17 @@ export default function EmailLearningPage() {
         )}
       </div>
 
-      {/* ---------------------------------------------------------------- */}
-      {/* Voice training threshold hint                                    */}
-      {/* Mirrors VOICE_TRAINING_MIN_SAMPLES in inquiry-brain.ts. Until    */}
-      {/* the trained corpus crosses 5 samples, the brains skip the       */}
-      {/* learning-feedback prompt block to avoid noisy bias.             */}
-      {/* ---------------------------------------------------------------- */}
+      {/* Voice-training threshold. Mirrors VOICE_TRAINING_MIN_SAMPLES in
+          inquiry-brain.ts — below 5 samples, the brain skips the learning
+          block to avoid noisy bias. */}
       {!loading && approvedCount + editedCount < 5 && (
-        <p className="text-xs text-amber-600">
-          {aiName} needs at least 5 trained examples (approved or edited drafts) before using
-          your voice. ({approvedCount + editedCount}/5)
-        </p>
+        <DataMaturity
+          variant="card"
+          current={approvedCount + editedCount}
+          threshold={5}
+          unit="trained examples"
+          unlocks={`${aiName} uses your voice in drafts`}
+        />
       )}
 
       {/* ---------------------------------------------------------------- */}

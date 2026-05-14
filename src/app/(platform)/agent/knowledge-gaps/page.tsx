@@ -22,6 +22,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useVenueId } from '@/lib/hooks/use-venue-id'
 import { useAiName } from '@/lib/hooks/use-ai-name'
+import { EmptyState } from '@/components/ui/empty-state'
 import {
   HelpCircle,
   CheckCircle2,
@@ -838,7 +839,7 @@ export default function KnowledgeGapsPage() {
       ) : tab === 'open' ? (
         filteredOpenGaps.length === 0 ? (
           <EmptyState
-            icon={<HelpCircle className="w-12 h-12 text-sage-300 mx-auto mb-4" />}
+            icon={HelpCircle}
             title="No open gaps"
             subtitle={`When ${aiName} encounters questions it cannot answer, they appear here.`}
           />
@@ -857,7 +858,7 @@ export default function KnowledgeGapsPage() {
       ) : tab === 'captured' ? (
         capturedGaps.length === 0 ? (
           <EmptyState
-            icon={<CheckCircle2 className="w-12 h-12 text-sage-300 mx-auto mb-4" />}
+            icon={CheckCircle2}
             title="No captured gaps yet"
             subtitle="Captured gaps appear here once you answer them."
           />
@@ -871,7 +872,7 @@ export default function KnowledgeGapsPage() {
       ) : tab === 'library' ? (
         filteredCaptures.length === 0 ? (
           <EmptyState
-            icon={<Sparkles className="w-12 h-12 text-sage-300 mx-auto mb-4" />}
+            icon={Sparkles}
             title="No captured knowledge yet"
             subtitle="Captured answers from any source (gaps, bulk import, FAQ docs) live here."
           />
@@ -893,7 +894,7 @@ export default function KnowledgeGapsPage() {
       ) : (
         dismissedGaps.length === 0 ? (
           <EmptyState
-            icon={<XCircle className="w-12 h-12 text-sage-300 mx-auto mb-4" />}
+            icon={XCircle}
             title="No dismissed gaps"
             subtitle="Dismissed gaps stay here as an audit trail."
           />
@@ -1109,20 +1110,3 @@ function DismissedGapCard({ gap }: { gap: KnowledgeGap }) {
   )
 }
 
-function EmptyState({
-  icon,
-  title,
-  subtitle,
-}: {
-  icon: React.ReactNode
-  title: string
-  subtitle: string
-}) {
-  return (
-    <div className="bg-surface border border-border rounded-xl p-12 shadow-sm text-center">
-      {icon}
-      <h3 className="font-heading text-lg font-semibold text-sage-900 mb-1">{title}</h3>
-      <p className="text-sm text-sage-600 max-w-md mx-auto">{subtitle}</p>
-    </div>
-  )
-}

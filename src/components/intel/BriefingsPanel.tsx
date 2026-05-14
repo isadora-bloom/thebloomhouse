@@ -18,6 +18,7 @@ import {
 import { useScope } from '@/lib/hooks/use-scope'
 import { VenueChip } from '@/components/intel/venue-chip'
 import { getAnomalyDisplay } from '@/lib/services/anomaly/display-labels'
+import { Recommendation } from '@/components/ui/recommendation'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -910,11 +911,15 @@ export function BriefingsPanel() {
             {(content?.recommendations?.length ?? 0) > 0 ? (
               <ol className="space-y-3">
                 {content?.recommendations?.map((rec, i) => (
-                  <li key={i} className="flex items-start gap-2.5">
-                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-gold-100 text-gold-700 text-xs font-semibold flex items-center justify-center mt-0.5">
-                      {i + 1}
-                    </span>
-                    <span className="text-sm text-sage-700 leading-relaxed">{rec}</span>
+                  <li key={i}>
+                    <Recommendation
+                      text={rec}
+                      iconSlot={
+                        <span className="w-5 h-5 rounded-full bg-gold-100 text-gold-700 text-xs font-semibold flex items-center justify-center">
+                          {i + 1}
+                        </span>
+                      }
+                    />
                   </li>
                 ))}
               </ol>

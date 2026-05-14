@@ -19,9 +19,13 @@ import {
   BarChart3,
   Leaf,
   AlertTriangle,
+  ArrowRight,
 } from 'lucide-react'
+import Link from 'next/link'
 import { InsightPanel, type InsightItem } from '@/components/intel/insight-panel'
 import { MeOrMarketCard } from '@/components/intel/MeOrMarketCard'
+import { EmptyState } from '@/components/ui/empty-state'
+import { inferRecommendationDestination } from '@/lib/utils/recommendation-routing'
 import {
   BarChart,
   Bar,
@@ -606,17 +610,10 @@ function RecommendationsSection({
       </h2>
 
       {recommendations.length === 0 ? (
-        <div className="bg-surface border border-border rounded-xl p-8 shadow-sm text-center">
-          <Lightbulb className="w-8 h-8 text-sage-300 mx-auto mb-3" />
-          <p className="text-sm text-sage-500">
-            No recommendations yet. Run trend analysis to generate actionable
-            insights.
-          </p>
-          <p className="text-xs text-sage-400 mt-2 max-w-md mx-auto">
-            Example: &ldquo;Garden wedding searches up 35% — update website copy
-            and feature garden photos&rdquo;
-          </p>
-        </div>
+        <EmptyState
+          icon={Lightbulb}
+          text="No recommendations yet. Run trend analysis to generate actionable insights. Example: garden wedding searches up 35%, so update website copy and feature garden photos."
+        />
       ) : (
         <div className="space-y-3">
           {pending.map((rec) => (
@@ -657,6 +654,20 @@ function RecommendationsSection({
                       {rec.body}
                     </p>
                   )}
+                  {(() => {
+                    const dest = inferRecommendationDestination(
+                      `${rec.title} ${rec.body ?? ''}`,
+                    )
+                    return dest ? (
+                      <Link
+                        href={dest.href}
+                        className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-sage-700 hover:text-sage-900"
+                      >
+                        {dest.label}
+                        <ArrowRight className="h-3 w-3" />
+                      </Link>
+                    ) : null
+                  })()}
                   <div className="flex gap-2 mt-4">
                     <button
                       onClick={() => onApply(rec.id)}

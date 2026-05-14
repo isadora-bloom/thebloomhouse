@@ -18,7 +18,7 @@
  */
 
 import { useState, useEffect } from 'react'
-import { Trash2, Plus, Shield, PenLine, MailX } from 'lucide-react'
+import { Trash2, Plus, Shield, PenLine, MailX, Info } from 'lucide-react'
 import { useAiName } from '@/lib/hooks/use-ai-name'
 
 interface Filter {
@@ -31,6 +31,18 @@ interface Filter {
   created_at: string
 }
 
+interface AuditEntry {
+  filter_id: string
+  pattern: string
+  pattern_type: Filter['pattern_type']
+  action: Filter['action']
+  auditable: boolean
+  unauditable_reason: 'pre_storage' | 'label_not_stored' | null
+  count_30d: number
+  last_match_at: string | null
+  sample_senders: string[]
+}
+
 const PATTERN_TYPE_LABELS: Record<Filter['pattern_type'], string> = {
   sender_exact: 'Exact sender',
   sender_domain: 'Sender domain',
@@ -40,6 +52,7 @@ const PATTERN_TYPE_LABELS: Record<Filter['pattern_type'], string> = {
 export default function InboxFiltersPage() {
   const aiName = useAiName()
   const [filters, setFilters] = useState<Filter[]>([])
+  const [audit, setAudit] = useState<AuditEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -53,10 +66,19 @@ export default function InboxFiltersPage() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/agent/inbox-filters')
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = await res.json()
-      setFilters(json.filters ?? [])
+      const [filtersRes, auditRes] = await Promise.all([
+        fetch('/api/agent/inbox-filters'),
+        fetch('/api/agent/inbox-filters/audit'),
+      ])
+      if (!filtersRes.ok) throw new Error(`HTTP ${filtersRes.status}`)
+      const filtersJson = await filtersRes.json()
+      setFilters(filtersJson.filters ?? [])
+      if (auditRes.ok) {
+        const auditJson = await auditRes.json()
+        setAudit(auditJson.audit ?? [])
+      } else {
+        setAudit([])
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
@@ -214,12 +236,14 @@ export default function InboxFiltersPage() {
             title="Manual rules"
             subtitle="Added by you or the seed list. These take precedence."
             items={manual}
+            audit={audit}
             onDelete={handleDelete}
           />
           <FilterGroup
             title="Learned rules"
             subtitle={`Auto-added by the nightly learner when a domain consistently produces no draft. Remove any you want ${aiName} to start replying to again.`}
             items={learned}
+            audit={audit}
             onDelete={handleDelete}
             empty={`No learned rules yet. The nightly job will start promoting domains after ${aiName} has seen 5+ non-draft inbound emails from them.`}
           />
@@ -233,15 +257,18 @@ function FilterGroup({
   title,
   subtitle,
   items,
+  audit,
   onDelete,
   empty,
 }: {
   title: string
   subtitle: string
   items: Filter[]
+  audit: AuditEntry[]
   onDelete: (id: string) => void
   empty?: string
 }) {
+  const auditById = new Map<string, AuditEntry>(audit.map((a) => [a.filter_id, a]))
   return (
     <section className="space-y-2">
       <div>
@@ -254,39 +281,94 @@ function FilterGroup({
         </div>
       ) : (
         <div className="border border-border rounded-lg bg-warm-white divide-y divide-border">
-          {items.map((f) => (
-            <div key={f.id} className="flex items-start justify-between gap-3 px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-sage-100 text-sage-700">
-                    {PATTERN_TYPE_LABELS[f.pattern_type]}
-                  </span>
-                  <code className="text-sm font-mono text-sage-900 truncate">{f.pattern}</code>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${
-                      f.action === 'ignore'
-                        ? 'bg-red-50 text-red-700'
-                        : 'bg-amber-50 text-amber-700'
-                    }`}
-                  >
-                    {f.action === 'ignore' ? <MailX className="w-3 h-3" /> : <PenLine className="w-3 h-3" />}
-                    {f.action === 'ignore' ? 'Ignore' : 'No draft'}
-                  </span>
+          {items.map((f) => {
+            const a = auditById.get(f.id)
+            return (
+              <div key={f.id} className="flex items-start justify-between gap-3 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-sage-100 text-sage-700">
+                      {PATTERN_TYPE_LABELS[f.pattern_type]}
+                    </span>
+                    <code className="text-sm font-mono text-sage-900 truncate">{f.pattern}</code>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${
+                        f.action === 'ignore'
+                          ? 'bg-red-50 text-red-700'
+                          : 'bg-amber-50 text-amber-700'
+                      }`}
+                    >
+                      {f.action === 'ignore' ? <MailX className="w-3 h-3" /> : <PenLine className="w-3 h-3" />}
+                      {f.action === 'ignore' ? 'Ignore' : 'No draft'}
+                    </span>
+                  </div>
+                  {f.note && <p className="text-xs text-sage-500 mt-1">{f.note}</p>}
+                  <FilterAuditLine audit={a} action={f.action} />
                 </div>
-                {f.note && <p className="text-xs text-sage-500 mt-1">{f.note}</p>}
+                <button
+                  type="button"
+                  onClick={() => onDelete(f.id)}
+                  className="p-1.5 text-sage-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                  title="Remove filter"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => onDelete(f.id)}
-                className="p-1.5 text-sage-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                title="Remove filter"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </section>
   )
+}
+
+function FilterAuditLine({
+  audit,
+  action,
+}: {
+  audit: AuditEntry | undefined
+  action: Filter['action']
+}) {
+  if (!audit) return null
+  if (!audit.auditable) {
+    const reason =
+      audit.unauditable_reason === 'pre_storage'
+        ? 'Pre-storage filter, no audit log available.'
+        : 'Gmail-label filter, not tracked via interactions table.'
+    return (
+      <p className="text-xs text-sage-400 mt-1 flex items-center gap-1">
+        <Info className="w-3 h-3" />
+        {reason}
+      </p>
+    )
+  }
+  if (audit.count_30d === 0) {
+    return (
+      <p className="text-xs text-sage-400 mt-1">
+        No matches in the last 30 days. Rule may be redundant.
+      </p>
+    )
+  }
+  const last = audit.last_match_at ? new Date(audit.last_match_at) : null
+  const lastLabel = last ? relativeTime(last) : null
+  const sampleLabel = audit.sample_senders.slice(0, 3).join(', ')
+  return (
+    <p className="text-xs text-sage-600 mt-1">
+      Caught {audit.count_30d} {action === 'ignore' ? 'ignored' : 'no-draft'} email
+      {audit.count_30d === 1 ? '' : 's'} in 30d
+      {lastLabel ? ` · last ${lastLabel}` : ''}
+      {sampleLabel ? ` · ${sampleLabel}` : ''}
+      {audit.sample_senders.length > 3 ? ` +${audit.sample_senders.length - 3}` : ''}
+    </p>
+  )
+}
+
+function relativeTime(d: Date): string {
+  const diffMs = Date.now() - d.getTime()
+  const mins = Math.round(diffMs / 60_000)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.round(hours / 24)
+  return `${days}d ago`
 }

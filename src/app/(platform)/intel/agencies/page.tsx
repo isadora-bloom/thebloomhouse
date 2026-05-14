@@ -20,6 +20,7 @@ import {
   ExternalLink,
   AlertTriangle,
 } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
 
 interface AgencyListRow {
   id: string
@@ -159,7 +160,12 @@ export default function AgenciesListPage() {
           <Loader2 className="h-4 w-4 animate-spin" /> Loading agencies…
         </div>
       ) : agencies.length === 0 ? (
-        <EmptyState />
+        <EmptyState
+          icon={Briefcase}
+          title="No agencies tracked yet"
+          subtitle="Add the firm or firms managing your marketing spend (Hawthorn, Elite Wedding Marketing, etc.) so Bloom can compare their attribution to what they actually deliver."
+          action={{ label: 'Add your first agency', href: '/intel/agencies/new' }}
+        />
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {agencies.map((a) => (
@@ -172,26 +178,6 @@ export default function AgenciesListPage() {
           ))}
         </div>
       )}
-    </div>
-  )
-}
-
-function EmptyState() {
-  return (
-    <div className="rounded-2xl border border-dashed border-[var(--bh-line)] bg-white p-10 text-center">
-      <Briefcase className="mx-auto h-10 w-10 text-[var(--bh-muted)]" />
-      <h2 className="mt-3 font-serif text-lg">No agencies tracked yet</h2>
-      <p className="mt-1 mx-auto max-w-md text-sm text-[var(--bh-muted)]">
-        Add the firm or firms managing your marketing spend (Hawthorn,
-        Elite Wedding Marketing, etc.) so Bloom can compare their
-        attribution to what they actually deliver.
-      </p>
-      <Link
-        href="/intel/agencies/new"
-        className="mt-4 inline-flex items-center gap-2 rounded-md bg-[var(--bh-sage-700)] px-4 py-2 text-sm text-white hover:opacity-90"
-      >
-        <Plus className="h-4 w-4" /> Add your first agency
-      </Link>
     </div>
   )
 }

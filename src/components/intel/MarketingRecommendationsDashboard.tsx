@@ -34,6 +34,7 @@ import {
   Target,
   AlertCircle,
 } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
 
 interface ReasoningChain {
   evidence_signals?: string[]
@@ -275,9 +276,12 @@ function RecommendationCard({
               {action.label}
             </span>
             {rec.n_too_small_warning ? (
-              <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800">
+              <span
+                className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800"
+                title="Fewer than 10 signals support this. Treat as a starting hypothesis until more data arrives."
+              >
                 <AlertTriangle className="h-3 w-3" />
-                n &lt; 10
+                Limited signal
               </span>
             ) : null}
             <span className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-xs text-stone-700">
@@ -795,11 +799,10 @@ export function MarketingRecommendationsDashboard() {
       ) : null}
 
       {!loading && recommendations.length === 0 ? (
-        <div className="rounded-md border border-stone-200 bg-white p-8 text-center text-sm text-stone-500">
-          <Sparkles className="mx-auto mb-2 h-5 w-5 text-stone-400" />
-          No recommendations yet. Run &quot;Generate now&quot; to produce a
-          fresh batch.
-        </div>
+        <EmptyState
+          icon={Sparkles}
+          text="No recommendations yet. Run &quot;Generate now&quot; to produce a fresh batch."
+        />
       ) : null}
 
       {STATUSES.map((status) => {

@@ -193,9 +193,12 @@ export function MarketingRecommendationsPanel() {
                     {rec.action_type}
                   </span>
                   {rec.n_too_small_warning ? (
-                    <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800">
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800"
+                      title="Fewer than 10 signals support this. Treat as a starting hypothesis until more data arrives."
+                    >
                       <AlertTriangle className="h-3 w-3" />
-                      n &lt; 10
+                      Limited signal
                     </span>
                   ) : null}
                   <span className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-xs text-stone-700">
