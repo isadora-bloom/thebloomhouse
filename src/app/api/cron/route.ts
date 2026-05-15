@@ -31,6 +31,7 @@ import { findBacktraceCandidates } from '@/lib/services/attribution/source-backt
 import { reclusterVenue } from '@/lib/services/identity/candidate-clusterer'
 import { resolveVenueCandidates } from '@/lib/services/identity/candidate-resolver'
 import { runBacktrackAllVenues } from '@/lib/services/identity/backtrack'
+import { runIdentityFirstTracerAllVenues } from '@/lib/services/identity/tracer-runner'
 import { syncMeetings as syncZoomMeetings } from '@/lib/services/ingestion/zoom'
 import { syncAllVenues as syncOpenPhoneAllVenues } from '@/lib/services/ingestion/openphone'
 import { runCalendlyUriBackfill } from '@/lib/services/ingestion/calendly'
@@ -131,6 +132,15 @@ const VALID_JOBS = [
   // /api/cron?job=sms_sequences for manual runs.
   'sms_sequences',
   'phase_b_sweep',
+  // Identity-First Phase B (2026-05-14). Backwards Tracer that walks
+  // every connected channel's historical signals (anchors, gmail,
+  // calendly, knot, instagram) and reconstructs the
+  // couples/touchpoints/fragments/candidate_matches graph from raw
+  // evidence. Per IDENTITY-FIRST-ARCHITECTURE.md §4 + Appendix A. NOT
+  // the same job as 'phase_b_sweep' (legacy Wave 4-8) — that one
+  // operates on candidate_identities; this one operates on the new
+  // Phase A schema. Both coexist until Phase D migrates the read paths.
+  'identity_first_tracer',
   // T5-Rixey-CCC (2026-05-02). Candidate-resolver backtrack — when
   // weddings become known-email, retroactively scan unresolved storefront
   // candidate_identities and link the orphans. BBB spike measured 12.7%
@@ -758,6 +768,19 @@ async function runJob(job: JobName): Promise<unknown> {
       // ambiguous cases on the sweep — that already happened at
       // import time; AI is too expensive to retry every night.
       return sweepPhaseBAllVenues()
+
+    case 'identity_first_tracer':
+      // Identity-First Phase B Backwards Tracer (2026-05-14). Walks
+      // historical signals on every connected channel and reconstructs
+      // the couples / touchpoints / fragments graph in the new schema
+      // (mig 346). Six stages per IDENTITY-FIRST-ARCHITECTURE.md §4:
+      // anchor_discovery → touchpoint_sweep → cross_channel_coalesce →
+      // agent_infer → decay_sweep → validate. Rerun-safe via
+      // UNIQUE(venue_id, channel, external_id). LLM judge rate-limited
+      // 200/run + 50/venue/day. Cold-start mode: venue with zero
+      // booked-anchor couples short-circuits anchor_discovery and
+      // emits 'skipped' (no degenerate sweep).
+      return runIdentityFirstTracerAllVenues()
 
     case 'identity_backtrack':
       // T5-Rixey-CCC (2026-05-02). Daily backtrack — for each venue,
