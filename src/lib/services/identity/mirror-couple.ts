@@ -164,6 +164,23 @@ export async function mirrorCoupleFromWedding(
       return { isNew: false, coupleId: null }
     }
 
+    // Seed last_progression_at on first insert. Migration 348 backfills
+    // pre-existing couples; this keeps freshly-minted couples (after the
+    // migration ran) from landing with a NULL clock. The progression-
+    // event writer owns the column once real inbound activity arrives,
+    // so we only stamp WHEN STILL NULL — never clobber a live clock.
+    // Seed value: the wedding's inquiry_date (the couple progressed by
+    // inquiring) or its updated_at as a floor.
+    const seedProgressionAt =
+      (wedding.inquiry_date as string | null) ??
+      (wedding.updated_at as string | null) ??
+      new Date().toISOString()
+    await supabase
+      .from('couples')
+      .update({ last_progression_at: seedProgressionAt })
+      .eq('id', upserted.id)
+      .is('last_progression_at', null)
+
     logEvent({
       level: 'info',
       msg: 'identity.mirror_couple',
