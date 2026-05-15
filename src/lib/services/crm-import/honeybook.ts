@@ -267,16 +267,30 @@ function parseMoneyToCents(raw: string | null | undefined): Cents | null {
   return dollarsToCents(asDollars(n))
 }
 
-/** Parse a guest-count cell. Tolerates "120", "120 guests", "~120",
- *  "100-120" (takes the upper bound). null when no usable integer. */
+/** Parse a guest-count cell. Conservative on purpose: only a clean
+ *  single number ("120", "120 guests", "~120") or a clean range
+ *  ("100-120" / "100 to 120" — takes the upper bound). Anything noisy
+ *  (a date, a code, multiple unrelated numbers) returns null rather
+ *  than guessing — a wrong large value would fail the importer's
+ *  1-1000 pre-commit validation and atomically refuse the whole batch.
+ *
+ *  Capped at 1-1000 to match weddings.guest_count_estimate's DB
+ *  constraint (migration 165) and validateAllRows in the crm-import
+ *  route. A value outside that range can't be stored, so it returns
+ *  null instead of a value the validator would reject. */
 function parseGuestCount(raw: string | null | undefined): number | null {
   if (raw == null) return null
-  const nums = raw.match(/\d+/g)
-  if (!nums || nums.length === 0) return null
-  // Range like "100-120" -> take the larger; single value -> itself.
-  const n = Math.max(...nums.map((x) => parseInt(x, 10)))
-  if (!Number.isFinite(n) || n <= 0 || n >= 10000) return null
-  return n
+  const trimmed = raw.trim()
+  const inRange = (n: number): number | null =>
+    Number.isFinite(n) && n >= 1 && n <= 1000 ? n : null
+
+  const range = trimmed.match(/^~?\s*(\d{1,5})\s*(?:[-–—]|to)\s*(\d{1,5})\b/i)
+  if (range) {
+    return inRange(Math.max(parseInt(range[1]!, 10), parseInt(range[2]!, 10)))
+  }
+  const single = trimmed.match(/^~?\s*(\d{1,5})\b/)
+  if (single) return inRange(parseInt(single[1]!, 10))
+  return null
 }
 
 function parseDateIso(raw: string | null | undefined): string | null {
