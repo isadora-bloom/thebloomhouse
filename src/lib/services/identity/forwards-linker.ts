@@ -57,6 +57,7 @@
  * and replay.
  */
 
+import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { logEvent } from '@/lib/observability/logger'
 import {
@@ -161,13 +162,27 @@ export function invalidateCouplesCache(venueId: string): void {
 // ---------------------------------------------------------------------------
 
 function liveRunIdFor(venueId: string, source: string, now = new Date()): string {
+  // tracer_run_events.run_id is text (migration 347). We use a
+  // structured human-readable key so the dashboard can group
+  // (live:source:venueShort:date). Pre-347 the column was uuid; the
+  // migration converts existing rows in place.
   const yyyy = now.getUTCFullYear()
   const mm = String(now.getUTCMonth() + 1).padStart(2, '0')
   const dd = String(now.getUTCDate()).padStart(2, '0')
-  // Format: live:<source>:<venueShort>:<YYYY-MM-DD>. venueShort uses
-  // first 8 chars of UUID — keeps the dashboard row stable for the day
-  // without leaking the full id in every event row.
   return `${source}:${venueId.slice(0, 8)}:${yyyy}-${mm}-${dd}`
+}
+
+// Stub: kept exported so callers that want a uuid-shaped derivation
+// (e.g., for systems that still expect uuid) can use it. Unused now
+// that migration 347 widened run_id to text. Deterministic per-day.
+export function liveRunIdAsUuid(
+  venueId: string,
+  source: string,
+  now = new Date(),
+): string {
+  const key = liveRunIdFor(venueId, source, now)
+  const hash = createHash('sha256').update(key).digest('hex')
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`
 }
 
 async function emitLinkEvent(
@@ -185,6 +200,7 @@ async function emitLinkEvent(
     rows_seen: 1,
     rows_written: result.touchpoint_id ? 1 : 0,
     detail: {
+      kind: 'live_linker',
       action: result.action,
       tier: result.tier,
       matcher_score: result.matcher_score,
@@ -328,7 +344,7 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
           best.coupleId,
           'couple',
           tp.touchpoint_id,
-          'fragment',
+          'touchpoint',
           finalTier,
           best.verdict.reason + reasonExtra,
         )
@@ -368,6 +384,7 @@ export async function linkSignal(args: LinkSignalArgs): Promise<LinkResult> {
         rows_seen: 1,
         rows_written: 0,
         detail: {
+          kind: 'live_linker',
           error: message,
           signal: {
             channel: signal.channel,

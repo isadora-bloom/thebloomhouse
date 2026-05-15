@@ -159,7 +159,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (r.stage === 'validate' && r.detail && (r.detail as Record<string, unknown>).run_totals) {
       cur.totals = (r.detail as Record<string, unknown>).run_totals as Record<string, unknown>
     }
-    if (r.stage === 'forwards_link') {
+    const isLinkerRow =
+      r.stage === 'forwards_link' ||
+      ((r.detail as Record<string, unknown> | null)?.kind === 'live_linker')
+    if (isLinkerRow) {
       const acc =
         linkerTotalsByRun.get(r.run_id) ?? {
           signals_seen: 0,

@@ -373,9 +373,9 @@ export async function insertCandidateMatch(
   supabase: SupabaseClient,
   venueId: string,
   primaryId: string,
-  primaryType: 'couple' | 'fragment' | 'channel_scoped',
+  primaryType: 'couple' | 'fragment' | 'channel_scoped' | 'touchpoint',
   secondaryId: string,
-  secondaryType: 'couple' | 'fragment' | 'channel_scoped',
+  secondaryType: 'couple' | 'fragment' | 'channel_scoped' | 'touchpoint',
   confidence_tier: 'high' | 'medium' | 'low',
   reason: string,
 ): Promise<void> {
@@ -531,7 +531,7 @@ async function processSignal(
         bestVerdict.coupleId,
         'couple',
         tp.touchpoint_id,
-        'fragment',
+        'touchpoint',
         'medium',
         bestVerdict.verdict.reason + reasonExtra,
       )
@@ -550,7 +550,7 @@ async function processSignal(
         bestVerdict.coupleId,
         'couple',
         tp.touchpoint_id,
-        'fragment',
+        'touchpoint',
         'low',
         bestVerdict.verdict.reason + reasonExtra,
       )
