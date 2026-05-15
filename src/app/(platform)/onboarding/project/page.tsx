@@ -692,7 +692,7 @@ function DayCard({ day, isCurrent, isComplete, stepCompletion, onCompleteStep, o
                     the project, or who already did Day-1 work (Gmail,
                     CSV import) before the project advanced, must still
                     be able to tick those boxes. */}
-                {!stepDone && status !== 'completed' && s.actionKey !== 'voice_dna_extract' && (
+                {!stepDone && status !== 'live' && status !== 'archived' && s.actionKey !== 'voice_dna_extract' && (
                   <button
                     onClick={() => onCompleteStep(s)}
                     disabled={busy}
