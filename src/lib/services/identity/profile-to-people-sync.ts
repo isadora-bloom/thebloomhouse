@@ -199,6 +199,82 @@ function refusalEntryAlreadyPresent(evidence: NameEvidenceEntry[]): boolean {
   return false
 }
 
+/**
+ * Re-query the live DB for ANY non-tombstoned person on this wedding
+ * that could already represent `role`, and adopt it instead of inserting
+ * a fresh row.
+ *
+ * Why this exists (root-cause fix, 2026-05-15)
+ * --------------------------------------------
+ * The partner1_created / partner2_created branches below used to fire a
+ * blind `.from('people').insert(...)` whenever `loadPartners()` returned
+ * no row for the role. That produced duplicate live partner rows:
+ *   - loadPartners() filters `.in('role', ['partner1','partner2'])`, so a
+ *     real partner row whose role is null / 'partner' / mis-cased is
+ *     INVISIBLE to the find — the branch then inserts a second one.
+ *   - reconstruction runs repeatedly (a cron + signal triggers). If a
+ *     concurrent mergePeople had momentarily tombstoned the partner2
+ *     (it sets merged_into_id, reassigns children, then a later step
+ *     may role-correct), a sync that reads mid-merge sees no partner2
+ *     and inserts. The merge then leaves both alive.
+ *   Rixey carried 3 such weddings ("Mike & Mike", "Joseph & Joseph",
+ *   "(Unknown) & Ramsey") that came back after every manual merge.
+ *
+ * The fix: this is a match-and-update, not a blind insert. We re-read
+ * the wedding's people fresh and look for an adoptable row using, in
+ * priority order: (1) exact role match the loadPartners filter missed,
+ * (2) same first name (case-insensitive) as the profile claim, (3) the
+ * lone "other" role slot when the wedding has exactly one untyped row.
+ * Only when none of those match do we INSERT — meaning a duplicate
+ * partner row is impossible by construction.
+ *
+ * Returns the id of an existing adoptable row (caller should UPDATE its
+ * role/name), or null (caller should INSERT a fresh row).
+ */
+async function findAdoptablePartnerRow(
+  supabase: SupabaseClient,
+  weddingId: string,
+  role: 'partner1' | 'partner2',
+  claimFirst: string | null,
+): Promise<{ id: string; venue_id: string } | null> {
+  const { data, error } = await supabase
+    .from('people')
+    .select('id, venue_id, role, first_name')
+    .eq('wedding_id', weddingId)
+    .is('merged_into_id', null)
+  if (error || !data) return null
+  const rows = data as Array<{
+    id: string
+    venue_id: string
+    role: string | null
+    first_name: string | null
+  }>
+  if (rows.length === 0) return null
+
+  // Priority 1: a row already typed as this exact role (loadPartners
+  // could only have missed it on a race; adopt it, never duplicate it).
+  const exactRole = rows.find((r) => r.role === role)
+  if (exactRole) return { id: exactRole.id, venue_id: exactRole.venue_id }
+
+  // Priority 2: a row whose first name matches the profile claim — this
+  // is the same human under a stale/blank role. Adopt + re-role it.
+  if (claimFirst) {
+    const byName = rows.find((r) => namesEqual(r.first_name, claimFirst))
+    if (byName) return { id: byName.id, venue_id: byName.venue_id }
+  }
+
+  // Priority 3: exactly one row that is NOT the opposite partner — it is
+  // the unfilled slot for this role. Adopt it rather than inserting a
+  // sibling.
+  const opposite = role === 'partner1' ? 'partner2' : 'partner1'
+  const candidates = rows.filter((r) => r.role !== opposite)
+  if (candidates.length === 1) {
+    return { id: candidates[0].id, venue_id: candidates[0].venue_id }
+  }
+
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Sub-routines
 // ---------------------------------------------------------------------------
@@ -623,36 +699,29 @@ export async function syncProfileToPeople(
           const first = profileP1.first?.trim() || null
           const last = profileP1.last?.trim() || null
           if (first || last) {
-            let venueIdForInsert: string | null = null
-            const partner2Row = partners.find((p) => p.role === 'partner2') ?? null
-            if (partner2Row) {
-              venueIdForInsert = partner2Row.venue_id
-            } else {
-              const { data: wRow } = await supabase
-                .from('weddings')
-                .select('venue_id')
-                .eq('id', weddingId)
-                .maybeSingle()
-              venueIdForInsert = (wRow?.venue_id as string | null) ?? null
-            }
-            if (venueIdForInsert) {
-              const { data: newP1, error: insErr } = await supabase
+            // Match-and-update, not blind insert. loadPartners() only
+            // sees rows whose role is exactly 'partner1'/'partner2'; a
+            // real row under a null/'partner'/mis-cased role would be
+            // missed and a duplicate inserted. Re-query the live wedding
+            // for an adoptable row first. (2026-05-15 duplicate-partner
+            // root-cause fix — see findAdoptablePartnerRow doc above.)
+            const adoptable = await findAdoptablePartnerRow(
+              supabase,
+              weddingId,
+              'partner1',
+              first,
+            )
+            if (adoptable) {
+              const { error: updErr } = await supabase
                 .from('people')
-                .insert({
-                  venue_id: venueIdForInsert,
-                  wedding_id: weddingId,
-                  role: 'partner1',
-                  first_name: first,
-                  last_name: last,
-                })
-                .select('id')
-                .single()
-              if (insErr) {
-                console.warn(`[profile-to-people-sync] partner1 create failed: ${insErr.message}`)
-              } else if (newP1) {
+                .update({ role: 'partner1', first_name: first, last_name: last })
+                .eq('id', adoptable.id)
+              if (updErr) {
+                console.warn(`[profile-to-people-sync] partner1 adopt failed: ${updErr.message}`)
+              } else {
                 try {
                   const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
-                  await captureNameEvidence(supabase, newP1.id as string, {
+                  await captureNameEvidence(supabase, adoptable.id, {
                     first,
                     last,
                     source: 'reconstruct_profile_partner1',
@@ -663,17 +732,67 @@ export async function syncProfileToPeople(
                   )
                 }
                 updates.push({
-                  kind: 'partner1_created',
-                  personId: newP1.id as string,
-                  first,
-                  last,
+                  kind: 'name_updated',
+                  personId: adoptable.id,
+                  role: 'partner1',
+                  previous: { first: null, last: null },
+                  next: { first, last },
                   confidence: profileP1.confidence_0_100 ?? 0,
                 })
               }
             } else {
-              console.warn(
-                `[profile-to-people-sync] partner1 create skipped: no venue_id for wedding ${weddingId}`,
-              )
+              let venueIdForInsert: string | null = null
+              const partner2Row = partners.find((p) => p.role === 'partner2') ?? null
+              if (partner2Row) {
+                venueIdForInsert = partner2Row.venue_id
+              } else {
+                const { data: wRow } = await supabase
+                  .from('weddings')
+                  .select('venue_id')
+                  .eq('id', weddingId)
+                  .maybeSingle()
+                venueIdForInsert = (wRow?.venue_id as string | null) ?? null
+              }
+              if (venueIdForInsert) {
+                const { data: newP1, error: insErr } = await supabase
+                  .from('people')
+                  .insert({
+                    venue_id: venueIdForInsert,
+                    wedding_id: weddingId,
+                    role: 'partner1',
+                    first_name: first,
+                    last_name: last,
+                  })
+                  .select('id')
+                  .single()
+                if (insErr) {
+                  console.warn(`[profile-to-people-sync] partner1 create failed: ${insErr.message}`)
+                } else if (newP1) {
+                  try {
+                    const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+                    await captureNameEvidence(supabase, newP1.id as string, {
+                      first,
+                      last,
+                      source: 'reconstruct_profile_partner1',
+                    })
+                  } catch (capErr) {
+                    console.warn(
+                      `[profile-to-people-sync] partner1 evidence stamp failed: ${capErr instanceof Error ? capErr.message : String(capErr)}`,
+                    )
+                  }
+                  updates.push({
+                    kind: 'partner1_created',
+                    personId: newP1.id as string,
+                    first,
+                    last,
+                    confidence: profileP1.confidence_0_100 ?? 0,
+                  })
+                }
+              } else {
+                console.warn(
+                  `[profile-to-people-sync] partner1 create skipped: no venue_id for wedding ${weddingId}`,
+                )
+              }
             }
           }
         } catch (err) {
@@ -719,41 +838,85 @@ export async function syncProfileToPeople(
             const first = profileP2.first?.trim() || null
             const last = profileP2.last?.trim() || null
             if (first || last) {
-              const { data: newP2, error: insErr } = await supabase
-                .from('people')
-                .insert({
-                  venue_id: partner1Row.venue_id,
-                  wedding_id: weddingId,
-                  role: 'partner2',
-                  first_name: first,
-                  last_name: last,
-                })
-                .select('id')
-                .single()
-              if (insErr) {
-                console.warn(`[profile-to-people-sync] partner2 create failed: ${insErr.message}`)
-              } else if (newP2) {
-                // Stamp name_evidence via the chokepoint so the forensic
-                // record reflects this came from reconstruction.
-                try {
-                  const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
-                  await captureNameEvidence(supabase, newP2.id as string, {
+              // Match-and-update, not blind insert. The "missing
+              // partner2" the loadPartners find reported can be a real
+              // row that loadPartners' role filter (or a concurrent
+              // merge mid-tombstone) hid. Inserting unconditionally is
+              // exactly what produced Rixey's "Mike & Mike" /
+              // "Joseph & Joseph" duplicate-partner2 weddings. Re-query
+              // and adopt before inserting. (2026-05-15 root-cause fix.)
+              const adoptable = await findAdoptablePartnerRow(
+                supabase,
+                weddingId,
+                'partner2',
+                first,
+              )
+              if (adoptable) {
+                const { error: updErr } = await supabase
+                  .from('people')
+                  .update({ role: 'partner2', first_name: first, last_name: last })
+                  .eq('id', adoptable.id)
+                if (updErr) {
+                  console.warn(`[profile-to-people-sync] partner2 adopt failed: ${updErr.message}`)
+                } else {
+                  try {
+                    const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+                    await captureNameEvidence(supabase, adoptable.id, {
+                      first,
+                      last,
+                      source: 'reconstruct_profile_partner2',
+                    })
+                  } catch (capErr) {
+                    console.warn(
+                      `[profile-to-people-sync] partner2 evidence stamp failed: ${capErr instanceof Error ? capErr.message : String(capErr)}`,
+                    )
+                  }
+                  updates.push({
+                    kind: 'name_updated',
+                    personId: adoptable.id,
+                    role: 'partner2',
+                    previous: { first: null, last: null },
+                    next: { first, last },
+                    confidence: profileP2.confidence_0_100 ?? 0,
+                  })
+                }
+              } else {
+                const { data: newP2, error: insErr } = await supabase
+                  .from('people')
+                  .insert({
+                    venue_id: partner1Row.venue_id,
+                    wedding_id: weddingId,
+                    role: 'partner2',
+                    first_name: first,
+                    last_name: last,
+                  })
+                  .select('id')
+                  .single()
+                if (insErr) {
+                  console.warn(`[profile-to-people-sync] partner2 create failed: ${insErr.message}`)
+                } else if (newP2) {
+                  // Stamp name_evidence via the chokepoint so the forensic
+                  // record reflects this came from reconstruction.
+                  try {
+                    const { captureNameEvidence } = await import('@/lib/services/identity/name-capture')
+                    await captureNameEvidence(supabase, newP2.id as string, {
+                      first,
+                      last,
+                      source: 'reconstruct_profile_partner2',
+                    })
+                  } catch (capErr) {
+                    console.warn(
+                      `[profile-to-people-sync] partner2 evidence stamp failed: ${capErr instanceof Error ? capErr.message : String(capErr)}`,
+                    )
+                  }
+                  updates.push({
+                    kind: 'partner2_created',
+                    personId: newP2.id as string,
                     first,
                     last,
-                    source: 'reconstruct_profile_partner2',
+                    confidence: profileP2.confidence_0_100 ?? 0,
                   })
-                } catch (capErr) {
-                  console.warn(
-                    `[profile-to-people-sync] partner2 evidence stamp failed: ${capErr instanceof Error ? capErr.message : String(capErr)}`,
-                  )
                 }
-                updates.push({
-                  kind: 'partner2_created',
-                  personId: newP2.id as string,
-                  first,
-                  last,
-                  confidence: profileP2.confidence_0_100 ?? 0,
-                })
               }
             }
           }
