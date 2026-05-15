@@ -67,6 +67,15 @@ export default function CrmImportPage() {
   const [warnings, setWarnings] = useState<string[]>([])
   const [success, setSuccess] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Post-import breakdown: rows skipped pre-commit + deduped write
+  // failures + a migration hint when the schema is behind.
+  const [skippedRows, setSkippedRows] = useState<
+    Array<{ row: number; reasons: string[] }>
+  >([])
+  const [writeErrors, setWriteErrors] = useState<
+    Array<{ message: string; count: number }>
+  >([])
+  const [schemaHint, setSchemaHint] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/onboarding/crm-import')
@@ -86,6 +95,9 @@ export default function CrmImportPage() {
     setErrors([])
     setWarnings([])
     setSuccess(null)
+    setSkippedRows([])
+    setWriteErrors([])
+    setSchemaHint(null)
   }
 
   async function submit(asPreview: boolean) {
@@ -129,15 +141,23 @@ export default function CrmImportPage() {
         setPreview(data.rows ?? [])
         setPreviewTotal(data.total ?? 0)
       } else {
+        // The route always returns 200 now — a partial import is a
+        // success. data.message is the plain-language summary; the
+        // breakdowns explain exactly what didn't make it and why.
         setSuccess(
-          `Imported ${data.weddings_inserted} weddings · ` +
-          `${data.interactions_inserted} interactions · ` +
-          `${data.tours_inserted} tours · ` +
-          `${data.lost_deals_inserted} lost deals`
+          (data.message ?? `Imported ${data.weddings_inserted} of ${data.total_rows}.`) +
+          ` (${data.weddings_inserted} weddings · ${data.interactions_inserted} interactions · ` +
+          `${data.tours_inserted} tours · ${data.lost_deals_inserted} lost deals)`
         )
-        setPreview(null)
-        setCsv('')
-        if (data.errors?.length) setErrors(data.errors)
+        setSkippedRows(Array.isArray(data.skipped_invalid) ? data.skipped_invalid : [])
+        setWriteErrors(Array.isArray(data.write_errors) ? data.write_errors : [])
+        setSchemaHint(typeof data.schema_hint === 'string' ? data.schema_hint : null)
+        // Only clear the CSV when everything imported — leave it loaded
+        // so the coordinator can fix + re-run if some rows failed.
+        if (data.ok) {
+          setPreview(null)
+          setCsv('')
+        }
       }
     } catch (err) {
       setErrors([err instanceof Error ? err.message : 'Network error'])
@@ -363,9 +383,58 @@ export default function CrmImportPage() {
       )}
 
       {success && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-800 flex items-center gap-1.5">
-          <CheckCircle2 className="w-4 h-4" />
-          {success}
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-800 flex items-start gap-1.5">
+          <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>{success}</span>
+        </div>
+      )}
+
+      {/* Schema / migration hint — a failed write that traces to an
+          un-applied migration gets one clear line, not a wall of
+          Postgres errors. */}
+      {schemaHint && (
+        <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-xs text-red-900 flex items-start gap-1.5">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Database is behind</p>
+            <p>{schemaHint}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Deduped write failures — 112 identical errors collapse to one
+          line with a count. */}
+      {writeErrors.length > 0 && (
+        <div className="bg-red-50/70 border border-red-200 rounded-lg p-3 text-xs text-red-800 space-y-1">
+          <p className="font-medium">Could not be saved:</p>
+          {writeErrors.map((e, i) => (
+            <div key={i} className="flex items-start gap-1.5">
+              <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
+              <span>
+                {e.count > 1 && <strong>{e.count}× </strong>}
+                {e.message}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Rows skipped because their data did not validate. The good
+          rows still imported — these are listed so the coordinator can
+          fix the source CSV and re-run for just these. */}
+      {skippedRows.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 space-y-1">
+          <p className="font-medium">
+            {skippedRows.length} row{skippedRows.length === 1 ? '' : 's'} skipped — data didn&apos;t validate:
+          </p>
+          <div className="max-h-48 overflow-y-auto space-y-1">
+            {skippedRows.map((s) => (
+              <div key={s.row} className="flex items-start gap-1.5">
+                <span className="font-mono shrink-0">Row {s.row}:</span>
+                <span>{s.reasons.join('; ')}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

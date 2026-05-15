@@ -98,46 +98,112 @@ function isIsoLike(value: string | null | undefined): boolean {
   return !Number.isNaN(d.getTime())
 }
 
-function validateAllRows(rows: NormalisedLeadRow[]): string[] {
-  const errors: string[] = []
+/**
+ * Per-row validation. Returns rowIndex -> human reasons for every row
+ * that fails. The route SKIPS failing rows (with the reason surfaced
+ * to the coordinator) and imports the rest — it does NOT refuse the
+ * whole batch. commitNormalisedRows rolls back any single row that
+ * fails at insert time, so importing only the verified rows can never
+ * leave orphan wedding shells.
+ */
+function validateRows(rows: NormalisedLeadRow[]): Map<number, string[]> {
+  const byRow = new Map<number, string[]>()
+  const add = (idx: number, msg: string): void => {
+    const arr = byRow.get(idx) ?? []
+    arr.push(msg)
+    byRow.set(idx, arr)
+  }
   rows.forEach((row, idx) => {
     if (row.status && !VALID_STATUSES.has(row.status)) {
-      errors.push(`row ${idx + 1}: status='${row.status}' not in Bloom enum`)
+      add(idx, `status "${row.status}" is not a status Bloom recognises`)
     }
     if (
       row.guest_count_estimate !== null
       && row.guest_count_estimate !== undefined
       && (row.guest_count_estimate < 1 || row.guest_count_estimate > 1000)
     ) {
-      errors.push(`row ${idx + 1}: guest_count_estimate=${row.guest_count_estimate} out of range 1-1000`)
+      add(idx, `guest count ${row.guest_count_estimate} is outside the allowed 1-1000`)
     }
     if (
       row.booking_value !== null
       && row.booking_value !== undefined
       && row.booking_value < 0
     ) {
-      errors.push(`row ${idx + 1}: booking_value=${row.booking_value} cannot be negative`)
+      add(idx, `booking value cannot be negative`)
     }
-    if (!isIsoLike(row.wedding_date)) errors.push(`row ${idx + 1}: wedding_date='${row.wedding_date}' unparseable`)
-    if (!isIsoLike(row.inquiry_date)) errors.push(`row ${idx + 1}: inquiry_date='${row.inquiry_date}' unparseable`)
-    if (!isIsoLike(row.booked_at)) errors.push(`row ${idx + 1}: booked_at='${row.booked_at}' unparseable`)
-    if (!isIsoLike(row.lost_at)) errors.push(`row ${idx + 1}: lost_at='${row.lost_at}' unparseable`)
-
+    if (!isIsoLike(row.wedding_date)) add(idx, `wedding date "${row.wedding_date}" could not be read`)
+    if (!isIsoLike(row.inquiry_date)) add(idx, `inquiry date "${row.inquiry_date}" could not be read`)
+    if (!isIsoLike(row.booked_at)) add(idx, `booked date "${row.booked_at}" could not be read`)
+    if (!isIsoLike(row.lost_at)) add(idx, `lost date "${row.lost_at}" could not be read`)
     for (const interaction of row.interactions ?? []) {
-      if (!isIsoLike(interaction.occurred_at)) {
-        errors.push(`row ${idx + 1}: interaction occurred_at='${interaction.occurred_at}' unparseable`)
-      }
+      if (!isIsoLike(interaction.occurred_at)) add(idx, `an interaction date could not be read`)
     }
     for (const tour of row.tours ?? []) {
-      if (!isIsoLike(tour.scheduled_at)) {
-        errors.push(`row ${idx + 1}: tour scheduled_at='${tour.scheduled_at}' unparseable`)
-      }
+      if (!isIsoLike(tour.scheduled_at)) add(idx, `a tour date could not be read`)
     }
     if (row.lost_deal && !isIsoLike(row.lost_deal.lost_at)) {
-      errors.push(`row ${idx + 1}: lost_deal.lost_at='${row.lost_deal.lost_at}' unparseable`)
+      add(idx, `the lost-deal date could not be read`)
     }
   })
-  return errors
+  return byRow
+}
+
+interface WriteErrorSummary {
+  unique: Array<{ message: string; count: number }>
+  schema_hint: string | null
+}
+
+/**
+ * Collapse per-row commit errors into a deduped summary. 112 identical
+ * Postgres errors become one line with a count. If the errors carry a
+ * missing-column signature, derive a plain-language migration hint —
+ * so a failed import says "apply the migration" instead of dumping a
+ * wall of schema-cache errors.
+ */
+function summariseWriteErrors(errors: string[]): WriteErrorSummary {
+  const counts = new Map<string, number>()
+  for (const e of errors) counts.set(e, (counts.get(e) ?? 0) + 1)
+  const unique = Array.from(counts.entries())
+    .map(([message, count]) => ({ message, count }))
+    .sort((a, b) => b.count - a.count)
+  let schema_hint: string | null = null
+  for (const { message } of unique) {
+    const m = message.match(
+      /could not find the '([^']+)' column|column "?([a-zA-Z_]+)"? does not exist/i,
+    )
+    if (m) {
+      const col = m[1] ?? m[2]
+      schema_hint =
+        `The database is missing the "${col}" column on weddings — a pending ` +
+        `migration has not been applied. Apply the latest migrations, then re-import.`
+      break
+    }
+  }
+  return { unique, schema_hint }
+}
+
+function buildImportMessage(
+  total: number,
+  imported: number,
+  skippedInvalid: number,
+  write: WriteErrorSummary,
+): string {
+  if (total === 0) return 'The file had no data rows to import.'
+  if (imported === total && skippedInvalid === 0 && write.unique.length === 0) {
+    return `Imported all ${total} rows.`
+  }
+  const parts: string[] = [`Imported ${imported} of ${total}.`]
+  if (skippedInvalid > 0) {
+    parts.push(
+      `${skippedInvalid} row${skippedInvalid === 1 ? '' : 's'} skipped — the data did not validate (details below).`,
+    )
+  }
+  const failedAtWrite = write.unique.reduce((s, e) => s + e.count, 0)
+  if (failedAtWrite > 0) {
+    parts.push(`${failedAtWrite} could not be saved.`)
+    parts.push(write.schema_hint ?? `Reason: ${write.unique[0]!.message}`)
+  }
+  return parts.join(' ')
 }
 
 export async function POST(request: NextRequest) {
@@ -222,32 +288,37 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  // #88 (T5-followup-CC): atomic-ish commit. Supabase JS doesn't expose
-  // explicit BEGIN/COMMIT and the per-adapter commit loop writes
-  // weddings → people → interactions → tours → lost_deals row-by-row.
-  // Pre-fix a single bad row (unparseable date, unknown status, out-of-
-  // range headcount) committed earlier rows and left orphan weddings
-  // shells with no children. Cheapest fix without a server-side RPC:
-  // validate every row first, only proceed to commit if 100% pass.
-  const validationErrors = validateAllRows(parsed.rows)
-  if (validationErrors.length > 0) {
-    return NextResponse.json({
-      ok: false,
-      adapter: adapter.name,
-      ready: adapter.ready,
-      errors: validationErrors,
-      warnings: parsed.warnings,
-      reason: 'validation_failed_pre_commit',
-      rows: [],
-    }, { status: 400 })
-  }
+  // Per-row validation. A row that fails is SKIPPED with a reason the
+  // coordinator sees — it does NOT refuse the whole batch. The verified
+  // rows still import. commitNormalisedRows rolls back any single row
+  // that fails at insert time, so a partial import never leaves orphan
+  // wedding shells.
+  const rowErrors = validateRows(parsed.rows)
+  const validRows: NormalisedLeadRow[] = []
+  const skippedInvalid: Array<{ row: number; reasons: string[] }> = []
+  parsed.rows.forEach((row, i) => {
+    const errs = rowErrors.get(i)
+    if (errs && errs.length > 0) skippedInvalid.push({ row: i + 1, reasons: errs })
+    else validRows.push(row)
+  })
 
   const supabase = createServiceClient()
-  const commitResult = await adapter.commit({
-    supabase,
-    venueId: auth.venueId,
-    rows: parsed.rows,
-  })
+  const commitResult =
+    validRows.length > 0
+      ? await adapter.commit({
+          supabase,
+          venueId: auth.venueId,
+          rows: validRows,
+        })
+      : {
+          ok: true,
+          weddingsInserted: 0,
+          interactionsInserted: 0,
+          toursInserted: 0,
+          lostDealsInserted: 0,
+          errors: [] as string[],
+          touchedWeddingIds: [] as string[],
+        }
 
   // Wave 4 Phase 4c: raw-source persistence + import_runs audit row.
   // The existing endpoint already does the right adapter dispatch; we
@@ -282,18 +353,38 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  const writeErrors = summariseWriteErrors(commitResult.errors)
+  const message = buildImportMessage(
+    parsed.rows.length,
+    commitResult.weddingsInserted,
+    skippedInvalid.length,
+    writeErrors,
+  )
+
+  // Always 200 — a partial import is a success, not an HTTP error. The
+  // `ok` flag + `message` tell the coordinator the real state.
   return NextResponse.json({
-    ok: commitResult.ok,
+    ok:
+      commitResult.ok
+      && skippedInvalid.length === 0
+      && commitResult.errors.length === 0,
     adapter: adapter.name,
+    message,
+    total_rows: parsed.rows.length,
     weddings_inserted: commitResult.weddingsInserted,
     interactions_inserted: commitResult.interactionsInserted,
     tours_inserted: commitResult.toursInserted,
     lost_deals_inserted: commitResult.lostDealsInserted,
+    // Rows that failed pre-commit validation, each with a plain reason.
+    skipped_invalid: skippedInvalid,
+    // Deduped commit-time failures + a migration hint when applicable.
+    write_errors: writeErrors.unique,
+    schema_hint: writeErrors.schema_hint,
     errors: commitResult.errors,
     warnings: parsed.warnings,
     import_run_id: importRunId,
     reconstruction_enqueued_count: reconstructionEnqueuedCount,
-  }, { status: commitResult.ok ? 200 : 500 })
+  }, { status: 200 })
 }
 
 function deriveFilenameFromBody(adapterName: string, body: RequestBody): string {
