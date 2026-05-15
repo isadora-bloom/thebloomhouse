@@ -35,12 +35,27 @@ const ALLOWED_FIELDS = [
   'is_draft',
 ] as const
 
-function pick(body: Record<string, unknown>, fields: readonly string[]) {
+const INTERNAL_KEYS = new Set([
+  'id', 'venue_id', 'wedding_id', 'created_at', 'updated_at', 'extra_fields',
+])
+
+/**
+ * Whitelisted fields + leftovers. Off-whitelist keys used to be
+ * silently dropped; now they are returned as `extras` and stored in
+ * wedding_tables.extra_fields (migration 353).
+ */
+function pickWithExtras(body: Record<string, unknown>, fields: readonly string[]) {
+  const allowed = new Set(fields)
   const result: Record<string, unknown> = {}
-  for (const key of fields) {
-    if (key in body) result[key] = body[key]
+  const extras: Record<string, unknown> = {}
+  for (const [key, val] of Object.entries(body)) {
+    if (allowed.has(key)) result[key] = val
+    else if (!INTERNAL_KEYS.has(key)) extras[key] = val
   }
-  return result
+  return {
+    fields: result,
+    extras: Object.keys(extras).length > 0 ? extras : null,
+  }
 }
 
 // ---- GET ----
@@ -75,7 +90,8 @@ export async function POST(request: NextRequest) {
   try {
     const supabase = createServiceClient()
     const body = await request.json()
-    const fields = pick(body, ALLOWED_FIELDS)
+    const { fields, extras } = pickWithExtras(body, ALLOWED_FIELDS)
+    const extraPatch = extras ? { extra_fields: extras } : {}
 
     // Check if record exists
     const { data: existing } = await supabase
@@ -89,7 +105,7 @@ export async function POST(request: NextRequest) {
       // Update
       const { data, error } = await supabase
         .from('wedding_tables')
-        .update({ ...fields, updated_at: new Date().toISOString() })
+        .update({ ...fields, ...extraPatch, updated_at: new Date().toISOString() })
         .eq('id', existing.id)
         .eq('venue_id', auth.venueId)
         .eq('wedding_id', auth.weddingId)
@@ -117,6 +133,7 @@ export async function POST(request: NextRequest) {
           venue_id: auth.venueId,
           wedding_id: auth.weddingId,
           ...fields,
+          ...extraPatch,
         })
         .select()
         .single()

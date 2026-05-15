@@ -311,6 +311,7 @@ export const MODE_INTEL: ModeConfig = {
         // them. See IDENTITY-FIRST-ARCHITECTURE.md §6.
         { label: 'Couples', href: '/intel/couples', icon: UserCheck },
         { label: 'Identity Review', href: '/intel/identity-review', icon: Sparkles },
+        { label: 'Data Fields', href: '/intel/data-fields', icon: Database },
         { label: 'All Clients (legacy)', href: '/intel/clients', icon: UserCheck },
         { label: 'Matching / Dedup', href: '/intel/matching', icon: GitMerge },
         { label: 'Candidate Review (legacy)', href: '/intel/candidates', icon: Sparkles },

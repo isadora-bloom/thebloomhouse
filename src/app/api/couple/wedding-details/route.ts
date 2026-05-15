@@ -32,12 +32,30 @@ const ALLOWED_FIELDS = [
   'custom_field_values',
 ] as const
 
-function pick(body: Record<string, unknown>, fields: readonly string[]) {
+// Internal columns a couple POST should never set directly.
+const INTERNAL_KEYS = new Set([
+  'id', 'venue_id', 'wedding_id', 'created_at', 'updated_at', 'extra_fields',
+])
+
+/**
+ * Split the body into whitelisted fields + everything else. Previously
+ * anything off the whitelist was silently dropped (the pick() drop);
+ * now the leftovers are returned as `extras` and stored in
+ * wedding_details.extra_fields (migration 353) so couple-submitted
+ * data is never lost.
+ */
+function pickWithExtras(body: Record<string, unknown>, fields: readonly string[]) {
+  const allowed = new Set(fields)
   const result: Record<string, unknown> = {}
-  for (const key of fields) {
-    if (key in body) result[key] = body[key]
+  const extras: Record<string, unknown> = {}
+  for (const [key, val] of Object.entries(body)) {
+    if (allowed.has(key)) result[key] = val
+    else if (!INTERNAL_KEYS.has(key)) extras[key] = val
   }
-  return result
+  return {
+    fields: result,
+    extras: Object.keys(extras).length > 0 ? extras : null,
+  }
 }
 
 // ---- GET ----
@@ -72,7 +90,11 @@ export async function POST(request: NextRequest) {
   try {
     const supabase = createServiceClient()
     const body = await request.json()
-    const fields = pick(body, ALLOWED_FIELDS)
+    const { fields, extras } = pickWithExtras(body, ALLOWED_FIELDS)
+    // Only include extra_fields in the write when the couple actually
+    // submitted off-whitelist keys — don't clobber a stored value with
+    // null on a normal submit.
+    const extraPatch = extras ? { extra_fields: extras } : {}
 
     // Check if record exists
     const { data: existing } = await supabase
@@ -86,7 +108,7 @@ export async function POST(request: NextRequest) {
       // Update
       const { data, error } = await supabase
         .from('wedding_details')
-        .update({ ...fields, updated_at: new Date().toISOString() })
+        .update({ ...fields, ...extraPatch, updated_at: new Date().toISOString() })
         .eq('id', existing.id)
         .eq('venue_id', auth.venueId)
         .eq('wedding_id', auth.weddingId)
@@ -114,6 +136,7 @@ export async function POST(request: NextRequest) {
           venue_id: auth.venueId,
           wedding_id: auth.weddingId,
           ...fields,
+          ...extraPatch,
         })
         .select()
         .single()
