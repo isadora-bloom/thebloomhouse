@@ -1,0 +1,386 @@
+{
+  "_meta": {
+    "purpose": "Phase B matcher 90%-accuracy gate. Doctrine §2 last paragraph.",
+    "anchor": "IDENTITY-FIRST-ARCHITECTURE.md §2 + Appendix B stop #2",
+    "schema": {
+      "primary": "MatchableRecord (see matcher.ts)",
+      "secondary": "MatchableRecord",
+      "expected_tier": "high | medium | low | below_threshold",
+      "notes": "free text explaining why the human labeler chose this tier"
+    },
+    "labeling_rules": [
+      "Each case represents what the deterministic matcher should output. The LLM judge runs AFTER on score-40-90 cases and can upgrade/downgrade; that's a separate gate.",
+      "high: would a human auto-merge without thinking. Email/phone exact OR partner-email-cross + corroboration. Score >= 100.",
+      "medium: looks like the same person, surface for operator confirm. Full-name + temporal proximity, no email overlap. Score 60-99.",
+      "low: possible same person, soft candidate. First+last-initial + same-date OR session-signals only. Score 30-59.",
+      "below_threshold: do not surface. First-name only, single weak signal. Score <30."
+    ],
+    "tuning_workflow": "npx tsx scripts/matcher-acceptance.ts. Failures print per-pair with direction (over-merge vs under-merge)."
+  },
+  "pairs": [
+    {
+      "case_id": "exact-email-gmail-dot",
+      "primary": { "id": "a1", "primary_name": "Sarah Johnson", "primary_email": "sarah.johnson@gmail.com", "wedding_date": "2025-08-15" },
+      "secondary": { "id": "b1", "primary_name": "Sarah J.", "primary_email": "sarahjohnson@gmail.com", "wedding_date": "2025-08-15" },
+      "expected_tier": "high",
+      "notes": "Gmail dot-canonicalisation matches. email_exact (100) + wedding_date (30) = 130."
+    },
+    {
+      "case_id": "exact-phone-formats",
+      "primary": { "id": "a2", "primary_name": "Madeline Evans", "primary_phone": "+15551234567", "wedding_date": "2026-06-20" },
+      "secondary": { "id": "b2", "primary_name": "Maddie E.", "primary_phone": "(555) 123-4567", "wedding_date": "2026-06-20" },
+      "expected_tier": "high",
+      "notes": "Phone normalises across formats. phone_exact (100) + wedding_date (30) = 130."
+    },
+    {
+      "case_id": "partner-email-cross",
+      "primary": { "id": "a3", "primary_name": "James Wilson", "partner_email": "emma.wilson@yahoo.com", "wedding_date": "2025-09-12" },
+      "secondary": { "id": "b3", "primary_name": "Emma Wilson", "primary_email": "emma.wilson@yahoo.com", "wedding_date": "2025-09-12" },
+      "expected_tier": "high",
+      "notes": "partner_email cross (95) + wedding_date (30) = 125."
+    },
+    {
+      "case_id": "full-name-same-date",
+      "primary": { "id": "a4", "primary_name": "Olivia Martinez", "wedding_date": "2025-10-04" },
+      "secondary": { "id": "b4", "primary_name": "Olivia Martinez", "wedding_date": "2025-10-04" },
+      "expected_tier": "medium",
+      "notes": "Full name (60) + wedding_date (30) = 90. Judge band."
+    },
+    {
+      "case_id": "full-name-date-30d-gap",
+      "primary": { "id": "a5", "primary_name": "Ava Thompson", "wedding_date": "2025-07-12" },
+      "secondary": { "id": "b5", "primary_name": "Ava Thompson", "wedding_date": "2025-07-25" },
+      "expected_tier": "medium",
+      "notes": "Full name (60) + wedding_date (30) = 90."
+    },
+    {
+      "case_id": "first-plus-initial-same-date",
+      "primary": { "id": "a6", "primary_name": "Liam Brown", "wedding_date": "2025-09-19" },
+      "secondary": { "id": "b6", "primary_name": "Liam B.", "wedding_date": "2025-09-19" },
+      "expected_tier": "low",
+      "notes": "first+last-initial (25) + wedding_date (30) = 55. Low band."
+    },
+    {
+      "case_id": "levenshtein-typo",
+      "primary": { "id": "a7", "primary_name": "Madeline Evans", "wedding_date": "2025-08-30" },
+      "secondary": { "id": "b7", "primary_name": "Madelyn Evans", "wedding_date": "2025-08-30" },
+      "expected_tier": "medium",
+      "notes": "Both have 2 tokens. fullNameMatches('madeline evans','madelyn evans')=false (different first), but levenshtein2 across whole string. Actually 'madeline evans' vs 'madelyn evans' is 1 edit. name_levenshtein_2 (40) + wedding_date (30) = 70."
+    },
+    {
+      "case_id": "different-people-shared-first",
+      "primary": { "id": "a8", "primary_name": "Sarah Johnson", "wedding_date": "2024-05-01" },
+      "secondary": { "id": "b8", "primary_name": "Sarah Williams", "wedding_date": "2026-08-30" },
+      "expected_tier": "below_threshold",
+      "notes": "Different last names, 2+ years apart. fullNameMatches false, levenshtein2 false, first+initial doesn't fire (different initials). 0."
+    },
+    {
+      "case_id": "first-name-only-distant-dates",
+      "primary": { "id": "a9", "primary_name": "Emma", "wedding_date": "2024-03-15" },
+      "secondary": { "id": "b9", "primary_name": "Emma", "wedding_date": "2026-11-20" },
+      "expected_tier": "below_threshold",
+      "notes": "Single-token names don't fire fullNameMatches. No last-initial. 0."
+    },
+    {
+      "case_id": "email-mismatch-name-match",
+      "primary": { "id": "a10", "primary_name": "Noah Davis", "primary_email": "noah.davis@gmail.com", "wedding_date": "2025-09-15" },
+      "secondary": { "id": "b10", "primary_name": "Noah Davis", "primary_email": "different.noah@gmail.com", "wedding_date": "2025-09-15" },
+      "expected_tier": "medium",
+      "notes": "Different emails (no match), full name (60) + wedding_date (30) = 90. Judge should flag the email conflict."
+    },
+    {
+      "case_id": "cross-channel-temporal-tight",
+      "primary": { "id": "a11", "primary_name": "Mia Rodriguez", "observed_at": "2025-06-10T14:00:00Z" },
+      "secondary": { "id": "b11", "primary_name": "Mia Rodriguez", "observed_at": "2025-06-10T17:00:00Z" },
+      "expected_tier": "medium",
+      "notes": "Full name (60) + cross-channel <6h (35) = 95. Judge band."
+    },
+    {
+      "case_id": "cross-channel-temporal-loose",
+      "primary": { "id": "a12", "primary_name": "Mia R.", "observed_at": "2025-06-10T14:00:00Z" },
+      "secondary": { "id": "b12", "primary_name": "Mia Rodriguez", "observed_at": "2025-06-19T14:00:00Z" },
+      "expected_tier": "low",
+      "notes": "first+last-initial (25) + cross-channel <2w (10) = 35."
+    },
+    {
+      "case_id": "session-fingerprint-with-name",
+      "primary": { "id": "a13", "primary_name": "Charlotte Lee", "session_fingerprint": "fp_abc123" },
+      "secondary": { "id": "b13", "primary_name": "Charlotte Lee", "session_fingerprint": "fp_abc123" },
+      "expected_tier": "medium",
+      "notes": "Full name (60) + fingerprint (25) = 85."
+    },
+    {
+      "case_id": "ip-fingerprint-anonymous",
+      "primary": { "id": "a14", "session_ip": "192.0.2.55", "session_fingerprint": "fp_xyz", "observed_at": "2025-06-15T10:00:00Z" },
+      "secondary": { "id": "b14", "session_ip": "192.0.2.55", "session_fingerprint": "fp_xyz", "observed_at": "2025-06-15T11:00:00Z" },
+      "expected_tier": "medium",
+      "notes": "No names. IP (20) + fingerprint (25) + cross-channel <6h (35) = 80."
+    },
+    {
+      "case_id": "ghost-resurrection",
+      "primary": { "id": "a15", "primary_name": "William Garcia", "primary_email": "will.garcia@gmail.com", "wedding_date": "2024-04-20" },
+      "secondary": { "id": "b15", "primary_name": "William Garcia", "primary_email": "will.garcia@gmail.com", "wedding_date": "2026-09-15" },
+      "expected_tier": "high",
+      "notes": "Same email + full name. 100+60=160. Tracer policy surfaces this as resurrection candidate, not silent revival."
+    },
+    {
+      "case_id": "knot-save-then-inquiry",
+      "primary": { "id": "a16", "primary_name": "Sophia W.", "observed_at": "2025-04-01T09:00:00Z" },
+      "secondary": { "id": "b16", "primary_name": "Sophia Williams", "primary_email": "sophia.w@gmail.com", "observed_at": "2025-04-03T15:00:00Z" },
+      "expected_tier": "low",
+      "notes": "first+last-initial (25) + cross-channel <2w (10) = 35. ~2.25d gap, outside 48h band."
+    },
+    {
+      "case_id": "two-different-couples-same-date",
+      "primary": { "id": "a17", "primary_name": "Daniel Garcia", "wedding_date": "2026-05-22" },
+      "secondary": { "id": "b17", "primary_name": "Aiden Hernandez", "wedding_date": "2026-05-22" },
+      "expected_tier": "low",
+      "notes": "Different names, same date. wedding_date (30) only. Low band by score; matcher correctly defers — operator/judge would reject."
+    },
+    {
+      "case_id": "agent-multi-couple",
+      "primary": { "id": "a18", "primary_name": "Jessica Planner", "primary_email": "jessica@plannercollective.com", "wedding_date": "2025-08-01" },
+      "secondary": { "id": "b18", "primary_name": "Sarah Bride", "partner_email": "jessica@plannercollective.com", "wedding_date": "2025-09-15" },
+      "expected_tier": "medium",
+      "notes": "partner_email cross (95). Judge band; the LLM judge + agent-inference stage handle the upgrade to agent class."
+    },
+    {
+      "case_id": "email-typo-same-date",
+      "primary": { "id": "a19", "primary_name": "Henry Anderson", "primary_email": "henry.anderson@gmail.com", "wedding_date": "2025-09-08" },
+      "secondary": { "id": "b19", "primary_name": "Henry Anderson", "primary_email": "henry.andersno@gmail.com", "wedding_date": "2025-09-08" },
+      "expected_tier": "medium",
+      "notes": "Typo emails don't match exact. full name (60) + wedding_date (30) = 90. Judge should catch the typo and upgrade."
+    },
+    {
+      "case_id": "partner-cross-pair-names",
+      "primary": { "id": "a20", "primary_name": "Lucas Miller", "partner_name": "Ava Miller", "wedding_date": "2025-10-15" },
+      "secondary": { "id": "b20", "primary_name": "Ava Miller", "partner_name": "Lucas Miller", "wedding_date": "2025-10-15" },
+      "expected_tier": "medium",
+      "notes": "Cross-pair full-name match (60) + wedding_date (30) = 90."
+    },
+    {
+      "case_id": "full-name-no-date",
+      "primary": { "id": "a21", "primary_name": "Ethan Wright" },
+      "secondary": { "id": "b21", "primary_name": "Ethan Wright" },
+      "expected_tier": "medium",
+      "notes": "Full name only (60). Exactly at medium threshold."
+    },
+    {
+      "case_id": "fragment-fragment-coalesce",
+      "primary": { "id": "a22", "primary_name": "Ava B.", "observed_at": "2025-07-01T10:00:00Z" },
+      "secondary": { "id": "b22", "primary_name": "Ava B.", "observed_at": "2025-07-02T10:00:00Z" },
+      "expected_tier": "medium",
+      "notes": "Both 'Ava B.' tokenise as 2 tokens (Ava + B.) so fullNameMatches fires (60). Plus cross-channel <48h (20) = 80. The matcher treats 'Ava B.' as a full string match; the Tracer policy is what decides this is channel-scoped, not Resolved."
+    },
+    {
+      "case_id": "fragment-different-channels",
+      "primary": { "id": "a22b", "primary_name": "Charlotte", "observed_at": "2025-05-01T10:00:00Z" },
+      "secondary": { "id": "b22b", "primary_name": "Charlotte Davis", "observed_at": "2025-05-14T10:00:00Z" },
+      "expected_tier": "below_threshold",
+      "notes": "Single-token primary, no last-initial, 13d gap. Only cross-channel <2w (10). Below threshold."
+    },
+    {
+      "case_id": "double-cross-pair",
+      "primary": { "id": "a23", "primary_name": "Olivia Smith", "partner_name": "Jack Smith", "primary_email": "olivia@example.com" },
+      "secondary": { "id": "b23", "primary_name": "Jack Smith", "partner_name": "Olivia Smith", "primary_email": "jack@example.com" },
+      "expected_tier": "medium",
+      "notes": "Cross-pair full name (60). Different emails. 60. Medium threshold."
+    },
+    {
+      "case_id": "session-only-fingerprint-tight",
+      "primary": { "id": "a24", "session_fingerprint": "fp_a", "observed_at": "2025-08-01T10:00:00Z" },
+      "secondary": { "id": "b24", "session_fingerprint": "fp_a", "observed_at": "2025-08-01T11:00:00Z" },
+      "expected_tier": "medium",
+      "notes": "fingerprint (25) + cross-channel <6h (35) = 60. Medium threshold."
+    },
+    {
+      "case_id": "email-only-no-name-tight",
+      "primary": { "id": "a25", "primary_email": "contact@example.com", "observed_at": "2025-07-10T10:00:00Z" },
+      "secondary": { "id": "b25", "primary_email": "contact@example.com", "observed_at": "2025-07-10T15:00:00Z" },
+      "expected_tier": "high",
+      "notes": "email_exact (100) + cross-channel <6h (35) = 135."
+    },
+    {
+      "case_id": "common-name-distant-dates",
+      "primary": { "id": "a26", "primary_name": "John Smith", "wedding_date": "2025-05-10" },
+      "secondary": { "id": "b26", "primary_name": "John Smith", "wedding_date": "2026-03-22" },
+      "expected_tier": "medium",
+      "notes": "Full name (60). Distant dates so wedding_date doesn't fire. 60. Medium. Operator likely rejects but matcher correctly defers."
+    },
+    {
+      "case_id": "gmail-plus-addressing",
+      "primary": { "id": "a27", "primary_name": "Daniel King", "primary_email": "daniel.king+wedding@gmail.com", "wedding_date": "2025-11-01" },
+      "secondary": { "id": "b27", "primary_name": "Dan King", "primary_email": "danielking@gmail.com", "wedding_date": "2025-11-01" },
+      "expected_tier": "high",
+      "notes": "Gmail canonicalisation drops dot+plus. email_exact (100) + wedding_date (30) = 130."
+    },
+    {
+      "case_id": "phone-with-extension",
+      "primary": { "id": "a28", "primary_name": "Lily Thomas", "primary_phone": "555-0100x123" },
+      "secondary": { "id": "b28", "primary_name": "Lily Thomas", "primary_phone": "(555) 010-0123" },
+      "expected_tier": "high",
+      "notes": "Phone normalisation strips letters/punctuation. phone_exact (100) + full name (60) = 160."
+    },
+    {
+      "case_id": "different-phone-same-name-date",
+      "primary": { "id": "a29", "primary_name": "Mason Robinson", "primary_phone": "+15551111111", "wedding_date": "2025-09-01" },
+      "secondary": { "id": "b29", "primary_name": "Mason Robinson", "primary_phone": "+15552222222", "wedding_date": "2025-09-01" },
+      "expected_tier": "medium",
+      "notes": "Different phones (no match). Full name (60) + wedding_date (30) = 90."
+    },
+    {
+      "case_id": "agent-same-email-different-couples",
+      "primary": { "id": "a30", "primary_name": "Jessica Planner", "primary_email": "jessica@plannercollective.com", "wedding_date": "2025-08-01" },
+      "secondary": { "id": "b30", "primary_name": "Jessica Planner", "primary_email": "jessica@plannercollective.com", "wedding_date": "2025-11-15" },
+      "expected_tier": "high",
+      "notes": "Same email + same name. 100+60=160. The agent-inference stage in the Tracer (not the matcher) decides whether this is one human acting on behalf of two couples."
+    },
+    {
+      "case_id": "partner-email-no-other-signal",
+      "primary": { "id": "a31", "primary_name": "Noah Wright", "primary_email": "noah@example.com", "wedding_date": "2025-10-10" },
+      "secondary": { "id": "b31", "primary_name": "Olivia Wright", "partner_email": "noah@example.com", "wedding_date": "2025-10-10" },
+      "expected_tier": "high",
+      "notes": "partner_email cross (95) + wedding_date (30) = 125."
+    },
+    {
+      "case_id": "completely-different",
+      "primary": { "id": "a32", "primary_name": "James Smith", "primary_email": "j.smith@example.com", "wedding_date": "2024-01-15" },
+      "secondary": { "id": "b32", "primary_name": "Lucas Jones", "primary_email": "lucas@example.com", "wedding_date": "2026-12-25" },
+      "expected_tier": "below_threshold",
+      "notes": "0 signals."
+    },
+    {
+      "case_id": "calendly-followup",
+      "primary": { "id": "a33", "primary_name": "Emily Hill", "primary_email": "emily.hill@gmail.com", "observed_at": "2025-08-12T14:00:00Z" },
+      "secondary": { "id": "b33", "primary_name": "Emily Hill", "primary_email": "emily.hill@gmail.com", "observed_at": "2025-08-12T14:30:00Z" },
+      "expected_tier": "high",
+      "notes": "email_exact (100) + full name (60) + cross-channel <6h (35) = 195."
+    },
+    {
+      "case_id": "different-domains-typo-name",
+      "primary": { "id": "a34", "primary_name": "Madeline E.", "primary_email": "maddie@yahoo.com", "observed_at": "2025-06-01T10:00:00Z" },
+      "secondary": { "id": "b34", "primary_name": "Madeline Evans", "primary_email": "maddie@gmail.com", "observed_at": "2025-06-02T10:00:00Z" },
+      "expected_tier": "low",
+      "notes": "Different email domains so no match. first+last-initial (25) + cross-channel <48h (20) = 45."
+    },
+    {
+      "case_id": "shared-fingerprint-different-people",
+      "primary": { "id": "a35", "primary_name": "Sarah Brown", "session_fingerprint": "fp_shared", "observed_at": "2025-08-01T10:00:00Z" },
+      "secondary": { "id": "b35", "primary_name": "Daniel Green", "session_fingerprint": "fp_shared", "observed_at": "2025-09-15T10:00:00Z" },
+      "expected_tier": "below_threshold",
+      "notes": "Different names. Just fingerprint (25). Below 30."
+    },
+    {
+      "case_id": "name-match-no-temporal",
+      "primary": { "id": "a36", "primary_name": "Logan Carter" },
+      "secondary": { "id": "b36", "primary_name": "Logan Carter" },
+      "expected_tier": "medium",
+      "notes": "Full name only (60). Medium threshold."
+    },
+    {
+      "case_id": "wedding-date-only",
+      "primary": { "id": "a37", "wedding_date": "2026-04-15" },
+      "secondary": { "id": "b37", "wedding_date": "2026-04-15" },
+      "expected_tier": "low",
+      "notes": "wedding_date (30) only. Exactly at low threshold."
+    },
+    {
+      "case_id": "self-match-short-circuit",
+      "primary": { "id": "same-id", "primary_name": "Ella Diaz", "primary_email": "ella@example.com" },
+      "secondary": { "id": "same-id", "primary_name": "Ella Diaz", "primary_email": "ella@example.com" },
+      "expected_tier": "below_threshold",
+      "notes": "Same id short-circuits to 0/below_threshold even with strong signals."
+    },
+    {
+      "case_id": "first-only-temporal-tight",
+      "primary": { "id": "a38", "primary_name": "Liam", "observed_at": "2025-05-10T10:00:00Z" },
+      "secondary": { "id": "b38", "primary_name": "Liam", "observed_at": "2025-05-10T13:00:00Z" },
+      "expected_tier": "low",
+      "notes": "Single-token names so fullNameMatches doesn't fire. cross-channel <6h (35) only. Low band."
+    },
+    {
+      "case_id": "knot-channel-scoped-distant",
+      "primary": { "id": "a39", "primary_name": "Sophie M.", "observed_at": "2025-06-15T10:00:00Z" },
+      "secondary": { "id": "b39", "primary_name": "Sophie Morris", "primary_email": "sophie.m@gmail.com", "wedding_date": "2025-09-22", "observed_at": "2025-06-18T10:00:00Z" },
+      "expected_tier": "low",
+      "notes": "first+last-initial (25) + cross-channel <2w (10) = 35."
+    },
+    {
+      "case_id": "phone-and-name-high",
+      "primary": { "id": "a40", "primary_name": "Isabella Lopez", "primary_phone": "+15553334444", "wedding_date": "2025-12-05" },
+      "secondary": { "id": "b40", "primary_name": "Isabella Lopez", "primary_phone": "+15553334444", "wedding_date": "2025-12-05" },
+      "expected_tier": "high",
+      "notes": "phone_exact (100) + full name (60) + wedding_date (30) = 190."
+    },
+    {
+      "case_id": "name-levenshtein-2-edit-no-date",
+      "primary": { "id": "a41", "primary_name": "Caitlin Ross" },
+      "secondary": { "id": "b41", "primary_name": "Caitlyn Ross" },
+      "expected_tier": "low",
+      "notes": "fullNameMatches false. name_levenshtein_within_2 (40). Just 40. Low."
+    },
+    {
+      "case_id": "knot-fragment-pair",
+      "primary": { "id": "a42", "primary_name": "Owen P.", "observed_at": "2025-03-15T10:00:00Z" },
+      "secondary": { "id": "b42", "primary_name": "Owen P.", "observed_at": "2025-03-15T22:00:00Z" },
+      "expected_tier": "medium",
+      "notes": "'Owen P.' tokenises as full name. fullNameMatches (60) + cross-channel <48h (20) = 80."
+    },
+    {
+      "case_id": "levenshtein-trap-last-initial",
+      "primary": { "id": "a43", "primary_name": "Anonymous A" },
+      "secondary": { "id": "b43", "primary_name": "Anonymous B" },
+      "expected_tier": "low",
+      "notes": "'Anonymous A' / 'Anonymous B' are 1 edit apart → name_levenshtein_within_2 (40). Low. The judge should catch that this is the matcher's classic false-positive shape (shared prefix + different last initial) and reject."
+    },
+    {
+      "case_id": "ip-only-tight",
+      "primary": { "id": "a44", "session_ip": "192.0.2.99", "observed_at": "2025-05-01T10:00:00Z" },
+      "secondary": { "id": "b44", "session_ip": "192.0.2.99", "observed_at": "2025-05-01T11:00:00Z" },
+      "expected_tier": "low",
+      "notes": "ip (20) + cross-channel <6h (35) = 55. Low."
+    },
+    {
+      "case_id": "exact-email-only",
+      "primary": { "id": "a45", "primary_email": "operator@venue.com" },
+      "secondary": { "id": "b45", "primary_email": "operator@venue.com" },
+      "expected_tier": "high",
+      "notes": "email_exact (100) alone hits high threshold."
+    },
+    {
+      "case_id": "wedding-date-31d-cliff",
+      "primary": { "id": "a46", "primary_name": "Ethan Wright", "wedding_date": "2025-06-01" },
+      "secondary": { "id": "b46", "primary_name": "Ethan Wright", "wedding_date": "2025-07-15" },
+      "expected_tier": "medium",
+      "notes": "Full name (60). 44d gap so 30d signal does NOT fire. 60. Medium threshold."
+    },
+    {
+      "case_id": "different-emails-explicit",
+      "primary": { "id": "a47", "primary_name": "Mia Chen", "primary_email": "mia@example.com" },
+      "secondary": { "id": "b47", "primary_name": "Mia Chen", "primary_email": "mchen@example.com" },
+      "expected_tier": "medium",
+      "notes": "Different emails. Full name (60). Medium threshold."
+    },
+    {
+      "case_id": "weak-cross-channel-2w-boundary",
+      "primary": { "id": "a48", "primary_name": "Grace Taylor", "observed_at": "2025-04-01T10:00:00Z" },
+      "secondary": { "id": "b48", "primary_name": "Grace Taylor", "observed_at": "2025-04-13T10:00:00Z" },
+      "expected_tier": "medium",
+      "notes": "Full name (60) + cross-channel <2w (10) = 70."
+    },
+    {
+      "case_id": "outside-2w-temporal",
+      "primary": { "id": "a49", "primary_name": "Grace Taylor", "observed_at": "2025-04-01T10:00:00Z" },
+      "secondary": { "id": "b49", "primary_name": "Grace Taylor", "observed_at": "2025-04-25T10:00:00Z" },
+      "expected_tier": "medium",
+      "notes": "Full name (60), 24d gap so 2w band doesn't fire. 60. Medium threshold."
+    },
+    {
+      "case_id": "phone-partner-cross",
+      "primary": { "id": "a50", "primary_name": "Jack Harris", "primary_phone": "+15558887777", "wedding_date": "2025-11-22" },
+      "secondary": { "id": "b50", "primary_name": "Ava Harris", "partner_phone": "+15558887777", "wedding_date": "2025-11-22" },
+      "expected_tier": "high",
+      "notes": "partner_phone cross (95) + wedding_date (30) = 125."
+    }
+  ]
+}
