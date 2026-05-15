@@ -360,6 +360,46 @@ export async function POST(request: NextRequest) {
       console.error('[webhook/calendly] Tour pre-populate failed:', tourInsertErr)
     }
 
+    // Phase C Forwards Linker — shadow-mode parallel write. The legacy
+    // weddings / engagement_events / tours path above is untouched;
+    // this writes a touchpoint into the new identity schema so the
+    // Phase B couples graph stays current without nightly Tracer.
+    try {
+      const { linkSignal } = await import('@/lib/services/identity/forwards-linker')
+      await linkSignal({
+        supabase,
+        venueId,
+        signal: {
+          external_id: (payload.uri as string) ?? `calendly:${weddingId}:${startTime ?? Date.now()}`,
+          channel: 'calendly',
+          action_type: 'tour_booked',
+          occurred_at: startTime || new Date().toISOString(),
+          signal_tier: 'high',
+          identity_hint: inviteeName ?? inviteeEmail ?? null,
+          primary_name: inviteeName ?? null,
+          primary_email: inviteeEmail ?? null,
+          primary_phone: null,
+          partner_name: null,
+          partner_email: null,
+          partner_phone: null,
+          wedding_date: null,
+          session_ip: null,
+          session_fingerprint: null,
+          raw_payload: {
+            calendly_uri: (payload.uri as string) ?? null,
+            scheduled_at: startTime ?? null,
+          },
+          legacy_wedding_id: weddingId,
+        },
+        source: 'live:calendly',
+      })
+    } catch (err) {
+      console.warn(
+        '[webhook/calendly] forwards-linker failed (non-fatal):',
+        err instanceof Error ? err.message : err,
+      )
+    }
+
     // Track tour_booked in consultant_metrics
     // Try to find the coordinator who owns this wedding
     const { data: weddingRow } = await supabase

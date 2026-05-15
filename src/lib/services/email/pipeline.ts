@@ -4081,6 +4081,52 @@ export async function processIncomingEmail(
     }
   }
 
+  // Phase C Forwards Linker — shadow-mode write to the new identity
+  // schema. Fire-and-forget; never blocks pipeline response. Doctrine
+  // anchor: IDENTITY-FIRST-ARCHITECTURE.md §4. The legacy pipeline is
+  // unchanged above; the linker writes a parallel record into
+  // touchpoints/fragments so couples can rebuild without backfill.
+  if (interactionId) {
+    try {
+      const { linkSignal } = await import('@/lib/services/identity/forwards-linker')
+      await linkSignal({
+        supabase,
+        venueId,
+        signal: {
+          external_id: email.messageId ?? interactionId,
+          channel: 'gmail',
+          action_type: 'reply',
+          occurred_at: emailDate,
+          signal_tier: 'high',
+          identity_hint: rawFromName ?? rawFromEmail ?? null,
+          primary_name: rawFromName ?? null,
+          primary_email: rawFromEmail ?? null,
+          primary_phone: null,
+          partner_name: null,
+          partner_email: null,
+          partner_phone: null,
+          wedding_date: null,
+          session_ip: null,
+          session_fingerprint: null,
+          raw_payload: {
+            subject: email.subject,
+            interaction_id: interactionId,
+            draft_id: draftId,
+            thread_id: email.threadId ?? null,
+          },
+          legacy_wedding_id: weddingId ?? null,
+        },
+        correlationId,
+        source: 'live:email',
+      })
+    } catch (err) {
+      console.warn(
+        '[pipeline] forwards-linker failed (non-fatal):',
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+
   return {
     interactionId,
     draftId,

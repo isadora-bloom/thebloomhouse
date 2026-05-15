@@ -262,7 +262,7 @@ async function stageAnchorDiscovery(
 // Reruns produce 0 new rows.
 // ---------------------------------------------------------------------------
 
-interface CoupleForMatch {
+export interface CoupleForMatch {
   id: string
   primary_name: string | null
   primary_email: string | null
@@ -274,7 +274,7 @@ interface CoupleForMatch {
   source_wedding_id: string | null
 }
 
-function signalToMatchableRecord(s: NormalizedSignal): MatchableRecord {
+export function signalToMatchableRecord(s: NormalizedSignal): MatchableRecord {
   return {
     id: s.external_id,
     primary_name: s.primary_name ?? s.identity_hint ?? null,
@@ -290,7 +290,7 @@ function signalToMatchableRecord(s: NormalizedSignal): MatchableRecord {
   }
 }
 
-function coupleToMatchableRecord(c: CoupleForMatch): MatchableRecord {
+export function coupleToMatchableRecord(c: CoupleForMatch): MatchableRecord {
   return {
     id: c.id,
     primary_name: c.primary_name,
@@ -303,7 +303,7 @@ function coupleToMatchableRecord(c: CoupleForMatch): MatchableRecord {
   }
 }
 
-async function findCoupleForLegacyWedding(
+export async function findCoupleForLegacyWedding(
   supabase: SupabaseClient,
   venueId: string,
   weddingId: string,
@@ -317,7 +317,7 @@ async function findCoupleForLegacyWedding(
   return (data as { id: string } | null)?.id ?? null
 }
 
-async function insertTouchpoint(
+export async function insertTouchpoint(
   supabase: SupabaseClient,
   venueId: string,
   coupleId: string | null,
@@ -349,7 +349,7 @@ async function insertTouchpoint(
   return { inserted: true, touchpoint_id: (data as { id: string } | null)?.id ?? null }
 }
 
-async function insertFragment(
+export async function insertFragment(
   supabase: SupabaseClient,
   venueId: string,
   signal: NormalizedSignal,
@@ -369,7 +369,7 @@ async function insertFragment(
   return { inserted: true }
 }
 
-async function insertCandidateMatch(
+export async function insertCandidateMatch(
   supabase: SupabaseClient,
   venueId: string,
   primaryId: string,
@@ -398,7 +398,7 @@ async function insertCandidateMatch(
   }
 }
 
-async function loadRecentCouples(
+export async function loadRecentCouples(
   supabase: SupabaseClient,
   venueId: string,
 ): Promise<CoupleForMatch[]> {

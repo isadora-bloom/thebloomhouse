@@ -1704,6 +1704,75 @@ export async function runCsvImport(args: {
         }
       }
 
+      // Phase C Forwards Linker — shadow-mode parallel write. For every
+      // tangential_signal that just landed, mint a NormalizedSignal
+      // and route through the linker so the couples / touchpoints /
+      // fragments graph stays current. Fire-and-forget — the legacy
+      // Phase B clusterer/resolver above already did its work; this
+      // is the new-schema parallel write so Phase D read paths have
+      // data to read. Doctrine: IDENTITY-FIRST-ARCHITECTURE.md §4.
+      if (result.inserted_signal_ids.length > 0) {
+        try {
+          const { data: signalRows } = await supabase
+            .from('tangential_signals')
+            .select('id, source_platform, action_class, signal_date, extracted_identity, source_context')
+            .in('id', result.inserted_signal_ids)
+          const { linkSignalBatch } = await import('@/lib/services/identity/forwards-linker')
+          type SigRow = {
+            id: string
+            source_platform: string
+            action_class: string
+            signal_date: string | null
+            extracted_identity: Record<string, unknown> | null
+            source_context: string | null
+          }
+          const signals = ((signalRows ?? []) as SigRow[]).map((r) => {
+            const ident = r.extracted_identity ?? {}
+            const first = (ident.first_name as string | null) ?? null
+            const last = (ident.last_name as string | null) ?? null
+            const fullName =
+              first && last
+                ? `${first} ${last}`
+                : first ?? (ident.name_raw as string | null) ?? null
+            return {
+              external_id: r.id,
+              channel: r.source_platform,
+              action_type: r.action_class,
+              occurred_at: r.signal_date
+                ? new Date(r.signal_date).toISOString()
+                : new Date().toISOString(),
+              signal_tier:
+                r.action_class === 'inquiry' || r.action_class === 'message'
+                  ? ('medium' as const)
+                  : ('low' as const),
+              identity_hint:
+                fullName ?? (ident.username as string | null) ?? null,
+              primary_name: fullName,
+              primary_email: (ident.email as string | null) ?? null,
+              primary_phone: null,
+              partner_name: null,
+              partner_email: null,
+              partner_phone: null,
+              wedding_date: null,
+              session_ip: null,
+              session_fingerprint: null,
+              raw_payload: ident,
+              legacy_wedding_id: null,
+            }
+          })
+          await linkSignalBatch({
+            supabase,
+            venueId,
+            signals,
+            source: `live:${best.detector.key}`,
+          })
+        } catch (err) {
+          result.errors.push(
+            `forwards_linker: ${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
+      }
+
       // Bridge to ImportSummary so brain-dump's downstream UI keeps
       // the same shape. inserted = inserted, updated = 0, skipped =
       // duplicates + empty-name + unparseable-date. phase_b carries

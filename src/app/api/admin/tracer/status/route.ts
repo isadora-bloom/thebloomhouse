@@ -128,6 +128,21 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       totals: Record<string, unknown> | null
     }
   >()
+  // Per-run aggregator. For batch Tracer runs, totals come from the
+  // 'validate' stage detail.run_totals. For Phase C live-linker runs
+  // (stage='forwards_link'), there's no validate stage — totals are
+  // accumulated per-event from the action types, so the dashboard
+  // sees signals_seen / touchpoints_written / etc. for the day.
+  const linkerTotalsByRun = new Map<
+    string,
+    {
+      signals_seen: number
+      touchpoints_written: number
+      fragments_written: number
+      candidate_matches_written: number
+      judge_calls: number
+    }
+  >()
   for (const r of rows) {
     const cur =
       byRun.get(r.run_id) ?? {
@@ -144,7 +159,34 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (r.stage === 'validate' && r.detail && (r.detail as Record<string, unknown>).run_totals) {
       cur.totals = (r.detail as Record<string, unknown>).run_totals as Record<string, unknown>
     }
+    if (r.stage === 'forwards_link') {
+      const acc =
+        linkerTotalsByRun.get(r.run_id) ?? {
+          signals_seen: 0,
+          touchpoints_written: 0,
+          fragments_written: 0,
+          candidate_matches_written: 0,
+          judge_calls: 0,
+        }
+      acc.signals_seen += 1
+      const detail = (r.detail ?? {}) as Record<string, unknown>
+      const action = detail.action as string | undefined
+      if (action === 'attached' || action === 'candidate_medium' || action === 'candidate_low') {
+        acc.touchpoints_written += 1
+      }
+      if (action === 'fragment' || action === 'cold_start') acc.fragments_written += 1
+      if (action === 'candidate_medium' || action === 'candidate_low') {
+        acc.candidate_matches_written += 1
+      }
+      if (detail.judge_invoked) acc.judge_calls += 1
+      linkerTotalsByRun.set(r.run_id, acc)
+    }
     byRun.set(r.run_id, cur)
+  }
+  // Apply linker-derived totals.
+  for (const [runId, totals] of linkerTotalsByRun) {
+    const entry = byRun.get(runId)
+    if (entry && !entry.totals) entry.totals = totals
   }
   const runs = Array.from(byRun.values())
     .slice(0, 20)

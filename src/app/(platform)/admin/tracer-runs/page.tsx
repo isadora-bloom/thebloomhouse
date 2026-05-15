@@ -333,6 +333,13 @@ export default function TracerRunsPage() {
         <code>UNIQUE(venue_id, channel, external_id)</code> on touchpoints /
         fragments means the second pass writes zero new rows.
       </p>
+      <p className="mt-2 text-xs text-stone-500">
+        Run IDs prefixed <code>live:</code> are Phase C Forwards Linker
+        rollups — one row per venue per day, accumulating every live signal
+        (inbound email, Calendly tour, storefront CSV) that routed through
+        <code> linkSignal</code>. Batch Tracer runs (UUID-prefixed) walk
+        history; live-linker rolls forward.
+      </p>
     </div>
   )
 }
