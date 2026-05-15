@@ -1799,6 +1799,9 @@ export async function runCsvImport(args: {
       }
     }
     case 'reviews': {
+      // Preserve the full source row (raw_row) so any column Bloom
+      // does not map to a typed reviews field survives in
+      // reviews.raw_import_row (migration 352).
       const rows = dataRows.map((r) => rowToRecord(detection, headerRow, r))
         .filter((r) => r.reviewer && r.body)
         .map((r) => ({
@@ -1808,6 +1811,7 @@ export async function runCsvImport(args: {
           body: r.body as string,
           review_date: r.date ?? null,
           title: r.title ?? null,
+          raw_row: r as Record<string, unknown>,
         }))
       return importReviews({ supabase, venueId, rows })
     }
@@ -1823,6 +1827,9 @@ export async function runCsvImport(args: {
           priority: 50,
           is_active: true,
           source: 'csv',
+          // Migration 352: keep the whole source row so columns
+          // beyond question / answer / category are not lost.
+          raw_import_row: r as Record<string, unknown>,
         }))
       const { data: existing } = await supabase
         .from('knowledge_base')

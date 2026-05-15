@@ -360,6 +360,47 @@ export async function POST(request: NextRequest) {
       console.error('[webhook/calendly] Tour pre-populate failed:', tourInsertErr)
     }
 
+    // Preserve the Calendly invitee Q&A. The webhook receives the
+    // couple's answers to the operator's custom booking questions
+    // (guest count, date preferences, etc.) — previously only the
+    // "how did you hear" answer was extracted (captureDiscoverySource
+    // below) and the rest was discarded. Store the full set into
+    // weddings.calendly_qa (migration 322) so nothing the couple
+    // answered is lost. Merge under a webhook_* key so a prior
+    // CSV-imported calendly_qa is not clobbered.
+    try {
+      const qa = payload.questions_and_answers as
+        | Array<{ question?: unknown; answer?: unknown; position?: unknown }>
+        | undefined
+      if (Array.isArray(qa) && qa.length > 0) {
+        const flattened: Record<string, unknown> = {}
+        for (const item of qa) {
+          const q = typeof item?.question === 'string' ? item.question.trim() : null
+          if (q) flattened[q] = item?.answer ?? null
+        }
+        const { data: wRow } = await supabase
+          .from('weddings')
+          .select('calendly_qa')
+          .eq('id', weddingId)
+          .maybeSingle()
+        const existing =
+          (wRow?.calendly_qa as Record<string, unknown> | null) ?? {}
+        await supabase
+          .from('weddings')
+          .update({
+            calendly_qa: {
+              ...existing,
+              webhook_questions_and_answers: qa,
+              webhook_qa_flattened: flattened,
+              webhook_invitee_raw: payload,
+            },
+          })
+          .eq('id', weddingId)
+      }
+    } catch (qaErr) {
+      console.error('[webhook/calendly] Q&A preserve failed:', qaErr)
+    }
+
     // Phase C Forwards Linker — shadow-mode parallel write. The legacy
     // weddings / engagement_events / tours path above is untouched;
     // this writes a touchpoint into the new identity schema so the

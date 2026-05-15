@@ -33,6 +33,11 @@ export interface SpendRow {
   amount: number
   notes?: string | null
   campaign?: string | null
+  /** Full source CSV row, header-keyed. Preserved into
+   *  marketing_spend.raw_import_row (migration 352) so columns beyond
+   *  source / month / amount / campaign (impressions, clicks, channel
+   *  notes) are not silently dropped. */
+  raw_row?: Record<string, unknown> | null
 }
 
 export interface ImportResult {
@@ -95,6 +100,7 @@ export async function upsertSpendRows(args: {
       amount: row.amount,
       notes: row.notes ?? row.campaign ?? null,
       source_provenance: provenance,
+      raw_import_row: row.raw_row ?? null,
     }
 
     // Check if a row exists for dedup.
@@ -109,7 +115,11 @@ export async function upsertSpendRows(args: {
     if (existing) {
       const { error } = await supabase
         .from('marketing_spend')
-        .update({ amount: payload.amount, notes: payload.notes })
+        .update({
+          amount: payload.amount,
+          notes: payload.notes,
+          raw_import_row: payload.raw_import_row,
+        })
         .eq('id', existing.id)
       if (error) {
         result.errors.push(`update ${payload.source}/${payload.month}: ${error.message}`)
@@ -180,7 +190,14 @@ export function parseSpendCsv(csv: string): { rows: SpendRow[]; errors: string[]
       errors.push(`row ${i + 1}: parse error (source=${source}, month=${month}, amount=${amountStr})`)
       continue
     }
-    rows.push({ source, month, amount, campaign })
+    // Preserve the full header-keyed row so columns beyond the four we
+    // map (impressions, clicks, channel notes...) survive in
+    // marketing_spend.raw_import_row.
+    const raw_row: Record<string, unknown> = {}
+    headers.forEach((h, idx) => {
+      raw_row[h] = cells[idx]?.trim() ?? null
+    })
+    rows.push({ source, month, amount, campaign, raw_row })
   }
 
   return { rows, errors }

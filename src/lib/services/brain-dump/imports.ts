@@ -297,6 +297,10 @@ export interface ReviewRow {
   body: string
   review_date?: string | null
   title?: string | null
+  /** The full source CSV row, header-keyed. Preserved into
+   *  reviews.raw_import_row so columns Bloom does not map to a typed
+   *  field (response text, verified flag, language...) are not lost. */
+  raw_row?: Record<string, unknown> | null
 }
 
 export async function importReviews(args: {
@@ -331,6 +335,7 @@ export async function importReviews(args: {
       body: r.body,
       title: r.title ?? null,
       review_date: r.review_date ?? null,
+      raw_import_row: r.raw_row ?? null,
     })
     if (error) {
       summary.errors.push(`review by ${r.reviewer_name}: ${error.message}`)
