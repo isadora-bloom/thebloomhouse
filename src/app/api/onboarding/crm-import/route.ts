@@ -201,9 +201,21 @@ function buildImportMessage(args: {
   upgraded: number
   skippedInvalid: number
   write: WriteErrorSummary
+  /** Out-of-band signals committed by adapters that don't produce lead
+   *  rows (storefront-activity, site-visitors). For those, `total` is 0
+   *  because the payload isn't a NormalisedLeadRow. */
+  signals?: number
 }): string {
-  const { total, inserted, matched, upgraded, skippedInvalid, write } = args
-  if (total === 0) return 'The file had no data rows to import.'
+  const { total, inserted, matched, upgraded, skippedInvalid, write, signals = 0 } = args
+  if (total === 0) {
+    // Storefront / pixel imports have no lead rows by design — their
+    // payload is touchpoint signals. Report the signal count instead
+    // of the misleading "no data rows".
+    if (signals > 0) {
+      return `Imported ${signals.toLocaleString()} ${signals === 1 ? 'signal' : 'signals'} from this file.`
+    }
+    return 'The file had no data rows to import.'
+  }
   const handled = inserted + matched
   const failedAtWrite = write.unique.reduce((s, e) => s + e.count, 0)
 
@@ -437,6 +449,9 @@ export async function POST(request: NextRequest) {
     upgraded,
     skippedInvalid: skippedInvalid.length,
     write: writeErrors,
+    // Storefront / pixel adapters report their committed touchpoint
+    // count in interactionsInserted with zero lead rows.
+    signals: commitResult.interactionsInserted,
   })
 
   // Always 200 — a partial import is a success, not an HTTP error. The
