@@ -52,9 +52,6 @@ ALTER TABLE public.tangential_signals
   ));
 
 COMMENT ON COLUMN public.tangential_signals.signal_type IS
-  'Kind of tangential signal. Migration 356 added the storefront_* funnel '
-  || 'values used by the storefront-activity adapter (The Knot / WeddingWire '
-  || 'discovery-funnel exports). storefront_message is a real inquiry; '
-  || 'storefront_view / storefront_save are earlier-funnel touchpoints.';
+  'Kind of tangential signal. Migration 356 added the storefront_* funnel values used by the storefront-activity adapter (The Knot / WeddingWire discovery-funnel exports). storefront_message is a real inquiry; storefront_view / storefront_save are earlier-funnel touchpoints.';
 
 NOTIFY pgrst, 'reload schema';
