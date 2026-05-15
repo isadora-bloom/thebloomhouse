@@ -999,6 +999,13 @@ export default function WeddingsPage() {
         query = query.in('venue_id', venueIds)
       }
 
+      // Exclude tombstoned weddings. A merged-away duplicate keeps its
+      // status, but mergeWeddings reassigned all its children (people,
+      // interactions, ...) to the canonical — so it would render as a
+      // ghost "Unnamed" row sitting next to the real couple. non_couple_
+      // at filters rows the tombstone cron flagged as not-a-couple.
+      query = query.is('merged_into_id', null).is('non_couple_at', null)
+
       // Base filter: inquiries belong on /agent/leads, not here. This
       // surface only shows weddings that have at least booked a tour.
       if (statusFilter === 'all') {
