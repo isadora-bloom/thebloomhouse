@@ -27,6 +27,7 @@ import {
   Upload, AlertCircle, CheckCircle2, Loader2, FileText, Calendar,
   ChevronRight,
 } from 'lucide-react'
+import { CsvFileInput } from '@/components/onboarding/CsvFileInput'
 
 type ProviderHint =
   | 'calendly'
@@ -303,14 +304,30 @@ export default function TourSchedulerImportPage() {
         )}
 
         <div className="space-y-2">
-          <label className="text-xs font-medium text-sage-700">CSV content</label>
-          <textarea
-            rows={8}
-            value={csv}
-            onChange={(e) => { setCsv(e.target.value) }}
-            placeholder="Paste the scheduler export CSV (with a header row)."
-            className="w-full px-3 py-2 text-xs font-mono border border-sage-200 rounded"
-          />
+          <label className="text-xs font-medium text-sage-700">CSV file</label>
+          <div className="flex flex-wrap items-center gap-2">
+            <CsvFileInput
+              onText={(text) => { setCsv(text) }}
+              onError={(m) => setErrors([m])}
+            />
+            {csv.trim() && (
+              <span className="text-[11px] text-sage-500">
+                {csv.split(/\r?\n/).filter((l) => l.trim()).length} line(s) loaded
+              </span>
+            )}
+          </div>
+          <details className="text-xs">
+            <summary className="cursor-pointer text-sage-500 hover:text-sage-700">
+              or paste the CSV text instead
+            </summary>
+            <textarea
+              rows={8}
+              value={csv}
+              onChange={(e) => { setCsv(e.target.value) }}
+              placeholder="Paste the scheduler export CSV (with a header row). Uploading the file above is recommended."
+              className="mt-2 w-full px-3 py-2 text-xs font-mono border border-sage-200 rounded"
+            />
+          </details>
         </div>
 
         <div className="flex items-center justify-end gap-2">

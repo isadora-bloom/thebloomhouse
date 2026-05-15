@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react'
 import {
   Upload, AlertCircle, CheckCircle2, Loader2, FileText, Database,
 } from 'lucide-react'
+import { CsvFileInput } from '@/components/onboarding/CsvFileInput'
 
 interface AdapterManifest {
   name: string
@@ -280,52 +281,35 @@ export default function CrmImportPage() {
 
         <div className="space-y-2">
           <label className="text-xs font-medium text-sage-700">CSV file</label>
-          {/* File upload is the recommended path — uploading the actual
-              export keeps the original comma-delimited format. Pasting
-              from a spreadsheet view yields tab-separated text; the
-              parser now detects that too, but the file is cleaner. */}
+          {/* File upload is the recommended path. The parser
+              auto-detects comma vs tab, so a file or a spreadsheet
+              paste both work. */}
           <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex items-center gap-1.5 rounded border border-sage-300 bg-white hover:bg-sage-50 text-xs font-medium text-sage-700 px-3 py-2 cursor-pointer">
-              <Upload className="w-3.5 h-3.5" />
-              Choose CSV file
-              <input
-                type="file"
-                accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values"
-                className="hidden"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0]
-                  if (!file) return
-                  clearMessages()
-                  try {
-                    const text = await file.text()
-                    setCsv(text)
-                    setPreview(null)
-                    // Auto-pick the adapter from the header signature so
-                    // the coordinator doesn't have to know which one to
-                    // choose. A HoneyBook export is unmistakable — it
-                    // leads with "Project Name". Generic CSV needs a
-                    // hand-built mapping; the provider adapters
-                    // auto-detect their columns.
-                    const firstLine = (
-                      text.split(/\r?\n/).find((l) => l.trim()) ?? ''
-                    ).toLowerCase()
-                    if (
-                      firstLine.includes('project name') &&
-                      adapters.some((a) => a.name === 'honeybook' && a.ready)
-                    ) {
-                      setSelectedAdapter('honeybook')
-                      setWarnings([
-                        'Detected a HoneyBook export — switched the adapter to HoneyBook automatically.',
-                      ])
-                    }
-                  } catch {
-                    setErrors(['Could not read that file. Try a .csv export.'])
-                  }
-                  // Allow re-selecting the same file after a failed run.
-                  e.target.value = ''
-                }}
-              />
-            </label>
+            <CsvFileInput
+              onText={(text) => {
+                clearMessages()
+                setCsv(text)
+                setPreview(null)
+                // Auto-pick the adapter from the header signature so the
+                // coordinator doesn't have to know which to choose. A
+                // HoneyBook export leads with "Project Name"; Generic CSV
+                // needs a hand-built mapping, the provider adapters
+                // auto-detect.
+                const firstLine = (
+                  text.split(/\r?\n/).find((l) => l.trim()) ?? ''
+                ).toLowerCase()
+                if (
+                  firstLine.includes('project name') &&
+                  adapters.some((a) => a.name === 'honeybook' && a.ready)
+                ) {
+                  setSelectedAdapter('honeybook')
+                  setWarnings([
+                    'Detected a HoneyBook export — switched the adapter to HoneyBook automatically.',
+                  ])
+                }
+              }}
+              onError={(m) => setErrors([m])}
+            />
             {csv.trim() && (
               <span className="text-[11px] text-sage-500">
                 {csv.split(/\r?\n/).filter((l) => l.trim()).length} line(s) loaded
