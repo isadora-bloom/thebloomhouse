@@ -119,6 +119,11 @@ export default function CoupleDetailPage() {
   const [candidates, setCandidates] = useState<CandidateMatch[]>([])
   const [fragments, setFragments] = useState<Fragment[]>([])
   const [profile, setProfile] = useState<IdentityProfile | null>(null)
+  // Operator-tracked custom fields (data-fields feature): value lives in
+  // the wedding's raw_import_row, read through a tracked_data_fields def.
+  const [trackedFields, setTrackedFields] = useState<
+    Array<{ label: string; data_type: string; value: string }>
+  >([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showUnmerge, setShowUnmerge] = useState(false)
@@ -179,6 +184,48 @@ export default function CoupleDetailPage() {
       setCandidates(((candRes.data ?? []) as CandidateMatch[]))
       const prof = profRes.data as IdentityProfile | null
       setProfile(prof)
+
+      // Tracked custom fields: definitions are venue-scoped; values
+      // live in the source wedding's raw_import_row. Only meaningful
+      // when this couple mirrors a wedding (source_wedding_id set).
+      const coupleRow = c as CoupleDetail
+      if (coupleRow.source_wedding_id) {
+        const [defRes, wedRes] = await Promise.all([
+          supabase
+            .from('tracked_data_fields')
+            .select('source_key, label, data_type')
+            .eq('venue_id', coupleRow.venue_id)
+            .eq('entity_type', 'wedding'),
+          supabase
+            .from('weddings')
+            .select('raw_import_row')
+            .eq('id', coupleRow.source_wedding_id)
+            .maybeSingle(),
+        ])
+        if (!cancelled) {
+          const defs = (defRes.data ?? []) as Array<{
+            source_key: string
+            label: string
+            data_type: string
+          }>
+          const raw =
+            ((wedRes.data as { raw_import_row?: Record<string, unknown> } | null)
+              ?.raw_import_row) ?? {}
+          const fields = defs
+            .map((d) => ({
+              label: d.label,
+              data_type: d.data_type,
+              value: raw[d.source_key],
+            }))
+            .filter((f) => f.value != null && f.value !== '')
+            .map((f) => ({
+              label: f.label,
+              data_type: f.data_type,
+              value: String(f.value),
+            }))
+          setTrackedFields(fields)
+        }
+      }
 
       // 3. Pull fragments + orphan touchpoints referenced by open
       //    candidate_matches for this couple. Post-migration 347 a
@@ -428,6 +475,27 @@ export default function CoupleDetailPage() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {trackedFields.length > 0 && (
+        <div className="mb-6 rounded-lg border border-stone-200 bg-white p-4">
+          <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-700">
+            Tracked fields
+          </h2>
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+            {trackedFields.map((f) => (
+              <div key={f.label} className="flex flex-col">
+                <dt className="text-xs uppercase tracking-wide text-stone-500">
+                  {f.label}
+                </dt>
+                <dd className="text-stone-800">{f.value}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="mt-2 text-xs text-stone-400">
+            Imported columns you chose to track on the Data Fields page.
+          </p>
         </div>
       )}
 

@@ -39,16 +39,56 @@ export async function POST(request: NextRequest) {
     if (!auth) return unauthorized()
 
     const body = await request.json()
-    const { weddingId, venueId: requestedVenueId, email, partnerEmail, eventCode, coupleName } = body
+    const { weddingId, venueId: requestedVenueId, partnerEmail, coupleName } = body
+    let { eventCode, email } = body
 
-    if (!weddingId || !email || !eventCode) {
+    if (!weddingId) {
       return NextResponse.json(
-        { error: 'Missing required fields: weddingId, email, eventCode' },
+        { error: 'Missing required field: weddingId' },
         { status: 400 }
       )
     }
 
     const supabase = createServiceClient()
+
+    // Resolve the couple's email from the wedding's partner1 when the
+    // caller didn't supply one — lets the operator invite straight from
+    // a wedding card without re-typing the address.
+    if (!email) {
+      const { data: p1 } = await supabase
+        .from('people')
+        .select('email')
+        .eq('wedding_id', weddingId)
+        .eq('role', 'partner1')
+        .is('merged_into_id', null)
+        .not('email', 'is', null)
+        .maybeSingle()
+      email = (p1 as { email?: string } | null)?.email ?? null
+    }
+    if (!email) {
+      return NextResponse.json(
+        { error: 'No email on file for this couple — add a contact email first' },
+        { status: 400 }
+      )
+    }
+
+    // Ensure the wedding is portal-ready. A CRM-imported booked couple
+    // has no event_code until now; provisionCouplePortal mints one (and
+    // a wedding_details shell). The caller may still pass an explicit
+    // eventCode to override.
+    if (!eventCode) {
+      const { provisionCouplePortal } = await import(
+        '@/lib/services/portal/provision'
+      )
+      const provisioned = await provisionCouplePortal(supabase, weddingId)
+      eventCode = provisioned.event_code
+    }
+    if (!eventCode) {
+      return NextResponse.json(
+        { error: 'Could not resolve an event code for this wedding' },
+        { status: 500 }
+      )
+    }
 
     // Derive venueId from the wedding row, not from the request body.
     // Then verify auth ownership.

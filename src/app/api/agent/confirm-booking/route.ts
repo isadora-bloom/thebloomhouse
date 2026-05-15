@@ -121,6 +121,17 @@ export async function POST(request: NextRequest) {
           { status: 500 }
         )
       }
+      // Booked → provision the couple portal so the coordinator holds
+      // it from day one (event_code + wedding_details shell). Does not
+      // email — the operator chooses when to invite. Best-effort.
+      try {
+        const { provisionCouplePortal } = await import(
+          '@/lib/services/portal/provision'
+        )
+        await provisionCouplePortal(supabase, targetWeddingId)
+      } catch (err) {
+        console.warn('[confirm-booking] portal provision failed:', err)
+      }
       // Coordinator-confirmed booking — write a contract_signed
       // touchpoint with the wedding's first-touch source so /intel/
       // sources counts this in funnel conversion. Best-effort.

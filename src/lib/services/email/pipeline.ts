@@ -1567,6 +1567,14 @@ export async function processIncomingEmail(
   if (email.connectionId) {
     interactionPayload.gmail_connection_id = email.connectionId
   }
+  // Preserve the RFC-2822 headers captured at fetch time. They were
+  // read once during classification and then discarded; storing the
+  // full set keeps cc / bcc / reply-to / List-Unsubscribe / DKIM
+  // recoverable for audit + future retroactive classification
+  // (migration 354). Same raw-preservation principle as raw_import_row.
+  if (email.headers && Object.keys(email.headers).length > 0) {
+    interactionPayload.rfc2822_headers = email.headers
+  }
 
   const { data: interaction, error: interactionError } = await supabase
     .from('interactions')

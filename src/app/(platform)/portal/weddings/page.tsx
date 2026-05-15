@@ -225,6 +225,34 @@ function WeddingCardSkeleton() {
 
 function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; venueSlug: string | null; showVenueChip: boolean }) {
   const [expanded, setExpanded] = useState(false)
+  // Invite state. Seeded from the wedding's stamp so a card for an
+  // already-invited couple shows "Invite sent" without a round trip.
+  const [inviteState, setInviteState] = useState<'idle' | 'sending' | 'sent' | 'error'>(
+    wedding.couple_invited_at ? 'sent' : 'idle',
+  )
+  const [inviteError, setInviteError] = useState<string | null>(null)
+
+  const sendInvite = async () => {
+    setInviteState('sending')
+    setInviteError(null)
+    try {
+      const res = await fetch('/api/portal/invite-couple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ weddingId: wedding.id }),
+      })
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) {
+        setInviteState('error')
+        setInviteError(data.error ?? `HTTP ${res.status}`)
+      } else {
+        setInviteState('sent')
+      }
+    } catch (e) {
+      setInviteState('error')
+      setInviteError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   const coupleNames = getCoupleNames(wedding.people)
   const days = daysUntil(wedding.wedding_date)
@@ -434,7 +462,41 @@ function WeddingCard({ wedding, venueSlug, showVenueChip }: { wedding: Wedding; 
                 Open as Couple
               </Link>
             )}
+
+            {/* Email the couple their portal invite. Hidden once the
+                couple has registered — at that point there's nothing
+                to invite. */}
+            {!wedding.couple_registered_at && (
+              <button
+                onClick={sendInvite}
+                disabled={inviteState === 'sending' || inviteState === 'sent'}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                  inviteState === 'sent'
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-default'
+                    : 'bg-gold-600 text-white hover:bg-gold-700',
+                )}
+              >
+                {inviteState === 'sending' ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : inviteState === 'sent' ? (
+                  <CheckCircle className="w-3.5 h-3.5" />
+                ) : (
+                  <Send className="w-3.5 h-3.5" />
+                )}
+                {inviteState === 'sent'
+                  ? 'Invite sent'
+                  : inviteState === 'sending'
+                    ? 'Sending...'
+                    : wedding.couple_invited_at
+                      ? 'Re-send invite'
+                      : 'Email portal invite'}
+              </button>
+            )}
           </div>
+          {inviteError && (
+            <p className="text-xs text-red-600">{inviteError}</p>
+          )}
         </div>
       )}
     </div>
