@@ -1092,5 +1092,35 @@ export async function commitNormalisedRows(args: {
     }
   }
 
+  // Batch-provision the couple portal for every BOOKED wedding this
+  // import touched. Onboarding a CRM export of booked couples should
+  // land them in the Weddings tab with their portal ready on the
+  // coordinator's side from day one — event_code + wedding_details
+  // shell. provisionCouplePortal is idempotent and never throws, and
+  // does NOT email: invitations stay coordinator-click-only.
+  const touchedIds = result.touchedWeddingIds ?? []
+  if (touchedIds.length > 0) {
+    try {
+      const { data: bookedRows } = await supabase
+        .from('weddings')
+        .select('id')
+        .in('id', touchedIds)
+        .eq('status', 'booked')
+      const booked = (bookedRows ?? []) as Array<{ id: string }>
+      if (booked.length > 0) {
+        const { provisionCouplePortal } = await import(
+          '@/lib/services/portal/provision'
+        )
+        for (const w of booked) {
+          await provisionCouplePortal(supabase, w.id)
+        }
+      }
+    } catch (provErr) {
+      result.errors.push(
+        `portal provisioning: ${provErr instanceof Error ? provErr.message : String(provErr)}`,
+      )
+    }
+  }
+
   return result
 }
