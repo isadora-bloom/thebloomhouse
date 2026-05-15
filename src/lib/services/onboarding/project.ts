@@ -62,8 +62,8 @@ export interface DayStep {
 export const PROJECT_PLAN: DayPlan[] = [
   {
     day: 1,
-    title: 'Connect + Configure',
-    subtitle: 'Wire Gmail in, set Sage\'s identity + tone + safety rails, then pull 12 months of history.',
+    title: 'Connect + Import bookings',
+    subtitle: "Wire Gmail in, set Sage's identity + tone + safety rails, import everything you have on your booked couples, THEN pull 12 months of email history.",
     steps: [
       {
         key: 'gmail_oauth',
@@ -102,10 +102,23 @@ export const PROJECT_PLAN: DayPlan[] = [
         linkLabel: 'Open personality',
       },
       {
+        // MUST run before the email backfill. The Backwards Tracer
+        // anchors on booked couples; if 12 months of email history is
+        // ingested before any booked couples exist, reconstruction
+        // cold-starts and the email signals have nothing to attach to.
+        key: 'crm_export',
+        label: 'Upload everything you have on your booked couples',
+        description:
+          'Import your booked couples FIRST — before the email backfill. Upload a HoneyBook / Dubsado / Aisle Planner export (or the Generic CSV adapter with a column mapping). Include every column your CRM offers: revenue, deposit, booked date, guest count, package — all of it is read and recorded, and any column Bloom has no field for is preserved and surfaced on the Data Fields page. These booked couples are the anchors the whole reconstruction is built from. Imported rows are tagged confidence_flag=imported_medium. Completes once weddings has 1+ row tagged imported_medium.',
+        actionKey: 'crm_import_ui',
+        linkHref: '/onboarding/crm-import',
+        linkLabel: 'Open CRM import',
+      },
+      {
         key: 'backfill_12mo',
         label: 'Run 12-month email backfill',
         description:
-          'Pull the last 12 months of inquiry messages, classify, and stamp confidence_flag=imported_low so downstream surfaces know these are backfilled. Run from the Gmail backfill control on Agent settings.',
+          'Now that your booked couples are in as anchors, pull the last 12 months of inquiry messages, classify, and stamp confidence_flag=imported_low so downstream surfaces know these are backfilled. Run from the Gmail backfill control on Agent settings.',
         actionKey: 'backfill_email',
         linkHref: '/agent/settings',
         linkLabel: 'Trigger backfill',
@@ -201,8 +214,8 @@ export const PROJECT_PLAN: DayPlan[] = [
   },
   {
     day: 3,
-    title: 'CRM ingestion',
-    subtitle: 'Import historical pricing + lead history from your existing CRM.',
+    title: 'Pricing history + triage',
+    subtitle: 'Reconstruct historical pricing and triage anything that did not auto-match. (Booked-couple CRM import moved to Day 1 — it must precede the email backfill.)',
     steps: [
       {
         key: 'pricing_history_reconstruct',
@@ -212,15 +225,6 @@ export const PROJECT_PLAN: DayPlan[] = [
         actionKey: 'pricing_history_ui',
         linkHref: '/onboarding/pricing-history',
         linkLabel: 'Open pricing-history reconstruction',
-      },
-      {
-        key: 'crm_export',
-        label: 'Import lead history from CRM',
-        description:
-          'Upload a HoneyBook / Dubsado / Aisle Planner export, or use the Generic CSV adapter with a custom column-mapping JSON. Imported rows are tagged confidence_flag=imported_medium so live pipeline data stays distinguishable. Sub-step completes once weddings has 1+ row tagged imported_medium.',
-        actionKey: 'crm_import_ui',
-        linkHref: '/onboarding/crm-import',
-        linkLabel: 'Open CRM import',
       },
       {
         key: 'orphan_triage',
