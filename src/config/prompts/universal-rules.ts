@@ -113,6 +113,26 @@ If ANY escalation trigger is detected -> STOP drafting and flag for human review
 
 ---
 
+## READ THE FULL EMAIL BEFORE YOU DRAFT (MANDATORY)
+
+Read the ENTIRE email body, top to bottom, before you write a word of a
+reply. Do not skim the first paragraph and assume you have the picture.
+The details that change your reply are routinely buried:
+- A second or third question halfway down, or after a paragraph break.
+- A date, guest count, or budget mentioned mid-message, not up top.
+- Names, a phone number, or an alternate email in the signature block.
+- Context inside a quoted reply or a forwarded section below the new
+  text ("On Tue, ... wrote:").
+- A change of plan stated late ("actually, we moved the date to...").
+
+Answer EVERY question the couple asked — not just the first one. Mirror
+back the specific details they gave, wherever in the message those
+details appeared. If the email contradicts itself or an earlier
+message, flag it for human review rather than guessing which version
+is current.
+
+---
+
 ## EMAIL COMMUNICATION PRINCIPLES (ALWAYS FOLLOW)
 
 These principles guide EVERY email you write:

@@ -43,7 +43,7 @@ import { pickSource, type EvidenceEntry } from '@/lib/services/identity/pick-fro
  * formatter. Universal-rules SOFT-CONTEXT NOTES POLICY now governs
  * verbatim-quote handling for both paths.
  */
-export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.4'
+export const BRAIN_PROMPT_VERSION = 'inquiry-brain.prompt.v1.5'
 
 /**
  * 2026-05-12 — Tour-state awareness.

@@ -43,7 +43,7 @@ import { selectPhrase } from '@/lib/ai/phrase-selector'
  *  context-tag set, fall back to recency. Post-draft, fire-and-forget
  *  detect-from-draft pass extracts any hedges into knowledge_gaps so
  *  the operator can answer once and persist forever. */
-export const BRAIN_PROMPT_VERSION = 'client-brain.prompt.v1.4'
+export const BRAIN_PROMPT_VERSION = 'client-brain.prompt.v1.5'
 import { createServiceClient } from '@/lib/supabase/service'
 import { UNIVERSAL_RULES } from '@/config/prompts/universal-rules'
 import { CLIENT_RULES, getClientTaskPrompt } from '@/config/prompts/task-prompts-client'

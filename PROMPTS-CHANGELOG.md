@@ -11,6 +11,32 @@ quality / cost / latency should bump and get an entry here.
 
 Per Playbook OPS-21.5.1 / BUILD-PLAN T1-E.
 
+## 2026-05-15 (Whole-email directive across email-reading prompts)
+
+Extends the v3->v4 inbound-intent change to every other prompt that
+reads an email. One new directive: read the ENTIRE body top to bottom;
+questions, dates, names, phones and emails are routinely buried in
+later paragraphs, signatures, and quoted/forwarded sections.
+
+  - `universal-rules.ts` (Layer 1, every draft brain): new "READ THE
+    FULL EMAIL BEFORE YOU DRAFT" section. The brain must answer EVERY
+    question, mirror details from anywhere in the message, and flag
+    contradictions instead of guessing the current version.
+  - `inquiry-brain.prompt.v1.4` -> `v1.5` and
+    `client-brain.prompt.v1.4` -> `v1.5` — bumped because both consume
+    the revised universal rules.
+  - `inbound-haiku.v1` -> `inbound-haiku.v2`
+    (`src/lib/services/intel/inbound-haiku-classifier.ts`): the
+    sentiment / urgency / family classifier now scans the whole body,
+    not the opening sentence.
+
+CSV imports: no prompt change — column->field mapping is fully
+deterministic (no LLM). See `crm-import/primitives/field-detector.ts`
+(curated header aliases) and `brain-dump/csv-shape.ts` (heuristic
+shape detection). There is no LLM step that could "guess" a field
+mapping; the deterministic detectors either match a known alias or
+fall back to operator-supplied mapping.
+
 ## 2026-05-15 (Inbound classifier — whole-body identifier extraction)
 
 Bumped `inbound-intent.v3` → `inbound-intent.v4`

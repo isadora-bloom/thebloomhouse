@@ -36,7 +36,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import { logEvent } from '@/lib/observability/logger'
 
-export const INBOUND_HAIKU_PROMPT_VERSION = 'inbound-haiku.v1'
+export const INBOUND_HAIKU_PROMPT_VERSION = 'inbound-haiku.v2'
 
 export type InboundSentiment = 'positive' | 'neutral' | 'concerned' | 'frustrated'
 export type InboundUrgency = 'low' | 'medium' | 'high'
@@ -74,7 +74,14 @@ const FALLBACK: InboundHaikuVerdict = {
 
 const SYSTEM_PROMPT = `You are a forensic classifier reading one inbound email from a wedding couple to a venue.
 
-Read the SUBJECT and BODY. Emit a single JSON object with exactly these three keys:
+Read the ENTIRE subject and body, top to bottom — every line. Do not
+judge from the opening sentence alone. The signal you need (an
+escalation or frustration phrase, a worried sentence, a family or
+vendor mention) is often buried mid-message, in the signature, or
+inside a quoted reply / forwarded section below the new text. Scan all
+of it before you decide.
+
+Emit a single JSON object with exactly these three keys:
 
 {
   "sentiment": "positive" | "neutral" | "concerned" | "frustrated",
