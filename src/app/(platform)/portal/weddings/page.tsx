@@ -1006,6 +1006,11 @@ export default function WeddingsPage() {
       // at filters rows the tombstone cron flagged as not-a-couple.
       query = query.is('merged_into_id', null).is('non_couple_at', null)
 
+      // Same for the embedded people: a person merged into their twin
+      // keeps a merged_into_id tombstone, so without this the couple
+      // renders with duplicate names ("Mike & Mike & Mike").
+      query = query.is('people.merged_into_id', null)
+
       // Base filter: inquiries belong on /agent/leads, not here. This
       // surface only shows weddings that have at least booked a tour.
       if (statusFilter === 'all') {
