@@ -20,9 +20,10 @@
  * Supported bloom_field keys (anything in NormalisedLeadRow shape):
  *   source_id, partner1_first_name, partner1_last_name, partner1_email,
  *   partner1_phone, partner2_first_name, partner2_last_name,
- *   wedding_date, guest_count_estimate, booking_value, status,
- *   source, source_detail, inquiry_date, booked_at, lost_at,
- *   lost_reason, notes
+ *   wedding_date, guest_count_estimate, booking_value, amount_paid,
+ *   deposit_amount, tax_amount, gratuity_amount, refunded_amount,
+ *   package_name, status, source, source_detail, inquiry_date,
+ *   booked_at, lost_at, lost_reason, notes
  *
  * Status values are coerced to Bloom's enum via STATUS_ALIASES below.
  */
@@ -44,6 +45,10 @@ const SUPPORTED_FIELDS = new Set([
   'partner1_first_name', 'partner1_last_name', 'partner1_email', 'partner1_phone',
   'partner2_first_name', 'partner2_last_name',
   'wedding_date', 'guest_count_estimate', 'booking_value',
+  // Commercial detail (migration 175 + 351) — a booked-couple export
+  // carries these and they must not silently drop.
+  'amount_paid', 'deposit_amount', 'tax_amount', 'gratuity_amount',
+  'refunded_amount', 'package_name',
   'status', 'source', 'source_detail',
   'inquiry_date', 'booked_at', 'lost_at', 'lost_reason',
   'notes',
@@ -224,6 +229,12 @@ async function parseGenericCsv(config: AdapterConfig): Promise<ParseResult> {
       wedding_date: coerceWeddingDate(get('wedding_date')),
       guest_count_estimate: coerceNumber(get('guest_count_estimate')),
       booking_value: coerceMoneyToCents(get('booking_value')),
+      amount_paid: coerceMoneyToCents(get('amount_paid')),
+      deposit_amount: coerceMoneyToCents(get('deposit_amount')),
+      tax_amount: coerceMoneyToCents(get('tax_amount')),
+      gratuity_amount: coerceMoneyToCents(get('gratuity_amount')),
+      refunded_amount: coerceMoneyToCents(get('refunded_amount')),
+      package_name: get('package_name'),
       status: status ?? 'inquiry',
       // adapter-source-justified: generic-csv ONLY writes weddings.source
       //   when the coordinator EXPLICITLY mapped a CSV column to the

@@ -145,6 +145,16 @@ export interface NormalisedLeadRow {
   wedding_date?: string | null            // ISO yyyy-mm-dd
   guest_count_estimate?: number | null
   booking_value?: Cents | number | null   // in cents (Bloom convention) — branded Cents preferred (T5-Rixey-RR fix #5)
+  // Commercial detail from a booked-couple CRM export. All money in
+  // integer cents. Columns: amount_paid / tax_amount / gratuity_amount
+  // / refunded_amount (migration 175), deposit_amount + package_name
+  // (migration 351).
+  amount_paid?: Cents | number | null
+  deposit_amount?: Cents | number | null
+  tax_amount?: Cents | number | null
+  gratuity_amount?: Cents | number | null
+  refunded_amount?: Cents | number | null
+  package_name?: string | null
   status?: 'inquiry' | 'tour_scheduled' | 'tour_completed' | 'proposal_sent'
          | 'booked' | 'completed' | 'lost' | 'cancelled' | null
   source?: string | null                  // wedding source channel
@@ -499,6 +509,15 @@ export async function commitNormalisedRows(args: {
         wedding_date: row.wedding_date ?? null,
         guest_count_estimate: row.guest_count_estimate ?? null,
         booking_value: row.booking_value ?? null,
+        // Commercial detail (migration 175 + 351). Recorded so a
+        // booked-couple import keeps every revenue field, not just the
+        // contract total.
+        amount_paid: row.amount_paid ?? null,
+        deposit_amount: row.deposit_amount ?? null,
+        tax_amount: row.tax_amount ?? null,
+        gratuity_amount: row.gratuity_amount ?? null,
+        refunded_amount: row.refunded_amount ?? null,
+        package_name: row.package_name ?? null,
         inquiry_date: inquiryDateForRow,
         booked_at: row.booked_at ?? null,
         lost_at: row.lost_at ?? null,
@@ -585,6 +604,14 @@ export async function commitNormalisedRows(args: {
         if (row.booking_value != null) backfill.booking_value = row.booking_value
         if (row.wedding_date) backfill.wedding_date = row.wedding_date
         if (row.guest_count_estimate != null) backfill.guest_count_estimate = row.guest_count_estimate
+        // Commercial detail — backfill only when the existing wedding
+        // is missing it, so a re-import never clobbers a richer record.
+        if (row.amount_paid != null) backfill.amount_paid = row.amount_paid
+        if (row.deposit_amount != null) backfill.deposit_amount = row.deposit_amount
+        if (row.tax_amount != null) backfill.tax_amount = row.tax_amount
+        if (row.gratuity_amount != null) backfill.gratuity_amount = row.gratuity_amount
+        if (row.refunded_amount != null) backfill.refunded_amount = row.refunded_amount
+        if (row.package_name) backfill.package_name = row.package_name
         // Fold the import row's notes into existing notes (don't overwrite).
         if (row.notes && row.notes.trim()) {
           const { data: cur } = await supabase

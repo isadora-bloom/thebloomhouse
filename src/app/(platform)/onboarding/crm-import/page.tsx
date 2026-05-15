@@ -42,6 +42,12 @@ const DEFAULT_MAPPING_TEMPLATE = `{
   "wedding_date":        "Event Date",
   "guest_count_estimate":"Guest Count",
   "booking_value":       "Booking Total",
+  "amount_paid":         "Amount Paid",
+  "deposit_amount":      "Deposit",
+  "tax_amount":          "Tax",
+  "gratuity_amount":     "Gratuity",
+  "refunded_amount":     "Refunded",
+  "package_name":        "Package",
   "status":              "Lead Status",
   "source":              "Lead Source",
   "inquiry_date":        "Created Date",
@@ -152,6 +158,22 @@ export default function CrmImportPage() {
           distinguish them from live pipeline data.
         </p>
       </header>
+
+      {/* Upload-order guidance. The Backwards Tracer anchors on booked
+          couples — if Gmail / Calendly / storefront data is imported
+          before any booked couples exist, reconstruction cold-starts
+          and the signals have nothing to attach to. */}
+      <div className="rounded-xl border border-sage-300 bg-sage-50 p-4 text-sm text-sage-800">
+        <p className="font-medium text-sage-900">Upload your booked couples first.</p>
+        <p className="mt-1 text-sage-700">
+          This step — your CRM export of booked clients — should be the
+          <strong> first</strong> thing you import. Those couples are the
+          anchors Bloom reconstructs everything else from. Connect Gmail,
+          Calendly and storefront exports <em>after</em> this import
+          finishes. Include every column your CRM offers: revenue, deposit,
+          booked date, guest count and package are all read and recorded.
+        </p>
+      </div>
 
       <section className="bg-white border border-sage-200 rounded-xl p-5 shadow-sm space-y-4">
         <div className="space-y-2">

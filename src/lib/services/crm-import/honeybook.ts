@@ -25,9 +25,18 @@
  *   Client Email      → people.email + partner1_email
  *   Client Phone      → people.phone + partner1_phone
  *   Total             → booking_value (parsed "$4,500.00" → 450000 cents)
- *                       (variants: Project Value, Total Project Cost)
- *   Paid              → informational; not stored
- *   Balance           → informational; not stored
+ *                       (variants: Project Value, Total Project Cost,
+ *                       Contract Value/Amount/Total)
+ *   Paid              → amount_paid (cents)
+ *   Deposit           → deposit_amount (cents; variants: Retainer)
+ *   Tax               → tax_amount (cents; variants: Sales Tax)
+ *   Gratuity          → gratuity_amount (cents; variants: Tip, Service Charge)
+ *   Refunded          → refunded_amount (cents)
+ *   Guest Count       → guest_count_estimate (variants: Guests,
+ *                       Headcount, Pax, Attendance)
+ *   Package           → package_name (variants: Tier, Collection)
+ *   Balance           → informational; not stored (derivable from
+ *                       booking_value − amount_paid)
  *   Source            → weddings.source (mapped via SOURCE_ALIASES);
  *                       original string preserved in source_detail
  *                       (variants: Lead Source)
@@ -127,12 +136,18 @@ const COLUMNS: ColumnSpec[] = [
   { key: 'client_name',   variants: [/^client\s*name$/i, /^primary\s*client(\s*name)?$/i] },
   { key: 'client_email',  variants: [/^client\s*email$/i, /^email$/i, /^primary\s*email$/i],     required: true },
   { key: 'client_phone',  variants: [/^client\s*phone$/i, /^phone$/i, /^primary\s*phone$/i] },
-  { key: 'total',         variants: [/^total$/i, /^total\s*project\s*cost$/i, /^project\s*value$/i, /^total\s*invoiced$/i] },
-  { key: 'paid',          variants: [/^paid$/i, /^total\s*paid$/i] },
+  { key: 'total',         variants: [/^total$/i, /^total\s*project\s*cost$/i, /^project\s*value$/i, /^total\s*invoiced$/i, /^contract\s*(value|amount|total)$/i] },
+  { key: 'paid',          variants: [/^paid$/i, /^total\s*paid$/i, /^amount\s*paid$/i] },
+  { key: 'deposit',       variants: [/^deposit$/i, /^deposit\s*amount$/i, /^retainer$/i, /^retainer\s*amount$/i] },
+  { key: 'tax',           variants: [/^tax$/i, /^tax\s*amount$/i, /^sales\s*tax$/i] },
+  { key: 'gratuity',      variants: [/^gratuity$/i, /^gratuity\s*amount$/i, /^tip$/i, /^service\s*charge$/i] },
+  { key: 'refunded',      variants: [/^refund(ed)?$/i, /^refund(ed)?\s*amount$/i, /^amount\s*refunded$/i] },
   { key: 'balance',       variants: [/^balance$/i, /^outstanding(\s*balance)?$/i] },
+  { key: 'guest_count',   variants: [/^guest\s*count$/i, /^guests$/i, /^head\s*count$/i, /^headcount$/i, /^(no\.?|number)\s*of\s*guests$/i, /^pax$/i, /^attendance$/i] },
+  { key: 'package',       variants: [/^package(\s*name)?$/i, /^tier$/i, /^collection$/i, /^package\s*tier$/i] },
   { key: 'source',        variants: [/^source$/i, /^lead\s*source$/i, /^how\s*did\s*you\s*hear/i] },
   { key: 'inquiry_date',  variants: [/^inquiry\s*date$/i, /^created\s*date$/i, /^created$/i, /^date\s*created$/i] },
-  { key: 'booking_date',  variants: [/^booking\s*date$/i, /^booked\s*date$/i, /^date\s*booked$/i, /^contract\s*signed\s*date$/i] },
+  { key: 'booking_date',  variants: [/^booking\s*date$/i, /^booked\s*date$/i, /^date\s*booked$/i, /^booked\s*on$/i, /^contract\s*signed\s*date$/i] },
   { key: 'tags',          variants: [/^tags$/i] },
   { key: 'notes',         variants: [/^notes$/i, /^internal\s*notes$/i, /^description$/i] },
 ]
@@ -250,6 +265,18 @@ function parseMoneyToCents(raw: string | null | undefined): Cents | null {
   const n = Number(cleaned)
   if (!Number.isFinite(n) || n < 0) return null
   return dollarsToCents(asDollars(n))
+}
+
+/** Parse a guest-count cell. Tolerates "120", "120 guests", "~120",
+ *  "100-120" (takes the upper bound). null when no usable integer. */
+function parseGuestCount(raw: string | null | undefined): number | null {
+  if (raw == null) return null
+  const nums = raw.match(/\d+/g)
+  if (!nums || nums.length === 0) return null
+  // Range like "100-120" -> take the larger; single value -> itself.
+  const n = Math.max(...nums.map((x) => parseInt(x, 10)))
+  if (!Number.isFinite(n) || n <= 0 || n >= 10000) return null
+  return n
 }
 
 function parseDateIso(raw: string | null | undefined): string | null {
@@ -455,6 +482,13 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
     const projDate    = get(data, 'project_date')
     const status      = mapStatus(get(data, 'project_status'))
     const totalRaw    = get(data, 'total')
+    const paidRaw     = get(data, 'paid')
+    const depositRaw  = get(data, 'deposit')
+    const taxRaw      = get(data, 'tax')
+    const gratuityRaw = get(data, 'gratuity')
+    const refundedRaw = get(data, 'refunded')
+    const guestRaw    = get(data, 'guest_count')
+    const packageRaw  = get(data, 'package')
     const sourceRaw   = get(data, 'source')
     const inquiry     = get(data, 'inquiry_date')
     const booking     = get(data, 'booking_date')
@@ -561,8 +595,14 @@ async function parseHoneybook(config: AdapterConfig): Promise<ParseResult> {
       partner2_first_name: fromProject.partner2_first,
       partner2_last_name: fromProject.partner2_last,
       wedding_date: parseDateYmd(projDate),
-      guest_count_estimate: null,
+      guest_count_estimate: parseGuestCount(guestRaw),
       booking_value: parseMoneyToCents(totalRaw),
+      amount_paid: parseMoneyToCents(paidRaw),
+      deposit_amount: parseMoneyToCents(depositRaw),
+      tax_amount: parseMoneyToCents(taxRaw),
+      gratuity_amount: parseMoneyToCents(gratuityRaw),
+      refunded_amount: parseMoneyToCents(refundedRaw),
+      package_name: packageRaw,
       status: status ?? 'inquiry',
       // T5-Rixey-TT: HoneyBook is a CRM (factual provenance lives in
       // crm_source='honeybook'). Lead-source derivation decides the real
