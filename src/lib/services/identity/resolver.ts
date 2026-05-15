@@ -418,6 +418,70 @@ async function findByNamePlusDate(
   return null
 }
 
+/**
+ * Couple-level wedding match — the structural fix for split couples.
+ *
+ * The person-side match chain (email / phone / name+date) only ever
+ * answers "have I seen THIS HUMAN before". It cannot answer "is this
+ * the same COUPLE". When the two partners of one wedding arrive as
+ * separate signals — HoneyBook's Booked Client report lists each
+ * partner as its own row with their own email; two partners each email
+ * the venue; a calculator submission plus a Calendly tour — each signal
+ * resolves to a fresh person and Branch C mints a fresh wedding. The
+ * couple ends up split across two weddings with mirror-image names
+ * ("A & B" / "B & A").
+ *
+ * This helper closes that gap: given a wedding_date and the partner
+ * names carried on the signal, it looks for an existing non-terminal
+ * wedding at the same venue, on the exact same date, that already has
+ * a person whose first name matches one of those partner names. Exact
+ * date + shared partner name + same venue is strong enough to treat as
+ * the same couple; ambiguous near-misses are left for the merge-review
+ * tooling rather than auto-attached.
+ */
+async function findCoupleWeddingByNamesAndDate(
+  supabase: SupabaseClient,
+  venueId: string,
+  weddingDate: string,
+  candidateNames: Array<string | null | undefined>,
+): Promise<WeddingHit | null> {
+  const firstToken = (s: string): string =>
+    s.trim().toLowerCase().split(/\s+/)[0] ?? ''
+  const wantFirst = new Set<string>()
+  for (const n of candidateNames) {
+    if (!n) continue
+    const f = firstToken(n)
+    if (f.length >= 2) wantFirst.add(f)
+  }
+  if (wantFirst.size === 0) return null
+
+  const { data } = await supabase
+    .from('weddings')
+    .select('id, status, wedding_date, inquiry_date, merged_into_id, people(first_name)')
+    .eq('venue_id', venueId)
+    .eq('wedding_date', weddingDate)
+    .is('merged_into_id', null)
+    .is('non_couple_at', null)
+  if (!data || data.length === 0) return null
+
+  for (const w of data as Array<WeddingHit & { people?: Array<{ first_name?: string | null }> | null }>) {
+    if (TERMINAL_STATUSES.has((w.status ?? '').toLowerCase())) continue
+    for (const p of w.people ?? []) {
+      const pf = firstToken(p.first_name ?? '')
+      if (pf.length >= 2 && wantFirst.has(pf)) {
+        return {
+          id: w.id,
+          status: w.status,
+          wedding_date: w.wedding_date,
+          inquiry_date: w.inquiry_date,
+          merged_into_id: w.merged_into_id,
+        }
+      }
+    }
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Wedding picker — find the active wedding for this person at this venue.
 // ---------------------------------------------------------------------------
@@ -1088,6 +1152,22 @@ export async function resolveIdentity(
     (w) => TERMINAL_STATUSES.has((w.status ?? '').toLowerCase())
   ) ?? null
 
+  // Branch A' — couple-level match. When the matched/created person has
+  // no non-terminal wedding of their own, check whether the COUPLE
+  // already has one (the other partner arrived first, from this or a
+  // different channel). This runs regardless of email/phone — it is the
+  // only match that prevents the two partners of one couple from
+  // splitting into two weddings. See findCoupleWeddingByNamesAndDate.
+  let coupleWedding: WeddingHit | null = null
+  if (!nonTerminalWedding && signals.weddingDate) {
+    coupleWedding = await findCoupleWeddingByNamesAndDate(
+      supabase,
+      venueId,
+      signals.weddingDate,
+      [signals.partner1Name, signals.partner2Name, signals.fullName],
+    )
+  }
+
   if (nonTerminalWedding) {
     // Branch A — attach to existing non-terminal wedding.
     const wedding = nonTerminalWedding
@@ -1114,6 +1194,19 @@ export async function resolveIdentity(
       .update({ wedding_id: weddingId })
       .eq('id', personId)
       .is('wedding_id', null)
+  } else if (coupleWedding) {
+    // Branch A' — the couple already has an open wedding (the other
+    // partner created it). Attach this person to it instead of minting
+    // a duplicate. This is the split-couple root-cause fix.
+    weddingId = coupleWedding.id
+    await supabase.from('people')
+      .update({ wedding_id: weddingId })
+      .eq('id', personId)
+      .is('wedding_id', null)
+    console.info(
+      `[identity/resolver] couple-match: attached new person ${personId} ` +
+        `to existing couple wedding ${weddingId} (name+date; source=${sourceLabel ?? 'unknown'})`,
+    )
   } else if (mostRecentTerminalWedding) {
     // Branch B — re-engagement after loss. Mint a new wedding linked
     // back to the previous via previous_wedding_id (mig 257). Keeps the
